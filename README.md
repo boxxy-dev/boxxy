@@ -2,8 +2,8 @@
 
 You can get Boxxy-previews in releases; configs saved at `~/config/boxxy-terminal`
 
-## Contrinuting
-Open issues, propose features, redesign stuff; Mention if you run Boxxy native or the FLatpak built
+## Contributing
+Open issues, propose features, redesign stuff; Mention if you run Boxxy native or the Flatpak build
 
 ## Short Roadmap
 - More Providers & Local Ollama
@@ -12,4 +12,4 @@ Open issues, propose features, redesign stuff; Mention if you run Boxxy native o
 - Lots of polishing!
 
 ## Long Roadmap
-A new terminal that can communicate with AI agents, similar to Warp; much better though and open source :p
+A new terminal emulator (!VTE4) that can communicate with AI agents, similar to Warp; much better though and open source :p
