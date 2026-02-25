@@ -1,15 +1,9 @@
 ### Coming soon.. 
 
-You can get Boxxy-previews in releases; configs saved at `~/config/boxxy-terminal`
+You can get Boxxy-previews in [releases](https://github.com/miifrommera/boxxy/releases); Currently only Flatpak is supported; 
 
 ## Contributing
-Open issues, propose features, redesign stuff; Mention if you run Boxxy native or the Flatpak build
-
-## Short Roadmap
-- More Providers & Local Ollama
-- Split panes
-- Voice commands
-- Lots of polishing!
+Open issues, propose features, redesign stuff
 
 ## Long Roadmap
-A new terminal emulator (!VTE4) that can communicate with AI agents, similar to Warp; much better though and open source :p
+A new terminal emulator (!VTE4) that can communicate with AI agents, similar to Warp, with native GTK surfaces support directly to VTE
