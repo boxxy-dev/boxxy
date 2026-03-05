@@ -1,6 +1,6 @@
 Boxxy is the ONLY app you'll ever need ..but, yeah, it does look like a Linux Terminal :p
 
-![Boxxy](https://i.imgur.com/LXgNlQ0.png)
+![Boxxy](https://i.imgur.com/NlKIIpP.png)
 
 ## Features
 Boxxy is currently in early preview, but it does have most of the things you expect from a terminal:
@@ -11,6 +11,7 @@ Boxxy is currently in early preview, but it does have most of the things you exp
 - Preview images and videos (via GTK popover)
 - AI Chat, currently with Gemini and Ollama providers, but more will be added
 - Search
+- Command Palette
 - Boxxy Apps bridging Lua scripts to GTK4 widgets
 - Themes
 - More to come.. Much much more!!
@@ -21,7 +22,11 @@ There is a temporary Flatpak remote for Boxxy while Flathub submission is in pro
 flatpak remote-add --user --no-gpg-verify boxxy https://miifrommera.github.io/boxxy-flatpak-remote/repo
 flatpak install --user boxxy play.mii.Boxxy
 ```
-Requires GNOME 50 Sdk, currently GNOME Nightly
+If `flatpak update` fails to discover an update, try
+```
+flatpak update play.mii.Boxxy
+```
+Boxxy version in About, should match Github [Releases](https://github.com/miifrommera/boxxy/releases) latest version. Requires GNOME 50 Sdk, currently GNOME Nightly
 
 ## Not Yet Another Terminal Emulator
 While Boxxy is more than capable of running your Linux commands, that's not her primary goal; Boxxy is specifically designed to integrate `boxxy-claw`, a super fast [OpenClaw](https://github.com/openclaw/openclaw) agent, similar to [ZeroClaw](https://github.com/zeroclaw-labs/zeroclaw) with a very tight integration with the Linux terminal and your Linux system.
@@ -51,5 +56,5 @@ Boxxy is built with some seriously cool tech under the hood:
 - **Tokio & async-channel:** A heavy-duty multi-threaded async engine keeps the UI buttery smooth even when the terminal is sweating.
 - **Zero C Dependencies & Pure-Rust Engine:** Yep, you read that right. `boxxy-vte` completely ditches traditional C libraries. It features a custom, lock-free, async-first ANSI state machine.
 - **Blazing Fast Rendering:** We render the terminal grid directly via GTK4's native GSK scene graph for top-tier performance! 
-- **Modern Terminal Smarts:** Native OSC 8 hyperlinks (with underlines only on hover!), debounced asynchronous media previews, and native OSC 7 parsing for instantaneous, event-driven CWD tracking across the sandbox boundary.
+- **Modern Terminal Smarts:** Native OSC 8 hyperlinks, debounced asynchronous media previews, and native OSC 7 parsing for instantaneous, event-driven CWD tracking across the sandbox boundary.
 - **Flatpak Hole-Punching:** We use D-Bus and `socketpair()` magic to let `boxxy-agent` securely talk to your host system without breaking the Flatpak sandbox rules.
