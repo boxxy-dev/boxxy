@@ -11,6 +11,7 @@ Boxxy is currently in early preview, but it does have most of the things you exp
 - Preview images and videos (via GTK popover)
 - AI Chat, currently with Gemini and Ollama providers, but more will be added
 - Search
+- Support images with Kitty Graphics Protocol
 - Command Palette
 - Boxxy Apps bridging Lua scripts to GTK4 widgets
 - Themes
@@ -21,10 +22,6 @@ There is a temporary Flatpak remote for Boxxy while Flathub submission is in pro
 ```bash
 flatpak remote-add --user --no-gpg-verify boxxy https://miifrommera.github.io/boxxy-flatpak-remote/repo
 flatpak install --user boxxy play.mii.Boxxy
-```
-If `flatpak update` fails to discover an update, try
-```
-flatpak update play.mii.Boxxy
 ```
 Boxxy version in About, should match Github [Releases](https://github.com/miifrommera/boxxy/releases) latest version. Requires GNOME 50 Sdk, currently GNOME Nightly
 
