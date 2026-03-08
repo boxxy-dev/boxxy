@@ -33,7 +33,8 @@ Also Boxxy is **made to be fun!** There is a `Characters` feature planned with c
 ## Common Issues
 Boxxy has very little use in the wild yet, so it won't **really** be a surprise to discover stupid bugs. But most particularly you will face two kinds: either some weird rendering, which is caused by `boxxy-vte`, or issues with your session, which will be caused by `boxxy-agent` trying to access userspace outside the sandbox and update the Flatpak client.
 
-Before you open an issue, please, if possible, compare with [Ghostty](https://github.com/ghostty-org/ghostty) which has very solid mechanics.
+### Troubleshooting
+Before you open an issue, please, if possible, compare with [Ghostty](https://github.com/ghostty-org/ghostty) which has very solid mechanics. Also clear the current configuration, as Boxxy doesn't automatically handle settings migrations for newer versions.
 
 ## License
 Boxxy will be closed source until version 0.1.0, which is the version where all the stuff will be figured out without frequent re-writes. Originally that was planned for before the GNOME 50 release, but I don't see it happening. However, it won't be much longer after, and Boxxy will 100% be an open source project!
