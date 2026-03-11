@@ -2,7 +2,7 @@ Boxxy is the ONLY app you'll ever need ..but, yeah, it does look like a Linux Te
 
 ![Boxxy](https://i.imgur.com/NlKIIpP.png)
 
-`v0.0.19` Check [releases](https://github.com/miifrommera/boxxy/releases) for CHANGELOGS
+Check [releases](https://github.com/miifrommera/boxxy/releases) for changelogs
 
 ---
 
@@ -13,12 +13,13 @@ Boxxy is currently in early preview, but it does have most of the things you exp
 - Notifications
 - Split panes with softswap
 - Preview images and videos (via GTK popover)
-- AI Chat, currently with Gemini and Ollama providers, but more will be added
+- AI Chat
+- Integrated Claw 🦞
 - Search
 - Support images with Kitty Graphics Protocol
 - Command Palette
 - Themes
-- More to come.. 
+- And some more! 
 
 ---
 
