@@ -105,7 +105,7 @@ In Boxxy everything is a separate crate and they communicate with public structs
 - `boxxy-app`: The UI
 - `boxxy-agent`: The privileged agent that runs outside the sandbox. It is responsible for bypassing Flatpak limitations, managing your PTY and host processes, and securely piping that data back to the UI.
 - `boxxy-vte`: A headless, modern VTE written in pure Rust that GNOME and GTK apps can use instead of traditional `vte4-rs`.
-- `boxxy-claw`: The agentic part of Boxxy, currently developed in another repo, and I don't think it will be in 0.1.0.
+- `boxxy-claw`: The agentic part of Boxxy; The original reason Boxxy was created :p
 
 ---
 
