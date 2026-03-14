@@ -11,6 +11,11 @@ use crate::init::AppInit;
 
 pub fn sync_header_title(inner: &AppWindowInner) {
     if inner.tab_view.n_pages() <= 1 && !inner.current_settings.always_show_tabs {
+        if let Some(page) = inner.tab_view.selected_page() {
+            inner.single_tab_title.set_title(&page.title());
+        } else {
+            inner.single_tab_title.set_title("Terminal");
+        }
         inner.header_title_stack.set_visible_child_name("title");
     } else {
         inner.header_title_stack.set_visible_child_name("tabs");
@@ -214,6 +219,7 @@ pub fn focus_active_terminal(inner: &mut AppWindowInner) {
             inner.claw.set_history_widget(&tc.controller.claw_history_widget());
         }
     }
+    sync_header_title(inner);
 }
 
 pub fn open_boxxy_apps(inner: &mut AppWindowInner) {
@@ -234,4 +240,5 @@ pub fn open_boxxy_apps(inner: &mut AppWindowInner) {
         inner.boxxy_apps_page = Some(page.clone());
         inner.tab_view.set_selected_page(&page);
     }
+    sync_header_title(inner);
 }

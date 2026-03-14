@@ -115,9 +115,14 @@ pub fn settings_changed(inner: &mut AppWindowInner, settings: Settings) {
         tab.controller.update_settings(settings.clone(), variant);
     }
     
+    inner.tab_bar.set_autohide(!settings.always_show_tabs);
+    inner.tab_bar.set_expand_tabs(!settings.fixed_width_tabs);
+    
     inner.claw.update_diagnosis_mode(&settings.claw_auto_diagnosis_mode);
     inner.claw.update_terminal_suggestions(settings.claw_terminal_suggestions);
     inner.claw_popover.update_ui(inner.claw.is_active(), &settings);
+    
+    super::tabs::sync_header_title(inner);
 }
 
 pub fn theme_selected(inner: &mut AppWindowInner, palette: boxxy_themes::ParsedPaletteStatic) {
