@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gresources>
+  <gresource prefix="/play/mii/Boxxy">
+    <file compressed="true">style.css</file>
+    <file compressed="true" alias="icons/play.mii.Boxxy.png">icons/play.mii.Boxxy.png</file>
+    <file compressed="true" alias="icons/paper-plane-symbolic.svg">icons/paper-plane-symbolic.svg</file>
+    <file compressed="true" alias="icons/edit-clear-all-symbolic.svg">icons/edit-clear-all-symbolic.svg</file>
+    <file compressed="true" alias="icons/split-close-symbolic.svg">icons/split-close-symbolic.svg</file>
+    <file compressed="true" alias="icons/split-horizontal-symbolic.svg">icons/split-horizontal-symbolic.svg</file>
+    <file compressed="true" alias="icons/split-maximize-symbolic.svg">icons/split-maximize-symbolic.svg</file>
+    <file compressed="true" alias="icons/split-unmaximize-symbolic.svg">icons/split-unmaximize-symbolic.svg</file>
+    <file compressed="true" alias="icons/split-vertical-symbolic.svg">icons/split-vertical-symbolic.svg</file>
+    <file compressed="true" alias="icons/appearance-symbolic.svg">icons/appearance-symbolic.svg</file>
+    <file compressed="true" alias="icons/ai-slop-symbolic.svg">icons/ai-slop-symbolic.svg</file>
+    <file compressed="true" alias="icons/visual-bell-symbolic.svg">icons/visual-bell-symbolic.svg</file>
+    <file compressed="true" alias="icons/brain-symbolic.svg">icons/brain-symbolic.svg</file>
+    <file compressed="true" alias="icons/chat-symbolic.svg">icons/chat-symbolic.svg</file>
+    <file compressed="true" alias="icons/chat-none-symbolic.svg">icons/chat-none-symbolic.svg</file>
+    <file compressed="true" alias="icons/boxxyclaw.svg">icons/boxxyclaw.svg</file>
+    <file compressed="true" alias="icons/running-symbolic.svg">icons/running-symbolic.svg</file>
+    <file compressed="true" alias="icons/walking2-symbolic.svg">icons/walking2-symbolic.svg</file>
+    <file compressed="true" alias="icons/bug-symbolic.svg">icons/bug-symbolic.svg</file>
+    <file compressed="true" alias="prompts/ai_chat.md">prompts/ai_chat.md</file>
+    <file compressed="true" alias="prompts/claw.md">prompts/claw.md</file>
+    <file compressed="true" alias="prompts/boxxy_app_generator.md">prompts/boxxy_app_generator.md</file>
+    <file compressed="true" alias="prompts/memory_expansion.md">prompts/memory_expansion.md</file>
+    <file compressed="true" alias="prompts/memory_flush.md">prompts/memory_flush.md</file>
+    <file compressed="true" alias="prompts/memory_summarizer.md">prompts/memory_summarizer.md</file>
+    <file compressed="true" alias="ui/preferences.ui">ui/preferences.ui</file>
+  </gresource>
+</gresources>

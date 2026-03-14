@@ -1,0 +1,18 @@
+[package]
+name = "boxxy-db"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow.workspace = true
+log.workspace = true
+sqlx.workspace = true
+tokio.workspace = true
+directories.workspace = true
+serde.workspace = true
+serde_json.workspace = true

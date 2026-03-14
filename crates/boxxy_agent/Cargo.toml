@@ -1,0 +1,22 @@
+[package]
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description.workspace = true
+license.workspace = true
+name = "boxxy-agent"
+
+[dependencies]
+zbus = { workspace = true }
+tokio = { workspace = true }
+nix = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+log = { workspace = true }
+env_logger = { workspace = true }
+async-trait = { workspace = true }
+anyhow = { workspace = true }
+libc = { workspace = true }
+directories = { workspace = true }
+futures-util = { workspace = true }
+enumflags2 = { workspace = true }

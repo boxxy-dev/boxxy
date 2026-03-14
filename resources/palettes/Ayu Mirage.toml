@@ -1,0 +1,33 @@
+# Colors (Ayu Mirage)
+
+[colors.bright]
+black = '#686868'
+blue = '#73d0ff'
+cyan = '#95e6cb'
+green = '#d5ff80'
+magenta = '#dfbfff'
+red = '#f28779'
+white = '#ffffff'
+yellow = '#ffd173'
+
+[colors.cursor]
+cursor = '#ffcc66'
+text = '#1f2430'
+
+[colors.normal]
+black = '#171b24'
+blue = '#6dcbfa'
+cyan = '#90e1c6'
+green = '#87d96c'
+magenta = '#dabafa'
+red = '#ed8274'
+white = '#c7c7c7'
+yellow = '#facc6e'
+
+[colors.primary]
+background = '#1f2430'
+foreground = '#cccac2'
+
+[colors.selection]
+background = '#409fff'
+text = '#1f2430'

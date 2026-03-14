@@ -1,0 +1,17 @@
+[Desktop Entry]
+Name=Boxxy Terminal
+Comment=A modern terminal emulator with AI assistant
+Exec=boxxy-terminal
+Icon=play.mii.Boxxy
+Type=Application
+Categories=System;TerminalEmulator;
+Terminal=false
+StartupNotify=true
+StartupWMClass=play.mii.Boxxy
+Keywords=terminal;shell;console;
+Actions=new-window;
+
+[Desktop Action new-window]
+Name=New Window
+Exec=boxxy-terminal --new-window
+

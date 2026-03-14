@@ -1,0 +1,50 @@
+[package]
+name = "boxxy-vte"
+version = "0.1.0"
+edition = "2024"
+description = "A pure-Rust, lock-free, async-first ANSI terminal emulator engine"
+license = "MIT OR Apache-2.0"
+
+[features]
+default = ["serde"]
+serde = ["dep:serde", "bitflags/serde"]
+
+[dependencies]
+zbus = { workspace = true }
+gtk4 = { workspace = true }
+gio = { workspace = true }
+glib = { workspace = true }
+pango = { workspace = true }
+gsk4 = { workspace = true }
+log = { workspace = true }
+regex = { workspace = true }
+env_logger = { workspace = true }
+libc = { workspace = true }
+parking_lot = { workspace = true }
+async-channel = { workspace = true }
+
+# vte dependencies
+base64 = { workspace = true }
+bitflags = { workspace = true, features = ["serde"] }
+home = { workspace = true }
+regex-automata = { workspace = true, features = ["unicode-word-boundary"] }
+unicode-width = { workspace = true }
+serde = { workspace = true, features = ["rc"], optional = true }
+tokio = { workspace = true }
+arc-swap = { workspace = true }
+cursor-icon = { workspace = true }
+memchr = { workspace = true }
+image = { workspace = true }
+miniz_oxide = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+rustix-openpty = { workspace = true }
+rustix = { workspace = true, features = ["std"] }
+signal-hook = { workspace = true }
+
+[[bin]]
+name = "sandbox"
+path = "src/bin/sandbox.rs"

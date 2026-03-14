@@ -1,0 +1,32 @@
+[package]
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description.workspace = true
+license.workspace = true
+name = "boxxy-terminal"
+
+[dependencies]
+gtk4.workspace = true
+libadwaita.workspace = true
+boxxy-vte = { path = "../boxxy_vte" }
+boxxy-preferences = { path = "../preferences" }
+boxxy-app-menu = { path = "../app_menu" }
+boxxy-themes = { path = "../themes" }
+boxxy-ai-core = { path = "../ai_core" }
+boxxy-agent = { path = "../boxxy_agent" }
+boxxy-claw = { path = "../boxxy_claw" }
+async-channel.workspace = true
+ashpd.workspace = true
+tokio.workspace = true
+zbus.workspace = true
+async-trait.workspace = true
+anyhow.workspace = true
+libc.workspace = true
+lazy_static.workspace = true
+futures-channel.workspace = true
+futures-util.workspace = true
+gstreamer.workspace = true
+log.workspace = true
+uuid.workspace = true
+getrandom.workspace = true

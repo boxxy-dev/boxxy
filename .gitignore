@@ -1,0 +1,9 @@
+/target
+.claude
+build-dir
+.flatpak-builder
+releases
+/DEV
+flatpak/cargo-sources.json
+.env
+.env.*

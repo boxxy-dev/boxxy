@@ -1,0 +1,33 @@
+# Colors (Tinacious Design Light)
+
+[colors.bright]
+black = '#636667'
+blue = '#00cbff'
+cyan = '#00c8c7'
+green = '#00d364'
+magenta = '#d783ff'
+red = '#ff2f92'
+white = '#d5d6f3'
+yellow = '#d9ae53'
+
+[colors.cursor]
+cursor = '#b1b1d6'
+text = '#ffffff'
+
+[colors.normal]
+black = '#1d1d26'
+blue = '#00cbff'
+cyan = '#00ceca'
+green = '#00d364'
+magenta = '#cc66ff'
+red = '#ff3399'
+white = '#b1b1d6'
+yellow = '#e5b24d'
+
+[colors.primary]
+background = '#f8f8ff'
+foreground = '#1d1d26'
+
+[colors.selection]
+background = '#ff3399'
+text = '#ffffff'

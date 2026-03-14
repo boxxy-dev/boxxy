@@ -1,0 +1,33 @@
+# Colors (Unikitty)
+
+[colors.bright]
+black = '#434343'
+blue = '#0075ea'
+cyan = '#93ffef'
+green = '#d3ffaf'
+magenta = '#ffefff'
+red = '#d91329'
+white = '#fff3fe'
+yellow = '#ffef50'
+
+[colors.cursor]
+cursor = '#c7ff98'
+text = '#202020'
+
+[colors.normal]
+black = '#0c0c0c'
+blue = '#145fcd'
+cyan = '#9effef'
+green = '#c7ff98'
+magenta = '#ffe9ff'
+red = '#a80f20'
+white = '#fcf1fb'
+yellow = '#fff964'
+
+[colors.primary]
+background = '#ff8cd9'
+foreground = '#0b0b0b'
+
+[colors.selection]
+background = '#3ea9fe'
+text = '#ffffff'

@@ -1,0 +1,122 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<interface>
+  <requires lib="gtk" version="4.0"/>
+  <requires lib="libadwaita" version="1.0"/>
+  <template class="BoxxyShortcutsWindow" parent="AdwShortcutsWindow">
+    <child>
+      <object class="AdwShortcutsSection">
+        <property name="title" translatable="yes">General</property>
+        <child>
+          <object class="AdwShortcutsItem" id="new_window">
+            <property name="title" translatable="yes">New Window</property>
+          </object>
+        </child>
+        <child>
+          <object class="AdwShortcutsItem" id="new_tab">
+            <property name="title" translatable="yes">New Tab</property>
+          </object>
+        </child>
+        <child>
+          <object class="AdwShortcutsItem" id="close_tab">
+            <property name="title" translatable="yes">Close Tab</property>
+          </object>
+        </child>
+        <child>
+          <object class="AdwShortcutsItem" id="toggle_sidebar">
+            <property name="title" translatable="yes">Toggle Sidebar</property>
+          </object>
+        </child>
+        <child>
+          <object class="AdwShortcutsItem" id="preferences">
+            <property name="title" translatable="yes">Preferences</property>
+          </object>
+        </child>
+      </object>
+    </child>
+    <child>
+      <object class="AdwShortcutsSection">
+        <property name="title" translatable="yes">Terminal</property>
+        <child>
+          <object class="AdwShortcutsItem" id="copy">
+            <property name="title" translatable="yes">Copy</property>
+          </object>
+        </child>
+        <child>
+          <object class="AdwShortcutsItem" id="paste">
+            <property name="title" translatable="yes">Paste</property>
+          </object>
+        </child>
+        <child>
+          <object class="AdwShortcutsItem" id="zoom_in">
+            <property name="title" translatable="yes">Zoom In</property>
+          </object>
+        </child>
+        <child>
+          <object class="AdwShortcutsItem" id="zoom_out">
+            <property name="title" translatable="yes">Zoom Out</property>
+          </object>
+        </child>
+      </object>
+    </child>
+    <child>
+      <object class="AdwShortcutsSection">
+        <property name="title" translatable="yes">Split Panes</property>
+        <child>
+          <object class="AdwShortcutsItem" id="split_down">
+            <property name="title" translatable="yes">Split Down</property>
+          </object>
+        </child>
+        <child>
+          <object class="AdwShortcutsItem" id="split_right">
+            <property name="title" translatable="yes">Split Right</property>
+          </object>
+        </child>
+        <child>
+          <object class="AdwShortcutsItem" id="close_pane">
+            <property name="title" translatable="yes">Close Pane</property>
+          </object>
+        </child>
+        <child>
+          <object class="AdwShortcutsItem" id="focus_up">
+            <property name="title" translatable="yes">Focus Up</property>
+          </object>
+        </child>
+        <child>
+          <object class="AdwShortcutsItem" id="focus_down">
+            <property name="title" translatable="yes">Focus Down</property>
+          </object>
+        </child>
+        <child>
+          <object class="AdwShortcutsItem" id="focus_left">
+            <property name="title" translatable="yes">Focus Left</property>
+          </object>
+        </child>
+        <child>
+          <object class="AdwShortcutsItem" id="focus_right">
+            <property name="title" translatable="yes">Focus Right</property>
+          </object>
+        </child>
+        <child>
+          <object class="AdwShortcutsItem" id="swap_up">
+            <property name="title" translatable="yes">Swap Up</property>
+          </object>
+        </child>
+        <child>
+          <object class="AdwShortcutsItem" id="swap_down">
+            <property name="title" translatable="yes">Swap Down</property>
+          </object>
+        </child>
+        <child>
+          <object class="AdwShortcutsItem" id="swap_left">
+            <property name="title" translatable="yes">Swap Left</property>
+          </object>
+        </child>
+        <child>
+          <object class="AdwShortcutsItem" id="swap_right">
+            <property name="title" translatable="yes">Swap Right</property>
+          </object>
+        </child>
+      </object>
+    </child>
+  </template>
+</interface>

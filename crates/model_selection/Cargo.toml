@@ -1,0 +1,14 @@
+[package]
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description.workspace = true
+license.workspace = true
+name = "boxxy-model-selection"
+
+[dependencies]
+gtk4 = { workspace = true }
+libadwaita = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+reqwest = { workspace = true }

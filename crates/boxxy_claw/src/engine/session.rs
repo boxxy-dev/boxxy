@@ -1,0 +1,438 @@
+use crate::engine::{ClawMessage, ClawEngineEvent, context::load_session_context, context::retrieve_memories, context::summarize_and_store, dispatcher::extract_command_and_clean};
+use log::{info, debug};
+use boxxy_db::Db;
+use rig::message::Message;
+use std::sync::Arc;
+use tokio::sync::Mutex;
+use boxxy_agent::ipc::AgentClawProxy;
+
+pub struct SessionState {
+    pub pending_terminal_reply: Option<tokio::sync::oneshot::Sender<Result<String, String>>>,
+    pub pending_file_reply: Option<tokio::sync::oneshot::Sender<bool>>,
+    pub history: Vec<Message>,
+    pub pending_lazy_diagnosis: Option<(String, String, String)>,
+}
+
+pub struct ClawSession {
+    pub pane_id: String,
+    pub rx: async_channel::Receiver<ClawMessage>,
+    pub tx_ui: async_channel::Sender<ClawEngineEvent>,
+    pub session_context: String,
+    pub db: Arc<Mutex<Option<Db>>>,
+    pub state: Arc<Mutex<SessionState>>,
+}
+
+impl ClawSession {
+    pub fn new(pane_id: String) -> (Self, async_channel::Sender<ClawMessage>, async_channel::Receiver<ClawEngineEvent>) {
+        let (tx, rx) = async_channel::unbounded();
+        let (tx_ui, rx_ui) = async_channel::unbounded();
+        
+        // We defer loading session context and skills until the first use
+        let session = Self {
+            pane_id,
+            rx,
+            tx_ui,
+            session_context: String::new(),
+            db: Arc::new(Mutex::new(None)),
+            state: Arc::new(Mutex::new(SessionState {
+                pending_terminal_reply: None,
+                pending_file_reply: None,
+                history: Vec::new(),
+                pending_lazy_diagnosis: None,
+            })),
+        };
+        
+        (session, tx, rx_ui)
+    }
+
+    pub fn start(self, claw_proxy: AgentClawProxy<'static>) {
+        tokio::spawn(async move {
+            self.run(claw_proxy).await;
+        });
+    }
+
+    async fn run(mut self, claw_proxy: AgentClawProxy<'static>) {
+        // LAZY LOADING: We don't initialize the DB or load skills until we receive a message.
+        // This ensures BoxxyClaw doesn't consume memory/CPU if the user doesn't use the AI.
+        
+        let mut is_initialized = false;
+        let mut current_dir = String::from("/");
+
+        // Register with global workspace
+        let workspace = crate::registry::workspace::global_workspace().await;
+        workspace.update_pane_state(self.pane_id.clone(), current_dir.clone(), None, None).await;
+
+        while let Ok(msg) = self.rx.recv().await {
+            if !is_initialized {
+                info!("Initializing Claw Session for pane {} upon first request...", self.pane_id);
+                let session_context = load_session_context();
+                self.session_context = session_context;
+                
+                if let Ok(db) = Db::new().await {
+                    *self.db.lock().await = Some(db);
+                    info!("Claw Memory Database initialized for pane {}.", self.pane_id);
+                    
+                    // Sync any manual edits from MEMORY.md back to the DB
+                    let _ = crate::memories::db::sync_markdown_to_db(self.db.clone()).await;
+
+                    // Run Memory Hygiene
+                    let _ = crate::memories::hygiene::run_hygiene(self.db.clone()).await;
+                } else {
+                    log::error!("Failed to initialize Claw Memory Database.");
+                }
+                
+                is_initialized = true;
+            }
+
+            let session_ctx = self.session_context.clone();
+
+            match msg {
+                ClawMessage::Reload => {
+                    info!("Reloading Claw Session state...");
+                    let new_ctx = load_session_context();
+                    self.session_context = new_ctx;
+                    if let Ok(db) = Db::new().await {
+                        *self.db.lock().await = Some(db);
+                    }
+                }
+                ClawMessage::CommandFinished { exit_code, snapshot, cwd } => {
+                    current_dir = cwd.clone();
+                    
+                    // Update workspace state
+                    let last_cmd = snapshot.lines().next().unwrap_or("").to_string();
+                    workspace.update_pane_state(self.pane_id.clone(), current_dir.clone(), Some(last_cmd), Some(snapshot.clone())).await;
+
+                    let mut state_lock = self.state.lock().await;
+                    if let Some(reply) = state_lock.pending_terminal_reply.take() {
+                        if exit_code == 0 {
+                            let _ = reply.send(Ok(snapshot.clone()));
+                        } else {
+                            let _ = reply.send(Err(format!("Command failed with exit code {exit_code}:\n{snapshot}")));
+                        }
+                    } else if exit_code != 0 {
+                        if exit_code == 130 || exit_code == 131 {
+                            continue;
+                        }
+
+                        let settings = boxxy_preferences::Settings::load();
+                        let prompt = format!("The user's command failed with exit code {exit_code}. Please analyze the terminal snapshot and suggest a fix.");
+                        
+                        if settings.claw_auto_diagnosis_mode == boxxy_preferences::config::ClawAutoDiagnosisMode::Lazy {
+                            state_lock.pending_lazy_diagnosis = Some((prompt, snapshot, cwd));
+                            drop(state_lock);
+                            
+                            let tx_ui = self.tx_ui.clone();
+                            tokio::spawn(async move {
+                                let _ = tx_ui.send(ClawEngineEvent::LazyErrorIndicator).await;
+                            });
+                        } else {
+                            drop(state_lock);
+                            spawn_turn(
+                                self.pane_id.clone(),
+                                &prompt,
+                                &snapshot,
+                                &session_ctx,
+                                cwd,
+                                true,
+                                claw_proxy.clone(),
+                                self.db.clone(),
+                                self.state.clone(),
+                                self.tx_ui.clone(),
+                            );
+                        }
+                    }
+                }
+                ClawMessage::RequestLazyDiagnosis => {
+                    let mut state_lock = self.state.lock().await;
+                    if let Some((prompt, snapshot, cwd)) = state_lock.pending_lazy_diagnosis.take() {
+                        drop(state_lock);
+                        spawn_turn(
+                            self.pane_id.clone(),
+                            &prompt,
+                            &snapshot,
+                            &session_ctx,
+                            cwd,
+                            true,
+                            claw_proxy.clone(),
+                            self.db.clone(),
+                            self.state.clone(),
+                            self.tx_ui.clone(),
+                        );
+                    }
+                }
+                ClawMessage::ClawQuery { query, snapshot, cwd } => {
+                    current_dir = cwd.clone();
+                    
+                    // Update workspace state
+                    workspace.update_pane_state(self.pane_id.clone(), current_dir.clone(), Some(query.clone()), Some(snapshot.clone())).await;
+
+                    debug!("Pane {}: Direct Claw query: {query}. Starting analysis.", self.pane_id);
+                    spawn_turn(
+                        self.pane_id.clone(),
+                        &query,
+                        &snapshot,
+                        &session_ctx,
+                        cwd,
+                        true,
+                        claw_proxy.clone(),
+                        self.db.clone(),
+                        self.state.clone(),
+                        self.tx_ui.clone(),
+                    );
+                }
+                ClawMessage::FileWriteReply { approved } => {
+                    let mut state_lock = self.state.lock().await;
+                    if let Some(reply) = state_lock.pending_file_reply.take() {
+                        let _ = reply.send(approved);
+                    }
+                }
+                ClawMessage::UserMessage { message, snapshot, cwd } => {
+                    current_dir = cwd.clone();
+                    debug!("Pane {}: User reply: {message}. Checking for pending tools.", self.pane_id);
+                    
+                    // Update workspace state
+                    workspace.update_pane_state(self.pane_id.clone(), current_dir.clone(), None, Some(snapshot.clone())).await;
+
+                    let mut state_lock = self.state.lock().await;
+                    let mut fulfilled = false;
+                    
+                    if let Some(reply) = state_lock.pending_terminal_reply.take() {
+                        let _ = reply.send(Err(format!("User provided text feedback instead of running command: {message}")));
+                        fulfilled = true;
+                    } else if let Some(reply) = state_lock.pending_file_reply.take() {
+                        let _ = reply.send(false);
+                        fulfilled = true;
+                    }
+                    
+                    if fulfilled {
+                        debug!("Pane {}: Fulfilled pending tool with user feedback.", self.pane_id);
+                    } else {
+                        drop(state_lock);
+                        spawn_turn(
+                            self.pane_id.clone(),
+                            &message,
+                            &snapshot,
+                            &session_ctx,
+                            cwd,
+                            false,
+                            claw_proxy.clone(),
+                            self.db.clone(),
+                            self.state.clone(),
+                            self.tx_ui.clone(),
+                        );
+                    }
+                }
+                ClawMessage::CancelPending => {
+                    let mut state_lock = self.state.lock().await;
+                    if let Some(reply) = state_lock.pending_terminal_reply.take() {
+                        let _ = reply.send(Err("[USER_EXPLICIT_REJECT]".to_string()));
+                    }
+                    if let Some(reply) = state_lock.pending_file_reply.take() {
+                        let _ = reply.send(false);
+                    }
+                    debug!("Pane {}: User cancelled pending proposals.", self.pane_id);
+                    let _ = self.tx_ui.send(ClawEngineEvent::ProposalResolved).await;
+                }
+            }
+        }
+        
+        // Unregister on loop exit
+        workspace.unregister_pane(self.pane_id).await;
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn spawn_turn(
+    pane_id: String,
+    prompt: &str,
+    snapshot: &str,
+    session_ctx: &str,
+    cwd: String,
+    is_new_task: bool,
+    claw_proxy: AgentClawProxy<'static>,
+    db: Arc<Mutex<Option<Db>>>,
+    state: Arc<Mutex<SessionState>>,
+    tx_ui: async_channel::Sender<ClawEngineEvent>,
+) {
+    let prompt_clone = prompt.to_string();
+    let snapshot_clone = snapshot.to_string();
+    let session_ctx_clone = session_ctx.to_string();
+    let cwd_clone = cwd.clone();
+    
+    tokio::spawn(async move {
+        if is_new_task {
+            if let Ok(mut lock) = state.try_lock() {
+                lock.history.clear();
+            } else {
+                state.lock().await.history.clear();
+            }
+        }
+
+        let db_guard = db.lock().await;
+        let past_memories = retrieve_memories(&*db_guard, &prompt_clone, &cwd_clone).await;
+        drop(db_guard);
+        
+        let state_lock = state.lock().await;
+        let settings = boxxy_preferences::Settings::load();
+
+        let mut active_skills_text = String::new();
+        let mut available_skills_text = String::new();
+        let query_lower = prompt_clone.to_lowercase();
+        
+        let registry = crate::registry::skills::global_registry().await;
+
+        // Fetch Workspace Radar
+        let workspace = crate::registry::workspace::global_workspace().await;
+        let radar = workspace.get_radar_for_project(&cwd_clone, pane_id.clone()).await;
+        
+        // 1. Semantic Search: Get the top 3 most relevant skills via SQLite FTS5 to be "Active"
+        let mut active_skills = registry.search_relevant_skills(&prompt_clone, 3).await;
+
+        // 2. Keyword Fallback: If semantic search missed something explicitly triggered, add it to Active
+        let all_skills = registry.get_skills().await;
+        for skill in &all_skills {
+            // Avoid duplicates
+            if active_skills.iter().any(|s| s.frontmatter.name == skill.frontmatter.name) {
+                continue;
+            }
+
+            let mut should_load = false;
+            // Skills with NO triggers are "Always Active" (like system-specs)
+            if skill.frontmatter.triggers.is_empty() {
+                should_load = true;
+            } else {
+                for trigger in &skill.frontmatter.triggers {
+                    if !trigger.is_empty() && query_lower.contains(&trigger.to_lowercase()) {
+                        should_load = true;
+                        break;
+                    }
+                }
+            }
+
+            if should_load {
+                active_skills.push(skill.clone());
+            }
+        }
+
+        // 3. Build Active Skills Text (Full Content)
+        if !active_skills.is_empty() {
+            active_skills_text.push_str("\n--- ACTIVE SKILLS (FULL INSTRUCTIONS) ---\n");
+            for skill in active_skills.iter().take(5) {
+                active_skills_text.push_str(&format!("\n### SKILL: {}\n", skill.frontmatter.name));
+                active_skills_text.push_str(&skill.content);
+                active_skills_text.push('\n');
+            }
+        }
+
+        // 4. Build Available Skills Text (Compact Toolbox)
+        // Include all skills NOT in active_skills as compact metadata
+        let mut toolbox_count = 0;
+        for skill in &all_skills {
+            if active_skills.iter().any(|s| s.frontmatter.name == skill.frontmatter.name) {
+                continue;
+            }
+            
+            if toolbox_count == 0 {
+                available_skills_text.push_str("\n--- AVAILABLE SKILLS (TOOLBOX - Compact) ---\n");
+                available_skills_text.push_str("Use `activate_skill(name)` if you need the full instructions for any of these:\n");
+            }
+            
+            available_skills_text.push_str(&format!("- {}: {}\n", skill.frontmatter.name, skill.frontmatter.description));
+            toolbox_count += 1;
+        }
+
+        let data = gtk4::gio::resources_lookup_data("/play/mii/Boxxy/prompts/claw.md", gtk4::gio::ResourceLookupFlags::NONE)
+            .expect("Failed to load claw prompt resource");
+        let system_prompt_template = String::from_utf8(data.to_vec()).expect("Prompt resource is not valid UTF-8");
+        
+        let system_prompt = system_prompt_template
+            .replace("{{session_context}}", &session_ctx_clone)
+            .replace("{{active_skills}}", &active_skills_text)
+            .replace("{{available_skills}}", &available_skills_text)
+            .replace("{{past_memories}}", &past_memories)
+            .replace("{{current_dir}}", &cwd_clone)
+            .replace("{{workspace_radar}}", &radar);
+
+        let agent = crate::engine::agent::create_claw_agent(
+            &settings.claw_model,
+            &settings.gemini_api_key,
+            &settings.ollama_base_url,
+            &system_prompt,
+            &claw_proxy,
+            &cwd_clone,
+            tx_ui.clone(),
+            state.clone(),
+            db.clone(),
+        );
+
+        let full_prompt = format!(
+            "{prompt_clone}\n\nTerminal Snapshot:\n```\n{snapshot_clone}\n```"
+        );
+
+        let history = state_lock.history.clone();
+        drop(state_lock);
+
+        info!("Pane {pane_id}: Sending turn to Boxxy-Claw agent...");
+        let _ = tx_ui.send(ClawEngineEvent::AgentThinking { is_thinking: true }).await;
+        
+        match agent.chat(&full_prompt, history).await {
+            Ok(response) => {
+                let _ = tx_ui.send(ClawEngineEvent::AgentThinking { is_thinking: false }).await;
+                info!("Pane {pane_id}: Boxxy-Claw turn complete.");
+                
+                let mut state_lock = state.lock().await;
+                state_lock.history.push(rig::message::Message::user(full_prompt));
+                state_lock.history.push(rig::message::Message::assistant(response.clone()));
+
+                // Optional: Trigger Memory Flush if history is too long
+                let _ = crate::memories::flush::flush_history(
+                    db.clone(),
+                    &mut state_lock.history,
+                    &settings.claw_model,
+                    &settings.gemini_api_key,
+                    &settings.ollama_base_url,
+                    &cwd_clone,
+                ).await;
+                
+                drop(state_lock);
+
+                let prompt_for_db = prompt_clone.clone();
+                let resp_for_db = response.clone();
+                let db_for_summary = db.clone();
+                let cwd_for_db = cwd_clone.clone();
+                tokio::spawn(async move {
+                    let db_guard = db_for_summary.lock().await;
+                    summarize_and_store(&*db_guard, &prompt_for_db, &resp_for_db, &cwd_for_db).await;
+                });
+
+                let mut command_opt = None;
+                let mut clean_diagnosis = response.clone();
+
+                let extracted = extract_command_and_clean(&response);
+                if extracted.0.is_some() {
+                    command_opt = extracted.0;
+                    clean_diagnosis = extracted.1;
+                }
+
+                if clean_diagnosis.trim() == "[SILENT_ACK]" {
+                    info!("Pane {pane_id}: Agent acknowledged rejection silently. Not sending UI event.");
+                } else if clean_diagnosis.trim().is_empty() && command_opt.is_none() {
+                    info!("Pane {pane_id}: Agent response was empty (likely just tool calls). Not sending UI event.");
+                } else if let Some(command) = command_opt {
+                    let _ = tx_ui.send(ClawEngineEvent::InjectCommand { 
+                        command,
+                        diagnosis: clean_diagnosis
+                    }).await;
+                } else {
+                    let _ = tx_ui.send(ClawEngineEvent::DiagnosisComplete { 
+                        diagnosis: clean_diagnosis 
+                    }).await;
+                }
+            }
+            Err(e) => {
+                let _ = tx_ui.send(ClawEngineEvent::AgentThinking { is_thinking: false }).await;
+                log::error!("Pane {pane_id}: Boxxy-Claw agent failed: {e}");
+            }
+        }
+    });
+}

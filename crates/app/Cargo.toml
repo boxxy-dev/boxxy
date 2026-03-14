@@ -1,0 +1,30 @@
+[package]
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description.workspace = true
+license.workspace = true
+name = "boxxy-app"
+
+[dependencies]
+tokio.workspace = true
+gtk4.workspace = true
+libadwaita.workspace = true
+anyhow.workspace = true
+boxxy-window.workspace = true
+boxxy-terminal.workspace = true
+boxxy-ai-core = { path = "../ai_core" }
+gdk-pixbuf.workspace = true
+gio.workspace = true
+gstreamer = "0.25.0"
+env_logger.workspace = true
+log.workspace = true
+boxxy-preferences = { path = "../preferences" }
+boxxy-db = { path = "../db" }
+
+[build-dependencies]
+glib-build-tools.workspace = true
+
+[[bin]]
+name = "boxxy-terminal"
+path = "src/main.rs"

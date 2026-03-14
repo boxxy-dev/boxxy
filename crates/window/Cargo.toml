@@ -1,0 +1,30 @@
+[package]
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description.workspace = true
+license.workspace = true
+name = "boxxy-window"
+
+[dependencies]
+gtk4.workspace = true
+libadwaita.workspace = true
+boxxy-terminal = { path = "../terminal" }
+boxxy-preferences = { path = "../preferences" }
+boxxy-keybindings = { path = "../keybindings" }
+boxxy-app-menu = { path = "../app_menu" }
+boxxy-themes = { path = "../themes" }
+boxxy-sidebar = { path = "../sidebar" }
+boxxy-claw = { path = "../boxxy_claw" }
+boxxy-ai-core = { path = "../ai_core" }
+boxxy-apps = { path = "../boxxy_apps" }
+boxxy-model-selection = { path = "../model_selection" }
+boxxy-command-palette = { path = "../command_palette" }
+boxxy-shortcuts = { path = "../shortcuts" }
+boxxy-about = { path = "../about" }
+anyhow.workspace = true
+sourceview5.workspace = true
+async-channel.workspace = true
+tokio.workspace = true
+uuid.workspace = true
+getrandom.workspace = true

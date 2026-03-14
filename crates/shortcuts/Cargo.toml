@@ -1,0 +1,12 @@
+[package]
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description.workspace = true
+license.workspace = true
+name = "boxxy-shortcuts"
+
+[dependencies]
+gtk4.workspace = true
+libadwaita.workspace = true
+boxxy-keybindings.workspace = true

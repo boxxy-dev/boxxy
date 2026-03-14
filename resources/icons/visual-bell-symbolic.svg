@@ -1,0 +1,68 @@
+
+  <svg
+          xmlns='http://www.w3.org/2000/svg'
+          width='16'
+          height='16'
+          xmlns:gpa='https://www.gtk.org/grappa'
+          gpa:version='1'
+          gpa:keywords='accessibility-visual-alerts bell alarm sound blink'>
+    <path
+            d='M 7 3 L 7 1 M 1 12 L 5.43327904 12 M 1 12 C 2.02507615 12, 3 11.1057377, 3 10 L 3 7 C 3 4.79086113, 4.79086113 3, 7 3 C 7.50112104 3, 7.98071909 3.09215117, 8.42277241 3.26043248'
+            id='path0'
+            stroke-width='2'
+            stroke-linecap='round'
+            stroke-linejoin='round'
+            stroke='rgb(0,0,0)'
+            fill='none'
+            class='foreground-stroke transparent-fill'
+            gpa:stroke='foreground'>
+    </path>
+    <path
+            d='M 8.41421318 14.4142141 C 7.84221697 14.9862099, 6.98198175 15.157321, 6.23463297 14.8477592 C 5.48728418 14.5381975, 5 13.8089247, 5 13'
+            id='path1'
+            stroke-width='2'
+            stroke-linecap='round'
+            stroke-linejoin='round'
+            stroke='rgb(0,0,0)'
+            fill='none'
+            class='foreground-stroke transparent-fill'
+            gpa:stroke='foreground'>
+    </path>
+    <path
+            d='M 8.59525681 6.96734428 L 7 9 L 8.35579872 10.6947479 C 8.99841118 11.4980135, 9.9713192 11.9656172, 11 11.9656172 C 12.0286818 11.9656172, 13.0015898 11.4980135, 13.6442022 10.6947479 L 15 9 L 13.4047432 6.96734428 C 12.825243 6.22895241, 11.9386387 5.79772615, 11 5.79772615 C 10.0613613 5.79772615, 9.174757 6.22895241, 8.59525681 6.96734428 Z'
+            id='path2'
+            stroke-width='2'
+            stroke-linecap='round'
+            stroke-linejoin='round'
+            stroke='rgb(0,0,0)'
+            fill='none'
+            class='foreground-stroke transparent-fill'
+            gpa:stroke='foreground'>
+    </path>
+    <path
+            d='M 11 8 A 1 1 0 0 1 12 9 A 1 1 0 0 1 11 10 A 1 1 0 0 1 10 9 A 1 1 0 0 1 11 8 Z'
+            id='path3'
+            stroke-width='1'
+            stroke-linecap='round'
+            stroke-linejoin='round'
+            stroke='rgb(0,0,0)'
+            gpa:stroke-width='0.25 1 3'
+            fill-rule='winding'
+            fill='rgb(0,0,0)'
+            class='foreground-stroke foreground-fill'
+            gpa:stroke='foreground'
+            gpa:fill='foreground'>
+    </path>
+    <path
+            d='M 10 9 C 10 9.55228519, 10.4477148 10, 11 10 C 11.5522852 10, 12 9.55228519, 12 9 C 12 8.44771481, 11.5522852 8, 11 8 C 10.4477148 8, 10 8.44771481, 10 9 Z'
+            id='path4'
+            stroke-width='1'
+            stroke-linecap='round'
+            stroke-linejoin='round'
+            stroke='rgb(0,0,0)'
+            gpa:stroke-width='0.25 1 2'
+            fill='none'
+            class='foreground-stroke transparent-fill'
+            gpa:stroke='foreground'>
+    </path>
+  </svg>
