@@ -6,7 +6,7 @@ While we do our best to review the generated code, we certainly miss some spots.
 
 ## Committing
 
-Because Boxxy is early in development, we care to speed things up as much as possible. So internally we use a private "dev" branch that we work in a bunch of things. When the task is ready, we squeeze all commits to a single BIG, and push in "main", and most usually that will be actual releases. It is still easy to understand the commit changes with an Agent though.
+Because Boxxy is early in development, we care to speed things up as much as possible. So internally we use a private "dev" branch that we work in a bunch of things. When the task is ready, we squeeze all commits to a single BIG, and push in "main". It is still easy to understand the commit changes with an Agent though.
 
 ---
 

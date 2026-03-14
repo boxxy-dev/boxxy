@@ -71,3 +71,19 @@ From Preferences open the config folder and navigate to "boxxyclaw" and "skills"
 ## Memories
 
 Boxxy is a self-improving system via Memories. You can tell BoxxyClaw "? my favorite editor is micro" and Boxxy will remember that for the next time; While the initial functionality is here, Boxxy is still a Preview; There isn't a migration strategy yet, that means your memories might get wiped in Boxxy updates. However, the Long Term memory will survive! You can manually edit this file in `.config/boxxy-terminal/boxxyclaw/MEMORY.md`
+
+## Others
+
+You may need to raise your inotify limits. Check your current values:
+
+```
+cat /proc/sys/fs/inotify/max_user_instances
+cat /proc/sys/fs/inotify/max_user_watches
+```
+
+For example, Fedora's defaults are too low; Raise both:
+
+```
+echo fs.inotify.max_user_instances=65536 | sudo tee -a /etc/sysctl.conf && sudo sysctl -p
+echo fs.inotify.max_user_watches=524288 | sudo tee -a /etc/sysctl.conf && sudo sysctl -p
+```
