@@ -1,0 +1,418 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<interface>
+  <object class="AdwDialog" id="dialog">
+    <property name="presentation-mode">bottom-sheet</property>
+    <property name="title" translatable="yes">Preferences</property>
+    <property name="content-width">850</property>
+    <property name="content-height">600</property>
+    <property name="child">
+      <object class="AdwNavigationSplitView" id="split_view">
+        <property name="sidebar">
+          <object class="AdwNavigationPage">
+            <property name="title" translatable="yes">Categories</property>
+            <property name="child">
+              <object class="AdwToolbarView">
+                <child type="top">
+                  <object class="AdwHeaderBar">
+                    <property name="show-title">False</property>
+                  </object>
+                </child>
+                <property name="content">
+                  <object class="GtkBox">
+                    <property name="orientation">vertical</property>
+                    <child>
+                      <object class="GtkSearchEntry" id="search_entry">
+                        <property name="margin-top">12</property>
+                        <property name="margin-bottom">12</property>
+                        <property name="margin-start">12</property>
+                        <property name="margin-end">12</property>
+                        <property name="placeholder-text" translatable="yes">Search preferences...</property>
+                      </object>
+                    </child>
+                    <child>
+                      <object class="GtkScrolledWindow">
+                        <property name="vexpand">True</property>
+                        <property name="hscrollbar-policy">never</property>
+                        <property name="child">
+                          <object class="GtkListBox" id="category_list">
+                            <property name="selection-mode">single</property>
+                            <property name="css-classes">navigation-sidebar</property>
+                            <child>
+                              <object class="GtkListBoxRow" id="nav_appearance">
+                                <property name="child">
+                                  <object class="GtkLabel">
+                                    <property name="label" translatable="yes">Appearance</property>
+                                    <property name="xalign">0</property>
+                                    <property name="margin-start">12</property>
+                                    <property name="margin-end">12</property>
+                                    <property name="margin-top">10</property>
+                                    <property name="margin-bottom">10</property>
+                                  </object>
+                                </property>
+                              </object>
+                            </child>
+                            <child>
+                              <object class="GtkListBoxRow" id="nav_previews">
+                                <property name="child">
+                                  <object class="GtkLabel">
+                                    <property name="label" translatable="yes">Previews</property>
+                                    <property name="xalign">0</property>
+                                    <property name="margin-start">12</property>
+                                    <property name="margin-end">12</property>
+                                    <property name="margin-top">10</property>
+                                    <property name="margin-bottom">10</property>
+                                  </object>
+                                </property>
+                              </object>
+                            </child>
+                            <child>
+                              <object class="GtkListBoxRow" id="nav_apis">
+                                <property name="child">
+                                  <object class="GtkLabel">
+                                    <property name="label" translatable="yes">APIs</property>
+                                    <property name="xalign">0</property>
+                                    <property name="margin-start">12</property>
+                                    <property name="margin-end">12</property>
+                                    <property name="margin-top">10</property>
+                                    <property name="margin-bottom">10</property>
+                                  </object>
+                                </property>
+                              </object>
+                            </child>
+                            <child>
+                              <object class="GtkListBoxRow" id="nav_advanced">
+                                <property name="child">
+                                  <object class="GtkLabel">
+                                    <property name="label" translatable="yes">Advanced</property>
+                                    <property name="xalign">0</property>
+                                    <property name="margin-start">12</property>
+                                    <property name="margin-end">12</property>
+                                    <property name="margin-top">10</property>
+                                    <property name="margin-bottom">10</property>
+                                  </object>
+                                </property>
+                              </object>
+                            </child>
+                          </object>
+                        </property>
+                      </object>
+                    </child>
+                  </object>
+                </property>
+              </object>
+            </property>
+          </object>
+        </property>
+        
+        <property name="content">
+          <object class="AdwNavigationPage">
+            <property name="title" translatable="yes">Preferences</property>
+            <property name="child">
+              <object class="AdwToolbarView">
+                <child type="top">
+                  <object class="AdwHeaderBar">
+                    <property name="title-widget">
+                      <object class="AdwWindowTitle" id="content_title">
+                        <property name="title" translatable="yes">Appearance</property>
+                      </object>
+                    </property>
+                  </object>
+                </child>
+                <property name="content">
+                  <object class="AdwViewStack" id="stack">
+                    
+                    <child>
+                      <object class="AdwViewStackPage">
+                        <property name="name">appearance</property>
+                        <property name="child">
+                          <object class="AdwPreferencesPage" id="page_appearance">
+                            <child>
+                              <object class="AdwPreferencesGroup" id="group_font">
+                                <property name="title" translatable="yes">Font</property>
+                                <child>
+                                  <object class="AdwActionRow" id="font_row">
+                                    <property name="title" translatable="yes">Font</property>
+                                    <property name="subtitle" translatable="yes">Family and size</property>
+                                  </object>
+                                </child>
+                              </object>
+                            </child>
+                            <child>
+                              <object class="AdwPreferencesGroup" id="group_terminal">
+                                <property name="title" translatable="yes">Terminal</property>
+                                <child>
+                                  <object class="AdwActionRow" id="theme_row">
+                                    <property name="title" translatable="yes">Theme</property>
+                                    <property name="activatable">True</property>
+                                    <child type="suffix">
+                                      <object class="GtkImage">
+                                        <property name="icon-name">go-next-symbolic</property>
+                                      </object>
+                                    </child>
+                                  </object>
+                                </child>
+                                <child>
+                                  <object class="AdwSpinRow" id="padding_spin">
+                                    <property name="title" translatable="yes">Padding</property>
+                                    <property name="subtitle" translatable="yes">px</property>
+                                  </object>
+                                </child>
+                                <child>
+                                  <object class="AdwSpinRow" id="line_spacing_spin">
+                                    <property name="title" translatable="yes">Line Spacing</property>
+                                    <property name="digits">2</property>
+                                    <property name="numeric">True</property>
+                                  </object>
+                                </child>
+                                <child>
+                                  <object class="AdwSpinRow" id="col_spacing_spin">
+                                    <property name="title" translatable="yes">Column Spacing</property>
+                                    <property name="digits">2</property>
+                                    <property name="numeric">True</property>
+                                  </object>
+                                </child>
+                                <child>
+                                  <object class="AdwSwitchRow" id="preserve_cwd_switch">
+                                    <property name="title" translatable="yes">Preserve Working Directory</property>
+                                    <property name="subtitle" translatable="yes">New tabs open in the active tab's directory</property>
+                                  </object>
+                                </child>
+                              </object>
+                            </child>
+                            <child>
+                              <object class="AdwPreferencesGroup" id="group_cursor">
+                                <property name="title" translatable="yes">Cursor</property>
+                                <child>
+                                  <object class="AdwComboRow" id="cursor_shape_combo">
+                                    <property name="title" translatable="yes">Shape</property>
+                                  </object>
+                                </child>
+                                <child>
+                                  <object class="AdwSwitchRow" id="cursor_color_switch">
+                                    <property name="title" translatable="yes">Custom Color</property>
+                                  </object>
+                                </child>
+                                <child>
+                                  <object class="AdwActionRow" id="cursor_color_row">
+                                    <property name="title" translatable="yes">Color</property>
+                                  </object>
+                                </child>
+                                <child>
+                                  <object class="AdwSwitchRow" id="cursor_blinking_switch">
+                                    <property name="title" translatable="yes">Blinking Cursor</property>
+                                    <property name="subtitle" translatable="yes">Cursor fades in and out when focused.</property>
+                                  </object>
+                                </child>
+                              </object>
+                            </child>
+                            <child>
+                              <object class="AdwPreferencesGroup" id="group_layout">
+                                <property name="title" translatable="yes">Layout</property>
+                                <child>
+                                  <object class="AdwSwitchRow" id="hide_scrollbars_switch">
+                                    <property name="title" translatable="yes">Hide Scrollbars</property>
+                                    <property name="subtitle" translatable="yes">Do not show vertical scrollbars in terminal panes</property>
+                                  </object>
+                                </child>
+                                <child>
+                                  <object class="AdwSwitchRow" id="invert_scroll_switch">
+                                    <property name="title" translatable="yes">Invert Scroll Direction</property>
+                                    <property name="subtitle" translatable="yes">Reverse the direction of mouse wheel scrolling</property>
+                                  </object>
+                                </child>
+                                <child>
+                                  <object class="AdwSwitchRow" id="dim_inactive_switch">                                    
+                                    <property name="title" translatable="yes">Dim Inactive Panes</property>
+                                    <property name="subtitle" translatable="yes">Dim inactive terminal splits slightly</property>
+                                  </object>
+                                </child>
+                                <child>
+                                  <object class="AdwSwitchRow" id="always_show_tabs_switch">
+                                    <property name="title" translatable="yes">Always Show Tab Bar</property>
+                                    <property name="subtitle" translatable="yes">Show the tab bar even with only one tab</property>
+                                  </object>
+                                </child>
+                                <child>
+                                  <object class="AdwSwitchRow" id="fixed_width_tabs_switch">
+                                    <property name="title" translatable="yes">Fixed Width Tabs</property>
+                                    <property name="subtitle" translatable="yes">Do not expand tabs to fill the entire tab bar</property>
+                                  </object>
+                                </child>
+                                <child>
+                                  <object class="AdwSpinRow" id="chat_width_spin">
+                                    <property name="title" translatable="yes">Sidebar Width (px)</property>
+                                    <property name="subtitle" translatable="yes">Hacky mouse resize for OverlaySplitView</property>
+                                  </object>
+                                </child>
+                              </object>
+                            </child>
+                          </object>
+                        </property>
+                      </object>
+                    </child>
+
+                    <child>
+                      <object class="AdwViewStackPage">
+                        <property name="name">previews</property>
+                        <property name="child">
+                          <object class="AdwPreferencesPage" id="page_previews">
+                            <child>
+                              <object class="AdwPreferencesGroup" id="group_image_previews">
+                                <property name="title" translatable="yes">Image Previews</property>
+                                <child>
+                                  <object class="AdwActionRow" id="row_hyperlink_warning">
+                                    <property name="title" translatable="yes">Use --hyperlink for file previews</property>
+                                    <property name="subtitle" translatable="yes">Ensure your CLI tools (like eza or ls) use --hyperlink=auto for the best experience with path copying and image previews.</property>
+                                    <child type="prefix">
+                                      <object class="GtkImage">
+                                        <property name="icon-name">dialog-warning-symbolic</property>
+                                        <property name="css-classes">warning</property>
+                                      </object>
+                                    </child>
+                                  </object>
+                                </child>
+                                <child>
+                                  <object class="AdwComboRow" id="image_preview_trigger_combo">
+                                    <property name="title" translatable="yes">Image Previews</property>
+                                    <property name="subtitle" translatable="yes">When to display a small preview popup for image hyperlinks.</property>
+                                  </object>
+                                </child>
+                                <child>
+                                  <object class="AdwSpinRow" id="preview_max_width_spin">
+                                    <property name="title" translatable="yes">Maximum Width</property>
+                                    <property name="subtitle" translatable="yes">px</property>
+                                  </object>
+                                </child>
+                                <child>
+                                  <object class="AdwSpinRow" id="preview_max_height_spin">
+                                    <property name="title" translatable="yes">Maximum Height</property>
+                                    <property name="subtitle" translatable="yes">px</property>
+                                  </object>
+                                </child>
+                              </object>
+                            </child>
+                          </object>
+                        </property>
+                      </object>
+                    </child>
+
+                    <child>
+                      <object class="AdwViewStackPage">
+                        <property name="name">apis</property>
+                        <property name="child">
+                          <object class="AdwPreferencesPage" id="page_apis">
+                            <child>
+                              <object class="AdwPreferencesGroup" id="group_gemini_api">
+                                <property name="title" translatable="yes">Gemini API</property>
+                                <property name="description" translatable="yes">Configure Google Gemini AI settings.</property>
+                                <child>
+                                  <object class="AdwPasswordEntryRow" id="api_key_entry">
+                                    <property name="title" translatable="yes">API Key</property>
+                                  </object>
+                                </child>
+                              </object>
+                            </child>
+                            <child>
+                              <object class="AdwPreferencesGroup" id="group_ollama_api">
+                                <property name="title" translatable="yes">Ollama API</property>
+                                <property name="description" translatable="yes">Configure Local Ollama settings.</property>
+                                <child>
+                                  <object class="AdwEntryRow" id="ollama_base_url_entry">
+                                    <property name="title" translatable="yes">Base URL</property>
+                                  </object>
+                                </child>
+                              </object>
+                            </child>
+                          </object>
+                        </property>
+                      </object>
+                    </child>
+
+                    <child>
+                      <object class="AdwViewStackPage">
+                        <property name="name">advanced</property>
+                        <property name="child">
+                          <object class="AdwPreferencesPage" id="page_advanced">
+                            <child>
+                              <object class="AdwPreferencesGroup" id="group_shell">
+                                <property name="title" translatable="yes">Shell</property>
+                                <child>
+                                  <object class="AdwSwitchRow" id="login_shell_switch">
+                                    <property name="title" translatable="yes">Login Shell</property>
+                                    <property name="subtitle" translatable="yes">Spawn terminal as a login shell.</property>
+                                  </object>
+                                </child>
+                                <child>
+                                  <object class="AdwSwitchRow" id="show_vte_grid_switch">
+                                    <property name="title" translatable="yes">Show VTE Grid</property>
+                                    <property name="subtitle" translatable="yes">Draw grid lines representing terminal cells.</property>
+                                  </object>
+                                </child>
+                              </object>
+                            </child>
+                            <child>
+                              <object class="AdwPreferencesGroup" id="group_terminal_interaction">
+                                <property name="title" translatable="yes">Terminal Interaction</property>
+                                <property name="description" translatable="yes">Used for Ctrl+Click and context menus. Warning: Complex regexes can cause UI freezes.</property>
+                                <child>
+                                  <object class="AdwEntryRow" id="custom_regex_entry">
+                                    <property name="title" translatable="yes">File Path Regex</property>
+                                  </object>
+                                </child>
+                                <child>
+                                  <object class="AdwActionRow" id="row_reset_regex">
+                                    <child type="prefix">
+                                      <object class="GtkButton" id="reset_regex_btn">
+                                        <property name="label" translatable="yes">Reset to Default</property>
+                                      </object>
+                                    </child>
+                                  </object>
+                                </child>
+                              </object>
+                            </child>
+                            <child>
+                              <object class="AdwPreferencesGroup" id="group_config">
+                                <property name="title" translatable="yes">Config</property>
+                                <child>
+                                  <object class="AdwActionRow" id="row_open_config">
+                                    <property name="title" translatable="yes">Open Config Folder</property>
+                                    <property name="subtitle" translatable="yes">Manage settings and apps directly</property>
+                                    <child type="suffix">
+                                      <object class="GtkButton" id="open_config_btn">
+                                        <property name="icon-name">folder-open-symbolic</property>
+                                        <property name="valign">center</property>
+                                        <property name="css-classes">flat circular</property>
+                                      </object>
+                                    </child>
+                                  </object>
+                                </child>
+                                <child>
+                                  <object class="AdwActionRow" id="row_reset_config">
+                                    <property name="title" translatable="yes">Reset Everything</property>
+                                    <property name="subtitle" translatable="yes">Deletes all settings and apps.</property>
+                                    <child type="suffix">
+                                      <object class="GtkButton" id="reset_config_btn">
+                                        <property name="label" translatable="yes">Reset</property>
+                                        <property name="valign">center</property>
+                                        <property name="css-classes">destructive-action</property>
+                                      </object>
+                                    </child>
+                                  </object>
+                                </child>
+                              </object>
+                            </child>
+                          </object>
+                        </property>
+                      </object>
+                    </child>
+
+                  </object>
+                </property>
+              </object>
+            </property>
+          </object>
+        </property>
+      </object>
+    </property>
+  </object>
+</interface>

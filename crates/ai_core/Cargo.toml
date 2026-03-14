@@ -1,0 +1,15 @@
+[package]
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description.workspace = true
+license.workspace = true
+name = "boxxy-ai-core"
+
+[dependencies]
+async-trait.workspace = true
+serde.workspace = true
+anyhow.workspace = true
+tokio = { workspace = true, features = ["full"] }
+rig-core.workspace = true
+boxxy-model-selection = { path = "../model_selection" }

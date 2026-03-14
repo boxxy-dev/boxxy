@@ -1,0 +1,33 @@
+# Colors (Lab Fox)
+
+[colors.bright]
+black = '#535353'
+blue = '#db501f'
+cyan = '#7d53e7'
+green = '#53eaa8'
+magenta = '#6a36b6'
+red = '#ff6517'
+white = '#ffffff'
+yellow = '#fca013'
+
+[colors.cursor]
+cursor = '#7f7f7f'
+text = '#b2b2b2'
+
+[colors.normal]
+black = '#2e2e2e'
+blue = '#db3b21'
+cyan = '#6e49cb'
+green = '#3eb383'
+magenta = '#6b40a8'
+red = '#fc6d26'
+white = '#ffffff'
+yellow = '#fca121'
+
+[colors.primary]
+background = '#2e2e2e'
+foreground = '#ffffff'
+
+[colors.selection]
+background = '#cb392e'
+text = '#ffffff'

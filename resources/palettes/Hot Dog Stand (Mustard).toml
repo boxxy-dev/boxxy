@@ -1,0 +1,33 @@
+# Colors (Hot Dog Stand (Mustard))
+
+[colors.bright]
+black = '#000000'
+blue = '#000000'
+cyan = '#000000'
+green = '#ea3323'
+magenta = '#ea3323'
+red = '#ea3323'
+white = '#c6c6c6'
+yellow = '#ea3323'
+
+[colors.cursor]
+cursor = '#ea3323'
+text = '#ffff54'
+
+[colors.normal]
+black = '#000000'
+blue = '#000000'
+cyan = '#000000'
+green = '#ea3323'
+magenta = '#ea3323'
+red = '#ea3323'
+white = '#b9b9b9'
+yellow = '#ea3323'
+
+[colors.primary]
+background = '#ffff54'
+foreground = '#000000'
+
+[colors.selection]
+background = '#ea3323'
+text = '#ffffff'

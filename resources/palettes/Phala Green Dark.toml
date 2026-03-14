@@ -1,0 +1,33 @@
+# Colors (Phala Green Dark)
+
+[colors.bright]
+black = '#797979'
+blue = '#0433ff'
+cyan = '#00e8ea'
+green = '#00db00'
+magenta = '#ed3aea'
+red = '#ed2200'
+white = '#eaeaea'
+yellow = '#eae700'
+
+[colors.cursor]
+cursor = '#c1fc03'
+text = '#ff271d'
+
+[colors.normal]
+black = '#000000'
+blue = '#0223c0'
+cyan = '#00b4c0'
+green = '#00b100'
+magenta = '#c22ec0'
+red = '#ab1500'
+white = '#cbcbcb'
+yellow = '#a9a700'
+
+[colors.primary]
+background = '#000000'
+foreground = '#c1fc03'
+
+[colors.selection]
+background = '#014804'
+text = '#ffffff'

@@ -1,0 +1,21 @@
+[package]
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description.workspace = true
+license.workspace = true
+name = "boxxy-themes"
+
+[dependencies]
+pango.workspace = true
+gtk4.workspace = true
+gio.workspace = true
+libadwaita.workspace = true
+anyhow.workspace = true
+sourceview5.workspace = true
+directories.workspace = true
+glib.workspace = true
+
+[build-dependencies]
+serde = { workspace = true, features = ["derive"] }
+toml.workspace = true

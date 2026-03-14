@@ -1,0 +1,20 @@
+[package]
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description.workspace = true
+license.workspace = true
+name = "boxxy-preferences"
+
+[dependencies]
+cairo-rs.workspace = true
+gtk4.workspace = true
+libadwaita.workspace = true
+serde_json.workspace = true
+serde.workspace = true
+directories.workspace = true
+anyhow.workspace = true
+boxxy-themes.workspace = true
+tokio.workspace = true
+log.workspace = true
+boxxy-model-selection = { path = "../model_selection" }

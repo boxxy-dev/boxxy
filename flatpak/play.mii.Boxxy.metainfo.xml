@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>play.mii.Boxxy</id>
+  <name>Boxxy Terminal</name>
+  <summary>GNOME Terminal with AI assistant</summary>
+
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+
+  <description>
+    <p>
+     Stupid Linux Terminal
+    </p>
+  </description>
+
+  <launchable type="desktop-id">play.mii.Boxxy.desktop</launchable>
+
+  <url type="homepage">https://mii.play</url>
+
+  <requires>
+    <display_length compare="ge">360</display_length>
+  </requires>
+
+  <recommends>
+    <control>keyboard</control>
+    <control>pointing</control>
+  </recommends>
+
+  <content_rating type="oars-1.1"/>
+
+  <releases>
+    <release version="0.0.22" date="2026-03-14">
+      <description>
+        <p>Preview Builds</p>
+      </description>
+    </release>
+  </releases>
+
+  <screenshots>
+    <!-- Add screenshots here -->
+  </screenshots>
+</component>

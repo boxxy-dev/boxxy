@@ -1,0 +1,33 @@
+# Colors (Havn Daggry)
+
+[colors.bright]
+black = '#1f2842'
+blue = '#6089c0'
+cyan = '#aa869d'
+green = '#719679'
+magenta = '#7d7396'
+red = '#cc4a35'
+white = '#d6dbeb'
+yellow = '#f1a527'
+
+[colors.cursor]
+cursor = '#226c4f'
+text = '#d6dbeb'
+
+[colors.normal]
+black = '#1f2842'
+blue = '#3a577d'
+cyan = '#925780'
+green = '#577159'
+magenta = '#7c5c97'
+red = '#985248'
+white = '#b0b5c5'
+yellow = '#be6b00'
+
+[colors.primary]
+background = '#f8f9fb'
+foreground = '#3b4a7a'
+
+[colors.selection]
+background = '#cfe9dd'
+text = '#313c64'

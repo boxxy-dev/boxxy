@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<style-scheme id="synthwave" _name="Synthwave" version="1.0">
+  <author>Boxxy Terminal</author>
+  <description>Synthwave theme</description>
+
+  <!-- Synthwave Palette -->
+  <color name="bg" value="#2b213a"/>
+  <color name="fg" value="#f4eee4"/>
+  <color name="current-line" value="#3a2d52"/>
+  <color name="selection" value="#493863"/> 
+  <color name="cursor" value="#f4eee4"/>
+  
+  <color name="red" value="#d92c95"/>
+  <color name="green" value="#72f1b8"/>
+  <color name="yellow" value="#fede5d"/>
+  <color name="blue" value="#2c75e7"/>
+  <color name="purple" value="#b399ff"/>
+  <color name="cyan" value="#5ed7ff"/>
+  <color name="white" value="#f4eee4"/>
+  <color name="bright-red" value="#ff4d9e"/>
+  <color name="bright-yellow" value="#ff8b39"/>
+  <color name="bright-blue" value="#3e6af8"/>
+  <color name="bright-purple" value="#9e7cff"/>
+
+  <style name="text" background="bg" foreground="fg"/>
+  <style name="selection" background="selection"/>
+  <style name="cursor" foreground="cursor"/>
+  <style name="current-line" background="current-line"/>
+  <style name="line-numbers" foreground="purple" background="bg"/>
+  <style name="draw-spaces" foreground="current-line"/>
+
+  <!-- Syntax -->
+  <style name="def:comment" foreground="purple" italic="true"/>
+  <style name="def:shebang" foreground="purple" bold="true"/>
+  
+  <style name="def:constant" foreground="bright-yellow"/>
+  <style name="def:string" foreground="green"/>
+  <style name="def:special-char" foreground="cyan"/>
+  <style name="def:special-constant" foreground="bright-yellow" italic="true"/>
+  <style name="def:boolean" foreground="bright-yellow"/>
+  <style name="def:number" foreground="bright-yellow"/>
+  <style name="def:floating-point" foreground="bright-yellow"/>
+
+  <style name="def:identifier" foreground="fg"/>
+  <style name="def:function" foreground="bright-blue"/>
+  <style name="def:keyword" foreground="red"/>
+  <style name="def:builtin" foreground="cyan" italic="true"/>
+  <style name="def:statement" foreground="red"/>
+  <style name="def:type" foreground="bright-purple" italic="true"/>
+  <style name="def:preprocessor" foreground="red"/>
+  <style name="def:error" foreground="bright-red" underline="true"/>
+  <style name="def:warning" foreground="yellow" underline="true"/>
+  <style name="def:note" foreground="cyan" underline="true"/>
+
+</style-scheme>

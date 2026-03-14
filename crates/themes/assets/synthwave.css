@@ -1,0 +1,78 @@
+/* Base Colors */
+ @define-color window_bg_color #2b213a;
+ @define-color window_fg_color #f4eee4;  
+
+/* View Styling */
+ @define-color view_bg_color #2b213a;
+ @define-color view_fg_color #f4eee4;
+
+/* Header Bar */
+ @define-color headerbar_bg_color #2b213a; 
+ @define-color headerbar_backdrop_color #2b213a;
+ @define-color headerbar_fg_color #f4eee4;
+ @define-color headerbar_border_color transparent;
+
+/* Popovers & Dialogs */
+ @define-color popover_bg_color #2a2139; 
+ @define-color popover_fg_color #f4eee4;
+
+ @define-color dialog_bg_color @popover_bg_color;
+ @define-color dialog_fg_color @popover_fg_color;
+
+/* Cards & Sidebars */
+ @define-color card_bg_color #3a2d52;  
+ @define-color card_fg_color #f4eee4;
+
+ @define-color sidebar_bg_color #241b30;
+ @define-color sidebar_fg_color #f4eee4;
+ @define-color sidebar_backdrop_color @sidebar_bg_color;
+ @define-color sidebar_border_color  #3a2d52;
+
+ @define-color secondary_sidebar_bg_color @sidebar_bg_color;
+ @define-color secondary_sidebar_fg_color @sidebar_fg_color;
+ @define-color secondary_sidebar_backdrop_color @sidebar_backdrop_color;
+ @define-color secondary_sidebar_border_color @sidebar_border_color;
+
+/* Synthwave '84 Accent Colors */
+ @define-color accent_color #7e57c2; /* Purple */
+ @define-color accent_bg_color #7e57c2;
+ @define-color accent_fg_color #f4eee4;
+
+headerbar {
+    background-color: @headerbar_bg_color !important;
+    background-image: none !important;
+    color: @headerbar_fg_color !important;
+    border: none !important;
+    box-shadow: none !important;
+}
+
+window, .background {
+    background-color: @window_bg_color !important;
+    color: @window_fg_color !important;
+}
+
+tabbar {
+    background-color: @headerbar_bg_color !important;
+}
+
+tab {
+    background-color: @headerbar_bg_color !important;
+    color: @headerbar_fg_color !important;
+    border: none !important;
+    box-shadow: none !important;
+    margin: 0px !important;
+    padding: 2px 10px !important; /* Ensure some padding */
+}
+
+tab:checked {
+    background-color: #3a2d52 !important; /* Distinct lighter purple */
+    color: #ffffff !important;
+    font-weight: bold !important;
+    border-top: 2px solid #ff7edb !important; /* Pink accent */
+}
+
+.sidebar-header {
+    background-color: @headerbar_bg_color !important;
+    border-bottom: none !important;
+    background-image: none !important;
+}

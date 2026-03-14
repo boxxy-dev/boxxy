@@ -1,0 +1,19 @@
+[package]
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description.workspace = true
+license.workspace = true
+name = "boxxy-sidebar"
+
+[dependencies]
+gtk4.workspace = true
+libadwaita.workspace = true
+boxxy-ai-core = { path = "../ai_core" }
+anyhow.workspace = true
+sourceview5.workspace = true
+tokio.workspace = true
+rig-core.workspace = true
+boxxy-model-selection.workspace = true
+boxxy-preferences = { path = "../preferences" }
+uuid.workspace = true

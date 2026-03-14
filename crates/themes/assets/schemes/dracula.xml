@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<style-scheme id="dracula" _name="Dracula" version="1.0">
+  <author>Dracula Theme</author>
+  <description>Dracula theme for GTKSourceView</description>
+
+  <!-- Dracula Palette -->
+  <color name="bg" value="#282a36"/>
+  <color name="current-line" value="#44475a"/>
+  <color name="fg" value="#f8f8f2"/>
+  <color name="comment" value="#6272a4"/>
+  <color name="cyan" value="#8be9fd"/>
+  <color name="green" value="#50fa7b"/>
+  <color name="orange" value="#ffb86c"/>
+  <color name="pink" value="#ff79c6"/>
+  <color name="purple" value="#bd93f9"/>
+  <color name="red" value="#ff5555"/>
+  <color name="yellow" value="#f1fa8c"/>
+
+  <style name="text" background="bg" foreground="fg"/>
+  <style name="selection" background="current-line"/>
+  <style name="cursor" foreground="fg"/>
+  <style name="current-line" background="current-line"/>
+  <style name="line-numbers" foreground="comment" background="bg"/>
+  <style name="draw-spaces" foreground="comment"/>
+
+  <!-- Syntax -->
+  <style name="def:comment" foreground="comment"/>
+  <style name="def:shebang" foreground="comment" bold="true"/>
+  <style name="def:doc-comment-element" foreground="comment" italic="true"/>
+
+  <style name="def:constant" foreground="purple"/>
+  <style name="def:string" foreground="yellow"/>
+  <style name="def:special-char" foreground="pink"/>
+  <style name="def:special-constant" foreground="purple" italic="true"/>
+  <style name="def:boolean" foreground="purple"/>
+  <style name="def:number" foreground="purple"/>
+  <style name="def:floating-point" foreground="purple"/>
+
+  <style name="def:identifier" foreground="fg"/>
+  <style name="def:function" foreground="green"/>
+  <style name="def:keyword" foreground="pink"/>
+  <style name="def:builtin" foreground="cyan" italic="true"/>
+  <style name="def:statement" foreground="pink"/>
+  <style name="def:type" foreground="cyan" italic="true"/>
+  <style name="def:preprocessor" foreground="pink"/>
+  <style name="def:error" foreground="red" underline="true"/>
+  <style name="def:warning" foreground="orange" underline="true"/>
+  <style name="def:note" foreground="cyan" underline="true"/>
+
+</style-scheme>

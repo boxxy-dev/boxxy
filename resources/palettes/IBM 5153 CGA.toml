@@ -1,0 +1,33 @@
+# Colors (IBM 5153 CGA)
+
+[colors.bright]
+black = '#4e4e4e'
+blue = '#4e4edc'
+cyan = '#4ef3f3'
+green = '#4edc4e'
+magenta = '#f34ef3'
+red = '#dc4e4e'
+white = '#ffffff'
+yellow = '#f3f34e'
+
+[colors.cursor]
+cursor = '#cecece'
+text = '#141414'
+
+[colors.normal]
+black = '#141414'
+blue = '#1b1bd0'
+cyan = '#1bd0d0'
+green = '#1bd01b'
+magenta = '#d01bd0'
+red = '#d03333'
+white = '#cecece'
+yellow = '#d08c1b'
+
+[colors.primary]
+background = '#141414'
+foreground = '#cecece'
+
+[colors.selection]
+background = '#cecece'
+text = '#141414'

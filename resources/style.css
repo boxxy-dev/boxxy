@@ -1,0 +1,285 @@
+headerbar {
+	min-height: 28px;
+}
+
+headerbar > windowhandle {
+}
+
+.content-header > windowhandle > box {
+	padding: 0px;
+	margin: 0px;
+}
+
+.content-header windowcontrols.end {
+	padding-right: 8px;
+}
+
+.sidebar-header viewswitcher {
+	padding-top: 2px;
+}
+
+/* Reduce TabBar height */
+tabbar {
+	min-height: 0px;
+	padding: 0px;
+	margin: 0px;
+	border: none;
+}
+
+/* Target the tabs themselves */
+tab {
+	min-height: 28px;
+	padding: 2px 4px 2px 4px;
+	margin: 0px 0px 0px 0px;
+	border: none;
+	box-shadow: none;
+}
+
+tab > separator {
+	background: none;
+	opacity: 0;
+}
+
+/* Start and End elements in headerbar */
+
+.horizontal.start {
+	padding: 4px;
+}
+.horizontal.end {
+	padding: 0px;
+}
+.end.horizontal > button {
+	margin: 6px;
+}
+
+/* Adjust Sidebar HeaderBar to match */
+.sidebar-header {
+}
+
+.boxxy-apps-sidebar {
+	border: none;
+	border-right: none;
+	background-color: mix(@theme_bg_color, black, 0.1);
+	border-radius: 12px;
+	padding: 10px;
+}
+
+.boxxy-apps-sidebar row {
+	padding: 0px;
+	margin: 2px 0px;
+}
+
+.terminal-menu > contents {
+	min-width: 220px;
+	min-height: 330px; /*otherwise it keeps scrolling */
+}
+
+/* Give the preferences source view a distinct background */
+.preferences-editor {
+	border-radius: 12px;
+	border: none;
+	box-shadow: none;
+}
+
+.preferences-editor textview {
+	/* Darken background by 10% */
+	background-color: mix(@theme_bg_color, black, 0.9);
+}
+
+/* ── AI Chat ──────────────────────────────────────────────────────────────── */
+
+.message-bubble {
+	padding: 10px 14px;
+	border-radius: 12px;
+}
+
+.user-message {
+	background-color: @accent_bg_color;
+	color: @accent_fg_color;
+	border-radius: 16px 16px 4px 16px;
+}
+
+.assistant-message {
+	background-color: @card_bg_color;
+	border-radius: 4px 16px 16px 16px;
+}
+
+/* Code blocks */
+.code-block {
+	border-radius: 8px;
+	margin: 4px 0px;
+}
+
+.code-block-header {
+	padding: 2px 4px 2px 0px;
+	background-color: mix(@card_bg_color, black, 0.7);
+	border-radius: 8px 8px 0px 0px;
+	min-height: 0px;
+}
+
+.code-block-lang {
+	font-family: monospace;
+	font-size: 0.85em;
+	opacity: 0.6;
+}
+
+.code-block-view {
+	border-radius: 0px 0px 8px 8px;
+}
+
+/* Remove scrolling undershoot shadows only in the main window */
+.main-split-view undershoot.top,
+.main-split-view undershoot.bottom {
+	background-image: none;
+	box-shadow: none;
+}
+
+/* Hold-to-confirm progress bar */
+.hold-to-confirm-progress {
+	margin: 0px;
+	padding: 0px;
+}
+.hold-to-confirm-progress > trough {
+	background-color: transparent;
+	border: none;
+	box-shadow: none;
+}
+.hold-to-confirm-progress > trough > progress {
+	background-color: @error_bg_color;
+	border-radius: 0px;
+	min-height: 4px;
+}
+
+/* ── OSD Components (Terminal Size, Search Bar) ─────────────────────────── */
+.osd,
+.terminal-size-osd {
+    background-color: alpha(@window_bg_color, 0.95);
+    color: @window_fg_color;
+    border: 1px solid alpha(currentColor, 0.1);
+    border-radius: 12px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+.terminal-size-osd {
+    padding: 6px 16px;
+    font-weight: bold;
+    font-family: monospace;
+    font-size: 1.1em;
+}
+
+.search-bar-osd {
+    padding: 4px;
+}
+
+/* ── Search Popover ──────────────────────────────────────────────────────── */
+/*
+ * The popover is parented directly to the settings button (not owned by a
+ * MenuButton), so GTK measures screen space relative to the button and
+ * honours PositionType::Top without flipping it downward.
+ *
+ * We style only the contents node so GTK keeps its own native
+ * border/shadow/margin logic intact – fighting those with negative margins
+ * or offsets is what caused the earlier downward-flip bug.
+ */
+popover.search-popover > contents {
+    background-color: alpha(@window_bg_color, 0.95);
+    color: @window_fg_color;
+    border-radius: 10px;
+    padding: 2px;
+    /* Pull the popover ~8 px away from the bar edge */
+    margin-bottom: 8px;
+}
+
+/* Make checkboxes inside the popover readable */
+popover.search-popover check {
+    min-width: 16px;
+    min-height: 16px;
+}
+
+/* ── Command Palette ─────────────────────────────────────────────────────── */
+popover.command-palette > contents {
+    background-color: @window_bg_color;
+    color: @window_fg_color;
+    border: 1px solid alpha(currentColor, 0.1);
+    border-radius: 12px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+    padding: 0px;
+    margin-top: 8px; /* Extra padding from the headerbar */
+    min-width:460px;
+
+}
+
+shortcutlabel.palette-shortcut {
+    font-size: 0.7em;
+    opacity: 0.8;
+}
+
+.palette-shortcut .keycap {
+    padding: 4px 4px;
+    min-width: 16px;
+    min-height: 16px;
+    font-size: 0.85em;
+}
+
+/* Drop backdrop when window is not focused */
+
+:backdrop {
+    --dim-opacity: 1;
+    opacity: 1;
+    filter: none;
+}
+
+headerbar:backdrop,
+.titlebar:backdrop {
+    opacity: 1;
+    filter: none;
+    transition: none;
+}
+
+/* Sidebar Resize Handle */
+.sidebar-resize-handle {
+    min-width: 4px;
+    background: transparent;
+    margin: 0;
+    padding: 0;
+    border: none;
+    box-shadow: none;
+}
+.sidebar-resize-handle:hover,
+.sidebar-resize-handle:active {
+    background: transparent;
+}
+
+tabbox separator {
+    opacity: 0;
+    color: transparent;
+    background: transparent;
+}
+
+/* ── Boxxy-Claw Inline Widget ─────────────────────────────────────────── */
+.claw-widget {
+    border-radius: 24px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
+    border: 1px solid alpha(currentColor, 0.1);
+    background-clip: padding-box;
+}
+
+.claw-widget .suggested-action {
+    border-radius: 12px;
+}
+
+.claw-widget .heading {
+    font-weight: bold;
+    font-size: 1.1em;
+}
+
+.claw-widget frame.view {
+    border-radius: 12px;
+    background-color: alpha(black, 0.2);
+    border: 1px solid alpha(currentColor, 0.05);
+}
+
+.claw-indicator-inactive {
+    filter: grayscale(1) brightness(0.8);
+    opacity: 0.8;
+}
