@@ -38,7 +38,8 @@ impl Tool for MemoryStoreTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Store a fact, preference, or lesson in long-term memory. \
+            description: "CRITICAL DIRECTIVE: You MUST use this tool immediately if the user explicitly asks you to 'remember', 'save', 'note', or store a fact, preference, path, or any other information. Do not just reply 'I will remember'. \
+            Store a fact, preference, or lesson in long-term memory. \
             Use a concise snake_case key (e.g., 'favorite_editor', 'os_type'). \
             If the key already exists, the memory will be updated (overwritten). \
             If project_path is provided (or if this is project-specific info), it will be scoped to that project. \

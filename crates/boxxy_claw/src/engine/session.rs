@@ -395,16 +395,31 @@ fn spawn_turn(
                 ).await;
                 
                 drop(state_lock);
+let prompt_for_db = prompt_clone.clone();
+let resp_for_db = response.clone();
+let db_for_summary = db.clone();
+let cwd_for_db = cwd_clone.clone();
+let mem_model = settings.memory_model.clone().unwrap_or(settings.claw_model.clone());
+let gemini_key = settings.gemini_api_key.clone();
+let ollama_url = settings.ollama_base_url.clone();
 
-                let prompt_for_db = prompt_clone.clone();
-                let resp_for_db = response.clone();
-                let db_for_summary = db.clone();
-                let cwd_for_db = cwd_clone.clone();
-                tokio::spawn(async move {
-                    let db_guard = db_for_summary.lock().await;
-                    summarize_and_store(&*db_guard, &prompt_for_db, &resp_for_db, &cwd_for_db).await;
-                });
+tokio::spawn(async move {
+    let db_guard = db_for_summary.lock().await;
+    if db_guard.is_some() {
+        summarize_and_store(&*db_guard, &prompt_for_db, &resp_for_db, &cwd_for_db).await;
+    }
+    drop(db_guard);
 
+    crate::memories::extraction::extract_implicit_memory(
+        db_for_summary.clone(),
+        prompt_for_db,
+        resp_for_db,
+        mem_model,
+        gemini_key,
+        ollama_url,
+        cwd_for_db,
+    ).await;
+});
                 let mut command_opt = None;
                 let mut clean_diagnosis = response.clone();
 

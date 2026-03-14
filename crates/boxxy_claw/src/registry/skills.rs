@@ -104,7 +104,12 @@ impl SkillRegistry {
                         }
                     }
                     Err(e) => {
-                        error!("Failed to initialize skills watcher: {}", e);
+                        log::warn!(
+                            "Failed to initialize skills watcher: {}. \
+                            (If os error 24, your system may have exhausted 'fs.inotify.max_user_instances'.) \
+                            Skills will be loaded once but will not hot-reload.",
+                            e
+                        );
                     }
                 }
             }
