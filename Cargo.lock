@@ -473,7 +473,7 @@ dependencies = [
 
 [[package]]
 name = "boxxy-agent"
-version = "0.0.22"
+version = "0.0.23"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -492,7 +492,7 @@ dependencies = [
 
 [[package]]
 name = "boxxy-ai-core"
-version = "0.0.22"
+version = "0.0.23"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -504,7 +504,7 @@ dependencies = [
 
 [[package]]
 name = "boxxy-app"
-version = "0.0.22"
+version = "0.0.23"
 dependencies = [
  "anyhow",
  "boxxy-ai-core",
@@ -525,7 +525,7 @@ dependencies = [
 
 [[package]]
 name = "boxxy-app-menu"
-version = "0.0.22"
+version = "0.0.23"
 dependencies = [
  "anyhow",
  "gtk4",
@@ -534,7 +534,7 @@ dependencies = [
 
 [[package]]
 name = "boxxy-apps"
-version = "0.0.22"
+version = "0.0.23"
 dependencies = [
  "boxxy-ai-core",
  "boxxy-model-selection",
@@ -551,7 +551,7 @@ dependencies = [
 
 [[package]]
 name = "boxxy-claw"
-version = "0.0.22"
+version = "0.0.23"
 dependencies = [
  "anyhow",
  "async-channel",
@@ -579,7 +579,7 @@ dependencies = [
 
 [[package]]
 name = "boxxy-command-palette"
-version = "0.0.22"
+version = "0.0.23"
 dependencies = [
  "gtk4",
  "libadwaita",
@@ -587,7 +587,7 @@ dependencies = [
 
 [[package]]
 name = "boxxy-db"
-version = "0.0.22"
+version = "0.0.23"
 dependencies = [
  "anyhow",
  "directories",
@@ -600,7 +600,7 @@ dependencies = [
 
 [[package]]
 name = "boxxy-keybindings"
-version = "0.0.22"
+version = "0.0.23"
 dependencies = [
  "anyhow",
  "gtk4",
@@ -609,7 +609,7 @@ dependencies = [
 
 [[package]]
 name = "boxxy-model-selection"
-version = "0.0.22"
+version = "0.0.23"
 dependencies = [
  "gtk4",
  "libadwaita",
@@ -620,7 +620,7 @@ dependencies = [
 
 [[package]]
 name = "boxxy-preferences"
-version = "0.0.22"
+version = "0.0.23"
 dependencies = [
  "anyhow",
  "boxxy-keybindings",
@@ -638,7 +638,7 @@ dependencies = [
 
 [[package]]
 name = "boxxy-sidebar"
-version = "0.0.22"
+version = "0.0.23"
 dependencies = [
  "anyhow",
  "boxxy-ai-core",
@@ -654,7 +654,7 @@ dependencies = [
 
 [[package]]
 name = "boxxy-terminal"
-version = "0.0.22"
+version = "0.0.23"
 dependencies = [
  "anyhow",
  "ashpd",
@@ -683,7 +683,7 @@ dependencies = [
 
 [[package]]
 name = "boxxy-themes"
-version = "0.0.22"
+version = "0.0.23"
 dependencies = [
  "anyhow",
  "directories",
@@ -733,7 +733,7 @@ dependencies = [
 
 [[package]]
 name = "boxxy-window"
-version = "0.0.22"
+version = "0.0.23"
 dependencies = [
  "anyhow",
  "async-channel",

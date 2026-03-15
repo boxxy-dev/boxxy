@@ -1,42 +1,72 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <component type="desktop-application">
-  <id>play.mii.Boxxy</id>
-  <name>Boxxy Terminal</name>
-  <summary>GNOME Terminal with AI assistant</summary>
+	<metadata_license>CC0-1.0</metadata_license>
+	<project_license>MIT</project_license>
+	<id>play.mii.Boxxy</id>
+	<name>Boxxy Terminal</name>
+	<developer id="io.github.miifrommera">
+    	<name>Mii</name>
+    </developer>
 
-  <metadata_license>CC0-1.0</metadata_license>
-  <project_license>MIT</project_license>
+	<summary>The Stupid Linux Terminal</summary>
+	<description>
+	    <p>A Terminal written in GTK and Rust that integrates a blazing fast Claw-like AI!</p>
+	    <p>Features:</p>
+	    <ul>
+	    <li>Split panes with soft swap</li>
+	    <li>Preview videos via GTK widget</li>
+	    <li>Kitty Graphics Protocol support</li>
+	    <li>Self improving AI with local models and memories 🦀</li>
+	    <li>Headless modern terminal in pure Rust</li>
+	    <li>And a few more..</li>
+	    </ul>
+	    <p>NOTE: Boxxy is in preview. Short term memories database might get wiped, since Boxxy doesn't support migrations yet</p>
+	</description>
 
-  <description>
-    <p>
-     Stupid Linux Terminal
-    </p>
-  </description>
+    <url type="homepage">https://github.com/miifrommera/boxxy/</url>
+    <url type="bugtracker">https://github.com/miifrommera/boxxy/issues</url>
 
+    <screenshots>
+    	<screenshot type="default">
+     		<image>https://i.imgur.com/IqBh2Sg.png</image>
+     	</screenshot>
+     	<screenshot>
+      		<image>https://i.imgur.com/bMSWSSV.png</image>
+      	</screenshot>
+      	<screenshot>
+       		<image>https://i.imgur.com/OgiPaho.png</image>
+       	</screenshot>
+       	<screenshot>
+        		<image>https://i.imgur.com/6UMbeNK.png</image>
+        	</screenshot>
+    </screenshots>
+
+    <supports>
+      <control>keyboard</control>
+      <control>pointing</control>
+    </supports>
+    <requires>
+      <display_length compare="ge">360</display_length>
+    </requires>
   <launchable type="desktop-id">play.mii.Boxxy.desktop</launchable>
+  <provides>
+  	<binary>boxxy-terminal</binary>
+  </provides>
 
-  <url type="homepage">https://mii.play</url>
-
-  <requires>
-    <display_length compare="ge">360</display_length>
-  </requires>
-
-  <recommends>
-    <control>keyboard</control>
-    <control>pointing</control>
-  </recommends>
-
-  <content_rating type="oars-1.1"/>
+  <categories>
+    <category>Graphics</category>
+    <category>Viewer</category>
+    <category>GTK</category>
+    <category>GNOME</category>
+  </categories>
 
   <releases>
-    <release version="0.0.22" date="2026-03-14">
+    <release version="0.0.23" date="2026-03-15">
       <description>
-        <p>Preview Builds</p>
+        <p>Initial</p>
       </description>
     </release>
   </releases>
 
-  <screenshots>
-    <!-- Add screenshots here -->
-  </screenshots>
+  <content_rating type="oars-1.1"/>
 </component>

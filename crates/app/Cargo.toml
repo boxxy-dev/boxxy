@@ -16,7 +16,7 @@ boxxy-terminal.workspace = true
 boxxy-ai-core = { path = "../ai_core" }
 gdk-pixbuf.workspace = true
 gio.workspace = true
-gstreamer = "0.25.0"
+gstreamer.workspace = true
 env_logger.workspace = true
 log.workspace = true
 boxxy-preferences = { path = "../preferences" }
