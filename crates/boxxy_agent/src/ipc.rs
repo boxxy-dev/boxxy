@@ -20,6 +20,7 @@ pub trait Agent {
     async fn spawn(&self, pty_master: OwnedFd, options: SpawnOptions) -> zbus::Result<u32>;
     async fn get_cwd(&self, pid: u32) -> zbus::Result<String>;
     async fn get_foreground_process(&self, pid: u32) -> zbus::Result<String>;
+    async fn get_running_processes(&self, pid: u32) -> zbus::Result<Vec<(u32, String)>>;
     async fn signal_process_group(&self, pid: u32, signal: i32) -> zbus::Result<()>;
 
     #[zbus(signal)]
@@ -208,6 +209,56 @@ impl BoxxyAgent {
         }
         
         Ok("".to_string())
+    }
+
+    async fn get_running_processes(&self, pid: u32) -> fdo::Result<Vec<(u32, String)>> {
+        let mut all_procs = Vec::new();
+        if let Ok(entries) = std::fs::read_dir("/proc") {
+            for entry in entries.flatten() {
+                if let Ok(file_name) = entry.file_name().into_string() {
+                    if let Ok(p) = file_name.parse::<u32>() {
+                        let stat_path = format!("/proc/{}/stat", p);
+                        if let Ok(stat_content) = std::fs::read_to_string(&stat_path) {
+                            let lp_pos = stat_content.find('(');
+                            let rp_pos = stat_content.rfind(')');
+                            if let (Some(lp), Some(rp)) = (lp_pos, rp_pos) {
+                                if rp > lp {
+                                    let name = stat_content[lp + 1..rp].to_string();
+                                    let rest = &stat_content[rp + 2..];
+                                    let parts: Vec<&str> = rest.split_whitespace().collect();
+                                    if parts.len() > 1 {
+                                        if let Ok(ppid) = parts[1].parse::<u32>() {
+                                            let cmdline_path = format!("/proc/{}/cmdline", p);
+                                            let full_name = if let Ok(cmdline) = std::fs::read(&cmdline_path) {
+                                                let cmd = String::from_utf8_lossy(&cmdline).replace('\0', " ").trim().to_string();
+                                                if cmd.is_empty() { name } else { cmd }
+                                            } else {
+                                                name
+                                            };
+                                            all_procs.push((p, ppid, full_name));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        let mut descendants = Vec::new();
+        let mut to_visit = vec![pid];
+        
+        while let Some(current) = to_visit.pop() {
+            for (p, ppid, name) in &all_procs {
+                if *ppid == current {
+                    descendants.push((*p, name.clone()));
+                    to_visit.push(*p);
+                }
+            }
+        }
+        
+        Ok(descendants)
     }
 
     async fn signal_process_group(&self, pid: u32, signal: i32) -> fdo::Result<()> {

@@ -40,10 +40,11 @@ pub fn handle_close_request(
         let agent = boxxy_terminal::get_agent().await;
         let mut running_apps = Vec::new();
         for pid in pids {
-            if let Ok(comm) = agent.get_foreground_process(pid).await
-                && !comm.is_empty() {
-                    running_apps.push((pid, comm));
-                }
+            if let Ok(mut procs) = agent.get_running_processes(pid).await {
+                // Ignore the shell process itself if it's the only thing running,
+                // but since we get descendants, the shell itself isn't included.
+                running_apps.append(&mut procs);
+            }
         }
 
         if running_apps.is_empty() {
@@ -53,12 +54,31 @@ pub fn handle_close_request(
         }
 
         let dialog = libadwaita::AlertDialog::builder()
-            .heading("Close Terminal?")
-            .body("There are processes still running. Closing will terminate them.")
+            .heading("Close Window?")
+            .body("Some processes are still running.")
             .build();
 
+        let group = libadwaita::PreferencesGroup::new();
+        for (pid, comm) in running_apps {
+            let row = libadwaita::ActionRow::builder()
+                .title(&comm)
+                .subtitle(format!("Process {}", pid))
+                .build();
+            group.add(&row);
+        }
+
+        let scrolled = gtk4::ScrolledWindow::builder()
+            .hscrollbar_policy(gtk4::PolicyType::Never)
+            .vscrollbar_policy(gtk4::PolicyType::Automatic)
+            .max_content_height(250)
+            .propagate_natural_height(true)
+            .child(&group)
+            .build();
+
+        dialog.set_extra_child(Some(&scrolled));
+
         dialog.add_response("cancel", "Cancel");
-        dialog.add_response("close", "Close");
+        dialog.add_response("close", "Close All");
         dialog.set_response_appearance("close", libadwaita::ResponseAppearance::Destructive);
         dialog.set_default_response(Some("cancel"));
         dialog.set_close_response("cancel");

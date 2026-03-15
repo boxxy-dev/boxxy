@@ -269,5 +269,9 @@ impl AgentManager {
     pub async fn get_foreground_process(&self, pid: u32) -> Result<String> {
         self.proxy.get_foreground_process(pid).await.context("Agent get_foreground_process failed")
     }
+
+    pub async fn get_running_processes(&self, pid: u32) -> Result<Vec<(u32, String)>> {
+        self.proxy.get_running_processes(pid).await.context("Agent get_running_processes failed")
+    }
 }
 
