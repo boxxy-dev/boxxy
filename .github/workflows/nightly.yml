@@ -6,13 +6,12 @@ on:
       - main
   schedule:
     - cron: '0 0 * * *' # Every night at midnight
-  workflow_dispatch: # Allows you to trigger it manually from the UI
+  workflow_dispatch:
 
 permissions:
   contents: write
 
 env:
-  # Opt-in to Node 24 for all actions as per 2026 deprecation standards
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
 
 jobs:
@@ -38,7 +37,7 @@ jobs:
         uses: addnab/docker-run-action@v3
         with:
           image: fedora:rawhide
-          options: --platform linux/${{ matrix.arch }} -v ${{ github.workspace }}:/workspace -e GITHUB_ENV=/workspace/github_env
+          options: --platform linux/${{ matrix.arch }} -v ${{ github.workspace }}:/workspace
           run: |
             dnf install -y \
               gcc pkgconfig openssl-devel gtk4-devel libadwaita-devel \
@@ -51,6 +50,7 @@ jobs:
             source $HOME/.cargo/env
 
             cd /workspace
+            # Explicitly build for the native architecture of the container
             cargo build --release --locked
 
             PKG_NAME="boxxy-terminal-nightly-linux-${{ matrix.arch }}"
@@ -64,21 +64,38 @@ jobs:
             cp resources/icons/play.mii.Boxxy.png "${PKG_NAME}/share/icons/hicolor/scalable/apps/"
 
             tar -czvf "${PKG_NAME}.tar.gz" "${PKG_NAME}"
-            echo "ASSET_PATH=${PKG_NAME}.tar.gz" >> $GITHUB_ENV
 
-      - name: Load Asset Path
-        run: cat github_env >> $GITHUB_ENV
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: binary-${{ matrix.arch }}
+          path: boxxy-terminal-nightly-linux-${{ matrix.arch }}.tar.gz
+
+  publish:
+    name: Publish Nightly
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: binary-*
+          merge-multiple: true
 
       - name: Update Nightly Release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Use official GH CLI (standard, pre-installed, and Node-version independent)
+          # Atomic update: Delete old release and recreate with ALL assets at once
           gh release delete nightly --yes || true
           git tag -d nightly || true
           git push origin :refs/tags/nightly || true
           
-          gh release create nightly ${{ env.ASSET_PATH }} \
+          # Use wildcards to include all downloaded tarballs
+          gh release create nightly *.tar.gz \
             --title "Nightly Build" \
             --notes "This release contains the latest automated builds from the main branch." \
             --prerelease
