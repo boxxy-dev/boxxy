@@ -50,7 +50,7 @@ pub fn populate_about_page(page: &adw::PreferencesPage) -> Box<dyn Fn(&str) -> b
 
     let dev_row = adw::ActionRow::builder()
         .title("Developer")
-        .subtitle(env!("CARGO_PKG_AUTHORS"))
+        .subtitle("Mii")
         .build();
     rows.push(dev_row.clone());
 
