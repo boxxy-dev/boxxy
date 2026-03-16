@@ -468,7 +468,8 @@ impl TerminalPaneComponent {
                     inner.terminal.set_color_cursor(Some(&rgba));
                 }
             } else {
-                inner.terminal.set_color_cursor(None);
+                let theme_cursor = palette_opt.and_then(|p| gdk::RGBA::parse(p.cursor).ok());
+                inner.terminal.set_color_cursor(theme_cursor.as_ref());
             }
         }
         

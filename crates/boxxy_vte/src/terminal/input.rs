@@ -1,7 +1,7 @@
 use gtk4::gdk::{Key, ModifierType};
 
 /// Translates a GTK key event into an ANSI byte sequence for the PTY
-pub fn translate_key(key: Key, modifiers: ModifierType) -> Option<Vec<u8>> {
+pub fn translate_key(key: Key, modifiers: ModifierType, is_app_cursor: bool) -> Option<Vec<u8>> {
     let mut bytes = Vec::new();
 
     let ctrl = modifiers.contains(ModifierType::CONTROL_MASK);
@@ -34,27 +34,33 @@ pub fn translate_key(key: Key, modifiers: ModifierType) -> Option<Vec<u8>> {
             return Some(bytes);
         }
         Key::Up => {
-            bytes.extend_from_slice(b"\x1b[A");
+            if is_app_cursor { bytes.extend_from_slice(b"\x1bOA"); }
+            else { bytes.extend_from_slice(b"\x1b[A"); }
             return Some(bytes);
         }
         Key::Down => {
-            bytes.extend_from_slice(b"\x1b[B");
+            if is_app_cursor { bytes.extend_from_slice(b"\x1bOB"); }
+            else { bytes.extend_from_slice(b"\x1b[B"); }
             return Some(bytes);
         }
         Key::Right => {
-            bytes.extend_from_slice(b"\x1b[C");
+            if is_app_cursor { bytes.extend_from_slice(b"\x1bOC"); }
+            else { bytes.extend_from_slice(b"\x1b[C"); }
             return Some(bytes);
         }
         Key::Left => {
-            bytes.extend_from_slice(b"\x1b[D");
+            if is_app_cursor { bytes.extend_from_slice(b"\x1bOD"); }
+            else { bytes.extend_from_slice(b"\x1b[D"); }
             return Some(bytes);
         }
         Key::Home => {
-            bytes.extend_from_slice(b"\x1b[H");
+            if is_app_cursor { bytes.extend_from_slice(b"\x1bOH"); }
+            else { bytes.extend_from_slice(b"\x1b[H"); }
             return Some(bytes);
         }
         Key::End => {
-            bytes.extend_from_slice(b"\x1b[F");
+            if is_app_cursor { bytes.extend_from_slice(b"\x1bOF"); }
+            else { bytes.extend_from_slice(b"\x1b[F"); }
             return Some(bytes);
         }
         Key::Page_Up => {

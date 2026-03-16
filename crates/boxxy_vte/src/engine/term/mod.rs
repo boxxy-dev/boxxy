@@ -15,7 +15,7 @@ use log::{debug, trace};
 use unicode_width::UnicodeWidthChar;
 
 use crate::engine::event::{Event, EventListener};
-use crate::engine::grid::{Dimensions, Grid, GridIterator, Scroll};
+use crate::engine::grid::{Dimensions, Grid, GridCell, GridIterator, Scroll};
 use crate::engine::index::{self, Boundary, Column, Direction, Line, Point, Side};
 use crate::engine::selection::{Selection, SelectionRange, SelectionType};
 use crate::engine::term::cell::{Cell, Flags, LineLength};
@@ -41,6 +41,7 @@ pub struct RenderState {
     pub cell_width: u16,
     pub cell_height: u16,
     pub is_alt_screen: bool,
+    pub cl_mode: Option<String>,
     pub mode: TermMode,
 }
 
@@ -63,6 +64,7 @@ impl RenderState {
         let selection_range = term.selection.as_ref().and_then(|s| s.to_range(term));
         let is_alt_screen = term.mode.contains(TermMode::ALT_SCREEN);
         let mode = term.mode;
+        let cl_mode = term.cl_mode.clone();
 
         Self {
             cells,
@@ -77,6 +79,7 @@ impl RenderState {
             cell_width: term.cell_width,
             cell_height: term.cell_height,
             is_alt_screen,
+            cl_mode,
             mode,
         }
     }
@@ -84,6 +87,239 @@ impl RenderState {
     pub fn cell(&self, point: Point) -> &Cell {
         let row = point.line.0 + self.display_offset;
         &self.cells[(row as usize) * self.columns + point.column.0]
+    }
+
+    pub fn calculate_character_delta(&self, start: Point, end: Point) -> isize {
+        let mut char_delta = 0isize;
+        let cur_line = start.line.0;
+        let cur_col = start.column.0;
+        let tar_line = end.line.0;
+        let tar_col = end.column.0;
+
+        let (start_line, start_col, end_line, end_col, mult) = if tar_line > cur_line || (tar_line == cur_line && tar_col > cur_col) {
+            (cur_line, cur_col, tar_line, tar_col, 1isize)
+        } else {
+            (tar_line, tar_col, cur_line, cur_col, -1isize)
+        };
+
+        for line in start_line..=end_line {
+            let row_in_viewport = (line + self.display_offset as i32) as usize;
+            let row_cells = &self.cells[row_in_viewport * self.columns .. (row_in_viewport + 1) * self.columns];
+            
+            let s_col = if line == start_line { start_col } else { 0 };
+            let e_col = if line == end_line { 
+                end_col 
+            } else {
+                let mut e = row_cells.len();
+                if !row_cells[row_cells.len() - 1].flags.contains(Flags::WRAPLINE) {
+                    let last_cmd = row_cells.iter().rposition(|c| c.flags.contains(Flags::SEMANTIC_CMD));
+                    let last_content = row_cells.iter().rposition(|c| !c.is_empty());
+                    e = last_cmd.map(|l| l + 1).unwrap_or(0).max(last_content.map(|l| l + 1).unwrap_or(0));
+                }
+                e
+            };
+
+            let first_cmd = row_cells.iter().position(|c| c.flags.contains(Flags::SEMANTIC_CMD));
+            let last_prompt = row_cells.iter().rposition(|c| c.flags.contains(Flags::SEMANTIC_PROMPT));
+            
+            let line_start_bound = first_cmd.unwrap_or_else(|| last_prompt.map(|p| p + 1).unwrap_or(0));
+            
+            let actual_s_col = s_col.max(line_start_bound);
+            let actual_e_col = e_col.max(line_start_bound);
+
+            if actual_s_col < actual_e_col {
+                for i in actual_s_col..actual_e_col {
+                    let flags = row_cells[i].flags;
+                    if i < row_cells.len() 
+                        && !flags.contains(Flags::WIDE_CHAR_SPACER) 
+                        && !flags.contains(Flags::LEADING_WIDE_CHAR_SPACER) 
+                        && !flags.contains(Flags::SEMANTIC_PROMPT) 
+                    {
+                        char_delta += 1;
+                    }
+                }
+            }
+            
+            if line < end_line && !row_cells[row_cells.len() - 1].flags.contains(Flags::WRAPLINE) {
+                char_delta += 1;
+            }
+        }
+
+        char_delta * mult
+    }
+
+    /// Returns true if every row between line_a and line_b (exclusive of max) has WRAPLINE set,
+    /// meaning they form a single logical line in the shell's view.
+    fn is_in_same_wrap_chain(&self, line_a: Line, line_b: Line) -> bool {
+        let min_line = line_a.0.min(line_b.0);
+        let max_line = line_a.0.max(line_b.0);
+        let n_rows = self.cells.len() / self.columns;
+        for l in min_line..max_line {
+            let row_idx = (l + self.display_offset as i32) as usize;
+            if (row_idx + 1) * self.columns > self.cells.len() || row_idx >= n_rows {
+                return false;
+            }
+            let last_cell = &self.cells[(row_idx + 1) * self.columns - 1];
+            if !last_cell.flags.contains(Flags::WRAPLINE) {
+                return false;
+            }
+        }
+        true
+    }
+
+    pub fn calculate_navigation_sequence(&self, point: Point) -> Option<String> {
+        // Only fires when the shell has explicitly advertised cl=line support via OSC 133;A.
+        // CLICK_REPORT (mode 2031) is handled upstream in the GTK click handler — fish moves
+        // its own cursor via SGR mouse events and must never receive arrow sequences here.
+        let cl_mode_str = self.cl_mode.as_deref()?;
+        if !cl_mode_str.split(',').any(|m| m == "line") {
+            debug!("nav: not line mode, cl_mode={:?}", self.cl_mode);
+            return None;
+        }
+
+        let is_app_cursor = self.mode.contains(TermMode::APP_CURSOR);
+        let (right_seq, left_seq) = if is_app_cursor { ("\x1bOC", "\x1bOD") } else { ("\x1b[C", "\x1b[D") };
+
+        let is_same_line = point.line == self.cursor_point.line;
+        let is_soft_wrap = !is_same_line && self.is_in_same_wrap_chain(self.cursor_point.line, point.line);
+        debug!("nav: click={:?} cursor={:?} same={} soft_wrap={}", point, self.cursor_point, is_same_line, is_soft_wrap);
+
+        if is_same_line || is_soft_wrap {
+            // Case 1 & 2: same logical line (exact match or soft-wrapped).
+            // The shell sees this as one line; Left/Right arrows navigate it transparently.
+            let row_in_viewport = (point.line.0 + self.display_offset) as usize;
+            let mut target_col = point.column.0;
+            let line_cells = &self.cells[row_in_viewport * self.columns..(row_in_viewport + 1) * self.columns];
+
+            if target_col < line_cells.len() && line_cells[target_col].flags.contains(Flags::WIDE_CHAR_SPACER) && target_col > 0 {
+                target_col -= 1;
+            }
+
+            // For same-line clicks: enforce semantic bounds (don't move into prompt area).
+            if is_same_line {
+                let first_cmd = line_cells.iter().position(|c| c.flags.contains(Flags::SEMANTIC_CMD));
+                let last_prompt = line_cells.iter().rposition(|c| c.flags.contains(Flags::SEMANTIC_PROMPT));
+                if let Some(first) = first_cmd {
+                    if target_col < first {
+                        target_col = first;
+                    }
+                } else if let Some(last) = last_prompt {
+                    if target_col <= last {
+                        target_col = last + 1;
+                    }
+                }
+                let last_cmd = line_cells.iter().rposition(|c| c.flags.contains(Flags::SEMANTIC_CMD));
+                let last_content = line_cells.iter().rposition(|c| !c.is_empty());
+                let line_end_bound = last_cmd.map(|l| l + 1).unwrap_or(0).max(last_content.map(|l| l + 1).unwrap_or(0));
+                let command_end = line_end_bound.max(self.cursor_point.column.0);
+                if target_col > command_end {
+                    target_col = command_end;
+                }
+            }
+
+            let char_delta = self.calculate_character_delta(
+                self.cursor_point,
+                Point::new(point.line, Column(target_col)),
+            );
+
+            let mut seq = String::new();
+            if char_delta > 0 {
+                seq.push_str(&right_seq.repeat(char_delta as usize));
+            } else if char_delta < 0 {
+                seq.push_str(&left_seq.repeat((-char_delta) as usize));
+            }
+            if !seq.is_empty() { Some(seq) } else { None }
+        } else {
+            // Case 3: hard-newline multiline command.
+            // Left/Right cannot cross hard newlines; use Up/Down to change logical lines,
+            // then Left/Right to adjust to the target column.
+            let n_rows = self.cells.len() / self.columns;
+            let cursor_row_idx = (self.cursor_point.line.0 + self.display_offset as i32) as usize;
+            let target_row_idx = (point.line.0 + self.display_offset as i32) as usize;
+            if target_row_idx >= n_rows {
+                return None;
+            }
+
+            let cursor_row = &self.cells[cursor_row_idx * self.columns..(cursor_row_idx + 1) * self.columns];
+            let target_row = &self.cells[target_row_idx * self.columns..(target_row_idx + 1) * self.columns];
+
+            debug!("nav B: cursor_idx={} target_idx={} display_offset={}", cursor_row_idx, target_row_idx, self.display_offset);
+
+            // Don't navigate when the user has scrolled into history — Up/Down would move
+            // through command history instead of within the current multiline command.
+            if self.display_offset != 0 {
+                debug!("nav B: rejected — scrolled into history");
+                return None;
+            }
+
+            // Cursor must be on an active command line (OSC 133;B sets SEMANTIC_CMD).
+            // Without this guard, Up/Down would navigate shell history instead of within the command.
+            // Continuation lines in fish may carry SEMANTIC_PROMPT (fish omits OSC 133;B for them),
+            // so we accept SEMANTIC_CMD | SEMANTIC_PROMPT on the target.
+            let cursor_has_cmd = cursor_row.iter().any(|c| c.flags.contains(Flags::SEMANTIC_CMD));
+            let target_is_editable = target_row.iter().any(|c| {
+                c.flags.contains(Flags::SEMANTIC_CMD) || c.flags.contains(Flags::SEMANTIC_PROMPT)
+            });
+            if !cursor_has_cmd || !target_is_editable {
+                debug!("nav B: rejected — semantic guard (cursor_cmd={} target_editable={})", cursor_has_cmd, target_is_editable);
+                return None;
+            }
+
+            // No blank rows between cursor and target. A blank line separates different command
+            // "clusters" (e.g. old output above vs the current prompt below), so a gap means
+            // the click is on a different command's output and we should not navigate.
+            let min_row = target_row_idx.min(cursor_row_idx);
+            let max_row = target_row_idx.max(cursor_row_idx);
+            let has_gap = (min_row..=max_row).any(|r| {
+                (r + 1) * self.columns <= self.cells.len()
+                    && self.cells[r * self.columns..(r + 1) * self.columns]
+                        .iter()
+                        .all(|c| c.is_empty())
+            });
+            if has_gap {
+                debug!("nav B: rejected — blank row between cursor and target");
+                return None;
+            }
+
+            let line_delta = point.line.0 - self.cursor_point.line.0;
+            if line_delta == 0 {
+                return None;
+            }
+
+            // Compute target column.
+            // Do NOT apply the "skip past prompt" clamping here: when fish omits 133;B for
+            // continuation lines, user-typed content is also tagged SEMANTIC_PROMPT, so
+            // last_prompt would include the actual content and the clamp would overshoot.
+            let mut target_col = point.column.0;
+            if target_col < target_row.len() && target_row[target_col].flags.contains(Flags::WIDE_CHAR_SPACER) && target_col > 0 {
+                target_col -= 1;
+            }
+            // Right bound: don't click into empty space past content.
+            let last_content = target_row.iter().rposition(|c| !c.is_empty());
+            let content_end = last_content.map(|l| l + 1).unwrap_or(0).max(self.cursor_point.column.0);
+            if target_col > content_end {
+                target_col = content_end;
+            }
+
+            // After Up/Down, the shell places the cursor at min(current_col, content_end).
+            let post_nav_col = self.cursor_point.column.0.min(content_end);
+            let col_adjustment = target_col as isize - post_nav_col as isize;
+
+            let (up_seq, down_seq) = if is_app_cursor { ("\x1bOA", "\x1bOB") } else { ("\x1b[A", "\x1b[B") };
+            let mut seq = String::new();
+            if line_delta > 0 {
+                seq.push_str(&down_seq.repeat(line_delta as usize));
+            } else {
+                seq.push_str(&up_seq.repeat((-line_delta) as usize));
+            }
+            if col_adjustment > 0 {
+                seq.push_str(&right_seq.repeat(col_adjustment as usize));
+            } else if col_adjustment < 0 {
+                seq.push_str(&left_seq.repeat((-col_adjustment) as usize));
+            }
+            debug!("nav B: line_delta={} post_nav_col={} target_col={} col_adj={} seq_len={}", line_delta, post_nav_col, target_col, col_adjustment, seq.len());
+            if !seq.is_empty() { Some(seq) } else { None }
+        }
     }
 }
 
@@ -138,6 +374,7 @@ bitflags! {
         const REPORT_ALTERNATE_KEYS   = 1 << 20;
         const REPORT_ALL_KEYS_AS_ESC  = 1 << 21;
         const REPORT_ASSOCIATED_TEXT  = 1 << 22;
+        const CLICK_REPORT            = 1 << 23;
         const MOUSE_MODE              = Self::MOUSE_REPORT_CLICK.bits() | Self::MOUSE_MOTION.bits() | Self::MOUSE_DRAG.bits();
         const KITTY_KEYBOARD_PROTOCOL = Self::DISAMBIGUATE_ESC_CODES.bits()
                                       | Self::REPORT_EVENT_TYPES.bits()
@@ -395,6 +632,8 @@ pub struct Term<T> {
 
     /// Config directly for the terminal.
     config: Config,
+
+    pub cl_mode: Option<String>,
 }
 
 /// Configuration options for the [`Term`].
@@ -516,6 +755,7 @@ impl<T> Term<T> {
             kitty_graphics: crate::engine::kitty::KittyGraphics::new(),
             cell_width: dimensions.cell_width(),
             cell_height: dimensions.cell_height(),
+            cl_mode: None,
         }
     }
 
@@ -2133,6 +2373,11 @@ impl<T: EventListener> Handler for Term<T> {
                 self.event_proxy.send_event(Event::CursorBlinkingChange);
             },
             NamedPrivateMode::SyncUpdate => (),
+            NamedPrivateMode::ClickReport => {
+                self.mode.remove(TermMode::MOUSE_MODE);
+                self.mode.insert(TermMode::CLICK_REPORT);
+                self.event_proxy.send_event(Event::MouseCursorDirty);
+            },
         }
     }
 
@@ -2182,6 +2427,10 @@ impl<T: EventListener> Handler for Term<T> {
                 self.event_proxy.send_event(Event::CursorBlinkingChange);
             },
             NamedPrivateMode::SyncUpdate => (),
+            NamedPrivateMode::ClickReport => {
+                self.mode.remove(TermMode::CLICK_REPORT);
+                self.event_proxy.send_event(Event::MouseCursorDirty);
+            },
         }
     }
 
@@ -2226,6 +2475,9 @@ impl<T: EventListener> Handler for Term<T> {
                 },
                 NamedPrivateMode::SyncUpdate => ModeState::Reset,
                 NamedPrivateMode::ColumnMode => ModeState::NotSupported,
+                NamedPrivateMode::ClickReport => {
+                    self.mode.contains(TermMode::CLICK_REPORT).into()
+                },
             },
             PrivateMode::Unknown(_) => ModeState::NotSupported,
         };
@@ -2367,7 +2619,10 @@ impl<T: EventListener> Handler for Term<T> {
     }
 
     #[inline]
-    fn osc_133_a(&mut self) {
+    fn osc_133_a(&mut self, cl: Option<String>) {
+        if let Some(mode) = cl {
+            self.cl_mode = Some(mode);
+        }
         self.grid.cursor.template.flags.remove(crate::engine::term::cell::Flags::SEMANTIC_CMD | crate::engine::term::cell::Flags::SEMANTIC_OUTPUT);
         self.grid.cursor.template.flags.insert(crate::engine::term::cell::Flags::SEMANTIC_PROMPT);
         self.event_proxy.send_event(Event::Osc133A);
@@ -3652,5 +3907,180 @@ mod tests {
             term.grid[Line(r)][Column(0)].c == 'l' && term.grid[Line(r)][Column(1)].c == 's'
         });
         assert!(found, "'ls' must be visible after combined shrink");
+    }
+
+    #[test]
+    fn test_calculate_character_delta() {
+        use crate::engine::term::test::mock_term;
+        use crate::engine::term::cell::Flags;
+        use crate::engine::index::{Point, Line, Column};
+        
+        // Test 1: Simple Same Line Navigation
+        let term = mock_term("hello world\r");
+        let state = RenderState::new(&term);
+        assert_eq!(state.calculate_character_delta(Point::new(Line(0), Column(0)), Point::new(Line(0), Column(5))), 5);
+        assert_eq!(state.calculate_character_delta(Point::new(Line(0), Column(5)), Point::new(Line(0), Column(0))), -5);
+        
+        // Test 2: Skipping Prompts
+        let mut term = mock_term("> echo hi\r");
+        term.grid[Line(0)][Column(0)].flags.insert(Flags::SEMANTIC_PROMPT);
+        term.grid[Line(0)][Column(1)].flags.insert(Flags::SEMANTIC_PROMPT); // " "
+        let state = RenderState::new(&term);
+        // Start is column 2 (e), target is column 6 (h). The delta is purely the difference because prompt is behind start.
+        assert_eq!(state.calculate_character_delta(Point::new(Line(0), Column(2)), Point::new(Line(0), Column(6))), 4);
+        
+        // Test 3: Hard Newlines (+1)
+        let term = mock_term("cmd\r\narg\r");
+        let state = RenderState::new(&term);
+        // Move from (0,0) to (1,0). Should be 3 (cmd) + 1 (\n) = 4
+        assert_eq!(state.calculate_character_delta(Point::new(Line(0), Column(0)), Point::new(Line(1), Column(0))), 4);
+        // Reverse
+        assert_eq!(state.calculate_character_delta(Point::new(Line(1), Column(0)), Point::new(Line(0), Column(0))), -4);
+
+        // Test 4: Wrapped Lines (No +1)
+        let term = mock_term("cmd\narg\r"); // \n in mock_term generates WRAPLINE
+        let state = RenderState::new(&term);
+        // Move from (0,0) to (1,0). Should be 3 (cmd)
+        assert_eq!(state.calculate_character_delta(Point::new(Line(0), Column(0)), Point::new(Line(1), Column(0))), 3);
+        // Reverse
+        assert_eq!(state.calculate_character_delta(Point::new(Line(1), Column(0)), Point::new(Line(0), Column(0))), -3);
+        
+        // Test 5: Wide Characters
+        let term = mock_term("echo 🚀 test\r");
+        // mock_term adds WIDE_CHAR and WIDE_CHAR_SPACER automatically.
+        let state = RenderState::new(&term);
+        // "echo " (5) + "🚀" (1) + " t" (2) = 8 jumps to reach 'e'
+        assert_eq!(state.calculate_character_delta(Point::new(Line(0), Column(0)), Point::new(Line(0), Column(9))), 8);
+        assert_eq!(state.calculate_character_delta(Point::new(Line(0), Column(9)), Point::new(Line(0), Column(0))), -8);
+    }
+
+    #[test]
+    fn test_calculate_navigation_sequence() {
+        use crate::engine::term::cell::{Cell, Flags};
+        use crate::engine::index::{Point, Line, Column};
+
+        /// Build a minimal RenderState from row strings.
+        /// '\n'-split rows; each char sets the cell's `c` field.
+        /// cursor_line/cursor_col set the cursor position.
+        fn make_state(rows: &[&str], cursor_line: usize, cursor_col: usize) -> RenderState {
+            let cols = rows.iter().map(|r| r.len()).max().unwrap_or(1).max(1);
+            let num_rows = rows.len().max(1);
+            let mut cells = vec![Cell::default(); num_rows * cols];
+            for (r, row_str) in rows.iter().enumerate() {
+                for (c, ch) in row_str.chars().enumerate() {
+                    cells[r * cols + c].c = ch;
+                }
+            }
+            RenderState {
+                cells,
+                columns: cols,
+                screen_lines: num_rows,
+                total_lines: num_rows,
+                display_offset: 0,
+                cursor_point: Point::new(Line(cursor_line as i32), Column(cursor_col)),
+                cl_mode: Some("line".to_string()),
+                ..RenderState::default()
+            }
+        }
+
+        // 1. cl_mode=None → always None
+        let mut state = make_state(&["hello"], 0, 0);
+        state.cl_mode = None;
+        assert_eq!(state.calculate_navigation_sequence(Point::new(Line(0), Column(3))), None);
+
+        // 2. Same line — click right of cursor
+        let state = make_state(&["hello world"], 0, 0);
+        assert_eq!(
+            state.calculate_navigation_sequence(Point::new(Line(0), Column(5))),
+            Some("\x1b[C".repeat(5)),
+        );
+
+        // 3. Same line — click left of cursor
+        let state = make_state(&["hello world"], 0, 5);
+        assert_eq!(
+            state.calculate_navigation_sequence(Point::new(Line(0), Column(0))),
+            Some("\x1b[D".repeat(5)),
+        );
+
+        // 4. Same line — click at cursor column → no movement → None
+        let state = make_state(&["hello world"], 0, 3);
+        assert_eq!(state.calculate_navigation_sequence(Point::new(Line(0), Column(3))), None);
+
+        // 5. Soft-wrapped rows — cursor on row 0, click on row 1.
+        //    WRAPLINE on last cell of row 0 makes rows 0+1 one logical shell line.
+        //    char_delta("hello"→row1:col0) = 5 (no +1 hard newline) → 5 Right.
+        let mut state = make_state(&["hello", "world"], 0, 0);
+        state.cells[state.columns - 1].flags.insert(Flags::WRAPLINE);
+        assert_eq!(
+            state.calculate_navigation_sequence(Point::new(Line(1), Column(0))),
+            Some("\x1b[C".repeat(5)),
+        );
+
+        // Helper: tag every cell in a row with a semantic flag.
+        let set_row_flags = |state: &mut RenderState, row: usize, flag: Flags| {
+            let start = row * state.columns;
+            let end = start + state.columns;
+            for cell in &mut state.cells[start..end] {
+                cell.flags.insert(flag);
+            }
+        };
+
+        // 6. Hard-newline multiline — cursor on row 0, click below (Down + col adjust).
+        //    "for x " (6 cols), cursor col=0.
+        //    Click at row 1 ("  echo"), col 2.
+        //    content_end = max(last_content(row1)+1, cursor_col) = max(6,0) = 6
+        //    post_nav_col = min(0, 6) = 0 ; col_adj = 2 → 1 Down + 2 Right.
+        let mut state = make_state(&["for x", "  echo"], 0, 0);
+        set_row_flags(&mut state, 0, Flags::SEMANTIC_CMD);
+        set_row_flags(&mut state, 1, Flags::SEMANTIC_CMD);
+        assert_eq!(
+            state.calculate_navigation_sequence(Point::new(Line(1), Column(2))),
+            Some(format!("{}{}", "\x1b[B", "\x1b[C".repeat(2))),
+        );
+
+        // 7. Hard-newline multiline — cursor on row 1, click above (Up + col adjust).
+        //    "for x " (6 cols) on row 0; cursor at row 1, col 2.
+        //    Click at row 0, col 3.
+        //    content_end = max(5, 2) = 5 ; post_nav_col = min(2,5) = 2 ; col_adj = 1 → Up + 1 Right.
+        let mut state = make_state(&["for x", "  echo"], 1, 2);
+        set_row_flags(&mut state, 0, Flags::SEMANTIC_CMD);
+        set_row_flags(&mut state, 1, Flags::SEMANTIC_CMD);
+        assert_eq!(
+            state.calculate_navigation_sequence(Point::new(Line(0), Column(3))),
+            Some(format!("{}\x1b[C", "\x1b[A")),
+        );
+
+        // 7b. Target row has SEMANTIC_PROMPT (fish continuation line) — should still navigate.
+        let mut state = make_state(&["for x", "  echo"], 0, 0);
+        set_row_flags(&mut state, 0, Flags::SEMANTIC_CMD);
+        set_row_flags(&mut state, 1, Flags::SEMANTIC_PROMPT);
+        assert_eq!(
+            state.calculate_navigation_sequence(Point::new(Line(1), Column(2))),
+            Some(format!("{}{}", "\x1b[B", "\x1b[C".repeat(2))),
+        );
+
+        // 8. Hard-newline rejected — blank row between cursor and target → has_gap → None.
+        let mut state = make_state(&["for x", "     ", "echo"], 0, 0);
+        set_row_flags(&mut state, 0, Flags::SEMANTIC_CMD);
+        set_row_flags(&mut state, 2, Flags::SEMANTIC_CMD);
+        assert_eq!(state.calculate_navigation_sequence(Point::new(Line(2), Column(0))), None);
+
+        // 9. Hard-newline rejected — cursor row has no SEMANTIC_CMD → would navigate history.
+        let mut state = make_state(&["for x", "  echo"], 0, 0);
+        set_row_flags(&mut state, 1, Flags::SEMANTIC_CMD); // only target flagged, not cursor
+        assert_eq!(state.calculate_navigation_sequence(Point::new(Line(1), Column(2))), None);
+
+        // 10. Hard-newline rejected — target row has no semantic flag (plain output) → None.
+        let mut state = make_state(&["for x", "  output"], 0, 0);
+        set_row_flags(&mut state, 0, Flags::SEMANTIC_CMD); // cursor flagged, target not
+        assert_eq!(state.calculate_navigation_sequence(Point::new(Line(1), Column(2))), None);
+
+        // 11. Hard-newline rejected — scrolled into history (display_offset != 0) → None.
+        let mut state = make_state(&["history", "for x", "  echo"], 0, 0);
+        set_row_flags(&mut state, 0, Flags::SEMANTIC_CMD);
+        set_row_flags(&mut state, 1, Flags::SEMANTIC_CMD);
+        set_row_flags(&mut state, 2, Flags::SEMANTIC_CMD);
+        state.display_offset = 1;
+        assert_eq!(state.calculate_navigation_sequence(Point::new(Line(1), Column(0))), None);
     }
 }

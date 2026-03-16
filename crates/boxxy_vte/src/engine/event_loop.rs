@@ -215,7 +215,7 @@ where
                                     log::info!("EventLoop: Storing selection to {:?}, len={}", clipboard_type, text.len());
                                     self.event_proxy.send_event(Event::ClipboardStore(clipboard_type, text));
                                 } else {
-                                    log::info!("EventLoop: Copy requested but selection is empty");
+                                    log::debug!("EventLoop: Copy requested but selection is empty");
                                 }
                             },
                             Ok(Msg::Search(query, direction, case_insensitive)) => {
@@ -253,7 +253,7 @@ where
                             Ok(Msg::GetTextSnapshot(max_lines, offset_lines, sender)) => {
                                 use crate::engine::grid::Dimensions;
                                 use crate::engine::index::{Line, Column};
-                                let total_lines = self.terminal.total_lines();
+                                let _total_lines = self.terminal.total_lines();
 
                                 let bottom = self.terminal.bottommost_line();
                                 let mut start_line_idx = bottom.0 - offset_lines as i32;
@@ -264,7 +264,7 @@ where
                                     start_line_idx = topmost;
                                 }
 
-                                let mut lines_to_fetch = max_lines as i32;
+                                let lines_to_fetch = max_lines as i32;
                                 let mut end_line_idx = start_line_idx + lines_to_fetch.saturating_sub(1);
                                 if end_line_idx > bottom.0 {
                                     end_line_idx = bottom.0;

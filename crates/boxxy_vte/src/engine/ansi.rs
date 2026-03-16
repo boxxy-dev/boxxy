@@ -480,13 +480,15 @@ pub trait Handler {
     fn set_cwd(&mut self, _: String) {}
 
     /// OSC 133 A: Prompt started
-    fn osc_133_a(&mut self) {}
+    fn osc_133_a(&mut self, _cl: Option<String>) {}
     /// OSC 133 B: Command started
     fn osc_133_b(&mut self) {}
     /// OSC 133 C: Command executed (output starts)
     fn osc_133_c(&mut self) {}
     /// OSC 133 D: Command finished with exit code
     fn osc_133_d(&mut self, _exit_code: Option<i32>) {}
+    /// OSC 133 N: Implicit termination
+    fn osc_133_n(&mut self, _cl: Option<String>) {}
 
     /// Custom OSC 777: BoxxyClaw
     fn claw_query(&mut self, _query: String) {}
@@ -918,6 +920,7 @@ impl PrivateMode {
             1049 => Self::Named(NamedPrivateMode::SwapScreenAndSetRestoreCursor),
             2004 => Self::Named(NamedPrivateMode::BracketedPaste),
             2026 => Self::Named(NamedPrivateMode::SyncUpdate),
+            2031 => Self::Named(NamedPrivateMode::ClickReport),
             _ => Self::Unknown(mode),
         }
     }
@@ -969,6 +972,7 @@ pub enum NamedPrivateMode {
     BracketedPaste = 2004,
     /// The mode is handled automatically by [`Processor`].
     SyncUpdate = 2026,
+    ClickReport = 2031,
 }
 
 /// Mode for clearing line.
@@ -1377,8 +1381,20 @@ where
             // Shell Integration (OSC 133)
             b"133" => {
                 if params.len() >= 2 {
+                    let mut cl = None;
+                    if params.len() >= 3 {
+                        for param in &params[2..] {
+                            if let Ok(s) = str::from_utf8(param) {
+                                if let Some(val) = s.strip_prefix("cl=") {
+                                    cl = Some(val.to_string());
+                                    break;
+                                }
+                            }
+                        }
+                    }
+
                     match params[1] {
-                        b"A" => self.handler.osc_133_a(),
+                        b"A" => self.handler.osc_133_a(cl),
                         b"B" => self.handler.osc_133_b(),
                         b"C" => self.handler.osc_133_c(),
                         b"D" => {
@@ -1389,6 +1405,7 @@ where
                             };
                             self.handler.osc_133_d(exit_code);
                         }
+                        b"N" => self.handler.osc_133_n(cl),
                         _ => unhandled(params),
                     }
                     return;

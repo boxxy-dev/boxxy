@@ -9,9 +9,18 @@ use crate::engine::index::{Point, Column, Line, Side};
 use crate::engine::selection::{Selection, SelectionType};
 use crate::terminal::backend::TerminalBackend;
 
+// ─── Cell-filling character detection ────────────────────────────────────────
+#[inline]
+fn is_cell_filling_char(c: char) -> bool {
+    matches!(c,
+        '\u{2500}'..='\u{257F}' |  // Box Drawing
+        '\u{2580}'..='\u{259F}' |  // Block Elements
+        '\u{E0A0}'..='\u{E0A3}' |  // Powerline Extra (PUA)
+        '\u{E0B0}'..='\u{E0D4}'    // Powerline Symbols (PUA)
+    )
+}
+
 // ─── Regex match rule ────────────────────────────────────────────────────────
-/// A single registered regex matcher (registered via `add_match_regex_str`).
-/// Tag IDs start at 1 and increment; 0 is reserved for "no match".
 pub struct MatchRule {
     pub id: i32,
     pub regex: regex::Regex,
@@ -50,49 +59,24 @@ pub struct TerminalWidget {
     pub search_case_sensitive: Cell<bool>,
     pub search_wrap_around: Cell<bool>,
     pub invert_scroll: Cell<bool>,
-    // gtk::Scrollable vertical adjustment + its signal handler ID
     pub vadjustment: RefCell<Option<gtk4::Adjustment>>,
     pub vadjustment_handler: RefCell<Option<glib::SignalHandlerId>>,
-    // gtk::Scrollable horizontal adjustment (unused for scrolling, required by interface)
     pub hadjustment: RefCell<Option<gtk4::Adjustment>>,
-    // gtk::Scrollable scroll policies
     pub hscroll_policy: Cell<gtk4::ScrollablePolicy>,
     pub vscroll_policy: Cell<gtk4::ScrollablePolicy>,
-    // ── Link / regex matching ────────────────────────────────────────────────
-    /// Registered regex rules (see `add_match_regex_str`).
     pub match_rules: RefCell<Vec<MatchRule>>,
-    /// Next tag ID to assign when registering a new rule.
     pub next_match_tag: Cell<i32>,
-    // ── Hover tracking ───────────────────────────────────────────────────────
-    /// Current pointer position in widget-local pixels, or `None` when the
-    /// pointer is outside the widget. Used to restrict OSC 8 underlines to
-    /// the hovered hyperlink only.
     pub mouse_pos: Cell<Option<(f64, f64)>>,
-
-    // ── Terminal event callbacks ─────────────────────────────────────────────
-    /// Called on the GTK main loop whenever the shell sets a new window title
-    /// (OSC 0 / OSC 2).  Wired by `pane.rs` to emit `PaneOutput::TitleChanged`.
     pub title_callback: RefCell<Option<TitleCallback>>,
-    /// Called when the CWD changes, detected by piggybacking on title events
-    /// and reading `/proc/{child_pid}/cwd`.  Only useful on native Linux builds;
-    /// on Flatpak the direct child PID belongs to `host-spawn` whose CWD does
-    /// not follow `cd` commands issued inside the host shell.
     pub cwd_callback: RefCell<Option<CwdCallback>>,
-    /// Called when the terminal bell fires (BEL / `\x07`).
     pub bell_callback: RefCell<Option<BellCallback>>,
-    /// Called when the child shell process exits with an exit code.
     pub exit_callback: RefCell<Option<ExitCallback>>,
-    
-    // OSC 133 callbacks
     pub osc_133_a_callback: RefCell<Option<Osc133ACallback>>,
     pub osc_133_b_callback: RefCell<Option<Osc133BCallback>>,
     pub osc_133_c_callback: RefCell<Option<Osc133CCallback>>,
     pub osc_133_d_callback: RefCell<Option<Osc133DCallback>>,
     pub claw_query_callback: RefCell<Option<ClawQueryCallback>>,
-    
-    /// Last CWD emitted via `cwd_callback`; used to suppress duplicate events.
     pub last_cwd: RefCell<Option<String>>,
-    // ── Kitty Graphics Cache ────────────────────────────────────────────────
     pub kitty_textures: RefCell<HashMap<u32, gtk4::gdk::Texture>>,
 }
 
@@ -142,10 +126,6 @@ impl Default for TerminalWidget {
     }
 }
 
-// ─── Property IDs ────────────────────────────────────────────────────────────
-// Must start at 1. These correspond to the four properties required by the
-// gtk::Scrollable interface; we install them as override properties so that
-// gtk::ScrolledWindow finds and drives them automatically.
 const PROP_VADJUSTMENT: usize = 1;
 const PROP_HADJUSTMENT: usize = 2;
 const PROP_VSCROLL_POLICY: usize = 3;
@@ -156,29 +136,19 @@ impl ObjectSubclass for TerminalWidget {
     const NAME: &'static str = "BoxxyTerminalWidget";
     type Type = super::TerminalWidget;
     type ParentType = gtk4::Widget;
-    // Declaring this causes GTK to allocate our widget the full space inside a
-    // ScrolledWindow instead of wrapping us in an invisible Viewport.
     type Interfaces = (gtk4::Scrollable,);
 }
 
-// ─── gtk::Scrollable interface implementation ─────────────────────────────────
-// ScrollableImpl is a marker trait; the adjustment logic is driven by our
-// GObject properties below.
 impl ScrollableImpl for TerminalWidget {}
 
-// ─── GObject property plumbing ────────────────────────────────────────────────
 impl ObjectImpl for TerminalWidget {
     fn properties() -> &'static [glib::ParamSpec] {
         static PROPS: std::sync::OnceLock<Vec<glib::ParamSpec>> = std::sync::OnceLock::new();
         PROPS.get_or_init(|| {
             vec![
-                // ID 1
                 glib::ParamSpecOverride::for_interface::<gtk4::Scrollable>("vadjustment"),
-                // ID 2
                 glib::ParamSpecOverride::for_interface::<gtk4::Scrollable>("hadjustment"),
-                // ID 3
                 glib::ParamSpecOverride::for_interface::<gtk4::Scrollable>("vscroll-policy"),
-                // ID 4
                 glib::ParamSpecOverride::for_interface::<gtk4::Scrollable>("hscroll-policy"),
             ]
         })
@@ -238,7 +208,6 @@ impl ObjectImpl for TerminalWidget {
             }
         });
 
-        // ── Keyboard input ────────────────────────────────────────────────────
         let key_ctrl = gtk4::EventControllerKey::new();
         key_ctrl.connect_key_pressed(glib::clone!(
             #[weak]
@@ -247,80 +216,44 @@ impl ObjectImpl for TerminalWidget {
             glib::Propagation::Proceed,
             move |_, key, _keycode, modifier| {
                 let imp = obj.imp();
-                
-                // Keep cursor solidly visible while typing/navigating
                 obj.start_cursor_blink();
 
-                // Ctrl+Shift+V → paste
-                if key == gtk4::gdk::Key::V
-                    && modifier.contains(
-                        gtk4::gdk::ModifierType::CONTROL_MASK
-                            | gtk4::gdk::ModifierType::SHIFT_MASK,
-                    )
-                {
-                    log::info!("Terminal: Ctrl+Shift+V detected, pasting...");
+                if key == gtk4::gdk::Key::V && modifier.contains(gtk4::gdk::ModifierType::CONTROL_MASK | gtk4::gdk::ModifierType::SHIFT_MASK) {
                     obj.paste_clipboard();
                     return glib::Propagation::Stop;
                 }
-
-                // Ctrl+Shift+C → copy
-                if key == gtk4::gdk::Key::C
-                    && modifier.contains(
-                        gtk4::gdk::ModifierType::CONTROL_MASK
-                            | gtk4::gdk::ModifierType::SHIFT_MASK,
-                    )
-                {
-                    log::info!("Terminal: Ctrl+Shift+C detected, copying...");
+                if key == gtk4::gdk::Key::C && modifier.contains(gtk4::gdk::ModifierType::CONTROL_MASK | gtk4::gdk::ModifierType::SHIFT_MASK) {
                     obj.copy_clipboard();
                     return glib::Propagation::Stop;
                 }
-
-                // ── Shift + navigation keys → scroll the scrollback buffer ───
-                //
-                // Shift+PageUp/Down scrolls the terminal's scrollback by one
-                // full screen page.  Shift+Home/End jump to the top / bottom of
-                // the buffer.  These are intercepted here *before* translate_key
-                // so the raw \x1b[5~ sequences are never forwarded to the PTY.
                 if modifier.contains(gtk4::gdk::ModifierType::SHIFT_MASK) {
                     let scroll_op = match key {
-                        gtk4::gdk::Key::Page_Up | gtk4::gdk::Key::KP_Page_Up => {
-                            Some(Scroll::PageUp)
-                        }
-                        gtk4::gdk::Key::Page_Down | gtk4::gdk::Key::KP_Page_Down => {
-                            Some(Scroll::PageDown)
-                        }
+                        gtk4::gdk::Key::Page_Up | gtk4::gdk::Key::KP_Page_Up => Some(Scroll::PageUp),
+                        gtk4::gdk::Key::Page_Down | gtk4::gdk::Key::KP_Page_Down => Some(Scroll::PageDown),
                         gtk4::gdk::Key::Home => Some(Scroll::Top),
                         gtk4::gdk::Key::End  => Some(Scroll::Bottom),
                         _ => None,
                     };
                     if let Some(op) = scroll_op {
-                        let backend_ref = imp.backend.borrow();
-                        if let Some(backend) = backend_ref.as_ref() {
-                            backend.scroll_display(op);
-                        }
+                        if let Some(backend) = imp.backend.borrow().as_ref() { backend.scroll_display(op); }
                         return glib::Propagation::Stop;
                     }
                 }
-
-                if let Some(bytes) = crate::terminal::input::translate_key(key, modifier) {
-                    if let Some(backend) = imp.backend.borrow().as_ref() {
-                        if !backend.is_alt_screen() {
-                            backend.scroll_display(Scroll::Bottom);
-                        }
+                if let Some(backend) = imp.backend.borrow().as_ref() {
+                    let state = backend.render_state.load();
+                    let is_app_cursor = state.mode.contains(crate::engine::term::TermMode::APP_CURSOR);
+                    if let Some(bytes) = crate::terminal::input::translate_key(key, modifier, is_app_cursor) {
+                        if !backend.is_alt_screen() { backend.scroll_display(Scroll::Bottom); }
                         backend.write_to_pty(bytes);
+                        return glib::Propagation::Stop;
                     }
-                    return glib::Propagation::Stop;
                 }
                 glib::Propagation::Proceed
             }
         ));
         obj.add_controller(key_ctrl);
 
-        // ── Mouse wheel / touchpad scrolling ──────────────────────────────────
-        let scroll_ctrl = gtk4::EventControllerScroll::new(
-            gtk4::EventControllerScrollFlags::VERTICAL
-                | gtk4::EventControllerScrollFlags::DISCRETE,
-        );
+        let scroll_ctrl = gtk4::EventControllerScroll::new(gtk4::EventControllerScrollFlags::VERTICAL | gtk4::EventControllerScrollFlags::DISCRETE);
         scroll_ctrl.connect_scroll(glib::clone!(
             #[weak]
             obj,
@@ -328,47 +261,25 @@ impl ObjectImpl for TerminalWidget {
             glib::Propagation::Proceed,
             move |ctrl, _dx, dy| {
                 let imp = obj.imp();
-
-                let did_scroll = {
-                    let backend_ref = imp.backend.borrow();
-                    if let Some(backend) = backend_ref.as_ref() {
-                        let state = backend.render_state.load();
-                        let modifiers = ctrl.current_event_state();
-                        
-                        if state.mode.intersects(crate::engine::term::TermMode::MOUSE_MODE) 
-                            && !modifiers.contains(gtk4::gdk::ModifierType::SHIFT_MASK) 
-                            && let Some((mx, my)) = imp.mouse_pos.get() 
-                        {
-                            let char_size = imp.get_char_size(&obj);
-                            let padding = imp.padding.get() as f64;
-                            let cell_x = ((mx - padding) / char_size.0).floor() as usize;
-                            let cell_y = ((my - padding) / char_size.1).floor() as usize;
-                            
-                            let button = if dy > 0.0 { 65 } else { 64 };
-                            
-                            if let Some(seq) = format_mouse_report(button, true, false, cell_x, cell_y, modifiers, state.mode) {
-                                backend.notifier.0.send(crate::engine::event_loop::Msg::Input(std::borrow::Cow::Owned(seq))).ok();
-                                if state.mode.contains(crate::engine::term::TermMode::SGR_MOUSE)
-                                    && let Some(release_seq) = format_mouse_report(button, false, false, cell_x, cell_y, modifiers, state.mode) {
-                                        backend.notifier.0.send(crate::engine::event_loop::Msg::Input(std::borrow::Cow::Owned(release_seq))).ok();
-                                }
-                                return glib::Propagation::Stop;
+                if let Some(backend) = imp.backend.borrow().as_ref() {
+                    let state = backend.render_state.load();
+                    let modifiers = ctrl.current_event_state();
+                    if state.mode.intersects(crate::engine::term::TermMode::MOUSE_MODE) && !modifiers.contains(gtk4::gdk::ModifierType::SHIFT_MASK) && let Some((mx, my)) = imp.mouse_pos.get() {
+                        let char_size = imp.get_char_size(&obj);
+                        let padding = imp.padding.get() as f64;
+                        let cell_x = ((mx - padding) / char_size.0).floor() as usize;
+                        let cell_y = ((my - padding) / char_size.1).floor() as usize;
+                        let button = if dy > 0.0 { 65 } else { 64 };
+                        if let Some(seq) = format_mouse_report(button, true, false, cell_x, cell_y, modifiers, state.mode) {
+                            backend.notifier.0.send(crate::engine::event_loop::Msg::Input(std::borrow::Cow::Owned(seq))).ok();
+                            if state.mode.contains(crate::engine::term::TermMode::SGR_MOUSE) && let Some(rs) = format_mouse_report(button, false, false, cell_x, cell_y, modifiers, state.mode) {
+                                backend.notifier.0.send(crate::engine::event_loop::Msg::Input(std::borrow::Cow::Owned(rs))).ok();
                             }
+                            return glib::Propagation::Stop;
                         }
-
-                        let mut adjusted_dy = dy;
-                        if imp.invert_scroll.get() {
-                            adjusted_dy = -adjusted_dy;
-                        }
-                        let lines = (adjusted_dy * 3.0) as i32;
-                        backend.scroll_display(Scroll::Delta(lines));
-                        true
-                    } else {
-                        false
                     }
-                };
-
-                if did_scroll {
+                    let mut adj_dy = dy; if imp.invert_scroll.get() { adj_dy = -adj_dy; }
+                    backend.scroll_display(Scroll::Delta((adj_dy * 3.0) as i32));
                     obj.queue_draw();
                     obj.update_scroll_adjustment();
                     return glib::Propagation::Stop;
@@ -378,7 +289,6 @@ impl ObjectImpl for TerminalWidget {
         ));
         obj.add_controller(scroll_ctrl);
 
-        // ── Mouse selection ───────────────────────────────────────────────────
         let click_gesture = gtk4::GestureClick::new();
         click_gesture.set_button(0);
         click_gesture.connect_pressed(glib::clone!(
@@ -390,31 +300,17 @@ impl ObjectImpl for TerminalWidget {
                 if let Some(backend) = imp.backend.borrow().as_ref() {
                     let state = backend.render_state.load();
                     let modifiers = gesture.current_event_state();
-                    
                     let char_size = imp.get_char_size(&obj);
                     let padding = imp.padding.get() as f64;
                     let cell_x = (x - padding) / char_size.0;
                     let col = cell_x.floor() as usize;
                     let side = if (cell_x - cell_x.floor()) > 0.5 { Side::Right } else { Side::Left };
                     let row = ((y - padding) / char_size.1).floor() as usize;
-                    let display_offset = state.display_offset;
-                    let point = Point::new(
-                        Line(row as i32 - display_offset),
-                        Column(col),
-                    );
+                    let point = Point::new(Line(row as i32 - state.display_offset), Column(col));
 
-                    let is_mouse_mode = state.mode.intersects(crate::engine::term::TermMode::MOUSE_MODE);
-                    let bypass_mouse_mode = modifiers.contains(gtk4::gdk::ModifierType::SHIFT_MASK);
-
-                    if is_mouse_mode && !bypass_mouse_mode {
-                        imp.mouse_pressed.set(true);
-                        imp.mouse_pos.set(Some((x, y)));
-                        let button = match gesture.current_button() {
-                            1 => 0,
-                            2 => 1,
-                            3 => 2,
-                            _ => 0,
-                        };
+                    if state.mode.intersects(crate::engine::term::TermMode::MOUSE_MODE) && !modifiers.contains(gtk4::gdk::ModifierType::SHIFT_MASK) {
+                        imp.mouse_pressed.set(true); imp.mouse_pos.set(Some((x, y)));
+                        let button = match gesture.current_button() { 1 => 0, 2 => 1, 3 => 2, _ => 0 };
                         if let Some(seq) = format_mouse_report(button, true, false, col, row, modifiers, state.mode) {
                             backend.notifier.0.send(crate::engine::event_loop::Msg::Input(std::borrow::Cow::Owned(seq))).ok();
                         }
@@ -422,21 +318,19 @@ impl ObjectImpl for TerminalWidget {
                     }
 
                     if gesture.current_button() == 1 {
+                        if n_press == 1 {
+                            if let Some(seq) = state.calculate_navigation_sequence(point) {
+                                // Clear any existing selection so there's no lingering highlight.
+                                backend.set_selection(None);
+                                backend.notifier.0.send(crate::engine::event_loop::Msg::Input(std::borrow::Cow::Owned(seq.into_bytes()))).ok();
+                                return; // Don't start a selection — navigation is taking the click.
+                            }
+                        }
                         imp.mouse_pressed.set(true);
-                        let selection_type = match n_press {
-                            1 => SelectionType::Simple,
-                            2 => SelectionType::Semantic,
-                            _ => SelectionType::Lines,
-                        };
-                        backend.set_selection(Some(Selection::new(
-                            selection_type,
-                            point,
-                            side,
-                        )));
+                        let st = match n_press { 1 => SelectionType::Simple, 2 => SelectionType::Semantic, _ => SelectionType::Lines };
+                        backend.set_selection(Some(Selection::new(st, point, side)));
                         obj.queue_draw();
-                    } else if gesture.current_button() == 2 {
-                        obj.paste_primary();
-                    }
+                    } else if gesture.current_button() == 2 { obj.paste_primary(); }
                 }
             }
         ));
@@ -449,32 +343,34 @@ impl ObjectImpl for TerminalWidget {
                 if let Some(backend) = imp.backend.borrow().as_ref() {
                     let state = backend.render_state.load();
                     let modifiers = gesture.current_event_state();
-                    
-                    let is_mouse_mode = state.mode.intersects(crate::engine::term::TermMode::MOUSE_MODE);
-                    let bypass_mouse_mode = modifiers.contains(gtk4::gdk::ModifierType::SHIFT_MASK);
-
-                    if is_mouse_mode && !bypass_mouse_mode {
-                        let char_size = imp.get_char_size(&obj);
-                        let padding = imp.padding.get() as f64;
-                        let col = ((x - padding) / char_size.0).floor() as usize;
-                        let row = ((y - padding) / char_size.1).floor() as usize;
-
-                        let button = match gesture.current_button() {
-                            1 => 0,
-                            2 => 1,
-                            3 => 2,
-                            _ => 0,
-                        };
-                        // For X10/Normal, release is always button 3
-                        let release_button = if state.mode.contains(crate::engine::term::TermMode::SGR_MOUSE) { button } else { 3 };
-                        if let Some(seq) = format_mouse_report(release_button, false, false, col, row, modifiers, state.mode) {
+                    let char_size = imp.get_char_size(&obj);
+                    let padding = imp.padding.get() as f64;
+                    let col = ((x - padding) / char_size.0).floor() as usize;
+                    let row = ((y - padding) / char_size.1).floor() as usize;
+                    if state.mode.intersects(crate::engine::term::TermMode::MOUSE_MODE) && !modifiers.contains(gtk4::gdk::ModifierType::SHIFT_MASK) {
+                        let button = match gesture.current_button() { 1 => 0, 2 => 1, 3 => 2, _ => 0 };
+                        let rb = if state.mode.contains(crate::engine::term::TermMode::SGR_MOUSE) { button } else { 3 };
+                        if let Some(seq) = format_mouse_report(rb, false, false, col, row, modifiers, state.mode) {
                             backend.notifier.0.send(crate::engine::event_loop::Msg::Input(std::borrow::Cow::Owned(seq))).ok();
                         }
                         return;
                     }
-
-                    backend.copy_selection(crate::engine::term::ClipboardType::Selection);
-                    backend.copy_selection(crate::engine::term::ClipboardType::Clipboard);
+                    if backend.has_selection() {
+                        backend.copy_selection(crate::engine::term::ClipboardType::Selection);
+                        backend.copy_selection(crate::engine::term::ClipboardType::Clipboard);
+                    } else if state.mode.contains(crate::engine::term::TermMode::CLICK_REPORT)
+                        && !modifiers.contains(gtk4::gdk::ModifierType::SHIFT_MASK)
+                        && gesture.current_button() == 1
+                    {
+                        // No drag selection was made — this was a plain click.
+                        // CLICK_REPORT (mode 2031): fish 4.1+ handles cursor repositioning natively.
+                        // Send press+release in SGR format and let fish move its own cursor.
+                        let press = format!("\x1b[<0;{};{}M", col + 1, row + 1);
+                        let release = format!("\x1b[<0;{};{}m", col + 1, row + 1);
+                        let report = press + &release;
+                        backend.notifier.0.send(crate::engine::event_loop::Msg::Input(std::borrow::Cow::Owned(report.into_bytes()))).ok();
+                        backend.set_selection(None);
+                    }
                 }
             }
         ));
@@ -486,35 +382,24 @@ impl ObjectImpl for TerminalWidget {
             obj,
             move |ctrl, x, y| {
                 let imp = obj.imp();
-                
                 if let Some(backend) = imp.backend.borrow().as_ref() {
                     let state = backend.render_state.load();
                     let modifiers = ctrl.current_event_state();
-                    let is_mouse_mode = state.mode.intersects(crate::engine::term::TermMode::MOUSE_MODE);
-                    let bypass_mouse_mode = modifiers.contains(gtk4::gdk::ModifierType::SHIFT_MASK);
-                    
-                    if is_mouse_mode && !bypass_mouse_mode {
+                    if state.mode.intersects(crate::engine::term::TermMode::MOUSE_MODE) && !modifiers.contains(gtk4::gdk::ModifierType::SHIFT_MASK) {
                         imp.mouse_pos.set(Some((x, y)));
-                        
                         let char_size = imp.get_char_size(&obj);
                         let padding = imp.padding.get() as f64;
                         let col = ((x - padding) / char_size.0).floor() as usize;
                         let row = ((y - padding) / char_size.1).floor() as usize;
-                        
                         let is_drag = imp.mouse_pressed.get();
-                        
-                        // Default to left button (0) for drag, or 35 (no button) for motion
                         let button = if is_drag { 0 } else { 35 };
-
                         if let Some(seq) = format_mouse_report(button, is_drag, true, col, row, modifiers, state.mode) {
                             backend.notifier.0.send(crate::engine::event_loop::Msg::Input(std::borrow::Cow::Owned(seq))).ok();
                         }
                         return;
                     }
                 }
-
                 if imp.mouse_pressed.get() {
-                    // ── Drag selection ────────────────────────────────────────
                     imp.mouse_pos.set(Some((x, y)));
                     if let Some(backend) = imp.backend.borrow().as_ref() {
                         let state = backend.render_state.load();
@@ -524,141 +409,69 @@ impl ObjectImpl for TerminalWidget {
                         let col = cell_x.floor() as usize;
                         let side = if (cell_x - cell_x.floor()) > 0.5 { Side::Right } else { Side::Left };
                         let row = ((y - padding) / char_size.1).floor() as usize;
-                        let display_offset = state.display_offset;
-                        let point = Point::new(
-                            Line(row as i32 - display_offset),
-                            Column(col),
-                        );
+                        let point = Point::new(Line(row as i32 - state.display_offset), Column(col));
                         backend.update_selection(point, side);
                         obj.queue_draw();
                     }
                 } else {
-                    let is_link = obj.check_hyperlink_at(x, y).is_some()
-                        || obj.check_match_at(x, y).0.is_some();
-
+                    let is_link = obj.check_hyperlink_at(x, y).is_some() || obj.check_match_at(x, y).0.is_some();
                     obj.imp().mouse_pos.set(Some((x, y)));
                     obj.queue_draw();
-
-                    if is_link {
-                        obj.set_cursor_from_name(Some("pointer"));
-                    } else {
-                        obj.set_cursor_from_name(Some("text"));
-                    }
+                    obj.set_cursor_from_name(Some(if is_link { "pointer" } else { "text" }));
                 }
             }
         ));
-        motion_ctrl.connect_leave(glib::clone!(
-            #[weak]
-            obj,
-            move |_| {
-                obj.set_cursor(None);
-                obj.imp().mouse_pos.set(None);
-                obj.queue_draw();
-            }
-        ));
+        motion_ctrl.connect_leave(glib::clone!(#[weak] obj, move |_| { obj.set_cursor(None); obj.imp().mouse_pos.set(None); obj.queue_draw(); }));
         obj.add_controller(motion_ctrl);
     }
 }
 
-
-fn format_mouse_report(
-    button: u8,
-    is_press: bool,
-    is_motion: bool,
-    x: usize,
-    y: usize,
-    modifiers: gtk4::gdk::ModifierType,
-    mode: crate::engine::term::TermMode,
-) -> Option<Vec<u8>> {
-    if !mode.intersects(crate::engine::term::TermMode::MOUSE_MODE) {
-        return None;
-    }
-
+fn format_mouse_report(button: u8, is_press: bool, is_motion: bool, x: usize, y: usize, modifiers: gtk4::gdk::ModifierType, mode: crate::engine::term::TermMode) -> Option<Vec<u8>> {
+    if !mode.intersects(crate::engine::term::TermMode::MOUSE_MODE) { return None; }
     let mut cb = button;
-
     if modifiers.contains(gtk4::gdk::ModifierType::SHIFT_MASK) { cb += 4; }
     if modifiers.contains(gtk4::gdk::ModifierType::ALT_MASK) { cb += 8; }
     if modifiers.contains(gtk4::gdk::ModifierType::CONTROL_MASK) { cb += 16; }
-
     if is_motion {
-        if !mode.contains(crate::engine::term::TermMode::MOUSE_MOTION) && !mode.contains(crate::engine::term::TermMode::MOUSE_DRAG) {
-            return None;
-        }
+        if !mode.contains(crate::engine::term::TermMode::MOUSE_MOTION) && !mode.contains(crate::engine::term::TermMode::MOUSE_DRAG) { return None; }
         cb += 32;
     }
-
-    let x = x + 1;
-    let y = y + 1;
-
+    let (x, y) = (x + 1, y + 1);
     if mode.contains(crate::engine::term::TermMode::SGR_MOUSE) {
         let suffix = if is_press { b'M' } else { b'm' };
-        let mut buf = Vec::new();
-        buf.extend_from_slice(b"\x1b[<");
-        buf.extend_from_slice(cb.to_string().as_bytes());
-        buf.push(b';');
-        buf.extend_from_slice(x.to_string().as_bytes());
-        buf.push(b';');
-        buf.extend_from_slice(y.to_string().as_bytes());
-        buf.push(suffix);
-        Some(buf)
+        Some(format!("\x1b[<{};{};{}{}", cb, x, y, suffix as char).into_bytes())
     } else {
-        if x > 223 || y > 223 {
-            return None;
-        }
-        let cb_byte = 32 + cb;
-        let cx_byte = (32 + x as u8).max(32);
-        let cy_byte = (32 + y as u8).max(32);
-        Some(vec![b'\x1b', b'[', b'M', cb_byte, cx_byte, cy_byte])
+        if x > 223 || y > 223 { return None; }
+        Some(vec![b'\x1b', b'[', b'M', 32 + cb, (32 + x as u8).max(32), (32 + y as u8).max(32)])
     }
 }
 
-// ─── Internal helpers ─────────────────────────────────────────────────────────
 impl TerminalWidget {
     pub(crate) fn get_char_size(&self, widget: &super::TerminalWidget) -> (f64, f64) {
         let pango_ctx = widget.pango_context();
         let layout = gtk4::pango::Layout::new(&pango_ctx);
-        if let Some(ref fd) = *self.font_desc.borrow() {
-            layout.set_font_description(Some(fd));
-        } else {
+        if let Some(ref fd) = *self.font_desc.borrow() { layout.set_font_description(Some(fd)); }
+        else {
             let mut font_desc = gtk4::pango::FontDescription::new();
-            font_desc.set_family("Monospace");
-            font_desc.set_size(12 * gtk4::pango::SCALE);
+            font_desc.set_family("Monospace"); font_desc.set_size(12 * gtk4::pango::SCALE);
             layout.set_font_description(Some(&font_desc));
         }
         layout.set_text("A");
         let (_, logical) = layout.extents();
-        (
-            (logical.width() as f64 / gtk4::pango::SCALE as f64)
-                * self.cell_width_scale.get(),
-            (logical.height() as f64 / gtk4::pango::SCALE as f64)
-                * self.cell_height_scale.get(),
-        )
+        ((logical.width() as f64 / gtk4::pango::SCALE as f64) * self.cell_width_scale.get(), (logical.height() as f64 / gtk4::pango::SCALE as f64) * self.cell_height_scale.get())
     }
 
     fn setup_event_loop(&self, receiver: async_channel::Receiver<Event>) {
         let obj_weak = self.obj().downgrade();
         glib::spawn_future_local(async move {
             fn handle_title(widget: &super::TerminalWidget, title: String) {
-                {
-                    let cb = widget.imp().title_callback.borrow();
-                    if let Some(f) = cb.as_ref() {
-                        f(title.clone());
-                    }
-                }
-
-                let new_cwd = {
-                    let backend_ref = widget.imp().backend.borrow();
-                    backend_ref.as_ref().and_then(|b| b.cwd())
-                };
+                if let Some(f) = widget.imp().title_callback.borrow().as_ref() { f(title.clone()); }
+                let new_cwd = widget.imp().backend.borrow().as_ref().and_then(|b| b.cwd());
                 if let Some(cwd) = new_cwd {
                     let mut last = widget.imp().last_cwd.borrow_mut();
                     if last.as_deref() != Some(cwd.as_str()) {
-                        *last = Some(cwd.clone());
-                        drop(last); 
-                        let cb = widget.imp().cwd_callback.borrow();
-                        if let Some(f) = cb.as_ref() {
-                            f(cwd);
-                        }
+                        *last = Some(cwd.clone()); drop(last);
+                        if let Some(f) = widget.imp().cwd_callback.borrow().as_ref() { f(cwd); }
                     }
                 }
             }
@@ -667,175 +480,57 @@ impl TerminalWidget {
                 if let Some(widget) = obj_weak.upgrade() {
                     match event {
                         Event::Wakeup => {
-                            if let Some(backend) = widget.imp().backend.borrow().as_ref() {
-                                backend.clear_pending_wakeups();
-                            }
-                            widget.queue_draw();
-                            widget.update_scroll_adjustment();
+                            if let Some(backend) = widget.imp().backend.borrow().as_ref() { backend.clear_pending_wakeups(); }
+                            widget.queue_draw(); widget.update_scroll_adjustment();
                         }
-                        Event::PtyWrite(text) => {
-                            log::trace!("TerminalWidget: received PtyWrite event, len={}", text.len());
-                            if let Some(backend) =
-                                widget.imp().backend.borrow().as_ref()
-                            {
-                                backend.write_to_pty(text.into_bytes());
-                            }
-                        }
-                        Event::Title(title) => {
-                            handle_title(&widget, title);
-                        }
+                        Event::PtyWrite(text) => { if let Some(backend) = widget.imp().backend.borrow().as_ref() { backend.write_to_pty(text.into_bytes()); } }
+                        Event::Title(title) => { handle_title(&widget, title); }
                         Event::CwdChanged(cwd) => {
                             let mut last = widget.imp().last_cwd.borrow_mut();
                             if last.as_deref() != Some(cwd.as_str()) {
-                                *last = Some(cwd.clone());
-                                drop(last);
-                                let cb = widget.imp().cwd_callback.borrow();
-                                if let Some(f) = cb.as_ref() {
-                                    f(cwd);
-                                }
+                                *last = Some(cwd.clone()); drop(last);
+                                if let Some(f) = widget.imp().cwd_callback.borrow().as_ref() { f(cwd); }
                             }
                         }
-                        Event::Osc133A => {
-                            let cb = widget.imp().osc_133_a_callback.borrow();
-                            if let Some(f) = cb.as_ref() {
-                                f();
-                            }
-                        }
-                        Event::Osc133B => {
-                            let cb = widget.imp().osc_133_b_callback.borrow();
-                            if let Some(f) = cb.as_ref() {
-                                f();
-                            }
-                        }
-                        Event::Osc133C => {
-                            let cb = widget.imp().osc_133_c_callback.borrow();
-                            if let Some(f) = cb.as_ref() {
-                                f();
-                            }
-                        }
-                        Event::Osc133D(exit_code) => {
-                            let cb = widget.imp().osc_133_d_callback.borrow();
-                            if let Some(f) = cb.as_ref() {
-                                f(exit_code);
-                            }
-                        }
-                        Event::ClawQuery(query) => {
-                            let cb = widget.imp().claw_query_callback.borrow();
-                            if let Some(f) = cb.as_ref() {
-                                f(query);
-                            }
-                        }
-                        Event::ResetTitle => {
-                            handle_title(&widget, "Terminal".to_string());
-                        }
-                        Event::Bell => {
-                            let cb = widget.imp().bell_callback.borrow();
-                            if let Some(f) = cb.as_ref() {
-                                f();
-                            }
-                        }
-                        Event::ChildExit(code) => {
-                            let cb = widget.imp().exit_callback.borrow();
-                            if let Some(f) = cb.as_ref() {
-                                f(code.code().unwrap_or(0));
-                            }
-                        }
-                        // ── Clipboard Operations (OSC 52 and Selection) ────────
+                        Event::Osc133A => { if let Some(f) = widget.imp().osc_133_a_callback.borrow().as_ref() { f(); } }
+                        Event::Osc133B => { if let Some(f) = widget.imp().osc_133_b_callback.borrow().as_ref() { f(); } }
+                        Event::Osc133C => { if let Some(f) = widget.imp().osc_133_c_callback.borrow().as_ref() { f(); } }
+                        Event::Osc133D(ec) => { if let Some(f) = widget.imp().osc_133_d_callback.borrow().as_ref() { f(ec); } }
+                        Event::ClawQuery(q) => { if let Some(f) = widget.imp().claw_query_callback.borrow().as_ref() { f(q); } }
+                        Event::ResetTitle => { handle_title(&widget, "Terminal".to_string()); }
+                        Event::Bell => { if let Some(f) = widget.imp().bell_callback.borrow().as_ref() { f(); } }
+                        Event::ChildExit(code) => { if let Some(f) = widget.imp().exit_callback.borrow().as_ref() { f(code.code().unwrap_or(0)); } }
                         Event::ClipboardStore(ty, text) => {
-                            log::info!("Terminal: Event::ClipboardStore received, type={:?}, len={}", ty, text.len());
-                            let clipboard = if ty == crate::engine::term::ClipboardType::Selection {
-                                widget.display().primary_clipboard()
-                            } else {
-                                widget.clipboard()
-                            };
-                            clipboard.set_text(&text);
+                            let cb = if ty == crate::engine::term::ClipboardType::Selection { widget.display().primary_clipboard() } else { widget.clipboard() };
+                            cb.set_text(&text);
                         }
                         Event::ClipboardLoad(ty, formatter) => {
-                            log::info!("Terminal: Event::ClipboardLoad received, type={:?}", ty);
-                            let clipboard = if ty == crate::engine::term::ClipboardType::Selection {
-                                widget.display().primary_clipboard()
-                            } else {
-                                widget.clipboard()
-                            };
+                            let cb = if ty == crate::engine::term::ClipboardType::Selection { widget.display().primary_clipboard() } else { widget.clipboard() };
                             let widget_weak = widget.downgrade();
                             glib::spawn_future_local(async move {
-                                match clipboard.read_text_future().await {
-                                    Ok(Some(text)) => {
-                                        log::info!("Terminal: Clipboard content loaded, len={}", text.len());
-                                        if let Some(widget) = widget_weak.upgrade() {
-                                            let response = formatter(&text);
-                                            if let Some(backend) = widget.imp().backend.borrow().as_ref() {
-                                                backend.write_to_pty(response.into_bytes());
-                                            }
-                                        }
-                                    }
-                                    _ => {
-                                        log::warn!("Terminal: Failed to load clipboard content for ClipboardLoad");
+                                if let Ok(Some(text)) = cb.read_text_future().await {
+                                    if let Some(widget) = widget_weak.upgrade() {
+                                        let response = formatter(&text);
+                                        if let Some(backend) = widget.imp().backend.borrow().as_ref() { backend.write_to_pty(response.into_bytes()); }
                                     }
                                 }
                             });
                         }
-
-                        // ── Color and Size Requests ────────────────────────────
-                        // Handle OSC 10, 11, 12 queries from the shell (e.g. "What is your background color?").
-                        // Modern CLI tools like Gemini CLI use these to adapt their UI themes to the terminal.
                         Event::ColorRequest(index, formatter) => {
                             let imp = widget.imp();
-                            let default_fg = (*imp.fg_color.borrow()).unwrap_or_else(|| gtk4::gdk::RGBA::new(0.8, 0.8, 0.8, 1.0));
-                            let default_bg = (*imp.bg_color.borrow()).unwrap_or_else(|| gtk4::gdk::RGBA::new(0.05, 0.05, 0.05, 1.0));
-                            let default_cursor = (*imp.cursor_color.borrow()).unwrap_or(default_fg);
-
-                            // Resolve the requested index to an actual color.
-                            // 256: Foreground, 257: Background, 258: Cursor, 0-255: Palette
-                            let rgba = if index == 256 {
-                                default_fg
-                            } else if index == 257 {
-                                default_bg
-                            } else if index == 258 {
-                                default_cursor
-                            } else {
-                                let palette = imp.palette.borrow();
-                                palette.get(index).cloned().unwrap_or(default_fg)
-                            };
-
-                            // Convert GDK's 0.0-1.0 floats back to standard 0-255 RGB for the shell response.
-                            let rgb = crate::engine::ansi::Rgb {
-                                r: (rgba.red() * 255.0).round() as u8,
-                                g: (rgba.green() * 255.0).round() as u8,
-                                b: (rgba.blue() * 255.0).round() as u8,
-                            };
-
-                            let response = formatter(rgb);
-                            if let Some(backend) = widget.imp().backend.borrow().as_ref() {
-                                backend.write_to_pty(response.into_bytes());
-                            }
+                            let dfg = (*imp.fg_color.borrow()).unwrap_or_else(|| gtk4::gdk::RGBA::new(0.8, 0.8, 0.8, 1.0));
+                            let dbg = (*imp.bg_color.borrow()).unwrap_or_else(|| gtk4::gdk::RGBA::new(0.05, 0.05, 0.05, 1.0));
+                            let rgba = if index == 256 { dfg } else if index == 257 { dbg } else if index == 258 { (*imp.cursor_color.borrow()).unwrap_or(dfg) } else { imp.palette.borrow().get(index).cloned().unwrap_or(dfg) };
+                            let rgb = crate::engine::ansi::Rgb { r: (rgba.red() * 255.0).round() as u8, g: (rgba.green() * 255.0).round() as u8, b: (rgba.blue() * 255.0).round() as u8 };
+                            let resp = formatter(rgb);
+                            if let Some(backend) = widget.imp().backend.borrow().as_ref() { backend.write_to_pty(resp.into_bytes()); }
                         }
                         Event::TextAreaSizeRequest(formatter) => {
-                            let char_size = widget.imp().get_char_size(&widget);
-                            
-                            // `width()` and `height()` might return widget size instead of character size?
-                            // Wait, the formatter expects WindowSize where:
-                            // num_cols is number of columns, num_lines is number of lines
-                            // cell_width is pixel width of a cell
-                            // cell_height is pixel height of a cell
-                            // And `formatter` multiplies them to get total pixels.
-                            // BUT widget.width() / height() returns the PIXEL width/height of the widget, NOT columns!
-                            // So `widget.width()` as `num_cols` is totally wrong.
-                            let cols = (widget.width() as f64 / char_size.0).floor() as u16;
-                            let lines = (widget.height() as f64 / char_size.1).floor() as u16;
-
-                            let size = crate::engine::event::WindowSize {
-                                num_cols: cols,
-                                num_lines: lines,
-                                cell_width: char_size.0 as u16,
-                                cell_height: char_size.1 as u16,
-                                pixel_width: widget.width() as u16,
-                                pixel_height: widget.height() as u16,
-                            };
-                            let response = formatter(size);
-                            if let Some(backend) = widget.imp().backend.borrow().as_ref() {
-                                backend.write_to_pty(response.into_bytes());
-                            }
+                            let cs = widget.imp().get_char_size(&widget);
+                            let cols = (widget.width() as f64 / cs.0).floor() as u16;
+                            let lines = (widget.height() as f64 / cs.1).floor() as u16;
+                            let resp = formatter(crate::engine::event::WindowSize { num_cols: cols, num_lines: lines, cell_width: cs.0 as u16, cell_height: cs.1 as u16, pixel_width: widget.width() as u16, pixel_height: widget.height() as u16 });
+                            if let Some(backend) = widget.imp().backend.borrow().as_ref() { backend.write_to_pty(resp.into_bytes()); }
                         }
                         _ => {}
                     }
@@ -846,152 +541,83 @@ impl TerminalWidget {
 
     pub(crate) fn attach_pty(&self, master_fd: zbus::zvariant::OwnedFd) {
         let (sender, receiver) = async_channel::unbounded::<Event>();
-        let fd: std::os::fd::OwnedFd = master_fd.into();
-        let backend = TerminalBackend::from_fd(sender, fd);
+        let backend = TerminalBackend::from_fd(sender, master_fd.into());
         self.backend.replace(Some(backend));
-
-        let width = self.obj().width();
-        let height = self.obj().height();
-        if width > 0 && height > 0 {
-            let cell_size = self.get_char_size(&self.obj());
-            let padding = self.padding.get() as f64;
-            let cols = ((width as f64 - 2.0 * padding) / cell_size.0).floor().max(1.0) as usize;
-            let lines = ((height as f64 - 2.0 * padding) / cell_size.1).floor().max(1.0) as usize;
-            if let Some(b) = self.backend.borrow().as_ref() {
-                b.resize(cols, lines, cell_size.0, cell_size.1, width, height);
-            }
+        let (w, h) = (self.obj().width(), self.obj().height());
+        if w > 0 && h > 0 {
+            let cs = self.get_char_size(&self.obj());
+            let pad = self.padding.get() as f64;
+            let cols = ((w as f64 - 2.0 * pad) / cs.0).floor().max(1.0) as usize;
+            let lines = ((h as f64 - 2.0 * pad) / cs.1).floor().max(1.0) as usize;
+            if let Some(b) = self.backend.borrow().as_ref() { b.resize(cols, lines, cs.0, cs.1, w, h); }
         }
-
         self.setup_event_loop(receiver);
         self.obj().queue_draw();
     }
 
     pub(crate) fn spawn(&self, working_dir: Option<&str>, command: &[&str]) {
         let (sender, receiver) = async_channel::unbounded::<Event>();
-        let mut pty_options = crate::engine::tty::Options::default();
-        pty_options.env.insert("TERM".to_string(), "xterm-256color".to_string());
-        pty_options.env.insert("COLORTERM".to_string(), "truecolor".to_string());
-
-        if let Some(wd) = working_dir {
-            pty_options.working_directory = Some(std::path::PathBuf::from(wd));
-        }
-        if !command.is_empty() {
-            let prog = command[0].to_string();
-            let args = command[1..].iter().map(|s| s.to_string()).collect();
-            pty_options.shell = Some(crate::engine::tty::Shell::new(prog, args));
-        }
-
-        let backend = TerminalBackend::new(sender, pty_options);
+        let mut opts = crate::engine::tty::Options::default();
+        opts.env.insert("TERM".to_string(), "xterm-256color".to_string());
+        opts.env.insert("COLORTERM".to_string(), "truecolor".to_string());
+        if let Some(wd) = working_dir { opts.working_directory = Some(std::path::PathBuf::from(wd)); }
+        if !command.is_empty() { opts.shell = Some(crate::engine::tty::Shell::new(command[0].to_string(), command[1..].iter().map(|s| s.to_string()).collect())); }
+        let backend = TerminalBackend::new(sender, opts);
         self.backend.replace(Some(backend));
-
         self.setup_event_loop(receiver);
         self.obj().queue_draw();
     }
 
-    pub(crate) fn copy_clipboard(&self) {
-        if let Some(backend) = self.backend.borrow().as_ref() {
-            backend.copy_selection(crate::engine::term::ClipboardType::Clipboard);
-        }
-    }
-
-    pub(crate) fn has_selection(&self) -> bool {
-        if let Some(backend) = self.backend.borrow().as_ref() {
-            backend.has_selection()
-        } else {
-            false
-        }
-    }
-
+    pub(crate) fn copy_clipboard(&self) { if let Some(backend) = self.backend.borrow().as_ref() { backend.copy_selection(crate::engine::term::ClipboardType::Clipboard); } }
+    pub(crate) fn has_selection(&self) -> bool { self.backend.borrow().as_ref().map(|b| b.has_selection()).unwrap_or(false) }
     pub(crate) fn paste_clipboard(&self) {
-        let clipboard = self.obj().clipboard();
-        let obj_weak = self.obj().downgrade();
-        glib::spawn_future_local(async move {
-            match clipboard.read_text_future().await {
-                Ok(Some(text)) => {
-                    log::info!("Terminal: Pasting text from CLIPBOARD, len={}", text.len());
-                    if let Some(widget) = obj_weak.upgrade()
-                        && let Some(backend) = widget.imp().backend.borrow().as_ref() {
-                            backend.write_to_pty(text.as_str().as_bytes().to_vec());
-                        }
-                }
-                _ => {
-                    log::warn!("Terminal: CLIPBOARD paste failed or empty");
-                }
-            }
-        });
+        let cb = self.obj().clipboard(); let ow = self.obj().downgrade();
+        glib::spawn_future_local(async move { if let Ok(Some(text)) = cb.read_text_future().await { if let Some(w) = ow.upgrade() && let Some(b) = w.imp().backend.borrow().as_ref() { b.write_to_pty(text.as_str().as_bytes().to_vec()); } } });
     }
-
-    pub(crate) fn search(&self, direction: crate::engine::index::Direction) {
-        let query = self.search_query.borrow().clone();
-        if let Some(q) = query
-            && let Some(backend) = self.backend.borrow().as_ref() {
-                backend.search(q, direction, !self.search_case_sensitive.get());
-            }
-    }
+    pub(crate) fn search(&self, dir: crate::engine::index::Direction) { if let Some(q) = self.search_query.borrow().clone() && let Some(b) = self.backend.borrow().as_ref() { b.search(q, dir, !self.search_case_sensitive.get()); } }
 }
 
-// ─── Widget implementation ────────────────────────────────────────────────────
 impl WidgetImpl for TerminalWidget {
-    fn measure(
-        &self,
-        _orientation: gtk4::Orientation,
-        _for_size: i32,
-    ) -> (i32, i32, i32, i32) {
-        (100, 400, -1, -1)
-    }
-
+    fn measure(&self, _: gtk4::Orientation, _: i32) -> (i32, i32, i32, i32) { (100, 400, -1, -1) }
     fn size_allocate(&self, width: i32, height: i32, baseline: i32) {
         self.parent_size_allocate(width, height, baseline);
-        let char_size = self.get_char_size(&self.obj());
-        let padding = self.padding.get() as f64;
-        if char_size.0 > 0.0 && char_size.1 > 0.0 {
-            let cols = ((width as f64 - 2.0 * padding) / char_size.0).floor().max(1.0) as usize;
-            let lines = ((height as f64 - 2.0 * padding) / char_size.1).floor().max(1.0) as usize;
-            if let Some(backend) = self.backend.borrow().as_ref() {
-                backend.resize(cols, lines, char_size.0, char_size.1, width, height);
-            }
+        let cs = self.get_char_size(&self.obj()); let pad = self.padding.get() as f64;
+        if cs.0 > 0.0 && cs.1 > 0.0 {
+            let cols = ((width as f64 - 2.0 * pad) / cs.0).floor().max(1.0) as usize;
+            let lines = ((height as f64 - 2.0 * pad) / cs.1).floor().max(1.0) as usize;
+            if let Some(b) = self.backend.borrow().as_ref() { b.resize(cols, lines, cs.0, cs.1, width, height); }
         }
         self.obj().update_scroll_adjustment();
     }
 
     fn snapshot(&self, snapshot: &gtk4::Snapshot) {
-        let width = self.obj().width() as f32;
-        let height = self.obj().height() as f32;
-        let padding = self.padding.get();
+        let (width, height, padding) = (self.obj().width() as f32, self.obj().height() as f32, self.padding.get());
         let bg_color = (*self.bg_color.borrow()).unwrap_or_else(|| gtk4::gdk::RGBA::new(0.05, 0.05, 0.05, 1.0));
         let fg_color_default = (*self.fg_color.borrow()).unwrap_or_else(|| gtk4::gdk::RGBA::new(0.8, 0.8, 0.8, 1.0));
-        let rect = gtk4::graphene::Rect::new(0.0, 0.0, width, height);
-        snapshot.append_color(&bg_color, &rect);
+        snapshot.append_color(&bg_color, &gtk4::graphene::Rect::new(0.0, 0.0, width, height));
 
         if let Some(backend) = self.backend.borrow().as_ref() {
             let state = backend.render_state.load();
-            snapshot.save();
-            snapshot.translate(&gtk4::graphene::Point::new(padding, padding));
+            snapshot.save(); snapshot.translate(&gtk4::graphene::Point::new(padding, padding));
             let display_offset = state.display_offset;
             let pango_ctx = self.obj().pango_context();
             let layout = gtk4::pango::Layout::new(&pango_ctx);
-            if let Some(ref fd) = *self.font_desc.borrow() {
-                layout.set_font_description(Some(fd));
-            } else {
+            if let Some(ref fd) = *self.font_desc.borrow() { layout.set_font_description(Some(fd)); }
+            else {
                 let mut font_desc = gtk4::pango::FontDescription::new();
-                font_desc.set_family("Monospace");
-                font_desc.set_size(12 * gtk4::pango::SCALE);
+                font_desc.set_family("Monospace"); font_desc.set_size(12 * gtk4::pango::SCALE);
                 layout.set_font_description(Some(&font_desc));
             }
-
-            let char_size = self.get_char_size(&self.obj());
-            let char_width = char_size.0 as f32;
-            let char_height = char_size.1 as f32;
+            let cs = self.get_char_size(&self.obj());
+            let (char_width, char_height) = (cs.0 as f32, cs.1 as f32);
             let mut offset_y = 0.0_f32;
 
             if (self.cell_width_scale.get() - 1.0).abs() > f64::EPSILON || (self.cell_height_scale.get() - 1.0).abs() > f64::EPSILON {
-                layout.set_text("A");
-                let (_, logical) = layout.extents();
+                layout.set_text("A"); let (_, logical) = layout.extents();
                 if (self.cell_width_scale.get() - 1.0).abs() > f64::EPSILON {
                     let diff = (logical.width() as f64 * (self.cell_width_scale.get() - 1.0)) as i32;
                     let attr_list = gtk4::pango::AttrList::new();
-                    let attr = gtk4::pango::AttrInt::new_letter_spacing(diff);
-                    attr_list.insert(attr);
+                    attr_list.insert(gtk4::pango::AttrInt::new_letter_spacing(diff));
                     layout.set_attributes(Some(&attr_list));
                 }
                 if (self.cell_height_scale.get() - 1.0).abs() > f64::EPSILON {
@@ -1002,271 +628,186 @@ impl WidgetImpl for TerminalWidget {
 
             let selection_range = state.selection_range;
             let palette = self.palette.borrow();
-
             let draw_kitty_images = |is_background: bool| {
                 let mut texture_cache = self.kitty_textures.borrow_mut();
                 for placement in &state.kitty_placements {
-                    if (placement.z_index < 0) != is_background {
-                        continue;
-                    }
-                    let texture = if let Some(tex) = texture_cache.get(&placement.image_id) {
-                        Some(tex.clone())
-                    } else if let Some(img) = state.kitty_images.get(&placement.image_id) {
-                        log::info!("Creating texture for image ID {}", placement.image_id);
+                    if (placement.z_index < 0) != is_background { continue; }
+                    let texture = if let Some(tex) = texture_cache.get(&placement.image_id) { Some(tex.clone()) }
+                    else if let Some(img) = state.kitty_images.get(&placement.image_id) {
                         let tex = match &img.data {
                             crate::engine::kitty::KittyImageData::Dynamic(dyn_img) => {
-                                let rgba = dyn_img.to_rgba8();
-                                let width = rgba.width() as i32;
-                                let height = rgba.height() as i32;
-                                let bytes = glib::Bytes::from(&rgba.into_raw());
-                                gtk4::gdk::MemoryTexture::new(
-                                    width,
-                                    height,
-                                    gtk4::gdk::MemoryFormat::R8g8b8a8,
-                                    &bytes,
-                                    (width * 4) as usize,
-                                ).upcast::<gtk4::gdk::Texture>()
+                                let rgba = dyn_img.to_rgba8(); let (w, h) = (rgba.width() as i32, rgba.height() as i32);
+                                gtk4::gdk::MemoryTexture::new(w, h, gtk4::gdk::MemoryFormat::R8g8b8a8, &glib::Bytes::from(&rgba.into_raw()), (w * 4) as usize).upcast::<gtk4::gdk::Texture>()
                             }
                             crate::engine::kitty::KittyImageData::RawRgb { width, height, data } => {
-                                let w = *width as i32;
-                                let h = *height as i32;
-                                let bytes = glib::Bytes::from_owned(data.clone());
-                                gtk4::gdk::MemoryTexture::new(
-                                    w,
-                                    h,
-                                    gtk4::gdk::MemoryFormat::R8g8b8,
-                                    &bytes,
-                                    (w * 3) as usize,
-                                ).upcast::<gtk4::gdk::Texture>()
+                                let (w, h) = (*width as i32, *height as i32);
+                                gtk4::gdk::MemoryTexture::new(w, h, gtk4::gdk::MemoryFormat::R8g8b8, &glib::Bytes::from_owned(data.clone()), (w * 3) as usize).upcast::<gtk4::gdk::Texture>()
                             }
                             crate::engine::kitty::KittyImageData::RawRgba { width, height, data } => {
-                                let w = *width as i32;
-                                let h = *height as i32;
-                                let bytes = glib::Bytes::from_owned(data.clone());
-                                gtk4::gdk::MemoryTexture::new(
-                                    w,
-                                    h,
-                                    gtk4::gdk::MemoryFormat::R8g8b8a8,
-                                    &bytes,
-                                    (w * 4) as usize,
-                                ).upcast::<gtk4::gdk::Texture>()
+                                let (w, h) = (*width as i32, *height as i32);
+                                gtk4::gdk::MemoryTexture::new(w, h, gtk4::gdk::MemoryFormat::R8g8b8a8, &glib::Bytes::from_owned(data.clone()), (w * 4) as usize).upcast::<gtk4::gdk::Texture>()
                             }
                         };
-                        texture_cache.insert(placement.image_id, tex.clone());
-                        Some(tex)
-                    } else {
-                        None
-                    };
-
+                        texture_cache.insert(placement.image_id, tex.clone()); Some(tex)
+                    } else { None };
                     if let Some(tex) = texture {
-                        let row = placement.point.line.0 + display_offset;
-                        let col = placement.point.column.0;
-                        
+                        let (row, col) = (placement.point.line.0 + display_offset, placement.point.column.0);
                         let scale = self.obj().scale_factor() as f32;
-
-                        // Only draw if visible
-                        let approx_height_cells = placement.height.unwrap_or_else(|| {
-                             if char_height > 0.0 {
-                                 ((placement.visible_height as f32 / scale) / char_height).ceil() as u32
-                             } else {
-                                 1
-                             }
-                        }).max(1);
-                        
+                        let approx_height_cells = placement.height.unwrap_or_else(|| { if char_height > 0.0 { ((placement.visible_height as f32 / scale) / char_height).ceil() as u32 } else { 1 } }).max(1);
                         if row >= -(approx_height_cells as i32) && row < state.screen_lines as i32 {
-                            let x = col as f32 * char_width + padding;
-                            let y = row as f32 * char_height + padding;
-                            
-                            // Scale to cell dimensions or use pixel dimensions
-                            let target_width = if let Some(c) = placement.width {
-                                c as f32 * char_width
-                            } else {
-                                placement.visible_width as f32 / scale
-                            };
-
-                            let target_height = if let Some(r) = placement.height {
-                                r as f32 * char_height
-                            } else {
-                                placement.visible_height as f32 / scale
-                            };
-                            
-                            let rect = gtk4::graphene::Rect::new(x, y, target_width, target_height);
-                            snapshot.append_texture(&tex, &rect);
+                            let (x, y) = (col as f32 * char_width + padding, row as f32 * char_height + padding);
+                            let target_width = if let Some(c) = placement.width { c as f32 * char_width } else { placement.visible_width as f32 / scale };
+                            let target_height = if let Some(r) = placement.height { r as f32 * char_height } else { placement.visible_height as f32 / scale };
+                            snapshot.append_texture(&tex, &gtk4::graphene::Rect::new(x, y, target_width, target_height));
                         }
                     }
                 }
             };
-
-            // Draw background images
             draw_kitty_images(true);
-
             let hovered_uri = self.mouse_pos.get().and_then(|(mx, my)| {
-                let padding = self.padding.get() as f64;
-                let hov_col = ((mx - padding) / char_size.0).floor() as usize;
-                let hov_row = ((my - padding) / char_size.1).floor() as usize;
-                if hov_row < state.screen_lines && hov_col < state.columns {
-                    let hov_point = Point::new(Line(hov_row as i32 - display_offset), Column(hov_col));
-                    state.cell(hov_point).hyperlink().map(|h| h.uri().to_string())
-                } else { None }
+                let hov_col = ((mx - padding as f64) / cs.0).floor() as usize;
+                let hov_row = ((my - padding as f64) / cs.1).floor() as usize;
+                if hov_row < state.screen_lines && hov_col < state.columns { state.cell(Point::new(Line(hov_row as i32 - display_offset), Column(hov_col))).hyperlink().map(|h| h.uri().to_string()) }
+                else { None }
             });
 
-            let mut line_str = String::with_capacity(state.columns);
-
-            for row in 0..state.screen_lines {
-                let mut current_fg = fg_color_default;
+            for row in 0..state.screen_lines as i32 {
+                // 1. Background pass
                 let mut current_bg: Option<gtk4::gdk::RGBA> = None;
                 let mut start_col = 0.0_f32;
-                line_str.clear();
-
                 for col in 0..state.columns {
-                    let point = Point::new(Line(row as i32 - display_offset), Column(col));
-                    let cell = state.cell(point);
-
+                    let cell = state.cell(Point::new(Line(row - display_offset), Column(col)));
                     let mut bg = match cell.bg {
-                        crate::engine::ansi::Color::Named(named) => {
-                            let idx = named as usize;
-                            if idx < 256 {
-                                palette.get(idx).cloned()
-                            } else if idx == 257 { // NamedColor::Background
-                                None // Use default background
-                            } else if (259..=266).contains(&idx) { // Dim colors
-                                palette.get(idx - 259).cloned().map(|mut c| {
-                                    c.set_alpha(c.alpha() * 0.5);
-                                    c
-                                })
-                            } else {
-                                None
-                            }
-                        }
+                        crate::engine::ansi::Color::Named(crate::engine::ansi::NamedColor::Background) => None,
+                        crate::engine::ansi::Color::Named(named) if (named as usize) < 256 => palette.get(named as usize).cloned(),
                         crate::engine::ansi::Color::Spec(rgb) => Some(gtk4::gdk::RGBA::new(rgb.r as f32 / 255.0, rgb.g as f32 / 255.0, rgb.b as f32 / 255.0, 1.0)),
-                        crate::engine::ansi::Color::Indexed(idx) => {
-                            palette.get(idx as usize).cloned()
-                        }
+                        crate::engine::ansi::Color::Indexed(idx) => palette.get(idx as usize).cloned(),
+                        _ => None,
                     };
+                    if cell.flags.contains(crate::engine::term::cell::Flags::INVERSE) {
+                        let fg = match cell.fg {
+                            crate::engine::ansi::Color::Named(named) if (named as usize) < 256 => {
+                                let mut idx = named as usize; if cell.flags.contains(crate::engine::term::cell::Flags::BOLD) && idx < 8 { idx += 8; }
+                                palette.get(idx).cloned().unwrap_or(fg_color_default)
+                            }
+                            crate::engine::ansi::Color::Spec(rgb) => gtk4::gdk::RGBA::new(rgb.r as f32 / 255.0, rgb.g as f32 / 255.0, rgb.b as f32 / 255.0, 1.0),
+                            crate::engine::ansi::Color::Indexed(idx) => {
+                                let mut i = idx as usize; if cell.flags.contains(crate::engine::term::cell::Flags::BOLD) && i < 8 { i += 8; }
+                                palette.get(i).cloned().unwrap_or(fg_color_default)
+                            }
+                            _ => fg_color_default,
+                        };
+                        bg = Some(fg);
+                    }
+                    if bg != current_bg {
+                        if let Some(ref bg_col) = current_bg { snapshot.append_color(bg_col, &gtk4::graphene::Rect::new(start_col, row as f32 * char_height, (col as f32 * char_width) - start_col + 0.5, char_height + 0.5)); }
+                        current_bg = bg; start_col = col as f32 * char_width;
+                    }
+                }
+                if let Some(ref bg_col) = current_bg { snapshot.append_color(bg_col, &gtk4::graphene::Rect::new(start_col, row as f32 * char_height, (state.columns as f32 * char_width) - start_col + 0.5, char_height + 0.5)); }
 
+                // 2. Text pass
+                let mut current_fg = fg_color_default;
+                let mut line_str = String::new();
+                start_col = 0.0_f32;
+                for col in 0..state.columns {
+                    let point = Point::new(Line(row - display_offset), Column(col));
+                    let cell = state.cell(point);
                     let mut fg = match cell.fg {
                         crate::engine::ansi::Color::Named(named) => {
-                            let mut idx = named as usize;
-                            if cell.flags.contains(crate::engine::term::cell::Flags::BOLD) && idx < 8 {
-                                idx += 8;
-                            }
-                            if idx < 256 {
-                                palette.get(idx).cloned().unwrap_or(fg_color_default)
-                            } else if idx == 256 { // NamedColor::Foreground
-                                fg_color_default
-                            } else if (259..=266).contains(&idx) { // Dim colors
-                                palette.get(idx - 259).cloned().map(|mut c| {
-                                    c.set_alpha(c.alpha() * 0.5);
-                                    c
-                                }).unwrap_or(fg_color_default)
-                            } else {
-                                fg_color_default
-                            }
+                            let mut idx = named as usize; if cell.flags.contains(crate::engine::term::cell::Flags::BOLD) && idx < 8 { idx += 8; }
+                            if idx < 256 { palette.get(idx).cloned().unwrap_or(fg_color_default) }
+                            else if idx == 256 { fg_color_default }
+                            else if (259..=266).contains(&idx) { palette.get(idx - 259).cloned().map(|mut c| { c.set_alpha(c.alpha() * 0.5); c }).unwrap_or(fg_color_default) }
+                            else { fg_color_default }
                         }
                         crate::engine::ansi::Color::Spec(rgb) => gtk4::gdk::RGBA::new(rgb.r as f32 / 255.0, rgb.g as f32 / 255.0, rgb.b as f32 / 255.0, 1.0),
                         crate::engine::ansi::Color::Indexed(mut idx) => {
-                            if cell.flags.contains(crate::engine::term::cell::Flags::BOLD) && idx < 8 {
-                                idx += 8;
-                            }
+                            if cell.flags.contains(crate::engine::term::cell::Flags::BOLD) && idx < 8 { idx += 8; }
                             palette.get(idx as usize).cloned().unwrap_or(fg_color_default)
                         }
                     };
-
                     if cell.flags.contains(crate::engine::term::cell::Flags::DIM) {
-                        fg.set_red(fg.red() * 0.6);
-                        fg.set_green(fg.green() * 0.6);
-                        fg.set_blue(fg.blue() * 0.6);
+                        fg.set_red(fg.red() * 0.6); fg.set_green(fg.green() * 0.6); fg.set_blue(fg.blue() * 0.6);
                     }
-
                     if cell.flags.contains(crate::engine::term::cell::Flags::INVERSE) {
-                        let actual_bg = bg.unwrap_or(bg_color);
-                        bg = Some(fg);
-                        fg = actual_bg;
+                        fg = match cell.bg {
+                            crate::engine::ansi::Color::Named(crate::engine::ansi::NamedColor::Background) => bg_color,
+                            crate::engine::ansi::Color::Named(n) => palette.get(n as usize).cloned().unwrap_or(bg_color),
+                            crate::engine::ansi::Color::Spec(rgb) => gtk4::gdk::RGBA::new(rgb.r as f32 / 255.0, rgb.g as f32 / 255.0, rgb.b as f32 / 255.0, 1.0),
+                            crate::engine::ansi::Color::Indexed(idx) => palette.get(idx as usize).cloned().unwrap_or(bg_color),
+                        };
                     }
-
-                    if bg != current_bg || fg != current_fg {
-                        if let Some(ref bg_col) = current_bg {
-                            let width = (col as f32 * char_width) - start_col;
-                            snapshot.append_color(bg_col, &gtk4::graphene::Rect::new(start_col, row as f32 * char_height, width + 0.5, char_height + 0.5));
-                        }
-
+                    let is_wide = cell.flags.contains(crate::engine::term::cell::Flags::WIDE_CHAR);
+                    let is_spacer = cell.flags.intersects(crate::engine::term::cell::Flags::WIDE_CHAR_SPACER | crate::engine::term::cell::Flags::LEADING_WIDE_CHAR_SPACER);
+                    let is_filling = is_cell_filling_char(cell.c);
+                    if fg != current_fg || is_wide || is_spacer || is_filling {
                         if !line_str.is_empty() {
+                            layout.set_text(&line_str); snapshot.save(); snapshot.translate(&gtk4::graphene::Point::new(start_col, row as f32 * char_height + offset_y));
+                            snapshot.append_layout(&layout, &current_fg); snapshot.restore(); line_str.clear();
+                        }
+                        current_fg = fg;
+                    }
+                    if !is_spacer {
+                        if line_str.is_empty() { start_col = col as f32 * char_width; }
+                        line_str.push(cell.c);
+                        if let Some(zw) = cell.zerowidth() { for &c in zw { line_str.push(c); } }
+                        if is_wide {
+                            layout.set_text(&line_str); let (_, logical) = layout.extents(); let actual_width = logical.width() as f32 / gtk4::pango::SCALE as f32; let target_width = char_width * 2.0;
+                            snapshot.save(); snapshot.translate(&gtk4::graphene::Point::new(start_col, row as f32 * char_height + offset_y));
+                            if (actual_width - target_width).abs() > 0.1 {
+                                let s = target_width / actual_width; snapshot.scale(s, s);
+                                let ah = logical.height() as f32 / gtk4::pango::SCALE as f32;
+                                let scaled_h = ah * s;
+                                if scaled_h < char_height { snapshot.translate(&gtk4::graphene::Point::new(0.0, (char_height - scaled_h) / 2.0)); }
+                            }
+                            snapshot.append_layout(&layout, &current_fg); snapshot.restore(); line_str.clear();
+                        } else if is_filling {
+                            // Scale box-drawing / block / powerline chars to fill the cell exactly,
+                            // matching Ghostty's behaviour of cell-perfect glyph rendering.
                             layout.set_text(&line_str);
+                            let (_, logical) = layout.extents();
+                            let aw = (logical.width() as f32 / gtk4::pango::SCALE as f32).max(0.1);
+                            let ah = (logical.height() as f32 / gtk4::pango::SCALE as f32).max(0.1);
+                            let sx = char_width / aw;
+                            let sy = char_height / ah;
                             snapshot.save();
-                            snapshot.translate(&gtk4::graphene::Point::new(start_col, row as f32 * char_height + offset_y));
+                            snapshot.translate(&gtk4::graphene::Point::new(start_col, row as f32 * char_height));
+                            if (sx - 1.0).abs() > 0.02 || (sy - 1.0).abs() > 0.02 {
+                                snapshot.scale(sx, sy);
+                            }
                             snapshot.append_layout(&layout, &current_fg);
                             snapshot.restore();
+                            line_str.clear();
                         }
-
-                        current_bg = bg;
-                        current_fg = fg;
-                        start_col = col as f32 * char_width;
-                        line_str.clear();
                     }
-                    line_str.push(cell.c);
                 }
-
-                // Final flush for the row
-                if let Some(ref bg_col) = current_bg {
-                    let width = (state.columns as f32 * char_width) - start_col;
-                    snapshot.append_color(bg_col, &gtk4::graphene::Rect::new(start_col, row as f32 * char_height, width + 0.5, char_height + 0.5));
-                }
-
                 if !line_str.is_empty() {
-                    layout.set_text(&line_str);
-                    snapshot.save();
-                    snapshot.translate(&gtk4::graphene::Point::new(start_col, row as f32 * char_height + offset_y));
-                    snapshot.append_layout(&layout, &current_fg);
-                    snapshot.restore();
+                    layout.set_text(&line_str); snapshot.save(); snapshot.translate(&gtk4::graphene::Point::new(start_col, row as f32 * char_height + offset_y));
+                    snapshot.append_layout(&layout, &current_fg); snapshot.restore();
                 }
-
-                // Draw selections and hyperlinks on top of the rendered text
                 for col in 0..state.columns {
-                    let point = Point::new(Line(row as i32 - display_offset), Column(col));
-                    let cell = state.cell(point);
-
-                    if let Some(ref range) = selection_range
-                        && range.contains(point) {
-                            snapshot.append_color(&gtk4::gdk::RGBA::new(0.2, 0.4, 0.6, 0.5), &gtk4::graphene::Rect::new(col as f32 * char_width, row as f32 * char_height, char_width, char_height));
-                        }
-
-                    if let Some(cell_uri) = cell.hyperlink().map(|h| h.uri().to_string())
-                        && hovered_uri.as_deref() == Some(cell_uri.as_str()) {
-                            snapshot.append_color(&gtk4::gdk::RGBA::new(0.35, 0.75, 1.0, 1.0), &gtk4::graphene::Rect::new(col as f32 * char_width, row as f32 * char_height + char_height - 1.5, char_width, 1.5));
-                        }
+                    let point = Point::new(Line(row - display_offset), Column(col));
+                    if let Some(ref range) = selection_range && range.contains(point) { snapshot.append_color(&gtk4::gdk::RGBA::new(0.2, 0.4, 0.6, 0.5), &gtk4::graphene::Rect::new(col as f32 * char_width, row as f32 * char_height, char_width, char_height)); }
+                    if let Some(cell_uri) = state.cell(point).hyperlink().map(|h| h.uri().to_string()) && hovered_uri.as_deref() == Some(cell_uri.as_str()) { snapshot.append_color(&gtk4::gdk::RGBA::new(0.35, 0.75, 1.0, 1.0), &gtk4::graphene::Rect::new(col as f32 * char_width, row as f32 * char_height + char_height - 1.5, char_width, 1.5)); }
                 }
             }
-
             if self.show_grid.get() {
                 let grid_color = gtk4::gdk::RGBA::new(1.0, 1.0, 1.0, 0.05);
-                for row in 0..=state.screen_lines {
-                    let y = row as f32 * char_height;
-                    snapshot.append_color(&grid_color, &gtk4::graphene::Rect::new(0.0, y, width - 2.0 * padding, 1.0));
-                }
-                for col in 0..=state.columns {
-                    let x = col as f32 * char_width;
-                    snapshot.append_color(&grid_color, &gtk4::graphene::Rect::new(x, 0.0, 1.0, height - 2.0 * padding));
-                }
+                for r in 0..=state.screen_lines as i32 { snapshot.append_color(&grid_color, &gtk4::graphene::Rect::new(0.0, r as f32 * char_height, width - 2.0 * padding, 1.0)); }
+                for c in 0..=state.columns { snapshot.append_color(&grid_color, &gtk4::graphene::Rect::new(c as f32 * char_width, 0.0, 1.0, height - 2.0 * padding)); }
             }
-
             if self.cursor_visible.get() {
-                let cursor_point = state.cursor_point;
-                let cursor_row = cursor_point.line.0 + display_offset;
-                if cursor_row >= 0 && cursor_row < state.screen_lines as i32 {
-                    let shape = self.cursor_shape.get();
-                    let (c_width, c_height, c_y_offset) = match shape {
-                        crate::engine::ansi::CursorShape::Underline => (char_width, 2.0_f32, char_height - 2.0),
-                        crate::engine::ansi::CursorShape::Beam => (2.0_f32, char_height, 0.0_f32),
-                        _ => (char_width, char_height, 0.0_f32),
-                    };
-                    let cursor_color = (*self.cursor_color.borrow()).unwrap_or_else(|| gtk4::gdk::RGBA::new(1.0, 1.0, 1.0, 0.7));
-                    snapshot.append_color(&cursor_color, &gtk4::graphene::Rect::new(cursor_point.column.0 as f32 * char_width, cursor_row as f32 * char_height + c_y_offset, c_width, c_height));
+                let mut cp = state.cursor_point; let cr = cp.line.0 + display_offset;
+                if cr >= 0 && cr < state.screen_lines as i32 {
+                    let cell = state.cell(cp); let mut wide = cell.flags.contains(crate::engine::term::cell::Flags::WIDE_CHAR);
+                    if cell.flags.contains(crate::engine::term::cell::Flags::WIDE_CHAR_SPACER) && cp.column.0 > 0 { cp.column.0 -= 1; wide = true; }
+                    let (cw, ch, cy) = match self.cursor_shape.get() { crate::engine::ansi::CursorShape::Underline => (if wide { char_width * 2.0 } else { char_width }, 2.0_f32, char_height - 2.0), crate::engine::ansi::CursorShape::Beam => (2.0_f32, char_height, 0.0_f32), _ => (if wide { char_width * 2.0 } else { char_width }, char_height, 0.0_f32) };
+                    let cc = (*self.cursor_color.borrow()).unwrap_or(fg_color_default);
+                    snapshot.append_color(&cc, &gtk4::graphene::Rect::new(cp.column.0 as f32 * char_width, cr as f32 * char_height + cy, cw, ch));
                 }
             }
-            snapshot.restore();
-
-            // ── Draw Foreground Kitty Graphics ───────────────────────────────
-            draw_kitty_images(false);
+            snapshot.restore(); draw_kitty_images(false);
         }
     }
 }
