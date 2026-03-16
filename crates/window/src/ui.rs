@@ -177,8 +177,29 @@ impl AppWindow {
         split_view.set_sidebar(Some(&sidebar_toolbar));
 
         let (content_toolbar, content_header, bell_indicator, single_tab_title, header_title_stack, menu_btn, tab_bar, claw_indicator, claw_popover) = Self::build_content_area(&tx, &tab_view, &current_settings);
-        split_view.set_content(Some(&content_toolbar));
+        
+        let overlay = gtk::Overlay::new();
+        overlay.set_child(Some(&content_toolbar));
+
+        let notification_pill = crate::widgets::notification_pill::BoxxyNotificationPill::new();
+        notification_pill.set_visible(false);
+        overlay.add_overlay(&notification_pill);
+
+        split_view.set_content(Some(&overlay));
         window.set_content(Some(&split_view));
+
+        let tx_pill = tx.clone();
+        let pill_clone = notification_pill.clone();
+        notification_pill.connect_clicked(move |_| {
+            if let Some(notification) = pill_clone.get_notification() {
+                let popover = gtk::Popover::new();
+                popover.set_position(gtk::PositionType::Top);
+                let details = crate::widgets::notification_details::BoxxyNotificationDetails::new(&notification, tx_pill.clone());
+                popover.set_child(Some(&details));
+                popover.set_parent(&pill_clone);
+                popover.popup();
+            }
+        });
 
         let tx_focus2 = tx.clone();
         tab_view.connect_selected_page_notify(move |_| {
@@ -247,6 +268,8 @@ impl AppWindow {
             bell_indicator,
             claw_indicator,
             claw_popover,
+            notification_pill,
+            notifications: Vec::new(),
             initial_working_dir: init.working_dir.clone(),
             force_close,
             tx: tx.clone(),
@@ -292,6 +315,17 @@ impl AppWindow {
         if !is_drag_window && inner_ref.borrow().tabs.is_empty() {
             crate::update::update(&inner_ref, AppInput::NewTab);
         }
+
+        // Background update check
+        let tx_update = tx.clone();
+        tokio::spawn(async move {
+            // Wait 10 seconds after startup to not interfere with boot
+            tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+            if let Ok(Some((version, url))) = crate::updater::Updater::check_for_update().await {
+                let notification = crate::widgets::notification::Notification::new_update(&version, &url);
+                let _ = tx_update.send(AppInput::PushNotification(notification)).await;
+            }
+        });
 
         window.present();
 

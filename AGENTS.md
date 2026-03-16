@@ -54,7 +54,21 @@ Unified AI interface layer. Abstracts multiple providers (Gemini, Anthropic, Oll
 ### 10. `boxxy-model-selection` (Library Crate)
 Data-driven model configuration UI. Uses a registry pattern to dynamically build selection dialogs and dropdowns based on registered `AiProvider` traits. Decouples AI capability discovery from the main application window.
 
-### 7. `boxxy-sidebar` (Library Crate)
+## Distribution & Updates
+
+Boxxy supports two primary distribution channels:
+
+1. **Flatpak (Flathub):** The primary sandboxed distribution. Updates are managed externally by the Flatpak system.
+2. **Native (GitHub Nightly):** A standalone installation method via `scripts/install.sh` that targets `~/.local/boxxy-terminal/`. 
+
+### Auto-Update Protocol (Native Only)
+For native installations, Boxxy implements an **Atomic Swap** update mechanism located in `boxxy_window::updater`:
+- **Detection:** Reuses `is_flatpak()` to disable the internal updater when sandboxed.
+- **Verification:** Tracks the `published_at` date of the GitHub `nightly` release in `~/.local/boxxy-terminal/.last_update` to avoid redundant prompts.
+- **Persistence:** Downloads and extracts updates silently in the background.
+- **Execution:** Performs an atomic rename of the running `boxxy-terminal` and `boxxy-agent` binaries before spawning the new process and exiting. This bypasses "text file busy" errors and requires no root privileges.
+
+## State Machine & UI Sync Protocol (Claw)
 Modular AI Chat sidebar component (`AiSidebarComponent`). Scoped into `commands`, `markdown`, `widgets`, and `types`.
 
 ### 8. `boxxy-preferences` (Library Crate)

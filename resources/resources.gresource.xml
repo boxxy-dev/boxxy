@@ -28,5 +28,7 @@
     <file compressed="true" alias="prompts/memory_flush.md">prompts/memory_flush.md</file>
     <file compressed="true" alias="prompts/memory_summarizer.md">prompts/memory_summarizer.md</file>
     <file compressed="true" alias="ui/preferences.ui">ui/preferences.ui</file>
+    <file compressed="true" alias="ui/widgets/notification_pill.ui">ui/widgets/notification_pill.ui</file>
+    <file compressed="true" alias="ui/widgets/notification_details.ui">ui/widgets/notification_details.ui</file>
   </gresource>
 </gresources>

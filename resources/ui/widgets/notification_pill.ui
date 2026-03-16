@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<interface>
+  <template class="BoxxyNotificationPill" parent="GtkButton">
+    <property name="valign">end</property>
+    <property name="halign">center</property>
+    <property name="margin-bottom">12</property>
+    <style>
+      <class name="notification-pill"/>
+      <class name="suggested-action"/>
+    </style>
+    <child>
+      <object class="GtkBox">
+        <property name="spacing">8</property>
+        <child>
+          <object class="GtkImage" id="icon">
+            <property name="icon-name">software-update-available-symbolic</property>
+          </object>
+        </child>
+        <child>
+          <object class="GtkLabel" id="label">
+            <property name="label">Update Available</property>
+            <property name="max-width-chars">30</property>
+            <property name="ellipsize">end</property>
+          </object>
+        </child>
+      </object>
+    </child>
+  </template>
+</interface>

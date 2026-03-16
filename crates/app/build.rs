@@ -33,6 +33,8 @@ fn main() {
     <file compressed="true" alias="prompts/memory_flush.md">prompts/memory_flush.md</file>
     <file compressed="true" alias="prompts/memory_summarizer.md">prompts/memory_summarizer.md</file>
     <file compressed="true" alias="ui/preferences.ui">ui/preferences.ui</file>
+    <file compressed="true" alias="ui/widgets/notification_pill.ui">ui/widgets/notification_pill.ui</file>
+    <file compressed="true" alias="ui/widgets/notification_details.ui">ui/widgets/notification_details.ui</file>
   </gresource>
 </gresources>
 "#.to_string();
@@ -72,6 +74,8 @@ fn main() {
     println!("cargo:rerun-if-changed=../../resources/prompts/memory_flush.md");
     println!("cargo:rerun-if-changed=../../resources/prompts/memory_summarizer.md");
     println!("cargo:rerun-if-changed=../../resources/ui/preferences.ui");
+    println!("cargo:rerun-if-changed=../../resources/ui/widgets/notification_pill.ui");
+    println!("cargo:rerun-if-changed=../../resources/ui/widgets/notification_details.ui");
 
     glib_build_tools::compile_resources(
         &["../../resources"],

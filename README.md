@@ -27,7 +27,13 @@ Boxxy is currently in early preview, but it does have most of the things you exp
 ---
 
 ## Installation
-Flathub Submission in progress..
+
+```bash
+#Nightly builds; It supports automatic updates from within the app
+curl -sSf https://raw.githubusercontent.com/miifrommera/boxxy/main/scripts/install.sh | sh
+```
+
+Flathub submission [in progress..](https://github.com/flathub/flathub/pull/8098)
 
 ---
 

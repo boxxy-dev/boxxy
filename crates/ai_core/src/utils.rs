@@ -14,3 +14,8 @@ pub fn runtime() -> &'static Runtime {
             .expect("Failed to create Tokio runtime")
     })
 }
+
+/// Returns true if the application is running inside a Flatpak sandbox.
+pub fn is_flatpak() -> bool {
+    ashpd::is_sandboxed()
+}

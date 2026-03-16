@@ -37,9 +37,7 @@ pub async fn get_agent() -> &'static AgentManager {
     }).await
 }
 
-pub(crate) fn is_flatpak() -> bool {
-    ashpd::is_sandboxed()
-}
+pub(crate) use boxxy_ai_core::utils::is_flatpak;
 
 pub(crate) fn get_host_shell() -> String {
     let username = env::var("USER")

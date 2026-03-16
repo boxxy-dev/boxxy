@@ -250,5 +250,53 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, msg: AppInput) {
                 tab.controller.reload_claw();
             }
         }
+
+        // Notifications
+        AppInput::PushNotification(notification) => {
+            inner.notifications.push(notification.clone());
+            inner.notification_pill.set_notification(notification);
+        }
+        AppInput::DismissNotification(id) => {
+            inner.notifications.retain(|n| n.id != id);
+            if let Some(next) = inner.notifications.last() {
+                inner.notification_pill.set_notification(next.clone());
+            } else {
+                inner.notification_pill.clear();
+            }
+        }
+        AppInput::StartUpdateDownload(url) => {
+            let tx = inner.tx.clone();
+            // We should find the version from the notification
+            let version = inner.notifications.iter()
+                .find(|n| n.id == "update-available")
+                .and_then(|n| n.details.iter().find(|(k, _)| k == "Version"))
+                .map(|(_, v)| v.clone())
+                .unwrap_or_default();
+
+            // Clear notifications and hide pill immediately
+            inner.notifications.clear();
+            inner.notification_pill.clear();
+
+            tokio::spawn(async move {
+                match crate::updater::Updater::download_update(url).await {
+                    Ok(_path) => {
+                        let _ = tx.send(AppInput::UpdateDownloaded(version)).await;
+                    }
+                    Err(e) => {
+                        eprintln!("Update download failed: {:#}", e);
+                    }
+                }
+            });
+        }
+        AppInput::UpdateDownloaded(version) => {
+            // Dismiss the "available" notification and push "ready"
+            inner.notifications.retain(|n| n.id != "update-available");
+            let ready = crate::widgets::notification::Notification::new_update_ready(&version);
+            inner.notifications.push(ready.clone());
+            inner.notification_pill.set_notification(ready);
+        }
+        AppInput::ApplyUpdateAndRestart => {
+            let _ = crate::updater::Updater::apply_update_and_restart();
+        }
     }
 }

@@ -283,3 +283,11 @@ tabbox separator {
     filter: grayscale(1) brightness(0.8);
     opacity: 0.8;
 }
+
+.notification-pill {
+    border-radius: 9999px;
+    padding: 2px 12px;
+    font-weight: bold;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+

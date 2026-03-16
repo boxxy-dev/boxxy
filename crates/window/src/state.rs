@@ -11,6 +11,7 @@ use gtk4 as gtk;
 use libadwaita as adw;
 
 use crate::init::TerminalController;
+use crate::widgets::notification::Notification;
 
 #[derive(Debug, Clone)]
 pub enum AppInput {
@@ -67,6 +68,11 @@ pub enum AppInput {
         height: i32,
         is_maximized: bool,
     },
+    PushNotification(Notification),
+    DismissNotification(String),
+    StartUpdateDownload(String),
+    UpdateDownloaded(String),
+    ApplyUpdateAndRestart,
 }
 
 pub struct AppWindowInner {
@@ -96,6 +102,8 @@ pub struct AppWindowInner {
     pub bell_indicator: gtk::Image,
     pub claw_indicator: gtk::Button,
     pub claw_popover: crate::boxxyclaw_indicator_popover::BoxxyclawIndicatorPopover,
+    pub notification_pill: crate::widgets::notification_pill::BoxxyNotificationPill,
+    pub notifications: Vec<Notification>,
     pub initial_working_dir: Option<String>,
     pub force_close: Rc<Cell<bool>>,
     pub tx: async_channel::Sender<AppInput>,
