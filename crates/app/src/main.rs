@@ -8,6 +8,7 @@ fn main() {
         .filter_module("zbus", log::LevelFilter::Warn)
         .filter_module("zvariant", log::LevelFilter::Warn)
         .filter_module("tracing", log::LevelFilter::Warn)
+        .filter_module("sqlx", log::LevelFilter::Warn)
         .init();
     // Enter the global tokio runtime context so tokio::spawn works everywhere.
     let _rt_guard = utils::runtime().enter();
@@ -17,13 +18,10 @@ fn main() {
     boxxy_preferences::Settings::init();
     boxxy_preferences::AppState::init();
 
-    // Ensure all default files and the SQLite database are generated immediately on first run
+    // Ensure all default files are generated immediately on first run
     // in the background, without blocking the UI thread.
     tokio::spawn(async {
         boxxy_preferences::Settings::ensure_claw_skills();
-        if let Err(e) = boxxy_db::Db::new().await {
-            log::error!("Failed to initialize Claw Memory Database on startup: {}", e);
-        }
     });
 
     gstreamer::init().expect("Failed to initialize GStreamer.");
