@@ -28,12 +28,15 @@ Boxxy is currently in early preview, but it does have most of the things you exp
 
 ## Installation
 
+### Native
+
 Nightly builds. It supports automatic updates from within the app.
 ```bash
 curl -sSf https://raw.githubusercontent.com/miifrommera/boxxy/main/scripts/install.sh | sh
 ```
-Requires GTK 4.22, libAdwaita 1.9
+Requires GTK 4.22, libAdwaita 1.9; aarch64 not currently supported because of the very slow builds, open an issue if you need it.
 
+### Flathub
 Flathub submission [in progress..](https://github.com/flathub/flathub/pull/8098)
 
 ---

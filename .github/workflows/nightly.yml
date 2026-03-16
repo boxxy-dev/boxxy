@@ -20,15 +20,10 @@ jobs:
       matrix:
         include:
           - arch: x86_64
-          - arch: aarch64
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Set up QEMU
-        if: matrix.arch == 'aarch64'
-        uses: docker/setup-qemu-action@v3
 
       - name: Build in Fedora Container
         uses: addnab/docker-run-action@v3
