@@ -1,0 +1,73 @@
+name: Nightly Build
+
+on:
+  push:
+    branches:
+      - main
+  schedule:
+    - cron: '0 0 * * *' # Every night at midnight
+  workflow_dispatch: # Allows you to trigger it manually from the UI
+
+jobs:
+  build:
+    name: Build (${{ matrix.arch }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+          - arch: aarch64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        if: matrix.arch == 'aarch64'
+        uses: docker/setup-qemu-action@v3
+
+      - name: Build in Fedora Container
+        uses: addnab/docker-run-action@v3
+        with:
+          image: fedora:rawhide
+          options: --platform linux/${{ matrix.arch }} -v ${{ github.workspace }}:/workspace -e GITHUB_ENV=/workspace/github_env
+          run: |
+            dnf install -y \
+              gcc pkgconfig openssl-devel gtk4-devel libadwaita-devel \
+              gstreamer1-devel gstreamer1-plugins-base-devel gdk-pixbuf2-devel \
+              glib2-devel sqlite-devel tar gzip git curl
+
+            # Install Rust
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+            source $HOME/.cargo/env
+
+            cd /workspace
+            cargo build --release --locked
+
+            PKG_NAME="boxxy-terminal-nightly-linux-${{ matrix.arch }}"
+            mkdir -p "${PKG_NAME}/bin"
+            mkdir -p "${PKG_NAME}/share/applications"
+            mkdir -p "${PKG_NAME}/share/icons/hicolor/scalable/apps"
+
+            cp target/release/boxxy-terminal "${PKG_NAME}/bin/"
+            cp target/release/boxxy-agent "${PKG_NAME}/bin/"
+            cp flatpak/play.mii.Boxxy.desktop "${PKG_NAME}/share/applications/"
+            cp resources/icons/play.mii.Boxxy.png "${PKG_NAME}/share/icons/hicolor/scalable/apps/"
+
+            tar -czvf "${PKG_NAME}.tar.gz" "${PKG_NAME}"
+            echo "ASSET_PATH=${PKG_NAME}.tar.gz" >> $GITHUB_ENV
+
+      - name: Load Asset Path
+        run: cat github_env >> $GITHUB_ENV
+
+      - name: Update Nightly Release
+        uses: andelf/nightly-release@main
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: nightly
+          name: 'Nightly Build'
+          body: 'This release contains the latest automated builds from the main branch.'
+          prerelease: true
+          files: ${{ env.ASSET_PATH }}
