@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <interface>
   <object class="AdwDialog" id="dialog">
-    <property name="presentation-mode">bottom-sheet</property>
+    <property name="presentation-mode">floating</property>
     <property name="title" translatable="yes">Preferences</property>
     <property name="content-width">850</property>
     <property name="content-height">600</property>
