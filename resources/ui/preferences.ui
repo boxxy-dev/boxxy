@@ -1,7 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <interface>
   <object class="AdwDialog" id="dialog">
-    <property name="presentation-mode">bottom-sheet</property>
     <property name="title" translatable="yes">Preferences</property>
     <property name="content-width">850</property>
     <property name="content-height">600</property>
@@ -131,7 +130,7 @@
             </property>
           </object>
         </property>
-        
+
         <property name="content">
           <object class="AdwNavigationPage">
             <property name="title" translatable="yes">Preferences</property>
@@ -148,7 +147,7 @@
                 </child>
                 <property name="content">
                   <object class="AdwViewStack" id="stack">
-                    
+
                     <child>
                       <object class="AdwViewStackPage">
                         <property name="name">appearance</property>
@@ -250,7 +249,7 @@
                                   </object>
                                 </child>
                                 <child>
-                                  <object class="AdwSwitchRow" id="dim_inactive_switch">                                    
+                                  <object class="AdwSwitchRow" id="dim_inactive_switch">
                                     <property name="title" translatable="yes">Dim Inactive Panes</property>
                                     <property name="subtitle" translatable="yes">Dim inactive terminal splits slightly</property>
                                   </object>

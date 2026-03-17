@@ -74,7 +74,21 @@ impl ClawSession {
             .await;
 
         while let Ok(msg) = self.rx.recv().await {
-            if !is_initialized {
+            let needs_initialization = match &msg {
+                ClawMessage::ClawQuery { .. }
+                | ClawMessage::UserMessage { .. }
+                | ClawMessage::RequestLazyDiagnosis => true,
+                ClawMessage::CommandFinished { exit_code, .. }
+                    if *exit_code != 0 && *exit_code != 130 && *exit_code != 131 =>
+                {
+                    let settings = boxxy_preferences::Settings::load();
+                    settings.claw_auto_diagnosis_mode
+                        != boxxy_preferences::config::ClawAutoDiagnosisMode::Lazy
+                }
+                _ => false,
+            };
+
+            if !is_initialized && needs_initialization {
                 info!(
                     "Initializing Claw Session for pane {} upon first request...",
                     self.pane_id

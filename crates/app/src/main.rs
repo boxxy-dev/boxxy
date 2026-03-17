@@ -9,6 +9,7 @@ fn main() {
         .filter_module("zvariant", log::LevelFilter::Warn)
         .filter_module("tracing", log::LevelFilter::Warn)
         .filter_module("sqlx", log::LevelFilter::Warn)
+        .filter_module("rig", log::LevelFilter::Warn)
         .init();
     // Enter the global tokio runtime context so tokio::spawn works everywhere.
     let _rt_guard = utils::runtime().enter();
