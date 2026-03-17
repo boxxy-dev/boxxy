@@ -12,9 +12,8 @@ Read the [Getting Started](docs/GettingStarted.md) and check news on [Releases](
 ## Features
 Boxxy is currently in early preview, but it does have most of the things you expect from a terminal:
 
-- Tabs on the headerbar
-- Notifications
 - Split panes with softswap
+- Bookmarks
 - Preview images and videos (via GTK popover)
 - AI Chat
 - Integrated Self Improving Claw 🦀
@@ -37,7 +36,7 @@ curl -sSf https://raw.githubusercontent.com/miifrommera/boxxy/main/scripts/insta
 Requires GTK 4.22, libAdwaita 1.9; aarch64 not currently supported because of the very slow builds, open an issue if you need it.
 
 ### Flathub
-Flathub submission [in progress..](https://github.com/flathub/flathub/pull/8098)
+Flathub submission [Closed](https://github.com/flathub/flathub/pull/8098)
 
 ---
 
@@ -75,8 +74,7 @@ Boxxy has very little use in the wild yet, so it won't **really** be a surprise 
 ---
 
 ## Roadmap
- - **Bookmarks.** Save scripts and script variables for quick execution  
- - **Boxxy Scripts.** Let Boxxy write and run Lua scripts
+ - **Boxxy Scripts.** Let Boxxy create and run scripts for completing tasks
  - **Voice.** Speech to Text, Text to Speech 
  - **Characters.** Add characters with voice cloning
  - **Boxxy Marketplace.** A repo that hosts community skills and characters
