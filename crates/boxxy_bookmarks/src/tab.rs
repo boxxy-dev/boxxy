@@ -13,6 +13,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 struct CardWidgets {
+    script_icon: gtk::Image,
     name_label: gtk::Label,
     run_btn: gtk::Button,
     buffer: sourceview5::Buffer,
@@ -91,6 +92,10 @@ impl BookmarksTabComponent {
             header.set_margin_bottom(12);
             header.set_margin_start(12);
             header.set_margin_end(12);
+
+            let script_icon = gtk::Image::new();
+            script_icon.set_pixel_size(24);
+            header.append(&script_icon);
 
             let name_label = gtk::Label::new(None);
             name_label.add_css_class("heading");
@@ -242,6 +247,7 @@ impl BookmarksTabComponent {
             widgets_map_setup.borrow_mut().insert(
                 list_item.clone(),
                 CardWidgets {
+                    script_icon,
                     name_label,
                     run_btn,
                     buffer,
@@ -262,6 +268,16 @@ impl BookmarksTabComponent {
                     widgets.name_label.set_text(&bm.name);
 
                     if let Some(script) = BookmarksManager::get_script(&bm.filename) {
+                        if bm.filename.ends_with(".py")
+                            || script.starts_with("#!/usr/bin/env python")
+                            || script.starts_with("#!/usr/bin/python")
+                            || script.starts_with("```python")
+                        {
+                            widgets.script_icon.set_icon_name(Some("python"));
+                        } else {
+                            widgets.script_icon.set_icon_name(Some("console"));
+                        }
+
                         let preview_text: String =
                             script.lines().take(5).collect::<Vec<_>>().join("\n");
                         widgets.buffer.set_text(&preview_text);
@@ -271,6 +287,9 @@ impl BookmarksTabComponent {
                         widgets.missing_box.set_visible(false);
                         widgets.run_btn.set_sensitive(true);
                     } else {
+                        widgets
+                            .script_icon
+                            .set_icon_name(Some("dialog-warning-symbolic"));
                         widgets.preview_container.set_visible(false);
                         widgets.missing_box.set_visible(true);
                         widgets.run_btn.set_sensitive(false);

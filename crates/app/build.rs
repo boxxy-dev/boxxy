@@ -27,6 +27,8 @@ fn main() {
     <file compressed="true" alias="icons/bug-symbolic.svg">icons/bug-symbolic.svg</file>
     <file compressed="true" alias="icons/user-bookmarks-symbolic.svg">icons/user-bookmarks-symbolic.svg</file>
     <file compressed="true" alias="icons/external-link-symbolic.svg">icons/external-link-symbolic.svg</file>
+    <file compressed="true" alias="icons/console.svg">icons/console.svg</file>
+    <file compressed="true" alias="icons/python.svg">icons/python.svg</file>
     <file compressed="true" alias="prompts/ai_chat.md">prompts/ai_chat.md</file>
     <file compressed="true" alias="prompts/claw.md">prompts/claw.md</file>
     <file compressed="true" alias="prompts/boxxy_app_generator.md">prompts/boxxy_app_generator.md</file>
@@ -69,6 +71,8 @@ fn main() {
     println!("cargo:rerun-if-changed=../../resources/icons/bug-symbolic.svg");
     println!("cargo:rerun-if-changed=../../resources/icons/user-bookmarks-symbolic.svg");
     println!("cargo:rerun-if-changed=../../resources/icons/external-link-symbolic.svg");
+    println!("cargo:rerun-if-changed=../../resources/icons/console.svg");
+    println!("cargo:rerun-if-changed=../../resources/icons/python.svg");
     println!("cargo:rerun-if-changed=../../resources/prompts/ai_chat.md");
     println!("cargo:rerun-if-changed=../../resources/prompts/claw.md");
     println!("cargo:rerun-if-changed=../../resources/prompts/boxxy_app_generator.md");

@@ -95,6 +95,25 @@ impl BookmarksSidebarComponent {
         hbox.set_margin_start(12);
         hbox.set_margin_end(12);
 
+        let script_icon = gtk::Image::new();
+        script_icon.set_pixel_size(16);
+
+        if let Some(script) = BookmarksManager::get_script(&bm.filename) {
+            if bm.filename.ends_with(".py")
+                || script.starts_with("#!/usr/bin/env python")
+                || script.starts_with("#!/usr/bin/python")
+                || script.starts_with("```python")
+            {
+                script_icon.set_icon_name(Some("python"));
+            } else {
+                script_icon.set_icon_name(Some("console"));
+            }
+        } else {
+            script_icon.set_icon_name(Some("dialog-warning-symbolic"));
+        }
+
+        hbox.append(&script_icon);
+
         let label = gtk::Label::new(Some(&bm.name));
         label.set_halign(gtk::Align::Start);
         label.set_hexpand(true);
