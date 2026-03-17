@@ -248,6 +248,7 @@ impl TerminalOverlay {
             if let crate::TerminalProposal::Bookmark(filename, _cmd, placeholders) =
                 current_proposal_for_accept.borrow().clone()
             {
+                cmd = _cmd; // Use the original full script instead of the truncated preview buffer
                 let input_str = template_entry_clone.text().to_string();
                 let values: Vec<String> =
                     input_str.split(',').map(|s| s.trim().to_string()).collect();
