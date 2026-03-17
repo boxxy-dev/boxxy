@@ -1,16 +1,12 @@
 name: Nightly Build
-
 on:
   schedule:
-    - cron: '0 0 * * *' # Every night at midnight
+    - cron: '0 0 * * *'
   workflow_dispatch:
-
 permissions:
   contents: write
-
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
-
 jobs:
   build:
     name: Build (${{ matrix.arch }})
@@ -20,11 +16,9 @@ jobs:
       matrix:
         include:
           - arch: x86_64
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
       - name: Build in Fedora Container
         uses: addnab/docker-run-action@v3
         with:
@@ -37,34 +31,24 @@ jobs:
               gtksourceview5-devel \
               gstreamer1-devel gstreamer1-plugins-base-devel gdk-pixbuf2-devel \
               glib2-devel sqlite-devel tar gzip git curl
-
-            # Install Rust
             curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
             source $HOME/.cargo/env
-
             cd /workspace
-            # Remove --locked to allow environmental lockfile updates
             cargo build --release
-
-            # Verify binaries exist before packaging
             if [ ! -f target/release/boxxy-terminal ] || [ ! -f target/release/boxxy-agent ]; then
               echo "Error: Binaries not found in target/release/"
               ls -R target/release/
               exit 1
             fi
-
             PKG_NAME="boxxy-terminal-nightly-linux-${{ matrix.arch }}"
             mkdir -p "${PKG_NAME}/bin"
             mkdir -p "${PKG_NAME}/share/applications"
             mkdir -p "${PKG_NAME}/share/icons/hicolor/scalable/apps"
-
             cp target/release/boxxy-terminal "${PKG_NAME}/bin/"
             cp target/release/boxxy-agent "${PKG_NAME}/bin/"
             cp flatpak/play.mii.Boxxy.desktop "${PKG_NAME}/share/applications/"
             cp resources/icons/play.mii.Boxxy.png "${PKG_NAME}/share/icons/hicolor/scalable/apps/"
-
             tar -czvf "${PKG_NAME}.tar.gz" "${PKG_NAME}"
-
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
@@ -78,35 +62,18 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
           pattern: binary-*
           merge-multiple: true
-
       - name: Update Nightly Release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Ensure nightly tag exists (create it if not)
-          if ! git rev-parse nightly >/dev/null 2>&1; then
-            git tag nightly
-            git push origin nightly
-          fi
-
-          # Atomic update: Delete old release and recreate with ALL assets at once
           gh release delete nightly --yes || true
-          git tag -d nightly || true
-          git push origin :refs/tags/nightly || true
-          
-          # Use wildcards to include all downloaded tarballs
-          gh release create nightly *.tar.gz \
-            --title "Nightly Build" \
-            --notes "This release contains the latest automated builds from the main branch." \
-            --prerelease
 
-          # Force GitHub to update the 'published_at' timestamp to now so it stays at the top of the releases page
-          RELEASE_ID=$(gh release view nightly --json id -q .id)
-          gh api --method PATCH /repos/${{ github.repository }}/releases/$RELEASE_ID -F draft=true
-          gh api --method PATCH /repos/${{ github.repository }}/releases/$RELEASE_ID -F draft=false
+          gh release create nightly *.tar.gz \
+            --title "Nightly Build ($(date -u '+%Y-%m-%d'))" \
+            --notes "Latest automated build from the main branch — $(git rev-parse --short HEAD)." \
+            --prerelease
