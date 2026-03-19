@@ -23,7 +23,7 @@ struct BoxxyAppsInner {
     engine: Rc<RefCell<BoxxyAppEngine>>,
     create_dialog: CreateAppDialog,
     content_box: gtk::Box,
-    model_provider: ModelProvider,
+    model_provider: Option<ModelProvider>,
     running_app: Option<PathBuf>,
     app_list_box: gtk::ListBox,
     new_app_btn: gtk::Button,

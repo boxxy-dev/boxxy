@@ -14,17 +14,18 @@ pub struct GlobalModelSelectorDialog {
 
 impl GlobalModelSelectorDialog {
     pub fn new<F1, F2, F3>(
-        init_ai: ModelProvider,
-        init_apps: ModelProvider,
+        init_ai: Option<ModelProvider>,
+        init_apps: Option<ModelProvider>,
         init_memory: Option<ModelProvider>,
         ollama_url: String,
+        api_keys: std::collections::HashMap<String, String>,
         on_ai_change: F1,
         on_apps_change: F2,
         on_memory_change: F3,
     ) -> Self
     where
-        F1: Fn(ModelProvider) + 'static,
-        F2: Fn(ModelProvider) + 'static,
+        F1: Fn(Option<ModelProvider>) + 'static,
+        F2: Fn(Option<ModelProvider>) + 'static,
         F3: Fn(Option<ModelProvider>) + 'static,
     {
         let dialog = libadwaita::Dialog::builder()
@@ -38,14 +39,20 @@ impl GlobalModelSelectorDialog {
         stack.set_hhomogeneous(true);
         stack.set_vhomogeneous(true);
 
-        let ai_chat_selector = SingleModelSelector::new(init_ai, ollama_url.clone(), on_ai_change);
-        let claw_selector =
-            SingleModelSelector::new(init_apps.clone(), ollama_url.clone(), on_apps_change);
+        let ai_chat_selector =
+            SingleModelSelector::new(init_ai, ollama_url.clone(), api_keys.clone(), on_ai_change);
+        let claw_selector = SingleModelSelector::new(
+            init_apps.clone(),
+            ollama_url.clone(),
+            api_keys.clone(),
+            on_apps_change,
+        );
 
-        let mem_initial = init_memory.unwrap_or(init_apps);
-        let memory_selector = SingleModelSelector::new(mem_initial, ollama_url, move |new_prov| {
-            on_memory_change(Some(new_prov));
-        });
+        let mem_initial = init_memory.or(init_apps);
+        let memory_selector =
+            SingleModelSelector::new(mem_initial, ollama_url, api_keys, move |new_prov| {
+                on_memory_change(new_prov);
+            });
 
         let build_tab = |selector: &SingleModelSelector, help_text: &str| -> gtk::Box {
             let vbox = gtk::Box::new(gtk::Orientation::Vertical, 0);
@@ -53,6 +60,7 @@ impl GlobalModelSelectorDialog {
             let help_label = gtk::Label::new(Some(help_text));
             help_label.set_halign(gtk::Align::Start);
             help_label.set_wrap(true);
+            help_label.add_css_class("caption");
             help_label.add_css_class("dim-label");
             help_label.set_margin_start(10);
             help_label.set_margin_end(10);

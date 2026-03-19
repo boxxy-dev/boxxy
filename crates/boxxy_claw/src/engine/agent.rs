@@ -20,6 +20,7 @@ pub enum ClawAgent {
     Gemini(Agent<gemini::CompletionModel>),
     Ollama(Agent<ollama::CompletionModel>),
     Anthropic(Agent<rig::providers::anthropic::completion::CompletionModel>),
+    Error(String),
 }
 
 impl ClawAgent {
@@ -32,6 +33,9 @@ impl ClawAgent {
             Self::Gemini(agent) => agent.chat(prompt, history).await,
             Self::Ollama(agent) => agent.chat(prompt, history).await,
             Self::Anthropic(agent) => agent.chat(prompt, history).await,
+            Self::Error(e) => Err(rig::completion::PromptError::CompletionError(
+                rig::completion::CompletionError::ProviderError(e.clone()),
+            )),
         }
     }
 }
@@ -39,7 +43,7 @@ impl ClawAgent {
 #[must_use]
 #[allow(clippy::too_many_arguments)]
 pub fn create_claw_agent(
-    provider: &ModelProvider,
+    provider: &Option<ModelProvider>,
     creds: &AiCredentials,
     system_prompt: &str,
     claw_proxy: &AgentClawProxy<'static>,
@@ -48,6 +52,16 @@ pub fn create_claw_agent(
     state: std::sync::Arc<tokio::sync::Mutex<SessionState>>,
     db: std::sync::Arc<tokio::sync::Mutex<Option<boxxy_db::Db>>>,
 ) -> ClawAgent {
+    let provider = match provider {
+        Some(p) => p,
+        None => {
+            return ClawAgent::Error(
+                "No Claw model selected. Please configure your models in Settings -> APIs -> Models Selection."
+                    .to_string(),
+            )
+        }
+    };
+
     match provider {
         ModelProvider::Gemini(model, _thinking) => {
             let key = creds.api_keys.get("Gemini").cloned().unwrap_or_default();

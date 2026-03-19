@@ -57,8 +57,8 @@ pub async fn retrieve_memories(
 
         let model = settings
             .memory_model
-            .as_ref()
-            .unwrap_or(&settings.claw_model);
+            .clone()
+            .or(settings.claw_model.clone());
 
         let creds = boxxy_ai_core::AiCredentials::new(
             settings.api_keys.clone(),
@@ -66,7 +66,7 @@ pub async fn retrieve_memories(
         );
 
         let agent = boxxy_ai_core::create_agent(
-            model,
+            &model,
             &creds,
             "You are a search optimizer. Output only comma-separated keywords.",
         );

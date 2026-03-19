@@ -345,3 +345,11 @@ boxxyterminalwidget {
 .sidebar-toolbar > contents {
     background-color: @window_bg_color;
 }
+
+.model-status-success .status-title {
+    color: @success_bg_color;
+}
+
+.model-status-warning .status-title {
+    color: @warning_bg_color;
+}

@@ -337,9 +337,22 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
                 inner.current_settings.claw_model.clone(),
                 inner.current_settings.memory_model.clone(),
                 inner.current_settings.ollama_base_url.clone(),
-                |_| {},
-                |_| {},
-                |_| {},
+                inner.current_settings.api_keys.clone(),
+                move |provider| {
+                    let mut settings = boxxy_preferences::Settings::load();
+                    settings.ai_chat_model = provider;
+                    settings.save();
+                },
+                move |provider| {
+                    let mut settings = boxxy_preferences::Settings::load();
+                    settings.claw_model = provider;
+                    settings.save();
+                },
+                move |provider| {
+                    let mut settings = boxxy_preferences::Settings::load();
+                    settings.memory_model = provider;
+                    settings.save();
+                },
             );
             dialog.present(Some(&inner.window));
         }

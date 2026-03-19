@@ -522,7 +522,7 @@ fn spawn_turn(
                 let mem_model = settings
                     .memory_model
                     .clone()
-                    .unwrap_or(settings.claw_model.clone());
+                    .or(settings.claw_model.clone());
                 let creds = boxxy_ai_core::AiCredentials::new(
                     settings.api_keys.clone(),
                     settings.ollama_base_url.clone(),

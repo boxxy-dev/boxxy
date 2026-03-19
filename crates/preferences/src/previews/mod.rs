@@ -5,18 +5,36 @@ use libadwaita as adw;
 use std::cell::RefCell;
 use std::rc::Rc;
 
+fn add_class_to_description_label(widget: &gtk::Widget) {
+    // We look for labels that are likely to be descriptions (they are dim and small by default in Adwaita)
+    if let Some(label) = widget.downcast_ref::<gtk::Label>() {
+        // Only target if it contains the hyperlink text
+        if label.text().contains("--hyperlink") {
+            label.add_css_class("caption");
+            return;
+        }
+    }
+    let mut child = widget.first_child();
+    while let Some(c) = child {
+        add_class_to_description_label(&c);
+        child = c.next_sibling();
+    }
+}
+
 pub fn setup_previews_page(
     builder: &gtk::Builder,
     settings_rc: Rc<RefCell<Settings>>,
     on_change: Rc<dyn Fn(Settings) + 'static>,
 ) -> Box<dyn Fn(&str) -> bool> {
-    let row_hyperlink_warning: adw::ActionRow = builder.object("row_hyperlink_warning").unwrap();
     let image_preview_trigger_combo: adw::ComboRow =
         builder.object("image_preview_trigger_combo").unwrap();
     let preview_max_width_spin: adw::SpinRow = builder.object("preview_max_width_spin").unwrap();
     let preview_max_height_spin: adw::SpinRow = builder.object("preview_max_height_spin").unwrap();
     let group_image_previews: adw::PreferencesGroup =
         builder.object("group_image_previews").unwrap();
+
+    // Style the group description as a caption
+    add_class_to_description_label(group_image_previews.upcast_ref());
 
     let preview_triggers_list =
         gtk::StringList::new(&["Disabled", "On Click (Shift+Click)", "On Hover"]);
@@ -54,15 +72,15 @@ pub fn setup_previews_page(
     );
     preview_max_width_spin.set_adjustment(Some(&preview_max_width_adj));
     preview_max_width_spin.set_value(settings_rc.borrow().preview_max_width as f64);
-    let s_rc = settings_rc.clone();
-    let cb = on_change.clone();
+    let s_rc2 = settings_rc.clone();
+    let cb2 = on_change.clone();
     preview_max_width_spin.connect_value_notify(move |row| {
-        let mut s = s_rc.borrow_mut();
+        let mut s = s_rc2.borrow_mut();
         let v = row.value() as i32;
         if s.preview_max_width != v {
             s.preview_max_width = v;
             s.save();
-            cb(s.clone());
+            cb2(s.clone());
         }
     });
 
@@ -76,22 +94,22 @@ pub fn setup_previews_page(
     );
     preview_max_height_spin.set_adjustment(Some(&preview_max_height_adj));
     preview_max_height_spin.set_value(settings_rc.borrow().preview_max_height as f64);
-    let s_rc = settings_rc.clone();
-    let cb = on_change.clone();
+    let s_rc3 = settings_rc.clone();
+    let cb3 = on_change.clone();
     preview_max_height_spin.connect_value_notify(move |row| {
-        let mut s = s_rc.borrow_mut();
+        let mut s = s_rc3.borrow_mut();
         let v = row.value() as i32;
         if s.preview_max_height != v {
             s.preview_max_height = v;
             s.save();
-            cb(s.clone());
+            cb3(s.clone());
         }
     });
 
-    let row_hyperlink_warning_clone = row_hyperlink_warning.clone();
     let image_preview_trigger_combo_clone = image_preview_trigger_combo.clone();
     let preview_max_width_spin_clone = preview_max_width_spin.clone();
     let preview_max_height_spin_clone = preview_max_height_spin.clone();
+    let group_image_previews_clone = group_image_previews.clone();
 
     Box::new(move |query: &str| {
         let match_row = |r: &gtk::Widget, text: &str| {
@@ -100,10 +118,9 @@ pub fn setup_previews_page(
             m
         };
 
-        let p1 = match_row(
-            row_hyperlink_warning_clone.upcast_ref(),
-            "use --hyperlink for file previews ensure cli tools eza ls path copying",
-        );
+        let p1 = query.is_empty()
+            || "use --hyperlink for file previews ensure cli tools eza ls path copying"
+                .contains(query);
         let p2 = match_row(
             image_preview_trigger_combo_clone.upcast_ref(),
             "image previews display small popup",
@@ -117,7 +134,7 @@ pub fn setup_previews_page(
             "maximum height px",
         );
 
-        group_image_previews.set_visible(p1 || p2 || p3 || p4);
-        group_image_previews.is_visible()
+        group_image_previews_clone.set_visible(p1 || p2 || p3 || p4);
+        group_image_previews_clone.is_visible()
     })
 }

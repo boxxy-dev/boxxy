@@ -21,7 +21,7 @@ pub(crate) struct AiSidebarInner {
     pub input_entry: gtk::Entry,
     pub input_buffer: gtk::EntryBuffer,
     pub history: Vec<ChatMessage>,
-    pub model_provider: ModelProvider,
+    pub model_provider: Option<ModelProvider>,
     pub is_loading: bool,
     pub generation_task: Option<tokio::task::JoinHandle<()>>,
     pub action_btn: gtk::Button,
@@ -90,17 +90,19 @@ impl AiSidebarComponent {
 
         autocomplete_popover.set_child(Some(&autocomplete_scroll));
 
-        let initial_model = boxxy_preferences::Settings::load().ai_chat_model;
-        let initial_apps_model = boxxy_preferences::Settings::load().claw_model;
-        let ollama_url = boxxy_preferences::Settings::load().ollama_base_url;
-
-        let initial_memory_model = boxxy_preferences::Settings::load().memory_model;
+        let settings = boxxy_preferences::Settings::load();
+        let initial_model = settings.ai_chat_model.clone();
+        let initial_apps_model = settings.claw_model.clone();
+        let ollama_url = settings.ollama_base_url.clone();
+        let initial_memory_model = settings.memory_model.clone();
+        let api_keys = settings.api_keys.clone();
 
         let model_selector = GlobalModelSelectorDialog::new(
             initial_model.clone(),
-            initial_apps_model.clone(),
-            initial_memory_model.clone(),
+            initial_apps_model,
+            initial_memory_model,
             ollama_url,
+            api_keys,
             move |provider| {
                 let mut settings = boxxy_preferences::Settings::load();
                 settings.ai_chat_model = provider;

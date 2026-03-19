@@ -9,7 +9,7 @@ use tokio::sync::Mutex;
 pub async fn flush_history(
     db: Arc<Mutex<Option<Db>>>,
     history: &mut Vec<Message>,
-    claw_model: &ModelProvider,
+    claw_model: &Option<ModelProvider>,
     creds: &boxxy_ai_core::AiCredentials,
     project_path: &str,
 ) -> anyhow::Result<()> {

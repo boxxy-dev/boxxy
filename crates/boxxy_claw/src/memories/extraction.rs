@@ -9,7 +9,7 @@ pub async fn extract_implicit_memory(
     db: Arc<Mutex<Option<Db>>>,
     user_prompt: String,
     assistant_response: String,
-    memory_model: ModelProvider,
+    memory_model: Option<ModelProvider>,
     creds: boxxy_ai_core::AiCredentials,
     project_path: String,
 ) {

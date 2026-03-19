@@ -22,7 +22,7 @@ struct CreateAppInner {
     filename_buffer: gtk::EntryBuffer,
     response_view: gtk::Box,
     is_loading: bool,
-    model_provider: ModelProvider,
+    model_provider: Option<ModelProvider>,
     generated_code: Option<String>,
     generation_task: Option<tokio::task::JoinHandle<()>>,
     spinner: gtk::Spinner,
@@ -189,7 +189,7 @@ impl CreateAppDialog {
             filename_buffer: filename_entry.buffer(),
             response_view,
             is_loading: false,
-            model_provider: ModelProvider::default(),
+            model_provider: None,
             generated_code: None,
             generation_task: None,
             spinner,
@@ -222,7 +222,7 @@ impl CreateAppDialog {
         comp
     }
 
-    pub fn set_model_provider(&self, provider: ModelProvider) {
+    pub fn set_model_provider(&self, provider: Option<ModelProvider>) {
         self.inner.borrow_mut().model_provider = provider;
         self.update_ui();
     }

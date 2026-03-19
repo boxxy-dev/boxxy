@@ -11,6 +11,7 @@ pub enum BoxxyAgent {
     Gemini(rig::agent::Agent<rig::providers::gemini::CompletionModel>),
     Ollama(rig::agent::Agent<rig::providers::ollama::CompletionModel>),
     Anthropic(rig::agent::Agent<rig::providers::anthropic::completion::CompletionModel>),
+    Error(String),
 }
 
 impl BoxxyAgent {
@@ -23,6 +24,9 @@ impl BoxxyAgent {
             Self::Gemini(agent) => agent.chat(prompt, history).await,
             Self::Ollama(agent) => agent.chat(prompt, history).await,
             Self::Anthropic(agent) => agent.chat(prompt, history).await,
+            Self::Error(e) => Err(rig::completion::PromptError::CompletionError(
+                rig::completion::CompletionError::ProviderError(e.clone()),
+            )),
         }
     }
 
@@ -31,6 +35,9 @@ impl BoxxyAgent {
             Self::Gemini(agent) => agent.prompt(prompt).await,
             Self::Ollama(agent) => agent.prompt(prompt).await,
             Self::Anthropic(agent) => agent.prompt(prompt).await,
+            Self::Error(e) => Err(rig::completion::PromptError::CompletionError(
+                rig::completion::CompletionError::ProviderError(e.clone()),
+            )),
         }
     }
 }
@@ -51,10 +58,20 @@ impl AiCredentials {
 }
 
 pub fn create_agent(
-    provider: &ModelProvider,
+    provider: &Option<ModelProvider>,
     creds: &AiCredentials,
     system_prompt: &str,
 ) -> BoxxyAgent {
+    let provider = match provider {
+        Some(p) => p,
+        None => {
+            return BoxxyAgent::Error(
+                "No AI model selected. Please configure your models in Settings -> APIs -> Models Selection."
+                    .to_string(),
+            )
+        }
+    };
+
     match provider {
         ModelProvider::Gemini(model, _thinking) => {
             let key = creds.api_keys.get("Gemini").cloned().unwrap_or_default();

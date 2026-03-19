@@ -329,19 +329,7 @@
                           <object class="AdwPreferencesPage" id="page_previews">
                             <child>
                               <object class="AdwPreferencesGroup" id="group_image_previews">
-                                <property name="title" translatable="yes">Image Previews</property>
-                                <child>
-                                  <object class="AdwActionRow" id="row_hyperlink_warning">
-                                    <property name="title" translatable="yes">Use --hyperlink for file previews</property>
-                                    <property name="subtitle" translatable="yes">Ensure your CLI tools (like eza or ls) use --hyperlink=auto for the best experience with path copying and image previews.</property>
-                                    <child type="prefix">
-                                      <object class="GtkImage">
-                                        <property name="icon-name">dialog-warning-symbolic</property>
-                                        <property name="css-classes">warning</property>
-                                      </object>
-                                    </child>
-                                  </object>
-                                </child>
+                                <property name="description" translatable="yes">Ensure your CLI tools (like eza or ls) use --hyperlink=auto for the best experience with path copying and image previews.</property>
                                 <child>
                                   <object class="AdwComboRow" id="image_preview_trigger_combo">
                                     <property name="title" translatable="yes">Image Previews</property>
@@ -390,28 +378,17 @@
                               </object>
                             </child>
                             <child>
-                              <object class="AdwPreferencesGroup" id="group_models_link">
+                              <object class="AdwPreferencesGroup" id="group_model_status">
                                 <property name="margin-top">12</property>
                                 <child>
-                                  <object class="GtkButton" id="open_models_btn">
-                                    <property name="label" translatable="yes">Open Models Selection</property>
-                                    <property name="halign">center</property>
-                                    <property name="css-classes">pill suggested-action</property>
+                                  <object class="AdwActionRow" id="model_status_row">
+                                    <property name="title" translatable="yes">Models Status</property>
+                                    <property name="activatable">True</property>
                                     <property name="action-name">win.model-selection</property>
-                                    <child>
-                                      <object class="GtkBox">
-                                        <property name="orientation">horizontal</property>
-                                        <property name="spacing">6</property>
-                                        <child>
-                                          <object class="GtkLabel">
-                                            <property name="label" translatable="yes">Open Models Selection</property>
-                                          </object>
-                                        </child>
-                                        <child>
-                                          <object class="GtkImage">
-                                            <property name="icon-name">external-link-symbolic</property>
-                                          </object>
-                                        </child>
+                                    <child type="suffix">
+                                      <object class="GtkImage">
+                                        <property name="icon-name">external-link-symbolic</property>
+                                        <property name="valign">center</property>
                                       </object>
                                     </child>
                                   </object>
