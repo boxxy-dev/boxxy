@@ -303,3 +303,24 @@ tabbox separator {
 .bookmarks-gallery .sourceview {
     border-radius: 8px;
 }
+
+
+/* Terminal Transparency Support */
+window.main-window,
+window.main-window > contents,
+.main-split-view,
+.main-split-view > contents,
+.main-split-view overlay,
+.terminal-toolbar,
+.terminal-toolbar > contents,
+.terminal-tab-view,
+.terminal-tab-view > contents {
+    background: transparent;
+    background-color: transparent;
+}
+
+/* Ensure the sidebar remains opaque */
+.sidebar-toolbar,
+.sidebar-toolbar > contents {
+    background-color: @window_bg_color;
+}

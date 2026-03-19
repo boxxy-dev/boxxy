@@ -20,6 +20,8 @@ pub fn setup_appearance_page(
     let color_scheme_combo: adw::ComboRow = builder.object("color_scheme_combo").unwrap();
     let font_row: adw::ActionRow = builder.object("font_row").unwrap();
     let theme_row: adw::ActionRow = builder.object("theme_row").unwrap();
+    let opacity_row: adw::ActionRow = builder.object("opacity_row").unwrap();
+    let opacity_scale: gtk::Scale = builder.object("opacity_scale").unwrap();
     let padding_spin: adw::SpinRow = builder.object("padding_spin").unwrap();
     let line_spacing_spin: adw::SpinRow = builder.object("line_spacing_spin").unwrap();
     let col_spacing_spin: adw::SpinRow = builder.object("col_spacing_spin").unwrap();
@@ -38,13 +40,11 @@ pub fn setup_appearance_page(
     let chat_width_spin: adw::SpinRow = builder.object("chat_width_spin").unwrap();
 
     let group_appearance: adw::PreferencesGroup = builder.object("group_appearance").unwrap();
-    let group_font: adw::PreferencesGroup = builder.object("group_font").unwrap();
     let group_terminal: adw::PreferencesGroup = builder.object("group_terminal").unwrap();
     let group_cursor: adw::PreferencesGroup = builder.object("group_cursor").unwrap();
     let group_layout: adw::PreferencesGroup = builder.object("group_layout").unwrap();
 
     // 0. Color Scheme
-
     let color_schemes_list = gtk::StringList::new(&["Follow System", "Light", "Dark"]);
     color_scheme_combo.set_model(Some(&color_schemes_list));
     let scheme_idx = match settings_rc.borrow().color_scheme {
@@ -98,6 +98,21 @@ pub fn setup_appearance_page(
     });
 
     // 2. Adjustments
+    let opacity_adj = gtk::Adjustment::new(settings_rc.borrow().opacity, 0.1, 1.0, 0.05, 0.1, 0.0);
+    opacity_scale.set_adjustment(&opacity_adj);
+
+    let s_rc = settings_rc.clone();
+    let cb = on_change.clone();
+    opacity_scale.connect_value_changed(move |scale| {
+        let mut s = s_rc.borrow_mut();
+        let val = scale.value();
+        if (s.opacity - val).abs() > 1e-4 {
+            s.opacity = val;
+            s.save();
+            cb(s.clone());
+        }
+    });
+
     let padding_adj = gtk::Adjustment::new(
         settings_rc.borrow().padding as f64,
         0.0,
@@ -359,6 +374,7 @@ pub fn setup_appearance_page(
     let fixed_width_tabs_switch_clone = fixed_width_tabs_switch.clone();
     let chat_width_spin_clone = chat_width_spin.clone();
     let color_scheme_combo_clone = color_scheme_combo.clone();
+    let opacity_row_clone = opacity_row.clone();
 
     let widgets = AppearanceWidgets {
         theme_row,
@@ -374,10 +390,14 @@ pub fn setup_appearance_page(
 
         let s1 = match_row(
             color_scheme_combo_clone.upcast_ref(),
-            "appearance dark light follow system color scheme",
+            "gtk theme dark light follow system color scheme",
         );
         let f1 = match_row(font_row_clone.upcast_ref(), "font family size");
         let t1 = match_row(theme_row_clone.upcast_ref(), "theme");
+        let t_op = match_row(
+            opacity_row_clone.upcast_ref(),
+            "opacity transparent background",
+        );
         let t2 = match_row(padding_spin_clone.upcast_ref(), "padding px");
         let t3 = match_row(line_spacing_spin_clone.upcast_ref(), "line spacing");
         let t4 = match_row(col_spacing_spin_clone.upcast_ref(), "column spacing");
@@ -416,14 +436,12 @@ pub fn setup_appearance_page(
             "sidebar width px hacky mouse resize overlay split view",
         );
 
-        group_appearance.set_visible(s1);
-        group_font.set_visible(f1);
-        group_terminal.set_visible(t1 || t2 || t3 || t4 || t5);
+        group_appearance.set_visible(s1 || f1 || t1 || t_op);
+        group_terminal.set_visible(t2 || t3 || t4 || t5);
         group_cursor.set_visible(c1 || c3 || c4);
         group_layout.set_visible(l1 || l2 || l3 || l4 || l5 || l6);
 
         group_appearance.is_visible()
-            || group_font.is_visible()
             || group_terminal.is_visible()
             || group_cursor.is_visible()
             || group_layout.is_visible()

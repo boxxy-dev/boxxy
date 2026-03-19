@@ -154,31 +154,22 @@
                         <property name="child">
                           <object class="AdwPreferencesPage" id="page_appearance">
                             <child>
-                              <object class="AdwPreferencesGroup" id="group_font">
-                                <property name="title" translatable="yes">Font</property>
+                              <object class="AdwPreferencesGroup" id="group_appearance">
+                                <property name="title" translatable="yes">Appearance</property>
                                 <child>
                                   <object class="AdwActionRow" id="font_row">
                                     <property name="title" translatable="yes">Font</property>
                                     <property name="subtitle" translatable="yes">Family and size</property>
                                   </object>
                                 </child>
-                              </object>
-                            </child>
-                            <child>
-                              <object class="AdwPreferencesGroup" id="group_appearance">
                                 <child>
                                   <object class="AdwComboRow" id="color_scheme_combo">
-                                    <property name="title" translatable="yes">Appearance</property>
+                                    <property name="title" translatable="yes">GTK Theme</property>
                                   </object>
                                 </child>
-                              </object>
-                            </child>
-                            <child>
-                              <object class="AdwPreferencesGroup" id="group_terminal">
-                                <property name="title" translatable="yes">Terminal</property>
                                 <child>
                                   <object class="AdwActionRow" id="theme_row">
-                                    <property name="title" translatable="yes">Theme</property>
+                                    <property name="title" translatable="yes">Terminal Theme</property>
                                     <property name="activatable">True</property>
                                     <child type="suffix">
                                       <object class="GtkImage">
@@ -187,6 +178,24 @@
                                     </child>
                                   </object>
                                 </child>
+                                <child>
+                                  <object class="AdwActionRow" id="opacity_row">
+                                    <property name="title" translatable="yes">Background Opacity</property>
+                                    <child type="suffix">
+                                      <object class="GtkScale" id="opacity_scale">
+                                        <property name="valign">center</property>
+                                        <property name="hexpand">True</property>
+                                        <property name="width-request">200</property>
+                                        <property name="draw-value">False</property>
+                                      </object>
+                                    </child>
+                                  </object>
+                                </child>
+                              </object>
+                            </child>
+                            <child>
+                              <object class="AdwPreferencesGroup" id="group_terminal">
+                                <property name="title" translatable="yes">Terminal</property>
                                 <child>
                                   <object class="AdwSpinRow" id="padding_spin">
                                     <property name="title" translatable="yes">Padding</property>

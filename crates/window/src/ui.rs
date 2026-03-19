@@ -441,6 +441,7 @@ impl AppWindow {
         current_settings: &Settings,
     ) -> (adw::ToolbarView, adw::ViewStack) {
         let sidebar_toolbar = adw::ToolbarView::new();
+        sidebar_toolbar.add_css_class("sidebar-toolbar");
         sidebar_toolbar.set_width_request(current_settings.ai_chat_width);
 
         let view_stack = adw::ViewStack::new();
@@ -574,7 +575,11 @@ impl AppWindow {
         gtk::Button,
         crate::boxxyclaw_indicator_popover::BoxxyclawIndicatorPopover,
     ) {
+        tab_view.add_css_class("terminal-tab-view");
+
         let content_toolbar = adw::ToolbarView::new();
+        content_toolbar.add_css_class("terminal-toolbar");
+
         let content_header = adw::HeaderBar::builder().build();
         content_header.add_css_class("flat");
         content_header.add_css_class("terminal-header");
