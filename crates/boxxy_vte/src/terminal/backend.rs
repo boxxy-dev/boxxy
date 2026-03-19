@@ -255,6 +255,9 @@ impl TerminalBackend {
 
     /// Write raw bytes into the PTY (keyboard input, pasted text, etc.).
     pub fn write_to_pty(&self, bytes: Vec<u8>) {
+        if bytes.is_empty() {
+            return;
+        }
         let _ = self.notifier.0.send(Msg::Input(bytes.into()));
     }
 

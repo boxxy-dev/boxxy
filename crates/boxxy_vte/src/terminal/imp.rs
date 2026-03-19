@@ -891,7 +891,9 @@ impl TerminalWidget {
         let cb = self.obj().clipboard();
         let ow = self.obj().downgrade();
         glib::spawn_future_local(async move {
-            if let Ok(Some(text)) = cb.read_text_future().await {
+            if let Ok(Some(text)) = cb.read_text_future().await
+                && !text.is_empty()
+            {
                 if let Some(w) = ow.upgrade()
                     && let Some(b) = w.imp().backend.borrow().as_ref()
                 {

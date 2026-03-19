@@ -425,6 +425,11 @@ where
         state.ensure_next();
 
         'write_many: while let Some(mut current) = state.take_current() {
+            if current.finished() {
+                state.goto_next();
+                continue 'write_many;
+            }
+
             log::trace!(
                 "EventLoop: pty_write current chunk len={}",
                 current.remaining_bytes().len()
