@@ -30,6 +30,7 @@ pub enum TerminalEventKind {
     Osc133D(String, Option<i32>),
     ClawEvent(String, boxxy_claw::engine::ClawEngineEvent),
     FocusClawSidebar,
+    PaneFocused(String),
 }
 
 #[derive(Debug, Clone)]

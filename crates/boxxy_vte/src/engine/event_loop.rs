@@ -265,21 +265,18 @@ where
                             Ok(Msg::GetTextSnapshot(max_lines, offset_lines, sender)) => {
                                 use crate::engine::grid::Dimensions;
                                 use crate::engine::index::{Line, Column};
-                                let _total_lines = self.terminal.total_lines();
 
                                 let bottom = self.terminal.bottommost_line();
-                                let mut start_line_idx = bottom.0 - offset_lines as i32;
-
-                                // Ensure start_line_idx doesn't go below the topmost line
                                 let topmost = self.terminal.topmost_line().0;
+
+                                let mut end_line_idx = bottom.0 - offset_lines as i32;
+                                if end_line_idx < topmost {
+                                    end_line_idx = topmost;
+                                }
+                                let mut start_line_idx = end_line_idx - max_lines as i32 + 1;
+
                                 if start_line_idx < topmost {
                                     start_line_idx = topmost;
-                                }
-
-                                let lines_to_fetch = max_lines as i32;
-                                let mut end_line_idx = start_line_idx + lines_to_fetch.saturating_sub(1);
-                                if end_line_idx > bottom.0 {
-                                    end_line_idx = bottom.0;
                                 }
 
                                 let start_point = Point::new(Line(start_line_idx), Column(0));

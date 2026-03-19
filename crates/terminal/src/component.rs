@@ -229,6 +229,11 @@ impl TerminalComponent {
                     drop(inner);
                     self.update_dimming();
 
+                    let _ = TERMINAL_EVENT_BUS.send(TerminalEvent {
+                        id: term_id.clone(),
+                        kind: TerminalEventKind::PaneFocused(id.clone()),
+                    });
+
                     if let Some(title) = title_opt {
                         let _ = TERMINAL_EVENT_BUS.send(TerminalEvent {
                             id: term_id,

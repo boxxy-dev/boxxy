@@ -48,6 +48,15 @@ pub fn handle_terminal_event(
             | TerminalEventKind::Osc133B
             | TerminalEventKind::Osc133C
             | TerminalEventKind::Osc133D(_, _) => {}
+            TerminalEventKind::PaneFocused(_) => {
+                let widget = inner.tabs[pos].controller.widget();
+                let page = inner.tab_view.page(widget);
+                if Some(&page) == inner.tab_view.selected_page().as_ref() {
+                    inner
+                        .claw
+                        .set_history_widget(&inner.tabs[pos].controller.claw_history_widget());
+                }
+            }
             TerminalEventKind::FocusClawSidebar => {
                 if !inner.sidebar_visible {
                     inner.sidebar_visible = true;
