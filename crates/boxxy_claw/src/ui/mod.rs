@@ -259,7 +259,12 @@ pub fn create_claw_message_list() -> gtk::ListBox {
         .build()
 }
 
-pub fn add_diagnosis_row(list: &gtk::ListBox, pane_id: String, diagnosis: &str) {
+pub fn add_diagnosis_row(
+    list: &gtk::ListBox,
+    pane_id: String,
+    agent_name: Option<String>,
+    diagnosis: &str,
+) {
     let row = gtk::ListBoxRow::new();
     row.set_selectable(false);
     row.set_activatable(false);
@@ -280,14 +285,19 @@ pub fn add_diagnosis_row(list: &gtk::ListBox, pane_id: String, diagnosis: &str) 
     title.set_halign(gtk::Align::Start);
     header.append(&title);
 
-    let pane_lbl = gtk::Label::new(Some(&format!(
-        "Pane {}",
-        if pane_id.len() >= 7 {
-            &pane_id[..7]
-        } else {
-            &pane_id
-        }
-    )));
+    let id_short = if pane_id.len() >= 7 {
+        &pane_id[..7]
+    } else {
+        &pane_id
+    };
+
+    let pane_text = if let Some(name) = agent_name {
+        format!("{} ({})", name, id_short)
+    } else {
+        format!("Pane {}", id_short)
+    };
+
+    let pane_lbl = gtk::Label::new(Some(&pane_text));
     pane_lbl.add_css_class("caption");
     pane_lbl.add_css_class("dim-label");
     header.append(&pane_lbl);
@@ -308,9 +318,79 @@ pub fn add_diagnosis_row(list: &gtk::ListBox, pane_id: String, diagnosis: &str) 
     list.append(&row);
 }
 
+pub fn add_suggested_row(
+    list: &gtk::ListBox,
+    pane_id: String,
+    agent_name: Option<String>,
+    diagnosis: &str,
+    command: &str,
+) {
+    let row = gtk::ListBoxRow::new();
+    row.set_selectable(false);
+    row.set_activatable(false);
+
+    let vbox = gtk::Box::new(gtk::Orientation::Vertical, 4);
+    vbox.set_margin_top(8);
+    vbox.set_margin_bottom(8);
+    vbox.set_margin_start(8);
+    vbox.set_margin_end(8);
+
+    let header = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    let icon = gtk::Image::from_icon_name("dialog-warning-symbolic");
+    icon.add_css_class("warning");
+    header.append(&icon);
+
+    let title = gtk::Label::new(Some("Suggested Action"));
+    title.add_css_class("heading");
+    title.set_halign(gtk::Align::Start);
+    header.append(&title);
+
+    let id_short = if pane_id.len() >= 7 {
+        &pane_id[..7]
+    } else {
+        &pane_id
+    };
+
+    let pane_text = if let Some(name) = agent_name {
+        format!("{} ({})", name, id_short)
+    } else {
+        format!("Pane {}", id_short)
+    };
+
+    let pane_lbl = gtk::Label::new(Some(&pane_text));
+    pane_lbl.add_css_class("caption");
+    pane_lbl.add_css_class("dim-label");
+    header.append(&pane_lbl);
+
+    vbox.append(&header);
+
+    if !diagnosis.is_empty() {
+        let text_view = gtk::TextView::builder()
+            .editable(false)
+            .wrap_mode(gtk::WrapMode::Word)
+            .cursor_visible(false)
+            .css_classes(["claw-diagnosis"])
+            .build();
+        text_view.buffer().set_text(diagnosis);
+        vbox.append(&text_view);
+    }
+
+    let cmd_label = gtk::Label::new(Some(command));
+    cmd_label.set_halign(gtk::Align::Start);
+    cmd_label.set_wrap(true);
+    cmd_label.set_selectable(true);
+    cmd_label.add_css_class("monospace");
+    cmd_label.add_css_class("dim-label");
+    vbox.append(&cmd_label);
+
+    row.set_child(Some(&vbox));
+    list.append(&row);
+}
+
 pub fn add_approval_row(
     list: &gtk::ListBox,
     pane_id: String,
+    agent_name: Option<String>,
     command: &str,
     on_text_reply: impl Fn(String) + 'static,
 ) -> gtk::Box {
@@ -334,14 +414,19 @@ pub fn add_approval_row(
     title.set_halign(gtk::Align::Start);
     header.append(&title);
 
-    let pane_lbl = gtk::Label::new(Some(&format!(
-        "Pane {}",
-        if pane_id.len() >= 7 {
-            &pane_id[..7]
-        } else {
-            &pane_id
-        }
-    )));
+    let id_short = if pane_id.len() >= 7 {
+        &pane_id[..7]
+    } else {
+        &pane_id
+    };
+
+    let pane_text = if let Some(name) = agent_name {
+        format!("{} ({})", name, id_short)
+    } else {
+        format!("Pane {}", id_short)
+    };
+
+    let pane_lbl = gtk::Label::new(Some(&pane_text));
     pane_lbl.add_css_class("caption");
     pane_lbl.add_css_class("dim-label");
     header.append(&pane_lbl);
@@ -418,6 +503,7 @@ pub fn add_approval_row(
 pub fn add_file_write_approval_row(
     list: &gtk::ListBox,
     pane_id: String,
+    agent_name: Option<String>,
     path: &str,
     content: &str,
     on_reply: impl Fn(bool) + 'static,
@@ -443,14 +529,19 @@ pub fn add_file_write_approval_row(
     title.set_halign(gtk::Align::Start);
     header.append(&title);
 
-    let pane_lbl = gtk::Label::new(Some(&format!(
-        "Pane {}",
-        if pane_id.len() >= 7 {
-            &pane_id[..7]
-        } else {
-            &pane_id
-        }
-    )));
+    let id_short = if pane_id.len() >= 7 {
+        &pane_id[..7]
+    } else {
+        &pane_id
+    };
+
+    let pane_text = if let Some(name) = agent_name {
+        format!("{} ({})", name, id_short)
+    } else {
+        format!("Pane {}", id_short)
+    };
+
+    let pane_lbl = gtk::Label::new(Some(&pane_text));
     pane_lbl.add_css_class("caption");
     pane_lbl.add_css_class("dim-label");
     header.append(&pane_lbl);

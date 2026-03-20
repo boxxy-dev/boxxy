@@ -12,13 +12,33 @@ pub(super) fn setup_claw(
     inner: &Rc<RefCell<PaneInner>>,
     id: String,
     claw_sender: async_channel::Sender<boxxy_claw::engine::ClawMessage>,
-    claw_rx: async_channel::Receiver<boxxy_claw::engine::ClawEngineEvent>,
+    mut claw_rx: async_channel::Receiver<boxxy_claw::engine::ClawEngineEvent>,
     claw_message_list: gtk::ListBox,
     callback: std::sync::Arc<dyn Fn(PaneOutput) + Send + Sync + 'static>,
+    spawn_intent: Option<String>,
 ) -> (TerminalOverlay, ClawIndicator, PendingDiagnosis) {
     let pending_proactive_diagnosis =
         Rc::new(RefCell::new(None::<(String, crate::TerminalProposal)>));
     let pending_diag_clone = pending_proactive_diagnosis.clone();
+
+    // Provide the initial intent if one was passed in
+    if let Some(intent) = spawn_intent {
+        let tx = claw_sender.clone();
+        let inner_clone = inner.clone();
+        gtk::glib::spawn_future_local(async move {
+            let pane = inner_clone.borrow().terminal.clone();
+            let cwd = inner_clone.borrow().working_dir.clone().unwrap_or_default();
+            if let Some(snapshot) = pane.get_text_snapshot(100, 0).await {
+                let _ = tx
+                    .send(boxxy_claw::engine::ClawMessage::UserMessage {
+                        message: intent,
+                        snapshot,
+                        cwd,
+                    })
+                    .await;
+            }
+        });
+    }
 
     let pending_sidebar_buttons = Rc::new(RefCell::new(None::<gtk::Box>));
 
@@ -135,23 +155,38 @@ pub(super) fn setup_claw(
                         indicator_event_clone.show_lazy_error();
                     }
                 }
-                boxxy_claw::engine::ClawEngineEvent::DiagnosisComplete { diagnosis, .. } => {
-                    boxxy_claw::ui::add_diagnosis_row(&claw_list_events, id.clone(), diagnosis);
+                boxxy_claw::engine::ClawEngineEvent::DiagnosisComplete {
+                    diagnosis,
+                    agent_name,
+                } => {
+                    boxxy_claw::ui::add_diagnosis_row(
+                        &claw_list_events,
+                        id.clone(),
+                        Some(agent_name.clone()),
+                        diagnosis,
+                    );
                     indicator_event_clone.hide();
                     if show_on_terminal {
                         popover_event_clone.show(
                             OverlayMode::Claw,
-                            "Boxxy-Claw",
+                            &format!("Agent: {agent_name}"),
                             diagnosis,
                             crate::TerminalProposal::None,
                         );
                     }
                 }
                 boxxy_claw::engine::ClawEngineEvent::InjectCommand {
-                    command, diagnosis, ..
+                    command,
+                    diagnosis,
+                    agent_name,
                 } => {
                     if !diagnosis.is_empty() {
-                        boxxy_claw::ui::add_diagnosis_row(&claw_list_events, id.clone(), diagnosis);
+                        boxxy_claw::ui::add_diagnosis_row(
+                            &claw_list_events,
+                            id.clone(),
+                            Some(agent_name.clone()),
+                            diagnosis,
+                        );
                     }
 
                     let tx_text_reply = claw_sender.clone();
@@ -159,6 +194,7 @@ pub(super) fn setup_claw(
                     let btns = boxxy_claw::ui::add_approval_row(
                         &claw_list_events,
                         id.clone(),
+                        Some(agent_name.clone()),
                         command,
                         move |reply_text| {
                             let tx = tx_text_reply.clone();
@@ -184,13 +220,17 @@ pub(super) fn setup_claw(
                     if show_on_terminal {
                         popover_event_clone.show(
                             OverlayMode::Claw,
-                            "Boxxy-Claw",
+                            &format!("Agent: {agent_name}"),
                             diagnosis,
                             crate::TerminalProposal::Command(command.clone()),
                         );
                     }
                 }
-                boxxy_claw::engine::ClawEngineEvent::ProposeFileWrite { path, content, .. } => {
+                boxxy_claw::engine::ClawEngineEvent::ProposeFileWrite {
+                    path,
+                    content,
+                    agent_name,
+                } => {
                     let tx_file_reply_for_events = claw_sender.clone();
                     let tx_text_reply = claw_sender.clone();
                     let popover = popover_event_clone.clone();
@@ -199,6 +239,7 @@ pub(super) fn setup_claw(
                     let btns = boxxy_claw::ui::add_file_write_approval_row(
                         &claw_list_events,
                         id.clone(),
+                        Some(agent_name.clone()),
                         path,
                         content,
                         move |approved| {
@@ -236,7 +277,7 @@ pub(super) fn setup_claw(
                     if show_on_terminal {
                         popover_event_clone.show(
                             OverlayMode::Claw,
-                            "Boxxy-Claw: Propose File Edit",
+                            &format!("Agent {agent_name}: Propose File Edit"),
                             &format!("Path: `{path}`\n\nI need to write or edit this file to complete the task."),
                             crate::TerminalProposal::FileWrite(path.clone(), content.clone())
                         );
@@ -245,12 +286,13 @@ pub(super) fn setup_claw(
                 boxxy_claw::engine::ClawEngineEvent::ProposeTerminalCommand {
                     command,
                     explanation,
-                    ..
+                    agent_name,
                 } => {
                     if !explanation.is_empty() {
                         boxxy_claw::ui::add_diagnosis_row(
                             &claw_list_events,
                             id.clone(),
+                            Some(agent_name.clone()),
                             explanation,
                         );
                     }
@@ -260,6 +302,7 @@ pub(super) fn setup_claw(
                     let btns = boxxy_claw::ui::add_approval_row(
                         &claw_list_events,
                         id.clone(),
+                        Some(agent_name.clone()),
                         command,
                         move |reply_text| {
                             let tx = tx_text_reply.clone();
@@ -284,18 +327,34 @@ pub(super) fn setup_claw(
                     if show_on_terminal {
                         popover_event_clone.show(
                             OverlayMode::Claw,
-                            "Boxxy-Claw",
+                            &format!("Agent: {agent_name}"),
                             explanation,
                             crate::TerminalProposal::Command(command.clone()),
                         );
                     }
                 }
+                boxxy_claw::engine::ClawEngineEvent::Identity { agent_name } => {
+                    inner_for_events
+                        .borrow()
+                        .agent_badge
+                        .set_identity(&agent_name);
+                }
                 boxxy_claw::engine::ClawEngineEvent::RequestScrollback {
                     max_lines,
                     offset_lines,
                     reply,
+                    ..
                 } => {
-                    let pane = inner_for_events.borrow().terminal.clone();
+                    let pane_inner = inner_for_events.borrow();
+                    let pane = pane_inner.terminal.clone();
+
+                    // Auto-hide the badge if we are in alt-screen (full screen app)
+                    if pane.is_alt_screen() {
+                        pane_inner.agent_badge.set_visible(false);
+                    } else {
+                        pane_inner.agent_badge.set_visible(true);
+                    }
+
                     let max_lines = *max_lines;
                     let offset_lines = *offset_lines;
                     let reply = reply.clone();
@@ -313,11 +372,16 @@ pub(super) fn setup_claw(
                         }
                     });
                 }
-                boxxy_claw::engine::ClawEngineEvent::ProposalResolved => {
+                boxxy_claw::engine::ClawEngineEvent::ProposalResolved { .. } => {
                     popover_event_clone.hide();
                     if let Some(btns) = pending_sidebar_buttons.borrow_mut().take() {
                         btns.set_visible(false);
                     }
+                }
+                boxxy_claw::engine::ClawEngineEvent::RequestSpawnAgent { .. }
+                | boxxy_claw::engine::ClawEngineEvent::RequestCloseAgent { .. }
+                | boxxy_claw::engine::ClawEngineEvent::InjectKeystrokes { .. } => {
+                    // Handled upstream by TerminalComponent / Window
                 }
             }
 

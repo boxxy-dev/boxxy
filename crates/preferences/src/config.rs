@@ -132,6 +132,7 @@ pub struct Settings {
     pub invert_scroll: bool,
     pub claw_auto_diagnosis_mode: ClawAutoDiagnosisMode,
     pub claw_terminal_suggestions: bool,
+    pub hide_agent_badge: bool,
 }
 
 impl Default for Settings {
@@ -170,6 +171,7 @@ impl Default for Settings {
             invert_scroll: true,
             claw_auto_diagnosis_mode: ClawAutoDiagnosisMode::Proactive,
             claw_terminal_suggestions: true,
+            hide_agent_badge: false,
         }
     }
 }

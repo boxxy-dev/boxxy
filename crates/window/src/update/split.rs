@@ -8,7 +8,7 @@ pub fn split_vertical(inner: &mut AppWindowInner) {
             .iter()
             .position(|c| c.controller.widget() == &child)
         {
-            inner.tabs[pos].controller.split_vertical();
+            inner.tabs[pos].controller.split_vertical(None);
         }
     }
 }
@@ -21,7 +21,7 @@ pub fn split_horizontal(inner: &mut AppWindowInner) {
             .iter()
             .position(|c| c.controller.widget() == &child)
         {
-            inner.tabs[pos].controller.split_horizontal();
+            inner.tabs[pos].controller.split_horizontal(None);
         }
     }
 }

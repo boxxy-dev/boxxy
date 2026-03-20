@@ -115,6 +115,11 @@ impl Tool for FileWriteTool {
         let (tx, rx) = tokio::sync::oneshot::channel();
         let path = resolve_path(&self.current_dir, &args.path);
 
+        let agent_name = {
+            let state = self.state.lock().await;
+            state.agent_name.clone()
+        };
+
         {
             let mut state = self.state.lock().await;
             state.pending_file_reply = Some(tx);
@@ -123,6 +128,7 @@ impl Tool for FileWriteTool {
         if let Err(e) = self
             .tx_ui
             .send(ClawEngineEvent::ProposeFileWrite {
+                agent_name: agent_name.clone(),
                 path: path.clone(),
                 content: args.content.clone(),
             })
@@ -135,12 +141,18 @@ impl Tool for FileWriteTool {
 
         let _ = self
             .tx_ui
-            .send(ClawEngineEvent::AgentThinking { is_thinking: false })
+            .send(ClawEngineEvent::AgentThinking {
+                agent_name: agent_name.clone(),
+                is_thinking: false,
+            })
             .await;
         let approved = rx.await.unwrap_or(false);
         let _ = self
             .tx_ui
-            .send(ClawEngineEvent::AgentThinking { is_thinking: true })
+            .send(ClawEngineEvent::AgentThinking {
+                agent_name,
+                is_thinking: true,
+            })
             .await;
 
         if approved {

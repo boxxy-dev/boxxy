@@ -31,7 +31,8 @@ impl Tool for TerminalCommandTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Execute a command in the user's active terminal. This will prompt the user to 'Accept & Run'. Use this for interactive commands or tasks where the user needs to see the live output.".to_string(),
+            description: "Execute a command in the user's active terminal. This will prompt the user to 'Accept & Run'. Use this for interactive commands or tasks where the user needs to see the live output. \
+            CRITICAL: When discussing the output of this command later, DO NOT wrap the output in a markdown `bash` block or the terminal will try to re-execute it!".to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -57,9 +58,15 @@ impl Tool for TerminalCommandTool {
             state.pending_terminal_reply = Some(tx);
         }
 
+        let agent_name = {
+            let state = self.state.lock().await;
+            state.agent_name.clone()
+        };
+
         if let Err(e) = self
             .tx_ui
             .send(ClawEngineEvent::ProposeTerminalCommand {
+                agent_name: agent_name.clone(),
                 command: args.command.clone(),
                 explanation: args.explanation.clone(),
             })
@@ -72,12 +79,18 @@ impl Tool for TerminalCommandTool {
 
         let _ = self
             .tx_ui
-            .send(ClawEngineEvent::AgentThinking { is_thinking: false })
+            .send(ClawEngineEvent::AgentThinking {
+                agent_name: agent_name.clone(),
+                is_thinking: false,
+            })
             .await;
         let result = rx.await;
         let _ = self
             .tx_ui
-            .send(ClawEngineEvent::AgentThinking { is_thinking: true })
+            .send(ClawEngineEvent::AgentThinking {
+                agent_name,
+                is_thinking: true,
+            })
             .await;
 
         match result {

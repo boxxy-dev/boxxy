@@ -6,10 +6,12 @@ use tokio::sync::{OnceCell, RwLock};
 #[derive(Clone, Debug)]
 pub struct PaneState {
     pub id: String,
+    pub name: String,
     pub cwd: String,
     pub last_command: Option<String>,
     pub last_snapshot: Option<String>,
     pub status: Option<String>,
+    pub tx: Option<async_channel::Sender<crate::engine::ClawMessage>>,
 }
 
 pub struct WorkspaceRegistry {
@@ -36,9 +38,33 @@ impl WorkspaceRegistry {
         }
     }
 
+    pub async fn register_pane_tx(
+        &self,
+        id: String,
+        tx: async_channel::Sender<crate::engine::ClawMessage>,
+    ) {
+        let mut panes = self.panes.write().await;
+        if let Some(pane) = panes.get_mut(&id) {
+            pane.tx = Some(tx);
+        }
+    }
+
+    pub async fn get_pane_tx_by_name(
+        &self,
+        name: &str,
+    ) -> Option<async_channel::Sender<crate::engine::ClawMessage>> {
+        let panes = self.panes.read().await;
+        let name_lower = name.to_lowercase();
+        panes
+            .values()
+            .find(|p| p.name.to_lowercase() == name_lower)
+            .and_then(|p| p.tx.clone())
+    }
+
     pub async fn update_pane_state(
         &self,
         id: String,
+        name: Option<String>,
         cwd: String,
         last_command: Option<String>,
         snapshot: Option<String>,
@@ -46,11 +72,18 @@ impl WorkspaceRegistry {
         let mut panes = self.panes.write().await;
         let entry = panes.entry(id.clone()).or_insert_with(|| PaneState {
             id,
+            name: name.clone().unwrap_or_else(|| "Unknown Agent".to_string()),
             cwd: cwd.clone(),
             last_command: None,
             last_snapshot: None,
             status: None,
+            tx: None,
         });
+
+        if let Some(n) = name {
+            entry.name = n;
+        }
+
         entry.cwd = cwd;
         if last_command.is_some() {
             entry.last_command = last_command;
@@ -77,6 +110,15 @@ impl WorkspaceRegistry {
         panes.get(&id).and_then(|p| p.last_snapshot.clone())
     }
 
+    pub async fn resolve_pane_id_by_name(&self, name: &str) -> Option<String> {
+        let panes = self.panes.read().await;
+        let name_lower = name.to_lowercase();
+        panes
+            .values()
+            .find(|p| p.name.to_lowercase() == name_lower)
+            .map(|p| p.id.clone())
+    }
+
     pub async fn get_radar_for_project(
         &self,
         project_path: &str,
@@ -92,7 +134,9 @@ impl WorkspaceRegistry {
 
         if !peers.is_empty() {
             radar.push_str("\n--- WORKSPACE RADAR (Peer Panes in this project) ---\n");
-            radar.push_str("You can read these panes using `read_pane_buffer(id)` if needed.\n");
+            radar.push_str(
+                "You can read these panes using `read_pane_buffer(agent_name)` if needed.\n",
+            );
             for peer in peers {
                 let cmd = peer.last_command.as_deref().unwrap_or("idle");
                 let status = peer
@@ -101,8 +145,8 @@ impl WorkspaceRegistry {
                     .map(|s| format!(" | Status: {}", s))
                     .unwrap_or_default();
                 radar.push_str(&format!(
-                    "- Pane {}: Last command `{}`{}\n",
-                    peer.id, cmd, status
+                    "- Agent '{}' (ID: {}): Last command `{}`{}\n",
+                    peer.name, peer.id, cmd, status
                 ));
             }
         }

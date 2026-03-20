@@ -81,6 +81,64 @@ pub fn handle_terminal_event(
                         inner.claw.refresh_visibility();
                         inner.claw.scroll_to_bottom();
                     }
+                    boxxy_claw::engine::ClawEngineEvent::RequestSpawnAgent {
+                        location,
+                        intent,
+                        ..
+                    } => match location {
+                        boxxy_claw::engine::SpawnLocation::NewTab => {
+                            super::tabs::new_tab_with_intent(inner, intent);
+                        }
+                        boxxy_claw::engine::SpawnLocation::VerticalSplit => {
+                            inner.tabs[pos].controller.split_vertical(intent);
+                        }
+                        boxxy_claw::engine::SpawnLocation::HorizontalSplit => {
+                            inner.tabs[pos].controller.split_horizontal(intent);
+                        }
+                    },
+                    boxxy_claw::engine::ClawEngineEvent::RequestCloseAgent {
+                        target_agent_name,
+                    } => {
+                        let inner_clone = _inner_ref.clone();
+                        let target_name = target_agent_name.clone();
+                        gtk4::glib::spawn_future_local(async move {
+                            let workspace =
+                                boxxy_claw::registry::workspace::global_workspace().await;
+                            if let Some(pane_id) =
+                                workspace.resolve_pane_id_by_name(&target_name).await
+                            {
+                                let mut inner = inner_clone.borrow_mut();
+                                // Search all tabs for this pane
+                                for tab in &inner.tabs {
+                                    if tab.controller.close_pane_by_id(&pane_id) {
+                                        break;
+                                    }
+                                }
+                            }
+                        });
+                    }
+                    boxxy_claw::engine::ClawEngineEvent::InjectKeystrokes {
+                        target_agent_name,
+                        keys,
+                    } => {
+                        let inner_clone = _inner_ref.clone();
+                        let target_name = target_agent_name.clone();
+                        let keys = keys.clone();
+                        gtk4::glib::spawn_future_local(async move {
+                            let workspace =
+                                boxxy_claw::registry::workspace::global_workspace().await;
+                            if let Some(pane_id) =
+                                workspace.resolve_pane_id_by_name(&target_name).await
+                            {
+                                let inner = inner_clone.borrow();
+                                for tab in &inner.tabs {
+                                    if tab.controller.inject_keystrokes_by_id(&pane_id, &keys) {
+                                        break;
+                                    }
+                                }
+                            }
+                        });
+                    }
                     _ => {} // Other events like AgentThinking or FileWrite are handled strictly by the Pane UI
                 }
             }

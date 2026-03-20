@@ -97,6 +97,7 @@ impl TerminalComponent {
             PaneInit {
                 id: initial_pane_id.clone(),
                 working_dir: init.working_dir.clone(),
+                spawn_intent: init.spawn_intent.clone(),
             },
             move |output: PaneOutput| {
                 let _ = tx.send(output);
@@ -347,14 +348,11 @@ impl TerminalComponent {
                 }
             }
             PaneOutput::ClawEvent(id, event) => {
-                let inner = self.inner.borrow();
-                if inner.active_pane_id == id {
-                    let term_id = inner.id.clone();
-                    let _ = TERMINAL_EVENT_BUS.send(TerminalEvent {
-                        id: term_id,
-                        kind: TerminalEventKind::ClawEvent(id, event),
-                    });
-                }
+                let term_id = self.inner.borrow().id.clone();
+                let _ = TERMINAL_EVENT_BUS.send(TerminalEvent {
+                    id: term_id,
+                    kind: TerminalEventKind::ClawEvent(id, event),
+                });
             }
             PaneOutput::FocusClawSidebar(id) => {
                 let inner = self.inner.borrow();
@@ -614,15 +612,52 @@ impl TerminalComponent {
         }
     }
 
-    pub fn split_vertical(&self) {
-        self.split(true);
+    pub fn inject_keystrokes_by_id(&self, id: &str, keys: &str) -> bool {
+        let inner = self.inner.borrow();
+        if let Some(pane_data) = inner.panes.get(id) {
+            pane_data.controller.inject_keystrokes(keys);
+            true
+        } else {
+            false
+        }
     }
 
-    pub fn split_horizontal(&self) {
-        self.split(false);
+    pub fn close_pane_by_id(&self, id: &str) -> bool {
+        let mut inner = self.inner.borrow_mut();
+        if !inner.panes.contains_key(id) {
+            return false;
+        }
+
+        let was_active = inner.active_pane_id.clone();
+        inner.active_pane_id = id.to_string();
+        drop(inner);
+        self.close_split();
+
+        let mut inner = self.inner.borrow_mut();
+        if was_active != id && inner.panes.contains_key(&was_active) {
+            inner.active_pane_id = was_active.clone();
+            inner
+                .panes
+                .get(&was_active)
+                .unwrap()
+                .controller
+                .grab_focus();
+        }
+
+        drop(inner);
+        self.update_dimming();
+        true
     }
 
-    fn split(&self, is_vertical: bool) {
+    pub fn split_vertical(&self, intent: Option<String>) {
+        self.split(true, intent);
+    }
+
+    pub fn split_horizontal(&self, intent: Option<String>) {
+        self.split(false, intent);
+    }
+
+    fn split(&self, is_vertical: bool, intent: Option<String>) {
         if self.inner.borrow().is_maximized {
             self.toggle_maximize();
         }
@@ -649,6 +684,7 @@ impl TerminalComponent {
             PaneInit {
                 id: new_id.clone(),
                 working_dir: inner.working_dir.clone(),
+                spawn_intent: intent,
             },
             move |msg: PaneOutput| {
                 let _ = tx.send(msg);

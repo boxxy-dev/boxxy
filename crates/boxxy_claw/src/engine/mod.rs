@@ -39,33 +39,77 @@ pub enum ClawMessage {
     UpdateDiagnosisMode(boxxy_preferences::config::ClawAutoDiagnosisMode),
     /// Update terminal suggestions dynamically.
     UpdateTerminalSuggestions(bool),
+    /// A task delegated from another agent.
+    DelegatedTask {
+        source_agent_name: String,
+        prompt: String,
+        reply_tx: tokio::sync::oneshot::Sender<String>,
+    },
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub enum SpawnLocation {
+    VerticalSplit,
+    HorizontalSplit,
+    NewTab,
 }
 
 /// Events sent from the Claw Engine back up to the GTK UI
 #[derive(Debug, Clone)]
 pub enum ClawEngineEvent {
     /// The agent has finished its diagnosis.
-    DiagnosisComplete { diagnosis: String },
+    DiagnosisComplete {
+        agent_name: String,
+        diagnosis: String,
+    },
     /// The agent suggests a command to be injected into the terminal prompt.
-    InjectCommand { command: String, diagnosis: String },
+    InjectCommand {
+        agent_name: String,
+        command: String,
+        diagnosis: String,
+    },
     /// The agent proposes to write or edit a file, requiring user approval.
-    ProposeFileWrite { path: String, content: String },
+    ProposeFileWrite {
+        agent_name: String,
+        path: String,
+        content: String,
+    },
     /// The agent wants the user to run a command in the terminal and wait for the result.
     ProposeTerminalCommand {
+        agent_name: String,
         command: String,
         explanation: String,
     },
     /// Emitted when the agent starts or stops thinking (for UI indicators).
-    AgentThinking { is_thinking: bool },
+    AgentThinking {
+        agent_name: String,
+        is_thinking: bool,
+    },
     /// Emitted when a command failed but the agent hasn't analyzed it yet (Lazy mode).
-    LazyErrorIndicator,
+    LazyErrorIndicator { agent_name: String },
     /// Emitted when a proposal is rejected, dismissed, or otherwise resolved so UIs can sync state.
-    ProposalResolved,
-    /// Emitted when the agent requests older lines from the terminal's scrollback buffer.
+    ProposalResolved { agent_name: String },
+    /// Emitted when the agentrequests older lines from the terminal's scrollback buffer.
     #[allow(clippy::type_complexity)]
     RequestScrollback {
+        agent_name: String,
         max_lines: usize,
         offset_lines: usize,
         reply: std::sync::Arc<tokio::sync::Mutex<Option<tokio::sync::oneshot::Sender<String>>>>,
+    },
+    /// Emitted to announce the agent's identity to the UI.
+    Identity { agent_name: String },
+    /// Emitted when the agent requests to spawn a new agent in a split or tab.
+    RequestSpawnAgent {
+        source_agent_name: String,
+        location: SpawnLocation,
+        intent: Option<String>,
+    },
+    /// Emitted when the agent requests to close a specific agent's pane.
+    RequestCloseAgent { target_agent_name: String },
+    /// Emitted when the agent needs to send raw keystrokes to another agent's pane.
+    InjectKeystrokes {
+        target_agent_name: String,
+        keys: String,
     },
 }

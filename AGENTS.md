@@ -47,7 +47,15 @@ Manages the split-pane terminal environment. Features a deep modular architectur
 Host Privileged Agent. Bypasses Flatpak sandboxing to handle PTY management and host-level system administration via D-Bus IPC.
 
 ### 5. `boxxy-claw` (Library Crate)
-Agentic Reasoning Engine using an **Actor Model**. Spawns isolated `ClawSession` actors per terminal pane. Handles context synthesis, tool execution, and LLM communication via a modular dispatcher. Features a **Hybrid Memory System** for both explicit tool-based storage and implicit background fact extraction. It utilizes OSC 133 semantic prompt tracking and Dynamic Scrollback Paging from the VTE to autonomously pull structured history context to the AI on-demand. The agent pipeline is provider-agnostic, leveraging `AiCredentials` map for seamless scaling.
+Agentic Reasoning Engine using an **Actor Model**. Spawns isolated `ClawSession` actors per terminal pane. Features the **"Red Pony Protocol"**: each pane is assigned a unique mnemonic name (e.g., "Red Pony") mapped to its UUID, operating as a "Clean Slate" agent that does not leak conversational context to other panes. 
+
+Handles context synthesis, tool execution, and LLM communication via a modular dispatcher. Features a **Hybrid Memory System** for both explicit tool-based storage and implicit background fact extraction. It utilizes OSC 133 semantic prompt tracking and Dynamic Scrollback Paging from the VTE to autonomously pull structured history context to the AI on-demand. 
+
+Agents interact with peers via the **Workspace Radar**, allowing them to read buffers, delegate tasks, and autonomously coordinate multi-pane workflows using their mnemonic identities. Agents also have full **Pane Lifecycle Management** authority, capable of spawning new sibling panes or tabs (passing initial intents), injecting raw keystrokes (Esc, Ctrl+C, etc.) into peer terminals, and closing active panes dynamically without IPC overhead.
+
+Each agent possesses a **Visual Identity**: a sleek, color-coded badge in the terminal's top-right corner. This badge automatically hides during alternate screen usage (e.g., `vim`, `htop`) to avoid obstruction and can be globally disabled via user preferences.
+
+The agent pipeline is provider-agnostic, leveraging `AiCredentials` map for seamless scaling.
 
 ### 6. `boxxy-vte` (Library Crate)
 Headless pure-Rust terminal emulator. Renders via GSK Snapshot and supports Kittygraphics natively. OSC 7/8/133 support. Features native semantic prompt tracking (`Flags::SEMANTIC_*`) embedded directly into the terminal cell grid to provide structured context blocks (`[PROMPT]`, `[COMMAND]`, `[OUTPUT]`).

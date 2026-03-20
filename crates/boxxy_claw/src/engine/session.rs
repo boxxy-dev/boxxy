@@ -10,6 +10,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 pub struct SessionState {
+    pub agent_name: String,
     pub pending_terminal_reply: Option<tokio::sync::oneshot::Sender<Result<String, String>>>,
     pub pending_file_reply: Option<tokio::sync::oneshot::Sender<bool>>,
     pub history: Vec<Message>,
@@ -18,7 +19,9 @@ pub struct SessionState {
 
 pub struct ClawSession {
     pub pane_id: String,
+    pub name: String,
     pub rx: async_channel::Receiver<ClawMessage>,
+    pub tx_self: async_channel::Sender<ClawMessage>,
     pub tx_ui: async_channel::Sender<ClawEngineEvent>,
     pub session_context: String,
     pub db: Arc<Mutex<Option<Db>>>,
@@ -40,14 +43,20 @@ impl ClawSession {
 
         let settings = boxxy_preferences::Settings::load();
 
+        // Generate a funny name for this agent
+        let name = petname::petname(2, " ").unwrap_or_else(|| "Unknown Agent".to_string());
+
         // We defer loading session context and skills until the first use
         let session = Self {
             pane_id,
+            name: name.clone(),
             rx,
+            tx_self: tx.clone(),
             tx_ui,
             session_context: String::new(),
             db: Arc::new(Mutex::new(None)),
             state: Arc::new(Mutex::new(SessionState {
+                agent_name: name,
                 pending_terminal_reply: None,
                 pending_file_reply: None,
                 history: Vec::new(),
@@ -76,13 +85,23 @@ impl ClawSession {
         // Register with global workspace
         let workspace = crate::registry::workspace::global_workspace().await;
         workspace
-            .update_pane_state(self.pane_id.clone(), current_dir.clone(), None, None)
+            .update_pane_state(
+                self.pane_id.clone(),
+                Some(self.name.clone()),
+                current_dir.clone(),
+                None,
+                None,
+            )
+            .await;
+        workspace
+            .register_pane_tx(self.pane_id.clone(), self.tx_self.clone())
             .await;
 
         while let Ok(msg) = self.rx.recv().await {
             let needs_initialization = match &msg {
                 ClawMessage::ClawQuery { .. }
                 | ClawMessage::UserMessage { .. }
+                | ClawMessage::DelegatedTask { .. }
                 | ClawMessage::RequestLazyDiagnosis => true,
                 ClawMessage::CommandFinished { exit_code, .. }
                     if *exit_code != 0 && *exit_code != 130 && *exit_code != 131 =>
@@ -94,17 +113,25 @@ impl ClawSession {
 
             if !is_initialized && needs_initialization {
                 info!(
-                    "Initializing Claw Session for pane {} upon first request...",
-                    self.pane_id
+                    "Initializing Claw Session for pane {} ({}) upon first request...",
+                    self.pane_id, self.name
                 );
+
+                let _ = self
+                    .tx_ui
+                    .send(ClawEngineEvent::Identity {
+                        agent_name: self.name.clone(),
+                    })
+                    .await;
+
                 let session_context = load_session_context();
                 self.session_context = session_context;
 
                 if let Ok(db) = Db::new().await {
                     *self.db.lock().await = Some(db);
                     info!(
-                        "Claw Memory Database initialized for pane {}.",
-                        self.pane_id
+                        "Claw Memory Database initialized for pane {} ({}).",
+                        self.pane_id, self.name
                     );
 
                     // Sync any manual edits from MEMORY.md back to the DB
@@ -142,6 +169,7 @@ impl ClawSession {
                     workspace
                         .update_pane_state(
                             self.pane_id.clone(),
+                            Some(self.name.clone()),
                             current_dir.clone(),
                             Some(last_cmd),
                             Some(snapshot.clone()),
@@ -173,13 +201,17 @@ impl ClawSession {
                             drop(state_lock);
 
                             let tx_ui = self.tx_ui.clone();
+                            let agent_name = self.name.clone();
                             tokio::spawn(async move {
-                                let _ = tx_ui.send(ClawEngineEvent::LazyErrorIndicator).await;
+                                let _ = tx_ui
+                                    .send(ClawEngineEvent::LazyErrorIndicator { agent_name })
+                                    .await;
                             });
                         } else {
                             drop(state_lock);
                             spawn_turn(
                                 self.pane_id.clone(),
+                                self.name.clone(),
                                 &prompt,
                                 &snapshot,
                                 &session_ctx,
@@ -189,6 +221,7 @@ impl ClawSession {
                                 self.db.clone(),
                                 self.state.clone(),
                                 self.tx_ui.clone(),
+                                None,
                             );
                         }
                     }
@@ -200,6 +233,7 @@ impl ClawSession {
                         drop(state_lock);
                         spawn_turn(
                             self.pane_id.clone(),
+                            self.name.clone(),
                             &prompt,
                             &snapshot,
                             &session_ctx,
@@ -209,6 +243,7 @@ impl ClawSession {
                             self.db.clone(),
                             self.state.clone(),
                             self.tx_ui.clone(),
+                            None,
                         );
                     }
                 }
@@ -223,6 +258,7 @@ impl ClawSession {
                     workspace
                         .update_pane_state(
                             self.pane_id.clone(),
+                            Some(self.name.clone()),
                             current_dir.clone(),
                             Some(query.clone()),
                             Some(snapshot.clone()),
@@ -230,20 +266,22 @@ impl ClawSession {
                         .await;
 
                     debug!(
-                        "Pane {}: Direct Claw query: {query}. Starting analysis.",
-                        self.pane_id
+                        "Pane {} ({}): Direct Claw query: {query}. Starting analysis.",
+                        self.pane_id, self.name
                     );
                     spawn_turn(
                         self.pane_id.clone(),
+                        self.name.clone(),
                         &query,
                         &snapshot,
                         &session_ctx,
                         cwd,
-                        true,
+                        false,
                         claw_proxy.clone(),
                         self.db.clone(),
                         self.state.clone(),
                         self.tx_ui.clone(),
+                        None,
                     );
                 }
                 ClawMessage::FileWriteReply { approved } => {
@@ -259,14 +297,15 @@ impl ClawSession {
                 } => {
                     current_dir = cwd.clone();
                     debug!(
-                        "Pane {}: User reply: {message}. Checking for pending tools.",
-                        self.pane_id
+                        "Pane {} ({}): User reply: {message}. Checking for pending tools.",
+                        self.pane_id, self.name
                     );
 
                     // Update workspace state
                     workspace
                         .update_pane_state(
                             self.pane_id.clone(),
+                            Some(self.name.clone()),
                             current_dir.clone(),
                             None,
                             Some(snapshot.clone()),
@@ -288,13 +327,14 @@ impl ClawSession {
 
                     if fulfilled {
                         debug!(
-                            "Pane {}: Fulfilled pending tool with user feedback.",
-                            self.pane_id
+                            "Pane {} ({}): Fulfilled pending tool with user feedback.",
+                            self.pane_id, self.name
                         );
                     } else {
                         drop(state_lock);
                         spawn_turn(
                             self.pane_id.clone(),
+                            self.name.clone(),
                             &message,
                             &snapshot,
                             &session_ctx,
@@ -304,8 +344,44 @@ impl ClawSession {
                             self.db.clone(),
                             self.state.clone(),
                             self.tx_ui.clone(),
+                            None,
                         );
                     }
+                }
+                ClawMessage::DelegatedTask {
+                    source_agent_name,
+                    prompt,
+                    reply_tx,
+                } => {
+                    let snapshot = workspace
+                        .get_pane_snapshot(self.pane_id.clone())
+                        .await
+                        .unwrap_or_default();
+
+                    let full_prompt = format!(
+                        "*Task delegated from agent '{}'*: {}",
+                        source_agent_name, prompt
+                    );
+
+                    debug!(
+                        "Pane {} ({}): Received delegated task from {}.",
+                        self.pane_id, self.name, source_agent_name
+                    );
+
+                    spawn_turn(
+                        self.pane_id.clone(),
+                        self.name.clone(),
+                        &full_prompt,
+                        &snapshot,
+                        &session_ctx,
+                        current_dir.clone(),
+                        false,
+                        claw_proxy.clone(),
+                        self.db.clone(),
+                        self.state.clone(),
+                        self.tx_ui.clone(),
+                        Some(reply_tx),
+                    );
                 }
                 ClawMessage::CancelPending => {
                     let mut state_lock = self.state.lock().await;
@@ -316,7 +392,12 @@ impl ClawSession {
                         let _ = reply.send(false);
                     }
                     debug!("Pane {}: User cancelled pending proposals.", self.pane_id);
-                    let _ = self.tx_ui.send(ClawEngineEvent::ProposalResolved).await;
+                    let _ = self
+                        .tx_ui
+                        .send(ClawEngineEvent::ProposalResolved {
+                            agent_name: self.name.clone(),
+                        })
+                        .await;
                 }
                 ClawMessage::UpdateDiagnosisMode(mode) => {
                     self.diagnosis_mode = mode;
@@ -335,6 +416,7 @@ impl ClawSession {
 #[allow(clippy::too_many_arguments)]
 fn spawn_turn(
     pane_id: String,
+    agent_name: String,
     prompt: &str,
     snapshot: &str,
     session_ctx: &str,
@@ -344,6 +426,7 @@ fn spawn_turn(
     db: Arc<Mutex<Option<Db>>>,
     state: Arc<Mutex<SessionState>>,
     tx_ui: async_channel::Sender<ClawEngineEvent>,
+    delegate_reply_tx: Option<tokio::sync::oneshot::Sender<String>>,
 ) {
     let prompt_clone = prompt.to_string();
     let snapshot_clone = snapshot.to_string();
@@ -451,8 +534,18 @@ fn spawn_turn(
         let system_prompt_template =
             String::from_utf8(data.to_vec()).expect("Prompt resource is not valid UTF-8");
 
+        let identity_injection = format!(
+            "## YOUR IDENTITY\n\
+            You are the Boxxy-Claw agent managing terminal pane: **{}**\n\
+            Your unique internal ID is: `{}`\n",
+            agent_name, pane_id
+        );
+
         let system_prompt = system_prompt_template
-            .replace("{{session_context}}", &session_ctx_clone)
+            .replace(
+                "{{session_context}}",
+                &format!("{}\n\n{}", identity_injection, session_ctx_clone),
+            )
             .replace("{{active_skills}}", &active_skills_text)
             .replace("{{available_skills}}", &available_skills_text)
             .replace("{{past_memories}}", &past_memories)
@@ -482,13 +575,19 @@ fn spawn_turn(
         drop(state_lock);
 
         let _ = tx_ui
-            .send(ClawEngineEvent::AgentThinking { is_thinking: true })
+            .send(ClawEngineEvent::AgentThinking {
+                agent_name: agent_name.clone(),
+                is_thinking: true,
+            })
             .await;
 
         match agent.chat(&full_prompt, history).await {
             Ok(response) => {
                 let _ = tx_ui
-                    .send(ClawEngineEvent::AgentThinking { is_thinking: false })
+                    .send(ClawEngineEvent::AgentThinking {
+                        agent_name: agent_name.clone(),
+                        is_thinking: false,
+                    })
                     .await;
 
                 let mut state_lock = state.lock().await;
@@ -563,15 +662,18 @@ fn spawn_turn(
 
                 if clean_diagnosis.trim() == "[SILENT_ACK]" {
                     info!(
-                        "Pane {pane_id}: Agent acknowledged rejection silently. Not sending UI event."
+                        "Pane {} ({}): Agent acknowledged rejection silently. Not sending UI event.",
+                        pane_id, agent_name
                     );
                 } else if clean_diagnosis.trim().is_empty() && command_opt.is_none() {
                     info!(
-                        "Pane {pane_id}: Agent response was empty (likely just tool calls). Not sending UI event."
+                        "Pane {} ({}): Agent response was empty (likely just tool calls). Not sending UI event.",
+                        pane_id, agent_name
                     );
                 } else if let Some(command) = command_opt {
                     let _ = tx_ui
                         .send(ClawEngineEvent::InjectCommand {
+                            agent_name,
                             command,
                             diagnosis: clean_diagnosis,
                         })
@@ -579,16 +681,30 @@ fn spawn_turn(
                 } else {
                     let _ = tx_ui
                         .send(ClawEngineEvent::DiagnosisComplete {
+                            agent_name,
                             diagnosis: clean_diagnosis,
                         })
                         .await;
                 }
+                if let Some(tx) = delegate_reply_tx {
+                    let _ = tx.send(response.clone());
+                }
             }
             Err(e) => {
                 let _ = tx_ui
-                    .send(ClawEngineEvent::AgentThinking { is_thinking: false })
+                    .send(ClawEngineEvent::AgentThinking {
+                        agent_name: agent_name.clone(),
+                        is_thinking: false,
+                    })
                     .await;
-                log::error!("Pane {pane_id}: Boxxy-Claw agent failed: {e}");
+                log::error!(
+                    "Pane {} ({}): Boxxy-Claw agent failed: {e}",
+                    pane_id,
+                    agent_name
+                );
+                if let Some(tx) = delegate_reply_tx {
+                    let _ = tx.send(format!("Error: {}", e));
+                }
             }
         }
     });

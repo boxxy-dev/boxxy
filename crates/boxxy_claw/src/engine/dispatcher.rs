@@ -48,32 +48,46 @@ pub fn extract_command_and_clean(text: &str) -> (Option<String>, String) {
                 .filter(|l| !l.trim().starts_with('#'))
                 .collect();
 
-            let mut final_cmd = String::new();
-            for (i, line) in sanitized.iter().enumerate() {
-                let trimmed = line.trim();
-                if let Some(stripped) = trimmed.strip_suffix('\\') {
-                    // Remove trailing backslash for line continuation
-                    final_cmd.push_str(stripped.trim_end());
-                    final_cmd.push(' ');
-                } else {
-                    final_cmd.push_str(trimmed);
-                    if i < sanitized.len() - 1 {
-                        if trimmed.ends_with("&&")
-                            || trimmed.ends_with("||")
-                            || trimmed.ends_with(';')
-                        {
-                            final_cmd.push(' ');
-                        } else {
-                            final_cmd.push_str(" && ");
+            // Safety check: if the "bash" block contains literal escape characters,
+            // the LLM is hallucinating a raw keystroke injection as a bash script.
+            let is_raw_keystrokes = sanitized.iter().any(|l| {
+                l.contains("\\u001b")
+                    || l.contains("\\e")
+                    || l.contains("\\x03")
+                    || l.contains("\\x04")
+                    || l.contains("^[")
+            });
+
+            if is_raw_keystrokes {
+                None
+            } else {
+                let mut final_cmd = String::new();
+                for (i, line) in sanitized.iter().enumerate() {
+                    let trimmed = line.trim();
+                    if let Some(stripped) = trimmed.strip_suffix('\\') {
+                        // Remove trailing backslash for line continuation
+                        final_cmd.push_str(stripped.trim_end());
+                        final_cmd.push(' ');
+                    } else {
+                        final_cmd.push_str(trimmed);
+                        if i < sanitized.len() - 1 {
+                            if trimmed.ends_with("&&")
+                                || trimmed.ends_with("||")
+                                || trimmed.ends_with(';')
+                            {
+                                final_cmd.push(' ');
+                            } else {
+                                final_cmd.push_str(" && ");
+                            }
                         }
                     }
                 }
-            }
 
-            if final_cmd.is_empty() {
-                None
-            } else {
-                Some(final_cmd)
+                if final_cmd.is_empty() {
+                    None
+                } else {
+                    Some(final_cmd)
+                }
             }
         }
     } else {

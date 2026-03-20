@@ -4,7 +4,10 @@ use crate::engine::tools::SysShellTool;
 use crate::engine::tools::file_ops::{FileReadTool, FileWriteTool};
 use crate::engine::tools::skills::ActivateSkillTool;
 use crate::engine::tools::terminal::TerminalCommandTool;
-use crate::engine::tools::workspace::{ReadPaneTool, SetWorkspaceIntentTool};
+use crate::engine::tools::workspace::{
+    CloseAgentTool, DelegateTaskTool, ReadPaneTool, SendKeystrokesTool, SetWorkspaceIntentTool,
+    SpawnAgentTool,
+};
 use boxxy_agent::ipc::AgentClawProxy;
 use boxxy_model_selection::ModelProvider;
 use rig::agent::Agent;
@@ -95,9 +98,23 @@ pub fn create_claw_agent(
                 })
                 .tool(crate::engine::tools::scrollback::ReadScrollbackTool {
                     tx_ui: tx_ui.clone(),
+                    state: state.clone(),
                 })
                 .tool(ActivateSkillTool)
                 .tool(ReadPaneTool)
+                .tool(DelegateTaskTool {
+                    state: state.clone(),
+                })
+                .tool(SpawnAgentTool {
+                    tx_ui: tx_ui.clone(),
+                    state: state.clone(),
+                })
+                .tool(CloseAgentTool {
+                    tx_ui: tx_ui.clone(),
+                })
+                .tool(SendKeystrokesTool {
+                    tx_ui: tx_ui.clone(),
+                })
                 .tool(SetWorkspaceIntentTool {
                     project_path: current_dir.to_string(),
                 })
@@ -140,9 +157,23 @@ pub fn create_claw_agent(
                 })
                 .tool(crate::engine::tools::scrollback::ReadScrollbackTool {
                     tx_ui: tx_ui.clone(),
+                    state: state.clone(),
                 })
                 .tool(ActivateSkillTool)
                 .tool(ReadPaneTool)
+                .tool(DelegateTaskTool {
+                    state: state.clone(),
+                })
+                .tool(SpawnAgentTool {
+                    tx_ui: tx_ui.clone(),
+                    state: state.clone(),
+                })
+                .tool(CloseAgentTool {
+                    tx_ui: tx_ui.clone(),
+                })
+                .tool(SendKeystrokesTool {
+                    tx_ui: tx_ui.clone(),
+                })
                 .tool(SetWorkspaceIntentTool {
                     project_path: current_dir.to_string(),
                 })
@@ -182,9 +213,23 @@ pub fn create_claw_agent(
                 })
                 .tool(crate::engine::tools::scrollback::ReadScrollbackTool {
                     tx_ui: tx_ui.clone(),
+                    state: state.clone(),
                 })
                 .tool(ActivateSkillTool)
                 .tool(ReadPaneTool)
+                .tool(DelegateTaskTool {
+                    state: state.clone(),
+                })
+                .tool(SpawnAgentTool {
+                    tx_ui: tx_ui.clone(),
+                    state: state.clone(),
+                })
+                .tool(CloseAgentTool {
+                    tx_ui: tx_ui.clone(),
+                })
+                .tool(SendKeystrokesTool {
+                    tx_ui: tx_ui.clone(),
+                })
                 .tool(SetWorkspaceIntentTool {
                     project_path: current_dir.to_string(),
                 })

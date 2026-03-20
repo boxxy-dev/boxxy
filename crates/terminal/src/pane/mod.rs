@@ -15,11 +15,14 @@ use crate::{PaneInit, PaneOutput};
 use crate::claw_indicator::ClawIndicator;
 use crate::overlay::{OverlayMode, TerminalOverlay};
 
+mod badge;
 mod claw;
 mod events;
 mod gestures;
 mod preview;
 mod ui;
+
+use badge::AgentBadge;
 
 pub type PendingDiagnosis = Rc<RefCell<Option<(String, crate::TerminalProposal)>>>;
 
@@ -30,6 +33,7 @@ pub struct TerminalPaneComponent {
     _search_bar: Rc<SearchBarComponent>,
     claw_popover: TerminalOverlay,
     claw_indicator: ClawIndicator,
+    agent_badge: AgentBadge,
     pending_proactive_diagnosis: PendingDiagnosis,
     claw_sender: async_channel::Sender<boxxy_claw::engine::ClawMessage>,
     claw_message_list: gtk::ListBox,
@@ -49,6 +53,7 @@ pub(super) struct PaneInner {
     pub(super) n_columns: i64,
     pub(super) n_rows: i64,
     pub(super) pid: Option<u32>,
+    pub(super) agent_badge: AgentBadge,
     pub(super) callback: std::sync::Arc<dyn Fn(PaneOutput) + Send + Sync + 'static>,
 }
 
@@ -83,6 +88,7 @@ impl TerminalPaneComponent {
         let claw_message_list = boxxy_claw::ui::create_claw_message_list();
 
         let is_claw_active = Rc::new(Cell::new(false));
+        let agent_badge = AgentBadge::new(&widget);
 
         let inner = Rc::new(RefCell::new(PaneInner {
             terminal: terminal.clone(),
@@ -97,6 +103,7 @@ impl TerminalPaneComponent {
             n_columns: 0,
             n_rows: 0,
             pid: None,
+            agent_badge: agent_badge.clone(),
             callback: callback.clone(),
         }));
 
@@ -158,7 +165,6 @@ impl TerminalPaneComponent {
             callback.clone(),
             id.clone(),
         );
-
         let (claw_popover, claw_indicator, pending_proactive_diagnosis) = claw::setup_claw(
             &widget,
             &inner,
@@ -167,6 +173,7 @@ impl TerminalPaneComponent {
             claw_rx,
             claw_message_list.clone(),
             callback.clone(),
+            init.spawn_intent,
         );
 
         // Focus toggle hotkey (Ctrl + `)
@@ -208,6 +215,7 @@ impl TerminalPaneComponent {
             _search_bar: search_bar_rc,
             claw_popover,
             claw_indicator,
+            agent_badge,
             pending_proactive_diagnosis,
             claw_sender,
             claw_message_list,
@@ -400,6 +408,29 @@ impl TerminalPaneComponent {
         self.inner.borrow().terminal.copy_clipboard();
     }
 
+    pub fn inject_keystrokes(&self, keys: &str) {
+        log::debug!(
+            "Injecting keystrokes into pane {}: {:?}",
+            self.inner.borrow().id,
+            keys
+        );
+        let mut unescaped = keys.to_string();
+        // Fallback for LLMs that literally output "\u001b" text instead of JSON escapes
+        unescaped = unescaped.replace("\\u001b", "\x1b");
+        unescaped = unescaped.replace("\\e", "\x1b");
+        unescaped = unescaped.replace("\\r", "\r");
+        unescaped = unescaped.replace("\\n", "\n");
+        unescaped = unescaped.replace("\\t", "\t");
+        unescaped = unescaped.replace("\\x03", "\x03");
+        unescaped = unescaped.replace("\\x04", "\x04");
+
+        log::debug!("Unescaped bytes: {:?}", unescaped.as_bytes());
+        self.inner
+            .borrow()
+            .terminal
+            .write_all(unescaped.into_bytes());
+    }
+
     pub fn paste(&self) {
         self.inner.borrow().terminal.paste_clipboard();
     }
@@ -548,6 +579,7 @@ impl TerminalPaneComponent {
         }
 
         inner.current_settings = Some(settings);
+        inner.agent_badge.update_settings();
     }
 
     pub fn set_dimmed(&self, dimmed: bool) {

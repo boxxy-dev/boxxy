@@ -23,6 +23,10 @@ pub fn sync_header_title(inner: &AppWindowInner) {
 }
 
 pub fn new_tab(inner: &mut AppWindowInner) {
+    new_tab_with_intent(inner, None);
+}
+
+pub fn new_tab_with_intent(inner: &mut AppWindowInner, intent: Option<String>) {
     let id = uuid::Uuid::new_v4().to_string();
 
     let working_dir = if inner.current_settings.preserve_working_dir {
@@ -45,6 +49,7 @@ pub fn new_tab(inner: &mut AppWindowInner) {
     let controller = TerminalComponent::new(TerminalInit {
         id: id.clone(),
         working_dir,
+        spawn_intent: intent,
     });
 
     let parsed = load_palette(inner.current_settings.theme.as_str());

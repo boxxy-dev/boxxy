@@ -430,9 +430,14 @@
                                     <property name="subtitle" translatable="yes">Draw grid lines representing terminal cells.</property>
                                   </object>
                                 </child>
-                              </object>
-                            </child>
-                            <child>
+                                <child>
+                                  <object class="AdwSwitchRow" id="hide_agent_badge_switch">
+                                    <property name="title" translatable="yes">Hide Agent Badge</property>
+                                    <property name="subtitle" translatable="yes">Hide the agent identity badge in the top right corner.</property>
+                                  </object>
+                                </child>
+                                </object>
+                                </child>                            <child>
                               <object class="AdwPreferencesGroup" id="group_terminal_interaction">
                                 <property name="title" translatable="yes">Terminal Interaction</property>
                                 <property name="description" translatable="yes">Used for Ctrl+Click and context menus. Warning: Complex regexes can cause UI freezes.</property>

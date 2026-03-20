@@ -2,6 +2,7 @@
 pub struct TerminalInit {
     pub id: String,
     pub working_dir: Option<String>,
+    pub spawn_intent: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -37,6 +38,7 @@ pub enum TerminalEventKind {
 pub struct PaneInit {
     pub id: String,
     pub working_dir: Option<String>,
+    pub spawn_intent: Option<String>,
 }
 
 #[derive(Debug, Clone)]

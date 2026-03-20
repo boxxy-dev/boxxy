@@ -31,3 +31,4 @@ serde_yml = { workspace = true }
 thiserror = { workspace = true }
 sqlx = { workspace = true }
 uuid.workspace = true
+petname.workspace = true

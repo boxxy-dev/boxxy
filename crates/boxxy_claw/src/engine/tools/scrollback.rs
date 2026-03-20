@@ -16,6 +16,7 @@ pub struct ReadScrollbackOutput {
 
 pub struct ReadScrollbackTool {
     pub tx_ui: async_channel::Sender<ClawEngineEvent>,
+    pub state: std::sync::Arc<tokio::sync::Mutex<crate::engine::session::SessionState>>,
 }
 
 impl Tool for ReadScrollbackTool {
@@ -53,7 +54,13 @@ impl Tool for ReadScrollbackTool {
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
 
+        let agent_name = {
+            let state = self.state.lock().await;
+            state.agent_name.clone()
+        };
+
         let req = ClawEngineEvent::RequestScrollback {
+            agent_name,
             max_lines: args.max_lines,
             offset_lines: args.offset_lines,
             reply: std::sync::Arc::new(tokio::sync::Mutex::new(Some(reply_tx))),

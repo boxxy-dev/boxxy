@@ -107,6 +107,7 @@ serde_yml = "0.0.12"
 thiserror = "2.0"
 notify = "8.2.0"
 uuid = { version = "1.22.0", features = ["v4"] }
+petname = "2.0.2"
 getrandom = "0.4.2"
 toml = "1.0.6+spec-1.1.0"
 boxxy-bookmarks = { path = "crates/boxxy_bookmarks" }

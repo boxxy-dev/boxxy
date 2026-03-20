@@ -1,0 +1,95 @@
+use gtk4 as gtk;
+use gtk4::prelude::*;
+
+#[derive(Clone)]
+pub struct AgentBadge {
+    container: gtk::Box,
+    label: gtk::Label,
+}
+
+impl AgentBadge {
+    pub fn new(overlay: &gtk::Overlay) -> Self {
+        let container = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .halign(gtk::Align::End)
+            .valign(gtk::Align::Start)
+            .margin_top(12)
+            .margin_end(12)
+            .css_classes(["agent-badge-container"])
+            .spacing(6)
+            .visible(false)
+            .build();
+
+        let label = gtk::Label::builder()
+            .css_classes(["agent-badge-label"])
+            .build();
+
+        container.append(&label);
+
+        overlay.add_overlay(&container);
+
+        Self { container, label }
+    }
+
+    pub fn set_identity(&self, name: &str) {
+        self.label.set_text(name);
+
+        let settings = boxxy_preferences::Settings::load();
+
+        // Generate a deterministic color based on the name
+        let color = self.generate_color(name);
+
+        // Apply custom styling via CSS for the specific background color
+        let css = format!(
+            ".agent-badge-container {{ background-color: {}; color: white; border-radius: 12px; padding: 4px 10px; opacity: 0.7; font-weight: bold; font-size: 0.8rem; box-shadow: 0 2px 4px rgba(0,0,0,0.2); transition: opacity 0.3s ease; }}",
+            color
+        );
+
+        let provider = gtk::CssProvider::new();
+        provider.load_from_data(&css);
+        #[allow(deprecated)]
+        self.container
+            .style_context()
+            .add_provider(&provider, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
+
+        if !settings.hide_agent_badge {
+            self.container.set_visible(true);
+        }
+    }
+
+    pub fn set_visible(&self, visible: bool) {
+        let settings = boxxy_preferences::Settings::load();
+        if settings.hide_agent_badge {
+            self.container.set_visible(false);
+        } else {
+            self.container.set_visible(visible);
+        }
+    }
+
+    pub fn update_settings(&self) {
+        let settings = boxxy_preferences::Settings::load();
+        if settings.hide_agent_badge {
+            self.container.set_visible(false);
+        } else {
+            // Only show if we actually have a name set (label isn't empty)
+            let has_name = !self.label.text().is_empty();
+            self.container.set_visible(has_name);
+        }
+    }
+
+    fn generate_color(&self, name: &str) -> String {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+
+        let mut hasher = DefaultHasher::new();
+        name.hash(&mut hasher);
+        let hash = hasher.finish();
+
+        // Use the hash to pick a pleasant, fairly dark color (to ensure white text contrast)
+        let r = (hash & 0xFF) as u8 % 150 + 50;
+        let g = ((hash >> 8) & 0xFF) as u8 % 150 + 50;
+        let b = ((hash >> 16) & 0xFF) as u8 % 150 + 50;
+
+        format!("rgb({}, {}, {})", r, g, b)
+    }
+}

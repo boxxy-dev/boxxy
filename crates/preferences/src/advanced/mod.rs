@@ -14,6 +14,8 @@ pub fn setup_advanced_page(
 ) -> Box<dyn Fn(&str) -> bool> {
     let login_shell_switch: adw::SwitchRow = builder.object("login_shell_switch").unwrap();
     let show_vte_grid_switch: adw::SwitchRow = builder.object("show_vte_grid_switch").unwrap();
+    let hide_agent_badge_switch: adw::SwitchRow =
+        builder.object("hide_agent_badge_switch").unwrap();
     let custom_regex_entry: adw::EntryRow = builder.object("custom_regex_entry").unwrap();
     let reset_regex_btn: gtk::Button = builder.object("reset_regex_btn").unwrap();
     let open_config_btn: gtk::Button = builder.object("open_config_btn").unwrap();
@@ -46,6 +48,18 @@ pub fn setup_advanced_page(
         let mut s = s_rc.borrow_mut();
         if s.show_vte_grid != row.is_active() {
             s.show_vte_grid = row.is_active();
+            s.save();
+            cb(s.clone());
+        }
+    });
+
+    hide_agent_badge_switch.set_active(settings_rc.borrow().hide_agent_badge);
+    let s_rc = settings_rc.clone();
+    let cb = on_change.clone();
+    hide_agent_badge_switch.connect_active_notify(move |row| {
+        let mut s = s_rc.borrow_mut();
+        if s.hide_agent_badge != row.is_active() {
+            s.hide_agent_badge = row.is_active();
             s.save();
             cb(s.clone());
         }
@@ -127,6 +141,7 @@ pub fn setup_advanced_page(
 
     let login_shell_switch_clone = login_shell_switch.clone();
     let show_vte_grid_switch_clone = show_vte_grid_switch.clone();
+    let hide_agent_badge_switch_clone = hide_agent_badge_switch.clone();
     let custom_regex_entry_clone = custom_regex_entry.clone();
     let row_reset_regex_clone = row_reset_regex.clone();
     let row_open_config_clone = row_open_config.clone();
@@ -147,6 +162,10 @@ pub fn setup_advanced_page(
             show_vte_grid_switch_clone.upcast_ref(),
             "show vte grid lines representing cells",
         );
+        let ad2b = match_row(
+            hide_agent_badge_switch_clone.upcast_ref(),
+            "hide agent identity badge top right corner",
+        );
         let ad3 = match_row(
             custom_regex_entry_clone.upcast_ref(),
             "file path regex ctrl+click freezes",
@@ -161,7 +180,7 @@ pub fn setup_advanced_page(
             "reset everything delete all apps destructive",
         );
 
-        group_shell.set_visible(ad1 || ad2);
+        group_shell.set_visible(ad1 || ad2 || ad2b);
         group_terminal_interaction.set_visible(ad3 || ad4);
         group_config.set_visible(ad5 || ad6);
 

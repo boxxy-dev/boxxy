@@ -451,6 +451,14 @@ impl TerminalWidget {
         self.imp().osc_133_b_callback.replace(Some(Box::new(f)));
     }
 
+    pub fn is_alt_screen(&self) -> bool {
+        if let Some(backend) = self.imp().backend.borrow().as_ref() {
+            backend.is_alt_screen()
+        } else {
+            false
+        }
+    }
+
     pub fn on_osc_133_c<F: Fn() + 'static>(&self, f: F) {
         self.imp().osc_133_c_callback.replace(Some(Box::new(f)));
     }
