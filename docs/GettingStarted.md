@@ -40,6 +40,17 @@ end
 ```
 
 ```bash
+#NuShell Integration (~/.config/nushell/config.nu)
+
+#BoxxyClaw Integration 
+def "?" [...rest: string] {
+    print -n $"\e]777;BoxxyClaw;($rest | str join ' ')\e\\"
+}
+
+alias "??" = ?
+```
+
+```bash
 # Bash Integration (~/.bashrc)
 
 # BoxxyClaw Integration
