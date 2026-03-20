@@ -38,7 +38,7 @@ To prevent UI starvation and zombie processes, the application utilizes a **sing
 Entry point. Initializes GTK/Libadwaita, registers GResources, bootstraps the main window, and ensures clean process termination.
 
 ### 2. `boxxy-window` (Library Crate)
-Main UI Orchestrator using a modular MVU pattern. Manages the `AdwApplicationWindow`, tabs, and global state routing via `state.rs`, `ui.rs`, and the `update/` module.
+Main UI Orchestrator using a modular MVU pattern. Manages the `AdwApplicationWindow`, tabs, and global state routing via `state.rs`, `ui.rs`, and the `update/` module. Acts as the primary orchestrator for the **Global Workspace Radar**, ensuring peer-to-peer agent discovery and global intent propagation across all windows. Respects the **"Lightweight First"** configuration by initializing agents in an inactive state unless `claw_on_by_default` is enabled.
 
 ### 3. `boxxy-terminal` (Library Crate)
 Manages the split-pane terminal environment. Features a deep modular architecture (`pane/`) handling UI, gestures, events, media previews, and Claw integration.
@@ -51,19 +51,20 @@ Agentic Reasoning Engine using an **Actor Model**. Spawns isolated `ClawSession`
 
 Handles context synthesis, tool execution, and LLM communication via a modular dispatcher. Features a **Hybrid Memory System** for both explicit tool-based storage and implicit background fact extraction. It utilizes OSC 133 semantic prompt tracking and Dynamic Scrollback Paging from the VTE to autonomously pull structured history context to the AI on-demand. 
 
-Agents interact with peers via the **Workspace Radar**, allowing them to read buffers, delegate tasks, and autonomously coordinate multi-pane workflows using their mnemonic identities. Agents also have full **Pane Lifecycle Management** authority, capable of spawning new sibling panes or tabs (passing initial intents), injecting raw keystrokes (Esc, Ctrl+C, etc.) into peer terminals, and closing active panes dynamically without IPC overhead.
+Agents interact with peers via the **Global Workspace Radar**, allowing them to read buffers, delegate tasks, and autonomously coordinate multi-pane workflows across the entire PC using their mnemonic identities. Agents can proactively discover all active peers using the `list_active_agents` tool and share high-level objectives via the **Global Intent Blackboard**.
 
-Each agent possesses a **Visual Identity**: a sleek, color-coded badge in the terminal's top-right corner. This badge automatically hides during alternate screen usage (e.g., `vim`, `htop`) to avoid obstruction and can be globally disabled via user preferences.
-
-The agent pipeline is provider-agnostic, leveraging `AiCredentials` map for seamless scaling.
+Agents also have full **Pane Lifecycle Management** authority, capable of spawning new sibling panes or tabs (passing initial intents), injecting raw keystrokes (Esc, Ctrl+C, etc.) into peer terminals, and closing active panes dynamically without IPC overhead.
 
 ### 6. `boxxy-vte` (Library Crate)
 Headless pure-Rust terminal emulator. Renders via GSK Snapshot and supports Kittygraphics natively. OSC 7/8/133 support. Features native semantic prompt tracking (`Flags::SEMANTIC_*`) embedded directly into the terminal cell grid to provide structured context blocks (`[PROMPT]`, `[COMMAND]`, `[OUTPUT]`).
 
-### 9. `boxxy-ai-core` (Library Crate)
+### 7. `boxxy-ai-core` (Library Crate)
 Unified AI interface layer. Abstracts multiple providers (Gemini, Anthropic, Ollama) behind a single `BoxxyAgent` interface. Manages `AiCredentials` mapping and the global multi-threaded Tokio runtime.
 
-### 10. `boxxy-model-selection` (Library Crate)
+### 8. `boxxy-preferences` (Library Crate)
+Settings management using an `AdwNavigationSplitView` architecture. UI is defined in `resources/ui/preferences.ui` and supports real-time search filtering.
+
+### 9. `boxxy-model-selection` (Library Crate)
 Data-driven model configuration UI. Uses a registry pattern to dynamically build selection dialogs and dropdowns based on registered `AiProvider` traits. Decouples AI capability discovery from the main application window.
 
 ## Distribution & Updates
@@ -79,20 +80,6 @@ For native installations, Boxxy implements an **Atomic Swap** update mechanism l
 - **Verification:** Tracks the `published_at` date of the GitHub `nightly` release in `~/.local/boxxy-terminal/.last_update` to avoid redundant prompts.
 - **Persistence:** Downloads and extracts updates silently in the background.
 - **Execution:** Performs an atomic rename of the running `boxxy-terminal` and `boxxy-agent` binaries before spawning the new process and exiting. This bypasses "text file busy" errors and requires no root privileges.
-
-## State Machine & UI Sync Protocol (Claw)
-Modular AI Chat sidebar component (`AiSidebarComponent`). Scoped into `commands`, `markdown`, `widgets`, and `types`.
-
-### 8. `boxxy-preferences` (Library Crate)
-Settings management using an `AdwNavigationSplitView` architecture. UI is defined in `resources/ui/preferences.ui` and supports real-time search filtering.
-
-### Other Crates
-- `boxxy-ai-core`: Shared AI utilities and `rig-core` wrappers.
-- `boxxy-apps`: Lua bridge for generating custom GTK widgets.
-- `boxxy-themes`: Palette-driven theme engine and CSS injector.
-- `boxxy-db`: SQLite persistence for history, memories, and skills.
-- `boxxy-model-selection`: Global AI configuration UI.
-- `boxxy-app-menu`, `boxxy-shortcuts`, `boxxy-about`: UI utility components.
 
 ## State Machine & UI Sync Protocol (Claw)
 
