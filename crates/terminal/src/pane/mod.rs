@@ -69,8 +69,15 @@ impl TerminalPaneComponent {
             std::sync::Arc::new(callback);
         let id = init.id;
 
-        let (widget, terminal, scrolled_window, size_revealer, size_label, search_bar_rc) =
-            ui::build_ui();
+        let (
+            widget,
+            terminal,
+            scrolled_window,
+            size_revealer,
+            size_label,
+            search_bar_rc,
+            progress_bar,
+        ) = ui::build_ui();
 
         let provider = gtk::CssProvider::new();
         #[allow(deprecated)]
@@ -160,6 +167,7 @@ impl TerminalPaneComponent {
         events::wire_terminal_events(
             &terminal,
             &inner,
+            &progress_bar,
             &is_claw_active,
             &claw_sender,
             callback.clone(),

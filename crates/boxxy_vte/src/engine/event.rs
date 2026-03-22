@@ -33,6 +33,12 @@ pub enum Event {
     /// Custom OSC 777;BoxxyClaw query
     ClawQuery(String),
 
+    /// Progress bar update (OSC 9;4)
+    ProgressChanged {
+        state: u8,
+        progress: u8,
+    },
+
     /// Reset to the default color palette.
     ResetColor,
 
@@ -97,6 +103,9 @@ impl Debug for Event {
             Event::Bell => write!(f, "Bell"),
             Event::Exit => write!(f, "Exit"),
             Event::ChildExit(status) => write!(f, "ChildExit({status:?})"),
+            Event::ProgressChanged { state, progress } => {
+                write!(f, "ProgressChanged({state}, {progress})")
+            }
             Event::ClawQuery(query) => write!(f, "ClawQuery({query})"),
             Event::ResetColor => write!(f, "ResetColor"),
         }

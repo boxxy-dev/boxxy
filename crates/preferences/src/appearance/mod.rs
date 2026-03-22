@@ -33,6 +33,8 @@ pub fn setup_appearance_page(
     let cursor_color_switch: gtk::Switch = builder.object("cursor_color_switch").unwrap();
     let cursor_color_row: adw::ActionRow = builder.object("cursor_color_row").unwrap();
     let cursor_blinking_switch: adw::SwitchRow = builder.object("cursor_blinking_switch").unwrap();
+    let enable_progress_bar_switch: adw::SwitchRow =
+        builder.object("enable_progress_bar_switch").unwrap();
     let hide_scrollbars_switch: adw::SwitchRow = builder.object("hide_scrollbars_switch").unwrap();
     let invert_scroll_switch: adw::SwitchRow = builder.object("invert_scroll_switch").unwrap();
     let dim_inactive_switch: adw::SwitchRow = builder.object("dim_inactive_switch").unwrap();
@@ -294,6 +296,18 @@ pub fn setup_appearance_page(
         }
     });
 
+    enable_progress_bar_switch.set_active(settings_rc.borrow().enable_progress_bar);
+    let s_rc_pb = settings_rc.clone();
+    let cb_pb = on_change.clone();
+    enable_progress_bar_switch.connect_active_notify(move |row| {
+        let mut s = s_rc_pb.borrow_mut();
+        if s.enable_progress_bar != row.is_active() {
+            s.enable_progress_bar = row.is_active();
+            s.save();
+            cb_pb(s.clone());
+        }
+    });
+
     hide_scrollbars_switch.set_active(settings_rc.borrow().hide_scrollbars);
     let s_rc = settings_rc.clone();
     let cb = on_change.clone();
@@ -439,6 +453,7 @@ pub fn setup_appearance_page(
     let cursor_shape_combo_clone = cursor_shape_combo.clone();
     let cursor_color_row_clone = cursor_color_row.clone();
     let cursor_blinking_switch_clone = cursor_blinking_switch.clone();
+    let enable_progress_bar_switch_clone = enable_progress_bar_switch.clone();
     let hide_scrollbars_switch_clone = hide_scrollbars_switch.clone();
     let invert_scroll_switch_clone = invert_scroll_switch.clone();
     let dim_inactive_switch_clone = dim_inactive_switch.clone();
@@ -488,6 +503,10 @@ pub fn setup_appearance_page(
             cursor_blinking_switch_clone.upcast_ref(),
             "blinking cursor fades in out",
         );
+        let pb = match_row(
+            enable_progress_bar_switch_clone.upcast_ref(),
+            "progress bars show visual osc 9 4 flatpak cargo",
+        );
         let l1 = match_row(
             hide_scrollbars_switch_clone.upcast_ref(),
             "hide scrollbars do not show vertical",
@@ -516,7 +535,7 @@ pub fn setup_appearance_page(
         group_appearance.set_visible(s1 || f1 || t_bg || t1 || t_op);
         group_terminal.set_visible(t2 || t3 || t4 || t5);
         group_cursor.set_visible(c1 || c3 || c4);
-        group_layout.set_visible(l1 || l2 || l3 || l4 || l5 || l6);
+        group_layout.set_visible(pb || l1 || l2 || l3 || l4 || l5 || l6);
 
         group_appearance.is_visible()
             || group_terminal.is_visible()

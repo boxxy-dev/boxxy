@@ -11,6 +11,7 @@ pub(super) fn build_ui() -> (
     gtk::Revealer,
     gtk::Label,
     Rc<SearchBarComponent>,
+    gtk::ProgressBar,
 ) {
     let widget = gtk::Overlay::new();
     widget.add_css_class("terminal-pane");
@@ -52,6 +53,18 @@ pub(super) fn build_ui() -> (
 
     let search_bar_rc = Rc::new(search_bar);
 
+    let progress_bar = gtk::ProgressBar::new();
+    progress_bar.set_valign(gtk::Align::Start);
+    progress_bar.set_halign(gtk::Align::Fill);
+    progress_bar.add_css_class("terminal-progress-bar");
+    progress_bar.set_margin_start(0);
+    progress_bar.set_margin_end(0);
+    progress_bar.set_margin_top(0);
+    progress_bar.set_visible(false);
+
+    // We add it to the overlay so it sits on top of the terminal
+    widget.add_overlay(&progress_bar);
+
     (
         widget,
         terminal,
@@ -59,5 +72,6 @@ pub(super) fn build_ui() -> (
         size_revealer,
         size_label,
         search_bar_rc,
+        progress_bar,
     )
 }

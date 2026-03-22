@@ -138,6 +138,7 @@ pub struct Settings {
     pub enable_dangerous_tools: bool,
     pub enable_web_tools: bool,
     pub enable_clipboard_tools: bool,
+    pub enable_progress_bar: bool,
 }
 
 impl Default for Settings {
@@ -182,6 +183,7 @@ impl Default for Settings {
             enable_dangerous_tools: false,
             enable_web_tools: true,
             enable_clipboard_tools: true,
+            enable_progress_bar: true,
         }
     }
 }

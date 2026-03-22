@@ -8,11 +8,63 @@ use std::rc::Rc;
 pub(super) fn wire_terminal_events(
     terminal: &TerminalWidget,
     inner: &Rc<RefCell<PaneInner>>,
+    progress_bar: &gtk::ProgressBar,
     is_claw_active: &Rc<Cell<bool>>,
     claw_sender: &async_channel::Sender<boxxy_claw::engine::ClawMessage>,
     callback: std::sync::Arc<dyn Fn(PaneOutput) + Send + Sync + 'static>,
     id: String,
 ) {
+    let pb_clone = progress_bar.clone();
+    let inner_for_pb = inner.clone();
+    terminal.on_progress_changed(move |state, progress| {
+        let enable_pb = inner_for_pb
+            .borrow()
+            .current_settings
+            .as_ref()
+            .map(|s| s.enable_progress_bar)
+            .unwrap_or(true);
+
+        if !enable_pb {
+            pb_clone.set_visible(false);
+            return;
+        }
+
+        // States:
+        // 0 — hide/clear the progress bar
+        // 1 — normal progress (green bar)
+        // 2 — error state (red)
+        // 3 — indeterminate/pulsing (spinner-like)
+        // 4 — warning state (yellow)
+
+        match state {
+            0 => {
+                pb_clone.set_visible(false);
+                pb_clone.remove_css_class("error");
+                pb_clone.remove_css_class("warning");
+            }
+            1 | 2 | 4 => {
+                pb_clone.set_visible(true);
+                let frac = (progress as f64).clamp(0.0, 100.0) / 100.0;
+                pb_clone.set_fraction(frac);
+
+                pb_clone.remove_css_class("error");
+                pb_clone.remove_css_class("warning");
+                if state == 2 {
+                    pb_clone.add_css_class("error");
+                } else if state == 4 {
+                    pb_clone.add_css_class("warning");
+                }
+            }
+            3 => {
+                pb_clone.set_visible(true);
+                pb_clone.remove_css_class("error");
+                pb_clone.remove_css_class("warning");
+                pb_clone.pulse();
+            }
+            _ => {}
+        }
+    });
+
     let cb_clone = callback.clone();
     let id_clone = id.clone();
     terminal.on_title_changed(move |title| {

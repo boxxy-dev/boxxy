@@ -432,6 +432,11 @@ impl TerminalWidget {
         self.imp().cwd_callback.replace(Some(Box::new(f)));
     }
 
+    /// Register a callback that is invoked whenever an OSC 9;4 progress event is emitted.
+    pub fn on_progress_changed<F: Fn(u8, u8) + 'static>(&self, f: F) {
+        self.imp().progress_callback.replace(Some(Box::new(f)));
+    }
+
     /// Register a callback that is invoked whenever the terminal bell fires.
     pub fn on_bell<F: Fn() + 'static>(&self, f: F) {
         self.imp().bell_callback.replace(Some(Box::new(f)));

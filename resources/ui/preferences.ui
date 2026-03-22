@@ -294,6 +294,12 @@
                               <object class="AdwPreferencesGroup" id="group_layout">
                                 <property name="title" translatable="yes">Layout</property>
                                 <child>
+                                  <object class="AdwSwitchRow" id="enable_progress_bar_switch">
+                                    <property name="title" translatable="yes">Show Progress Bars</property>
+                                    <property name="subtitle" translatable="yes">Show a visual progress bar for OSC 9;4 sequences (e.g. flatpak, cargo)</property>
+                                  </object>
+                                </child>
+                                <child>
                                   <object class="AdwSwitchRow" id="hide_scrollbars_switch">
                                     <property name="title" translatable="yes">Hide Scrollbars</property>
                                     <property name="subtitle" translatable="yes">Do not show vertical scrollbars in terminal panes</property>

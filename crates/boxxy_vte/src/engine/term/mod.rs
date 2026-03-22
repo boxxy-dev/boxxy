@@ -2896,6 +2896,13 @@ impl<T: EventListener> Handler for Term<T> {
     }
 
     #[inline]
+    fn set_progress(&mut self, state: u8, progress: u8) {
+        trace!("Setting progress state {state} progress {progress}");
+        self.event_proxy
+            .send_event(Event::ProgressChanged { state, progress });
+    }
+
+    #[inline]
     fn set_cwd(&mut self, cwd: String) {
         trace!("Setting CWD to '{cwd}'");
         self.event_proxy.send_event(Event::CwdChanged(cwd));

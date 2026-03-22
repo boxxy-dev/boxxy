@@ -29,6 +29,7 @@ pub struct MatchRule {
 
 pub type TitleCallback = Box<dyn Fn(String) + 'static>;
 pub type CwdCallback = Box<dyn Fn(String) + 'static>;
+pub type ProgressCallback = Box<dyn Fn(u8, u8) + 'static>;
 pub type BellCallback = Box<dyn Fn() + 'static>;
 pub type ExitCallback = Box<dyn Fn(i32) + 'static>;
 
@@ -71,6 +72,7 @@ pub struct TerminalWidget {
     pub hovered_regex_match: Cell<Option<(usize, usize, usize)>>, // (row, start_col, end_col)
     pub title_callback: RefCell<Option<TitleCallback>>,
     pub cwd_callback: RefCell<Option<CwdCallback>>,
+    pub progress_callback: RefCell<Option<ProgressCallback>>,
     pub bell_callback: RefCell<Option<BellCallback>>,
     pub exit_callback: RefCell<Option<ExitCallback>>,
     pub osc_133_a_callback: RefCell<Option<Osc133ACallback>>,
@@ -120,6 +122,7 @@ impl Default for TerminalWidget {
             next_match_tag: Cell::new(1),
             title_callback: RefCell::new(None),
             cwd_callback: RefCell::new(None),
+            progress_callback: RefCell::new(None),
             bell_callback: RefCell::new(None),
             exit_callback: RefCell::new(None),
             osc_133_a_callback: RefCell::new(None),
@@ -741,6 +744,11 @@ impl TerminalWidget {
                                 if let Some(f) = widget.imp().cwd_callback.borrow().as_ref() {
                                     f(cwd);
                                 }
+                            }
+                        }
+                        Event::ProgressChanged { state, progress } => {
+                            if let Some(f) = widget.imp().progress_callback.borrow().as_ref() {
+                                f(state, progress);
                             }
                         }
                         Event::Osc133A => {

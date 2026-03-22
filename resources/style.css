@@ -158,6 +158,27 @@ tab > separator {
     padding: 4px;
 }
 
+/* ── Terminal Progress Bar (OSC 9;4) ──────────────────────────────────── */
+progressbar.terminal-progress-bar trough {
+    background: transparent;
+    border-radius: 0;
+    min-height: 2px;
+}
+
+progressbar.terminal-progress-bar progress {
+    background-color: @success_bg_color;
+    border-radius: 0;
+    min-height: 2px;
+}
+
+progressbar.terminal-progress-bar.warning progress {
+    background-color: @warning_bg_color;
+}
+
+progressbar.terminal-progress-bar.error progress {
+    background-color: @error_bg_color;
+}
+
 /* ── Search Popover ──────────────────────────────────────────────────────── */
 /*
  * The popover is parented directly to the settings button (not owned by a

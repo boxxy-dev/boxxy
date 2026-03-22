@@ -510,6 +510,9 @@ pub trait Handler {
     /// Custom OSC 777: BoxxyClaw
     fn claw_query(&mut self, _query: String) {}
 
+    /// OSC 9;4 Progress Bar
+    fn set_progress(&mut self, _state: u8, _progress: u8) {}
+
     /// OSC to set window title.
     fn set_title(&mut self, _: Option<String>) {}
 
@@ -1437,6 +1440,28 @@ where
                         .trim()
                         .to_owned();
                     self.handler.set_title(Some(title));
+                    return;
+                }
+                unhandled(params);
+            }
+
+            // Progress Bar (OSC 9;4)
+            b"9" => {
+                // ESC ] 9 ; 4 ; <state> ; <progress> ST
+                if params.len() >= 3 && params[1] == b"4" {
+                    let state = str::from_utf8(params[2])
+                        .ok()
+                        .and_then(|s| s.parse::<u8>().ok())
+                        .unwrap_or(0);
+                    let progress = if params.len() >= 4 {
+                        str::from_utf8(params[3])
+                            .ok()
+                            .and_then(|s| s.parse::<u8>().ok())
+                            .unwrap_or(0)
+                    } else {
+                        0
+                    };
+                    self.handler.set_progress(state, progress);
                     return;
                 }
                 unhandled(params);
