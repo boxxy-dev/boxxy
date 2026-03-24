@@ -180,15 +180,20 @@ impl TerminalPaneComponent {
             let tx_msg = claw_sender.clone();
             let inner_rc_for_msg = Rc::downgrade(&inner);
             let inner_rc_for_cancel = Rc::downgrade(&inner);
+            let is_claw_active_for_msg = is_claw_active.clone();
             Rc::new(MsgBarComponent::new(
                 move |(query, images)| {
                     if let Some(inner_arc) = inner_rc_for_msg.upgrade() {
-                        let tx = tx_msg.clone();
                         let pane = inner_arc.borrow().terminal.clone();
-                        let cwd = inner_arc.borrow().working_dir.clone().unwrap_or_default();
-
                         pane.set_focusable(true);
                         pane.grab_focus();
+
+                        if !is_claw_active_for_msg.get() {
+                            return;
+                        }
+
+                        let tx = tx_msg.clone();
+                        let cwd = inner_arc.borrow().working_dir.clone().unwrap_or_default();
 
                         gtk::glib::spawn_future_local(async move {
                             if let Some(snapshot) = pane.get_text_snapshot(100, 0).await {
@@ -232,10 +237,14 @@ impl TerminalPaneComponent {
         let terminal_clone = terminal.clone();
         let popover_clone = claw_popover.clone();
         let msg_bar_clone = msg_bar.clone();
+        let is_claw_active_for_focus = is_claw_active.clone();
         focus_toggle_handler.connect_key_pressed(move |_, keyval, _keycode, state| {
             let is_ctrl = state.contains(gtk::gdk::ModifierType::CONTROL_MASK);
 
             if is_ctrl && keyval == gtk::gdk::Key::slash {
+                if !is_claw_active_for_focus.get() {
+                    return gtk::glib::Propagation::Proceed;
+                }
                 if let Some(rect) = terminal_clone.get_cursor_rect() {
                     terminal_clone.set_focusable(false); // Prevent clicks from stealing focus
                     msg_bar_clone.show_at_y(rect.y() as i32, rect.height() as i32);
@@ -251,9 +260,9 @@ impl TerminalPaneComponent {
 
             let is_grave = keyval == gtk::gdk::Key::dead_grave || keyval == gtk::gdk::Key::grave;
 
-            if is_ctrl && is_grave {
-                if popover_clone.is_visible() {
-                    if let Some(root) = popover_clone.widget().root() {
+            if is_ctrl && is_grave
+                && popover_clone.is_visible()
+                    && let Some(root) = popover_clone.widget().root() {
                         let is_popover_focused = if let Some(focus) = root.focus() {
                             let focus_widget = focus.downcast_ref::<gtk::Widget>().unwrap();
                             focus_widget == popover_clone.widget().upcast_ref::<gtk::Widget>()
@@ -269,8 +278,6 @@ impl TerminalPaneComponent {
                         }
                         return gtk::glib::Propagation::Stop;
                     }
-                }
-            }
             gtk::glib::Propagation::Proceed
         });
         widget.add_controller(focus_toggle_handler);
@@ -550,6 +557,10 @@ impl TerminalPaneComponent {
     pub fn resize(&self) {}
 
     pub fn set_claw_active(&self, active: bool) {
+        if self.is_claw_active.get() == active {
+            return;
+        }
+
         self.is_claw_active.set(active);
 
         let pid = self.inner.borrow().pid;
@@ -564,10 +575,14 @@ impl TerminalPaneComponent {
         self.agent_badge.set_visible(active);
 
         // If turning ON, tell the session to Initialize
+        let tx = self.claw_sender.clone();
         if active {
-            let tx = self.claw_sender.clone();
             glib::spawn_future_local(async move {
                 let _ = tx.send(boxxy_claw::engine::ClawMessage::Initialize).await;
+            });
+        } else {
+            glib::spawn_future_local(async move {
+                let _ = tx.send(boxxy_claw::engine::ClawMessage::Deactivate).await;
             });
         }
     }

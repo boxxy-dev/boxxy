@@ -71,14 +71,13 @@ impl SkillRegistry {
                 let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
 
                 let w = notify::recommended_watcher(move |res: notify::Result<Event>| {
-                    if let Ok(event) = res {
-                        if matches!(
+                    if let Ok(event) = res
+                        && matches!(
                             event.kind,
                             EventKind::Modify(_) | EventKind::Create(_) | EventKind::Remove(_)
                         ) {
                             let _ = tx.send(());
                         }
-                    }
                 });
 
                 match w {
@@ -99,7 +98,7 @@ impl SkillRegistry {
                                     // Debounce events
                                     tokio::time::sleep(std::time::Duration::from_millis(250)).await;
                                     // Drain any extra events that arrived during the sleep
-                                    while let Ok(_) = rx.try_recv() {}
+                                    while rx.try_recv().is_ok() {}
 
                                     debug!(
                                         "SkillRegistry: File change detected, reloading skills."
@@ -142,7 +141,7 @@ impl SkillRegistry {
         if let Some(db_val) = db_guard.as_ref() {
             let store = Store::new(db_val.pool());
             // Sanitize query for FTS5
-            let sanitized = query.replace('"', "").replace('\'', "").replace('?', "");
+            let sanitized = query.replace(['"', '\'', '?'], "");
             if let Ok(records) = store.search_skills(&sanitized, limit).await {
                 // Map records back to Skill structs
                 return records

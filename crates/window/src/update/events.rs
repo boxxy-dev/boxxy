@@ -110,7 +110,7 @@ pub fn handle_terminal_event(
                             if let Some(pane_id) =
                                 workspace.resolve_pane_id_by_name(&target_name).await
                             {
-                                let mut inner = inner_clone.borrow_mut();
+                                let inner = inner_clone.borrow_mut();
                                 // Search all tabs for this pane
                                 for tab in &inner.tabs {
                                     if tab.controller.close_pane_by_id(&pane_id) {

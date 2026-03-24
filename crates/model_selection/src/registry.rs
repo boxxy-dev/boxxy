@@ -107,11 +107,10 @@ impl AiProvider for GeminiProviderImpl {
                 for l in &levels {
                     thinking_list.append(&l.to_string());
                 }
-                if let Some(think) = t {
-                    if let Some(t_pos) = levels.iter().position(|l| l == think) {
+                if let Some(think) = t
+                    && let Some(t_pos) = levels.iter().position(|l| l == think) {
                         thinking_dropdown.set_selected(t_pos as u32);
                     }
-                }
             }
         }
     }
@@ -191,12 +190,10 @@ impl AiProvider for OllamaProviderImpl {
                 if let Some(item) = model_list
                     .item(i)
                     .and_then(|o| o.downcast::<gtk::StringObject>().ok())
-                {
-                    if item.string().as_str() == m {
+                    && item.string().as_str() == m {
                         found_pos = Some(i);
                         break;
                     }
-                }
             }
             if let Some(pos) = found_pos {
                 model_dropdown.set_selected(pos);

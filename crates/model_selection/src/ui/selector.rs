@@ -395,14 +395,10 @@ impl SingleModelSelector {
             }
             let p_idx = inner.provider_dropdown.selected();
 
-            let prov_name = if let Some(prov) = inner.providers.get(p_idx as usize) {
-                Some(prov.name())
-            } else {
-                None
-            };
+            let prov_name = inner.providers.get(p_idx as usize).map(|prov| prov.name());
 
-            if let Some(name) = prov_name {
-                if name != "Ollama" {
+            if let Some(name) = prov_name
+                && name != "Ollama" {
                     inner.updating = true;
                     let m_idx = inner.model_dropdown.selected();
                     inner
@@ -421,7 +417,6 @@ impl SingleModelSelector {
                     inner.updating = false;
                     should_update = true;
                 }
-            }
         }
         should_update
     }

@@ -2,7 +2,6 @@ use super::PaneInner;
 use crate::PaneOutput;
 use boxxy_vte::terminal::TerminalWidget;
 use gtk4 as gtk;
-use gtk4::prelude::ToVariant;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 

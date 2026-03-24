@@ -60,6 +60,7 @@ pub struct AutocompleteController {
 }
 
 impl AutocompleteController {
+    #[must_use] 
     pub fn new(
         entry: &gtk::Entry,
         providers: Vec<Box<dyn CompletionProvider>>,
@@ -113,19 +114,21 @@ impl AutocompleteController {
                 let text_before = &text[..cursor_pos];
                 for provider in &c_clone.providers {
                     let trigger = provider.trigger_char();
-                    if let Some(idx) = text_before.rfind(trigger) {
-                        if idx == 0 || text_before.as_bytes()[idx - 1] == b' ' {
+                    if let Some(idx) = text_before.rfind(trigger)
+                        && (idx == 0 || text_before.as_bytes()[idx - 1] == b' ') {
                             let query = &text_before[idx + 1..];
                             found_trigger = Some((provider, idx, query));
                             break;
                         }
-                    }
                 }
             }
 
             if let Some((provider, idx, query)) = found_trigger {
                 let completions = provider.get_completions(query);
-                if !completions.is_empty() {
+                if completions.is_empty() {
+                    c_clone.popover.popdown();
+                    c_clone.active_trigger.replace(None);
+                } else {
                     c_clone.update_list(completions);
                     c_clone
                         .active_trigger
@@ -134,9 +137,6 @@ impl AutocompleteController {
                     if !c_clone.popover.is_visible() {
                         c_clone.popover.popup();
                     }
-                } else {
-                    c_clone.popover.popdown();
-                    c_clone.active_trigger.replace(None);
                 }
             } else {
                 c_clone.popover.popdown();
@@ -228,15 +228,15 @@ impl AutocompleteController {
     }
 
     fn move_selection(&self, delta: i32) {
-        let current_idx = self.list.selected_row().map(|r| r.index()).unwrap_or(0);
-        let next_idx = (current_idx as i32 + delta).max(0);
+        let current_idx = self.list.selected_row().map_or(0, |r| r.index());
+        let next_idx = (current_idx + delta).max(0);
         if let Some(row) = self.list.row_at_index(next_idx) {
             self.list.select_row(Some(&row));
         }
     }
 
     fn apply_completion(&self, replacement: &str) {
-        let trigger_info = self.active_trigger.borrow().clone();
+        let trigger_info = *self.active_trigger.borrow();
         if let Some((_trigger, start_idx)) = trigger_info {
             let text = self.entry.text().to_string();
             let cursor_pos = self.entry.position() as usize;

@@ -213,8 +213,8 @@ impl TabContextMenu {
             let mut clicked_index = None;
             for (i, tab) in tabs.iter().enumerate() {
                 #[allow(deprecated)]
-                if let Some((tab_x, tab_y)) = tb_clone.translate_coordinates(tab, x, y) {
-                    if tab_x >= 0.0
+                if let Some((tab_x, tab_y)) = tb_clone.translate_coordinates(tab, x, y)
+                    && tab_x >= 0.0
                         && tab_x < tab.width() as f64
                         && tab_y >= 0.0
                         && tab_y < tab.height() as f64
@@ -222,7 +222,6 @@ impl TabContextMenu {
                         clicked_index = Some(i);
                         break;
                     }
-                }
             }
 
             let idx = if let Some(i) = clicked_index {
@@ -244,7 +243,7 @@ impl TabContextMenu {
                 *cp_gesture.borrow_mut() = Some(page.clone());
 
                 let is_pinned = page.is_pinned();
-                let unpinned_count = tv_clone.n_pages() - tv_clone.n_pinned_pages();
+                let _unpinned_count = tv_clone.n_pages() - tv_clone.n_pinned_pages();
                 let is_terminal =
                     !page.child().has_css_class("non-terminal-tab") && page.title() != "Bookmarks";
 

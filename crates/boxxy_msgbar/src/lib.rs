@@ -70,7 +70,7 @@ impl MsgBarComponent {
         let on_submit_rc = Rc::new(on_submit);
         let on_cancel_rc = Rc::new(on_cancel);
 
-        let c_submit = on_submit_rc.clone();
+        let c_submit = on_submit_rc;
 
         entry.connect_activate(move |e| {
             let mut text = e.text().to_string();
@@ -116,7 +116,7 @@ impl MsgBarComponent {
         let k_active = is_active.clone();
         let k_widget = widget.clone();
         let k_entry = entry.clone();
-        let k_cancel = on_cancel_rc.clone();
+        let k_cancel = on_cancel_rc;
         let k_attachments = attachments.clone();
         let k_tags_box = tags_box.clone();
 
@@ -258,7 +258,7 @@ impl MsgBarComponent {
 
         let atts_clone = attachments.clone();
         let tags_clone = tags_box.clone();
-        let id_clone = id.clone();
+        let id_clone = id;
         close_btn.connect_clicked(move |_| {
             atts_clone.borrow_mut().retain(|a| a.id != id_clone);
             if let Some(child) = tags_clone.first_child() {

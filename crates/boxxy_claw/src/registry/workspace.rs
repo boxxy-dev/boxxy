@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::{OnceCell, RwLock};
 
@@ -28,6 +27,12 @@ pub async fn global_workspace() -> Arc<WorkspaceRegistry> {
         .get_or_init(|| async { Arc::new(WorkspaceRegistry::new()) })
         .await
         .clone()
+}
+
+impl Default for WorkspaceRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl WorkspaceRegistry {

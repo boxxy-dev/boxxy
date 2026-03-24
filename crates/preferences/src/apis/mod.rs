@@ -1,18 +1,16 @@
 use crate::config::Settings;
 use adw::prelude::*;
-use gtk::prelude::*;
 use gtk4 as gtk;
 use libadwaita as adw;
 use std::cell::RefCell;
 use std::rc::Rc;
 
 fn add_class_to_title_label(widget: &gtk::Widget, title: &str) {
-    if let Some(label) = widget.downcast_ref::<gtk::Label>() {
-        if label.text() == title {
+    if let Some(label) = widget.downcast_ref::<gtk::Label>()
+        && label.text() == title {
             label.add_css_class("status-title");
             return;
         }
-    }
     let mut child = widget.first_child();
     while let Some(c) = child {
         add_class_to_title_label(&c, title);

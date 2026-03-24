@@ -84,7 +84,7 @@ pub fn parse_markdown(input: &str) -> Vec<ContentBlock> {
             Event::End(tag) => match tag {
                 TagEnd::Paragraph => {
                     if in_list {
-                        current_text.push_str("\n");
+                        current_text.push('\n');
                     } else {
                         blocks.push(ContentBlock::Paragraph(std::mem::take(&mut current_text)));
                         current_block_type = None;
@@ -153,7 +153,7 @@ pub fn parse_markdown(input: &str) -> Vec<ContentBlock> {
                 if in_code_block {
                     current_text.push('\n');
                 } else {
-                    current_text.push_str("\n");
+                    current_text.push('\n');
                 }
             }
             Event::Html(html) => {

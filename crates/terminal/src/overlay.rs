@@ -278,7 +278,7 @@ impl TerminalOverlay {
                     let temp_filename = format!("{}-{}{}", stem, short_uuid, ext);
                     let temp_path = runs_dir.join(&temp_filename);
 
-                    if let Ok(_) = std::fs::write(&temp_path, &cmd) {
+                    if std::fs::write(&temp_path, &cmd).is_ok() {
                         // Make executable
                         #[cfg(unix)]
                         {

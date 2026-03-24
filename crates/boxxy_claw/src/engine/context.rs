@@ -72,7 +72,7 @@ pub async fn retrieve_memories(
         );
 
         // Fallback to basic cleaned query if expansion fails
-        let mut fts_query = query.replace('"', "").replace('\'', "").replace('?', "");
+        let mut fts_query = query.replace(['"', '\'', '?'], "");
 
         if let Ok(keywords) = agent.prompt(&expansion_prompt).await {
             let cleaned = keywords.trim().replace(", ", " OR ").replace(',', " OR ");
@@ -87,8 +87,8 @@ pub async fn retrieve_memories(
         let max_budget_chars = 2000; // Roughly 500 tokens. A lightweight token budget.
 
         // 0. Always inject Pinned Memories first
-        if let Ok(pinned_memories) = store.get_pinned_memories(Some(project_path)).await {
-            if !pinned_memories.is_empty() {
+        if let Ok(pinned_memories) = store.get_pinned_memories(Some(project_path)).await
+            && !pinned_memories.is_empty() {
                 result.push_str("\n--- PINNED FACTS (CRITICAL) ---\n");
                 for mem in pinned_memories {
                     let line = format!("- {}: {}\n", mem.key, mem.content);
@@ -96,15 +96,13 @@ pub async fn retrieve_memories(
                     current_budget_chars += line.len();
                 }
             }
-        }
 
         // 1. Search Long-term Memories (Facts)
         // We pull more records initially (e.g., 20) and then filter by budget
         if let Ok(memories) = store
             .search_memories(&fts_query, Some(project_path), 20)
             .await
-        {
-            if !memories.is_empty() && current_budget_chars < max_budget_chars {
+            && !memories.is_empty() && current_budget_chars < max_budget_chars {
                 result.push_str("\n--- RELEVANT PREFERENCES & FACTS ---\n");
                 for mem in memories {
                     let line = format!("- {}: {}\n", mem.key, mem.content);
@@ -115,14 +113,12 @@ pub async fn retrieve_memories(
                     current_budget_chars += line.len();
                 }
             }
-        }
 
         // 2. Search Past Interactions (Summaries)
         if let Ok(interactions) = store
             .search_interactions(&fts_query, Some(project_path), 20)
             .await
-        {
-            if !interactions.is_empty() && current_budget_chars < max_budget_chars {
+            && !interactions.is_empty() && current_budget_chars < max_budget_chars {
                 result.push_str(
                     "\n--- RELEVANT PAST INTERACTIONS ---\n\
                 Below are relevant experiences or facts you've encountered in previous sessions:\n",
@@ -136,7 +132,6 @@ pub async fn retrieve_memories(
                     current_budget_chars += line.len();
                 }
             }
-        }
 
         if !result.is_empty() {
             result.push('\n');
@@ -174,8 +169,8 @@ pub async fn summarize_and_store(
         "You are a concise summarizer. Output only the summary.",
     );
 
-    if let Ok(summary) = agent.prompt(&summarizer_prompt).await {
-        if let Some(db) = db.as_ref() {
+    if let Ok(summary) = agent.prompt(&summarizer_prompt).await
+        && let Some(db) = db.as_ref() {
             let store = boxxy_db::store::Store::new(db.pool());
             // Store in interactions table (episodic memory)
             let _ = store
@@ -187,5 +182,4 @@ pub async fn summarize_and_store(
                 summary.trim()
             );
         }
-    }
 }

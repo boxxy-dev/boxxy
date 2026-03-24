@@ -45,6 +45,8 @@ pub enum ClawMessage {
     CancelPending,
     /// The engine should initialize or reset its state (new identity, clear history).
     Initialize,
+    /// The engine should shut down its resources because Claw mode is deactivated.
+    Deactivate,
     /// The engine should reload its state (database, skills)
     Reload,
     /// Update diagnosis mode dynamically.

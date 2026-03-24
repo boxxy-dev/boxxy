@@ -6,7 +6,6 @@ pub mod workspace;
 
 use crate::engine::ClawEngineEvent;
 use crate::engine::session::SessionState;
-use async_trait::async_trait;
 use boxxy_agent::ipc::AgentClawProxy;
 use boxxy_core_toolbox::ApprovalHandler;
 use rig::completion::ToolDefinition;

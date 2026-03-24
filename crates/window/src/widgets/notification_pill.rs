@@ -45,6 +45,12 @@ glib::wrapper! {
         @implements gtk::Accessible, gtk::Actionable, gtk::Buildable, gtk::ConstraintTarget;
 }
 
+impl Default for BoxxyNotificationPill {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl BoxxyNotificationPill {
     pub fn new() -> Self {
         glib::Object::builder().build()

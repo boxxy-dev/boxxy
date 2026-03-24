@@ -80,11 +80,9 @@ impl BookmarksManager {
             let mut data = BookmarksData::default();
             if let Some(path) = Self::get_index_path()
                 && let Ok(content) = fs::read_to_string(path)
-            {
-                if let Ok(d) = serde_json::from_str::<BookmarksData>(&content) {
+                && let Ok(d) = serde_json::from_str::<BookmarksData>(&content) {
                     data = d;
                 }
-            }
 
             // Sync order with bookmarks if needed
             if data.order.len() != data.bookmarks.len() {

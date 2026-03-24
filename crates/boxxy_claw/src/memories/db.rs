@@ -40,7 +40,7 @@ pub async fn sync_memories_to_markdown(db: Arc<Mutex<Option<Db>>>) -> anyhow::Re
             file,
             "Add the 📌 emoji anywhere in the line to permanently pin a memory to the context."
         )?;
-        writeln!(file, "")?;
+        writeln!(file)?;
 
         let mut unverified = Vec::new();
         let mut verified = Vec::new();
@@ -72,7 +72,7 @@ pub async fn sync_memories_to_markdown(db: Arc<Mutex<Option<Db>>>) -> anyhow::Re
                 };
                 writeln!(file, "- [{}] {}:{}{}", path, mem.key, pin, mem.content)?;
             }
-            writeln!(file, "")?;
+            writeln!(file)?;
         }
 
         writeln!(file, "## 🟢 Active Memories")?;
@@ -130,12 +130,11 @@ pub async fn sync_markdown_to_db(db: Arc<Mutex<Option<Db>>>) -> anyhow::Result<(
                 let mut line_content = &line[2..];
                 let mut project_path = "global".to_string();
 
-                if line_content.starts_with('[') {
-                    if let Some(end_idx) = line_content.find(']') {
+                if line_content.starts_with('[')
+                    && let Some(end_idx) = line_content.find(']') {
                         project_path = line_content[1..end_idx].trim().to_string();
                         line_content = line_content[end_idx + 1..].trim();
                     }
-                }
 
                 let parts: Vec<&str> = line_content.splitn(2, ':').collect();
                 if parts.len() == 2 {

@@ -160,6 +160,26 @@ impl ClawSession {
             let session_ctx = self.session_context.clone();
 
             match msg {
+                ClawMessage::Deactivate => {
+                    info!("Deactivating Claw Session for pane {}...", self.pane_id);
+                    is_initialized = false;
+                    *self.db.lock().await = None;
+
+                    let mut state_lock = self.state.lock().await;
+                    state_lock.history.clear();
+                    drop(state_lock);
+
+                    // Update Workspace Radar to indicate no active agent
+                    workspace
+                        .update_pane_state(
+                            self.pane_id.clone(),
+                            None,
+                            current_dir.clone(),
+                            None,
+                            None,
+                        )
+                        .await;
+                }
                 ClawMessage::Initialize => {
                     info!("Initializing NEW Claw Session for pane {}...", self.pane_id);
 
@@ -537,7 +557,7 @@ fn spawn_turn(
         }
 
         let db_guard = db.lock().await;
-        let past_memories = retrieve_memories(&*db_guard, &prompt_clone, &cwd_clone).await;
+        let past_memories = retrieve_memories(&db_guard, &prompt_clone, &cwd_clone).await;
         drop(db_guard);
 
         let state_lock = state.lock().await;
@@ -770,7 +790,7 @@ fn spawn_turn(
                     let db_guard = db_for_summary.lock().await;
                     if db_guard.is_some() {
                         summarize_and_store(
-                            &*db_guard,
+                            &db_guard,
                             &prompt_for_db,
                             &resp_for_db,
                             &cwd_for_db,

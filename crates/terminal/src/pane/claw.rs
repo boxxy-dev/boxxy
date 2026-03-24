@@ -231,7 +231,7 @@ pub(super) fn setup_claw(
                         &claw_list_events,
                         id.clone(),
                         Some(agent_name.clone()),
-                        &path,
+                        path,
                         |_| {},
                         |_| {},
                     );
@@ -253,7 +253,7 @@ pub(super) fn setup_claw(
                         id.clone(),
                         Some(agent_name.clone()),
                         *pid,
-                        &process_name,
+                        process_name,
                         |_| {},
                         |_| {},
                     );
@@ -331,7 +331,7 @@ pub(super) fn setup_claw(
                     inner_for_events
                         .borrow()
                         .agent_badge
-                        .set_identity(&agent_name);
+                        .set_identity(agent_name);
                 }
                 boxxy_claw::engine::ClawEngineEvent::RequestScrollback {
                     max_lines,

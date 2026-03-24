@@ -182,7 +182,7 @@ pub fn sidebar_visible_changed(inner: &mut AppWindowInner, visible: bool) {
 }
 
 pub fn sidebar_page_changed(inner: &mut AppWindowInner, name: String) {
-    if name == "claw" {}
+    
     inner.app_state.active_sidebar_page = name;
     inner.app_state.save();
 }

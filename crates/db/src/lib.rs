@@ -54,7 +54,7 @@ impl Db {
     async fn initialize_schema(&self) -> Result<()> {
         // Direct table creation without sqlx migration tracking.
         // This makes development faster and avoids checksum/versioning conflicts.
-        let schema = r#"
+        let schema = r"
             CREATE TABLE IF NOT EXISTS sessions (
                 id TEXT PRIMARY KEY,
                 name TEXT NOT NULL,
@@ -169,7 +169,7 @@ impl Db {
               INSERT INTO skills_fts(skills_fts, rowid, name, description, triggers) VALUES('delete', old.name, old.name, old.description, old.triggers);
               INSERT INTO skills_fts(rowid, name, description, triggers) VALUES (new.name, new.name, new.description, new.triggers);
             END;
-            "#;
+            ";
 
         sqlx::query(schema)
             .execute(&self.pool)

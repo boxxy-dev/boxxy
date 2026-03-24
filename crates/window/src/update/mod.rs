@@ -351,15 +351,14 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
         }
         AppInput::DismissNotification(id) => {
             inner.notifications.retain(|n| n.id != id);
-            if let Some(current) = inner.notification_pill.get_notification() {
-                if current.id == id {
+            if let Some(current) = inner.notification_pill.get_notification()
+                && current.id == id {
                     inner.notification_pill.clear();
                     // Show next notification if any
                     if let Some(next) = inner.notifications.first() {
                         inner.notification_pill.set_notification(next.clone());
                     }
                 }
-            }
         }
         AppInput::StartUpdateDownload(url, date, checksum_url) => {
             let tx_download = inner.tx.clone();

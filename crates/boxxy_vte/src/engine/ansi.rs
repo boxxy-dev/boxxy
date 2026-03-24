@@ -1384,12 +1384,11 @@ where
                     let mut cl = None;
                     if params.len() >= 3 {
                         for param in &params[2..] {
-                            if let Ok(s) = str::from_utf8(param) {
-                                if let Some(val) = s.strip_prefix("cl=") {
+                            if let Ok(s) = str::from_utf8(param)
+                                && let Some(val) = s.strip_prefix("cl=") {
                                     cl = Some(val.to_string());
                                     break;
                                 }
-                            }
                         }
                     }
 

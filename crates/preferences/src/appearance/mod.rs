@@ -114,9 +114,9 @@ pub fn setup_appearance_page(
             None::<&gtk::Window>,
             gtk::gio::Cancellable::NONE,
             move |res| {
-                if let Ok(file) = res {
-                    if let Some(path) = file.path() {
-                        if let Some(new_path) = boxxy_themes::copy_background_image(&path) {
+                if let Ok(file) = res
+                    && let Some(path) = file.path()
+                        && let Some(new_path) = boxxy_themes::copy_background_image(&path) {
                             let mut s = s_rc.borrow_mut();
                             s.background_image_path = Some(new_path);
                             s.save();
@@ -125,8 +125,6 @@ pub fn setup_appearance_page(
                             cb(s_clone);
                             update_subtitle();
                         }
-                    }
-                }
             },
         );
     });

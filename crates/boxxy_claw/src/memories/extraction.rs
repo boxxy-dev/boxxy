@@ -24,10 +24,10 @@ pub async fn extract_implicit_memory(
 
     let prompt = format!("USER: {}\n\nASSISTANT: {}", user_prompt, assistant_response);
 
-    if let Ok(response) = agent.prompt(&prompt).await {
-        if let Ok(json) = serde_json::from_str::<serde_json::Value>(&response) {
-            if let Some(facts) = json.get("facts").and_then(|f| f.as_array()) {
-                if !facts.is_empty() {
+    if let Ok(response) = agent.prompt(&prompt).await
+        && let Ok(json) = serde_json::from_str::<serde_json::Value>(&response)
+            && let Some(facts) = json.get("facts").and_then(|f| f.as_array())
+                && !facts.is_empty() {
                     let db_guard = db.lock().await;
                     if let Some(db_val) = db_guard.as_ref() {
                         let store = Store::new(db_val.pool());
@@ -57,7 +57,4 @@ pub async fn extract_implicit_memory(
                         let _ = crate::memories::db::sync_memories_to_markdown(db.clone()).await;
                     }
                 }
-            }
-        }
-    }
 }

@@ -149,7 +149,7 @@ impl RenderState {
             };
 
         for line in start_line..=end_line {
-            let row_in_viewport = (line + self.display_offset as i32) as usize;
+            let row_in_viewport = (line + self.display_offset) as usize;
             let row_cells =
                 &self.cells[row_in_viewport * self.columns..(row_in_viewport + 1) * self.columns];
 
@@ -219,7 +219,7 @@ impl RenderState {
         let max_line = line_a.0.max(line_b.0);
         let n_rows = self.cells.len() / self.columns;
         for l in min_line..max_line {
-            let row_idx = (l + self.display_offset as i32) as usize;
+            let row_idx = (l + self.display_offset) as usize;
             if (row_idx + 1) * self.columns > self.cells.len() || row_idx >= n_rows {
                 return false;
             }
@@ -285,11 +285,10 @@ impl RenderState {
                     if target_col < first {
                         target_col = first;
                     }
-                } else if let Some(last) = last_prompt {
-                    if target_col <= last {
+                } else if let Some(last) = last_prompt
+                    && target_col <= last {
                         target_col = last + 1;
                     }
-                }
                 let last_cmd = line_cells
                     .iter()
                     .rposition(|c| c.flags.contains(Flags::SEMANTIC_CMD));
@@ -315,14 +314,14 @@ impl RenderState {
             } else if char_delta < 0 {
                 seq.push_str(&left_seq.repeat((-char_delta) as usize));
             }
-            if !seq.is_empty() { Some(seq) } else { None }
+            if seq.is_empty() { None } else { Some(seq) }
         } else {
             // Case 3: hard-newline multiline command.
             // Left/Right cannot cross hard newlines; use Up/Down to change logical lines,
             // then Left/Right to adjust to the target column.
             let n_rows = self.cells.len() / self.columns;
-            let cursor_row_idx = (self.cursor_point.line.0 + self.display_offset as i32) as usize;
-            let target_row_idx = (point.line.0 + self.display_offset as i32) as usize;
+            let cursor_row_idx = (self.cursor_point.line.0 + self.display_offset) as usize;
+            let target_row_idx = (point.line.0 + self.display_offset) as usize;
             if target_row_idx >= n_rows {
                 return None;
             }
@@ -434,7 +433,7 @@ impl RenderState {
                 col_adjustment,
                 seq.len()
             );
-            if !seq.is_empty() { Some(seq) } else { None }
+            if seq.is_empty() { None } else { Some(seq) }
         }
     }
 }

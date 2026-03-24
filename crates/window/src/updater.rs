@@ -180,8 +180,8 @@ impl Updater {
         let entries = fs::read_dir(&pending_dir)?;
         let mut inner_folder = None;
         for entry in entries {
-            if let Ok(entry) = entry {
-                if entry.file_type()?.is_dir()
+            if let Ok(entry) = entry
+                && entry.file_type()?.is_dir()
                     && entry
                         .file_name()
                         .to_string_lossy()
@@ -190,7 +190,6 @@ impl Updater {
                     inner_folder = Some(entry.path());
                     break;
                 }
-            }
         }
 
         let inner_folder = inner_folder.context("Could not find extracted content folder")?;

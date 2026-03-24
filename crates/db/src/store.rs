@@ -112,7 +112,7 @@ impl<'a> Store<'a> {
 
     // --- Global Memories (Long-term Facts) ---
 
-    /// Upsert a memory by key (ZeroClaw model)
+    /// Upsert a memory by key (`ZeroClaw` model)
     pub async fn add_memory(
         &self,
         key: &str,

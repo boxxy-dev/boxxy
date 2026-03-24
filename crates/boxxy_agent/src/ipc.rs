@@ -174,14 +174,13 @@ impl BoxxyAgent {
         // minimal baseline from the host passwd entry so the shell has at least
         // HOME, USER, LOGNAME, and SHELL set correctly before sourcing its own
         // startup files (e.g. ~/.config/fish/config.fish, ~/.bashrc, etc.).
-        if options.env.is_empty() {
-            if let Ok(Some(user)) = User::from_uid(getuid()) {
+        if options.env.is_empty()
+            && let Ok(Some(user)) = User::from_uid(getuid()) {
                 cmd.env("HOME", user.dir.to_string_lossy().as_ref());
                 cmd.env("USER", &user.name);
                 cmd.env("LOGNAME", &user.name);
                 cmd.env("SHELL", user.shell.to_string_lossy().as_ref());
             }
-        }
 
         for (key, value) in options.env {
             cmd.env(key, value);
@@ -253,12 +252,11 @@ impl BoxxyAgent {
                     _ = interval.tick() => {
                         let is_tracked = tracked_pids.read().await.contains(&pid);
                         if is_tracked {
-                            if let Ok(current_process) = Self::get_foreground_process_internal(pid) {
-                                if current_process != last_process_name {
+                            if let Ok(current_process) = Self::get_foreground_process_internal(pid)
+                                && current_process != last_process_name {
                                     let _ = BoxxyAgent::foreground_process_changed(&emitter, pid, current_process.clone()).await;
                                     last_process_name = current_process;
                                 }
-                            }
                         } else if !last_process_name.is_empty() {
                             // If tracking is disabled, reset the last known state so UI clears it
                             last_process_name = String::new();
@@ -288,19 +286,19 @@ impl BoxxyAgent {
         let mut all_procs = Vec::new();
         if let Ok(entries) = std::fs::read_dir("/proc") {
             for entry in entries.flatten() {
-                if let Ok(file_name) = entry.file_name().into_string() {
-                    if let Ok(p) = file_name.parse::<u32>() {
+                if let Ok(file_name) = entry.file_name().into_string()
+                    && let Ok(p) = file_name.parse::<u32>() {
                         let stat_path = format!("/proc/{}/stat", p);
                         if let Ok(stat_content) = std::fs::read_to_string(&stat_path) {
                             let lp_pos = stat_content.find('(');
                             let rp_pos = stat_content.rfind(')');
-                            if let (Some(lp), Some(rp)) = (lp_pos, rp_pos) {
-                                if rp > lp {
+                            if let (Some(lp), Some(rp)) = (lp_pos, rp_pos)
+                                && rp > lp {
                                     let name = stat_content[lp + 1..rp].to_string();
                                     let rest = &stat_content[rp + 2..];
                                     let parts: Vec<&str> = rest.split_whitespace().collect();
-                                    if parts.len() > 1 {
-                                        if let Ok(ppid) = parts[1].parse::<u32>() {
+                                    if parts.len() > 1
+                                        && let Ok(ppid) = parts[1].parse::<u32>() {
                                             let cmdline_path = format!("/proc/{}/cmdline", p);
                                             let full_name =
                                                 if let Ok(cmdline) = std::fs::read(&cmdline_path) {
@@ -314,12 +312,9 @@ impl BoxxyAgent {
                                                 };
                                             all_procs.push((p, ppid, full_name));
                                         }
-                                    }
                                 }
-                            }
                         }
                     }
-                }
             }
         }
 

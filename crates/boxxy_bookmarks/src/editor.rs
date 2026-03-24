@@ -1,7 +1,6 @@
 use crate::Bookmark;
 use crate::manager::BookmarksManager;
 use adw::prelude::*;
-use gtk::prelude::*;
 use gtk4 as gtk;
 use libadwaita as adw;
 use sourceview5::prelude::*;

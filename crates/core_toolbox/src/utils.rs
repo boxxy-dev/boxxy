@@ -15,11 +15,10 @@ pub fn resolve_path(base: &str, path: &str) -> String {
         if let Some(home) = directories::UserDirs::new().map(|u| u.home_dir().to_path_buf()) {
             return home.join(&path[2..]).to_string_lossy().to_string();
         }
-    } else if path == "~" {
-        if let Some(home) = directories::UserDirs::new().map(|u| u.home_dir().to_path_buf()) {
+    } else if path == "~"
+        && let Some(home) = directories::UserDirs::new().map(|u| u.home_dir().to_path_buf()) {
             return home.to_string_lossy().to_string();
         }
-    }
 
     if base.is_empty() {
         path.to_string()

@@ -1,6 +1,5 @@
 use adw::prelude::*;
 use gtk::glib;
-use gtk::prelude::*;
 use gtk4 as gtk;
 use libadwaita as adw;
 use sourceview5::prelude::*;
@@ -113,11 +112,10 @@ impl BookmarksTabComponent {
             run_btn.connect_clicked(move |_| {
                 if let Some(obj) = list_item_run.item().and_downcast::<glib::BoxedAnyObject>() {
                     let bm = obj.borrow::<Bookmark>();
-                    if let Some(script) = BookmarksManager::get_script(&bm.filename) {
-                        if let Some(inner) = inner_weak_run.upgrade() {
+                    if let Some(script) = BookmarksManager::get_script(&bm.filename)
+                        && let Some(inner) = inner_weak_run.upgrade() {
                             (inner.borrow().on_run)(bm.name.clone(), bm.filename.clone(), script);
                         }
-                    }
                 }
             });
             header.append(&run_btn);
