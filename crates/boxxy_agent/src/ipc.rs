@@ -262,7 +262,6 @@ impl BoxxyAgent {
     }
 
     async fn get_running_processes(&self, pid: u32) -> fdo::Result<Vec<(u32, String)>> {
-
         let mut all_procs = Vec::new();
         if let Ok(entries) = std::fs::read_dir("/proc") {
             for entry in entries.flatten() {

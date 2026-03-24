@@ -231,7 +231,9 @@ impl Tool for DelegateTaskTool {
             name: Self::NAME.to_string(),
             description: "Delegate a complex task or ask a question to another agent in the workspace. \
             The target agent will autonomously analyze its pane, run commands if needed (prompting the user), \
-            and return its final response back to you. Use this to orchestrate multi-pane workflows (e.g. 'restart the backend server').".to_string(),
+            and return its final response back to you. Use this to orchestrate multi-pane workflows (e.g. 'restart the backend server'). \
+            CRITICAL WARNING: DO NOT use this tool if the target agent's Status says it is running an interactive TUI application like 'vim', 'nano', or 'htop'. \
+            Stateless agents cannot control TUIs via text delegation. If you need to control a TUI in another pane, you MUST use the `send_keystrokes_to_pane` tool instead.".to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {

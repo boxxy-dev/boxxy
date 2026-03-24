@@ -11,7 +11,7 @@ When running inside a Flatpak, Boxxy cannot directly create PTYs on the host or 
 1.  **PTY Management:** Creating PTYs on the host's `/dev/pts` ensures that they are visible and manageable by host processes, which is not possible from within a sandboxed PTS namespace.
 2.  **Job Control:** By creating the session and controlling terminal on the host, we avoid the `tcsetpgrp` / "no job control" issues common with simple `flatpak-spawn --host` wrappers.
 3.  **CWD Tracking:** The agent can reliably track the current working directory of child processes by reading `/proc/{pid}/cwd` on the host, even when the UI is sandboxed.
-4.  **Foreground Process Tracking:** The agent can monitor which process is currently in the foreground of a PTY (e.g., `sudo`, `ssh`, `vim`), allowing the UI to adapt accordingly.
+4.  **Foreground Process Tracking:** The agent monitors which process is currently in the foreground of a PTY (e.g., `sudo`, `ssh`, `vim`) by polling the Terminal Process Group ID (`tpgid`). It emits the `foreground_process_changed` D-Bus signal in real-time whenever the interactive application changes, enabling UI/AI modality awareness.
 5.  **Sandbox Escape:** It uses the `TIOCGPTPEER` ioctl to safely pass PTY slave file descriptors back to the sandboxed UI over a Unix socket.
 
 ## Architecture
@@ -51,7 +51,7 @@ To ensure the application remains functional across different host distributions
 -   Spawning shells and other processes on the host.
 -   Enforcing a security blacklist for file operations (Claw engine).
 -   Forwarding signals (like `SIGWINCH`) to host processes.
--   Monitoring process exit statuses and emitting D-Bus signals.
+-   Monitoring process exit statuses and foreground changes (modality) and emitting D-Bus signals (`exited`, `foreground_process_changed`).
 -   Reporting CWD and foreground process information to the UI via `/proc`.
 
 ## Public Traits & Structs

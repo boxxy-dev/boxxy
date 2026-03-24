@@ -169,7 +169,9 @@ impl ClawSession {
                     } else {
                         Some(format!("Running: {}", process_name))
                     };
-                    workspace.set_pane_status(self.pane_id.clone(), status).await;
+                    workspace
+                        .set_pane_status(self.pane_id.clone(), status)
+                        .await;
                 }
                 ClawMessage::CommandFinished {
                     exit_code,
@@ -506,6 +508,18 @@ fn spawn_turn(
         let workspace = crate::registry::workspace::global_workspace().await;
         let radar = workspace.get_global_radar(pane_id.clone()).await;
 
+        let mut tui_warning = String::new();
+        let all_agents = workspace.get_all_agents().await;
+        if let Some(me) = all_agents.iter().find(|a| a.id == pane_id) {
+            let status = &me.status;
+            if status.starts_with("Running: ") {
+                tui_warning = format!(
+                    "\n--- TUI WARNING ---\nYour pane is currently running an interactive application: {}.\nYou cannot run standard bash commands or delegate tasks to yourself to run bash commands. To interact with this application, you MUST use `send_keystrokes_to_pane` with your own agent name ('{}'). Note: You do not know the exact internal state (e.g. insert mode vs normal mode in vim), so send escape characters (\\e) first if necessary.\n-------------------\n",
+                    status, me.name
+                );
+            }
+        }
+
         // 1. Semantic Search: Get the top 3 most relevant skills via SQLite FTS5 to be "Active"
         let mut active_skills = registry.search_relevant_skills(&prompt_clone, 3).await;
 
@@ -595,7 +609,8 @@ fn spawn_turn(
             .replace("{{available_skills}}", &available_skills_text)
             .replace("{{past_memories}}", &past_memories)
             .replace("{{current_dir}}", &cwd_clone)
-            .replace("{{workspace_radar}}", &radar);
+            .replace("{{workspace_radar}}", &radar)
+            .replace("{{tui_warning}}", &tui_warning);
 
         let creds = boxxy_ai_core::AiCredentials::new(
             settings.api_keys.clone(),

@@ -23,6 +23,6 @@ The container component representing a single Tab.
 ## Key Features
 - **Dynamic Splits**: Supports infinite vertical and horizontal terminal splits.
 - **Seamless Background Images**: A single background image spans the entire tab seamlessly across all transparent terminal splits. 
-- **Agent Integration**: Seamlessly routes terminal context (CWD, snapshots) to the Claw agent.
+- **Agent Integration**: Seamlessly routes terminal context (CWD, snapshots) and real-time foreground process changes (via D-Bus signals) to the Claw agent.
 - **Modern Hyperlinks**: Native OSC 8 support with robust media previews.
 - **OSD Indicators**: Interactive overlays for terminal size and agent status.
