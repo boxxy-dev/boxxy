@@ -319,6 +319,7 @@ impl TerminalPaneComponent {
         let inner_rc = self.inner.clone();
         let id = self.id();
         let claw_sender = self.claw_sender.clone();
+        let is_claw_active_spawn = self.is_claw_active.get();
 
         glib::spawn_future_local(async move {
             let settings = inner_rc
@@ -438,6 +439,11 @@ impl TerminalPaneComponent {
 
                             // CWD tracking is now handled entirely via OSC 7 events
                             // registered in events::setup_terminal_events.
+
+                            // Initialize tracking state based on current claw activity
+                            if is_claw_active_spawn {
+                                let _ = agent.set_foreground_tracking(pid, true).await;
+                            }
                         }
                         Err(e) => log::error!("Failed to spawn process via agent: {:#}", e),
                     }
@@ -486,6 +492,14 @@ impl TerminalPaneComponent {
 
     pub fn set_claw_active(&self, active: bool) {
         self.is_claw_active.set(active);
+        
+        let pid = self.inner.borrow().pid;
+        if let Some(pid) = pid {
+            glib::spawn_future_local(async move {
+                let agent = crate::get_agent().await;
+                let _ = agent.set_foreground_tracking(pid, active).await;
+            });
+        }
     }
 
     pub fn update_diagnosis_mode(&self, mode: &boxxy_preferences::config::ClawAutoDiagnosisMode) {

@@ -11,7 +11,7 @@ When running inside a Flatpak, Boxxy cannot directly create PTYs on the host or 
 1.  **PTY Management:** Creating PTYs on the host's `/dev/pts` ensures that they are visible and manageable by host processes, which is not possible from within a sandboxed PTS namespace.
 2.  **Job Control:** By creating the session and controlling terminal on the host, we avoid the `tcsetpgrp` / "no job control" issues common with simple `flatpak-spawn --host` wrappers.
 3.  **CWD Tracking:** The agent can reliably track the current working directory of child processes by reading `/proc/{pid}/cwd` on the host, even when the UI is sandboxed.
-4.  **Foreground Process Tracking:** The agent monitors which process is currently in the foreground of a PTY (e.g., `sudo`, `ssh`, `vim`) by polling the Terminal Process Group ID (`tpgid`). It emits the `foreground_process_changed` D-Bus signal in real-time whenever the interactive application changes, enabling UI/AI modality awareness.
+4.  **Foreground Process Tracking:** The agent monitors which process is currently in the foreground of a PTY (e.g., `sudo`, `ssh`, `vim`) by polling the Terminal Process Group ID (`tpgid`). It emits the `foreground_process_changed` D-Bus signal in real-time whenever the interactive application changes, enabling UI/AI modality awareness. To ensure zero overhead when AI is disabled, this tracking loop is strictly opt-in per-PID and can be dynamically paused/resumed by the UI via `set_foreground_tracking()`.
 5.  **Sandbox Escape:** It uses the `TIOCGPTPEER` ioctl to safely pass PTY slave file descriptors back to the sandboxed UI over a Unix socket.
 
 ## Architecture

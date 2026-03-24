@@ -64,7 +64,7 @@ async fn main() -> Result<()> {
 
     let _conn = Builder::unix_stream(stream)
         .p2p()
-        .serve_at("/play/mii/Boxxy/Agent", BoxxyAgent)?
+        .serve_at("/play/mii/Boxxy/Agent", BoxxyAgent::default())?
         .serve_at("/play/mii/Boxxy/AgentClaw", boxxy_agent::claw::AgentClaw)?
         .build()
         .await

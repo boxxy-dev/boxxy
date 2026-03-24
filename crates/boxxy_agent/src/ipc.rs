@@ -22,6 +22,7 @@ pub trait Agent {
     async fn get_foreground_process(&self, pid: u32) -> zbus::Result<String>;
     async fn get_running_processes(&self, pid: u32) -> zbus::Result<Vec<(u32, String)>>;
     async fn signal_process_group(&self, pid: u32, signal: i32) -> zbus::Result<()>;
+    async fn set_foreground_tracking(&self, pid: u32, enabled: bool) -> zbus::Result<()>;
 
     #[zbus(signal)]
     async fn exited(&self, pid: u32, exit_code: i32) -> zbus::Result<()>;
@@ -57,7 +58,9 @@ pub struct SpawnOptions {
 }
 
 #[derive(Default)]
-pub struct BoxxyAgent;
+pub struct BoxxyAgent {
+    pub tracked_pids: std::sync::Arc<tokio::sync::RwLock<std::collections::HashSet<u32>>>,
+}
 
 impl BoxxyAgent {
     /// Internal helper to read the foreground process from /proc without &self.
@@ -128,6 +131,16 @@ impl BoxxyAgent {
         let raw_fd = master_fd.into_raw_fd();
         let std_fd = unsafe { std::os::unix::io::OwnedFd::from_raw_fd(raw_fd) };
         Ok(OwnedFd::from(std_fd))
+    }
+
+    async fn set_foreground_tracking(&self, pid: u32, enabled: bool) -> fdo::Result<()> {
+        let mut lock = self.tracked_pids.write().await;
+        if enabled {
+            lock.insert(pid);
+        } else {
+            lock.remove(&pid);
+        }
+        Ok(())
     }
 
     /// Spawn a process on the host using the provided master PTY FD.
@@ -220,6 +233,8 @@ impl BoxxyAgent {
             .ok_or_else(|| fdo::Error::Failed("Failed to get PID".to_string()))?;
 
         let emitter = emitter.to_owned();
+        let tracked_pids = self.tracked_pids.clone();
+        
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(std::time::Duration::from_millis(1500));
             let mut last_process_name = String::new();
@@ -232,14 +247,22 @@ impl BoxxyAgent {
                             Err(_) => -1,
                         };
                         let _ = BoxxyAgent::exited(&emitter, pid, exit_code).await;
+                        tracked_pids.write().await.remove(&pid);
                         break;
                     }
                     _ = interval.tick() => {
-                        if let Ok(current_process) = Self::get_foreground_process_internal(pid) {
-                            if current_process != last_process_name {
-                                let _ = BoxxyAgent::foreground_process_changed(&emitter, pid, current_process.clone()).await;
-                                last_process_name = current_process;
+                        let is_tracked = tracked_pids.read().await.contains(&pid);
+                        if is_tracked {
+                            if let Ok(current_process) = Self::get_foreground_process_internal(pid) {
+                                if current_process != last_process_name {
+                                    let _ = BoxxyAgent::foreground_process_changed(&emitter, pid, current_process.clone()).await;
+                                    last_process_name = current_process;
+                                }
                             }
+                        } else if !last_process_name.is_empty() {
+                            // If tracking is disabled, reset the last known state so UI clears it
+                            last_process_name = String::new();
+                            let _ = BoxxyAgent::foreground_process_changed(&emitter, pid, String::new()).await;
                         }
                     }
                 }
@@ -248,6 +271,7 @@ impl BoxxyAgent {
 
         Ok(pid)
     }
+
 
     async fn get_cwd(&self, pid: u32) -> fdo::Result<String> {
         let link_path = format!("/proc/{}/cwd", pid);

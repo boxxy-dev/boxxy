@@ -307,4 +307,11 @@ impl AgentManager {
             .await
             .context("Agent get_running_processes failed")
     }
+
+    pub async fn set_foreground_tracking(&self, pid: u32, enabled: bool) -> Result<()> {
+        self.proxy
+            .set_foreground_tracking(pid, enabled)
+            .await
+            .context("Agent set_foreground_tracking failed")
+    }
 }
