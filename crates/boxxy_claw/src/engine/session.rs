@@ -108,7 +108,8 @@ impl ClawSession {
                 ClawMessage::ClawQuery { .. }
                 | ClawMessage::UserMessage { .. }
                 | ClawMessage::DelegatedTask { .. }
-                | ClawMessage::RequestLazyDiagnosis => true,
+                | ClawMessage::RequestLazyDiagnosis
+                | ClawMessage::Initialize => true,
                 ClawMessage::CommandFinished { exit_code, .. }
                     if *exit_code != 0 && *exit_code != 130 && *exit_code != 131 =>
                 {
@@ -123,12 +124,16 @@ impl ClawSession {
                     self.pane_id, self.name
                 );
 
-                let _ = self
-                    .tx_ui
-                    .send(ClawEngineEvent::Identity {
-                        agent_name: self.name.clone(),
-                    })
-                    .await;
+                // If this is an explicit Initialize message, we'll handle the identity
+                // announcement in the match block below to avoid double announcements.
+                if !matches!(&msg, ClawMessage::Initialize) {
+                    let _ = self
+                        .tx_ui
+                        .send(ClawEngineEvent::Identity {
+                            agent_name: self.name.clone(),
+                        })
+                        .await;
+                }
 
                 let session_context = load_session_context();
                 self.session_context = session_context;
@@ -155,6 +160,39 @@ impl ClawSession {
             let session_ctx = self.session_context.clone();
 
             match msg {
+                ClawMessage::Initialize => {
+                    info!("Initializing NEW Claw Session for pane {}...", self.pane_id);
+
+                    // 1. Pick a new name
+                    let name =
+                        petname::petname(2, " ").unwrap_or_else(|| "Unknown Agent".to_string());
+                    self.name = name.clone();
+
+                    // 2. Clear history and update agent name in state
+                    let mut state_lock = self.state.lock().await;
+                    state_lock.agent_name = name.clone();
+                    state_lock.history.clear();
+                    drop(state_lock);
+
+                    // 3. Update Workspace Radar
+                    workspace
+                        .update_pane_state(
+                            self.pane_id.clone(),
+                            Some(name.clone()),
+                            current_dir.clone(),
+                            None,
+                            None,
+                        )
+                        .await;
+
+                    // 4. Announce Identity to UI
+                    let _ = self
+                        .tx_ui
+                        .send(ClawEngineEvent::Identity {
+                            agent_name: name,
+                        })
+                        .await;
+                }
                 ClawMessage::Reload => {
                     info!("Reloading Claw Session state...");
                     let new_ctx = load_session_context();

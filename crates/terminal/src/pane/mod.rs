@@ -492,12 +492,23 @@ impl TerminalPaneComponent {
 
     pub fn set_claw_active(&self, active: bool) {
         self.is_claw_active.set(active);
-        
+
         let pid = self.inner.borrow().pid;
         if let Some(pid) = pid {
             glib::spawn_future_local(async move {
                 let agent = crate::get_agent().await;
                 let _ = agent.set_foreground_tracking(pid, active).await;
+            });
+        }
+
+        // Update badge visibility
+        self.agent_badge.set_visible(active);
+
+        // If turning ON, tell the session to Initialize
+        if active {
+            let tx = self.claw_sender.clone();
+            glib::spawn_future_local(async move {
+                let _ = tx.send(boxxy_claw::engine::ClawMessage::Initialize).await;
             });
         }
     }

@@ -1,10 +1,13 @@
 use gtk4 as gtk;
 use gtk4::prelude::*;
+use std::cell::Cell;
+use std::rc::Rc;
 
 #[derive(Clone)]
 pub struct AgentBadge {
     container: gtk::Box,
     label: gtk::Label,
+    is_active: Rc<Cell<bool>>,
 }
 
 impl AgentBadge {
@@ -28,15 +31,16 @@ impl AgentBadge {
 
         overlay.add_overlay(&container);
 
-        Self { container, label }
+        Self {
+            container,
+            label,
+            is_active: Rc::new(Cell::new(false)),
+        }
     }
 
     pub fn set_identity(&self, name: &str) {
         self.label.set_text(name);
 
-        let settings = boxxy_preferences::Settings::load();
-
-        // Generate a deterministic color based on the name
         let color = self.generate_color(name);
 
         // Apply custom styling via CSS for the specific background color
@@ -52,28 +56,26 @@ impl AgentBadge {
             .style_context()
             .add_provider(&provider, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
 
-        if !settings.hide_agent_badge {
-            self.container.set_visible(true);
-        }
+        self.refresh_visibility();
     }
 
     pub fn set_visible(&self, visible: bool) {
-        let settings = boxxy_preferences::Settings::load();
-        if settings.hide_agent_badge {
-            self.container.set_visible(false);
-        } else {
-            self.container.set_visible(visible);
-        }
+        self.is_active.set(visible);
+        self.refresh_visibility();
     }
 
     pub fn update_settings(&self) {
+        self.refresh_visibility();
+    }
+
+    fn refresh_visibility(&self) {
         let settings = boxxy_preferences::Settings::load();
-        if settings.hide_agent_badge {
+        let has_name = !self.label.text().is_empty();
+
+        if settings.hide_agent_badge || !self.is_active.get() || !has_name {
             self.container.set_visible(false);
         } else {
-            // Only show if we actually have a name set (label isn't empty)
-            let has_name = !self.label.text().is_empty();
-            self.container.set_visible(has_name);
+            self.container.set_visible(true);
         }
     }
 

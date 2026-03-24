@@ -41,6 +41,8 @@ pub enum ClawMessage {
     RequestLazyDiagnosis,
     /// The user rejected or dismissed a proposal. The agent should cancel any pending tools.
     CancelPending,
+    /// The engine should initialize or reset its state (new identity, clear history).
+    Initialize,
     /// The engine should reload its state (database, skills)
     Reload,
     /// Update diagnosis mode dynamically.
