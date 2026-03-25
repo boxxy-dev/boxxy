@@ -861,6 +861,21 @@ fn spawn_turn(
                     pane_id,
                     agent_name
                 );
+                
+                let error_msg = format!("{}", e);
+                let friendly_msg = if error_msg.contains("does not support tools") {
+                    format!("**Error:** The selected Ollama model does not support tool calling.\n\nBoxxy-Claw requires a highly capable reasoning model with native tool support (like `llama3.2`, `qwen2.5`, or `mistral`) to interact with your system.\n\nPlease select a different model for Boxxy-Claw in the Model Selection menu (Ctrl+Shift+P).")
+                } else {
+                    format!("**Boxxy-Claw encountered an error:**\n```\n{}\n```", e)
+                };
+
+                let _ = tx_ui
+                    .send(ClawEngineEvent::DiagnosisComplete {
+                        agent_name: agent_name.clone(),
+                        diagnosis: friendly_msg,
+                    })
+                    .await;
+
                 if let Some(tx) = delegate_reply_tx {
                     let _ = tx.send(format!("Error: {}", e));
                 }

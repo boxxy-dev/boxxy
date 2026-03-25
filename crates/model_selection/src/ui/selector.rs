@@ -10,7 +10,6 @@ pub struct SingleModelSelector {
     widget: gtk::Box,
     inner: Rc<RefCell<SingleModelSelectorInner>>,
 }
-
 struct SingleModelSelectorInner {
     provider_dropdown: gtk::DropDown,
     model_dropdown: gtk::DropDown,
@@ -22,6 +21,7 @@ struct SingleModelSelectorInner {
     ollama_url: String,
     providers: Vec<Box<dyn AiProvider>>,
     last_selected_ollama_model: String,
+    on_change_callback: Option<Rc<dyn Fn()>>,
 }
 
 impl SingleModelSelector {
@@ -85,6 +85,7 @@ impl SingleModelSelector {
                     ollama_url,
                     providers: vec![],
                     last_selected_ollama_model: String::new(),
+                    on_change_callback: None,
                 })),
             };
         }
@@ -140,6 +141,7 @@ impl SingleModelSelector {
             } else {
                 String::new()
             },
+            on_change_callback: None,
         }));
 
         let self_ = Self {
@@ -155,7 +157,7 @@ impl SingleModelSelector {
 
         let on_change = Rc::new(on_change);
         let s_clone = self_.clone();
-        let update_state = {
+        let update_state: Rc<dyn Fn()> = {
             let on_change = on_change.clone();
             Rc::new(move || {
                 let inner = s_clone.inner.borrow();
@@ -194,6 +196,10 @@ impl SingleModelSelector {
                 }
             })
         };
+
+        if let Ok(mut inner) = self_.inner.try_borrow_mut() {
+            inner.on_change_callback = Some(update_state.clone());
+        }
 
         // Connect Provider selection change
         provider_dropdown.connect_selected_notify({
@@ -292,11 +298,39 @@ impl SingleModelSelector {
 
                     inner.model_dropdown.set_selected(found_pos.unwrap());
                     inner.updating = false;
+
+                    let cb = inner.on_change_callback.clone();
+                    drop(inner);
+                    if let Some(cb) = cb {
+                        cb();
+                    }
                 }
             }
         });
 
         self_
+    }
+
+    pub fn get_current_provider(&self) -> Option<ModelProvider> {
+        let inner = self.inner.borrow();
+        let p_idx = inner.provider_dropdown.selected();
+        let m_idx = inner.model_dropdown.selected();
+        let t_idx = inner.thinking_dropdown.selected();
+
+        inner.providers.get(p_idx as usize).map(|prov_def| {
+            let mut m_name = None;
+            if let Some(item) = inner
+                .model_list
+                .item(m_idx)
+                .and_then(|o| o.downcast::<gtk::StringObject>().ok())
+            {
+                let s = item.string().to_string();
+                if s != "Loading..." && s != "Ollama Offline" {
+                    m_name = Some(s);
+                }
+            }
+            prov_def.create_model_provider(m_idx, m_name, Some(t_idx))
+        })
     }
 
     pub fn on_provider_changed(&self) -> bool {
@@ -376,9 +410,12 @@ impl SingleModelSelector {
                             }
                             inner.model_dropdown.set_selected(0);
                             inner.updating = false;
-                            // We don't trigger update_state here automatically to avoid loops,
-                            // but actually we should if it's user initiated.
-                            // However, this async block is tricky.
+                            
+                            let cb = inner.on_change_callback.clone();
+                            drop(inner);
+                            if let Some(cb) = cb {
+                                cb();
+                            }
                         }
                     });
                 }
@@ -397,8 +434,8 @@ impl SingleModelSelector {
 
             let prov_name = inner.providers.get(p_idx as usize).map(|prov| prov.name());
 
-            if let Some(name) = prov_name
-                && name != "Ollama" {
+            if let Some(name) = prov_name {
+                if name != "Ollama" {
                     inner.updating = true;
                     let m_idx = inner.model_dropdown.selected();
                     inner
@@ -416,12 +453,22 @@ impl SingleModelSelector {
                     inner.options_vbox.set_visible(supports);
                     inner.updating = false;
                     should_update = true;
+                } else {
+                    // It is Ollama, we don't have thinking levels, but we still need to update
+                    should_update = true;
                 }
+            }
         }
         should_update
     }
 
     pub fn set_model_provider(&self, provider: Option<ModelProvider>) {
+        if let Some(ref p) = provider {
+            if self.get_current_provider().as_ref() == Some(p) {
+                return;
+            }
+        }
+
         if let Ok(mut inner) = self.inner.try_borrow_mut() {
             inner.updating = true;
             drop(inner);
@@ -462,6 +509,24 @@ impl SingleModelSelector {
                         .options_vbox
                         .set_visible(prov_def.supports_thinking(m_idx));
                 } else {
+                    // Check if we already have the target Ollama model in the list
+                    let mut already_set = false;
+                    if let ModelProvider::Ollama(ref target_m) = provider {
+                        for i in 0..inner.model_list.n_items() {
+                            if let Some(item) = inner.model_list.item(i).and_then(|o| o.downcast::<gtk::StringObject>().ok()) {
+                                if item.string().as_str() == target_m {
+                                    inner.model_dropdown.set_selected(i);
+                                    already_set = true;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+
+                    if already_set {
+                        return;
+                    }
+
                     inner.model_list.append("Loading...");
                     inner.options_vbox.set_visible(false);
 
