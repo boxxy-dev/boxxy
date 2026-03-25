@@ -29,14 +29,14 @@ impl AppWindow {
         static CSS_REGISTERED: OnceLock<()> = OnceLock::new();
         CSS_REGISTERED.get_or_init(|| {
             let provider = gtk::CssProvider::new();
-            provider.load_from_resource("/play/mii/Boxxy/style.css");
+            provider.load_from_resource("/dev/boxxy/BoxxyTerminal/style.css");
             if let Some(display) = gtk::gdk::Display::default() {
                 gtk::style_context_add_provider_for_display(
                     &display,
                     &provider,
                     gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
                 );
-                gtk::IconTheme::for_display(&display).add_resource_path("/play/mii/Boxxy/icons");
+                gtk::IconTheme::for_display(&display).add_resource_path("/dev/boxxy/BoxxyTerminal/icons");
             }
         });
 

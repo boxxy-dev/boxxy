@@ -95,13 +95,13 @@ impl AgentManager {
             .context("Failed to establish P2P connection to agent")?;
 
         let proxy = AgentProxy::builder(&connection)
-            .destination("play.mii.Boxxy.Agent")?
+            .destination("dev.boxxy.BoxxyTerminal.Agent")?
             .build()
             .await
             .context("Failed to create AgentProxy")?;
 
         let claw_proxy = AgentClawProxy::builder(&connection)
-            .destination("play.mii.Boxxy.AgentClaw")?
+            .destination("dev.boxxy.BoxxyTerminal.AgentClaw")?
             .build()
             .await
             .context("Failed to create AgentClawProxy")?;
@@ -174,7 +174,7 @@ impl AgentManager {
                     .lines()
                     .map_while(Result::ok)
                 {
-                    log::warn!("[flatpak-spawn] {}", line);
+                    log::info!("[flatpak-spawn] {}", line);
                 }
             });
         }

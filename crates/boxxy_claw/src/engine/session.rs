@@ -658,7 +658,7 @@ fn spawn_turn(
         }
 
         let data = gtk4::gio::resources_lookup_data(
-            "/play/mii/Boxxy/prompts/claw.md",
+            "/dev/boxxy/BoxxyTerminal/prompts/claw.md",
             gtk4::gio::ResourceLookupFlags::NONE,
         )
         .expect("Failed to load claw prompt resource");

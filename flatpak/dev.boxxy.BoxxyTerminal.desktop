@@ -2,12 +2,12 @@
 Name=Boxxy Terminal
 Comment=A modern terminal emulator with AI assistant
 Exec=boxxy-terminal
-Icon=play.mii.Boxxy
+Icon=dev.boxxy.BoxxyTerminal
 Type=Application
 Categories=System;TerminalEmulator;
 Terminal=false
 StartupNotify=true
-StartupWMClass=play.mii.Boxxy
+StartupWMClass=dev.boxxy.BoxxyTerminal
 Keywords=terminal;shell;console;
 Actions=new-window;
 

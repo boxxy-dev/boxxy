@@ -15,7 +15,7 @@ pub fn populate_about_page(page: &adw::PreferencesPage) -> Box<dyn Fn(&str) -> b
         .build();
 
     let logo = gtk::Image::builder()
-        .icon_name("play.mii.Boxxy")
+        .icon_name("dev.boxxy.BoxxyTerminal")
         .pixel_size(128)
         .halign(gtk::Align::Center)
         .build();
@@ -63,7 +63,7 @@ pub fn populate_about_page(page: &adw::PreferencesPage) -> Box<dyn Fn(&str) -> b
     let ext_icon1 = gtk::Image::from_icon_name("external-link-symbolic");
     let site_row = adw::ActionRow::builder()
         .title("Website")
-        .subtitle("https://github.com/miifrommera/boxxy/")
+        .subtitle("https://boxxy.dev")
         .activatable(true)
         .build();
     site_row.add_suffix(&ext_icon1);

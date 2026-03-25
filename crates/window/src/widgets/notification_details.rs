@@ -9,7 +9,7 @@ mod imp {
     use super::*;
 
     #[derive(Default, CompositeTemplate)]
-    #[template(resource = "/play/mii/Boxxy/ui/widgets/notification_details.ui")]
+    #[template(resource = "/dev/boxxy/BoxxyTerminal/ui/widgets/notification_details.ui")]
     pub struct BoxxyNotificationDetails {
         #[template_child]
         pub title: TemplateChild<gtk::Label>,

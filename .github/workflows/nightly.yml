@@ -60,8 +60,8 @@ jobs:
 
             cp target/release/boxxy-terminal "${PKG_NAME}/bin/"
             cp target/release/boxxy-agent "${PKG_NAME}/bin/"
-            cp flatpak/play.mii.Boxxy.desktop "${PKG_NAME}/share/applications/"
-            cp resources/icons/play.mii.Boxxy.png "${PKG_NAME}/share/icons/hicolor/scalable/apps/"
+            cp flatpak/dev.boxxy.BoxxyTerminal.desktop "${PKG_NAME}/share/applications/"
+            cp resources/icons/dev.boxxy.BoxxyTerminal.png "${PKG_NAME}/share/icons/hicolor/scalable/apps/"
 
             tar -czvf "${PKG_NAME}.tar.gz" "${PKG_NAME}"
             sha256sum "${PKG_NAME}.tar.gz" | awk '{print $1}' > "${PKG_NAME}.tar.gz.sha256"

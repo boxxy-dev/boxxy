@@ -6,7 +6,7 @@ use zbus::interface;
 #[derive(Default)]
 pub struct AgentClaw;
 
-#[interface(name = "play.mii.Boxxy.AgentClaw")]
+#[interface(name = "dev.boxxy.BoxxyTerminal.AgentClaw")]
 impl AgentClaw {
     /// Execute a non-interactive shell command on the host.
     async fn exec_shell(&self, command: String) -> fdo::Result<(i32, String, String)> {

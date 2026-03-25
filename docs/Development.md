@@ -37,12 +37,12 @@ python3 flatpak/flatpak-cargo-generator.py Cargo.lock -o flatpak/cargo-sources.j
 Build repo and export bundle
 
 ```
-flatpak-builder --repo=repo --force-clean build-dir flatpak/play.mii.Boxxy.yml
-flatpak build-bundle repo boxxy.flatpak play.mii.Boxxy
+flatpak-builder --repo=repo --force-clean build-dir flatpak/dev.boxxy.BoxxyTerminal.yml
+flatpak build-bundle repo boxxy.flatpak dev.boxxy.BoxxyTerminal
 ```
 
 Or Build & Install in single command
 
 ```
-flatpak-builder --user --install --force-clean build-dir flatpak/play.mii.Boxxy.yml
+flatpak-builder --user --install --force-clean build-dir flatpak/dev.boxxy.BoxxyTerminal.yml
 ```

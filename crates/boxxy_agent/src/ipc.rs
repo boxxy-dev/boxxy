@@ -10,8 +10,8 @@ use zbus::proxy;
 use zbus::zvariant::{OwnedFd, Type};
 
 #[proxy(
-    interface = "play.mii.Boxxy.Agent",
-    default_path = "/play/mii/Boxxy/Agent",
+    interface = "dev.boxxy.BoxxyTerminal.Agent",
+    default_path = "/dev/boxxy/BoxxyTerminal/Agent",
     gen_blocking = false
 )]
 pub trait Agent {
@@ -32,8 +32,8 @@ pub trait Agent {
 }
 
 #[proxy(
-    interface = "play.mii.Boxxy.AgentClaw",
-    default_path = "/play/mii/Boxxy/AgentClaw",
+    interface = "dev.boxxy.BoxxyTerminal.AgentClaw",
+    default_path = "/dev/boxxy/BoxxyTerminal/AgentClaw",
     gen_blocking = false
 )]
 pub trait AgentClaw {
@@ -104,7 +104,7 @@ impl BoxxyAgent {
     }
 }
 
-#[interface(name = "play.mii.Boxxy.Agent")]
+#[interface(name = "dev.boxxy.BoxxyTerminal.Agent")]
 impl BoxxyAgent {
     /// Return the preferred login shell for the current user.
     async fn get_preferred_shell(&self) -> fdo::Result<String> {

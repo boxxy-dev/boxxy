@@ -46,7 +46,7 @@ pub async fn flush_history(
     }
 
     let data = gtk4::gio::resources_lookup_data(
-        "/play/mii/Boxxy/prompts/memory_flush.md",
+        "/dev/boxxy/BoxxyTerminal/prompts/memory_flush.md",
         gtk4::gio::ResourceLookupFlags::NONE,
     )
     .expect("Failed to load memory_flush prompt resource");

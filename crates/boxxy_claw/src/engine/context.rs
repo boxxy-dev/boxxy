@@ -46,7 +46,7 @@ pub async fn retrieve_memories(
         let settings = boxxy_preferences::Settings::load();
 
         let data = gtk4::gio::resources_lookup_data(
-            "/play/mii/Boxxy/prompts/memory_expansion.md",
+            "/dev/boxxy/BoxxyTerminal/prompts/memory_expansion.md",
             gtk4::gio::ResourceLookupFlags::NONE,
         )
         .expect("Failed to load memory_expansion prompt resource");
@@ -151,7 +151,7 @@ pub async fn summarize_and_store(
     let settings = boxxy_preferences::Settings::load();
 
     let data = gtk4::gio::resources_lookup_data(
-        "/play/mii/Boxxy/prompts/memory_summarizer.md",
+        "/dev/boxxy/BoxxyTerminal/prompts/memory_summarizer.md",
         gtk4::gio::ResourceLookupFlags::NONE,
     )
     .expect("Failed to load memory_summarizer prompt resource");

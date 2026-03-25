@@ -5,9 +5,9 @@ fn main() {
 
     let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
 <gresources>
-  <gresource prefix="/play/mii/Boxxy">
+  <gresource prefix="/dev/boxxy/BoxxyTerminal">
     <file compressed="true">style.css</file>
-    <file compressed="true" alias="icons/play.mii.Boxxy.png">icons/play.mii.Boxxy.png</file>
+    <file compressed="true" alias="icons/dev.boxxy.BoxxyTerminal.png">icons/dev.boxxy.BoxxyTerminal.png</file>
     <file compressed="true" alias="icons/paper-plane-symbolic.svg">icons/paper-plane-symbolic.svg</file>
     <file compressed="true" alias="icons/edit-clear-all-symbolic.svg">icons/edit-clear-all-symbolic.svg</file>
     <file compressed="true" alias="icons/split-close-symbolic.svg">icons/split-close-symbolic.svg</file>
@@ -51,7 +51,7 @@ fn main() {
 
     // Rerun if any palette file is added/removed/modified.
     println!("cargo:rerun-if-changed=../../resources/style.css");
-    println!("cargo:rerun-if-changed=../../resources/icons/play.mii.Boxxy.png");
+    println!("cargo:rerun-if-changed=../../resources/icons/dev.boxxy.BoxxyTerminal.png");
     println!("cargo:rerun-if-changed=../../resources/icons/paper-plane-symbolic.svg");
     println!("cargo:rerun-if-changed=../../resources/icons/edit-clear-all-symbolic.svg");
     println!("cargo:rerun-if-changed=../../resources/icons/split-close-symbolic.svg");

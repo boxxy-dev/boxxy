@@ -32,7 +32,7 @@ impl PreferencesComponent {
         let settings_rc = Rc::new(RefCell::new(Settings::load()));
         let cb_rc = Rc::new(on_settings_changed);
 
-        let builder = gtk::Builder::from_resource("/play/mii/Boxxy/ui/preferences.ui");
+        let builder = gtk::Builder::from_resource("/dev/boxxy/BoxxyTerminal/ui/preferences.ui");
         let dialog: adw::Dialog = builder.object("dialog").unwrap();
         let stack: adw::ViewStack = builder.object("stack").unwrap();
         let content_title: adw::WindowTitle = builder.object("content_title").unwrap();

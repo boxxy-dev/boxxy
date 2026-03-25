@@ -64,13 +64,13 @@ async fn main() -> Result<()> {
 
     let _conn = Builder::unix_stream(stream)
         .p2p()
-        .serve_at("/play/mii/Boxxy/Agent", BoxxyAgent::default())?
-        .serve_at("/play/mii/Boxxy/AgentClaw", boxxy_agent::claw::AgentClaw)?
+        .serve_at("/dev/boxxy/BoxxyTerminal/Agent", BoxxyAgent::default())?
+        .serve_at("/dev/boxxy/BoxxyTerminal/AgentClaw", boxxy_agent::claw::AgentClaw)?
         .build()
         .await
         .context("Failed to build zbus connection")?;
 
-    log::info!("Boxxy Agent serving at /play/mii/Boxxy/Agent and /play/mii/Boxxy/AgentClaw");
+    log::info!("Boxxy Agent serving at /dev/boxxy/BoxxyTerminal/Agent and /dev/boxxy/BoxxyTerminal/AgentClaw");
 
     #[cfg(target_os = "linux")]
     unsafe {

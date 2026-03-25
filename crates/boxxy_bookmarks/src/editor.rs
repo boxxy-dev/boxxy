@@ -331,7 +331,7 @@ impl BookmarkEditor {
             );
 
             let data = gtk::gio::resources_lookup_data(
-                "/play/mii/Boxxy/prompts/bookmark_generator.md",
+                "/dev/boxxy/BoxxyTerminal/prompts/bookmark_generator.md",
                 gtk::gio::ResourceLookupFlags::NONE,
             )
             .expect("Failed to load bookmark generator prompt resource");

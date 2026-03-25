@@ -57,7 +57,7 @@ To ensure the application remains functional across different host distributions
 ## Public Traits & Structs
 
 ### `BoxxyAgent` (struct)
-Implements the `play.mii.Boxxy.Agent` D-Bus interface. Hosted via `zbus`.
+Implements the `dev.boxxy.BoxxyTerminal.Agent` D-Bus interface. Hosted via `zbus`.
 Handles incoming method calls like `create_pty`, `spawn`, `get_cwd`, and `signal_process_group`.
 
 ### `SpawnOptions` (struct)

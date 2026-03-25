@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <gresources>
-  <gresource prefix="/play/mii/Boxxy">
+  <gresource prefix="/dev/boxxy/BoxxyTerminal">
     <file compressed="true">style.css</file>
-    <file compressed="true" alias="icons/play.mii.Boxxy.png">icons/play.mii.Boxxy.png</file>
+    <file compressed="true" alias="icons/dev.boxxy.BoxxyTerminal.png">icons/dev.boxxy.BoxxyTerminal.png</file>
     <file compressed="true" alias="icons/paper-plane-symbolic.svg">icons/paper-plane-symbolic.svg</file>
     <file compressed="true" alias="icons/edit-clear-all-symbolic.svg">icons/edit-clear-all-symbolic.svg</file>
     <file compressed="true" alias="icons/split-close-symbolic.svg">icons/split-close-symbolic.svg</file>

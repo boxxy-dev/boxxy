@@ -79,12 +79,12 @@ main() {
 
     # Setup Desktop File
     echo "Installing desktop entry..."
-    DESKTOP_FILE="$DESKTOP_DIR/play.mii.Boxxy.desktop"
-    cp "$INSTALL_DIR/share/applications/play.mii.Boxxy.desktop" "$DESKTOP_FILE"
+    DESKTOP_FILE="$DESKTOP_DIR/dev.boxxy.BoxxyTerminal.desktop"
+    cp "$INSTALL_DIR/share/applications/dev.boxxy.BoxxyTerminal.desktop" "$DESKTOP_FILE"
     
     # Patch the desktop file with absolute paths
     sed -i "s|Exec=boxxy-terminal|Exec=$INSTALL_DIR/bin/boxxy-terminal|g" "$DESKTOP_FILE"
-    sed -i "s|Icon=play.mii.Boxxy|Icon=$INSTALL_DIR/share/icons/hicolor/scalable/apps/play.mii.Boxxy.png|g" "$DESKTOP_FILE"
+    sed -i "s|Icon=dev.boxxy.BoxxyTerminal|Icon=$INSTALL_DIR/share/icons/hicolor/scalable/apps/dev.boxxy.BoxxyTerminal.png|g" "$DESKTOP_FILE"
 
     # Update icon cache (if tool exists)
     if command -v gtk4-update-icon-cache >/dev/null 2>&1; then

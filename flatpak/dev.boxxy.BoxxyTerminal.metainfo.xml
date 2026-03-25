@@ -2,7 +2,7 @@
 <component type="desktop-application">
 	<metadata_license>CC0-1.0</metadata_license>
 	<project_license>MIT</project_license>
-	<id>play.mii.Boxxy</id>
+	<id>dev.boxxy.BoxxyTerminal</id>
 	<name>Boxxy Terminal</name>
 	<developer id="io.github.miifrommera">
     	<name>Mii</name>
@@ -48,7 +48,7 @@
     <requires>
       <display_length compare="ge">360</display_length>
     </requires>
-  <launchable type="desktop-id">play.mii.Boxxy.desktop</launchable>
+  <launchable type="desktop-id">dev.boxxy.BoxxyTerminal.desktop</launchable>
   <provides>
   	<binary>boxxy-terminal</binary>
   </provides>

@@ -30,7 +30,7 @@ fn main() {
     gio::resources_register_include!("compiled.gresource").expect("Failed to register resources.");
 
     let app = libadwaita::Application::builder()
-        .application_id("play.mii.Boxxy")
+        .application_id("dev.boxxy.BoxxyTerminal")
         .flags(gio::ApplicationFlags::HANDLES_COMMAND_LINE)
         .build();
 

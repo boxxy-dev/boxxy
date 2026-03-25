@@ -400,7 +400,7 @@ impl AiSidebarComponent {
         );
 
         let data = gtk::gio::resources_lookup_data(
-            "/play/mii/Boxxy/prompts/ai_chat.md",
+            "/dev/boxxy/BoxxyTerminal/prompts/ai_chat.md",
             gtk::gio::ResourceLookupFlags::NONE,
         )
         .expect("Failed to load ai_chat prompt resource");
