@@ -5,7 +5,7 @@ Boxxy is the ONLY app you'll ever need ..but, yeah, it does look like a Linux Te
 
 ## Getting Started
 
-Read the [Getting Started](docs/GettingStarted.md) and check news on [Releases](https://github.com/miifrommera/boxxy/releases)
+Read the [Getting Started](https://boxxy.dev/getting-started/) and check news on [Releases](https://github.com/miifrommera/boxxy/releases)
 
 ---
 
@@ -36,7 +36,7 @@ curl -sSf https://raw.githubusercontent.com/miifrommera/boxxy/main/scripts/insta
 Requires GTK 4.22, libAdwaita 1.9; aarch64 not currently supported because of the very slow builds, open an issue if you need it.
 
 ### Flathub
-Flathub submission [Closed](https://github.com/flathub/flathub/pull/8098)
+Flathub submission in progress..
 
 ---
 
@@ -56,7 +56,7 @@ Boxxy has 4 major components:
 
 ## Development
 
-See [Development](docs/Development.md)
+See [Development](https://boxxy.dev/development)
 
 ---
 
