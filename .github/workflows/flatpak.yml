@@ -7,50 +7,63 @@ on:
 
 jobs:
   flatpak:
-    name: "Flatpak"
+    name: Flatpak
     strategy:
+      fail-fast: false
       matrix:
         variant:
           - arch: x86_64
             runner: ubuntu-24.04
           - arch: aarch64
             runner: ubuntu-24.04-arm
+
     runs-on: ${{ matrix.variant.runner }}
 
     container:
       image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-50
       options: --privileged
 
+    defaults:
+      run:
+        shell: bash
+
     steps:
       - uses: actions/checkout@v4
 
       - name: Set short SHA
         id: short_sha
-        shell: bash
         run: echo "short=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
 
       - name: Generate flatpak sources
-        shell: bash
         run: |
           set -euo pipefail
           pip3 install --no-cache-dir aiohttp toml tomlkit
           python3 flatpak/flatpak-cargo-generator.py Cargo.lock -o flatpak/cargo-sources.json
 
-      - name: Add Flatpak remotes
-        shell: bash
+      - name: Prepare container for Flatpak build
         run: |
           set -euo pipefail
+
+          mkdir -p /etc /var/lib/dbus
+
+          if command -v systemd-machine-id-setup >/dev/null 2>&1; then
+            systemd-machine-id-setup
+          else
+            dbus-uuidgen --ensure=/etc/machine-id
+          fi
+
+          ln -sf /etc/machine-id /var/lib/dbus/machine-id
+
           flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
           flatpak remote-add --if-not-exists gnome-nightly https://nightly.gnome.org/gnome-nightly.flatpakrepo
-          flatpak remotes
 
       - name: Build Flatpak
-        shell: bash
         run: |
           set -euo pipefail
 
           flatpak-builder \
             --force-clean \
+            --disable-rofiles-fuse \
             --arch=${{ matrix.variant.arch }} \
             --repo=repo \
             --install-deps-from=flathub \
@@ -67,27 +80,5 @@ jobs:
         with:
           name: flatpak-${{ matrix.variant.arch }}
           path: |
-            LICENSE
-            *.flatpak
-
-  prerelease:
-    name: "build"
-    needs: [flatpak]
-    runs-on: ubuntu-latest
-    steps:
-      - name: Download flatpak artifacts into workspace root
-        uses: actions/download-artifact@v4
-        with:
-          pattern: flatpak-*
-          merge-multiple: true
-          path: .
-
-      - uses: dciborow/action-github-releases@v1.0.1
-        with:
-          repo_token: "${{ secrets.RELEASE_TOKEN }}"
-          prerelease: true
-          automatic_release_tag: "latest"
-          title: "Pre-release"
-          files: |
             LICENSE
             *.flatpak
