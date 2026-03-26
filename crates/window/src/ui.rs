@@ -474,17 +474,17 @@ impl AppWindow {
         let view_stack = adw::ViewStack::new();
 
         let assistant_page = view_stack.add_titled(ai_chat.widget(), Some("assistant"), "AI Chat");
-        assistant_page.set_icon_name(Some("ai-slop-symbolic"));
+        assistant_page.set_icon_name(Some("boxxy-ai-slop-symbolic"));
 
         let claw_page = view_stack.add_titled(claw.widget(), Some("claw"), "Claw");
         claw_page.set_icon_name(Some("boxxyclaw"));
 
         let bookmarks_page =
             view_stack.add_titled(bookmarks_sidebar.widget(), Some("bookmarks"), "Bookmarks");
-        bookmarks_page.set_icon_name(Some("user-bookmarks-symbolic"));
+        bookmarks_page.set_icon_name(Some("boxxy-bookmark-filled-symbolic"));
 
         let themes_page = view_stack.add_titled(theme_selector.widget(), Some("themes"), "Colors");
-        themes_page.set_icon_name(Some("appearance-symbolic"));
+        themes_page.set_icon_name(Some("boxxy-appearance-symbolic"));
 
         view_stack.set_visible_child_name(&app_state.active_sidebar_page);
 
@@ -619,7 +619,7 @@ impl AppWindow {
         content_header.set_title_widget(Some(&tab_bar));
 
         let toggle_sidebar_btn = gtk::Button::builder()
-            .icon_name("sidebar-show-symbolic")
+            .icon_name("boxxy-dock-left-symbolic")
             .tooltip_text("Toggle Sidebar")
             .build();
         let tx_toggle = tx.clone();
@@ -629,7 +629,7 @@ impl AppWindow {
         content_header.pack_start(&toggle_sidebar_btn);
 
         let menu_btn = gtk::Button::builder()
-            .icon_name("open-menu-symbolic")
+            .icon_name("boxxy-open-menu-symbolic")
             .tooltip_text("Menu")
             .build();
         let tx_menu_btn = tx.clone();
@@ -684,7 +684,7 @@ impl AppWindow {
         content_header.pack_end(&claw_indicator);
 
         let bell_indicator = gtk::Image::builder()
-            .icon_name("visual-bell-symbolic")
+            .icon_name("boxxy-visual-bell-symbolic")
             .visible(false)
             .margin_start(6)
             .margin_end(6)

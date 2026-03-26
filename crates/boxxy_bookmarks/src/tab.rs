@@ -102,7 +102,7 @@ impl BookmarksTabComponent {
             name_label.set_hexpand(true);
             header.append(&name_label);
 
-            let run_btn = gtk::Button::from_icon_name("media-playback-start-symbolic");
+            let run_btn = gtk::Button::from_icon_name("boxxy-media-playback-start-symbolic");
             run_btn.add_css_class("flat");
             run_btn.add_css_class("circular");
             run_btn.set_tooltip_text(Some("Run in New Tab"));
@@ -121,7 +121,7 @@ impl BookmarksTabComponent {
             });
             header.append(&run_btn);
 
-            let edit_btn = gtk::Button::from_icon_name("document-edit-symbolic");
+            let edit_btn = gtk::Button::from_icon_name("boxxy-document-edit-symbolic");
             edit_btn.add_css_class("flat");
             edit_btn.add_css_class("circular");
 
@@ -136,7 +136,7 @@ impl BookmarksTabComponent {
             });
             header.append(&edit_btn);
 
-            let delete_btn = gtk::Button::from_icon_name("user-trash-symbolic");
+            let delete_btn = gtk::Button::from_icon_name("boxxy-user-trash-symbolic");
             delete_btn.add_css_class("flat");
             delete_btn.add_css_class("circular");
 
@@ -228,7 +228,7 @@ impl BookmarksTabComponent {
             missing_box.set_margin_end(8);
             missing_box.set_halign(gtk::Align::Center);
 
-            let icon = gtk::Image::from_icon_name("dialog-warning-symbolic");
+            let icon = gtk::Image::from_icon_name("boxxy-dialog-warning-symbolic");
             icon.add_css_class("error");
             missing_box.append(&icon);
 
@@ -288,7 +288,7 @@ impl BookmarksTabComponent {
                     } else {
                         widgets
                             .script_icon
-                            .set_icon_name(Some("dialog-warning-symbolic"));
+                            .set_icon_name(Some("boxxy-dialog-warning-symbolic"));
                         widgets.preview_container.set_visible(false);
                         widgets.missing_box.set_visible(true);
                         widgets.run_btn.set_sensitive(false);

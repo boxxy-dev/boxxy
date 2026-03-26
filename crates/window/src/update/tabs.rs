@@ -420,7 +420,7 @@ pub fn open_bookmarks(inner: &mut AppWindowInner) {
         let page = inner.tab_view.insert(&widget, 0);
         page.set_title("Bookmarks");
         inner.tab_view.set_page_pinned(&page, true);
-        page.set_icon(Some(&gio::ThemedIcon::new("user-bookmarks-symbolic")));
+        page.set_icon(Some(&gio::ThemedIcon::new("boxxy-user-bookmarks-symbolic")));
 
         inner.bookmarks_controller = Some(controller);
         inner.bookmarks_page = Some(page.clone());

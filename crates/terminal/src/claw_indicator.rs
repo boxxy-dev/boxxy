@@ -59,7 +59,7 @@ impl ClawIndicator {
         hbox.append(&main_btn);
 
         let cancel_btn = gtk::Button::builder()
-            .icon_name("window-close-symbolic")
+            .icon_name("boxxy-window-close-symbolic")
             .css_classes(["flat", "circular"])
             .tooltip_text("Cancel")
             .build();
@@ -117,7 +117,7 @@ impl ClawIndicator {
         *self.action_type.borrow_mut() = 1;
         self.spinner.stop();
         self.spinner.set_visible(false);
-        self.icon.set_icon_name(Some("dialog-warning-symbolic"));
+        self.icon.set_icon_name(Some("boxxy-dialog-warning-symbolic"));
         self.icon.set_css_classes(&["warning"]);
         self.label.set_text("Fix Available");
         self.main_btn.set_can_focus(true);

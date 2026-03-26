@@ -81,7 +81,7 @@ impl TabContextMenu {
 
         let title_entry = gtk4::Entry::builder()
             .placeholder_text("Set Title")
-            .secondary_icon_name("edit-clear-symbolic")
+            .secondary_icon_name("boxxy-edit-clear-symbolic")
             .margin_top(4)
             .margin_bottom(4)
             .build();
@@ -154,7 +154,7 @@ impl TabContextMenu {
                 .add_provider(&provider, gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION);
 
             if c == TabColor::Default {
-                btn.set_icon_name("edit-clear-symbolic");
+                btn.set_icon_name("boxxy-edit-clear-symbolic");
             }
 
             let cp_inner = cp.clone();

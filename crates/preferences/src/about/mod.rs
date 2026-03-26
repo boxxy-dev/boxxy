@@ -34,7 +34,7 @@ pub fn populate_about_page(page: &adw::PreferencesPage) -> Box<dyn Fn(&str) -> b
     let group = adw::PreferencesGroup::builder().build();
     let mut rows = Vec::new();
 
-    let ext_icon0 = gtk::Image::from_icon_name("external-link-symbolic");
+    let ext_icon0 = gtk::Image::from_icon_name("boxxy-external-link-symbolic");
     let version_row = adw::ActionRow::builder()
         .title("Version")
         .subtitle(env!("CARGO_PKG_VERSION"))
@@ -60,7 +60,7 @@ pub fn populate_about_page(page: &adw::PreferencesPage) -> Box<dyn Fn(&str) -> b
         .build();
     rows.push(license_row.clone());
 
-    let ext_icon1 = gtk::Image::from_icon_name("external-link-symbolic");
+    let ext_icon1 = gtk::Image::from_icon_name("boxxy-external-link-symbolic");
     let site_row = adw::ActionRow::builder()
         .title("Website")
         .subtitle("https://boxxy.dev")
@@ -76,7 +76,7 @@ pub fn populate_about_page(page: &adw::PreferencesPage) -> Box<dyn Fn(&str) -> b
             gtk::gio::AppInfo::launch_default_for_uri(&uri, None::<&gtk::gio::AppLaunchContext>);
     });
 
-    let ext_icon2 = gtk::Image::from_icon_name("external-link-symbolic");
+    let ext_icon2 = gtk::Image::from_icon_name("boxxy-external-link-symbolic");
     let issues_row = adw::ActionRow::builder()
         .title("Report an Issue")
         .subtitle("https://github.com/miifrommera/boxxy/issues")

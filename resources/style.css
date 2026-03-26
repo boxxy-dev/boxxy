@@ -463,3 +463,29 @@ boxxyterminalwidget {
   background: rgba(255, 255, 255, 0.1);
 }
 
+
+.search-bar-osd searchentry image.left {
+    -gtk-icon-source: -gtk-icontheme("boxxy-edit-find-symbolic");
+}
+
+/* Global icon overrides */
+image.right-arrow {
+    -gtk-icon-source: -gtk-icontheme("boxxy-right-symbolic");
+}
+spinbutton button.up image, spinbutton button.up image.left, spinbutton button.up image.right, spinbutton button.up > image, button.up > image, spinbutton button.image-button.up image {
+    -gtk-icon-source: -gtk-icontheme("boxxy-plus-symbolic");
+}
+spinbutton button.down image, spinbutton button.down image.left, spinbutton button.down image.right, spinbutton button.down > image, button.down > image, spinbutton button.image-button.down image {
+    -gtk-icon-source: -gtk-icontheme("boxxy-minus-symbolic");
+}
+entry image.clear, passwordentryrow image.clear, searchentry image.clear {
+    -gtk-icon-source: -gtk-icontheme("boxxy-entry-clear-symbolic");
+}
+
+/* Additional fallback for AdwSpinRow */
+spinrow button.up image {
+    -gtk-icon-source: -gtk-icontheme("boxxy-plus-symbolic");
+}
+spinrow button.down image {
+    -gtk-icon-source: -gtk-icontheme("boxxy-minus-symbolic");
+}

@@ -52,12 +52,12 @@ impl SearchBarComponent {
         entry.set_hexpand(true);
         entry.set_placeholder_text(Some("Search History"));
 
-        let up_btn = gtk::Button::from_icon_name("go-up-symbolic");
-        let down_btn = gtk::Button::from_icon_name("go-down-symbolic");
+        let up_btn = gtk::Button::from_icon_name("boxxy-up-symbolic");
+        let down_btn = gtk::Button::from_icon_name("boxxy-down-symbolic");
 
         // ── Settings button (plain Button, not MenuButton) ──────────────────
         let settings_btn = gtk::Button::new();
-        settings_btn.set_icon_name("emblem-system-symbolic");
+        settings_btn.set_icon_name("boxxy-settings-symbolic");
 
         // Build the popover and parent it directly to the button widget.
         // Parenting here (not via MenuButton::set_popover) gives us full
@@ -99,7 +99,7 @@ impl SearchBarComponent {
             }
         });
 
-        let close_btn = gtk::Button::from_icon_name("window-close-symbolic");
+        let close_btn = gtk::Button::from_icon_name("boxxy-cross-small-symbolic");
 
         container.append(&entry);
         container.append(&up_btn);

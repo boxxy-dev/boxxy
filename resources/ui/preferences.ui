@@ -191,7 +191,7 @@
                                         <property name="spacing">6</property>
                                         <child>
                                           <object class="GtkButton" id="clear_bg_image_btn">
-                                            <property name="icon-name">edit-clear-symbolic</property>
+                                            <property name="icon-name">boxxy-edit-clear-symbolic</property>
                                             <property name="tooltip-text" translatable="yes">Clear Background Image</property>
                                             <property name="css-classes">flat</property>
                                           </object>
@@ -211,7 +211,7 @@
                                     <property name="activatable">True</property>
                                     <child type="suffix">
                                       <object class="GtkImage">
-                                        <property name="icon-name">go-next-symbolic</property>
+                                        <property name="icon-name">boxxy-right-symbolic</property>
                                       </object>
                                     </child>
                                   </object>
@@ -406,7 +406,7 @@
                                     <property name="action-name">win.model-selection</property>
                                     <child type="suffix">
                                       <object class="GtkImage">
-                                        <property name="icon-name">external-link-symbolic</property>
+                                        <property name="icon-name">boxxy-external-link-symbolic</property>
                                         <property name="valign">center</property>
                                       </object>
                                     </child>
@@ -546,7 +546,7 @@
                                     <property name="subtitle" translatable="yes">Manage settings and configuration directly</property>
                                     <child type="suffix">
                                       <object class="GtkButton" id="open_config_btn">
-                                        <property name="icon-name">folder-open-symbolic</property>
+                                        <property name="icon-name">boxxy-folder-open-symbolic</property>
                                         <property name="valign">center</property>
                                         <property name="css-classes">flat circular</property>
                                       </object>

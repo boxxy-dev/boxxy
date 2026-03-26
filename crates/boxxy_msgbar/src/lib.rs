@@ -312,7 +312,7 @@ impl MsgBarComponent {
         chip.append(&lbl);
 
         let close_btn = gtk::Button::builder()
-            .icon_name("window-close-symbolic")
+            .icon_name("boxxy-window-close-symbolic")
             .css_classes(["flat", "circular"])
             .build();
 

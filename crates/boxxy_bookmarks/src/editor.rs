@@ -50,7 +50,7 @@ impl BookmarkEditor {
         top_bar.append(&spacer);
 
         let close_btn = gtk::Button::builder()
-            .icon_name("window-close-symbolic")
+            .icon_name("boxxy-window-close-symbolic")
             .valign(gtk::Align::Center)
             .build();
         close_btn.add_css_class("flat");

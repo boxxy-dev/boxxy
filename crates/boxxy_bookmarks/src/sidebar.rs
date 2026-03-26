@@ -109,7 +109,7 @@ impl BookmarksSidebarComponent {
                 script_icon.set_icon_name(Some("console"));
             }
         } else {
-            script_icon.set_icon_name(Some("dialog-warning-symbolic"));
+            script_icon.set_icon_name(Some("boxxy-dialog-warning-symbolic"));
         }
 
         hbox.append(&script_icon);

@@ -134,7 +134,7 @@ impl ClawSidebarComponent {
 
         // 1. Clear Button
         let clear_btn = gtk::Button::builder()
-            .icon_name("edit-clear-all-symbolic")
+            .icon_name("boxxy-edit-clear-all-symbolic")
             .css_classes(["flat"])
             .tooltip_text("Clear History")
             .build();
@@ -154,7 +154,7 @@ impl ClawSidebarComponent {
 
         // 2. Play/Stop Button
         let toggle_btn = gtk::Button::builder()
-            .icon_name("media-playback-start-symbolic")
+            .icon_name("boxxy-media-playback-start-symbolic")
             .css_classes(["flat", "suggested-action"])
             .tooltip_text("Activate Claw")
             .build();
@@ -168,7 +168,7 @@ impl ClawSidebarComponent {
 
         // 3. Proactive Mode Button
         let mode_toggle_btn = gtk::Button::builder()
-            .icon_name("walking2-symbolic")
+            .icon_name("boxxy-walking2-symbolic")
             .css_classes(["flat"])
             .tooltip_text("Lazy Diagnosis Mode")
             .build();
@@ -244,13 +244,13 @@ impl ClawSidebarComponent {
     pub fn update_diagnosis_mode(&self, mode: &boxxy_preferences::config::ClawAutoDiagnosisMode) {
         match mode {
             boxxy_preferences::config::ClawAutoDiagnosisMode::Proactive => {
-                self.mode_toggle_btn.set_icon_name("running-symbolic");
+                self.mode_toggle_btn.set_icon_name("boxxy-running-symbolic");
                 self.mode_toggle_btn
                     .set_tooltip_text(Some("Proactive Diagnosis Mode"));
                 self.mode_toggle_btn.add_css_class("accent");
             }
             boxxy_preferences::config::ClawAutoDiagnosisMode::Lazy => {
-                self.mode_toggle_btn.set_icon_name("walking2-symbolic");
+                self.mode_toggle_btn.set_icon_name("boxxy-walking2-symbolic");
                 self.mode_toggle_btn
                     .set_tooltip_text(Some("Lazy Diagnosis Mode"));
                 self.mode_toggle_btn.remove_css_class("accent");
@@ -262,13 +262,13 @@ impl ClawSidebarComponent {
         self.is_active.set(active);
         if active {
             self.toggle_btn
-                .set_icon_name("media-playback-stop-symbolic");
+                .set_icon_name("boxxy-media-playback-stop-symbolic");
             self.toggle_btn.set_tooltip_text(Some("Deactivate Claw"));
             self.toggle_btn.remove_css_class("suggested-action");
             self.toggle_btn.add_css_class("destructive-action");
         } else {
             self.toggle_btn
-                .set_icon_name("media-playback-start-symbolic");
+                .set_icon_name("boxxy-media-playback-start-symbolic");
             self.toggle_btn.set_tooltip_text(Some("Activate Claw"));
             self.toggle_btn.remove_css_class("destructive-action");
             self.toggle_btn.add_css_class("suggested-action");
@@ -378,7 +378,7 @@ pub fn add_suggested_row(
     vbox.set_margin_end(8);
 
     let header = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-    let icon = gtk::Image::from_icon_name("dialog-warning-symbolic");
+    let icon = gtk::Image::from_icon_name("boxxy-dialog-warning-symbolic");
     icon.add_css_class("warning");
     header.append(&icon);
 

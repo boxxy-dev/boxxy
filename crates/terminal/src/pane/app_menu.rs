@@ -84,24 +84,24 @@ impl AppMenuComponent {
         let split_model = gio::Menu::new();
 
         let split_v = gio::MenuItem::new(None, Some("win.split-vertical"));
-        split_v.set_attribute_value("verb-icon", Some(&"split-vertical-symbolic".to_variant()));
+        split_v.set_attribute_value("verb-icon", Some(&"boxxy-split-vertical-symbolic".to_variant()));
         split_model.append_item(&split_v);
 
         let split_h = gio::MenuItem::new(None, Some("win.split-horizontal"));
-        split_h.set_attribute_value("verb-icon", Some(&"split-horizontal-symbolic".to_variant()));
+        split_h.set_attribute_value("verb-icon", Some(&"boxxy-split-horizontal-symbolic".to_variant()));
         split_model.append_item(&split_h);
 
         let toggle_max = gio::MenuItem::new(None, Some("win.toggle-maximize"));
         let max_icon = if ctx.is_maximized {
-            "split-unmaximize-symbolic"
+            "boxxy-split-unmaximize-symbolic"
         } else {
-            "split-maximize-symbolic"
+            "boxxy-split-maximize-symbolic"
         };
         toggle_max.set_attribute_value("verb-icon", Some(&max_icon.to_variant()));
         split_model.append_item(&toggle_max);
 
         let close_split = gio::MenuItem::new(None, Some("win.close-split"));
-        close_split.set_attribute_value("verb-icon", Some(&"split-close-symbolic".to_variant()));
+        close_split.set_attribute_value("verb-icon", Some(&"boxxy-split-close-symbolic".to_variant()));
         split_model.append_item(&close_split);
 
         let split_section_item = gio::MenuItem::new_section(None, &split_model);

@@ -65,7 +65,7 @@ impl AiSidebarComponent {
         input_entry.set_buffer(&input_buffer);
         input_box.append(&input_entry);
 
-        let action_btn = gtk::Button::from_icon_name("paper-plane-symbolic");
+        let action_btn = gtk::Button::from_icon_name("boxxy-paper-plane-symbolic");
         action_btn.set_tooltip_text(Some("Send"));
         input_box.append(&action_btn);
 
@@ -338,7 +338,7 @@ impl AiSidebarComponent {
             task.abort();
         }
         inner.is_loading = false;
-        inner.action_btn.set_icon_name("paper-plane-symbolic");
+        inner.action_btn.set_icon_name("boxxy-paper-plane-symbolic");
         inner.action_btn.set_tooltip_text(Some("Send"));
         inner.input_entry.grab_focus();
     }
@@ -383,7 +383,7 @@ impl AiSidebarComponent {
         inner.is_loading = true;
         inner
             .action_btn
-            .set_icon_name("media-playback-stop-symbolic");
+            .set_icon_name("boxxy-media-playback-stop-symbolic");
         inner.action_btn.set_tooltip_text(Some("Stop Generating"));
 
         inner.input_entry.grab_focus();
@@ -442,7 +442,7 @@ impl AiSidebarComponent {
         inner.message_list.append(&build_message_widget(&ai_msg));
 
         inner.is_loading = false;
-        inner.action_btn.set_icon_name("paper-plane-symbolic");
+        inner.action_btn.set_icon_name("boxxy-paper-plane-symbolic");
         inner.action_btn.set_tooltip_text(Some("Send"));
 
         Self::smart_scroll(&inner.scroll_adj);

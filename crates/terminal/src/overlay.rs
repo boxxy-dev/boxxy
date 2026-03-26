@@ -128,7 +128,7 @@ impl TerminalOverlay {
             .build();
 
         let reply_btn = gtk::Button::builder()
-            .icon_name("paper-plane-symbolic")
+            .icon_name("boxxy-paper-plane-symbolic")
             .css_classes(["flat"])
             .tooltip_text("Send Reply")
             .build();
@@ -163,7 +163,7 @@ impl TerminalOverlay {
         action_box.set_halign(gtk::Align::End);
 
         let inspect_btn = gtk::Button::builder()
-            .icon_name("bug-symbolic")
+            .icon_name("boxxy-bug-symbolic")
             .css_classes(["flat"])
             .tooltip_text("Open in Sidebar")
             .build();
@@ -390,7 +390,7 @@ impl TerminalOverlay {
                 self.icon.set_icon_name(Some("boxxyclaw"));
             }
             OverlayMode::Bookmark => {
-                self.icon.set_icon_name(Some("user-bookmarks-symbolic"));
+                self.icon.set_icon_name(Some("boxxy-user-bookmarks-symbolic"));
             }
         }
 

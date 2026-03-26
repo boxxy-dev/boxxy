@@ -13,7 +13,7 @@
         <property name="spacing">8</property>
         <child>
           <object class="GtkImage" id="icon">
-            <property name="icon-name">software-update-available-symbolic</property>
+            <property name="icon-name">boxxy-up-arrow-in-a-star-symbolic</property>
           </object>
         </child>
         <child>

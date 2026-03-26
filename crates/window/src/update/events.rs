@@ -20,7 +20,7 @@ pub fn handle_terminal_event(
                     page.set_title(&title);
                     if Some(&page) != inner.tab_view.selected_page().as_ref() {
                         page.set_indicator_icon(Some(&gtk4::gio::ThemedIcon::new(
-                            "visual-bell-symbolic",
+                            "boxxy-visual-bell-symbolic",
                         )));
                         page.set_indicator_activatable(false);
                     }
@@ -39,7 +39,7 @@ pub fn handle_terminal_event(
                 let page = inner.tab_view.page(widget);
                 if Some(&page) != inner.tab_view.selected_page().as_ref() {
                     page.set_indicator_icon(Some(&gtk4::gio::ThemedIcon::new(
-                        "visual-bell-symbolic",
+                        "boxxy-visual-bell-symbolic",
                     )));
                     page.set_indicator_activatable(false);
                 } else {

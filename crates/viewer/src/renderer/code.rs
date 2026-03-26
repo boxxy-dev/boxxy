@@ -49,7 +49,7 @@ impl BlockRenderer for CodeRenderer {
             header.append(&lang_label);
 
             let copy_btn = gtk::Button::builder()
-                .icon_name("edit-copy-symbolic")
+                .icon_name("boxxy-edit-copy-symbolic")
                 .css_classes(["flat", "circular"])
                 .tooltip_text("Copy to clipboard")
                 .valign(gtk::Align::Center)
@@ -60,12 +60,12 @@ impl BlockRenderer for CodeRenderer {
                 if let Some(display) = gtk::gdk::Display::default() {
                     let clipboard = display.clipboard();
                     clipboard.set_text(&code_clone);
-                    btn.set_icon_name("object-select-symbolic");
+                    btn.set_icon_name("boxxy-object-select-symbolic");
                     let b = btn.clone();
                     gtk::glib::timeout_add_local_once(
                         std::time::Duration::from_millis(1500),
                         move || {
-                            b.set_icon_name("edit-copy-symbolic");
+                            b.set_icon_name("boxxy-edit-copy-symbolic");
                         },
                     );
                 }

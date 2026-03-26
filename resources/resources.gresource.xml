@@ -3,27 +3,50 @@
   <gresource prefix="/dev/boxxy/BoxxyTerminal">
     <file compressed="true">style.css</file>
     <file compressed="true" alias="icons/dev.boxxy.BoxxyTerminal.png">icons/dev.boxxy.BoxxyTerminal.png</file>
-    <file compressed="true" alias="icons/paper-plane-symbolic.svg">icons/paper-plane-symbolic.svg</file>
-    <file compressed="true" alias="icons/edit-clear-all-symbolic.svg">icons/edit-clear-all-symbolic.svg</file>
-    <file compressed="true" alias="icons/split-close-symbolic.svg">icons/split-close-symbolic.svg</file>
-    <file compressed="true" alias="icons/split-horizontal-symbolic.svg">icons/split-horizontal-symbolic.svg</file>
-    <file compressed="true" alias="icons/split-maximize-symbolic.svg">icons/split-maximize-symbolic.svg</file>
-    <file compressed="true" alias="icons/split-unmaximize-symbolic.svg">icons/split-unmaximize-symbolic.svg</file>
-    <file compressed="true" alias="icons/split-vertical-symbolic.svg">icons/split-vertical-symbolic.svg</file>
-    <file compressed="true" alias="icons/appearance-symbolic.svg">icons/appearance-symbolic.svg</file>
-    <file compressed="true" alias="icons/ai-slop-symbolic.svg">icons/ai-slop-symbolic.svg</file>
-    <file compressed="true" alias="icons/visual-bell-symbolic.svg">icons/visual-bell-symbolic.svg</file>
-    <file compressed="true" alias="icons/brain-symbolic.svg">icons/brain-symbolic.svg</file>
-    <file compressed="true" alias="icons/chat-symbolic.svg">icons/chat-symbolic.svg</file>
-    <file compressed="true" alias="icons/chat-none-symbolic.svg">icons/chat-none-symbolic.svg</file>
+    <file compressed="true" alias="icons/boxxy-paper-plane-symbolic.svg">icons/boxxy-paper-plane-symbolic.svg</file>
+    <file compressed="true" alias="icons/boxxy-edit-clear-all-symbolic.svg">icons/boxxy-edit-clear-all-symbolic.svg</file>
+    <file compressed="true" alias="icons/boxxy-split-close-symbolic.svg">icons/boxxy-split-close-symbolic.svg</file>
+    <file compressed="true" alias="icons/boxxy-split-horizontal-symbolic.svg">icons/boxxy-split-horizontal-symbolic.svg</file>
+    <file compressed="true" alias="icons/boxxy-split-maximize-symbolic.svg">icons/boxxy-split-maximize-symbolic.svg</file>
+    <file compressed="true" alias="icons/boxxy-split-unmaximize-symbolic.svg">icons/boxxy-split-unmaximize-symbolic.svg</file>
+    <file compressed="true" alias="icons/boxxy-split-vertical-symbolic.svg">icons/boxxy-split-vertical-symbolic.svg</file>
+    <file compressed="true" alias="icons/boxxy-appearance-symbolic.svg">icons/boxxy-appearance-symbolic.svg</file>
+    <file compressed="true" alias="icons/boxxy-ai-slop-symbolic.svg">icons/boxxy-ai-slop-symbolic.svg</file>
+    <file compressed="true" alias="icons/boxxy-visual-bell-symbolic.svg">icons/boxxy-visual-bell-symbolic.svg</file>
+    <file compressed="true" alias="icons/boxxy-brain-symbolic.svg">icons/boxxy-brain-symbolic.svg</file>
+    <file compressed="true" alias="icons/boxxy-chat-symbolic.svg">icons/boxxy-chat-symbolic.svg</file>
+    <file compressed="true" alias="icons/boxxy-chat-none-symbolic.svg">icons/boxxy-chat-none-symbolic.svg</file>
     <file compressed="true" alias="icons/boxxyclaw.svg">icons/boxxyclaw.svg</file>
-    <file compressed="true" alias="icons/running-symbolic.svg">icons/running-symbolic.svg</file>
-    <file compressed="true" alias="icons/walking2-symbolic.svg">icons/walking2-symbolic.svg</file>
-    <file compressed="true" alias="icons/bug-symbolic.svg">icons/bug-symbolic.svg</file>
-    <file compressed="true" alias="icons/user-bookmarks-symbolic.svg">icons/user-bookmarks-symbolic.svg</file>
-    <file compressed="true" alias="icons/external-link-symbolic.svg">icons/external-link-symbolic.svg</file>
+    <file compressed="true" alias="icons/boxxy-running-symbolic.svg">icons/boxxy-running-symbolic.svg</file>
+    <file compressed="true" alias="icons/boxxy-walking2-symbolic.svg">icons/boxxy-walking2-symbolic.svg</file>
+    <file compressed="true" alias="icons/boxxy-bug-symbolic.svg">icons/boxxy-bug-symbolic.svg</file>
+    <file compressed="true" alias="icons/boxxy-user-bookmarks-symbolic.svg">icons/boxxy-user-bookmarks-symbolic.svg</file>
+    <file compressed="true" alias="icons/boxxy-external-link-symbolic.svg">icons/boxxy-external-link-symbolic.svg</file>
     <file compressed="true" alias="icons/console.svg">icons/console.svg</file>
     <file compressed="true" alias="icons/python.svg">icons/python.svg</file>
+    <file compressed="true" alias="icons/boxxy-dock-left-symbolic.svg">icons/boxxy-dock-left-symbolic.svg</file>
+    <file compressed="true" alias="icons/boxxy-bookmark-filled-symbolic.svg">icons/boxxy-bookmark-filled-symbolic.svg</file>
+    <file compressed="true" alias="icons/boxxy-edit-find-symbolic.svg">icons/boxxy-edit-find-symbolic.svg</file>
+    <file compressed="true" alias="icons/boxxy-up-symbolic.svg">icons/boxxy-up-symbolic.svg</file>
+    <file compressed="true" alias="icons/boxxy-down-symbolic.svg">icons/boxxy-down-symbolic.svg</file>
+    <file compressed="true" alias="icons/boxxy-settings-symbolic.svg">icons/boxxy-settings-symbolic.svg</file>
+    <file compressed="true" alias="icons/boxxy-cross-small-symbolic.svg">icons/boxxy-cross-small-symbolic.svg</file>
+    <file compressed="true" alias="icons/boxxy-right-symbolic.svg">icons/boxxy-right-symbolic.svg</file>
+    <file compressed="true" alias="icons/boxxy-plus-symbolic.svg">icons/boxxy-plus-symbolic.svg</file>
+    <file compressed="true" alias="icons/boxxy-minus-symbolic.svg">icons/boxxy-minus-symbolic.svg</file>
+    <file compressed="true" alias="icons/boxxy-entry-clear-symbolic.svg">icons/boxxy-entry-clear-symbolic.svg</file>
+    <file compressed="true" alias="icons/boxxy-dialog-warning-symbolic.svg">icons/boxxy-dialog-warning-symbolic.svg</file>
+    <file compressed="true" alias="icons/boxxy-document-edit-symbolic.svg">icons/boxxy-document-edit-symbolic.svg</file>
+    <file compressed="true" alias="icons/boxxy-edit-clear-symbolic.svg">icons/boxxy-edit-clear-symbolic.svg</file>
+    <file compressed="true" alias="icons/boxxy-edit-copy-symbolic.svg">icons/boxxy-edit-copy-symbolic.svg</file>
+    <file compressed="true" alias="icons/boxxy-folder-open-symbolic.svg">icons/boxxy-folder-open-symbolic.svg</file>
+    <file compressed="true" alias="icons/boxxy-media-playback-start-symbolic.svg">icons/boxxy-media-playback-start-symbolic.svg</file>
+    <file compressed="true" alias="icons/boxxy-media-playback-stop-symbolic.svg">icons/boxxy-media-playback-stop-symbolic.svg</file>
+    <file compressed="true" alias="icons/boxxy-object-select-symbolic.svg">icons/boxxy-object-select-symbolic.svg</file>
+    <file compressed="true" alias="icons/boxxy-up-arrow-in-a-star-symbolic.svg">icons/boxxy-up-arrow-in-a-star-symbolic.svg</file>
+    <file compressed="true" alias="icons/boxxy-user-trash-symbolic.svg">icons/boxxy-user-trash-symbolic.svg</file>
+    <file compressed="true" alias="icons/boxxy-window-close-symbolic.svg">icons/boxxy-window-close-symbolic.svg</file>
+    <file compressed="true" alias="icons/boxxy-open-menu-symbolic.svg">icons/boxxy-open-menu-symbolic.svg</file>
     <file compressed="true" alias="prompts/ai_chat.md">prompts/ai_chat.md</file>
     <file compressed="true" alias="prompts/claw.md">prompts/claw.md</file>
     <file compressed="true" alias="prompts/bookmark_generator.md">prompts/bookmark_generator.md</file>
