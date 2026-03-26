@@ -83,7 +83,12 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
             inner.preferences.show(&inner.window.clone().upcast());
         }
         AppInput::OpenInFiles => {
-            // Not implemented in window_state.rs but present in state.rs
+            if let Some(page) = inner.tab_view.selected_page() {
+                let child = page.child();
+                if let Some(tc) = inner.tabs.iter().find(|c| c.controller.widget() == &child) {
+                    tc.controller.open_in_files();
+                }
+            }
         }
         AppInput::ShowAppMenu(x, y) => {
             let rect = gtk4::gdk::Rectangle::new(x as i32, y as i32, 0, 0);

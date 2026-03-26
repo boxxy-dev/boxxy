@@ -611,11 +611,30 @@ impl TerminalPaneComponent {
             .working_dir()
             .unwrap_or_else(|| std::env::var("HOME").unwrap_or_default());
         let uri = if wd.starts_with("file://") {
-            wd
+            wd.clone()
         } else {
             format!("file://{}", wd)
         };
-        let _ = gio::AppInfo::launch_default_for_uri(&uri, None::<&gio::AppLaunchContext>);
+        
+        let path = wd.strip_prefix("file://").unwrap_or(&wd).to_string();
+
+        gtk4::glib::spawn_future_local(async move {
+            if boxxy_ai_core::utils::is_flatpak() {
+                if let Ok(dir) = std::fs::File::open(&path) {
+                    use std::os::fd::AsFd;
+                    let req = ashpd::desktop::open_uri::OpenDirectoryRequest::default()
+                        .send(&dir.as_fd())
+                        .await;
+                    if let Err(e) = req {
+                        eprintln!("Failed to open directory via ashpd: {}", e);
+                    }
+                } else {
+                    eprintln!("Failed to open directory for ashpd: {}", path);
+                }
+            } else {
+                let _ = gio::AppInfo::launch_default_for_uri(&uri, None::<&gio::AppLaunchContext>);
+            }
+        });
     }
 
     pub fn update_settings(&self, settings: Settings, palette_opt: Option<Palette>) {
