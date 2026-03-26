@@ -28,7 +28,7 @@ jobs:
         shell: bash
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Set short SHA
         id: short_sha
@@ -76,7 +76,7 @@ jobs:
             boxxy-${{ matrix.variant.arch }}-${{ steps.short_sha.outputs.short }}.flatpak \
             dev.boxxy.BoxxyTerminal
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: flatpak-${{ matrix.variant.arch }}
           path: |
@@ -89,7 +89,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Download flatpak artifacts into workspace root
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           pattern: flatpak-*
           merge-multiple: true
