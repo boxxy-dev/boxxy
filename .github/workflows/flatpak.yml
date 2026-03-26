@@ -26,24 +26,42 @@ jobs:
 
       - name: Set short SHA
         id: short_sha
+        shell: bash
         run: echo "short=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
 
-      - name: Generate flatpak sources (python container)
-        uses: docker://python:3.11
-        with:
-          args: >
-            bash -lc "set -e;
-            pip install --no-cache-dir aiohttp toml tomlkit &&
-            python3 flatpak/flatpak-cargo-generator.py Cargo.lock -o flatpak/cargo-sources.json
+      - name: Generate flatpak sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          pip3 install --no-cache-dir aiohttp toml tomlkit
+          python3 flatpak/flatpak-cargo-generator.py Cargo.lock -o flatpak/cargo-sources.json
 
-      - uses: flatpak/flatpak-github-actions/flatpak-builder@v6
-        with:
-          repository-name: gnome-nightly
-          repository-url: https://nightly.gnome.org/gnome-nightly.flatpakrepo
-          bundle: boxxy-${{ matrix.variant.arch }}-${{ steps.short_sha.outputs.short }}.flatpak
-          manifest-path: flatpak/dev.boxxy.BoxxyTerminal.yml
-          cache-key: flatpak-builder-${{ github.sha }}
-          arch: ${{ matrix.variant.arch }}
+      - name: Add Flatpak remotes
+        shell: bash
+        run: |
+          set -euo pipefail
+          flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
+          flatpak remote-add --if-not-exists gnome-nightly https://nightly.gnome.org/gnome-nightly.flatpakrepo
+          flatpak remotes
+
+      - name: Build Flatpak
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          flatpak-builder \
+            --force-clean \
+            --arch=${{ matrix.variant.arch }} \
+            --repo=repo \
+            --install-deps-from=flathub \
+            --install-deps-from=gnome-nightly \
+            build-dir \
+            flatpak/dev.boxxy.BoxxyTerminal.yml
+
+          flatpak build-bundle \
+            repo \
+            boxxy-${{ matrix.variant.arch }}-${{ steps.short_sha.outputs.short }}.flatpak \
+            dev.boxxy.BoxxyTerminal
 
       - uses: actions/upload-artifact@v4
         with:
