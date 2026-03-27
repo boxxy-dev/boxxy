@@ -118,7 +118,8 @@ impl TerminalPaneComponent {
 
             // We need a weak ref for the msg_bar callbacks, but inner isn't created yet.
             // We'll use a RefCell<Option<Weak<RefCell<PaneInner>>>> that we fill later.
-            let inner_weak_ref: Rc<RefCell<Option<std::rc::Weak<RefCell<PaneInner>>>>> = Rc::new(RefCell::new(None));
+            let inner_weak_ref: Rc<RefCell<Option<std::rc::Weak<RefCell<PaneInner>>>>> =
+                Rc::new(RefCell::new(None));
             let inner_weak_for_msg = inner_weak_ref.clone();
             let inner_weak_for_cancel = inner_weak_ref.clone();
             let inner_weak_for_active = inner_weak_ref.clone();
@@ -135,7 +136,11 @@ impl TerminalPaneComponent {
 
             let msg_bar = Rc::new(MsgBarComponent::new(
                 move |(query, images)| {
-                    if let Some(inner_arc) = inner_weak_for_msg.borrow().as_ref().and_then(|w| w.upgrade()) {
+                    if let Some(inner_arc) = inner_weak_for_msg
+                        .borrow()
+                        .as_ref()
+                        .and_then(|w| w.upgrade())
+                    {
                         let pane = inner_arc.borrow().terminal.clone();
                         pane.set_focusable(true);
                         pane.grab_focus();
@@ -143,8 +148,15 @@ impl TerminalPaneComponent {
                         if !is_claw_active_for_msg.get() {
                             is_claw_active_for_msg.set(true);
                             inner_arc.borrow().agent_badge.set_visible(true);
-                            inner_arc.borrow().msg_bar.update_ui(true, is_proactive_for_msg.get());
-                            cb_msg(PaneOutput::ClawStateChanged(id_msg.clone(), true, is_proactive_for_msg.get()));
+                            inner_arc
+                                .borrow()
+                                .msg_bar
+                                .update_ui(true, is_proactive_for_msg.get());
+                            cb_msg(PaneOutput::ClawStateChanged(
+                                id_msg.clone(),
+                                true,
+                                is_proactive_for_msg.get(),
+                            ));
                             let tx = tx_msg.clone();
                             glib::spawn_future_local(async move {
                                 let _ = tx.send(boxxy_claw::engine::ClawMessage::Initialize).await;
@@ -181,7 +193,11 @@ impl TerminalPaneComponent {
                     }
                 },
                 move || {
-                    if let Some(inner_arc) = inner_weak_for_cancel.borrow().as_ref().and_then(|w| w.upgrade()) {
+                    if let Some(inner_arc) = inner_weak_for_cancel
+                        .borrow()
+                        .as_ref()
+                        .and_then(|w| w.upgrade())
+                    {
                         let pane = inner_arc.borrow().terminal.clone();
                         pane.set_focusable(true);
                         pane.grab_focus();
@@ -190,11 +206,22 @@ impl TerminalPaneComponent {
                 move |active| {
                     if is_claw_active_for_active.get() != active {
                         is_claw_active_for_active.set(active);
-                        if let Some(inner_arc) = inner_weak_for_active.borrow().as_ref().and_then(|w| w.upgrade()) {
-                            inner_arc.borrow().msg_bar.update_ui(active, is_proactive_for_active.get());
+                        if let Some(inner_arc) = inner_weak_for_active
+                            .borrow()
+                            .as_ref()
+                            .and_then(|w| w.upgrade())
+                        {
+                            inner_arc
+                                .borrow()
+                                .msg_bar
+                                .update_ui(active, is_proactive_for_active.get());
                             inner_arc.borrow().agent_badge.set_visible(active);
                         }
-                        cb_toggle(PaneOutput::ClawStateChanged(id_toggle.clone(), active, is_proactive_for_active.get()));
+                        cb_toggle(PaneOutput::ClawStateChanged(
+                            id_toggle.clone(),
+                            active,
+                            is_proactive_for_active.get(),
+                        ));
                         let tx = tx_claw_toggle.clone();
                         if active {
                             glib::spawn_future_local(async move {
@@ -210,10 +237,21 @@ impl TerminalPaneComponent {
                 move |proactive| {
                     if is_proactive_for_proactive.get() != proactive {
                         is_proactive_for_proactive.set(proactive);
-                        if let Some(inner_arc) = inner_weak_for_proactive.borrow().as_ref().and_then(|w| w.upgrade()) {
-                            inner_arc.borrow().msg_bar.update_ui(is_claw_active_for_proactive.get(), proactive);
+                        if let Some(inner_arc) = inner_weak_for_proactive
+                            .borrow()
+                            .as_ref()
+                            .and_then(|w| w.upgrade())
+                        {
+                            inner_arc
+                                .borrow()
+                                .msg_bar
+                                .update_ui(is_claw_active_for_proactive.get(), proactive);
                         }
-                        cb_proactive(PaneOutput::ClawStateChanged(id_proactive.clone(), is_claw_active_for_proactive.get(), proactive));
+                        cb_proactive(PaneOutput::ClawStateChanged(
+                            id_proactive.clone(),
+                            is_claw_active_for_proactive.get(),
+                            proactive,
+                        ));
                         let tx = tx_proactive_toggle.clone();
                         let mode = if proactive {
                             boxxy_preferences::config::ClawAutoDiagnosisMode::Proactive
@@ -221,7 +259,9 @@ impl TerminalPaneComponent {
                             boxxy_preferences::config::ClawAutoDiagnosisMode::Lazy
                         };
                         glib::spawn_future_local(async move {
-                            let _ = tx.send(boxxy_claw::engine::ClawMessage::UpdateDiagnosisMode(mode)).await;
+                            let _ = tx
+                                .send(boxxy_claw::engine::ClawMessage::UpdateDiagnosisMode(mode))
+                                .await;
                         });
                     }
                 },
@@ -335,10 +375,11 @@ impl TerminalPaneComponent {
             if is_ctrl && keyval == gtk::gdk::Key::slash {
                 if let Some(rect) = terminal_clone.get_cursor_rect() {
                     terminal_clone.set_focusable(false); // Prevent clicks from stealing focus
-                    
+
                     // Sync the MsgBar state with current pane status
-                    msg_bar_clone.update_ui(is_claw_active_for_focus.get(), is_proactive_for_focus.get());
-                    
+                    msg_bar_clone
+                        .update_ui(is_claw_active_for_focus.get(), is_proactive_for_focus.get());
+
                     msg_bar_clone.show_at_y(rect.y() as i32, rect.height() as i32);
                     // Use a micro-delay to let GTK process the visibility change
                     // before attempting to steal focus from the TerminalWidget.
@@ -709,7 +750,7 @@ impl TerminalPaneComponent {
         } else {
             format!("file://{}", wd)
         };
-        
+
         let path = wd.strip_prefix("file://").unwrap_or(&wd).to_string();
 
         gtk4::glib::spawn_future_local(async move {

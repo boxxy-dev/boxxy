@@ -3,8 +3,8 @@ pub mod split;
 pub mod tabs;
 pub mod window_state;
 
-use gtk4::prelude::*;
 use gtk4::gio;
+use gtk4::prelude::*;
 use libadwaita as adw;
 use libadwaita::prelude::*;
 use std::cell::RefCell;
@@ -263,7 +263,11 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
                 // Get active pane ID from selected tab
                 if let Some(page) = inner.tab_view.selected_page() {
                     let child = page.child();
-                    if let Some(pos) = inner.tabs.iter().position(|c| c.controller.widget() == &child) {
+                    if let Some(pos) = inner
+                        .tabs
+                        .iter()
+                        .position(|c| c.controller.widget() == &child)
+                    {
                         Some(inner.tabs[pos].controller.active_pane_id())
                     } else {
                         None
@@ -281,37 +285,44 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
                         break;
                     }
                 }
-                
+
                 // If we updated the active pane, update the UI
-                if found {
-                    if let Some(page) = inner.tab_view.selected_page() {
+                if found
+                    && let Some(page) = inner.tab_view.selected_page() {
                         let child = page.child();
-                        if let Some(pos) = inner.tabs.iter().position(|c| c.controller.widget() == &child) {
-                            if inner.tabs[pos].controller.active_pane_id() == id {
+                        if let Some(pos) = inner
+                            .tabs
+                            .iter()
+                            .position(|c| c.controller.widget() == &child)
+                            && inner.tabs[pos].controller.active_pane_id() == id {
                                 inner.claw_active = active;
                                 if active {
                                     page.set_icon(Some(&gtk4::gio::ThemedIcon::new("boxxyclaw")));
                                 } else {
                                     page.set_icon(None::<&gio::Icon>);
                                 }
-                                inner.claw.update_ui(inner.claw_active, inner.claw_proactive);
+                                inner
+                                    .claw
+                                    .update_ui(inner.claw_active, inner.claw_proactive);
                             }
-                        }
                     }
-                }
             } else {
                 // If no pane identified (e.g. no tabs open), just update the window state
                 inner.claw_active = active;
-                inner.claw.update_ui(inner.claw_active, inner.claw_proactive);
+                inner
+                    .claw
+                    .update_ui(inner.claw_active, inner.claw_proactive);
             }
         }
         AppInput::SetClawActiveGlobal(active) => {
             inner.claw_active = active;
-            inner.claw.update_ui(inner.claw_active, inner.claw_proactive);
-            
+            inner
+                .claw
+                .update_ui(inner.claw_active, inner.claw_proactive);
+
             for tab in &inner.tabs {
                 tab.controller.set_claw_active(active);
-                
+
                 let widget = tab.controller.widget();
                 let page = inner.tab_view.page(widget);
                 if active {
@@ -334,7 +345,11 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
                 // Get active pane ID from selected tab
                 if let Some(page) = inner.tab_view.selected_page() {
                     let child = page.child();
-                    if let Some(pos) = inner.tabs.iter().position(|c| c.controller.widget() == &child) {
+                    if let Some(pos) = inner
+                        .tabs
+                        .iter()
+                        .position(|c| c.controller.widget() == &child)
+                    {
                         Some(inner.tabs[pos].controller.active_pane_id())
                     } else {
                         None
@@ -352,27 +367,34 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
                         break;
                     }
                 }
-                
+
                 // If we updated the active pane, update the UI
-                if found {
-                    if let Some(page) = inner.tab_view.selected_page() {
+                if found
+                    && let Some(page) = inner.tab_view.selected_page() {
                         let child = page.child();
-                        if let Some(pos) = inner.tabs.iter().position(|c| c.controller.widget() == &child) {
-                            if inner.tabs[pos].controller.active_pane_id() == id {
+                        if let Some(pos) = inner
+                            .tabs
+                            .iter()
+                            .position(|c| c.controller.widget() == &child)
+                            && inner.tabs[pos].controller.active_pane_id() == id {
                                 inner.claw_proactive = proactive;
-                                inner.claw.update_ui(inner.claw_active, inner.claw_proactive);
+                                inner
+                                    .claw
+                                    .update_ui(inner.claw_active, inner.claw_proactive);
                             }
-                        }
                     }
-                }
             } else {
                 inner.claw_proactive = proactive;
-                inner.claw.update_ui(inner.claw_active, inner.claw_proactive);
+                inner
+                    .claw
+                    .update_ui(inner.claw_active, inner.claw_proactive);
             }
         }
         AppInput::SetClawProactiveGlobal(proactive) => {
             inner.claw_proactive = proactive;
-            inner.claw.update_ui(inner.claw_active, inner.claw_proactive);
+            inner
+                .claw
+                .update_ui(inner.claw_active, inner.claw_proactive);
             let mode = if proactive {
                 boxxy_preferences::config::ClawAutoDiagnosisMode::Proactive
             } else {
@@ -438,11 +460,11 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
             inner.notifications.push(ready.clone());
 
             let toast = adw::Toast::new(&ready.message);
-            
+
             if ready.level == crate::widgets::notification::NotificationLevel::Update {
                 toast.set_timeout(0); // Permanent until dismissed
                 toast.set_button_label(Some("Details"));
-                
+
                 let tx = inner.tx.clone();
                 let notification = ready.clone();
                 let toast_overlay = inner.toast_overlay.clone();
@@ -508,38 +530,33 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
                     let tx_dialog = tx.clone();
 
                     if let Some(root) = toast_overlay.root().and_downcast::<gtk4::Window>() {
-                        dialog.choose(
-                            Some(&root),
-                            gtk4::gio::Cancellable::NONE,
-                            move |response| {
-                                if response == "win.start-download" {
-                                    let _ = tx_dialog.send_blocking(
-                                        crate::state::AppInput::StartUpdateDownload(
-                                            url.clone(),
-                                            date.clone(),
-                                            checksum_url.clone(),
-                                        ),
-                                    );
-                                    let _ = tx_dialog.send_blocking(
-                                        crate::state::AppInput::DismissNotification(id.clone()),
-                                    );
-                                } else if response == "win.apply-update" {
-                                    let _ = tx_dialog.send_blocking(
-                                        crate::state::AppInput::ApplyUpdateAndRestart,
-                                    );
-                                } else if response == "win.dismiss-notification" {
-                                    let _ = tx_dialog.send_blocking(
-                                        crate::state::AppInput::DismissNotification(id.clone()),
-                                    );
-                                }
-                            },
-                        );
+                        dialog.choose(Some(&root), gtk4::gio::Cancellable::NONE, move |response| {
+                            if response == "win.start-download" {
+                                let _ = tx_dialog.send_blocking(
+                                    crate::state::AppInput::StartUpdateDownload(
+                                        url.clone(),
+                                        date.clone(),
+                                        checksum_url.clone(),
+                                    ),
+                                );
+                                let _ = tx_dialog.send_blocking(
+                                    crate::state::AppInput::DismissNotification(id.clone()),
+                                );
+                            } else if response == "win.apply-update" {
+                                let _ = tx_dialog
+                                    .send_blocking(crate::state::AppInput::ApplyUpdateAndRestart);
+                            } else if response == "win.dismiss-notification" {
+                                let _ = tx_dialog.send_blocking(
+                                    crate::state::AppInput::DismissNotification(id.clone()),
+                                );
+                            }
+                        });
                     }
                 });
             } else {
                 toast.set_timeout(5);
             }
-            
+
             inner.toast_overlay.add_toast(toast);
         }
         AppInput::DismissNotification(id) => {
@@ -568,12 +585,12 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
             let toast = adw::Toast::new(&ready.message);
             toast.set_timeout(0); // Permanent until dismissed
             toast.set_button_label(Some("Restart"));
-            
+
             let tx = inner.tx.clone();
             toast.connect_button_clicked(move |_| {
                 let _ = tx.send_blocking(AppInput::ApplyUpdateAndRestart);
             });
-            
+
             inner.toast_overlay.add_toast(toast);
         }
         AppInput::ApplyUpdateAndRestart => {

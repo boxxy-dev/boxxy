@@ -91,18 +91,23 @@ impl CompletionProvider for ResumeCompletionProvider {
         let sessions = runtime.block_on(async {
             if let Ok(db) = boxxy_db::Db::new().await {
                 let store = boxxy_db::store::Store::new(db.pool());
-                store.get_recent_active_sessions(10).await.unwrap_or_default()
+                store
+                    .get_recent_active_sessions(10)
+                    .await
+                    .unwrap_or_default()
             } else {
                 Vec::new()
             }
         });
 
         for session in sessions {
-            let title = session.title.unwrap_or_else(|| "Untitled Session".to_string());
+            let title = session
+                .title
+                .unwrap_or_else(|| "Untitled Session".to_string());
             let agent_name = session.agent_name.unwrap_or_else(|| "Unknown".to_string());
             let cwd = session.last_cwd.unwrap_or_else(|| "/".to_string());
             let msg_count = session.message_count;
-            
+
             // Format age (very basic implementation)
             let age = if let Some(updated_at) = session.updated_at {
                 // Since SQLite returns a string for updated_at, and we didn't parse it to chrono yet
@@ -119,10 +124,10 @@ impl CompletionProvider for ResumeCompletionProvider {
                 || agent_name.to_lowercase().contains(&query_lower)
             {
                 items.push(CompletionItem {
-                    display_name: format!("{} [{} msgs]", title, msg_count),
+                    display_name: format!("{title} [{msg_count} msgs]"),
                     replacement_text: format!("/resume {}", session.id),
                     icon_name: Some("boxxy-chat-symbolic".to_string()),
-                    secondary_text: Some(format!("{} • {} • {}", agent_name, age, cwd)),
+                    secondary_text: Some(format!("{agent_name} • {age} • {cwd}")),
                 });
             }
         }
@@ -198,18 +203,18 @@ impl AutocompleteController {
                     if let Some(idx) = text_before.rfind(&trigger) {
                         // Trigger must be preceded by space or be at the start
                         let is_at_start = idx == 0;
-                        let followed_by_space = if !is_at_start {
-                            text_before.as_bytes().get(idx - 1) == Some(&b' ')
-                        } else {
+                        let followed_by_space = if is_at_start {
                             false
+                        } else {
+                            text_before.as_bytes().get(idx - 1) == Some(&b' ')
                         };
 
                         if is_at_start || followed_by_space {
                             let query = &text_before[idx + trigger.len()..];
-                            
+
                             // Allow multi-word queries for "/resume" command to support filtering sessions by title
                             let allow_spaces = trigger.ends_with(' ') || trigger == "/resume";
-                            
+
                             if allow_spaces || !query.contains(' ') {
                                 found_trigger = Some((provider, idx, query, trigger));
                                 break;
@@ -226,9 +231,7 @@ impl AutocompleteController {
                     c_clone.active_trigger.replace(None);
                 } else {
                     c_clone.update_list(completions);
-                    c_clone
-                        .active_trigger
-                        .replace(Some((trigger, idx)));
+                    c_clone.active_trigger.replace(Some((trigger, idx)));
 
                     if !c_clone.popover.is_visible() {
                         c_clone.popover.popup();

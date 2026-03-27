@@ -87,7 +87,10 @@ impl AgentBadge {
         let settings = boxxy_preferences::Settings::load();
         let has_name = !self.label.text().is_empty();
 
-        if settings.hide_agent_badge || (!self.is_active.get() && !self.is_evicted.get()) || !has_name {
+        if settings.hide_agent_badge
+            || (!self.is_active.get() && !self.is_evicted.get())
+            || !has_name
+        {
             self.container.set_visible(false);
         } else {
             self.container.set_visible(true);

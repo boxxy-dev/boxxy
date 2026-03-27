@@ -24,6 +24,7 @@ impl Default for MsgHistory {
 }
 
 impl MsgHistory {
+    #[must_use] 
     pub fn new() -> Self {
         Self {
             items: Vec::new(),
@@ -42,7 +43,7 @@ impl MsgHistory {
         let items_rc = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let items_clone = items_rc.clone();
 
-        let _ = boxxy_ai_core::utils::runtime().block_on(async move {
+        let () = boxxy_ai_core::utils::runtime().block_on(async move {
             if let Ok(db) = boxxy_db::Db::new().await {
                 let store = boxxy_db::store::Store::new(db.pool());
                 if let Ok(records) = store.get_recent_msgbar_history(MAX_HISTORY_ITEMS).await {
@@ -106,11 +107,10 @@ impl MsgHistory {
         boxxy_ai_core::utils::runtime().spawn(async move {
             if let Ok(db) = boxxy_db::Db::new().await {
                 let store = boxxy_db::store::Store::new(db.pool());
-                if let Ok(json) = serde_json::to_string(&attachments) {
-                    if store.insert_msgbar_history(&text, &json).await.is_ok() {
+                if let Ok(json) = serde_json::to_string(&attachments)
+                    && store.insert_msgbar_history(&text, &json).await.is_ok() {
                         let _ = store.prune_msgbar_history(150, 100).await;
                     }
-                }
             }
         });
     }

@@ -103,7 +103,9 @@ pub fn new_tab_with_intent(inner: &mut AppWindowInner, intent: Option<String>) {
     controller.update_settings(inner.current_settings.clone(), palette);
     controller.set_claw_active(inner.current_settings.claw_on_by_default);
 
-    let mode = if inner.current_settings.claw_auto_diagnosis_mode == boxxy_preferences::config::ClawAutoDiagnosisMode::Proactive {
+    let mode = if inner.current_settings.claw_auto_diagnosis_mode
+        == boxxy_preferences::config::ClawAutoDiagnosisMode::Proactive
+    {
         boxxy_preferences::config::ClawAutoDiagnosisMode::Proactive
     } else {
         boxxy_preferences::config::ClawAutoDiagnosisMode::Lazy
@@ -379,7 +381,7 @@ pub fn focus_active_terminal(inner: &mut AppWindowInner) {
         {
             let tc = &inner.tabs[pos];
             tc.controller.grab_focus();
-            
+
             // Sync Claw UI state
             let tab_is_claw_active = tc.controller.is_claw_active();
             inner.claw_active = tab_is_claw_active;
@@ -392,8 +394,10 @@ pub fn focus_active_terminal(inner: &mut AppWindowInner) {
             let tab_is_proactive = tc.controller.is_proactive();
             inner.claw_proactive = tab_is_proactive;
 
-            inner.claw.update_ui(inner.claw_active, inner.claw_proactive);
-            
+            inner
+                .claw
+                .update_ui(inner.claw_active, inner.claw_proactive);
+
             inner
                 .claw
                 .set_history_widget(&tc.controller.claw_history_widget());

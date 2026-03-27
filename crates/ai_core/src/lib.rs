@@ -26,19 +26,35 @@ impl BoxxyAgent {
 
         match self {
             Self::Gemini(agent) => {
-                let res = agent.prompt(prompt).with_history(&mut history).extended_details().await?;
+                let res = agent
+                    .prompt(prompt)
+                    .with_history(&mut history)
+                    .extended_details()
+                    .await?;
                 Ok((res.output.clone(), Some(res.usage)))
             }
             Self::Ollama(agent) => {
-                let res = agent.prompt(prompt).with_history(&mut history).extended_details().await?;
+                let res = agent
+                    .prompt(prompt)
+                    .with_history(&mut history)
+                    .extended_details()
+                    .await?;
                 Ok((res.output.clone(), Some(res.usage)))
             }
             Self::Anthropic(agent) => {
-                let res = agent.prompt(prompt).with_history(&mut history).extended_details().await?;
+                let res = agent
+                    .prompt(prompt)
+                    .with_history(&mut history)
+                    .extended_details()
+                    .await?;
                 Ok((res.output.clone(), Some(res.usage)))
             }
             Self::OpenAi(agent) => {
-                let res = agent.prompt(prompt).with_history(&mut history).extended_details().await?;
+                let res = agent
+                    .prompt(prompt)
+                    .with_history(&mut history)
+                    .extended_details()
+                    .await?;
                 Ok((res.output.clone(), Some(res.usage)))
             }
             Self::Error(e) => Err(rig::completion::PromptError::CompletionError(

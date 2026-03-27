@@ -215,18 +215,20 @@ impl ClawSession {
                         .await;
                 }
                 ClawMessage::ResumeSession { session_id } => {
-                    info!("Resuming session {} in pane {}...", session_id, self.pane_id);
+                    info!(
+                        "Resuming session {} in pane {}...",
+                        session_id, self.pane_id
+                    );
 
                     // 1. Evict session if active elsewhere
                     workspace.evict_session(&session_id).await;
 
                     // 2. Load session from DB
                     let mut db_guard = self.db.lock().await;
-                    if db_guard.is_none() {
-                        if let Ok(db) = Db::new().await {
+                    if db_guard.is_none()
+                        && let Ok(db) = Db::new().await {
                             *db_guard = Some(db);
                         }
-                    }
 
                     if let Some(db) = &*db_guard {
                         let store = boxxy_db::store::Store::new(db.pool());
@@ -242,13 +244,12 @@ impl ClawSession {
                                 state_lock.session_id = session_id.clone();
                                 state_lock.agent_name = self.name.clone();
 
-                                if let Some(history_json) = session.history_json {
-                                    if let Ok(history) =
+                                if let Some(history_json) = session.history_json
+                                    && let Ok(history) =
                                         serde_json::from_str::<Vec<Message>>(&history_json)
                                     {
                                         state_lock.history = history;
                                     }
-                                }
 
                                 // Force agent rebuild
                                 state_lock.persistent_agent = None;
@@ -312,8 +313,9 @@ impl ClawSession {
 
                     // Check if database was reset (due to update in Preview Phase)
                     // We use swap(false) to ensure only the first agent to initialize shows the notification
-                    if boxxy_db::DATABASE_WAS_RESET.swap(false, std::sync::atomic::Ordering::SeqCst) {
-                        let _ = self.tx_ui.send(ClawEngineEvent::SystemMessage { 
+                    if boxxy_db::DATABASE_WAS_RESET.swap(false, std::sync::atomic::Ordering::SeqCst)
+                    {
+                        let _ = self.tx_ui.send(ClawEngineEvent::SystemMessage {
                             text: "⚠️ Database reset for update. This only happens during the Preview.".to_string() 
                         }).await;
                     }
@@ -747,7 +749,7 @@ fn spawn_turn(
             }
 
             let mut should_load = false;
-            // We NO LONGER load trigger-less skills by default. 
+            // We NO LONGER load trigger-less skills by default.
             // They must be triggered or activated via tool.
             for trigger in &skill.frontmatter.triggers {
                 if !trigger.is_empty() && query_lower.contains(&trigger.to_lowercase()) {
@@ -788,11 +790,15 @@ fn spawn_turn(
                 available_skills_text.push_str("Use `activate_skill(name)` if you need the full instructions for any of these:\n");
             }
 
-            let description = skill.frontmatter.description.split('.').next().unwrap_or("No description available.").trim();
-            available_skills_text.push_str(&format!(
-                "- {}: {}.\n",
-                skill.frontmatter.name, description
-            ));
+            let description = skill
+                .frontmatter
+                .description
+                .split('.')
+                .next()
+                .unwrap_or("No description available.")
+                .trim();
+            available_skills_text
+                .push_str(&format!("- {}: {}.\n", skill.frontmatter.name, description));
             toolbox_count += 1;
         }
 
@@ -901,7 +907,7 @@ fn spawn_turn(
 
         // We temporarily adapt the ClawAgent to accept `Vec<Message>` for the current prompt
         // instead of just `&str` since we need to send the multimodal `user_msg`.
-        
+
         // Context Hygiene 2.0: Aggressively strip ALL transient context from previous turns
         // (Skills, Radar, Memories, and Snapshots) so history grows near-zero tokens per turn.
         let mut final_history: Vec<rig::message::Message> = history
@@ -915,7 +921,8 @@ fn spawn_turn(
                             // Find the start of the dynamic block and truncate everything after it
                             if let Some(idx) = text.text.find("\n\n## CURRENT TURN CONTEXT") {
                                 text.text.truncate(idx);
-                            } else if let Some(idx) = text.text.find("\n\nTerminal Snapshot:\n```") {
+                            } else if let Some(idx) = text.text.find("\n\nTerminal Snapshot:\n```")
+                            {
                                 // Fallback for older messages
                                 text.text.truncate(idx);
                             }
@@ -1083,7 +1090,7 @@ fn spawn_turn(
                             agent_name,
                             command,
                             diagnosis: clean_diagnosis,
-                            usage: usage.clone(),
+                            usage: usage,
                         })
                         .await;
                 } else {
@@ -1091,7 +1098,7 @@ fn spawn_turn(
                         .send(ClawEngineEvent::DiagnosisComplete {
                             agent_name,
                             diagnosis: clean_diagnosis,
-                            usage: usage.clone(),
+                            usage: usage,
                         })
                         .await;
                 }
@@ -1114,9 +1121,7 @@ fn spawn_turn(
 
                 let error_msg = format!("{}", e);
                 let friendly_msg = if error_msg.contains("does not support tools") {
-                    format!(
-                        "**Error:** The selected Ollama model does not support tool calling.\n\nBoxxy-Claw requires a highly capable reasoning model with native tool support (like `llama3.2`, `qwen2.5`, or `mistral`) to interact with your system.\n\nPlease select a different model for Boxxy-Claw in the Model Selection menu (Ctrl+Shift+P)."
-                    )
+                    "**Error:** The selected Ollama model does not support tool calling.\n\nBoxxy-Claw requires a highly capable reasoning model with native tool support (like `llama3.2`, `qwen2.5`, or `mistral`) to interact with your system.\n\nPlease select a different model for Boxxy-Claw in the Model Selection menu (Ctrl+Shift+P).".to_string()
                 } else {
                     format!("**Boxxy-Claw encountered an error:**\n```\n{}\n```", e)
                 };

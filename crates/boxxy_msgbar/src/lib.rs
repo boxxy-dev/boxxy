@@ -6,7 +6,7 @@ use gtk4::prelude::*;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use history::{HistoryItem, MsgHistory};
+use history::HistoryItem;
 
 use serde::{Deserialize, Serialize};
 
@@ -93,13 +93,16 @@ impl MsgBarComponent {
 
         widget.append(&proactive_toggle);
 
-        let tags_box = gtk::Box::new(gtk::Orientation::Horizontal, 4);        tags_box.set_valign(gtk::Align::Center);
+        let tags_box = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+        tags_box.set_valign(gtk::Align::Center);
         widget.append(&tags_box);
 
         let entry = gtk::Entry::builder()
             .hexpand(true)
             .has_frame(false) // removes borders
-            .placeholder_text("Ask Boxxy-Claw... (Ctrl+V: attach, @agent: direct, /resume: session)")
+            .placeholder_text(
+                "Ask Boxxy-Claw... (Ctrl+V: attach, @agent: direct, /resume: session)",
+            )
             .build();
 
         entry.add_css_class("monospace");
@@ -156,7 +159,9 @@ impl MsgBarComponent {
             }
 
             if !text.trim().is_empty() || !images.is_empty() {
-                c_history_activate.borrow_mut().push(original_text, atts.clone());
+                c_history_activate
+                    .borrow_mut()
+                    .push(original_text, atts.clone());
                 c_submit((text, images));
                 e.set_text("");
             }
@@ -181,7 +186,7 @@ impl MsgBarComponent {
         let k_cancel = on_cancel_rc;
         let k_attachments = attachments.clone();
         let k_tags_box = tags_box.clone();
-        let k_history = c_history.clone();
+        let k_history = c_history;
 
         key_ctrl.connect_key_pressed(move |_, key, _, state| {
             let is_ctrl = state.contains(gtk::gdk::ModifierType::CONTROL_MASK);
@@ -326,7 +331,8 @@ impl MsgBarComponent {
         } else {
             self.proactive_toggle
                 .set_icon_name("boxxy-walking2-symbolic");
-            self.proactive_toggle.set_tooltip_text(Some("Lazy Diagnosis Mode"));
+            self.proactive_toggle
+                .set_tooltip_text(Some("Lazy Diagnosis Mode"));
             self.proactive_toggle.remove_css_class("accent");
         }
     }

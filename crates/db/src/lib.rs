@@ -25,74 +25,76 @@ pub struct Db {
 
 impl Db {
     pub async fn new() -> Result<Self> {
-        let db = DB.get_or_try_init(|| async {
-            let db_path = Self::get_db_path()?;
+        let db = DB
+            .get_or_try_init(|| async {
+                let db_path = Self::get_db_path()?;
 
-            // Ensure directory exists
-            if let Some(parent) = db_path.parent() {
-                tokio::fs::create_dir_all(parent)
+                // Ensure directory exists
+                if let Some(parent) = db_path.parent() {
+                    tokio::fs::create_dir_all(parent)
+                        .await
+                        .context("Failed to create database directory")?;
+                }
+
+                // 1. Initial connection to check version
+                let options = SqliteConnectOptions::new()
+                    .filename(&db_path)
+                    .create_if_missing(true)
+                    .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
+                    .synchronous(sqlx::sqlite::SqliteSynchronous::Normal);
+
+                let temp_pool = SqlitePoolOptions::new()
+                    .max_connections(1)
+                    .connect_with(options.clone())
+                    .await?;
+
+                let version: (i32,) = sqlx::query_as("PRAGMA user_version")
+                    .fetch_one(&temp_pool)
+                    .await?;
+
+                temp_pool.close().await;
+
+                // 2. Validate version
+                if version.0 != CURRENT_SCHEMA_VERSION && version.0 != 0 {
+                    log::warn!(
+                        "Database version mismatch (found {}, expected {}). DROPPING DATABASE.",
+                        version.0,
+                        CURRENT_SCHEMA_VERSION
+                    );
+
+                    // Close any potential lingering handles by waiting a tiny bit if needed
+                    // though temp_pool.close() should be enough.
+                    let _ = tokio::fs::remove_file(&db_path).await;
+                    // Also remove the WAL and SHM files if they exist
+                    let _ = tokio::fs::remove_file(format!("{}-wal", db_path.display())).await;
+                    let _ = tokio::fs::remove_file(format!("{}-shm", db_path.display())).await;
+
+                    DATABASE_WAS_RESET.store(true, Ordering::SeqCst);
+                } else if version.0 == 0 {
+                    // If it's 0, we check if tables exist to decide if it's a "Legacy Unversioned" DB or a fresh one.
+                    // For this preview phase, we'll just treat 0 as "Fresh" and set the version.
+                    // But if sessions table exists, it might be legacy.
+                    // To be safe, if version is 0 and the file existed, we can just let it proceed to initialize_schema.
+                }
+
+                // 3. Re-open (or initial open) official pool
+                let pool = SqlitePoolOptions::new()
+                    .max_connections(5)
+                    .connect_with(options)
                     .await
-                    .context("Failed to create database directory")?;
-            }
+                    .context("Failed to connect to database")?;
 
-            // 1. Initial connection to check version
-            let options = SqliteConnectOptions::new()
-                .filename(&db_path)
-                .create_if_missing(true)
-                .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
-                .synchronous(sqlx::sqlite::SqliteSynchronous::Normal);
+                let db = Self { pool };
+                db.initialize_schema().await?;
 
-            let temp_pool = SqlitePoolOptions::new()
-                .max_connections(1)
-                .connect_with(options.clone())
-                .await?;
+                // 4. Set/Update version
+                sqlx::query(&format!("PRAGMA user_version = {CURRENT_SCHEMA_VERSION}"))
+                    .execute(&db.pool)
+                    .await?;
 
-            let version: (i32,) = sqlx::query_as("PRAGMA user_version")
-                .fetch_one(&temp_pool)
-                .await?;
-
-            temp_pool.close().await;
-
-            // 2. Validate version
-            if version.0 != CURRENT_SCHEMA_VERSION && version.0 != 0 {
-                log::warn!(
-                    "Database version mismatch (found {}, expected {}). DROPPING DATABASE.",
-                    version.0,
-                    CURRENT_SCHEMA_VERSION
-                );
-                
-                // Close any potential lingering handles by waiting a tiny bit if needed
-                // though temp_pool.close() should be enough.
-                let _ = tokio::fs::remove_file(&db_path).await;
-                // Also remove the WAL and SHM files if they exist
-                let _ = tokio::fs::remove_file(format!("{}-wal", db_path.display())).await;
-                let _ = tokio::fs::remove_file(format!("{}-shm", db_path.display())).await;
-
-                DATABASE_WAS_RESET.store(true, Ordering::SeqCst);
-            } else if version.0 == 0 {
-                // If it's 0, we check if tables exist to decide if it's a "Legacy Unversioned" DB or a fresh one.
-                // For this preview phase, we'll just treat 0 as "Fresh" and set the version.
-                // But if sessions table exists, it might be legacy.
-                // To be safe, if version is 0 and the file existed, we can just let it proceed to initialize_schema.
-            }
-
-            // 3. Re-open (or initial open) official pool
-            let pool = SqlitePoolOptions::new()
-                .max_connections(5)
-                .connect_with(options)
-                .await
-                .context("Failed to connect to database")?;
-
-            let db = Self { pool };
-            db.initialize_schema().await?;
-
-            // 4. Set/Update version
-            sqlx::query(&format!("PRAGMA user_version = {}", CURRENT_SCHEMA_VERSION))
-                .execute(&db.pool)
-                .await?;
-
-            Ok::<Db, anyhow::Error>(db)
-        }).await?;
+                Ok::<Self, anyhow::Error>(db)
+            })
+            .await?;
 
         Ok(db.clone())
     }

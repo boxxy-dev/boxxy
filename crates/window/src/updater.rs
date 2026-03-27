@@ -274,7 +274,13 @@ impl Updater {
             }
             hasher.update(&buf[..n]);
         }
-        Ok(format!("{:x}", hasher.finalize()))
+        let hash = hasher.finalize();
+        let mut hex_str = String::with_capacity(64);
+        for b in hash {
+            use std::fmt::Write;
+            write!(&mut hex_str, "{:02x}", b).unwrap();
+        }
+        Ok(hex_str)
     }
 
     fn get_app_dir() -> Result<PathBuf> {

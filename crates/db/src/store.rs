@@ -16,10 +16,10 @@ impl<'a> Store<'a> {
 
     pub async fn insert_msgbar_history(&self, text: &str, attachments_json: &str) -> Result<i64> {
         let result = sqlx::query(
-            r#"
+            r"
             INSERT INTO msgbar_history (text, attachments)
             VALUES (?, ?)
-            "#,
+            ",
         )
         .bind(text)
         .bind(attachments_json)
@@ -31,14 +31,14 @@ impl<'a> Store<'a> {
 
     pub async fn get_recent_msgbar_history(&self, limit: i64) -> Result<Vec<MsgBarHistory>> {
         let records = sqlx::query_as::<_, MsgBarHistory>(
-            r#"
+            r"
             SELECT * FROM (
                 SELECT id, text, attachments, created_at
                 FROM msgbar_history
                 ORDER BY id DESC
                 LIMIT ?
             ) ORDER BY id ASC
-            "#,
+            ",
         )
         .bind(limit)
         .fetch_all(self.pool)
@@ -55,14 +55,14 @@ impl<'a> Store<'a> {
         if count >= threshold {
             let to_delete = count - target;
             sqlx::query(
-                r#"
+                r"
                 DELETE FROM msgbar_history 
                 WHERE id IN (
                     SELECT id FROM msgbar_history 
                     ORDER BY id ASC 
                     LIMIT ?
                 )
-                "#,
+                ",
             )
             .bind(to_delete)
             .execute(self.pool)
@@ -118,12 +118,10 @@ impl<'a> Store<'a> {
     }
 
     pub async fn get_session(&self, id: &str) -> Result<Option<Session>> {
-        let session = sqlx::query_as::<_, Session>(
-            "SELECT * FROM sessions WHERE id = ?",
-        )
-        .bind(id)
-        .fetch_optional(self.pool)
-        .await?;
+        let session = sqlx::query_as::<_, Session>("SELECT * FROM sessions WHERE id = ?")
+            .bind(id)
+            .fetch_optional(self.pool)
+            .await?;
         Ok(session)
     }
 

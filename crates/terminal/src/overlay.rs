@@ -57,7 +57,7 @@ impl TerminalOverlay {
         on_visibility_changed: F6,
     ) -> Self {
         let revealer = gtk::Revealer::new();
-        
+
         let on_vis_rc = Rc::new(on_visibility_changed);
         revealer.connect_reveal_child_notify(move |rev| {
             on_vis_rc(rev.reveals_child());
@@ -397,7 +397,8 @@ impl TerminalOverlay {
                 self.icon.set_icon_name(Some("boxxyclaw"));
             }
             OverlayMode::Bookmark => {
-                self.icon.set_icon_name(Some("boxxy-user-bookmarks-symbolic"));
+                self.icon
+                    .set_icon_name(Some("boxxy-user-bookmarks-symbolic"));
             }
         }
 

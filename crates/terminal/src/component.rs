@@ -765,7 +765,9 @@ impl TerminalComponent {
         if let Some(ref settings) = inner.current_settings {
             new_controller.update_settings(settings.clone(), inner.current_palette);
             new_controller.set_claw_active(settings.claw_on_by_default);
-            let mode = if settings.claw_auto_diagnosis_mode == boxxy_preferences::config::ClawAutoDiagnosisMode::Proactive {
+            let mode = if settings.claw_auto_diagnosis_mode
+                == boxxy_preferences::config::ClawAutoDiagnosisMode::Proactive
+            {
                 boxxy_preferences::config::ClawAutoDiagnosisMode::Proactive
             } else {
                 boxxy_preferences::config::ClawAutoDiagnosisMode::Lazy

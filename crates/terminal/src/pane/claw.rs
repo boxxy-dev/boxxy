@@ -172,7 +172,8 @@ pub(super) fn setup_claw(
                     usage,
                 } => {
                     if let Some(usage) = usage {
-                        total_tokens_for_events.set(total_tokens_for_events.get() + usage.total_tokens);
+                        total_tokens_for_events
+                            .set(total_tokens_for_events.get() + usage.total_tokens);
                     }
                     boxxy_claw::ui::add_diagnosis_row(
                         &claw_list_events,
@@ -195,7 +196,8 @@ pub(super) fn setup_claw(
                     usage,
                 } => {
                     if let Some(usage) = usage {
-                        total_tokens_for_events.set(total_tokens_for_events.get() + usage.total_tokens);
+                        total_tokens_for_events
+                            .set(total_tokens_for_events.get() + usage.total_tokens);
                     }
                     if !diagnosis.is_empty() {
                         boxxy_claw::ui::add_diagnosis_row(
@@ -229,7 +231,8 @@ pub(super) fn setup_claw(
                     usage,
                 } => {
                     if let Some(usage) = usage {
-                        total_tokens_for_events.set(total_tokens_for_events.get() + usage.total_tokens);
+                        total_tokens_for_events
+                            .set(total_tokens_for_events.get() + usage.total_tokens);
                     }
                     boxxy_claw::ui::add_file_write_approval_row(
                         &claw_list_events,
@@ -248,9 +251,14 @@ pub(super) fn setup_claw(
                         crate::TerminalProposal::FileWrite(path.clone(), content.clone())
                     );
                 }
-                boxxy_claw::engine::ClawEngineEvent::ProposeFileDelete { path, agent_name, usage } => {
+                boxxy_claw::engine::ClawEngineEvent::ProposeFileDelete {
+                    path,
+                    agent_name,
+                    usage,
+                } => {
                     if let Some(usage) = usage {
-                        total_tokens_for_events.set(total_tokens_for_events.get() + usage.total_tokens);
+                        total_tokens_for_events
+                            .set(total_tokens_for_events.get() + usage.total_tokens);
                     }
                     boxxy_claw::ui::add_file_delete_approval_row(
                         &claw_list_events,
@@ -275,7 +283,8 @@ pub(super) fn setup_claw(
                     usage,
                 } => {
                     if let Some(usage) = usage {
-                        total_tokens_for_events.set(total_tokens_for_events.get() + usage.total_tokens);
+                        total_tokens_for_events
+                            .set(total_tokens_for_events.get() + usage.total_tokens);
                     }
                     boxxy_claw::ui::add_kill_process_approval_row(
                         &claw_list_events,
@@ -296,7 +305,8 @@ pub(super) fn setup_claw(
                 }
                 boxxy_claw::engine::ClawEngineEvent::ProposeGetClipboard { agent_name, usage } => {
                     if let Some(usage) = usage {
-                        total_tokens_for_events.set(total_tokens_for_events.get() + usage.total_tokens);
+                        total_tokens_for_events
+                            .set(total_tokens_for_events.get() + usage.total_tokens);
                     }
                     boxxy_claw::ui::add_clipboard_get_approval_row(
                         &claw_list_events,
@@ -313,9 +323,14 @@ pub(super) fn setup_claw(
                         crate::TerminalProposal::None,
                     );
                 }
-                boxxy_claw::engine::ClawEngineEvent::ProposeSetClipboard { agent_name, text, usage } => {
+                boxxy_claw::engine::ClawEngineEvent::ProposeSetClipboard {
+                    agent_name,
+                    text,
+                    usage,
+                } => {
                     if let Some(usage) = usage {
-                        total_tokens_for_events.set(total_tokens_for_events.get() + usage.total_tokens);
+                        total_tokens_for_events
+                            .set(total_tokens_for_events.get() + usage.total_tokens);
                     }
                     boxxy_claw::ui::add_clipboard_set_approval_row(
                         &claw_list_events,
@@ -340,7 +355,8 @@ pub(super) fn setup_claw(
                     usage,
                 } => {
                     if let Some(usage) = usage {
-                        total_tokens_for_events.set(total_tokens_for_events.get() + usage.total_tokens);
+                        total_tokens_for_events
+                            .set(total_tokens_for_events.get() + usage.total_tokens);
                     }
                     if !explanation.is_empty() {
                         boxxy_claw::ui::add_diagnosis_row(
@@ -367,10 +383,7 @@ pub(super) fn setup_claw(
                     );
                 }
                 boxxy_claw::engine::ClawEngineEvent::Identity { agent_name } => {
-                    inner_clone
-                        .borrow()
-                        .agent_badge
-                        .set_identity(agent_name);
+                    inner_clone.borrow().agent_badge.set_identity(agent_name);
                 }
                 boxxy_claw::engine::ClawEngineEvent::Evicted => {
                     inner_clone.borrow().agent_badge.set_evicted(true);
@@ -395,7 +408,8 @@ pub(super) fn setup_claw(
                         if terminal.is_alt_screen() {
                             cb_clone_notify(PaneOutput::Notification(
                                 id_clone_notify,
-                                "Session resumed, but folder switch skipped (Terminal Busy).".to_string(),
+                                "Session resumed, but folder switch skipped (Terminal Busy)."
+                                    .to_string(),
                             ));
                             return;
                         }
@@ -406,18 +420,16 @@ pub(super) fn setup_claw(
                         } else {
                             cb_clone_notify(PaneOutput::Notification(
                                 id_clone_notify,
-                                format!("Directory '{}' no longer exists. Staying in current folder.", path),
+                                format!(
+                                    "Directory '{}' no longer exists. Staying in current folder.",
+                                    path
+                                ),
                             ));
                         }
                     });
                 }
                 boxxy_claw::engine::ClawEngineEvent::SystemMessage { text } => {
-                    boxxy_claw::ui::add_diagnosis_row(
-                        &claw_list_events,
-                        id.clone(),
-                        None,
-                        text,
-                    );
+                    boxxy_claw::ui::add_diagnosis_row(&claw_list_events, id.clone(), None, text);
                     cb_clone_events(PaneOutput::Notification(id.clone(), text.clone()));
                 }
                 boxxy_claw::engine::ClawEngineEvent::RequestScrollback {
@@ -467,7 +479,8 @@ pub(super) fn setup_claw(
                     usage,
                 } => {
                     if let Some(usage) = usage {
-                        total_tokens_for_events.set(total_tokens_for_events.get() + usage.total_tokens);
+                        total_tokens_for_events
+                            .set(total_tokens_for_events.get() + usage.total_tokens);
                     }
                     if tool_name == "list_processes" {
                         boxxy_claw::ui::add_process_list_row(

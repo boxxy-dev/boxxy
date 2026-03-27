@@ -59,24 +59,26 @@ pub fn handle_terminal_event(
             TerminalEventKind::ClawStateChanged(active, proactive) => {
                 let widget = inner.tabs[pos].controller.widget();
                 let page = inner.tab_view.page(widget);
-                
+
                 // Update tab icon
                 if active {
                     page.set_icon(Some(&gtk4::gio::ThemedIcon::new("boxxyclaw")));
                 } else {
                     page.set_icon(None::<&gtk4::gio::Icon>);
                 }
-                
+
                 if Some(&page) == inner.tab_view.selected_page().as_ref() {
                     inner.claw_active = active;
                     inner.claw_proactive = proactive;
-                    inner.claw.update_ui(inner.claw_active, inner.claw_proactive);
+                    inner
+                        .claw
+                        .update_ui(inner.claw_active, inner.claw_proactive);
                 }
             }
             TerminalEventKind::PaneFocused(_) => {
                 let widget = inner.tabs[pos].controller.widget();
                 let page = inner.tab_view.page(widget);
-                
+
                 // Update tab icon
                 let is_claw_active = inner.tabs[pos].controller.is_claw_active();
                 if is_claw_active {
@@ -84,14 +86,16 @@ pub fn handle_terminal_event(
                 } else {
                     page.set_icon(None::<&gtk4::gio::Icon>);
                 }
-                
+
                 if Some(&page) == inner.tab_view.selected_page().as_ref() {
                     inner.claw_active = is_claw_active;
                     let is_proactive = inner.tabs[pos].controller.is_proactive();
                     inner.claw_proactive = is_proactive;
-                    
-                    inner.claw.update_ui(inner.claw_active, inner.claw_proactive);
-                    
+
+                    inner
+                        .claw
+                        .update_ui(inner.claw_active, inner.claw_proactive);
+
                     inner
                         .claw
                         .set_history_widget(&inner.tabs[pos].controller.claw_history_widget());

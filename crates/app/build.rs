@@ -112,7 +112,9 @@ fn main() {
     println!("cargo:rerun-if-changed=../../resources/icons/boxxy-edit-clear-symbolic.svg");
     println!("cargo:rerun-if-changed=../../resources/icons/boxxy-edit-copy-symbolic.svg");
     println!("cargo:rerun-if-changed=../../resources/icons/boxxy-folder-open-symbolic.svg");
-    println!("cargo:rerun-if-changed=../../resources/icons/boxxy-media-playback-start-symbolic.svg");
+    println!(
+        "cargo:rerun-if-changed=../../resources/icons/boxxy-media-playback-start-symbolic.svg"
+    );
     println!("cargo:rerun-if-changed=../../resources/icons/boxxy-media-playback-stop-symbolic.svg");
     println!("cargo:rerun-if-changed=../../resources/icons/boxxy-object-select-symbolic.svg");
     println!("cargo:rerun-if-changed=../../resources/icons/boxxy-up-arrow-in-a-star-symbolic.svg");

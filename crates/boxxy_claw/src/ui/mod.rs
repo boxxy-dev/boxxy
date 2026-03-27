@@ -260,7 +260,8 @@ impl ClawSidebarComponent {
                 self.mode_toggle_btn.add_css_class("accent");
             }
             boxxy_preferences::config::ClawAutoDiagnosisMode::Lazy => {
-                self.mode_toggle_btn.set_icon_name("boxxy-walking2-symbolic");
+                self.mode_toggle_btn
+                    .set_icon_name("boxxy-walking2-symbolic");
                 self.mode_toggle_btn
                     .set_tooltip_text(Some("Lazy Diagnosis Mode"));
                 self.mode_toggle_btn.remove_css_class("accent");

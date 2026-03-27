@@ -117,7 +117,8 @@ impl ClawIndicator {
         *self.action_type.borrow_mut() = 1;
         self.spinner.stop();
         self.spinner.set_visible(false);
-        self.icon.set_icon_name(Some("boxxy-dialog-warning-symbolic"));
+        self.icon
+            .set_icon_name(Some("boxxy-dialog-warning-symbolic"));
         self.icon.set_css_classes(&["warning"]);
         self.label.set_text("Fix Available");
         self.main_btn.set_can_focus(true);

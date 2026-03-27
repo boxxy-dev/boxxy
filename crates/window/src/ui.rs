@@ -102,7 +102,8 @@ impl AppWindow {
                 let _ = tx_claw_active.send_blocking(AppInput::SetClawActive(active, None));
             },
             move |proactive| {
-                let _ = tx_claw_proactive.send_blocking(AppInput::SetClawProactive(proactive, None));
+                let _ =
+                    tx_claw_proactive.send_blocking(AppInput::SetClawProactive(proactive, None));
             },
         );
 
@@ -244,13 +245,8 @@ impl AppWindow {
             &current_settings,
         );
         split_view.set_sidebar(Some(&sidebar_toolbar));
-        let (
-            content_toolbar,
-            content_header,
-            bell_indicator,
-            menu_btn,
-            tab_bar,
-        ) = Self::build_content_area(&tx, &tab_view, &current_settings);
+        let (content_toolbar, content_header, bell_indicator, menu_btn, tab_bar) =
+            Self::build_content_area(&tx, &tab_view, &current_settings);
 
         let overlay = gtk::Overlay::new();
         overlay.set_child(Some(&content_toolbar));
@@ -567,7 +563,7 @@ impl AppWindow {
     fn build_content_area(
         tx: &async_channel::Sender<AppInput>,
         tab_view: &adw::TabView,
-        current_settings: &Settings,
+        _current_settings: &Settings,
     ) -> (
         adw::ToolbarView,
         adw::HeaderBar,

@@ -101,18 +101,19 @@ self_update = { version = "0.43.1", features = ["archive-tar", "compression-flat
 tempfile = "3.27.0"
 tar = "0.4.45"
 flate2 = "1.1.9"
-sha2 = "0.10"
+sha2 = "0.11"
 sqlx = { version = "0.8.6", features = ["sqlite", "runtime-tokio-rustls", "macros", "chrono"] }
 serde_yml = "0.0.12"
 thiserror = "2.0"
 notify = "8.2.0"
-uuid = { version = "1.22.0", features = ["v4"] }
+uuid = { version = "1.23.0", features = ["v4"] }
 petname = "2.0.2"
 getrandom = "0.4.2"
-toml = "1.0.7"
+toml = "1.1.0"
 boxxy-bookmarks = { path = "crates/boxxy_bookmarks" }
 sysinfo = "0.38.4"
 arboard = "3.6.1"
 pulldown-cmark = "0.13.3"
 syntect = "5.3.0"
 boxxy-viewer = { path = "crates/viewer" }
+

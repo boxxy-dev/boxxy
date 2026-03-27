@@ -33,7 +33,8 @@ pub fn setup_agents_page(
     // Initialize values
     claw_on_by_default_switch.set_active(settings_rc.borrow().claw_on_by_default);
     proactive_by_default_switch.set_active(
-        settings_rc.borrow().claw_auto_diagnosis_mode == crate::config::ClawAutoDiagnosisMode::Proactive
+        settings_rc.borrow().claw_auto_diagnosis_mode
+            == crate::config::ClawAutoDiagnosisMode::Proactive,
     );
     hide_agent_badge_switch.set_active(settings_rc.borrow().hide_agent_badge);
     enable_file_tools_switch.set_active(settings_rc.borrow().enable_file_tools);
