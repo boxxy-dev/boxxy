@@ -324,7 +324,7 @@ impl AppWindow {
             tab_view,
             tab_bar: tab_bar.clone(),
             content_header,
-            _split_view: split_view,
+            split_view,
             sidebar_toolbar,
             menu_btn,
             view_stack,

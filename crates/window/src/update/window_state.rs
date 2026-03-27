@@ -197,61 +197,35 @@ pub fn sidebar_width_changed(inner: &mut AppWindowInner, width: i32) {
 }
 
 pub fn toggle_sidebar(inner: &mut AppWindowInner) {
-    if let Some(split) = inner
-        .window
-        .content()
-        .and_then(|c| c.downcast::<libadwaita::OverlaySplitView>().ok())
-    {
-        let is_visible = split.shows_sidebar();
-        split.set_show_sidebar(!is_visible);
-    }
+    let is_visible = inner.split_view.shows_sidebar();
+    inner.split_view.set_show_sidebar(!is_visible);
 }
 
 pub fn show_themes_sidebar(inner: &mut AppWindowInner) {
-    if !inner.sidebar_visible
-        && let Some(split) = inner
-            .window
-            .content()
-            .and_then(|c| c.downcast::<libadwaita::OverlaySplitView>().ok())
-    {
-        split.set_show_sidebar(true);
+    if !inner.sidebar_visible {
+        inner.split_view.set_show_sidebar(true);
     }
     inner.view_stack.set_visible_child_name("themes");
 }
 
 pub fn show_ai_chat(inner: &mut AppWindowInner) {
-    if !inner.sidebar_visible
-        && let Some(split) = inner
-            .window
-            .content()
-            .and_then(|c| c.downcast::<libadwaita::OverlaySplitView>().ok())
-    {
-        split.set_show_sidebar(true);
+    if !inner.sidebar_visible {
+        inner.split_view.set_show_sidebar(true);
     }
     inner.view_stack.set_visible_child_name("assistant");
     inner.ai_chat.grab_focus();
 }
 
 pub fn show_claw_sidebar(inner: &mut AppWindowInner) {
-    if !inner.sidebar_visible
-        && let Some(split) = inner
-            .window
-            .content()
-            .and_then(|c| c.downcast::<libadwaita::OverlaySplitView>().ok())
-    {
-        split.set_show_sidebar(true);
+    if !inner.sidebar_visible {
+        inner.split_view.set_show_sidebar(true);
     }
     inner.view_stack.set_visible_child_name("claw");
 }
 
 pub fn show_bookmarks_sidebar(inner: &mut AppWindowInner) {
-    if !inner.sidebar_visible
-        && let Some(split) = inner
-            .window
-            .content()
-            .and_then(|c| c.downcast::<libadwaita::OverlaySplitView>().ok())
-    {
-        split.set_show_sidebar(true);
+    if !inner.sidebar_visible {
+        inner.split_view.set_show_sidebar(true);
     }
     inner.view_stack.set_visible_child_name("bookmarks");
 }
