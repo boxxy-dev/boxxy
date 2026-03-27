@@ -85,7 +85,7 @@ impl GlobalModelSelectorDialog {
             "This model is used to extract background facts and match database memories. Use a fast, lightweight model here.",
         );
 
-        stack.add_titled(&ai_tab, Some("ai"), "AI Assistant");
+        stack.add_titled(&ai_tab, Some("ai"), "AI Chat");
         stack.add_titled(&claw_tab, Some("claw"), "Boxxy Claw");
         stack.add_titled(&mem_tab, Some("memory"), "Memories");
 
