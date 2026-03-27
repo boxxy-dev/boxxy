@@ -76,36 +76,52 @@ pub enum ClawEngineEvent {
     DiagnosisComplete {
         agent_name: String,
         diagnosis: String,
+        usage: Option<rig::completion::Usage>,
     },
     /// The agent suggests a command to be injected into the terminal prompt.
     InjectCommand {
         agent_name: String,
         command: String,
         diagnosis: String,
+        usage: Option<rig::completion::Usage>,
     },
     /// The agent proposes to write or edit a file, requiring user approval.
     ProposeFileWrite {
         agent_name: String,
         path: String,
         content: String,
+        usage: Option<rig::completion::Usage>,
     },
     /// The agent proposes to delete a file, requiring user approval.
-    ProposeFileDelete { agent_name: String, path: String },
+    ProposeFileDelete {
+        agent_name: String,
+        path: String,
+        usage: Option<rig::completion::Usage>,
+    },
     /// The agent proposes to kill a process, requiring user approval.
     ProposeKillProcess {
         agent_name: String,
         pid: u32,
         process_name: String,
+        usage: Option<rig::completion::Usage>,
     },
     /// The agent proposes to read the system clipboard, requiring user approval.
-    ProposeGetClipboard { agent_name: String },
+    ProposeGetClipboard {
+        agent_name: String,
+        usage: Option<rig::completion::Usage>,
+    },
     /// The agent proposes to set the system clipboard, requiring user approval.
-    ProposeSetClipboard { agent_name: String, text: String },
+    ProposeSetClipboard {
+        agent_name: String,
+        text: String,
+        usage: Option<rig::completion::Usage>,
+    },
     /// The agent wants the user to run a command in the terminal and wait for the result.
     ProposeTerminalCommand {
         agent_name: String,
         command: String,
         explanation: String,
+        usage: Option<rig::completion::Usage>,
     },
     /// Emitted when the agent starts or stops thinking (for UI indicators).
     AgentThinking {
@@ -144,5 +160,6 @@ pub enum ClawEngineEvent {
         agent_name: String,
         tool_name: String,
         result: String, // JSON
+        usage: Option<rig::completion::Usage>,
     },
 }

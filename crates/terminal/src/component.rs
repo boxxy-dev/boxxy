@@ -559,6 +559,15 @@ impl TerminalComponent {
             .claw_history_widget()
     }
 
+    pub fn get_total_tokens(&self) -> u64 {
+        let inner = self.inner.borrow();
+        inner
+            .panes
+            .get(&inner.active_pane_id)
+            .map(|p| p.controller.get_total_tokens())
+            .unwrap_or(0)
+    }
+
     pub fn working_dir(&self) -> Option<String> {
         let inner = self.inner.borrow();
         if let Some(pane_data) = inner.panes.get(&inner.active_pane_id) {

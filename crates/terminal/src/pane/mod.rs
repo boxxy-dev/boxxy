@@ -41,6 +41,7 @@ pub struct TerminalPaneComponent {
     claw_message_list: gtk::ListBox,
     is_claw_active: Rc<Cell<bool>>,
     msg_bar: Rc<MsgBarComponent>,
+    pub total_tokens: Rc<Cell<u64>>,
 }
 
 pub(super) struct PaneInner {
@@ -99,6 +100,7 @@ impl TerminalPaneComponent {
 
         let is_claw_active = Rc::new(Cell::new(false));
         let agent_badge = AgentBadge::new(&widget);
+        let total_tokens = Rc::new(Cell::new(0));
 
         let inner = Rc::new(RefCell::new(PaneInner {
             terminal: terminal.clone(),
@@ -229,6 +231,7 @@ impl TerminalPaneComponent {
             claw_message_list.clone(),
             callback.clone(),
             init.spawn_intent,
+            total_tokens.clone(),
         );
 
         // Focus toggle hotkey (Ctrl + `) and MsgBar hotkey (Ctrl + /)
@@ -296,11 +299,16 @@ impl TerminalPaneComponent {
             claw_message_list,
             is_claw_active,
             msg_bar,
+            total_tokens,
         }
     }
 
     pub fn widget(&self) -> &gtk::Overlay {
         &self.widget
+    }
+
+    pub fn get_total_tokens(&self) -> u64 {
+        self.total_tokens.get()
     }
 
     pub fn claw_history_widget(&self) -> gtk::ListBox {

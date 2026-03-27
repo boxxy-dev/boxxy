@@ -17,4 +17,5 @@ The crate is modularized into several scoped modules to maintain readability and
 - **Syntax Highlighting**: Uses `sourceview5` for high-quality code block rendering with dark/light mode awareness.
 - **Slash Commands**: Extensible command system with real-time autocomplete popover.
 - **Streaming-Aware**: Designed to handle asynchronous LLM responses without blocking the GTK main loop.
+- **Token Usage Tracking**: Displays real-time cumulative token usage for the active chat session, providing visibility into context costs and provider billing.
 - **External Prompts**: System prompts are loaded from GResources (`resources/prompts/ai_chat.md`).

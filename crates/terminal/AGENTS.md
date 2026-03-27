@@ -13,7 +13,9 @@ The leaf component representing a single terminal instance. Modularized into:
 - **`pane/gestures.rs`**: Input handling, including middle-click paste, focus tracking, and context menu wiring. Right-click ownership logic lives entirely in `boxxy-vte`; this file registers a callback via `terminal.on_context_menu(...)` to receive the event only when the terminal (not the running app) owns the click.
 - **`pane/events.rs`**: VTE signal wiring and PTY event routing.
 - **`pane/claw.rs`**: Integration with the `boxxy-claw` actor model. Manages in-terminal popovers, status indicators, and handles structured `ToolResult` events for rendering a read-only debug log in the sidebar.
-- **`pane/preview.rs`**: OSC 8 hyperlink media previews (hover/click detection).
+- **pane/preview.rs**: OSC 8 hyperlink media previews (hover/click detection).
+
+- **Session Observability**: Each pane maintains an internal counter of cumulative token usage for its dedicated Claw agent. This data is synced to the global Claw sidebar, ensuring users can track the context cost of each terminal session independently.
 
 ### `TerminalComponent` (`component.rs`)
 The container component representing a single Tab. 

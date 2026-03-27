@@ -398,6 +398,7 @@ pub fn focus_active_terminal(inner: &mut AppWindowInner) {
             inner
                 .claw
                 .set_history_widget(&tc.controller.claw_history_widget());
+            inner.claw.set_token_usage(tc.controller.get_total_tokens());
         }
     }
     sync_header_title(inner);

@@ -354,7 +354,8 @@ impl BookmarkEditor {
 
                 if let Ok(res) = rx.await {
                     match res {
-                        Ok(code) => {
+                        Ok(res_val) => {
+                            let code = res_val.0;
                             let clean_code = code
                                 .trim_start_matches("```bash")
                                 .trim_start_matches("```sh")

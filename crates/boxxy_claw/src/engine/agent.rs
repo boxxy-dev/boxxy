@@ -37,12 +37,62 @@ impl ClawAgent {
         &self,
         prompt: &str,
         history: Vec<Message>,
-    ) -> Result<String, rig::completion::PromptError> {
+    ) -> Result<(String, Option<rig::completion::Usage>), rig::completion::PromptError> {
+        use rig::completion::Completion;
+
         match self {
-            Self::Gemini(agent) => agent.chat(prompt, history).await,
-            Self::Ollama(agent) => agent.chat(prompt, history).await,
-            Self::Anthropic(agent) => agent.chat(prompt, history).await,
-            Self::OpenAi(agent) => agent.chat(prompt, history).await,
+            Self::Gemini(agent) => {
+                let res = agent.completion(prompt, history).await?.send().await?;
+                let text = res
+                    .choice
+                    .into_iter()
+                    .next()
+                    .and_then(|c| match c {
+                        rig::completion::AssistantContent::Text(t) => Some(t.text),
+                        _ => None,
+                    })
+                    .unwrap_or_default();
+                Ok((text, Some(res.usage)))
+            }
+            Self::Ollama(agent) => {
+                let res = agent.completion(prompt, history).await?.send().await?;
+                let text = res
+                    .choice
+                    .into_iter()
+                    .next()
+                    .and_then(|c| match c {
+                        rig::completion::AssistantContent::Text(t) => Some(t.text),
+                        _ => None,
+                    })
+                    .unwrap_or_default();
+                Ok((text, Some(res.usage)))
+            }
+            Self::Anthropic(agent) => {
+                let res = agent.completion(prompt, history).await?.send().await?;
+                let text = res
+                    .choice
+                    .into_iter()
+                    .next()
+                    .and_then(|c| match c {
+                        rig::completion::AssistantContent::Text(t) => Some(t.text),
+                        _ => None,
+                    })
+                    .unwrap_or_default();
+                Ok((text, Some(res.usage)))
+            }
+            Self::OpenAi(agent) => {
+                let res = agent.completion(prompt, history).await?.send().await?;
+                let text = res
+                    .choice
+                    .into_iter()
+                    .next()
+                    .and_then(|c| match c {
+                        rig::completion::AssistantContent::Text(t) => Some(t.text),
+                        _ => None,
+                    })
+                    .unwrap_or_default();
+                Ok((text, Some(res.usage)))
+            }
             Self::Error(e) => Err(rig::completion::PromptError::CompletionError(
                 rig::completion::CompletionError::ProviderError(e.clone()),
             )),

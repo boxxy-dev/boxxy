@@ -8,7 +8,7 @@ This crate provides the primary interface for AI interactions using the `rig-cor
 ### `BoxxyAgent`
 A wrapper enum around provider-specific `rig::agent::Agent` instances.
 - **Variants:** `Gemini`, `Anthropic`, `Ollama`.
-- **Methods:** `chat` (for conversational history) and `prompt` (for single-shot requests).
+- **Methods:** `chat` (for conversational history) and `prompt` (for single-shot requests). Both methods return a tuple `(String, Option<rig::completion::Usage>)`, exposing token consumption metadata to the UI for observability.
 
 ### `AiCredentials`
 A unified payload struct that carries API keys and base URLs.

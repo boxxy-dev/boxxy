@@ -61,9 +61,9 @@ pub async fn flush_history(
         "You are a concise memory extraction system. Output only valid JSON.",
     );
 
-    if let Ok(response) = agent.prompt(&flush_prompt).await {
+    if let Ok(res) = agent.prompt(&flush_prompt).await {
         // Attempt to parse the JSON response
-        if let Ok(json) = serde_json::from_str::<serde_json::Value>(&response) {
+        if let Ok(json) = serde_json::from_str::<serde_json::Value>(&res.0) {
             let db_guard = db.lock().await;
             if let Some(db_val) = db_guard.as_ref() {
                 let store = Store::new(db_val.pool());

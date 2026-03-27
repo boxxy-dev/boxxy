@@ -90,6 +90,7 @@ pub struct ClawSidebarComponent {
     is_proactive: Rc<Cell<bool>>,
     mode_toggle_btn: gtk::Button,
     toggle_btn: gtk::Button,
+    usage_lbl: gtk::Label,
     current_list: Rc<std::cell::RefCell<Option<gtk::ListBox>>>,
 }
 
@@ -121,6 +122,14 @@ impl ClawSidebarComponent {
             .build();
 
         widget.append(&scroll);
+
+        let usage_lbl = gtk::Label::builder()
+            .label("Context: 0 tokens")
+            .css_classes(["caption", "dim-label"])
+            .margin_bottom(4)
+            .visible(false)
+            .build();
+        widget.append(&usage_lbl);
 
         let is_active = Rc::new(Cell::new(false));
         let is_proactive = Rc::new(Cell::new(false));
@@ -193,6 +202,7 @@ impl ClawSidebarComponent {
             is_proactive,
             mode_toggle_btn,
             toggle_btn,
+            usage_lbl,
             current_list,
         }
     }
@@ -285,6 +295,16 @@ impl ClawSidebarComponent {
             boxxy_preferences::config::ClawAutoDiagnosisMode::Lazy
         };
         self.update_diagnosis_mode(&mode);
+    }
+
+    pub fn set_token_usage(&self, tokens: u64) {
+        if tokens > 0 {
+            self.usage_lbl
+                .set_label(&format!("Context: {tokens} tokens"));
+            self.usage_lbl.set_visible(true);
+        } else {
+            self.usage_lbl.set_visible(false);
+        }
     }
 
     #[must_use]

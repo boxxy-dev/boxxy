@@ -69,6 +69,7 @@ impl Tool for TerminalCommandTool {
                 agent_name: agent_name.clone(),
                 command: args.command.clone(),
                 explanation: args.explanation.clone(),
+                usage: None,
             })
             .await
         {

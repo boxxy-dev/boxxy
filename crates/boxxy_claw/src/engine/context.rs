@@ -74,7 +74,8 @@ pub async fn retrieve_memories(
         // Fallback to basic cleaned query if expansion fails
         let mut fts_query = query.replace(['"', '\'', '?'], "");
 
-        if let Ok(keywords) = agent.prompt(&expansion_prompt).await {
+        if let Ok(res) = agent.prompt(&expansion_prompt).await {
+            let keywords = res.0;
             let cleaned = keywords.trim().replace(", ", " OR ").replace(',', " OR ");
             // FTS5 can fail if the LLM outputs weird syntax, but we'll try it
             fts_query = cleaned;
@@ -174,9 +175,10 @@ pub async fn summarize_and_store(
         "You are a concise summarizer. Output only the summary.",
     );
 
-    if let Ok(summary) = agent.prompt(&summarizer_prompt).await
+    if let Ok(res) = agent.prompt(&summarizer_prompt).await
         && let Some(db) = db.as_ref()
     {
+        let summary = res.0;
         let store = boxxy_db::store::Store::new(db.pool());
         // Store in interactions table (episodic memory)
         let _ = store

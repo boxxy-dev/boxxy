@@ -29,6 +29,8 @@ pub(crate) struct AiSidebarInner {
     pub autocomplete_popover: gtk::Popover,
     pub autocomplete_list: gtk::ListBox,
     pub model_selector: GlobalModelSelectorDialog,
+    pub usage_label: gtk::Label,
+    pub total_tokens_used: Rc<std::cell::Cell<u64>>,
 }
 
 impl std::fmt::Debug for AiSidebarComponent {
@@ -90,6 +92,14 @@ impl AiSidebarComponent {
 
         autocomplete_popover.set_child(Some(&autocomplete_scroll));
 
+        let usage_label = gtk::Label::builder()
+            .label("Context: 0 tokens")
+            .css_classes(["caption", "dim-label"])
+            .margin_bottom(4)
+            .visible(false)
+            .build();
+        widget.append(&usage_label);
+
         let settings = boxxy_preferences::Settings::load();
         let initial_model = settings.ai_chat_model.clone();
         let initial_claw_model = settings.claw_model.clone();
@@ -134,6 +144,8 @@ impl AiSidebarComponent {
             autocomplete_popover,
             autocomplete_list,
             model_selector: model_selector.clone(),
+            usage_label,
+            total_tokens_used: Rc::new(std::cell::Cell::new(0)),
         }));
 
         let comp = Self { widget, inner };
@@ -421,17 +433,26 @@ impl AiSidebarComponent {
         glib::spawn_future_local(async move {
             if let Ok(res) = rx.await {
                 match res {
-                    Ok(r) => comp_clone.receive_response(r),
-                    Err(e) => comp_clone.receive_response(format!("Error: {e}")),
+                    Ok((r, usage)) => comp_clone.receive_response(r, usage),
+                    Err(e) => comp_clone.receive_response(format!("Error: {e}"), None),
                 }
             }
         });
     }
 
-    fn receive_response(&self, content: String) {
+    fn receive_response(&self, content: String, usage: Option<rig::completion::Usage>) {
         let mut inner = self.inner.borrow_mut();
         if !inner.is_loading {
             return;
+        }
+
+        if let Some(usage) = usage {
+            let total = inner.total_tokens_used.get() + usage.total_tokens;
+            inner.total_tokens_used.set(total);
+            inner
+                .usage_label
+                .set_label(&format!("Context: {total} tokens"));
+            inner.usage_label.set_visible(true);
         }
 
         let ai_msg = ChatMessage {

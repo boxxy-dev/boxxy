@@ -58,6 +58,9 @@ pub fn handle_terminal_event(
                     inner
                         .claw
                         .set_history_widget(&inner.tabs[pos].controller.claw_history_widget());
+                    inner
+                        .claw
+                        .set_token_usage(inner.tabs[pos].controller.get_total_tokens());
                 }
             }
             TerminalEventKind::FocusClawSidebar => {
@@ -76,6 +79,15 @@ pub fn handle_terminal_event(
                 inner.view_stack.set_visible_child_name("claw");
             }
             TerminalEventKind::ClawEvent(_p_id, claw_event) => {
+                // Update token usage if this is the active tab/pane
+                let total_tokens = inner.tabs[pos].controller.get_total_tokens();
+                if let Some(page) = inner.tab_view.selected_page() {
+                    let child = page.child();
+                    if inner.tabs[pos].controller.widget() == &child {
+                        inner.claw.set_token_usage(total_tokens);
+                    }
+                }
+
                 match claw_event {
                     boxxy_claw::engine::ClawEngineEvent::DiagnosisComplete { .. }
                     | boxxy_claw::engine::ClawEngineEvent::InjectCommand { .. }

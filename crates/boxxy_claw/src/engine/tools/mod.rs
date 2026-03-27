@@ -39,6 +39,7 @@ impl ApprovalHandler for ClawApprovalHandler {
                 agent_name,
                 path,
                 content,
+                usage: None,
             })
             .await
             .is_err()
@@ -63,7 +64,11 @@ impl ApprovalHandler for ClawApprovalHandler {
 
         if self
             .tx_ui
-            .send(ClawEngineEvent::ProposeFileDelete { agent_name, path })
+            .send(ClawEngineEvent::ProposeFileDelete {
+                agent_name,
+                path,
+                usage: None,
+            })
             .await
             .is_err()
         {
@@ -91,6 +96,7 @@ impl ApprovalHandler for ClawApprovalHandler {
                 agent_name,
                 pid,
                 process_name,
+                usage: None,
             })
             .await
             .is_err()
@@ -115,7 +121,10 @@ impl ApprovalHandler for ClawApprovalHandler {
 
         if self
             .tx_ui
-            .send(ClawEngineEvent::ProposeGetClipboard { agent_name })
+            .send(ClawEngineEvent::ProposeGetClipboard {
+                agent_name,
+                usage: None,
+            })
             .await
             .is_err()
         {
@@ -139,7 +148,11 @@ impl ApprovalHandler for ClawApprovalHandler {
 
         if self
             .tx_ui
-            .send(ClawEngineEvent::ProposeSetClipboard { agent_name, text })
+            .send(ClawEngineEvent::ProposeSetClipboard {
+                agent_name,
+                text,
+                usage: None,
+            })
             .await
             .is_err()
         {
@@ -160,6 +173,7 @@ impl ApprovalHandler for ClawApprovalHandler {
                 agent_name,
                 tool_name,
                 result,
+                usage: None,
             })
             .await;
     }

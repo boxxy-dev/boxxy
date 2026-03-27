@@ -24,8 +24,8 @@ pub async fn extract_implicit_memory(
 
     let prompt = format!("USER: {}\n\nASSISTANT: {}", user_prompt, assistant_response);
 
-    if let Ok(response) = agent.prompt(&prompt).await
-        && let Ok(json) = serde_json::from_str::<serde_json::Value>(&response)
+    if let Ok(res) = agent.prompt(&prompt).await
+        && let Ok(json) = serde_json::from_str::<serde_json::Value>(&res.0)
         && let Some(facts) = json.get("facts").and_then(|f| f.as_array())
         && !facts.is_empty()
     {

@@ -7,6 +7,8 @@ We leverage Rust's type safety and an actor-like model to enforce a strict bound
 
 To prevent UI starvation and zombie processes, the application utilizes a **single global multi-threaded Tokio runtime** (`boxxy_ai_core::utils::runtime()`) for all I/O and CPU-heavy tasks. Communication back to the GTK main loop is handled via **bounded `async-channel`s** combined with explicit yielding (`glib::timeout_future(0).await`), ensuring the UI remains responsive under heavy load.
 
+The system provides real-time visibility into LLM token usage across all providers. It implements aggressive **Context Hygiene** by treating terminal snapshots as transient data—pruning them from conversation history before every turn to prevent LLM confusion and context bloat.
+
 ## Technology Stack
 - **Language:** Rust 2024 (v1.94+)
 - **Concurrency:** tokio v1.50, async-channel v2.3

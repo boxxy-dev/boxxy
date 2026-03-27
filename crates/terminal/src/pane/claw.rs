@@ -4,7 +4,7 @@ use crate::claw_indicator::ClawIndicator;
 use crate::overlay::{OverlayMode, TerminalOverlay};
 use gtk4 as gtk;
 use gtk4::prelude::*;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 pub(super) fn setup_claw(
@@ -16,6 +16,7 @@ pub(super) fn setup_claw(
     claw_message_list: gtk::ListBox,
     callback: std::sync::Arc<dyn Fn(PaneOutput) + Send + Sync + 'static>,
     spawn_intent: Option<String>,
+    total_tokens: Rc<Cell<u64>>,
 ) -> (TerminalOverlay, ClawIndicator, PendingDiagnosis) {
     let pending_proactive_diagnosis =
         Rc::new(RefCell::new(None::<(String, crate::TerminalProposal)>));
@@ -142,6 +143,7 @@ pub(super) fn setup_claw(
     let indicator_event_clone = claw_indicator.clone();
     let claw_list_events = claw_message_list.clone();
     let inner_for_events = inner.clone();
+    let total_tokens_for_events = total_tokens.clone();
 
     gtk::glib::spawn_future_local(async move {
         while let Ok(event) = claw_rx.recv().await {
@@ -159,7 +161,11 @@ pub(super) fn setup_claw(
                 boxxy_claw::engine::ClawEngineEvent::DiagnosisComplete {
                     diagnosis,
                     agent_name,
+                    usage,
                 } => {
+                    if let Some(usage) = usage {
+                        total_tokens_for_events.set(total_tokens_for_events.get() + usage.total_tokens);
+                    }
                     boxxy_claw::ui::add_diagnosis_row(
                         &claw_list_events,
                         id.clone(),
@@ -178,7 +184,11 @@ pub(super) fn setup_claw(
                     command,
                     diagnosis,
                     agent_name,
+                    usage,
                 } => {
+                    if let Some(usage) = usage {
+                        total_tokens_for_events.set(total_tokens_for_events.get() + usage.total_tokens);
+                    }
                     if !diagnosis.is_empty() {
                         boxxy_claw::ui::add_diagnosis_row(
                             &claw_list_events,
@@ -208,7 +218,11 @@ pub(super) fn setup_claw(
                     path,
                     content,
                     agent_name,
+                    usage,
                 } => {
+                    if let Some(usage) = usage {
+                        total_tokens_for_events.set(total_tokens_for_events.get() + usage.total_tokens);
+                    }
                     boxxy_claw::ui::add_file_write_approval_row(
                         &claw_list_events,
                         id.clone(),
@@ -226,7 +240,10 @@ pub(super) fn setup_claw(
                         crate::TerminalProposal::FileWrite(path.clone(), content.clone())
                     );
                 }
-                boxxy_claw::engine::ClawEngineEvent::ProposeFileDelete { path, agent_name } => {
+                boxxy_claw::engine::ClawEngineEvent::ProposeFileDelete { path, agent_name, usage } => {
+                    if let Some(usage) = usage {
+                        total_tokens_for_events.set(total_tokens_for_events.get() + usage.total_tokens);
+                    }
                     boxxy_claw::ui::add_file_delete_approval_row(
                         &claw_list_events,
                         id.clone(),
@@ -247,7 +264,11 @@ pub(super) fn setup_claw(
                     pid,
                     process_name,
                     agent_name,
+                    usage,
                 } => {
+                    if let Some(usage) = usage {
+                        total_tokens_for_events.set(total_tokens_for_events.get() + usage.total_tokens);
+                    }
                     boxxy_claw::ui::add_kill_process_approval_row(
                         &claw_list_events,
                         id.clone(),
@@ -265,7 +286,10 @@ pub(super) fn setup_claw(
                         crate::TerminalProposal::Command(format!("kill {pid}")),
                     );
                 }
-                boxxy_claw::engine::ClawEngineEvent::ProposeGetClipboard { agent_name } => {
+                boxxy_claw::engine::ClawEngineEvent::ProposeGetClipboard { agent_name, usage } => {
+                    if let Some(usage) = usage {
+                        total_tokens_for_events.set(total_tokens_for_events.get() + usage.total_tokens);
+                    }
                     boxxy_claw::ui::add_clipboard_get_approval_row(
                         &claw_list_events,
                         id.clone(),
@@ -281,7 +305,10 @@ pub(super) fn setup_claw(
                         crate::TerminalProposal::None,
                     );
                 }
-                boxxy_claw::engine::ClawEngineEvent::ProposeSetClipboard { agent_name, text } => {
+                boxxy_claw::engine::ClawEngineEvent::ProposeSetClipboard { agent_name, text, usage } => {
+                    if let Some(usage) = usage {
+                        total_tokens_for_events.set(total_tokens_for_events.get() + usage.total_tokens);
+                    }
                     boxxy_claw::ui::add_clipboard_set_approval_row(
                         &claw_list_events,
                         id.clone(),
@@ -302,7 +329,11 @@ pub(super) fn setup_claw(
                     command,
                     explanation,
                     agent_name,
+                    usage,
                 } => {
+                    if let Some(usage) = usage {
+                        total_tokens_for_events.set(total_tokens_for_events.get() + usage.total_tokens);
+                    }
                     if !explanation.is_empty() {
                         boxxy_claw::ui::add_diagnosis_row(
                             &claw_list_events,
@@ -377,7 +408,11 @@ pub(super) fn setup_claw(
                     agent_name,
                     tool_name,
                     result,
+                    usage,
                 } => {
+                    if let Some(usage) = usage {
+                        total_tokens_for_events.set(total_tokens_for_events.get() + usage.total_tokens);
+                    }
                     if tool_name == "list_processes" {
                         boxxy_claw::ui::add_process_list_row(
                             &claw_list_events,

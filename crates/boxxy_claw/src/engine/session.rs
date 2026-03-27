@@ -760,7 +760,7 @@ fn spawn_turn(
         };
 
         match agent.chat(query_for_chat, final_history).await {
-            Ok(response) => {
+            Ok((response, usage)) => {
                 let _ = tx_ui
                     .send(ClawEngineEvent::AgentThinking {
                         agent_name: agent_name.clone(),
@@ -819,7 +819,7 @@ fn spawn_turn(
                     }
                     drop(db_guard);
 
-                    crate::memories::extraction::extract_implicit_memory(
+                    let _ = crate::memories::extraction::extract_implicit_memory(
                         db_for_summary.clone(),
                         prompt_for_db,
                         resp_for_db,
@@ -854,6 +854,7 @@ fn spawn_turn(
                             agent_name,
                             command,
                             diagnosis: clean_diagnosis,
+                            usage: usage.clone(),
                         })
                         .await;
                 } else {
@@ -861,6 +862,7 @@ fn spawn_turn(
                         .send(ClawEngineEvent::DiagnosisComplete {
                             agent_name,
                             diagnosis: clean_diagnosis,
+                            usage: usage.clone(),
                         })
                         .await;
                 }
@@ -894,6 +896,7 @@ fn spawn_turn(
                     .send(ClawEngineEvent::DiagnosisComplete {
                         agent_name: agent_name.clone(),
                         diagnosis: friendly_msg,
+                        usage: None,
                     })
                     .await;
 
