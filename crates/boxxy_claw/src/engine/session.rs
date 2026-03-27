@@ -19,6 +19,8 @@ pub struct SessionState {
     pub pending_set_clipboard_reply: Option<tokio::sync::oneshot::Sender<bool>>,
     pub history: Vec<Message>,
     pub pending_lazy_diagnosis: Option<(String, String, String)>,
+    pub persistent_agent: Option<crate::engine::agent::ClawAgent>,
+    pub last_tools: Option<Vec<String>>,
 }
 
 pub struct ClawSession {
@@ -68,6 +70,8 @@ impl ClawSession {
                 pending_set_clipboard_reply: None,
                 history: Vec::new(),
                 pending_lazy_diagnosis: None,
+                persistent_agent: None,
+                last_tools: None,
             })),
             diagnosis_mode: settings.claw_auto_diagnosis_mode,
         };
@@ -531,7 +535,7 @@ fn spawn_turn(
     agent_name: String,
     prompt: &str,
     snapshot: &str,
-    session_ctx: &str,
+    _session_ctx: &str,
     cwd: String,
     is_new_task: bool,
     claw_proxy: AgentClawProxy<'static>,
@@ -543,7 +547,6 @@ fn spawn_turn(
 ) {
     let prompt_clone = prompt.to_string();
     let snapshot_clone = snapshot.to_string();
-    let session_ctx_clone = session_ctx.to_string();
     let cwd_clone = cwd.clone();
     let images_clone = image_attachments.clone();
 
@@ -567,7 +570,7 @@ fn spawn_turn(
         let past_memories = retrieve_memories(&db_guard, &prompt_clone, &cwd_clone).await;
         drop(db_guard);
 
-        let state_lock = state.lock().await;
+        let mut state_lock = state.lock().await;
         let settings = boxxy_preferences::Settings::load();
 
         let mut active_skills_text = String::new();
@@ -592,10 +595,10 @@ fn spawn_turn(
             }
         }
 
-        // 1. Semantic Search: Get the top 3 most relevant skills via SQLite FTS5 to be "Active"
-        let mut active_skills = registry.search_relevant_skills(&prompt_clone, 3).await;
+        // 1. Semantic Search: Get only the TOP 1 most relevant skill to avoid context bloat
+        let mut active_skills = registry.search_relevant_skills(&prompt_clone, 1).await;
 
-        // 2. Keyword Fallback: If semantic search missed something explicitly triggered, add it to Active
+        // 2. Keyword Fallback: Only add skills that were EXPLICITLY triggered by keywords in the query
         let all_skills = registry.get_skills().await;
         for skill in &all_skills {
             // Avoid duplicates
@@ -607,15 +610,12 @@ fn spawn_turn(
             }
 
             let mut should_load = false;
-            // Skills with NO triggers are "Always Active" (like system-specs)
-            if skill.frontmatter.triggers.is_empty() {
-                should_load = true;
-            } else {
-                for trigger in &skill.frontmatter.triggers {
-                    if !trigger.is_empty() && query_lower.contains(&trigger.to_lowercase()) {
-                        should_load = true;
-                        break;
-                    }
+            // We NO LONGER load trigger-less skills by default. 
+            // They must be triggered or activated via tool.
+            for trigger in &skill.frontmatter.triggers {
+                if !trigger.is_empty() && query_lower.contains(&trigger.to_lowercase()) {
+                    should_load = true;
+                    break;
                 }
             }
 
@@ -625,9 +625,10 @@ fn spawn_turn(
         }
 
         // 3. Build Active Skills Text (Full Content)
+        // We limit this to a maximum of 2 skills in full to save tokens.
         if !active_skills.is_empty() {
             active_skills_text.push_str("\n--- ACTIVE SKILLS (FULL INSTRUCTIONS) ---\n");
-            for skill in active_skills.iter().take(5) {
+            for skill in active_skills.iter().take(2) {
                 active_skills_text.push_str(&format!("\n### SKILL: {}\n", skill.frontmatter.name));
                 active_skills_text.push_str(&skill.content);
                 active_skills_text.push('\n');
@@ -635,7 +636,7 @@ fn spawn_turn(
         }
 
         // 4. Build Available Skills Text (Compact Toolbox)
-        // Include all skills NOT in active_skills as compact metadata
+        // Everything else is just a name and description.
         let mut toolbox_count = 0;
         for skill in &all_skills {
             if active_skills
@@ -650,9 +651,10 @@ fn spawn_turn(
                 available_skills_text.push_str("Use `activate_skill(name)` if you need the full instructions for any of these:\n");
             }
 
+            let description = skill.frontmatter.description.split('.').next().unwrap_or("No description available.").trim();
             available_skills_text.push_str(&format!(
-                "- {}: {}\n",
-                skill.frontmatter.name, skill.frontmatter.description
+                "- {}: {}.\n",
+                skill.frontmatter.name, description
             ));
             toolbox_count += 1;
         }
@@ -665,44 +667,75 @@ fn spawn_turn(
         let system_prompt_template =
             String::from_utf8(data.to_vec()).expect("Prompt resource is not valid UTF-8");
 
-        let identity_injection = format!(
-            "## YOUR IDENTITY\n\
-            You are the Boxxy-Claw agent managing terminal pane: **{}**\n\
-            Your unique internal ID is: `{}`\n",
+        let identity = format!(
+            "You are the Boxxy-Claw agent managing terminal pane: **{}**\n\
+            Your unique internal ID is: `{}`",
             agent_name, pane_id
         );
 
         let system_prompt = system_prompt_template
-            .replace(
-                "{{session_context}}",
-                &format!("{}\n\n{}", identity_injection, session_ctx_clone),
-            )
-            .replace("{{active_skills}}", &active_skills_text)
-            .replace("{{available_skills}}", &available_skills_text)
-            .replace("{{past_memories}}", &past_memories)
-            .replace("{{current_dir}}", &cwd_clone)
-            .replace("{{workspace_radar}}", &radar)
-            .replace("{{tui_warning}}", &tui_warning);
+            .replace("{{identity}}", &identity)
+            .replace("{{available_skills}}", &available_skills_text);
 
         let creds = boxxy_ai_core::AiCredentials::new(
             settings.api_keys.clone(),
             settings.ollama_base_url.clone(),
         );
 
-        let agent = crate::engine::agent::create_claw_agent(
-            &settings.claw_model,
-            &creds,
-            &system_prompt,
-            &claw_proxy,
-            &cwd_clone,
-            tx_ui.clone(),
-            state.clone(),
-            db.clone(),
-            &settings,
+        // --- PHASE 3: PERSISTENT AGENT ---
+        // We check if we already have an agent instance for this session.
+        // If not, or if the model changed, we create a new one.
+        let mut agent_opt = state_lock.persistent_agent.take();
+
+        if agent_opt.is_none() {
+            agent_opt = Some(crate::engine::agent::create_claw_agent(
+                &settings.claw_model,
+                &creds,
+                &system_prompt,
+                &claw_proxy,
+                &cwd_clone,
+                tx_ui.clone(),
+                state.clone(),
+                db.clone(),
+                &settings,
+            ));
+        }
+
+        let agent = agent_opt.unwrap();
+
+        // Truncate snapshot to 5,000 characters and 50 lines to prevent context blowup
+        let mut final_snapshot = snapshot_clone;
+
+        // 1. Line limit (take only the last 50 lines)
+        let lines: Vec<&str> = final_snapshot.lines().collect();
+        if lines.len() > 50 {
+            final_snapshot = lines[lines.len() - 50..].join("\n");
+        }
+
+        // 2. Character limit
+        if final_snapshot.len() > 5000 {
+            final_snapshot = format!(
+                "... (truncated {} chars) ...\n{}",
+                final_snapshot.len() - 5000,
+                &final_snapshot[final_snapshot.len() - 5000..]
+            );
+        }
+
+        // 3. Build Dynamic Turn Context (The part that changes every turn)
+        let turn_context = format!(
+            "## CURRENT TURN CONTEXT\n\
+            CWD: `{}`\n\
+            {}\n\
+            {}\n\
+            {}\n\
+            {}\n",
+            cwd_clone, active_skills_text, past_memories, radar, tui_warning
         );
 
-        let full_prompt =
-            format!("{prompt_clone}\n\nTerminal Snapshot:\n```\n{snapshot_clone}\n```");
+        let full_prompt = format!(
+            "{}\n\n{}\n\nTerminal Snapshot:\n```\n{}\n```",
+            prompt_clone, turn_context, final_snapshot
+        );
 
         let history = state_lock.history.clone();
         drop(state_lock);
@@ -731,15 +764,22 @@ fn spawn_turn(
 
         // We temporarily adapt the ClawAgent to accept `Vec<Message>` for the current prompt
         // instead of just `&str` since we need to send the multimodal `user_msg`.
-        // Prune redundant snapshots from history to avoid context bloat
+        
+        // Context Hygiene 2.0: Aggressively strip ALL transient context from previous turns
+        // (Skills, Radar, Memories, and Snapshots) so history grows near-zero tokens per turn.
         let mut final_history: Vec<rig::message::Message> = history
             .into_iter()
             .map(|mut msg| {
                 if let rig::message::Message::User { content } = &mut msg {
-                    let mut items: Vec<rig::message::UserContent> = content.clone().into_iter().collect();
+                    let mut items: Vec<rig::message::UserContent> =
+                        content.clone().into_iter().collect();
                     for item in &mut items {
                         if let rig::message::UserContent::Text(text) = item {
-                            if let Some(idx) = text.text.find("\n\nTerminal Snapshot:\n```") {
+                            // Find the start of the dynamic block and truncate everything after it
+                            if let Some(idx) = text.text.find("\n\n## CURRENT TURN CONTEXT") {
+                                text.text.truncate(idx);
+                            } else if let Some(idx) = text.text.find("\n\nTerminal Snapshot:\n```") {
+                                // Fallback for older messages
                                 text.text.truncate(idx);
                             }
                         }
@@ -759,6 +799,17 @@ fn spawn_turn(
             &full_prompt
         };
 
+        log::debug!(
+            "\n=== CLAW LLM PAYLOAD START ===\n\
+            SYSTEM PROMPT:\n{}\n\n\
+            HISTORY DUMP (Context Hygiene 2.0 Check):\n{:#?}\n\n\
+            USER PROMPT (Current Turn):\n{}\n\
+            === CLAW LLM PAYLOAD END ===\n",
+            system_prompt,
+            final_history,
+            full_prompt
+        );
+
         match agent.chat(query_for_chat, final_history).await {
             Ok((response, usage)) => {
                 let _ = tx_ui
@@ -769,6 +820,9 @@ fn spawn_turn(
                     .await;
 
                 let mut state_lock = state.lock().await;
+                // Put the agent and tools back for the next turn
+                state_lock.persistent_agent = Some(agent);
+
                 state_lock
                     .history
                     .push(rig::message::Message::user(full_prompt.clone()));

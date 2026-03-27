@@ -7,7 +7,10 @@ We leverage Rust's type safety and an actor-like model to enforce a strict bound
 
 To prevent UI starvation and zombie processes, the application utilizes a **single global multi-threaded Tokio runtime** (`boxxy_ai_core::utils::runtime()`) for all I/O and CPU-heavy tasks. Communication back to the GTK main loop is handled via **bounded `async-channel`s** combined with explicit yielding (`glib::timeout_future(0).await`), ensuring the UI remains responsive under heavy load.
 
-The system provides real-time visibility into LLM token usage across all providers. It implements aggressive **Context Hygiene** by treating terminal snapshots as transient data—pruning them from conversation history before every turn to prevent LLM confusion and context bloat.
+The system provides real-time visibility into LLM token usage across all providers. It implements an advanced **Next-Gen Context Hygiene** strategy to maximize efficiency for 2026 flagship models (Gemini 3.1, Claude 4.6, GPT-5.4):
+- **Cache-Aligned Restructuring**: The system preamble (Character + Toolbox) is kept 100% static at the start of every request, while volatile data (Terminal snapshots, CWD, Active skills) is moved to the end of the user message. This triggers a 90% discount via automatic Context Caching.
+- **In-Memory Persistence**: AI agent objects are kept alive per terminal pane, maintaining internal session state and enabling incremental context updates.
+- **Aggressive History Stripping**: Past turn context (Skills, Radar, Memories) is aggressively pruned from history, leaving only the core intent to prevent linear context growth.
 
 ## Technology Stack
 - **Language:** Rust 2024 (v1.94+)

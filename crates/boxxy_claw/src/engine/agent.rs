@@ -36,62 +36,26 @@ impl ClawAgent {
     pub async fn chat(
         &self,
         prompt: &str,
-        history: Vec<Message>,
+        mut history: Vec<Message>,
     ) -> Result<(String, Option<rig::completion::Usage>), rig::completion::PromptError> {
-        use rig::completion::Completion;
+        use rig::completion::Prompt;
 
         match self {
             Self::Gemini(agent) => {
-                let res = agent.completion(prompt, history).await?.send().await?;
-                let text = res
-                    .choice
-                    .into_iter()
-                    .next()
-                    .and_then(|c| match c {
-                        rig::completion::AssistantContent::Text(t) => Some(t.text),
-                        _ => None,
-                    })
-                    .unwrap_or_default();
-                Ok((text, Some(res.usage)))
+                let res = agent.prompt(prompt).with_history(&mut history).extended_details().await?;
+                Ok((res.output.clone(), Some(res.usage)))
             }
             Self::Ollama(agent) => {
-                let res = agent.completion(prompt, history).await?.send().await?;
-                let text = res
-                    .choice
-                    .into_iter()
-                    .next()
-                    .and_then(|c| match c {
-                        rig::completion::AssistantContent::Text(t) => Some(t.text),
-                        _ => None,
-                    })
-                    .unwrap_or_default();
-                Ok((text, Some(res.usage)))
+                let res = agent.prompt(prompt).with_history(&mut history).extended_details().await?;
+                Ok((res.output.clone(), Some(res.usage)))
             }
             Self::Anthropic(agent) => {
-                let res = agent.completion(prompt, history).await?.send().await?;
-                let text = res
-                    .choice
-                    .into_iter()
-                    .next()
-                    .and_then(|c| match c {
-                        rig::completion::AssistantContent::Text(t) => Some(t.text),
-                        _ => None,
-                    })
-                    .unwrap_or_default();
-                Ok((text, Some(res.usage)))
+                let res = agent.prompt(prompt).with_history(&mut history).extended_details().await?;
+                Ok((res.output.clone(), Some(res.usage)))
             }
             Self::OpenAi(agent) => {
-                let res = agent.completion(prompt, history).await?.send().await?;
-                let text = res
-                    .choice
-                    .into_iter()
-                    .next()
-                    .and_then(|c| match c {
-                        rig::completion::AssistantContent::Text(t) => Some(t.text),
-                        _ => None,
-                    })
-                    .unwrap_or_default();
-                Ok((text, Some(res.usage)))
+                let res = agent.prompt(prompt).with_history(&mut history).extended_details().await?;
+                Ok((res.output.clone(), Some(res.usage)))
             }
             Self::Error(e) => Err(rig::completion::PromptError::CompletionError(
                 rig::completion::CompletionError::ProviderError(e.clone()),
@@ -128,105 +92,107 @@ pub fn create_claw_agent(
         state: state.clone(),
     });
 
+    let mut tools: Vec<Box<dyn rig::tool::ToolDyn>> = vec![
+        Box::new(SysShellTool {
+            proxy: claw_proxy.clone(),
+            current_dir: current_dir.to_string(),
+        }),
+        Box::new(crate::memories::MemoryStoreTool {
+            db: db.clone(),
+            current_dir: current_dir.to_string(),
+        }),
+        Box::new(crate::engine::tools::scrollback::ReadScrollbackTool {
+            tx_ui: tx_ui.clone(),
+            state: state.clone(),
+        }),
+        Box::new(ActivateSkillTool),
+        Box::new(TerminalCommandTool {
+            tx_ui: tx_ui.clone(),
+            state: state.clone(),
+        }),
+        Box::new(ListActiveAgentsTool),
+        Box::new(ReadPaneTool),
+        Box::new(DelegateTaskTool {
+            state: state.clone(),
+        }),
+        Box::new(SpawnAgentTool {
+            tx_ui: tx_ui.clone(),
+            state: state.clone(),
+        }),
+        Box::new(CloseAgentTool {
+            tx_ui: tx_ui.clone(),
+        }),
+        Box::new(SendKeystrokesTool {
+            tx_ui: tx_ui.clone(),
+        }),
+        Box::new(ListProcessesTool {
+            proxy: claw_proxy.clone(),
+            approval: approval_handler.clone(),
+        }),
+        Box::new(SetGlobalIntentTool),
+    ];
+
+    // Conditional Core Toolbox tools
+    if settings.enable_file_tools {
+        tools.push(Box::new(FileReadTool {
+            proxy: claw_proxy.clone(),
+            current_dir: current_dir.to_string(),
+        }));
+        tools.push(Box::new(FileWriteTool {
+            proxy: claw_proxy.clone(),
+            current_dir: current_dir.to_string(),
+            approval: approval_handler.clone(),
+        }));
+        tools.push(Box::new(ListDirectoryTool {
+            proxy: claw_proxy.clone(),
+            current_dir: current_dir.to_string(),
+        }));
+        tools.push(Box::new(FileDeleteTool {
+            proxy: claw_proxy.clone(),
+            current_dir: current_dir.to_string(),
+            approval: approval_handler.clone(),
+        }));
+    }
+
+    if settings.enable_system_tools {
+        tools.push(Box::new(GetSystemInfoTool {
+            proxy: claw_proxy.clone(),
+            approval: approval_handler.clone(),
+        }));
+    }
+
+    if settings.enable_dangerous_tools {
+        tools.push(Box::new(KillProcessTool {
+            proxy: claw_proxy.clone(),
+            approval: approval_handler.clone(),
+        }));
+    }
+
+    if settings.enable_web_tools {
+        tools.push(Box::new(HttpFetchTool));
+    }
+
+    if settings.enable_clipboard_tools {
+        tools.push(Box::new(GetClipboardTool {
+            proxy: claw_proxy.clone(),
+            approval: approval_handler.clone(),
+        }));
+        tools.push(Box::new(SetClipboardTool {
+            proxy: claw_proxy.clone(),
+            approval: approval_handler.clone(),
+        }));
+    }
+
     match provider {
         ModelProvider::Gemini(model, _thinking) => {
             let key = creds.api_keys.get("Gemini").cloned().unwrap_or_default();
             let client = gemini::Client::new(key.trim()).unwrap();
             let gemini_model = client.completion_model(model.api_name());
 
-            let mut builder = rig::agent::AgentBuilder::new(gemini_model)
+            let builder = rig::agent::AgentBuilder::new(gemini_model)
                 .preamble(system_prompt)
                 .default_max_turns(20)
-                .tool(SysShellTool {
-                    proxy: claw_proxy.clone(),
-                    current_dir: current_dir.to_string(),
-                })
-                .tool(crate::memories::MemoryStoreTool {
-                    db: db.clone(),
-                    current_dir: current_dir.to_string(),
-                })
-                .tool(TerminalCommandTool {
-                    tx_ui: tx_ui.clone(),
-                    state: state.clone(),
-                })
-                .tool(crate::engine::tools::scrollback::ReadScrollbackTool {
-                    tx_ui: tx_ui.clone(),
-                    state: state.clone(),
-                })
-                .tool(ActivateSkillTool)
-                .tool(ListActiveAgentsTool)
-                .tool(ReadPaneTool)
-                .tool(DelegateTaskTool {
-                    state: state.clone(),
-                })
-                .tool(SpawnAgentTool {
-                    tx_ui: tx_ui.clone(),
-                    state: state.clone(),
-                })
-                .tool(CloseAgentTool {
-                    tx_ui: tx_ui.clone(),
-                })
-                .tool(SendKeystrokesTool {
-                    tx_ui: tx_ui.clone(),
-                })
-                .tool(ListProcessesTool {
-                    proxy: claw_proxy.clone(),
-                    approval: approval_handler.clone(),
-                })
-                .tool(SetGlobalIntentTool);
-
-            // Conditional Core Toolbox tools
-            if settings.enable_file_tools {
-                builder = builder
-                    .tool(FileReadTool {
-                        proxy: claw_proxy.clone(),
-                        current_dir: current_dir.to_string(),
-                    })
-                    .tool(FileWriteTool {
-                        proxy: claw_proxy.clone(),
-                        current_dir: current_dir.to_string(),
-                        approval: approval_handler.clone(),
-                    })
-                    .tool(ListDirectoryTool {
-                        proxy: claw_proxy.clone(),
-                        current_dir: current_dir.to_string(),
-                    })
-                    .tool(FileDeleteTool {
-                        proxy: claw_proxy.clone(),
-                        current_dir: current_dir.to_string(),
-                        approval: approval_handler.clone(),
-                    });
-            }
-
-            if settings.enable_system_tools {
-                builder = builder.tool(GetSystemInfoTool {
-                    proxy: claw_proxy.clone(),
-                    approval: approval_handler.clone(),
-                });
-            }
-
-            if settings.enable_dangerous_tools {
-                builder = builder.tool(KillProcessTool {
-                    proxy: claw_proxy.clone(),
-                    approval: approval_handler.clone(),
-                });
-            }
-
-            if settings.enable_web_tools {
-                builder = builder.tool(HttpFetchTool);
-            }
-
-            if settings.enable_clipboard_tools {
-                builder = builder
-                    .tool(GetClipboardTool {
-                        proxy: claw_proxy.clone(),
-                        approval: approval_handler.clone(),
-                    })
-                    .tool(SetClipboardTool {
-                        proxy: claw_proxy.clone(),
-                        approval: approval_handler.clone(),
-                    });
-            }
+                .tools(tools);
 
             ClawAgent::Gemini(builder.build())
         }
@@ -238,99 +204,10 @@ pub fn create_claw_agent(
                 .unwrap();
             let ollama_model = client.completion_model(model_name.as_str());
 
-            let mut builder = rig::agent::AgentBuilder::new(ollama_model)
+            let builder = rig::agent::AgentBuilder::new(ollama_model)
                 .preamble(system_prompt)
                 .default_max_turns(20)
-                .tool(SysShellTool {
-                    proxy: claw_proxy.clone(),
-                    current_dir: current_dir.to_string(),
-                })
-                .tool(crate::memories::MemoryStoreTool {
-                    db: db.clone(),
-                    current_dir: current_dir.to_string(),
-                })
-                .tool(TerminalCommandTool {
-                    tx_ui: tx_ui.clone(),
-                    state: state.clone(),
-                })
-                .tool(crate::engine::tools::scrollback::ReadScrollbackTool {
-                    tx_ui: tx_ui.clone(),
-                    state: state.clone(),
-                })
-                .tool(ActivateSkillTool)
-                .tool(ListActiveAgentsTool)
-                .tool(ReadPaneTool)
-                .tool(DelegateTaskTool {
-                    state: state.clone(),
-                })
-                .tool(SpawnAgentTool {
-                    tx_ui: tx_ui.clone(),
-                    state: state.clone(),
-                })
-                .tool(CloseAgentTool {
-                    tx_ui: tx_ui.clone(),
-                })
-                .tool(SendKeystrokesTool {
-                    tx_ui: tx_ui.clone(),
-                })
-                .tool(ListProcessesTool {
-                    proxy: claw_proxy.clone(),
-                    approval: approval_handler.clone(),
-                })
-                .tool(SetGlobalIntentTool);
-
-            // Conditional Core Toolbox tools
-            if settings.enable_file_tools {
-                builder = builder
-                    .tool(FileReadTool {
-                        proxy: claw_proxy.clone(),
-                        current_dir: current_dir.to_string(),
-                    })
-                    .tool(FileWriteTool {
-                        proxy: claw_proxy.clone(),
-                        current_dir: current_dir.to_string(),
-                        approval: approval_handler.clone(),
-                    })
-                    .tool(ListDirectoryTool {
-                        proxy: claw_proxy.clone(),
-                        current_dir: current_dir.to_string(),
-                    })
-                    .tool(FileDeleteTool {
-                        proxy: claw_proxy.clone(),
-                        current_dir: current_dir.to_string(),
-                        approval: approval_handler.clone(),
-                    });
-            }
-
-            if settings.enable_system_tools {
-                builder = builder.tool(GetSystemInfoTool {
-                    proxy: claw_proxy.clone(),
-                    approval: approval_handler.clone(),
-                });
-            }
-
-            if settings.enable_dangerous_tools {
-                builder = builder.tool(KillProcessTool {
-                    proxy: claw_proxy.clone(),
-                    approval: approval_handler.clone(),
-                });
-            }
-
-            if settings.enable_web_tools {
-                builder = builder.tool(HttpFetchTool);
-            }
-
-            if settings.enable_clipboard_tools {
-                builder = builder
-                    .tool(GetClipboardTool {
-                        proxy: claw_proxy.clone(),
-                        approval: approval_handler.clone(),
-                    })
-                    .tool(SetClipboardTool {
-                        proxy: claw_proxy.clone(),
-                        approval: approval_handler.clone(),
-                    });
-            }
+                .tools(tools);
 
             ClawAgent::Ollama(builder.build())
         }
@@ -339,99 +216,10 @@ pub fn create_claw_agent(
             let client = rig::providers::anthropic::Client::new(key.trim()).unwrap();
             let anthropic_model = client.completion_model(model.api_name());
 
-            let mut builder = rig::agent::AgentBuilder::new(anthropic_model)
+            let builder = rig::agent::AgentBuilder::new(anthropic_model)
                 .preamble(system_prompt)
                 .default_max_turns(20)
-                .tool(SysShellTool {
-                    proxy: claw_proxy.clone(),
-                    current_dir: current_dir.to_string(),
-                })
-                .tool(crate::memories::MemoryStoreTool {
-                    db: db.clone(),
-                    current_dir: current_dir.to_string(),
-                })
-                .tool(TerminalCommandTool {
-                    tx_ui: tx_ui.clone(),
-                    state: state.clone(),
-                })
-                .tool(crate::engine::tools::scrollback::ReadScrollbackTool {
-                    tx_ui: tx_ui.clone(),
-                    state: state.clone(),
-                })
-                .tool(ActivateSkillTool)
-                .tool(ListActiveAgentsTool)
-                .tool(ReadPaneTool)
-                .tool(DelegateTaskTool {
-                    state: state.clone(),
-                })
-                .tool(SpawnAgentTool {
-                    tx_ui: tx_ui.clone(),
-                    state: state.clone(),
-                })
-                .tool(CloseAgentTool {
-                    tx_ui: tx_ui.clone(),
-                })
-                .tool(SendKeystrokesTool {
-                    tx_ui: tx_ui.clone(),
-                })
-                .tool(ListProcessesTool {
-                    proxy: claw_proxy.clone(),
-                    approval: approval_handler.clone(),
-                })
-                .tool(SetGlobalIntentTool);
-
-            // Conditional Core Toolbox tools
-            if settings.enable_file_tools {
-                builder = builder
-                    .tool(FileReadTool {
-                        proxy: claw_proxy.clone(),
-                        current_dir: current_dir.to_string(),
-                    })
-                    .tool(FileWriteTool {
-                        proxy: claw_proxy.clone(),
-                        current_dir: current_dir.to_string(),
-                        approval: approval_handler.clone(),
-                    })
-                    .tool(ListDirectoryTool {
-                        proxy: claw_proxy.clone(),
-                        current_dir: current_dir.to_string(),
-                    })
-                    .tool(FileDeleteTool {
-                        proxy: claw_proxy.clone(),
-                        current_dir: current_dir.to_string(),
-                        approval: approval_handler.clone(),
-                    });
-            }
-
-            if settings.enable_system_tools {
-                builder = builder.tool(GetSystemInfoTool {
-                    proxy: claw_proxy.clone(),
-                    approval: approval_handler.clone(),
-                });
-            }
-
-            if settings.enable_dangerous_tools {
-                builder = builder.tool(KillProcessTool {
-                    proxy: claw_proxy.clone(),
-                    approval: approval_handler.clone(),
-                });
-            }
-
-            if settings.enable_web_tools {
-                builder = builder.tool(HttpFetchTool);
-            }
-
-            if settings.enable_clipboard_tools {
-                builder = builder
-                    .tool(GetClipboardTool {
-                        proxy: claw_proxy.clone(),
-                        approval: approval_handler.clone(),
-                    })
-                    .tool(SetClipboardTool {
-                        proxy: claw_proxy.clone(),
-                        approval: approval_handler.clone(),
-                    });
-            }
+                .tools(tools);
 
             ClawAgent::Anthropic(builder.build())
         }
@@ -443,101 +231,12 @@ pub fn create_claw_agent(
             let mut builder = rig::agent::AgentBuilder::new(openai_model)
                 .preamble(system_prompt)
                 .default_max_turns(20)
-                .tool(SysShellTool {
-                    proxy: claw_proxy.clone(),
-                    current_dir: current_dir.to_string(),
-                })
-                .tool(crate::memories::MemoryStoreTool {
-                    db: db.clone(),
-                    current_dir: current_dir.to_string(),
-                })
-                .tool(TerminalCommandTool {
-                    tx_ui: tx_ui.clone(),
-                    state: state.clone(),
-                })
-                .tool(crate::engine::tools::scrollback::ReadScrollbackTool {
-                    tx_ui: tx_ui.clone(),
-                    state: state.clone(),
-                })
-                .tool(ActivateSkillTool)
-                .tool(ListActiveAgentsTool)
-                .tool(ReadPaneTool)
-                .tool(DelegateTaskTool {
-                    state: state.clone(),
-                })
-                .tool(SpawnAgentTool {
-                    tx_ui: tx_ui.clone(),
-                    state: state.clone(),
-                })
-                .tool(CloseAgentTool {
-                    tx_ui: tx_ui.clone(),
-                })
-                .tool(SendKeystrokesTool {
-                    tx_ui: tx_ui.clone(),
-                })
-                .tool(ListProcessesTool {
-                    proxy: claw_proxy.clone(),
-                    approval: approval_handler.clone(),
-                })
-                .tool(SetGlobalIntentTool);
+                .tools(tools);
 
             if let Some(level) = thinking {
                 builder = builder.additional_params(json!({
                     "reasoning": { "effort": level.api_name() }
                 }));
-            }
-
-            // Conditional Core Toolbox tools
-            if settings.enable_file_tools {
-                builder = builder
-                    .tool(FileReadTool {
-                        proxy: claw_proxy.clone(),
-                        current_dir: current_dir.to_string(),
-                    })
-                    .tool(FileWriteTool {
-                        proxy: claw_proxy.clone(),
-                        current_dir: current_dir.to_string(),
-                        approval: approval_handler.clone(),
-                    })
-                    .tool(ListDirectoryTool {
-                        proxy: claw_proxy.clone(),
-                        current_dir: current_dir.to_string(),
-                    })
-                    .tool(FileDeleteTool {
-                        proxy: claw_proxy.clone(),
-                        current_dir: current_dir.to_string(),
-                        approval: approval_handler.clone(),
-                    });
-            }
-
-            if settings.enable_system_tools {
-                builder = builder.tool(GetSystemInfoTool {
-                    proxy: claw_proxy.clone(),
-                    approval: approval_handler.clone(),
-                });
-            }
-
-            if settings.enable_dangerous_tools {
-                builder = builder.tool(KillProcessTool {
-                    proxy: claw_proxy.clone(),
-                    approval: approval_handler.clone(),
-                });
-            }
-
-            if settings.enable_web_tools {
-                builder = builder.tool(HttpFetchTool);
-            }
-
-            if settings.enable_clipboard_tools {
-                builder = builder
-                    .tool(GetClipboardTool {
-                        proxy: claw_proxy.clone(),
-                        approval: approval_handler.clone(),
-                    })
-                    .tool(SetClipboardTool {
-                        proxy: claw_proxy.clone(),
-                        approval: approval_handler.clone(),
-                    });
             }
 
             ClawAgent::OpenAi(builder.build())

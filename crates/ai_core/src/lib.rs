@@ -20,62 +20,26 @@ impl BoxxyAgent {
     pub async fn chat(
         &self,
         prompt: &str,
-        history: Vec<Message>,
+        mut history: Vec<Message>,
     ) -> Result<(String, Option<rig::completion::Usage>), rig::completion::PromptError> {
-        use rig::completion::Completion;
+        use rig::completion::Prompt;
 
         match self {
             Self::Gemini(agent) => {
-                let res = agent.completion(prompt, history).await?.send().await?;
-                let text = res
-                    .choice
-                    .into_iter()
-                    .next()
-                    .and_then(|c| match c {
-                        rig::completion::AssistantContent::Text(t) => Some(t.text),
-                        _ => None,
-                    })
-                    .unwrap_or_default();
-                Ok((text, Some(res.usage)))
+                let res = agent.prompt(prompt).with_history(&mut history).extended_details().await?;
+                Ok((res.output.clone(), Some(res.usage)))
             }
             Self::Ollama(agent) => {
-                let res = agent.completion(prompt, history).await?.send().await?;
-                let text = res
-                    .choice
-                    .into_iter()
-                    .next()
-                    .and_then(|c| match c {
-                        rig::completion::AssistantContent::Text(t) => Some(t.text),
-                        _ => None,
-                    })
-                    .unwrap_or_default();
-                Ok((text, Some(res.usage)))
+                let res = agent.prompt(prompt).with_history(&mut history).extended_details().await?;
+                Ok((res.output.clone(), Some(res.usage)))
             }
             Self::Anthropic(agent) => {
-                let res = agent.completion(prompt, history).await?.send().await?;
-                let text = res
-                    .choice
-                    .into_iter()
-                    .next()
-                    .and_then(|c| match c {
-                        rig::completion::AssistantContent::Text(t) => Some(t.text),
-                        _ => None,
-                    })
-                    .unwrap_or_default();
-                Ok((text, Some(res.usage)))
+                let res = agent.prompt(prompt).with_history(&mut history).extended_details().await?;
+                Ok((res.output.clone(), Some(res.usage)))
             }
             Self::OpenAi(agent) => {
-                let res = agent.completion(prompt, history).await?.send().await?;
-                let text = res
-                    .choice
-                    .into_iter()
-                    .next()
-                    .and_then(|c| match c {
-                        rig::completion::AssistantContent::Text(t) => Some(t.text),
-                        _ => None,
-                    })
-                    .unwrap_or_default();
-                Ok((text, Some(res.usage)))
+                let res = agent.prompt(prompt).with_history(&mut history).extended_details().await?;
+                Ok((res.output.clone(), Some(res.usage)))
             }
             Self::Error(e) => Err(rig::completion::PromptError::CompletionError(
                 rig::completion::CompletionError::ProviderError(e.clone()),
@@ -87,60 +51,24 @@ impl BoxxyAgent {
         &self,
         prompt: &str,
     ) -> Result<(String, Option<rig::completion::Usage>), rig::completion::PromptError> {
-        use rig::completion::Completion;
+        use rig::completion::Prompt;
 
         match self {
             Self::Gemini(agent) => {
-                let res = agent.completion(prompt, vec![]).await?.send().await?;
-                let text = res
-                    .choice
-                    .into_iter()
-                    .next()
-                    .and_then(|c| match c {
-                        rig::completion::AssistantContent::Text(t) => Some(t.text),
-                        _ => None,
-                    })
-                    .unwrap_or_default();
-                Ok((text, Some(res.usage)))
+                let res = agent.prompt(prompt).extended_details().await?;
+                Ok((res.output.clone(), Some(res.usage)))
             }
             Self::Ollama(agent) => {
-                let res = agent.completion(prompt, vec![]).await?.send().await?;
-                let text = res
-                    .choice
-                    .into_iter()
-                    .next()
-                    .and_then(|c| match c {
-                        rig::completion::AssistantContent::Text(t) => Some(t.text),
-                        _ => None,
-                    })
-                    .unwrap_or_default();
-                Ok((text, Some(res.usage)))
+                let res = agent.prompt(prompt).extended_details().await?;
+                Ok((res.output.clone(), Some(res.usage)))
             }
             Self::Anthropic(agent) => {
-                let res = agent.completion(prompt, vec![]).await?.send().await?;
-                let text = res
-                    .choice
-                    .into_iter()
-                    .next()
-                    .and_then(|c| match c {
-                        rig::completion::AssistantContent::Text(t) => Some(t.text),
-                        _ => None,
-                    })
-                    .unwrap_or_default();
-                Ok((text, Some(res.usage)))
+                let res = agent.prompt(prompt).extended_details().await?;
+                Ok((res.output.clone(), Some(res.usage)))
             }
             Self::OpenAi(agent) => {
-                let res = agent.completion(prompt, vec![]).await?.send().await?;
-                let text = res
-                    .choice
-                    .into_iter()
-                    .next()
-                    .and_then(|c| match c {
-                        rig::completion::AssistantContent::Text(t) => Some(t.text),
-                        _ => None,
-                    })
-                    .unwrap_or_default();
-                Ok((text, Some(res.usage)))
+                let res = agent.prompt(prompt).extended_details().await?;
+                Ok((res.output.clone(), Some(res.usage)))
             }
             Self::Error(e) => Err(rig::completion::PromptError::CompletionError(
                 rig::completion::CompletionError::ProviderError(e.clone()),
