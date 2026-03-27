@@ -157,6 +157,7 @@ pub struct AppWindowInner {
     pub claw_popover: crate::boxxyclaw_indicator_popover::BoxxyclawIndicatorPopover,
     pub claw_active: bool,
     pub claw_proactive: bool,
+    pub toast_overlay: adw::ToastOverlay,
     pub notification_pill: crate::widgets::notification_pill::BoxxyNotificationPill,
     pub notifications: Vec<Notification>,
     pub initial_working_dir: Option<String>,

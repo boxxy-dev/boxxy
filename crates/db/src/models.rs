@@ -8,8 +8,15 @@ use sqlx::prelude::FromRow;
 pub struct Session {
     pub id: String,
     pub name: String,
+    pub history_json: Option<String>,
+    pub agent_name: Option<String>,
+    pub last_cwd: Option<String>,
+    pub title: Option<String>,
+    pub model_id: Option<String>,
     pub created_at: Option<String>,
     pub updated_at: Option<String>,
+    #[sqlx(default)]
+    pub message_count: i64,
 }
 
 /// Represents an episodic interaction or summary linked to a session

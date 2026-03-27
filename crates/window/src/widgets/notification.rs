@@ -84,4 +84,20 @@ impl Notification {
             details: vec![("Version".to_string(), version.to_string())],
         }
     }
+
+    pub fn new_info(message: String) -> Self {
+        Self {
+            id: uuid::Uuid::new_v4().to_string(),
+            level: NotificationLevel::Info,
+            title: "Information".to_string(),
+            message,
+            icon_name: "boxxy-chat-symbolic".to_string(),
+            actions: vec![NotificationAction {
+                label: "Dismiss".to_string(),
+                action_name: "win.dismiss-notification".to_string(),
+                is_primary: false,
+            }],
+            details: Vec::new(),
+        }
+    }
 }

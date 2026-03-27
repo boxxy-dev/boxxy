@@ -3,7 +3,7 @@ use libadwaita::prelude::*;
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use crate::state::AppWindowInner;
+use crate::state::{AppInput, AppWindowInner};
 use boxxy_terminal::{TerminalEvent, TerminalEventKind};
 
 pub fn handle_terminal_event(
@@ -51,6 +51,11 @@ pub fn handle_terminal_event(
             | TerminalEventKind::Osc133C
             | TerminalEventKind::Osc133D(_, _)
             | TerminalEventKind::ForegroundProcessChanged(_) => {}
+            TerminalEventKind::Notification(message) => {
+                let _ = inner.tx.send_blocking(AppInput::PushNotification(
+                    crate::widgets::notification::Notification::new_info(message),
+                ));
+            }
             TerminalEventKind::PaneFocused(_) => {
                 let widget = inner.tabs[pos].controller.widget();
                 let page = inner.tab_view.page(widget);

@@ -5,6 +5,7 @@ use tokio::sync::{OnceCell, RwLock};
 #[derive(Clone, Debug)]
 pub struct PaneState {
     pub id: String,
+    pub session_id: Option<String>,
     pub name: String,
     pub cwd: String,
     pub last_command: Option<String>,
@@ -69,6 +70,7 @@ impl WorkspaceRegistry {
     pub async fn update_pane_state(
         &self,
         id: String,
+        session_id: Option<String>,
         name: Option<String>,
         cwd: String,
         last_command: Option<String>,
@@ -77,6 +79,7 @@ impl WorkspaceRegistry {
         let mut panes = self.panes.write().await;
         let entry = panes.entry(id.clone()).or_insert_with(|| PaneState {
             id,
+            session_id: session_id.clone(),
             name: name.clone().unwrap_or_else(|| "Unknown Agent".to_string()),
             cwd: cwd.clone(),
             last_command: None,
@@ -84,6 +87,10 @@ impl WorkspaceRegistry {
             status: None,
             tx: None,
         });
+
+        if let Some(s) = session_id {
+            entry.session_id = Some(s);
+        }
 
         if let Some(n) = name {
             entry.name = n;
@@ -95,6 +102,29 @@ impl WorkspaceRegistry {
         }
         if snapshot.is_some() {
             entry.last_snapshot = snapshot;
+        }
+    }
+
+    pub async fn update_pane_session(&self, id: String, session_id: String) {
+        let mut panes = self.panes.write().await;
+        if let Some(pane) = panes.get_mut(&id) {
+            pane.session_id = Some(session_id);
+        }
+    }
+
+    pub async fn evict_session(&self, session_id: &str) {
+        let panes = self.panes.read().await;
+        let target_tx = panes.values().find_map(|p| {
+            if p.session_id.as_deref() == Some(session_id) {
+                p.tx.clone()
+            } else {
+                None
+            }
+        });
+        drop(panes);
+
+        if let Some(tx) = target_tx {
+            let _ = tx.send(crate::engine::ClawMessage::Evict).await;
         }
     }
 

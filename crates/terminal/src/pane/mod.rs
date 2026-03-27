@@ -199,6 +199,18 @@ impl TerminalPaneComponent {
 
                         gtk::glib::spawn_future_local(async move {
                             if let Some(snapshot) = pane.get_text_snapshot(100, 0).await {
+                                if query.starts_with("/resume ") {
+                                    let session_id = query["/resume ".len()..].trim().to_string();
+                                    if !session_id.is_empty() {
+                                        let _ = tx
+                                            .send(boxxy_claw::engine::ClawMessage::ResumeSession {
+                                                session_id,
+                                            })
+                                            .await;
+                                        return;
+                                    }
+                                }
+
                                 let _ = tx
                                     .send(boxxy_claw::engine::ClawMessage::ClawQuery {
                                         query,

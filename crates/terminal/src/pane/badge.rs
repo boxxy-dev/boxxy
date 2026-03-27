@@ -8,6 +8,7 @@ pub struct AgentBadge {
     container: gtk::Box,
     label: gtk::Label,
     is_active: Rc<Cell<bool>>,
+    is_evicted: Rc<Cell<bool>>,
 }
 
 impl AgentBadge {
@@ -35,17 +36,31 @@ impl AgentBadge {
             container,
             label,
             is_active: Rc::new(Cell::new(false)),
+            is_evicted: Rc::new(Cell::new(false)),
         }
     }
 
+    pub fn set_evicted(&self, evicted: bool) {
+        self.is_evicted.set(evicted);
+        if evicted {
+            self.container.add_css_class("evicted");
+        } else {
+            self.container.remove_css_class("evicted");
+        }
+        self.refresh_visibility();
+    }
+
     pub fn set_identity(&self, name: &str) {
+        self.is_evicted.set(false);
+        self.container.remove_css_class("evicted");
         self.label.set_text(name);
 
         let color = self.generate_color(name);
 
         // Apply custom styling via CSS for the specific background color
         let css = format!(
-            ".agent-badge-container {{ background-color: {}; color: white; border-radius: 12px; padding: 4px 10px; opacity: 0.7; font-weight: bold; font-size: 0.8rem; box-shadow: 0 2px 4px rgba(0,0,0,0.2); transition: opacity 0.3s ease; }}",
+            ".agent-badge-container {{ background-color: {}; color: white; border-radius: 12px; padding: 4px 10px; opacity: 0.7; font-weight: bold; font-size: 0.8rem; box-shadow: 0 2px 4px rgba(0,0,0,0.2); transition: opacity 0.3s ease; }} \
+             .agent-badge-container.evicted {{ opacity: 0.2; filter: grayscale(100%); }}",
             color
         );
 
@@ -72,7 +87,7 @@ impl AgentBadge {
         let settings = boxxy_preferences::Settings::load();
         let has_name = !self.label.text().is_empty();
 
-        if settings.hide_agent_badge || !self.is_active.get() || !has_name {
+        if settings.hide_agent_badge || (!self.is_active.get() && !self.is_evicted.get()) || !has_name {
             self.container.set_visible(false);
         } else {
             self.container.set_visible(true);

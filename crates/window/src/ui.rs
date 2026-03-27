@@ -262,8 +262,11 @@ impl AppWindow {
         notification_pill.set_visible(false);
         overlay.add_overlay(&notification_pill);
 
+        let toast_overlay = adw::ToastOverlay::new();
+        toast_overlay.set_child(Some(&split_view));
+
         split_view.set_content(Some(&overlay));
-        window.set_content(Some(&split_view));
+        window.set_content(Some(&toast_overlay));
 
         let tx_pill = tx.clone();
         let pill_clone = notification_pill.clone();
@@ -343,6 +346,7 @@ impl AppWindow {
             claw_popover,
             claw_active: initial_claw_active,
             claw_proactive: initial_claw_proactive,
+            toast_overlay,
             notification_pill,
             notifications: Vec::new(),
             initial_working_dir: init.working_dir.clone(),

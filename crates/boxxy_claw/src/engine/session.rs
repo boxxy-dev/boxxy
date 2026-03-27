@@ -10,6 +10,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 pub struct SessionState {
+    pub session_id: String,
     pub agent_name: String,
     pub pending_terminal_reply: Option<tokio::sync::oneshot::Sender<Result<String, String>>>,
     pub pending_file_reply: Option<tokio::sync::oneshot::Sender<bool>>,
@@ -25,6 +26,7 @@ pub struct SessionState {
 
 pub struct ClawSession {
     pub pane_id: String,
+    pub session_id: String,
     pub name: String,
     pub rx: async_channel::Receiver<ClawMessage>,
     pub tx_self: async_channel::Sender<ClawMessage>,
@@ -50,10 +52,12 @@ impl ClawSession {
 
         // Generate a funny name for this agent
         let name = petname::petname(2, " ").unwrap_or_else(|| "Unknown Agent".to_string());
+        let session_id = uuid::Uuid::new_v4().to_string();
 
         // We defer loading session context and skills until the first use
         let session = Self {
-            pane_id,
+            pane_id: pane_id.clone(),
+            session_id: session_id.clone(),
             name: name.clone(),
             rx,
             tx_self: tx.clone(),
@@ -61,6 +65,7 @@ impl ClawSession {
             session_context: String::new(),
             db: Arc::new(Mutex::new(None)),
             state: Arc::new(Mutex::new(SessionState {
+                session_id,
                 agent_name: name,
                 pending_terminal_reply: None,
                 pending_file_reply: None,
@@ -97,6 +102,7 @@ impl ClawSession {
         workspace
             .update_pane_state(
                 self.pane_id.clone(),
+                Some(self.session_id.clone()),
                 Some(self.name.clone()),
                 current_dir.clone(),
                 None,
@@ -178,11 +184,123 @@ impl ClawSession {
                         .update_pane_state(
                             self.pane_id.clone(),
                             None,
+                            None,
                             current_dir.clone(),
                             None,
                             None,
                         )
                         .await;
+                }
+                ClawMessage::Evict => {
+                    info!("Agent in pane {} was EVICTED.", self.pane_id);
+                    is_initialized = false;
+                    *self.db.lock().await = None;
+
+                    let mut state_lock = self.state.lock().await;
+                    state_lock.history.clear();
+                    drop(state_lock);
+
+                    let _ = self.tx_ui.send(ClawEngineEvent::Evicted).await;
+
+                    // Update Workspace Radar to indicate no active agent
+                    workspace
+                        .update_pane_state(
+                            self.pane_id.clone(),
+                            None,
+                            None,
+                            current_dir.clone(),
+                            None,
+                            None,
+                        )
+                        .await;
+                }
+                ClawMessage::ResumeSession { session_id } => {
+                    info!("Resuming session {} in pane {}...", session_id, self.pane_id);
+
+                    // 1. Evict session if active elsewhere
+                    workspace.evict_session(&session_id).await;
+
+                    // 2. Load session from DB
+                    let mut db_guard = self.db.lock().await;
+                    if db_guard.is_none() {
+                        if let Ok(db) = Db::new().await {
+                            *db_guard = Some(db);
+                        }
+                    }
+
+                    if let Some(db) = &*db_guard {
+                        let store = boxxy_db::store::Store::new(db.pool());
+                        match store.get_session(&session_id).await {
+                            Ok(Some(session)) => {
+                                // 3. Rehydrate state
+                                self.session_id = session_id.clone();
+                                if let Some(agent_name) = session.agent_name {
+                                    self.name = agent_name.clone();
+                                }
+
+                                let mut state_lock = self.state.lock().await;
+                                state_lock.session_id = session_id.clone();
+                                state_lock.agent_name = self.name.clone();
+
+                                if let Some(history_json) = session.history_json {
+                                    if let Ok(history) =
+                                        serde_json::from_str::<Vec<Message>>(&history_json)
+                                    {
+                                        state_lock.history = history;
+                                    }
+                                }
+
+                                // Force agent rebuild
+                                state_lock.persistent_agent = None;
+                                drop(state_lock);
+
+                                // 4. Update Workspace Radar
+                                workspace
+                                    .update_pane_state(
+                                        self.pane_id.clone(),
+                                        Some(self.session_id.clone()),
+                                        Some(self.name.clone()),
+                                        current_dir.clone(),
+                                        None,
+                                        None,
+                                    )
+                                    .await;
+
+                                // 5. Announce Identity to UI
+                                let _ = self
+                                    .tx_ui
+                                    .send(ClawEngineEvent::Identity {
+                                        agent_name: self.name.clone(),
+                                    })
+                                    .await;
+
+                                let _ = self
+                                    .tx_ui
+                                    .send(ClawEngineEvent::SystemMessage {
+                                        text: "Session resumed.".to_string(),
+                                    })
+                                    .await;
+
+                                // 6. Handle CWD Switch
+                                if let Some(last_cwd) = session.last_cwd {
+                                    let _ = self
+                                        .tx_ui
+                                        .send(ClawEngineEvent::RequestCwdSwitch { path: last_cwd })
+                                        .await;
+                                }
+                                is_initialized = true;
+                            }
+                            _ => {
+                                let _ = self
+                                    .tx_ui
+                                    .send(ClawEngineEvent::SystemMessage {
+                                        text: "Failed to load session from database.".to_string(),
+                                    })
+                                    .await;
+                            }
+                        }
+                    }
+                    drop(db_guard);
                 }
                 ClawMessage::Initialize => {
                     info!("Initializing NEW Claw Session for pane {}...", self.pane_id);
@@ -191,6 +309,14 @@ impl ClawSession {
                     let name =
                         petname::petname(2, " ").unwrap_or_else(|| "Unknown Agent".to_string());
                     self.name = name.clone();
+
+                    // Check if database was reset (due to update in Preview Phase)
+                    // We use swap(false) to ensure only the first agent to initialize shows the notification
+                    if boxxy_db::DATABASE_WAS_RESET.swap(false, std::sync::atomic::Ordering::SeqCst) {
+                        let _ = self.tx_ui.send(ClawEngineEvent::SystemMessage { 
+                            text: "⚠️ Database reset for update. This only happens during the Preview.".to_string() 
+                        }).await;
+                    }
 
                     // 2. Clear history and update agent name in state
                     let mut state_lock = self.state.lock().await;
@@ -202,6 +328,7 @@ impl ClawSession {
                     workspace
                         .update_pane_state(
                             self.pane_id.clone(),
+                            Some(self.session_id.clone()),
                             Some(name.clone()),
                             current_dir.clone(),
                             None,
@@ -245,6 +372,7 @@ impl ClawSession {
                     workspace
                         .update_pane_state(
                             self.pane_id.clone(),
+                            Some(self.session_id.clone()),
                             Some(self.name.clone()),
                             current_dir.clone(),
                             Some(last_cmd),
@@ -287,6 +415,7 @@ impl ClawSession {
                             drop(state_lock);
                             spawn_turn(
                                 self.pane_id.clone(),
+                                self.session_id.clone(),
                                 self.name.clone(),
                                 &prompt,
                                 &snapshot,
@@ -310,6 +439,7 @@ impl ClawSession {
                         drop(state_lock);
                         spawn_turn(
                             self.pane_id.clone(),
+                            self.session_id.clone(),
                             self.name.clone(),
                             &prompt,
                             &snapshot,
@@ -337,6 +467,7 @@ impl ClawSession {
                     workspace
                         .update_pane_state(
                             self.pane_id.clone(),
+                            Some(self.session_id.clone()),
                             Some(self.name.clone()),
                             current_dir.clone(),
                             Some(query.clone()),
@@ -350,6 +481,7 @@ impl ClawSession {
                     );
                     spawn_turn(
                         self.pane_id.clone(),
+                        self.session_id.clone(),
                         self.name.clone(),
                         &query,
                         &snapshot,
@@ -410,6 +542,7 @@ impl ClawSession {
                     workspace
                         .update_pane_state(
                             self.pane_id.clone(),
+                            Some(self.session_id.clone()),
                             Some(self.name.clone()),
                             current_dir.clone(),
                             None,
@@ -439,6 +572,7 @@ impl ClawSession {
                         drop(state_lock);
                         spawn_turn(
                             self.pane_id.clone(),
+                            self.session_id.clone(),
                             self.name.clone(),
                             &message,
                             &snapshot,
@@ -476,6 +610,7 @@ impl ClawSession {
 
                     spawn_turn(
                         self.pane_id.clone(),
+                        self.session_id.clone(),
                         self.name.clone(),
                         &full_prompt,
                         &snapshot,
@@ -532,6 +667,7 @@ impl ClawSession {
 #[allow(clippy::too_many_arguments)]
 fn spawn_turn(
     pane_id: String,
+    session_id: String,
     agent_name: String,
     prompt: &str,
     snapshot: &str,
@@ -546,6 +682,7 @@ fn spawn_turn(
     image_attachments: Vec<String>,
 ) {
     let prompt_clone = prompt.to_string();
+    let session_id_clone = session_id.clone();
     let snapshot_clone = snapshot.to_string();
     let cwd_clone = cwd.clone();
     let images_clone = image_attachments.clone();
@@ -830,6 +967,42 @@ fn spawn_turn(
                     .history
                     .push(rig::message::Message::assistant(response.clone()));
 
+                // --- ATOMIC PERSISTENCE ---
+                let history_json = serde_json::to_string(&state_lock.history).unwrap_or_default();
+                let agent_name_for_db = agent_name.clone();
+                let session_id_for_db = session_id_clone.clone();
+                let cwd_for_db = cwd_clone.clone();
+                let model_id = settings
+                    .claw_model
+                    .as_ref()
+                    .map(|m| format!("{:?}", m))
+                    .unwrap_or_default();
+
+                // Generate title if it's the first turn (System + User + Assistant = 3 messages)
+                let mut title = String::new();
+                if state_lock.history.len() == 3 {
+                    title = prompt_clone.chars().take(50).collect();
+                }
+
+                let db_for_persistence = db.clone();
+                tokio::spawn(async move {
+                    let db_guard = db_for_persistence.lock().await;
+                    if let Some(db) = &*db_guard {
+                        let store = boxxy_db::store::Store::new(db.pool());
+                        let _ = store
+                            .upsert_session_state(
+                                &session_id_for_db,
+                                &agent_name_for_db,
+                                &title,
+                                &history_json,
+                                &agent_name_for_db,
+                                &cwd_for_db,
+                                &model_id,
+                            )
+                            .await;
+                    }
+                });
+
                 // Optional: Trigger Memory Flush if history is too long
                 let creds = boxxy_ai_core::AiCredentials::new(
                     settings.api_keys.clone(),
@@ -859,11 +1032,13 @@ fn spawn_turn(
                     settings.ollama_base_url.clone(),
                 );
 
+                let session_id_for_summary = session_id_clone.clone();
                 tokio::spawn(async move {
                     let db_guard = db_for_summary.lock().await;
                     if db_guard.is_some() {
                         summarize_and_store(
                             &db_guard,
+                            &session_id_for_summary,
                             &prompt_for_db,
                             &resp_for_db,
                             &cwd_for_db,

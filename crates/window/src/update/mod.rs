@@ -4,6 +4,7 @@ pub mod tabs;
 pub mod window_state;
 
 use gtk4::prelude::*;
+use libadwaita as adw;
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -352,7 +353,15 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
         }
         AppInput::PushNotification(ready) => {
             inner.notifications.push(ready.clone());
-            inner.notification_pill.set_notification(ready);
+
+            // Only show the old pill for actual app updates
+            if ready.level == crate::widgets::notification::NotificationLevel::Update {
+                inner.notification_pill.set_notification(ready.clone());
+            }
+
+            let toast = adw::Toast::new(&ready.message);
+            toast.set_timeout(5);
+            inner.toast_overlay.add_toast(toast);
         }
         AppInput::DismissNotification(id) => {
             inner.notifications.retain(|n| n.id != id);
@@ -385,7 +394,13 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
             // Show the "Update Ready" notification
             let ready = crate::widgets::notification::Notification::new_update_ready("nightly");
             inner.notifications.push(ready.clone());
-            inner.notification_pill.set_notification(ready);
+            inner.notification_pill.set_notification(ready.clone());
+
+            let toast = adw::Toast::new(&ready.message);
+            toast.set_timeout(0); // Permanent until dismissed
+            toast.set_button_label(Some("Restart"));
+            toast.set_action_name(Some("win.apply-update"));
+            inner.toast_overlay.add_toast(toast);
         }
         AppInput::ApplyUpdateAndRestart => {
             let _ = crate::updater::Updater::apply_update_and_restart();

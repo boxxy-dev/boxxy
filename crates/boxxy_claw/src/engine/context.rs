@@ -149,6 +149,7 @@ pub async fn retrieve_memories(
 
 pub async fn summarize_and_store(
     db: &Option<boxxy_db::Db>,
+    session_id: &str,
     user_query: &str,
     assistant_response: &str,
     project_path: &str,
@@ -182,11 +183,11 @@ pub async fn summarize_and_store(
         let store = boxxy_db::store::Store::new(db.pool());
         // Store in interactions table (episodic memory)
         let _ = store
-            .add_interaction("global", Some(project_path), summary.trim(), None, None)
+            .add_interaction(session_id, Some(project_path), summary.trim(), None, None)
             .await;
         debug!(
-            "Stored new interaction summary for project {}: {}",
-            project_path,
+            "Stored new interaction summary for session {}: {}",
+            session_id,
             summary.trim()
         );
     }

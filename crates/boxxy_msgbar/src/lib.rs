@@ -55,21 +55,27 @@ impl MsgBarComponent {
         let entry = gtk::Entry::builder()
             .hexpand(true)
             .has_frame(false) // removes borders
-            .placeholder_text("Ask Boxxy-Claw... (Ctrl+V to attach Image/Text, @agent to direct)")
+            .placeholder_text("Ask Boxxy-Claw... (Ctrl+V: attach, @agent: direct, /resume: session)")
             .build();
 
         entry.add_css_class("monospace");
+        entry.add_css_class("caption");
         widget.append(&entry);
 
         let is_active = Rc::new(Cell::new(false));
         let attachments = Rc::new(RefCell::new(Vec::<Attachment>::new()));
 
-        let history = Rc::new(RefCell::new(MsgHistory::new()));
+        let history = Rc::new(RefCell::new(history::MsgHistory::new()));
 
-        let providers: Vec<Box<dyn autocomplete::CompletionProvider>> =
-            vec![Box::new(autocomplete::AgentCompletionProvider)];
+        let mut providers: Vec<Box<dyn autocomplete::CompletionProvider>> = vec![
+            Box::new(autocomplete::AgentCompletionProvider),
+            Box::new(autocomplete::CommandCompletionProvider),
+            Box::new(autocomplete::ResumeCompletionProvider),
+        ];
+        // Sort by trigger length descending to ensure "/resume " matches before "/"
+        providers.sort_by(|a, b| b.trigger().len().cmp(&a.trigger().len()));
 
-        let autocomplete = autocomplete::AutocompleteController::new(&entry, providers, None);
+        let autocomplete_ctrl = autocomplete::AutocompleteController::new(&entry, providers, None);
 
         let c_active = is_active.clone();
         let c_widget = widget.clone();
@@ -82,6 +88,7 @@ impl MsgBarComponent {
 
         let c_submit = on_submit_rc;
 
+        let c_history_activate = c_history.clone();
         entry.connect_activate(move |e| {
             let original_text = e.text().to_string();
             let mut text = original_text.clone();
@@ -106,7 +113,7 @@ impl MsgBarComponent {
             }
 
             if !text.trim().is_empty() || !images.is_empty() {
-                c_history.borrow_mut().push(original_text, atts.clone());
+                c_history_activate.borrow_mut().push(original_text, atts.clone());
                 c_submit((text, images));
                 e.set_text("");
             }
@@ -131,7 +138,7 @@ impl MsgBarComponent {
         let k_cancel = on_cancel_rc;
         let k_attachments = attachments.clone();
         let k_tags_box = tags_box.clone();
-        let k_history = history.clone();
+        let k_history = c_history.clone();
 
         key_ctrl.connect_key_pressed(move |_, key, _, state| {
             let is_ctrl = state.contains(gtk::gdk::ModifierType::CONTROL_MASK);
@@ -231,7 +238,7 @@ impl MsgBarComponent {
             tags_box,
             attachments,
             history,
-            _autocomplete: autocomplete,
+            _autocomplete: autocomplete_ctrl,
         }
     }
 

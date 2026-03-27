@@ -15,7 +15,6 @@ use boxxy_core_toolbox::{
 use boxxy_model_selection::ModelProvider;
 use rig::agent::Agent;
 use rig::client::CompletionClient;
-use rig::completion::Chat;
 use rig::message::Message;
 use rig::providers::gemini;
 use rig::providers::ollama;
@@ -191,7 +190,7 @@ pub fn create_claw_agent(
 
             let builder = rig::agent::AgentBuilder::new(gemini_model)
                 .preamble(system_prompt)
-                .default_max_turns(20)
+                .default_max_turns(100)
                 .tools(tools);
 
             ClawAgent::Gemini(builder.build())
@@ -206,7 +205,7 @@ pub fn create_claw_agent(
 
             let builder = rig::agent::AgentBuilder::new(ollama_model)
                 .preamble(system_prompt)
-                .default_max_turns(20)
+                .default_max_turns(100)
                 .tools(tools);
 
             ClawAgent::Ollama(builder.build())
@@ -218,7 +217,7 @@ pub fn create_claw_agent(
 
             let builder = rig::agent::AgentBuilder::new(anthropic_model)
                 .preamble(system_prompt)
-                .default_max_turns(20)
+                .default_max_turns(100)
                 .tools(tools);
 
             ClawAgent::Anthropic(builder.build())
@@ -230,7 +229,7 @@ pub fn create_claw_agent(
 
             let mut builder = rig::agent::AgentBuilder::new(openai_model)
                 .preamble(system_prompt)
-                .default_max_turns(20)
+                .default_max_turns(100)
                 .tools(tools);
 
             if let Some(level) = thinking {

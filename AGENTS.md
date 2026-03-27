@@ -10,6 +10,7 @@ To prevent UI starvation and zombie processes, the application utilizes a **sing
 The system provides real-time visibility into LLM token usage across all providers. It implements an advanced **Next-Gen Context Hygiene** strategy to maximize efficiency for 2026 flagship models (Gemini 3.1, Claude 4.6, GPT-5.4):
 - **Cache-Aligned Restructuring**: The system preamble (Character + Toolbox) is kept 100% static at the start of every request, while volatile data (Terminal snapshots, CWD, Active skills) is moved to the end of the user message. This triggers a 90% discount via automatic Context Caching.
 - **In-Memory Persistence**: AI agent objects are kept alive per terminal pane, maintaining internal session state and enabling incremental context updates.
+- **Persistent Resumption**: Supports Pick-up-where-you-left-off capabilities via `boxxy-db`. Users can resume any of the last 10 active sessions in any terminal pane, restoring history, agent identity, and working directory.
 - **Aggressive History Stripping**: Past turn context (Skills, Radar, Memories) is aggressively pruned from history, leaving only the core intent to prevent linear context growth.
 
 ## Technology Stack

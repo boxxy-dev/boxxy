@@ -47,6 +47,8 @@ pub enum ClawMessage {
     Initialize,
     /// The engine should shut down its resources because Claw mode is deactivated.
     Deactivate,
+    /// The agent was evicted because the session was resumed elsewhere.
+    Evict,
     /// The engine should reload its state (database, skills)
     Reload,
     /// Update diagnosis mode dynamically.
@@ -60,6 +62,8 @@ pub enum ClawMessage {
     },
     /// The foreground process in the terminal changed.
     ForegroundProcessChanged { process_name: String },
+    /// Resume a previously saved session.
+    ResumeSession { session_id: String },
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -142,6 +146,12 @@ pub enum ClawEngineEvent {
     },
     /// Emitted to announce the agent's identity to the UI.
     Identity { agent_name: String },
+    /// Emitted when the agent was evicted because the session was resumed elsewhere.
+    Evicted,
+    /// Emitted when the agent requests the UI to switch the terminal's CWD.
+    RequestCwdSwitch { path: String },
+    /// Emitted to show a generic system message in the sidebar.
+    SystemMessage { text: String },
     /// Emitted when the agent requests to spawn a new agent in a split or tab.
     RequestSpawnAgent {
         source_agent_name: String,

@@ -12,15 +12,15 @@ pub struct CompletionItem {
 }
 
 pub trait CompletionProvider {
-    fn trigger_char(&self) -> char;
+    fn trigger(&self) -> String;
     fn get_completions(&self, query: &str) -> Vec<CompletionItem>;
 }
 
 pub struct AgentCompletionProvider;
 
 impl CompletionProvider for AgentCompletionProvider {
-    fn trigger_char(&self) -> char {
-        '@'
+    fn trigger(&self) -> String {
+        "@".to_string()
     }
 
     fn get_completions(&self, query: &str) -> Vec<CompletionItem> {
@@ -50,12 +50,93 @@ impl CompletionProvider for AgentCompletionProvider {
     }
 }
 
+pub struct CommandCompletionProvider;
+
+impl CompletionProvider for CommandCompletionProvider {
+    fn trigger(&self) -> String {
+        "/".to_string()
+    }
+
+    fn get_completions(&self, query: &str) -> Vec<CompletionItem> {
+        let mut items = Vec::new();
+        let query_lower = query.to_lowercase();
+
+        if "resume".contains(&query_lower) {
+            items.push(CompletionItem {
+                display_name: "resume".to_string(),
+                replacement_text: "/resume ".to_string(),
+                icon_name: Some("boxxy-chat-symbolic".to_string()),
+                secondary_text: Some("Resume a past session".to_string()),
+            });
+        }
+
+        items
+    }
+}
+
+pub struct ResumeCompletionProvider;
+
+impl CompletionProvider for ResumeCompletionProvider {
+    fn trigger(&self) -> String {
+        "/resume".to_string()
+    }
+
+    fn get_completions(&self, query: &str) -> Vec<CompletionItem> {
+        // Query starts after "/resume". If user types "/resume ", query is " ".
+        // We trim it to handle both cases.
+        let query_lower = query.trim().to_lowercase();
+        let mut items = Vec::new();
+
+        let runtime = boxxy_ai_core::utils::runtime();
+        let sessions = runtime.block_on(async {
+            if let Ok(db) = boxxy_db::Db::new().await {
+                let store = boxxy_db::store::Store::new(db.pool());
+                store.get_recent_active_sessions(10).await.unwrap_or_default()
+            } else {
+                Vec::new()
+            }
+        });
+
+        for session in sessions {
+            let title = session.title.unwrap_or_else(|| "Untitled Session".to_string());
+            let agent_name = session.agent_name.unwrap_or_else(|| "Unknown".to_string());
+            let cwd = session.last_cwd.unwrap_or_else(|| "/".to_string());
+            let msg_count = session.message_count;
+            
+            // Format age (very basic implementation)
+            let age = if let Some(updated_at) = session.updated_at {
+                // Since SQLite returns a string for updated_at, and we didn't parse it to chrono yet
+                // we'll just show the raw timestamp or a placeholder if it looks too complex to parse here
+                // without adding more dependencies to this crate.
+                // Let's just use the raw string for now or skip it if too long.
+                updated_at.split(' ').next().unwrap_or("").to_string()
+            } else {
+                "unknown".to_string()
+            };
+
+            if query_lower.is_empty()
+                || title.to_lowercase().contains(&query_lower)
+                || agent_name.to_lowercase().contains(&query_lower)
+            {
+                items.push(CompletionItem {
+                    display_name: format!("{} [{} msgs]", title, msg_count),
+                    replacement_text: format!("/resume {}", session.id),
+                    icon_name: Some("boxxy-chat-symbolic".to_string()),
+                    secondary_text: Some(format!("{} • {} • {}", agent_name, age, cwd)),
+                });
+            }
+        }
+
+        items
+    }
+}
+
 pub struct AutocompleteController {
     entry: gtk::Entry,
     popover: gtk::Popover,
     list: gtk::ListBox,
     providers: Vec<Box<dyn CompletionProvider>>,
-    active_trigger: Rc<RefCell<Option<(char, usize)>>>, // (char, start_index)
+    active_trigger: Rc<RefCell<Option<(String, usize)>>>, // (trigger, start_index)
     on_activated: Option<Box<dyn Fn(String) + 'static>>,
 }
 
@@ -113,18 +194,32 @@ impl AutocompleteController {
             if cursor_pos > 0 {
                 let text_before = &text[..cursor_pos];
                 for provider in &c_clone.providers {
-                    let trigger = provider.trigger_char();
-                    if let Some(idx) = text_before.rfind(trigger)
-                        && (idx == 0 || text_before.as_bytes()[idx - 1] == b' ')
-                    {
-                        let query = &text_before[idx + 1..];
-                        found_trigger = Some((provider, idx, query));
-                        break;
+                    let trigger = provider.trigger();
+                    if let Some(idx) = text_before.rfind(&trigger) {
+                        // Trigger must be preceded by space or be at the start
+                        let is_at_start = idx == 0;
+                        let followed_by_space = if !is_at_start {
+                            text_before.as_bytes().get(idx - 1) == Some(&b' ')
+                        } else {
+                            false
+                        };
+
+                        if is_at_start || followed_by_space {
+                            let query = &text_before[idx + trigger.len()..];
+                            
+                            // Allow multi-word queries for "/resume" command to support filtering sessions by title
+                            let allow_spaces = trigger.ends_with(' ') || trigger == "/resume";
+                            
+                            if allow_spaces || !query.contains(' ') {
+                                found_trigger = Some((provider, idx, query, trigger));
+                                break;
+                            }
+                        }
                     }
                 }
             }
 
-            if let Some((provider, idx, query)) = found_trigger {
+            if let Some((provider, idx, query, trigger)) = found_trigger {
                 let completions = provider.get_completions(query);
                 if completions.is_empty() {
                     c_clone.popover.popdown();
@@ -133,7 +228,7 @@ impl AutocompleteController {
                     c_clone.update_list(completions);
                     c_clone
                         .active_trigger
-                        .replace(Some((provider.trigger_char(), idx)));
+                        .replace(Some((trigger, idx)));
 
                     if !c_clone.popover.is_visible() {
                         c_clone.popover.popup();
@@ -237,7 +332,7 @@ impl AutocompleteController {
     }
 
     fn apply_completion(&self, replacement: &str) {
-        let trigger_info = *self.active_trigger.borrow();
+        let trigger_info = self.active_trigger.borrow().clone();
         if let Some((_trigger, start_idx)) = trigger_info {
             let text = self.entry.text().to_string();
             let cursor_pos = self.entry.position() as usize;

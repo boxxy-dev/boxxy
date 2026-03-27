@@ -142,7 +142,7 @@ pub(super) fn setup_claw(
     let popover_event_clone = claw_popover.clone();
     let indicator_event_clone = claw_indicator.clone();
     let claw_list_events = claw_message_list.clone();
-    let inner_for_events = inner.clone();
+    let inner_clone = inner.clone();
     let total_tokens_for_events = total_tokens.clone();
 
     gtk::glib::spawn_future_local(async move {
@@ -359,10 +359,58 @@ pub(super) fn setup_claw(
                     );
                 }
                 boxxy_claw::engine::ClawEngineEvent::Identity { agent_name } => {
-                    inner_for_events
+                    inner_clone
                         .borrow()
                         .agent_badge
                         .set_identity(agent_name);
+                }
+                boxxy_claw::engine::ClawEngineEvent::Evicted => {
+                    inner_clone.borrow().agent_badge.set_evicted(true);
+                    indicator_event_clone.hide();
+                    popover_event_clone.hide();
+                    boxxy_claw::ui::add_diagnosis_row(
+                        &claw_list_events,
+                        id.clone(),
+                        None,
+                        "Agent was EVICTED because the session was resumed in another pane.",
+                    );
+                }
+                boxxy_claw::engine::ClawEngineEvent::RequestCwdSwitch { path } => {
+                    let pane_inner = inner_clone.borrow();
+                    let terminal = pane_inner.terminal.clone();
+                    let path = path.clone();
+                    let id_clone_notify = id.clone();
+                    let cb_clone_notify = cb_clone_events.clone();
+
+                    gtk::glib::spawn_future_local(async move {
+                        // Check if in alt screen (terminal busy with TUI like vim)
+                        if terminal.is_alt_screen() {
+                            cb_clone_notify(PaneOutput::Notification(
+                                id_clone_notify,
+                                "Session resumed, but folder switch skipped (Terminal Busy).".to_string(),
+                            ));
+                            return;
+                        }
+
+                        // Validate path exists on host
+                        if std::path::Path::new(&path).exists() {
+                            terminal.write_all(format!("cd \"{}\"\n", path).into_bytes());
+                        } else {
+                            cb_clone_notify(PaneOutput::Notification(
+                                id_clone_notify,
+                                format!("Directory '{}' no longer exists. Staying in current folder.", path),
+                            ));
+                        }
+                    });
+                }
+                boxxy_claw::engine::ClawEngineEvent::SystemMessage { text } => {
+                    boxxy_claw::ui::add_diagnosis_row(
+                        &claw_list_events,
+                        id.clone(),
+                        None,
+                        text,
+                    );
+                    cb_clone_events(PaneOutput::Notification(id.clone(), text.clone()));
                 }
                 boxxy_claw::engine::ClawEngineEvent::RequestScrollback {
                     max_lines,
@@ -370,7 +418,7 @@ pub(super) fn setup_claw(
                     reply,
                     ..
                 } => {
-                    let pane_inner = inner_for_events.borrow();
+                    let pane_inner = inner_clone.borrow();
                     let pane = pane_inner.terminal.clone();
 
                     if pane.is_alt_screen() {

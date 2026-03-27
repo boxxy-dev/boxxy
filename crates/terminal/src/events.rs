@@ -33,6 +33,7 @@ pub enum TerminalEventKind {
     FocusClawSidebar,
     PaneFocused(String),
     ForegroundProcessChanged(String),
+    Notification(String),
 }
 
 #[derive(Debug, Clone)]
@@ -56,4 +57,5 @@ pub enum PaneOutput {
     ClawEvent(String, boxxy_claw::engine::ClawEngineEvent),
     FocusClawSidebar(String),
     ForegroundProcessChanged(String, String), // id, process_name
+    Notification(String, String),             // id, message
 }

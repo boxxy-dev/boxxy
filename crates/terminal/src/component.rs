@@ -374,6 +374,16 @@ impl TerminalComponent {
                     });
                 }
             }
+            PaneOutput::Notification(id, message) => {
+                let inner = self.inner.borrow();
+                if inner.active_pane_id == id {
+                    let term_id = inner.id.clone();
+                    let _ = TERMINAL_EVENT_BUS.send(TerminalEvent {
+                        id: term_id,
+                        kind: TerminalEventKind::Notification(message),
+                    });
+                }
+            }
         }
     }
 

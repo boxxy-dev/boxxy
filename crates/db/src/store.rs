@@ -81,14 +81,67 @@ impl<'a> Store<'a> {
         Ok(())
     }
 
+    pub async fn upsert_session_state(
+        &self,
+        id: &str,
+        name: &str,
+        title: &str,
+        history_json: &str,
+        agent_name: &str,
+        last_cwd: &str,
+        model_id: &str,
+    ) -> Result<()> {
+        sqlx::query(
+            r"
+            INSERT INTO sessions (id, name, title, history_json, agent_name, last_cwd, model_id, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(id) DO UPDATE SET
+                name = excluded.name,
+                title = CASE WHEN excluded.title != '' THEN excluded.title ELSE sessions.title END,
+                history_json = excluded.history_json,
+                agent_name = excluded.agent_name,
+                last_cwd = excluded.last_cwd,
+                model_id = excluded.model_id,
+                updated_at = CURRENT_TIMESTAMP
+            ",
+        )
+        .bind(id)
+        .bind(name)
+        .bind(title)
+        .bind(history_json)
+        .bind(agent_name)
+        .bind(last_cwd)
+        .bind(model_id)
+        .execute(self.pool)
+        .await?;
+        Ok(())
+    }
+
     pub async fn get_session(&self, id: &str) -> Result<Option<Session>> {
         let session = sqlx::query_as::<_, Session>(
-            "SELECT id, name, created_at, updated_at FROM sessions WHERE id = ?",
+            "SELECT * FROM sessions WHERE id = ?",
         )
         .bind(id)
         .fetch_optional(self.pool)
         .await?;
         Ok(session)
+    }
+
+    pub async fn get_recent_active_sessions(&self, limit: i64) -> Result<Vec<Session>> {
+        let records = sqlx::query_as::<_, Session>(
+            r"
+            SELECT s.*, COUNT(i.id) as message_count 
+            FROM sessions s
+            JOIN interactions i ON s.id = i.session_id
+            GROUP BY s.id
+            ORDER BY s.updated_at DESC
+            LIMIT ?
+            ",
+        )
+        .bind(limit)
+        .fetch_all(self.pool)
+        .await?;
+        Ok(records)
     }
 
     // --- Interactions (Episodic Memory) ---
