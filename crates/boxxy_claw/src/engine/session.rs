@@ -731,7 +731,26 @@ fn spawn_turn(
 
         // We temporarily adapt the ClawAgent to accept `Vec<Message>` for the current prompt
         // instead of just `&str` since we need to send the multimodal `user_msg`.
-        let mut final_history = history.clone();
+        // Prune redundant snapshots from history to avoid context bloat
+        let mut final_history: Vec<rig::message::Message> = history
+            .into_iter()
+            .map(|mut msg| {
+                if let rig::message::Message::User { content } = &mut msg {
+                    let mut items: Vec<rig::message::UserContent> = content.clone().into_iter().collect();
+                    for item in &mut items {
+                        if let rig::message::UserContent::Text(text) = item {
+                            if let Some(idx) = text.text.find("\n\nTerminal Snapshot:\n```") {
+                                text.text.truncate(idx);
+                            }
+                        }
+                    }
+                    if let Ok(new_content) = rig::OneOrMany::many(items) {
+                        *content = new_content;
+                    }
+                }
+                msg
+            })
+            .collect();
 
         let query_for_chat = if is_multimodal {
             final_history.push(user_msg.into_iter().next().unwrap());
@@ -752,7 +771,7 @@ fn spawn_turn(
                 let mut state_lock = state.lock().await;
                 state_lock
                     .history
-                    .push(rig::message::Message::user(full_prompt));
+                    .push(rig::message::Message::user(full_prompt.clone()));
                 state_lock
                     .history
                     .push(rig::message::Message::assistant(response.clone()));

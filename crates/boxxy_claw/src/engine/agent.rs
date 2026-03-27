@@ -86,7 +86,7 @@ pub fn create_claw_agent(
 
             let mut builder = rig::agent::AgentBuilder::new(gemini_model)
                 .preamble(system_prompt)
-                .default_max_turns(5)
+                .default_max_turns(20)
                 .tool(SysShellTool {
                     proxy: claw_proxy.clone(),
                     current_dir: current_dir.to_string(),
@@ -190,7 +190,7 @@ pub fn create_claw_agent(
 
             let mut builder = rig::agent::AgentBuilder::new(ollama_model)
                 .preamble(system_prompt)
-                .default_max_turns(5)
+                .default_max_turns(20)
                 .tool(SysShellTool {
                     proxy: claw_proxy.clone(),
                     current_dir: current_dir.to_string(),
@@ -291,7 +291,7 @@ pub fn create_claw_agent(
 
             let mut builder = rig::agent::AgentBuilder::new(anthropic_model)
                 .preamble(system_prompt)
-                .default_max_turns(5)
+                .default_max_turns(20)
                 .tool(SysShellTool {
                     proxy: claw_proxy.clone(),
                     current_dir: current_dir.to_string(),
@@ -392,7 +392,7 @@ pub fn create_claw_agent(
 
             let mut builder = rig::agent::AgentBuilder::new(openai_model)
                 .preamble(system_prompt)
-                .default_max_turns(5)
+                .default_max_turns(20)
                 .tool(SysShellTool {
                     proxy: claw_proxy.clone(),
                     current_dir: current_dir.to_string(),

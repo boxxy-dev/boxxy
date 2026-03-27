@@ -33,7 +33,7 @@ The crate uses an **Actor Model** mixed with a **Shared-Everything State** strat
 - **Hybrid Memory System**: Uses a SQLite database (`boxxy.db`) with an FTS5 Key-Value "Upsert" model to store long-term user preferences and learned facts. 
   - **Explicit Tool Enforcement**: The agent is strictly mandated to use the `memory_store` tool for direct user requests to remember information.
   - **Implicit Background Observer**: A specialized `memory_model` evaluates every turn asynchronously to extract permanent facts without interrupting the main conversation.
-  - **Context Hygiene**: Includes LLM-powered Semantic Query Expansion, LRU Hygiene (decaying stale memories over 30 days), Project-Scoped Context, Token-Based Budgeting, and Bidirectional Markdown Sync (`MEMORY.md`) with a User Verification Loop.
+  - **Context Hygiene & "No Duplicated Data"**: Includes LLM-powered Semantic Query Expansion, LRU Hygiene (decaying stale memories over 30 days), Project-Scoped Context, Token-Based Budgeting, and Bidirectional Markdown Sync (`MEMORY.md`) with a User Verification Loop. Terminal snapshots (100-line buffer states) are treated as **strictly transient**. They are passed to the LLM during the active turn but are aggressively pruned from the in-memory conversation history and are **never** stored in the SQLite database. Instead, only a 1-sentence episodic summary is persisted, ensuring a lean database and preventing LLM context bloat.
 
 ## Directives
 - **Lazy Loading & Lifecycle**: BoxxyClaw follows a strict two-stage initialization to keep the terminal lightweight:
