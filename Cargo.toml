@@ -23,7 +23,7 @@ members = [
     ]
 
 [workspace.package]
-version = "0.0.29"
+version = "0.0.30"
 edition = "2024"
 authors = ["Mii <miifrommera@gmail.com>"]
 description = "Stupid Linux Terminal"
@@ -116,4 +116,3 @@ arboard = "3.6.1"
 pulldown-cmark = "0.13.3"
 syntect = "5.3.0"
 boxxy-viewer = { path = "crates/viewer" }
-

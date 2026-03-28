@@ -23,7 +23,7 @@
 	    <p>NOTE: Boxxy is in preview. Short term memories database might get wiped, since Boxxy doesn't support migrations yet</p>
 	</description>
 
-    <url type="homepage">https://github.com/miifrommera/boxxy/</url>
+    <url type="homepage">https://boxxy.dev/</url>
     <url type="bugtracker">https://github.com/miifrommera/boxxy/issues</url>
 
     <screenshots>
@@ -61,7 +61,7 @@
   </categories>
 
   <releases>
-    <release version="0.0.29" date="2026-03-24">
+    <release version="0.0.30" date="2026-03-28">
       <description>
         <p>Initial</p>
       </description>
