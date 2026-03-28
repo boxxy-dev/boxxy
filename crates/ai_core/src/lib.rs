@@ -117,7 +117,7 @@ pub fn create_agent(
         Some(p) => p,
         None => {
             return BoxxyAgent::Error(
-                "No AI model selected. Please configure your models in Settings -> APIs -> Models Selection."
+                "No AI model selected. Please configure your models in Preferences -> APIs -> Models Selection."
                     .to_string(),
             )
         }
