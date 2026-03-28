@@ -29,6 +29,32 @@ impl ChatCommand for ModelCommand {
     }
 }
 
+use boxxy_core_widgets::autocomplete::{CompletionItem, CompletionProvider};
+use std::rc::Rc;
+
+pub struct SidebarCommandProvider {
+    pub registry: Rc<CommandRegistry>,
+}
+
+impl CompletionProvider for SidebarCommandProvider {
+    fn trigger(&self) -> String {
+        "/".to_string()
+    }
+
+    fn get_completions(&self, query: &str) -> Vec<CompletionItem> {
+        let completions = self.registry.get_completions(&format!("/{}", query));
+        completions
+            .into_iter()
+            .map(|cmd| CompletionItem {
+                display_name: cmd.to_string(),
+                replacement_text: cmd.to_string(),
+                icon_name: Some("boxxy-running-symbolic".to_string()),
+                secondary_text: None,
+            })
+            .collect()
+    }
+}
+
 pub struct CommandRegistry {
     pub(crate) commands: Vec<Box<dyn ChatCommand>>,
 }

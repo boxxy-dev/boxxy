@@ -29,7 +29,7 @@ pub struct MsgBarComponent {
     pub proactive_toggle: gtk::Button,
     pub claw_state: Rc<Cell<bool>>,
     pub proactive_state: Rc<Cell<bool>>,
-    _autocomplete: Rc<autocomplete::AutocompleteController>,
+    _autocomplete: Rc<boxxy_core_widgets::autocomplete::AutocompleteController>,
 }
 
 impl MsgBarComponent {
@@ -113,7 +113,7 @@ impl MsgBarComponent {
 
         let history = Rc::new(RefCell::new(history::MsgHistory::new()));
 
-        let mut providers: Vec<Box<dyn autocomplete::CompletionProvider>> = vec![
+        let mut providers: Vec<Box<dyn boxxy_core_widgets::autocomplete::CompletionProvider>> = vec![
             Box::new(autocomplete::AgentCompletionProvider),
             Box::new(autocomplete::CommandCompletionProvider),
             Box::new(autocomplete::ResumeCompletionProvider),
@@ -121,7 +121,16 @@ impl MsgBarComponent {
         // Sort by trigger length descending to ensure "/resume " matches before "/"
         providers.sort_by(|a, b| b.trigger().len().cmp(&a.trigger().len()));
 
-        let autocomplete_ctrl = autocomplete::AutocompleteController::new(&entry, providers, None);
+        let c_entry_activate = entry.clone();
+        let autocomplete_ctrl = boxxy_core_widgets::autocomplete::AutocompleteController::new(
+            &entry,
+            providers,
+            Some(Box::new(move |replacement| {
+                if replacement.starts_with("/resume ") {
+                    c_entry_activate.emit_activate();
+                }
+            })),
+        );
 
         let c_active = is_active.clone();
         let c_widget = widget.clone();
@@ -188,8 +197,21 @@ impl MsgBarComponent {
         let k_tags_box = tags_box.clone();
         let k_history = c_history;
 
+        let k_autocomplete = autocomplete_ctrl.clone();
         key_ctrl.connect_key_pressed(move |_, key, _, state| {
             let is_ctrl = state.contains(gtk::gdk::ModifierType::CONTROL_MASK);
+
+            if k_autocomplete.is_visible() {
+                // If autocomplete is visible, let it handle its own navigation/selection keys
+                if key == gtk::gdk::Key::Up
+                    || key == gtk::gdk::Key::Down
+                    || key == gtk::gdk::Key::Return
+                    || key == gtk::gdk::Key::Tab
+                    || key == gtk::gdk::Key::Escape
+                {
+                    return glib::Propagation::Proceed;
+                }
+            }
 
             if key == gtk::gdk::Key::Up {
                 let current_text = k_entry.text().to_string();

@@ -26,8 +26,7 @@ pub(crate) struct AiSidebarInner {
     pub generation_task: Option<tokio::task::JoinHandle<()>>,
     pub action_btn: gtk::Button,
     pub command_registry: Rc<CommandRegistry>,
-    pub autocomplete_popover: gtk::Popover,
-    pub autocomplete_list: gtk::ListBox,
+    pub autocomplete_ctrl: Rc<boxxy_core_widgets::autocomplete::AutocompleteController>,
     pub model_selector: GlobalModelSelectorDialog,
     pub usage_label: gtk::Label,
     pub total_tokens_used: Rc<std::cell::Cell<u64>>,
@@ -71,26 +70,16 @@ impl AiSidebarComponent {
         action_btn.set_tooltip_text(Some("Send"));
         input_box.append(&action_btn);
 
-        let autocomplete_popover = gtk::Popover::new();
-        autocomplete_popover.set_position(gtk::PositionType::Top);
-        autocomplete_popover.set_autohide(false);
-        autocomplete_popover.set_has_arrow(false);
-        autocomplete_popover.set_parent(&input_entry);
-        autocomplete_popover.add_css_class("autocomplete-popover");
-
-        let autocomplete_list = gtk::ListBox::new();
-        autocomplete_list.set_selection_mode(gtk::SelectionMode::Single);
-        autocomplete_list.add_css_class("boxed-list");
-        autocomplete_list.set_focusable(false);
-
-        let autocomplete_scroll = gtk::ScrolledWindow::new();
-        autocomplete_scroll.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
-        autocomplete_scroll.set_propagate_natural_height(true);
-        autocomplete_scroll.set_max_content_height(300);
-        autocomplete_scroll.set_focusable(false);
-        autocomplete_scroll.set_child(Some(&autocomplete_list));
-
-        autocomplete_popover.set_child(Some(&autocomplete_scroll));
+        let command_registry = Rc::new(CommandRegistry::new());
+        let providers: Vec<Box<dyn boxxy_core_widgets::autocomplete::CompletionProvider>> = vec![
+            Box::new(crate::commands::SidebarCommandProvider {
+                registry: command_registry.clone(),
+            }),
+        ];
+        let c_input_entry = input_entry.clone();
+        let autocomplete_ctrl = boxxy_core_widgets::autocomplete::AutocompleteController::new(&input_entry, providers, Some(Box::new(move |_| {
+            c_input_entry.emit_activate();
+        })));
 
         let usage_label = gtk::Label::builder()
             .label("Context: 0 tokens")
@@ -140,9 +129,8 @@ impl AiSidebarComponent {
             is_loading: false,
             generation_task: None,
             action_btn,
-            command_registry: Rc::new(CommandRegistry::new()),
-            autocomplete_popover,
-            autocomplete_list,
+            command_registry,
+            autocomplete_ctrl,
             model_selector: model_selector.clone(),
             usage_label,
             total_tokens_used: Rc::new(std::cell::Cell::new(0)),
@@ -191,129 +179,6 @@ impl AiSidebarComponent {
             }
         });
 
-        let comp_clone = comp.clone();
-        input_entry.connect_changed(move |entry| {
-            let text = entry.text().to_string();
-
-            let (completions, popover, list) = {
-                let Ok(inner) = comp_clone.inner.try_borrow() else {
-                    return;
-                };
-                (
-                    inner.command_registry.get_completions(&text),
-                    inner.autocomplete_popover.clone(),
-                    inner.autocomplete_list.clone(),
-                )
-            };
-
-            if text.starts_with('/') && !text.contains(' ') {
-                if !completions.is_empty() {
-                    while let Some(child) = list.first_child() {
-                        list.remove(&child);
-                    }
-                    for cmd in completions {
-                        let label = gtk::Label::new(Some(cmd));
-                        label.set_halign(gtk::Align::Start);
-                        label.set_margin_top(8);
-                        label.set_margin_bottom(8);
-                        label.set_margin_start(8);
-                        label.set_margin_end(8);
-                        let row = gtk::ListBoxRow::new();
-                        row.set_child(Some(&label));
-                        row.set_widget_name(cmd);
-                        list.append(&row);
-                    }
-                    list.select_row(list.row_at_index(0).as_ref());
-
-                    let width = entry.width();
-                    if width > 0 {
-                        popover.set_width_request(width);
-                    }
-
-                    if !popover.is_visible() {
-                        popover.popup();
-                        entry.grab_focus_without_selecting();
-                    }
-                } else {
-                    popover.popdown();
-                }
-            } else {
-                popover.popdown();
-            }
-        });
-
-        let comp_clone = comp.clone();
-        comp.inner
-            .borrow()
-            .autocomplete_list
-            .connect_row_activated(move |_list, row| {
-                let cmd = row.widget_name().to_string();
-                let c_clone = comp_clone.clone();
-
-                glib::idle_add_local_once(move || {
-                    {
-                        let inner = c_clone.inner.borrow();
-                        inner.input_buffer.set_text(format!("{} ", cmd));
-                        inner.autocomplete_popover.popdown();
-                        inner.input_entry.grab_focus();
-                        inner.input_entry.set_position(-1);
-                    }
-
-                    c_clone.send_message();
-                });
-            });
-
-        let key_controller = gtk::EventControllerKey::new();
-        let comp_clone = comp.clone();
-        key_controller.connect_key_pressed(move |_, key, _keycode, _state| {
-            let is_visible = comp_clone.inner.borrow().autocomplete_popover.is_visible();
-            if is_visible {
-                if key == gtk::gdk::Key::Up || key == gtk::gdk::Key::Down {
-                    let inner = comp_clone.inner.borrow();
-                    let list = &inner.autocomplete_list;
-                    let current_idx = list.selected_row().map(|r| r.index()).unwrap_or(0);
-                    if key == gtk::gdk::Key::Up && current_idx > 0 {
-                        list.select_row(list.row_at_index(current_idx - 1).as_ref());
-                        return glib::Propagation::Stop;
-                    } else if key == gtk::gdk::Key::Down
-                        && let Some(next_row) = list.row_at_index(current_idx + 1)
-                    {
-                        list.select_row(Some(&next_row));
-                        return glib::Propagation::Stop;
-                    }
-                } else if key == gtk::gdk::Key::Return || key == gtk::gdk::Key::Tab {
-                    let row_name = {
-                        let inner = comp_clone.inner.borrow();
-                        inner
-                            .autocomplete_list
-                            .selected_row()
-                            .map(|r| r.widget_name().to_string())
-                    };
-
-                    if let Some(cmd) = row_name {
-                        let c_clone = comp_clone.clone();
-                        glib::idle_add_local_once(move || {
-                            {
-                                let inner = c_clone.inner.borrow();
-                                inner.input_buffer.set_text(format!("{} ", cmd));
-                                inner.autocomplete_popover.popdown();
-                                inner.input_entry.grab_focus();
-                                inner.input_entry.set_position(-1);
-                            }
-
-                            c_clone.send_message();
-                        });
-                        return glib::Propagation::Stop;
-                    }
-                } else if key == gtk::gdk::Key::Escape {
-                    comp_clone.inner.borrow().autocomplete_popover.popdown();
-                    return glib::Propagation::Stop;
-                }
-            }
-            glib::Propagation::Proceed
-        });
-        key_controller.set_propagation_phase(gtk::PropagationPhase::Capture);
-        input_entry.add_controller(key_controller);
 
         comp
     }
@@ -370,7 +235,7 @@ impl AiSidebarComponent {
         }
 
         if content.starts_with('/') {
-            self.inner.borrow().autocomplete_popover.popdown();
+            self.inner.borrow().autocomplete_ctrl.hide();
             let _handled = registry.handle(&content, self);
             self.inner.borrow_mut().input_buffer.set_text("");
             return;

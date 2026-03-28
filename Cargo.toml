@@ -18,6 +18,7 @@ members = [
     "crates/boxxy_msgbar",
     "crates/db",
     "crates/boxxy_bookmarks",
+    "crates/core_widgets",
     "crates/core_toolbox",
     "crates/viewer",
     ]
@@ -53,6 +54,7 @@ boxxy-keybindings = { path = "crates/keybindings" }
 boxxy-terminal = { path = "crates/terminal" }
 boxxy-themes = { path = "crates/themes" }
 boxxy-window = { path = "crates/window" }
+boxxy-core-widgets = { path = "crates/core_widgets" }
 directories = "6.0.0"
 cairo-rs = "0.22"
 gdk-pixbuf = "0.22"
