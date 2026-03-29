@@ -24,7 +24,8 @@ impl BlockRenderer for TextRenderer {
                 label.set_wrap(true);
                 label.set_wrap_mode(pango::WrapMode::WordChar);
                 label.set_xalign(0.0); // Align left
-                label.set_halign(gtk::Align::Start);
+                label.set_halign(gtk::Align::Fill);
+                label.set_hexpand(true);
                 label.set_selectable(true);
                 label.set_markup(markup);
                 label.set_margin_bottom(8); // Add some spacing between paragraphs
@@ -35,7 +36,8 @@ impl BlockRenderer for TextRenderer {
                 label.set_use_markup(true);
                 label.set_wrap(true);
                 label.set_xalign(0.0);
-                label.set_halign(gtk::Align::Start);
+                label.set_halign(gtk::Align::Fill);
+                label.set_hexpand(true);
                 label.set_selectable(true);
 
                 // Map header levels to GTK/Libadwaita CSS classes or larger sizes
@@ -60,12 +62,14 @@ impl BlockRenderer for TextRenderer {
             ContentBlock::Blockquote(markup) => {
                 let frame = gtk::Frame::new(None);
                 frame.add_css_class("view"); // Gives it a background/border in Libadwaita
+                frame.set_hexpand(true);
 
                 let label = gtk::Label::new(None);
                 label.set_use_markup(true);
                 label.set_wrap(true);
                 label.set_xalign(0.0);
-                label.set_halign(gtk::Align::Start);
+                label.set_halign(gtk::Align::Fill);
+                label.set_hexpand(true);
                 label.set_selectable(true);
                 label.set_markup(markup);
 
@@ -83,9 +87,11 @@ impl BlockRenderer for TextRenderer {
                 let vbox = gtk::Box::new(gtk::Orientation::Vertical, 4);
                 vbox.set_margin_bottom(8);
                 vbox.set_margin_start(16); // Indent the list
+                vbox.set_hexpand(true);
 
                 for (i, item_markup) in items.iter().enumerate() {
                     let hbox = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+                    hbox.set_hexpand(true);
 
                     let bullet_text = if *ordered {
                         format!("{}.", i + 1)
@@ -100,7 +106,8 @@ impl BlockRenderer for TextRenderer {
                     content_label.set_use_markup(true);
                     content_label.set_wrap(true);
                     content_label.set_xalign(0.0);
-                    content_label.set_halign(gtk::Align::Start);
+                    content_label.set_halign(gtk::Align::Fill);
+                    content_label.set_hexpand(true);
                     content_label.set_selectable(true);
                     content_label.set_markup(item_markup);
 

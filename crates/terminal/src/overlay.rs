@@ -1,7 +1,8 @@
 use boxxy_viewer::StructuredViewer;
 use gtk::prelude::*;
 use gtk4 as gtk;
-use std::cell::RefCell;
+use libadwaita as adw;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -13,6 +14,8 @@ pub enum OverlayMode {
 #[derive(Clone)]
 pub struct TerminalOverlay {
     revealer: gtk::Revealer,
+    vbox: gtk::Box,
+    outer_scroll: gtk::ScrolledWindow,
     title_label: gtk::Label,
     diagnosis_viewer: StructuredViewer,
     command_view: gtk::TextView,
@@ -38,6 +41,8 @@ pub struct TerminalOverlay {
     action_box: gtk::Box,
     current_proposal: Rc<RefCell<crate::TerminalProposal>>,
     current_mode: Rc<RefCell<OverlayMode>>,
+    stored_max_height: Rc<Cell<i32>>,
+    clamp: adw::Clamp,
 }
 
 impl TerminalOverlay {
@@ -63,26 +68,59 @@ impl TerminalOverlay {
             on_vis_rc(rev.reveals_child());
         });
         revealer.set_transition_type(gtk::RevealerTransitionType::SlideDown);
-        revealer.set_halign(gtk::Align::Center);
+        revealer.set_halign(gtk::Align::Fill);
         revealer.set_valign(gtk::Align::Center);
+        revealer.set_margin_start(20);
+        revealer.set_margin_end(20);
 
-        let frame = gtk::Frame::new(None);
-        frame.add_css_class("app-notification");
-        frame.add_css_class("claw-widget");
-        frame.add_css_class("background");
-        frame.add_css_class("view");
-
-        let overlay = gtk::Overlay::new();
-        frame.set_child(Some(&overlay));
+        let s = boxxy_preferences::Settings::load();
 
         let vbox = gtk::Box::new(gtk::Orientation::Vertical, 12);
         vbox.set_margin_top(12);
         vbox.set_margin_bottom(12);
         vbox.set_margin_start(12);
         vbox.set_margin_end(12);
-        vbox.set_width_request(450);
+        vbox.set_size_request(boxxy_preferences::CLAW_WIDTH_BOUNDS.min, -1);
         vbox.set_hexpand(true);
-        overlay.set_child(Some(&vbox));
+
+        // propagate_natural_width: the scroll propagates the content's natural
+        // width (e.g., a wide code block) up to the AdwClamp, which then caps
+        // it at the user's max setting.  AdwClamp also measures height at the
+        // actual clamped width (not the allocation width), so height-for-width
+        // is always accurate — no scrollbar or clipping due to measurement
+        // mismatch.
+        let master_scroll = gtk::ScrolledWindow::builder()
+            .hscrollbar_policy(gtk::PolicyType::Never)
+            .vscrollbar_policy(gtk::PolicyType::Automatic)
+            .max_content_height(s.claw_popover_max_height)
+            .propagate_natural_height(true)
+            .propagate_natural_width(true)
+            .hexpand(true)
+            .build();
+        master_scroll.set_child(Some(&vbox));
+
+        let inner_overlay = gtk::Overlay::new();
+        inner_overlay.set_hexpand(true);
+        inner_overlay.set_child(Some(&master_scroll));
+
+        let frame = gtk::Frame::new(None);
+        frame.add_css_class("app-notification");
+        frame.add_css_class("claw-widget");
+        frame.add_css_class("background");
+        frame.add_css_class("view");
+        frame.set_halign(gtk::Align::Fill);
+        frame.set_child(Some(&inner_overlay));
+
+        // AdwClamp constrains the frame's width to at most maximum_size.
+        // When content is narrower than the maximum, the child is left at its
+        // natural width (centred within the available space).  The cross-axis
+        // (height) is always measured at the child's actual clamped width, so
+        // there is no height-for-width mismatch.
+        let clamp = adw::Clamp::new();
+        clamp.set_maximum_size(s.claw_popover_width);
+        clamp.set_child(Some(&frame));
+
+        revealer.set_child(Some(&clamp));
 
         let header = gtk::Box::new(gtk::Orientation::Horizontal, 6);
         let icon = gtk::Image::from_icon_name("boxxyclaw");
@@ -98,17 +136,8 @@ impl TerminalOverlay {
 
         vbox.append(&header);
 
-        let diag_scroll = gtk::ScrolledWindow::builder()
-            .hscrollbar_policy(gtk::PolicyType::Never)
-            .vscrollbar_policy(gtk::PolicyType::Automatic)
-            .max_content_height(400)
-            .propagate_natural_height(true)
-            .hexpand(true)
-            .build();
-
         let diagnosis_viewer = StructuredViewer::new(boxxy_claw::ui::get_claw_viewer_registry());
-        diag_scroll.set_child(Some(diagnosis_viewer.widget()));
-        vbox.append(&diag_scroll);
+        vbox.append(diagnosis_viewer.widget());
 
         let command_frame = gtk::Frame::new(None);
         command_frame.add_css_class("view");
@@ -188,9 +217,6 @@ impl TerminalOverlay {
         action_box.append(&accept_btn);
 
         vbox.append(&action_box);
-
-        frame.set_child(Some(&vbox));
-        revealer.set_child(Some(&frame));
 
         let current_proposal = Rc::new(RefCell::new(crate::TerminalProposal::None));
         let current_mode = Rc::new(RefCell::new(OverlayMode::Claw));
@@ -340,6 +366,8 @@ impl TerminalOverlay {
 
         Self {
             revealer,
+            vbox,
+            outer_scroll: master_scroll,
             title_label,
             diagnosis_viewer,
             command_view,
@@ -360,7 +388,28 @@ impl TerminalOverlay {
             action_box,
             current_proposal,
             current_mode,
+            stored_max_height: Rc::new(Cell::new(s.claw_popover_max_height)),
+            clamp,
         }
+    }
+
+    pub fn update_dimensions(&self, width: i32, max_height: i32) {
+        self.clamp.set_maximum_size(width);
+        self.stored_max_height.set(max_height);
+        // The effective height will be re-capped on the next pane resize event.
+        // Update unconditionally so a settings change takes effect immediately
+        // even before the next resize.
+        self.outer_scroll.set_max_content_height(max_height);
+    }
+
+    /// Called whenever the parent pane is resized. Caps the scroll window height
+    /// so the popover never overflows the visible terminal area.
+    pub fn update_pane_height(&self, pane_height: i32) {
+        const V_PAD: i32 = 40; // total top+bottom breathing room
+        let effective = (pane_height - V_PAD)
+            .max(boxxy_preferences::CLAW_HEIGHT_BOUNDS.min)
+            .min(self.stored_max_height.get());
+        self.outer_scroll.set_max_content_height(effective);
     }
 
     pub fn widget(&self) -> &gtk::Revealer {

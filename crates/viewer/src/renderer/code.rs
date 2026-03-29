@@ -34,6 +34,7 @@ impl BlockRenderer for CodeRenderer {
             frame.set_margin_bottom(12);
 
             let vbox = gtk::Box::new(gtk::Orientation::Vertical, 0);
+            vbox.set_hexpand(true);
 
             let header = gtk::Box::new(gtk::Orientation::Horizontal, 6);
             header.set_margin_start(8);
@@ -84,7 +85,8 @@ impl BlockRenderer for CodeRenderer {
             label.set_margin_bottom(8);
             label.set_margin_start(12);
             label.set_margin_end(12);
-            label.set_halign(gtk::Align::Start);
+            label.set_halign(gtk::Align::Fill);
+            label.set_hexpand(true);
             label.set_xalign(0.0);
             label.add_css_class("monospace");
 

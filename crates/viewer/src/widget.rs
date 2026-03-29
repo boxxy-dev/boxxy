@@ -52,6 +52,8 @@ impl ViewerState {
         // 3. Render any newly sealed blocks that aren't in the DOM yet
         for i in sealed_count..active_block_index {
             if let Some(widget) = self.registry.render_block(&blocks[i]) {
+                widget.set_hexpand(true);
+                widget.set_halign(gtk::Align::Fill);
                 self.container.append(&widget);
             }
         }
@@ -59,6 +61,8 @@ impl ViewerState {
         // 4. Render the current active block and attach it
         if let Some(widget) = self.registry.render_block(active_block) {
             widget.add_css_class("streaming-active");
+            widget.set_hexpand(true);
+            widget.set_halign(gtk::Align::Fill);
             self.container.append(&widget);
             *self.active_widget.borrow_mut() = Some(widget);
         }
@@ -86,6 +90,8 @@ impl StructuredViewer {
     /// Creates a new StructuredViewer with the given registry.
     pub fn new(registry: Rc<ViewerRegistry>) -> Self {
         let container = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        container.set_hexpand(true);
+        container.set_halign(gtk::Align::Fill);
 
         Self {
             state: Rc::new(ViewerState {
@@ -166,6 +172,8 @@ impl StructuredViewer {
         };
 
         if let Some(widget) = self.state.registry.render_block(&block) {
+            widget.set_hexpand(true);
+            widget.set_halign(gtk::Align::Fill);
             self.state.container.append(&widget);
         }
     }

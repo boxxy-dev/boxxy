@@ -93,6 +93,20 @@
                               </object>
                             </child>
                             <child>
+                              <object class="GtkListBoxRow" id="nav_claw_ui">
+                                <property name="child">
+                                  <object class="GtkLabel">
+                                    <property name="label" translatable="yes">Claw UI</property>
+                                    <property name="xalign">0</property>
+                                    <property name="margin-start">12</property>
+                                    <property name="margin-end">12</property>
+                                    <property name="margin-top">10</property>
+                                    <property name="margin-bottom">10</property>
+                                  </object>
+                                </property>
+                              </object>
+                            </child>
+                            <child>
                               <object class="GtkListBoxRow" id="nav_shortcuts">
                                 <property name="child">
                                   <object class="GtkLabel">
@@ -480,6 +494,87 @@
                                   <object class="AdwSwitchRow" id="enable_clipboard_tools_switch">
                                     <property name="title" translatable="yes">Enable Clipboard Tools</property>
                                     <property name="subtitle" translatable="yes">Allows agents to read from and write to your system clipboard.</property>
+                                  </object>
+                                </child>
+                              </object>
+                            </child>
+                          </object>
+                        </property>
+                      </object>
+                    </child>
+
+                    <child>
+                      <object class="AdwViewStackPage">
+                        <property name="name">claw_ui</property>
+                        <property name="child">
+                          <object class="AdwPreferencesPage" id="page_claw_ui">
+                            <child>
+                              <object class="AdwPreferencesGroup" id="group_claw_ui_dimensions">
+                                <property name="title" translatable="yes">Dimensions</property>
+                                <child>
+                                  <object class="AdwSpinRow" id="claw_popover_width_spin">
+                                    <property name="title" translatable="yes">Popover Max Width</property>
+                                    <property name="subtitle" translatable="yes">Maximum width of the Claw popover (px)</property>
+                                    <property name="digits">0</property>
+                                    <property name="numeric">True</property>
+                                    <property name="climb-rate">10</property>
+                                    <property name="adjustment">
+                                      <object class="GtkAdjustment" id="claw_popover_width_adj">
+                                      </object>
+                                    </property>
+                                  </object>
+                                </child>
+                                <child>
+                                  <object class="AdwSpinRow" id="claw_popover_max_height_spin">
+                                    <property name="title" translatable="yes">Popover Max Height</property>
+                                    <property name="subtitle" translatable="yes">Maximum height of the Claw popover (px)</property>
+                                    <property name="digits">0</property>
+                                    <property name="numeric">True</property>
+                                    <property name="climb-rate">10</property>
+                                    <property name="adjustment">
+                                      <object class="GtkAdjustment" id="claw_popover_max_height_adj">
+                                      </object>
+                                    </property>
+                                  </object>
+                                </child>
+                                <child>
+                                  <object class="AdwActionRow">
+                                    <property name="title" translatable="yes">Reset Dimensions</property>
+                                    <child type="suffix">
+                                      <object class="GtkButton" id="reset_claw_dimensions_btn">
+                                        <property name="label" translatable="yes">Reset</property>
+                                        <property name="valign">center</property>
+                                      </object>
+                                    </child>
+                                  </object>
+                                </child>
+                              </object>
+                            </child>
+
+                            <child>
+                              <object class="AdwPreferencesGroup" id="group_claw_ui_shortcuts">
+                                <property name="title" translatable="yes">Shortcuts</property>
+                                <child>
+                                  <object class="AdwActionRow">
+                                    <property name="title" translatable="yes">Message Bar Shortcut</property>
+                                    <property name="subtitle" translatable="yes">Accelerator to open the Claw message bar (e.g. &amp;lt;Ctrl&amp;gt;slash)</property>
+                                    <child>
+                                      <object class="GtkEntry" id="claw_msgbar_shortcut_entry">
+                                        <property name="valign">center</property>
+                                        <property name="hexpand">True</property>
+                                      </object>
+                                    </child>
+                                  </object>
+                                </child>
+                                <child>
+                                  <object class="AdwActionRow">
+                                    <property name="title" translatable="yes">Reset Shortcut</property>
+                                    <child type="suffix">
+                                      <object class="GtkButton" id="reset_claw_shortcut_btn">
+                                        <property name="label" translatable="yes">Reset</property>
+                                        <property name="valign">center</property>
+                                      </object>
+                                    </child>
                                   </object>
                                 </child>
                               </object>

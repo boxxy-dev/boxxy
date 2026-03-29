@@ -28,6 +28,53 @@ use badge::AgentBadge;
 
 pub type PendingDiagnosis = Rc<RefCell<Option<(String, crate::TerminalProposal)>>>;
 
+/// GTK key names for characters that users commonly type literally in accelerator
+/// strings (e.g. "/" instead of "slash").  `gtk_accelerator_parse` only accepts
+/// the symbolic names, so bare characters must be normalised before parsing.
+fn normalize_accel(accel: &str) -> String {
+    let key_start = accel.rfind('>').map(|i| i + 1).unwrap_or(0);
+    let key = match &accel[key_start..] {
+        "/" => "slash",
+        "?" => "question",
+        "=" => "equal",
+        "+" => "plus",
+        "-" => "minus",
+        "_" => "underscore",
+        "." => "period",
+        "," => "comma",
+        ";" => "semicolon",
+        ":" => "colon",
+        "'" => "apostrophe",
+        "\"" => "quotedbl",
+        "!" => "exclam",
+        "@" => "at",
+        "#" => "numbersign",
+        "$" => "dollar",
+        "%" => "percent",
+        "^" => "asciicircum",
+        "&" => "ampersand",
+        "*" => "asterisk",
+        "(" => "parenleft",
+        ")" => "parenright",
+        "[" => "bracketleft",
+        "]" => "bracketright",
+        "{" => "braceleft",
+        "}" => "braceright",
+        "|" => "bar",
+        "\\" => "backslash",
+        "`" => "grave",
+        "~" => "asciitilde",
+        other => other,
+    };
+    format!("{}{}", &accel[..key_start], key)
+}
+
+fn parse_accel_trigger(accel: &str) -> gtk::ShortcutTrigger {
+    let normalised = normalize_accel(accel);
+    gtk::ShortcutTrigger::parse_string(&normalised)
+        .unwrap_or_else(|| gtk::ShortcutTrigger::parse_string("<Ctrl>slash").unwrap())
+}
+
 #[derive(Clone)]
 pub struct TerminalPaneComponent {
     widget: gtk::Overlay,
@@ -43,6 +90,7 @@ pub struct TerminalPaneComponent {
     is_proactive: Rc<Cell<bool>>,
     msg_bar: Rc<MsgBarComponent>,
     pub total_tokens: Rc<Cell<u64>>,
+    msgbar_shortcut: gtk::Shortcut,
 }
 
 pub(super) struct PaneInner {
@@ -362,38 +410,43 @@ impl TerminalPaneComponent {
             total_tokens.clone(),
         );
 
-        // Focus toggle hotkey (Ctrl + `) and MsgBar hotkey (Ctrl + /)
-        let focus_toggle_handler = gtk::EventControllerKey::new();
-        focus_toggle_handler.set_propagation_phase(gtk::PropagationPhase::Capture);
-        let terminal_clone = terminal.clone();
-        let msg_bar_clone = msg_bar.clone();
-        let is_claw_active_for_focus = is_claw_active.clone();
-        let is_proactive_for_focus = is_proactive.clone();
-        focus_toggle_handler.connect_key_pressed(move |_, keyval, _keycode, state| {
-            let is_ctrl = state.contains(gtk::gdk::ModifierType::CONTROL_MASK);
-
-            if is_ctrl && keyval == gtk::gdk::Key::slash {
-                if let Some(rect) = terminal_clone.get_cursor_rect() {
-                    terminal_clone.set_focusable(false); // Prevent clicks from stealing focus
-
-                    // Sync the MsgBar state with current pane status
-                    msg_bar_clone
-                        .update_ui(is_claw_active_for_focus.get(), is_proactive_for_focus.get());
-
-                    msg_bar_clone.show_at_y(rect.y() as i32, rect.height() as i32);
-                    // Use a micro-delay to let GTK process the visibility change
-                    // before attempting to steal focus from the TerminalWidget.
-                    let entry_clone = msg_bar_clone.entry.clone();
-                    gtk::glib::spawn_future_local(async move {
-                        entry_clone.grab_focus();
-                    });
-                }
-                return gtk::glib::Propagation::Stop;
-            }
-
-            gtk::glib::Propagation::Proceed
+        // Keep popover height capped to the live pane height.
+        let claw_popover_for_resize = claw_popover.clone();
+        let height_detector = gtk::DrawingArea::new();
+        height_detector.set_can_target(false);
+        height_detector.connect_resize(move |_, _w, h| {
+            claw_popover_for_resize.update_pane_height(h);
         });
-        widget.add_controller(focus_toggle_handler);
+        widget.add_overlay(&height_detector);
+
+        // MsgBar shortcut (configurable via Settings)
+        let shortcut_controller = gtk::ShortcutController::new();
+        shortcut_controller.set_propagation_phase(gtk::PropagationPhase::Capture);
+
+        let msg_bar_sc = msg_bar.clone();
+        let terminal_sc = terminal.clone();
+        let is_claw_active_sc = is_claw_active.clone();
+        let is_proactive_sc = is_proactive.clone();
+        let action = gtk::CallbackAction::new(move |_, _| {
+            if let Some(rect) = terminal_sc.get_cursor_rect() {
+                terminal_sc.set_focusable(false);
+                msg_bar_sc.update_ui(is_claw_active_sc.get(), is_proactive_sc.get());
+                msg_bar_sc.show_at_y(rect.y() as i32, rect.height() as i32);
+                let entry_clone = msg_bar_sc.entry.clone();
+                gtk::glib::spawn_future_local(async move {
+                    entry_clone.grab_focus();
+                });
+            }
+            gtk::glib::Propagation::Stop
+        });
+
+        let initial_trigger = parse_accel_trigger(&Settings::load().claw_msgbar_shortcut);
+        let msgbar_shortcut = gtk::Shortcut::builder()
+            .trigger(&initial_trigger)
+            .action(&action)
+            .build();
+        shortcut_controller.add_shortcut(msgbar_shortcut.clone());
+        widget.add_controller(shortcut_controller);
 
         Self {
             widget,
@@ -409,6 +462,7 @@ impl TerminalPaneComponent {
             is_proactive,
             msg_bar,
             total_tokens,
+            msgbar_shortcut,
         }
     }
 
@@ -797,6 +851,12 @@ impl TerminalPaneComponent {
             needs_show_grid = p.show_vte_grid != settings.show_vte_grid;
             needs_invert_scroll = p.invert_scroll != settings.invert_scroll;
         }
+
+        self.claw_popover
+            .update_dimensions(settings.claw_popover_width, settings.claw_popover_max_height);
+
+        self.msgbar_shortcut
+            .set_trigger(Some(parse_accel_trigger(&settings.claw_msgbar_shortcut)));
 
         inner.hide_scrollbars = settings.hide_scrollbars;
         inner

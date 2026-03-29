@@ -95,6 +95,25 @@ impl fmt::Display for ColorScheme {
 pub const DEFAULT_FILE_REGEX: &str =
     r#"(?:https?://[^\s"'<>]+|/[\w.@:/-]+|~[\w.@:/-]+|\.{1,2}/[\w.@:/-]+)"#;
 
+#[derive(Debug, Clone, Copy)]
+pub struct DimensionBounds {
+    pub min: i32,
+    pub max: i32,
+    pub default: i32,
+}
+
+pub const CLAW_WIDTH_BOUNDS: DimensionBounds = DimensionBounds {
+    min: 400,
+    max: 1600,
+    default: 600,
+};
+
+pub const CLAW_HEIGHT_BOUNDS: DimensionBounds = DimensionBounds {
+    min: 400,
+    max: 1600,
+    default: 900,
+};
+
 // --- User Configurable Settings ---
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(default)]
@@ -139,6 +158,9 @@ pub struct Settings {
     pub enable_clipboard_tools: bool,
     pub enable_progress_bar: bool,
     pub colored_tabs: bool,
+    pub claw_popover_width: i32,
+    pub claw_popover_max_height: i32,
+    pub claw_msgbar_shortcut: String,
 }
 
 impl Default for Settings {
@@ -184,6 +206,9 @@ impl Default for Settings {
             enable_clipboard_tools: true,
             enable_progress_bar: true,
             colored_tabs: false,
+            claw_popover_width: CLAW_WIDTH_BOUNDS.default,
+            claw_popover_max_height: CLAW_HEIGHT_BOUNDS.default,
+            claw_msgbar_shortcut: "<Ctrl>slash".to_string(),
         }
     }
 }
