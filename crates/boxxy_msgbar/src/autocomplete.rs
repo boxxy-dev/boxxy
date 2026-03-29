@@ -119,4 +119,3 @@ impl CompletionProvider for ResumeCompletionProvider {
         items
     }
 }
-

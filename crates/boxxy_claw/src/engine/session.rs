@@ -1,6 +1,7 @@
 use crate::engine::{
-    ClawEngineEvent, ClawMessage, TaskStatus, TaskType, context::load_session_context, context::retrieve_memories,
-    context::summarize_and_store, dispatcher::extract_command_and_clean,
+    ClawEngineEvent, ClawMessage, TaskStatus, TaskType, context::load_session_context,
+    context::retrieve_memories, context::summarize_and_store,
+    dispatcher::extract_command_and_clean,
 };
 use boxxy_agent::ipc::AgentClawProxy;
 use boxxy_db::Db;
@@ -347,7 +348,7 @@ impl ClawSession {
                             if boxxy_db::DATABASE_WAS_RESET.swap(false, std::sync::atomic::Ordering::SeqCst)
                             {
                                 let _ = self.tx_ui.send(ClawEngineEvent::SystemMessage {
-                                    text: "⚠️ Database reset for update. This only happens during the Preview.".to_string() 
+                                    text: "⚠️ Database reset for update. This only happens during the Preview.".to_string()
                                 }).await;
                             }
 
@@ -983,7 +984,11 @@ fn spawn_turn(
             {}\n\
             {}\n",
             now.to_rfc3339(),
-            cwd_clone, active_skills_text, past_memories, radar, tui_warning
+            cwd_clone,
+            active_skills_text,
+            past_memories,
+            radar,
+            tui_warning
         );
 
         let full_prompt = format!(
@@ -1087,7 +1092,8 @@ fn spawn_turn(
 
                 // --- ATOMIC PERSISTENCE ---
                 let history_json = serde_json::to_string(&state_lock.history).unwrap_or_default();
-                let pending_tasks_json = serde_json::to_string(&state_lock.pending_tasks).unwrap_or_default();
+                let pending_tasks_json =
+                    serde_json::to_string(&state_lock.pending_tasks).unwrap_or_default();
                 let agent_name_for_db = agent_name.clone();
                 let session_id_for_db = session_id_clone.clone();
                 let cwd_for_db = cwd_clone.clone();

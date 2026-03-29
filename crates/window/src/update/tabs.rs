@@ -275,7 +275,11 @@ pub fn adopt_orphan_tabs(inner: &mut AppWindowInner) {
     for i in 0..n {
         let page = inner.tab_view.nth_page(i);
         let key = page.child().as_ptr() as usize;
-        if let Some(tc) = ORPHAN_TABS.with(|pool: &std::cell::RefCell<std::collections::HashMap<String, crate::init::TerminalController>>| pool.borrow_mut().remove(&key.to_string())) {
+        if let Some(tc) = ORPHAN_TABS.with(
+            |pool: &std::cell::RefCell<
+                std::collections::HashMap<String, crate::init::TerminalController>,
+            >| pool.borrow_mut().remove(&key.to_string()),
+        ) {
             let parsed = load_palette(inner.current_settings.theme.as_str());
             let is_dark = libadwaita::StyleManager::default().is_dark();
             let palette = parsed
@@ -308,7 +312,11 @@ pub fn tab_page_detached(inner: &mut AppWindowInner, key: usize) {
         .position(|c| c.controller.widget().as_ptr() as usize == key)
     {
         let tc = inner.tabs.remove(pos);
-        ORPHAN_TABS.with(|pool: &std::cell::RefCell<std::collections::HashMap<String, crate::init::TerminalController>>| pool.borrow_mut().insert(key.to_string(), tc));
+        ORPHAN_TABS.with(
+            |pool: &std::cell::RefCell<
+                std::collections::HashMap<String, crate::init::TerminalController>,
+            >| pool.borrow_mut().insert(key.to_string(), tc),
+        );
     } else if let Some(bookmarks_page) = &inner.bookmarks_page
         && bookmarks_page.child().as_ptr() as usize == key
     {
@@ -318,7 +326,11 @@ pub fn tab_page_detached(inner: &mut AppWindowInner, key: usize) {
 }
 
 pub fn tab_page_attached(inner: &mut AppWindowInner, key: usize) {
-    if let Some(tc) = ORPHAN_TABS.with(|pool: &std::cell::RefCell<std::collections::HashMap<String, crate::init::TerminalController>>| pool.borrow_mut().remove(&key.to_string())) {
+    if let Some(tc) = ORPHAN_TABS.with(
+        |pool: &std::cell::RefCell<
+            std::collections::HashMap<String, crate::init::TerminalController>,
+        >| pool.borrow_mut().remove(&key.to_string()),
+    ) {
         let parsed = load_palette(inner.current_settings.theme.as_str());
         let is_dark = libadwaita::StyleManager::default().is_dark();
         let palette = parsed
@@ -350,13 +362,20 @@ pub fn focus_active_terminal(inner: &mut AppWindowInner) {
     sync_tab_colors(inner);
     if let Some(page) = inner.tab_view.selected_page() {
         // Only clear the indicator if it's the bell icon. We don't want to clear the claw icon.
-        if page.indicator_icon().map(|icon| {
-            if let Ok(themed_icon) = icon.downcast::<gtk4::gio::ThemedIcon>() {
-                themed_icon.names().iter().any(|n| n.as_str().contains("visual-bell"))
-            } else {
-                false
-            }
-        }).unwrap_or(false) {
+        if page
+            .indicator_icon()
+            .map(|icon| {
+                if let Ok(themed_icon) = icon.downcast::<gtk4::gio::ThemedIcon>() {
+                    themed_icon
+                        .names()
+                        .iter()
+                        .any(|n| n.as_str().contains("visual-bell"))
+                } else {
+                    false
+                }
+            })
+            .unwrap_or(false)
+        {
             page.set_indicator_icon(None::<&gio::Icon>);
             page.set_indicator_activatable(false);
         }

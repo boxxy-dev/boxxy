@@ -1,11 +1,11 @@
 use crate::engine::{ClawEngineEvent, ScheduledTask, TaskStatus, TaskType};
+use chrono::{Duration, Utc};
 use rig::completion::ToolDefinition;
 use rig::tool::Tool;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use uuid::Uuid;
-use chrono::{Utc, Duration};
 
 #[derive(Deserialize)]
 pub struct ScheduleTaskArgs {
@@ -71,13 +71,20 @@ impl Tool for ScheduleTaskTool {
         let (agent_name, tasks, pane_id) = {
             let mut state = self.state.lock().await;
             state.pending_tasks.push(task);
-            (state.agent_name.clone(), state.pending_tasks.clone(), state.pane_id.clone())
+            (
+                state.agent_name.clone(),
+                state.pending_tasks.clone(),
+                state.pane_id.clone(),
+            )
         };
 
-        let _ = self.tx_ui.send(ClawEngineEvent::TaskStatusChanged {
-            agent_name,
-            tasks: tasks.clone(),
-        }).await;
+        let _ = self
+            .tx_ui
+            .send(ClawEngineEvent::TaskStatusChanged {
+                agent_name,
+                tasks: tasks.clone(),
+            })
+            .await;
 
         let workspace = crate::registry::workspace::global_workspace().await;
         workspace.update_pane_tasks(pane_id, tasks).await;
@@ -85,7 +92,10 @@ impl Tool for ScheduleTaskTool {
         Ok(ScheduleTaskOutput {
             success: true,
             task_id: id.to_string(),
-            message: format!("Task scheduled for {} seconds from now.", args.due_in_seconds),
+            message: format!(
+                "Task scheduled for {} seconds from now.",
+                args.due_in_seconds
+            ),
         })
     }
 }
@@ -112,7 +122,8 @@ impl Tool for ListTasksTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "List all your currently pending scheduled tasks and reminders.".to_string(),
+            description: "List all your currently pending scheduled tasks and reminders."
+                .to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {}
@@ -167,20 +178,29 @@ impl Tool for CancelTaskTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        let id = Uuid::parse_str(&args.task_id).map_err(|e| std::io::Error::other(format!("Invalid UUID: {e}")))?;
+        let id = Uuid::parse_str(&args.task_id)
+            .map_err(|e| std::io::Error::other(format!("Invalid UUID: {e}")))?;
 
         let (found, agent_name, tasks, pane_id) = {
             let mut state = self.state.lock().await;
             let initial_len = state.pending_tasks.len();
             state.pending_tasks.retain(|t| t.id != id);
-            (state.pending_tasks.len() < initial_len, state.agent_name.clone(), state.pending_tasks.clone(), state.pane_id.clone())
+            (
+                state.pending_tasks.len() < initial_len,
+                state.agent_name.clone(),
+                state.pending_tasks.clone(),
+                state.pane_id.clone(),
+            )
         };
 
         if found {
-            let _ = self.tx_ui.send(ClawEngineEvent::TaskStatusChanged {
-                agent_name,
-                tasks: tasks.clone(),
-            }).await;
+            let _ = self
+                .tx_ui
+                .send(ClawEngineEvent::TaskStatusChanged {
+                    agent_name,
+                    tasks: tasks.clone(),
+                })
+                .await;
 
             let workspace = crate::registry::workspace::global_workspace().await;
             workspace.update_pane_tasks(pane_id, tasks).await;

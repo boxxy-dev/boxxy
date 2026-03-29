@@ -49,7 +49,7 @@ impl AutocompleteController {
         scroll.set_propagate_natural_height(true);
         scroll.set_max_content_height(300);
         scroll.set_child(Some(&list));
-        
+
         popover.set_child(Some(&scroll));
         popover.set_halign(gtk::Align::Start);
 
@@ -221,9 +221,9 @@ impl AutocompleteController {
         let next_idx = (current_idx + delta).max(0);
         if let Some(row) = self.list.row_at_index(next_idx) {
             self.list.select_row(Some(&row));
-            
+
             // Ensure the newly selected row is visible within the scrolled window.
-            // In GTK4, ListBox doesn't automatically scroll to the selected row 
+            // In GTK4, ListBox doesn't automatically scroll to the selected row
             // if focus doesn't move. We can trigger a scroll by getting the row's bounds.
             let mut current_parent = self.list.parent();
             while let Some(p) = current_parent {
@@ -231,13 +231,14 @@ impl AutocompleteController {
                     let vadj = scroll.vadjustment();
                     let row_h = row.height() as f64;
                     // Compute coordinate relative to the ListBox
-                    let (_, row_y) = row.compute_point(&self.list, &gtk::graphene::Point::new(0.0, 0.0))
+                    let (_, row_y) = row
+                        .compute_point(&self.list, &gtk::graphene::Point::new(0.0, 0.0))
                         .map(|pt| (pt.x() as f64, pt.y() as f64))
                         .unwrap_or((0.0, 0.0));
-                    
+
                     let page_size = vadj.page_size();
                     let value = vadj.value();
-                    
+
                     if row_y < value {
                         vadj.set_value(row_y);
                     } else if row_y + row_h > value + page_size {
@@ -252,7 +253,7 @@ impl AutocompleteController {
 
     fn apply_completion(&self, replacement: &str) {
         self.popover.popdown();
-        
+
         let trigger_info = self.active_trigger.borrow().clone();
         if let Some((_trigger, start_idx)) = trigger_info {
             let text = self.entry.text().to_string();

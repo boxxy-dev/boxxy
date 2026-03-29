@@ -1,4 +1,4 @@
-use crate::config::{Settings, CLAW_HEIGHT_BOUNDS, CLAW_WIDTH_BOUNDS};
+use crate::config::{CLAW_HEIGHT_BOUNDS, CLAW_WIDTH_BOUNDS, Settings};
 use adw::prelude::*;
 use gtk4 as gtk;
 use libadwaita as adw;
@@ -11,12 +11,12 @@ pub fn setup_claw_ui_page(
     on_change: Rc<dyn Fn(Settings) + 'static>,
 ) -> Box<dyn Fn(&str) -> bool> {
     let claw_popover_width_spin: adw::SpinRow = builder.object("claw_popover_width_spin").unwrap();
-    let claw_popover_max_height_spin: adw::SpinRow = builder
-        .object("claw_popover_max_height_spin")
-        .unwrap();
+    let claw_popover_max_height_spin: adw::SpinRow =
+        builder.object("claw_popover_max_height_spin").unwrap();
     let claw_msgbar_shortcut_entry: gtk::Entry =
         builder.object("claw_msgbar_shortcut_entry").unwrap();
-    let reset_claw_dimensions_btn: gtk::Button = builder.object("reset_claw_dimensions_btn").unwrap();
+    let reset_claw_dimensions_btn: gtk::Button =
+        builder.object("reset_claw_dimensions_btn").unwrap();
     let reset_claw_shortcut_btn: gtk::Button = builder.object("reset_claw_shortcut_btn").unwrap();
     let group_claw_ui_dimensions: adw::PreferencesGroup =
         builder.object("group_claw_ui_dimensions").unwrap();
@@ -172,7 +172,10 @@ pub fn setup_claw_ui_page(
             "height maximum claw popover size",
         );
         let reset_dim = match_row(
-            reset_claw_dimensions_btn_clone.parent().unwrap().upcast_ref(),
+            reset_claw_dimensions_btn_clone
+                .parent()
+                .unwrap()
+                .upcast_ref(),
             "reset default claw ui dimensions size",
         );
 

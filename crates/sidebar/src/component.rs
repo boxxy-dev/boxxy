@@ -71,15 +71,18 @@ impl AiSidebarComponent {
         input_box.append(&action_btn);
 
         let command_registry = Rc::new(CommandRegistry::new());
-        let providers: Vec<Box<dyn boxxy_core_widgets::autocomplete::CompletionProvider>> = vec![
-            Box::new(crate::commands::SidebarCommandProvider {
+        let providers: Vec<Box<dyn boxxy_core_widgets::autocomplete::CompletionProvider>> =
+            vec![Box::new(crate::commands::SidebarCommandProvider {
                 registry: command_registry.clone(),
-            }),
-        ];
+            })];
         let c_input_entry = input_entry.clone();
-        let autocomplete_ctrl = boxxy_core_widgets::autocomplete::AutocompleteController::new(&input_entry, providers, Some(Box::new(move |_| {
-            c_input_entry.emit_activate();
-        })));
+        let autocomplete_ctrl = boxxy_core_widgets::autocomplete::AutocompleteController::new(
+            &input_entry,
+            providers,
+            Some(Box::new(move |_| {
+                c_input_entry.emit_activate();
+            })),
+        );
 
         let usage_label = gtk::Label::builder()
             .label("Context: 0 tokens")
@@ -178,7 +181,6 @@ impl AiSidebarComponent {
                 comp_clone.send_message();
             }
         });
-
 
         comp
     }

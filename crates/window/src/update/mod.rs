@@ -287,26 +287,26 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
                 }
 
                 // If we updated the active pane, update the UI
-                if found
-                    && let Some(page) = inner.tab_view.selected_page() {
-                        let child = page.child();
-                        if let Some(pos) = inner
-                            .tabs
-                            .iter()
-                            .position(|c| c.controller.widget() == &child)
-                            && inner.tabs[pos].controller.active_pane_id() == id {
-                                inner.claw_active = active;
-                                if active {
-                                    page.set_indicator_icon(Some(&gtk4::gio::ThemedIcon::new("boxxyclaw")));
-                                    page.set_indicator_activatable(false);
-                                } else {
-                                    page.set_indicator_icon(None::<&gio::Icon>);
-                                }
-                                inner
-                                    .claw
-                                    .update_ui(inner.claw_active, inner.claw_proactive);
-                            }
+                if found && let Some(page) = inner.tab_view.selected_page() {
+                    let child = page.child();
+                    if let Some(pos) = inner
+                        .tabs
+                        .iter()
+                        .position(|c| c.controller.widget() == &child)
+                        && inner.tabs[pos].controller.active_pane_id() == id
+                    {
+                        inner.claw_active = active;
+                        if active {
+                            page.set_indicator_icon(Some(&gtk4::gio::ThemedIcon::new("boxxyclaw")));
+                            page.set_indicator_activatable(false);
+                        } else {
+                            page.set_indicator_icon(None::<&gio::Icon>);
+                        }
+                        inner
+                            .claw
+                            .update_ui(inner.claw_active, inner.claw_proactive);
                     }
+                }
             } else {
                 // If no pane identified (e.g. no tabs open), just update the window state
                 inner.claw_active = active;
@@ -371,20 +371,20 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
                 }
 
                 // If we updated the active pane, update the UI
-                if found
-                    && let Some(page) = inner.tab_view.selected_page() {
-                        let child = page.child();
-                        if let Some(pos) = inner
-                            .tabs
-                            .iter()
-                            .position(|c| c.controller.widget() == &child)
-                            && inner.tabs[pos].controller.active_pane_id() == id {
-                                inner.claw_proactive = proactive;
-                                inner
-                                    .claw
-                                    .update_ui(inner.claw_active, inner.claw_proactive);
-                            }
+                if found && let Some(page) = inner.tab_view.selected_page() {
+                    let child = page.child();
+                    if let Some(pos) = inner
+                        .tabs
+                        .iter()
+                        .position(|c| c.controller.widget() == &child)
+                        && inner.tabs[pos].controller.active_pane_id() == id
+                    {
+                        inner.claw_proactive = proactive;
+                        inner
+                            .claw
+                            .update_ui(inner.claw_active, inner.claw_proactive);
                     }
+                }
             } else {
                 inner.claw_proactive = proactive;
                 inner

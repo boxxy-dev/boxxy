@@ -1,8 +1,8 @@
 use crate::engine::ClawEngineEvent;
 use crate::engine::session::SessionState;
 use crate::engine::tools::skills::ActivateSkillTool;
-use crate::engine::tools::terminal::TerminalCommandTool;
 use crate::engine::tools::tasks::{CancelTaskTool, ListTasksTool, ScheduleTaskTool};
+use crate::engine::tools::terminal::TerminalCommandTool;
 use crate::engine::tools::workspace::{
     CloseAgentTool, DelegateTaskTool, ListActiveAgentsTool, ReadPaneTool, SendKeystrokesTool,
     SetGlobalIntentTool, SpawnAgentTool,

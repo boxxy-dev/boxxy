@@ -62,7 +62,10 @@ impl WorkspaceRegistry {
         let panes = self.panes.read().await;
 
         for (pane_id, tasks) in all_tasks.iter() {
-            let agent_name = panes.get(pane_id).map(|p| p.name.clone()).unwrap_or_else(|| "Unknown Agent".to_string());
+            let agent_name = panes
+                .get(pane_id)
+                .map(|p| p.name.clone())
+                .unwrap_or_else(|| "Unknown Agent".to_string());
             for task in tasks {
                 if task.status == crate::engine::TaskStatus::Pending {
                     pending.push((agent_name.clone(), task.clone()));

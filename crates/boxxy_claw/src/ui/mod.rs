@@ -1,5 +1,5 @@
-use boxxy_viewer::{BlockRenderer, ContentBlock, StructuredViewer, ViewerRegistry};
 use crate::engine::{ScheduledTask, TaskStatus, TaskType};
+use boxxy_viewer::{BlockRenderer, ContentBlock, StructuredViewer, ViewerRegistry};
 use gtk::prelude::*;
 use gtk4 as gtk;
 use libadwaita as adw;
@@ -209,7 +209,7 @@ impl ClawSidebarComponent {
             .child(&tasks_list)
             .visible(false)
             .build();
-        
+
         widget.append(&tasks_expander);
 
         Self {
@@ -335,9 +335,13 @@ impl ClawSidebarComponent {
             self.tasks_list.remove(&row);
         }
 
-        let pending_count = tasks.iter().filter(|t| t.status == TaskStatus::Pending).count();
+        let pending_count = tasks
+            .iter()
+            .filter(|t| t.status == TaskStatus::Pending)
+            .count();
         if pending_count > 0 {
-            self.tasks_expander.set_label(Some(&format!("Pending Tasks ({})", pending_count)));
+            self.tasks_expander
+                .set_label(Some(&format!("Pending Tasks ({})", pending_count)));
             self.tasks_expander.set_visible(true);
 
             let on_cancel_rc = self.on_cancel_task.clone();
@@ -358,7 +362,11 @@ impl ClawSidebarComponent {
     }
 }
 
-pub fn add_task_row<F: Fn(uuid::Uuid) + 'static>(list: &gtk::ListBox, task: ScheduledTask, on_cancel: F) {
+pub fn add_task_row<F: Fn(uuid::Uuid) + 'static>(
+    list: &gtk::ListBox,
+    task: ScheduledTask,
+    on_cancel: F,
+) {
     let row = gtk::ListBoxRow::new();
     let vbox = gtk::Box::new(gtk::Orientation::Vertical, 4);
     vbox.set_margin_top(6);
@@ -389,7 +397,7 @@ pub fn add_task_row<F: Fn(uuid::Uuid) + 'static>(list: &gtk::ListBox, task: Sche
         .css_classes(["flat", "circular"])
         .tooltip_text("Cancel Task")
         .build();
-    
+
     let task_id = task.id;
     cancel_btn.connect_clicked(move |_| {
         on_cancel(task_id);
@@ -408,7 +416,10 @@ pub fn add_task_row<F: Fn(uuid::Uuid) + 'static>(list: &gtk::ListBox, task: Sche
         .build();
     vbox.append(&payload_lbl);
 
-    let due_str = format!("Due at: {}", task.due_at.with_timezone(&chrono::Local).format("%H:%M:%S"));
+    let due_str = format!(
+        "Due at: {}",
+        task.due_at.with_timezone(&chrono::Local).format("%H:%M:%S")
+    );
     let due_lbl = gtk::Label::builder()
         .label(&due_str)
         .xalign(0.0)

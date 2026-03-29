@@ -24,7 +24,7 @@ impl Default for MsgHistory {
 }
 
 impl MsgHistory {
-    #[must_use] 
+    #[must_use]
     pub fn new() -> Self {
         Self {
             items: Vec::new(),
@@ -108,9 +108,10 @@ impl MsgHistory {
             if let Ok(db) = boxxy_db::Db::new().await {
                 let store = boxxy_db::store::Store::new(db.pool());
                 if let Ok(json) = serde_json::to_string(&attachments)
-                    && store.insert_msgbar_history(&text, &json).await.is_ok() {
-                        let _ = store.prune_msgbar_history(150, 100).await;
-                    }
+                    && store.insert_msgbar_history(&text, &json).await.is_ok()
+                {
+                    let _ = store.prune_msgbar_history(150, 100).await;
+                }
             }
         });
     }

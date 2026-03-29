@@ -555,7 +555,9 @@ impl TerminalPaneComponent {
     }
 
     pub fn cancel_task(&self, task_id: uuid::Uuid) {
-        let _ = self.claw_sender.send_blocking(boxxy_claw::engine::ClawMessage::CancelTask { task_id });
+        let _ = self
+            .claw_sender
+            .send_blocking(boxxy_claw::engine::ClawMessage::CancelTask { task_id });
     }
 
     pub fn write_all(&self, data: Vec<u8>) {
@@ -858,8 +860,10 @@ impl TerminalPaneComponent {
             needs_invert_scroll = p.invert_scroll != settings.invert_scroll;
         }
 
-        self.claw_popover
-            .update_dimensions(settings.claw_popover_width, settings.claw_popover_max_height);
+        self.claw_popover.update_dimensions(
+            settings.claw_popover_width,
+            settings.claw_popover_max_height,
+        );
 
         self.msgbar_shortcut
             .set_trigger(Some(parse_accel_trigger(&settings.claw_msgbar_shortcut)));

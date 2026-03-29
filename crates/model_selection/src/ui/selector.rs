@@ -464,9 +464,10 @@ impl SingleModelSelector {
 
     pub fn set_model_provider(&self, provider: Option<ModelProvider>) {
         if let Some(ref p) = provider
-            && self.get_current_provider().as_ref() == Some(p) {
-                return;
-            }
+            && self.get_current_provider().as_ref() == Some(p)
+        {
+            return;
+        }
 
         if let Ok(mut inner) = self.inner.try_borrow_mut() {
             inner.updating = true;
@@ -516,11 +517,12 @@ impl SingleModelSelector {
                                 .model_list
                                 .item(i)
                                 .and_then(|o| o.downcast::<gtk::StringObject>().ok())
-                                && item.string().as_str() == target_m {
-                                    inner.model_dropdown.set_selected(i);
-                                    already_set = true;
-                                    break;
-                                }
+                                && item.string().as_str() == target_m
+                            {
+                                inner.model_dropdown.set_selected(i);
+                                already_set = true;
+                                break;
+                            }
                         }
                     }
 

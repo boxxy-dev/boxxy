@@ -20,7 +20,7 @@ pub enum TerminalProposal {
     FileDelete(String),                    // path
     KillProcess(u32, String),              // pid, name
     GetClipboard,
-    SetClipboard(String),                  // text
+    SetClipboard(String), // text
 }
 
 #[derive(Debug, Clone)]

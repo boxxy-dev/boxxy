@@ -45,7 +45,8 @@ impl TerminalController {
         pane_id: &str,
         mode: &boxxy_preferences::config::ClawAutoDiagnosisMode,
     ) -> bool {
-        self.controller.update_diagnosis_mode_for_pane(pane_id, mode)
+        self.controller
+            .update_diagnosis_mode_for_pane(pane_id, mode)
     }
 
     pub fn is_claw_active(&self) -> bool {
