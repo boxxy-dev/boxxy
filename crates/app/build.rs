@@ -18,9 +18,8 @@ fn main() {
     <file compressed="true" alias="icons/boxxy-appearance-symbolic.svg">icons/boxxy-appearance-symbolic.svg</file>
     <file compressed="true" alias="icons/boxxy-ai-slop-symbolic.svg">icons/boxxy-ai-slop-symbolic.svg</file>
     <file compressed="true" alias="icons/boxxy-visual-bell-symbolic.svg">icons/boxxy-visual-bell-symbolic.svg</file>
-    <file compressed="true" alias="icons/boxxy-brain-symbolic.svg">icons/boxxy-brain-symbolic.svg</file>
+    <file compressed="true" alias="icons/boxxy-timer-symbolic.svg">icons/boxxy-timer-symbolic.svg</file>
     <file compressed="true" alias="icons/boxxy-chat-symbolic.svg">icons/boxxy-chat-symbolic.svg</file>
-    <file compressed="true" alias="icons/boxxy-chat-none-symbolic.svg">icons/boxxy-chat-none-symbolic.svg</file>
     <file compressed="true" alias="icons/boxxyclaw.svg">icons/boxxyclaw.svg</file>
     <file compressed="true" alias="icons/boxxy-running-symbolic.svg">icons/boxxy-running-symbolic.svg</file>
     <file compressed="true" alias="icons/boxxy-walking2-symbolic.svg">icons/boxxy-walking2-symbolic.svg</file>
@@ -61,6 +60,7 @@ fn main() {
     <file compressed="true" alias="ui/preferences.ui">ui/preferences.ui</file>
     <file compressed="true" alias="ui/widgets/notification_pill.ui">ui/widgets/notification_pill.ui</file>
     <file compressed="true" alias="ui/widgets/notification_details.ui">ui/widgets/notification_details.ui</file>
+    <file compressed="true" alias="sounds/task.wav">sounds/task.wav</file>
   </gresource>
 </gresources>
 "#.to_string();
@@ -85,6 +85,7 @@ fn main() {
     println!("cargo:rerun-if-changed=../../resources/icons/boxxy-appearance-symbolic.svg");
     println!("cargo:rerun-if-changed=../../resources/icons/boxxy-ai-slop-symbolic.svg");
     println!("cargo:rerun-if-changed=../../resources/icons/boxxy-visual-bell-symbolic.svg");
+    println!("cargo:rerun-if-changed=../../resources/icons/boxxy-timer-symbolic.svg");
     println!("cargo:rerun-if-changed=../../resources/icons/boxxy-brain-symbolic.svg");
     println!("cargo:rerun-if-changed=../../resources/icons/boxxy-chat-symbolic.svg");
     println!("cargo:rerun-if-changed=../../resources/icons/boxxy-chat-none-symbolic.svg");
@@ -130,6 +131,7 @@ fn main() {
     println!("cargo:rerun-if-changed=../../resources/ui/preferences.ui");
     println!("cargo:rerun-if-changed=../../resources/ui/widgets/notification_pill.ui");
     println!("cargo:rerun-if-changed=../../resources/ui/widgets/notification_details.ui");
+    println!("cargo:rerun-if-changed=../../resources/sounds/task.wav");
 
     glib_build_tools::compile_resources(
         &["../../resources"],

@@ -16,7 +16,7 @@ pub mod store;
 static DB: OnceCell<Db> = OnceCell::const_new();
 pub static DATABASE_WAS_RESET: AtomicBool = AtomicBool::new(false);
 
-const CURRENT_SCHEMA_VERSION: i32 = 2;
+const CURRENT_SCHEMA_VERSION: i32 = 3;
 
 #[derive(Clone)]
 pub struct Db {
@@ -114,6 +114,7 @@ impl Db {
                 id TEXT PRIMARY KEY,
                 name TEXT NOT NULL,
                 history_json TEXT,
+                pending_tasks_json TEXT,
                 agent_name TEXT,
                 last_cwd TEXT,
                 title TEXT,

@@ -9,6 +9,7 @@ pub struct Session {
     pub id: String,
     pub name: String,
     pub history_json: Option<String>,
+    pub pending_tasks_json: Option<String>,
     pub agent_name: Option<String>,
     pub last_cwd: Option<String>,
     pub title: Option<String>,

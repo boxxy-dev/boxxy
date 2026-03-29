@@ -17,6 +17,10 @@ pub enum TerminalProposal {
     Command(String),
     Bookmark(String, String, Vec<String>), // filename, script, placeholders
     FileWrite(String, String),             // The path and content of the file
+    FileDelete(String),                    // path
+    KillProcess(u32, String),              // pid, name
+    GetClipboard,
+    SetClipboard(String),                  // text
 }
 
 #[derive(Debug, Clone)]

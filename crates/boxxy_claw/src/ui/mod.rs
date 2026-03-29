@@ -1,4 +1,5 @@
 use boxxy_viewer::{BlockRenderer, ContentBlock, StructuredViewer, ViewerRegistry};
+use crate::engine::{ScheduledTask, TaskStatus, TaskType};
 use gtk::prelude::*;
 use gtk4 as gtk;
 use libadwaita as adw;
@@ -92,13 +93,17 @@ pub struct ClawSidebarComponent {
     toggle_btn: gtk::Button,
     usage_lbl: gtk::Label,
     current_list: Rc<std::cell::RefCell<Option<gtk::ListBox>>>,
+    tasks_expander: gtk::Expander,
+    tasks_list: gtk::ListBox,
+    on_cancel_task: Rc<dyn Fn(uuid::Uuid) + 'static>,
 }
 
 impl ClawSidebarComponent {
     #[must_use]
-    pub fn new<F1: Fn(bool) + 'static, F2: Fn(bool) + 'static>(
+    pub fn new<F1: Fn(bool) + 'static, F2: Fn(bool) + 'static, F3: Fn(uuid::Uuid) + 'static>(
         on_active_toggled: F1,
         on_proactive_toggled: F2,
+        on_cancel_task: F3,
     ) -> Self {
         let widget = gtk::Box::new(gtk::Orientation::Vertical, 6);
         widget.set_margin_top(6);
@@ -194,6 +199,19 @@ impl ClawSidebarComponent {
         command_panel.append(&toggle_btn);
         widget.append(&command_panel);
 
+        let tasks_list = gtk::ListBox::builder()
+            .css_classes(["boxed-list"])
+            .selection_mode(gtk::SelectionMode::None)
+            .build();
+
+        let tasks_expander = gtk::Expander::builder()
+            .label("Pending Tasks")
+            .child(&tasks_list)
+            .visible(false)
+            .build();
+        
+        widget.append(&tasks_expander);
+
         Self {
             widget,
             status_page,
@@ -204,6 +222,9 @@ impl ClawSidebarComponent {
             toggle_btn,
             usage_lbl,
             current_list,
+            tasks_expander,
+            tasks_list,
+            on_cancel_task: Rc::new(on_cancel_task),
         }
     }
 
@@ -308,15 +329,101 @@ impl ClawSidebarComponent {
         }
     }
 
+    pub fn update_tasks(&self, tasks: Vec<ScheduledTask>) {
+        // Clear old tasks
+        while let Some(row) = self.tasks_list.row_at_index(0) {
+            self.tasks_list.remove(&row);
+        }
+
+        let pending_count = tasks.iter().filter(|t| t.status == TaskStatus::Pending).count();
+        if pending_count > 0 {
+            self.tasks_expander.set_label(Some(&format!("Pending Tasks ({})", pending_count)));
+            self.tasks_expander.set_visible(true);
+
+            let on_cancel_rc = self.on_cancel_task.clone();
+            for task in tasks {
+                if task.status == TaskStatus::Pending {
+                    let cancel_cb = on_cancel_rc.clone();
+                    add_task_row(&self.tasks_list, task, move |id| cancel_cb(id));
+                }
+            }
+        } else {
+            self.tasks_expander.set_visible(false);
+        }
+    }
+
     #[must_use]
     pub const fn widget(&self) -> &gtk::Box {
         &self.widget
     }
 }
 
+pub fn add_task_row<F: Fn(uuid::Uuid) + 'static>(list: &gtk::ListBox, task: ScheduledTask, on_cancel: F) {
+    let row = gtk::ListBoxRow::new();
+    let vbox = gtk::Box::new(gtk::Orientation::Vertical, 4);
+    vbox.set_margin_top(6);
+    vbox.set_margin_bottom(6);
+    vbox.set_margin_start(6);
+    vbox.set_margin_end(6);
+
+    let header = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    let (icon_name, title) = match task.task_type {
+        TaskType::Notification => ("boxxy-chat-symbolic", "Reminder"),
+        TaskType::Command => ("utilities-terminal-symbolic", "Command"),
+        TaskType::Query => ("help-browser-symbolic", "Query"),
+    };
+
+    let icon = gtk::Image::from_icon_name(icon_name);
+    header.append(&icon);
+
+    let title_lbl = gtk::Label::builder()
+        .label(title)
+        .css_classes(["heading"])
+        .halign(gtk::Align::Start)
+        .hexpand(true)
+        .build();
+    header.append(&title_lbl);
+
+    let cancel_btn = gtk::Button::builder()
+        .icon_name("boxxy-cross-small-symbolic")
+        .css_classes(["flat", "circular"])
+        .tooltip_text("Cancel Task")
+        .build();
+    
+    let task_id = task.id;
+    cancel_btn.connect_clicked(move |_| {
+        on_cancel(task_id);
+    });
+    header.append(&cancel_btn);
+
+    vbox.append(&header);
+
+    let payload_lbl = gtk::Label::builder()
+        .label(&task.payload)
+        .wrap(true)
+        .wrap_mode(gtk::pango::WrapMode::WordChar)
+        .xalign(0.0)
+        .halign(gtk::Align::Start)
+        .css_classes(["caption"])
+        .build();
+    vbox.append(&payload_lbl);
+
+    let due_str = format!("Due at: {}", task.due_at.with_timezone(&chrono::Local).format("%H:%M:%S"));
+    let due_lbl = gtk::Label::builder()
+        .label(&due_str)
+        .xalign(0.0)
+        .halign(gtk::Align::Start)
+        .css_classes(["caption", "dim-label"])
+        .build();
+    vbox.append(&due_lbl);
+
+    row.set_child(Some(&vbox));
+    list.append(&row);
+}
+
 impl Default for ClawSidebarComponent {
     fn default() -> Self {
-        Self::new(|_| {}, |_| {})
+        Self::new(|_| {}, |_| {}, |_| {})
     }
 }
 

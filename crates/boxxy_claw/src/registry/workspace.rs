@@ -17,6 +17,8 @@ pub struct PaneState {
 pub struct WorkspaceRegistry {
     // Map of pane_id -> PaneState
     panes: Arc<RwLock<HashMap<String, PaneState>>>,
+    // Map of pane_id -> Vec<ScheduledTask>
+    tasks: Arc<RwLock<HashMap<String, Vec<crate::engine::ScheduledTask>>>>,
     // Global shared intent/scratchpad for system-wide orchestration
     global_intent: Arc<RwLock<Option<String>>>,
 }
@@ -40,8 +42,34 @@ impl WorkspaceRegistry {
     pub fn new() -> Self {
         Self {
             panes: Arc::new(RwLock::new(HashMap::new())),
+            tasks: Arc::new(RwLock::new(HashMap::new())),
             global_intent: Arc::new(RwLock::new(None)),
         }
+    }
+
+    pub async fn update_pane_tasks(&self, id: String, tasks: Vec<crate::engine::ScheduledTask>) {
+        let mut all_tasks = self.tasks.write().await;
+        if tasks.is_empty() {
+            all_tasks.remove(&id);
+        } else {
+            all_tasks.insert(id, tasks);
+        }
+    }
+
+    pub async fn get_all_pending_tasks(&self) -> Vec<(String, crate::engine::ScheduledTask)> {
+        let all_tasks = self.tasks.read().await;
+        let mut pending = Vec::new();
+        let panes = self.panes.read().await;
+
+        for (pane_id, tasks) in all_tasks.iter() {
+            let agent_name = panes.get(pane_id).map(|p| p.name.clone()).unwrap_or_else(|| "Unknown Agent".to_string());
+            for task in tasks {
+                if task.status == crate::engine::TaskStatus::Pending {
+                    pending.push((agent_name.clone(), task.clone()));
+                }
+            }
+        }
+        pending
     }
 
     pub async fn register_pane_tx(
@@ -143,6 +171,11 @@ impl WorkspaceRegistry {
     pub async fn get_pane_snapshot(&self, id: String) -> Option<String> {
         let panes = self.panes.read().await;
         panes.get(&id).and_then(|p| p.last_snapshot.clone())
+    }
+
+    pub async fn get_pane_cwd(&self, id: String) -> Option<String> {
+        let panes = self.panes.read().await;
+        panes.get(&id).map(|p| p.cwd.clone())
     }
 
     pub async fn resolve_pane_id_by_name(&self, name: &str) -> Option<String> {

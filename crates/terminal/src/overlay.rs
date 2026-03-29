@@ -478,6 +478,18 @@ impl TerminalOverlay {
             crate::TerminalProposal::FileWrite(_path, _content) => {
                 self.file_action_box.set_visible(true);
             }
+            crate::TerminalProposal::FileDelete(_path) => {
+                self.file_action_box.set_visible(true);
+            }
+            crate::TerminalProposal::KillProcess(_pid, _name) => {
+                self.file_action_box.set_visible(true);
+            }
+            crate::TerminalProposal::GetClipboard => {
+                self.file_action_box.set_visible(true);
+            }
+            crate::TerminalProposal::SetClipboard(_text) => {
+                self.file_action_box.set_visible(true);
+            }
             crate::TerminalProposal::None => {
                 self.action_box.set_visible(true);
                 self.ok_btn.set_visible(true);

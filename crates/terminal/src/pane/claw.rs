@@ -492,6 +492,13 @@ pub(super) fn setup_claw(
                         );
                     }
                 }
+                boxxy_claw::engine::ClawEngineEvent::TaskStatusChanged { tasks, .. } => {
+                    let has_pending = tasks.iter().any(|t| t.status == boxxy_claw::engine::TaskStatus::Pending);
+                    inner_clone.borrow().agent_badge.set_has_tasks(has_pending);
+                }
+                boxxy_claw::engine::ClawEngineEvent::TaskCompleted { .. } => {
+                    // Handled by the window orchestrator for sound
+                }
             }
 
             cb_clone_events(PaneOutput::ClawEvent(id.clone(), event));

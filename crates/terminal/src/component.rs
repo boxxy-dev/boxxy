@@ -534,17 +534,20 @@ impl TerminalComponent {
         }
     }
 
-    pub fn resize(&self) {
-        let inner = self.inner.borrow();
-        if let Some(pane_data) = inner.panes.get(&inner.active_pane_id) {
-            pane_data.controller.resize();
-        }
-    }
-
     pub fn reload_claw(&self) {
         let inner = self.inner.borrow();
         for pane_data in inner.panes.values() {
             pane_data.controller.reload_claw();
+        }
+    }
+
+    pub fn cancel_task_by_id(&self, pane_id: &str, task_id: uuid::Uuid) -> bool {
+        let inner = self.inner.borrow();
+        if let Some(pane_data) = inner.panes.get(pane_id) {
+            pane_data.controller.cancel_task(task_id);
+            true
+        } else {
+            false
         }
     }
 

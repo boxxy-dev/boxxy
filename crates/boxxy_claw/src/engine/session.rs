@@ -1,5 +1,5 @@
 use crate::engine::{
-    ClawEngineEvent, ClawMessage, context::load_session_context, context::retrieve_memories,
+    ClawEngineEvent, ClawMessage, TaskStatus, TaskType, context::load_session_context, context::retrieve_memories,
     context::summarize_and_store, dispatcher::extract_command_and_clean,
 };
 use boxxy_agent::ipc::AgentClawProxy;
@@ -11,6 +11,7 @@ use tokio::sync::Mutex;
 
 pub struct SessionState {
     pub session_id: String,
+    pub pane_id: String,
     pub agent_name: String,
     pub pending_terminal_reply: Option<tokio::sync::oneshot::Sender<Result<String, String>>>,
     pub pending_file_reply: Option<tokio::sync::oneshot::Sender<bool>>,
@@ -22,6 +23,7 @@ pub struct SessionState {
     pub pending_lazy_diagnosis: Option<(String, String, String)>,
     pub persistent_agent: Option<crate::engine::agent::ClawAgent>,
     pub last_tools: Option<Vec<String>>,
+    pub pending_tasks: Vec<crate::engine::ScheduledTask>,
 }
 
 pub struct ClawSession {
@@ -66,6 +68,7 @@ impl ClawSession {
             db: Arc::new(Mutex::new(None)),
             state: Arc::new(Mutex::new(SessionState {
                 session_id,
+                pane_id: pane_id.clone(),
                 agent_name: name,
                 pending_terminal_reply: None,
                 pending_file_reply: None,
@@ -77,6 +80,7 @@ impl ClawSession {
                 pending_lazy_diagnosis: None,
                 persistent_agent: None,
                 last_tools: None,
+                pending_tasks: Vec::new(),
             })),
             diagnosis_mode: settings.claw_auto_diagnosis_mode,
         };
@@ -113,313 +117,407 @@ impl ClawSession {
             .register_pane_tx(self.pane_id.clone(), self.tx_self.clone())
             .await;
 
-        while let Ok(msg) = self.rx.recv().await {
-            let needs_initialization = match &msg {
-                ClawMessage::ClawQuery { .. }
-                | ClawMessage::UserMessage { .. }
-                | ClawMessage::DelegatedTask { .. }
-                | ClawMessage::RequestLazyDiagnosis
-                | ClawMessage::Initialize => true,
-                ClawMessage::CommandFinished { exit_code, .. }
-                    if *exit_code != 0 && *exit_code != 130 && *exit_code != 131 =>
-                {
-                    self.diagnosis_mode != boxxy_preferences::config::ClawAutoDiagnosisMode::Lazy
-                }
-                _ => false,
-            };
+        let mut task_interval = tokio::time::interval(std::time::Duration::from_secs(1));
 
-            if !is_initialized && needs_initialization {
-                info!(
-                    "Initializing Claw Session for pane {} ({}) upon first request...",
-                    self.pane_id, self.name
-                );
-
-                // If this is an explicit Initialize message, we'll handle the identity
-                // announcement in the match block below to avoid double announcements.
-                if !matches!(&msg, ClawMessage::Initialize) {
-                    let _ = self
-                        .tx_ui
-                        .send(ClawEngineEvent::Identity {
-                            agent_name: self.name.clone(),
-                        })
-                        .await;
-                }
-
-                let session_context = load_session_context();
-                self.session_context = session_context;
-
-                if let Ok(db) = Db::new().await {
-                    *self.db.lock().await = Some(db);
-                    info!(
-                        "Claw Memory Database initialized for pane {} ({}).",
-                        self.pane_id, self.name
-                    );
-
-                    // Sync any manual edits from MEMORY.md back to the DB
-                    let _ = crate::memories::db::sync_markdown_to_db(self.db.clone()).await;
-
-                    // Run Memory Hygiene
-                    let _ = crate::memories::hygiene::run_hygiene(self.db.clone()).await;
-                } else {
-                    log::error!("Failed to initialize Claw Memory Database.");
-                }
-
-                is_initialized = true;
-            }
-
-            let session_ctx = self.session_context.clone();
-
-            match msg {
-                ClawMessage::Deactivate => {
-                    info!("Deactivating Claw Session for pane {}...", self.pane_id);
-                    is_initialized = false;
-                    *self.db.lock().await = None;
-
-                    let mut state_lock = self.state.lock().await;
-                    state_lock.history.clear();
-                    drop(state_lock);
-
-                    // Update Workspace Radar to indicate no active agent
-                    workspace
-                        .update_pane_state(
-                            self.pane_id.clone(),
-                            None,
-                            None,
-                            current_dir.clone(),
-                            None,
-                            None,
-                        )
-                        .await;
-                }
-                ClawMessage::Evict => {
-                    info!("Agent in pane {} was EVICTED.", self.pane_id);
-                    is_initialized = false;
-                    *self.db.lock().await = None;
-
-                    let mut state_lock = self.state.lock().await;
-                    state_lock.history.clear();
-                    drop(state_lock);
-
-                    let _ = self.tx_ui.send(ClawEngineEvent::Evicted).await;
-
-                    // Update Workspace Radar to indicate no active agent
-                    workspace
-                        .update_pane_state(
-                            self.pane_id.clone(),
-                            None,
-                            None,
-                            current_dir.clone(),
-                            None,
-                            None,
-                        )
-                        .await;
-                }
-                ClawMessage::ResumeSession { session_id } => {
-                    info!(
-                        "Resuming session {} in pane {}...",
-                        session_id, self.pane_id
-                    );
-
-                    // 1. Evict session if active elsewhere
-                    workspace.evict_session(&session_id).await;
-
-                    // 2. Load session from DB
-                    let mut db_guard = self.db.lock().await;
-                    if db_guard.is_none()
-                        && let Ok(db) = Db::new().await {
-                            *db_guard = Some(db);
-                        }
-
-                    if let Some(db) = &*db_guard {
-                        let store = boxxy_db::store::Store::new(db.pool());
-                        match store.get_session(&session_id).await {
-                            Ok(Some(session)) => {
-                                // 3. Rehydrate state
-                                self.session_id = session_id.clone();
-                                if let Some(agent_name) = session.agent_name {
-                                    self.name = agent_name.clone();
-                                }
-
-                                let mut state_lock = self.state.lock().await;
-                                state_lock.session_id = session_id.clone();
-                                state_lock.agent_name = self.name.clone();
-
-                                if let Some(history_json) = session.history_json
-                                    && let Ok(history) =
-                                        serde_json::from_str::<Vec<Message>>(&history_json)
-                                    {
-                                        state_lock.history = history;
-                                    }
-
-                                // Force agent rebuild
-                                state_lock.persistent_agent = None;
-                                drop(state_lock);
-
-                                // 4. Update Workspace Radar
-                                workspace
-                                    .update_pane_state(
-                                        self.pane_id.clone(),
-                                        Some(self.session_id.clone()),
-                                        Some(self.name.clone()),
-                                        current_dir.clone(),
-                                        None,
-                                        None,
-                                    )
-                                    .await;
-
-                                // 5. Announce Identity to UI
-                                let _ = self
-                                    .tx_ui
-                                    .send(ClawEngineEvent::Identity {
-                                        agent_name: self.name.clone(),
-                                    })
-                                    .await;
-
-                                let _ = self
-                                    .tx_ui
-                                    .send(ClawEngineEvent::SystemMessage {
-                                        text: "Session resumed.".to_string(),
-                                    })
-                                    .await;
-
-                                // 6. Handle CWD Switch
-                                if let Some(last_cwd) = session.last_cwd {
-                                    let _ = self
-                                        .tx_ui
-                                        .send(ClawEngineEvent::RequestCwdSwitch { path: last_cwd })
-                                        .await;
-                                }
-                                is_initialized = true;
-                            }
-                            _ => {
-                                let _ = self
-                                    .tx_ui
-                                    .send(ClawEngineEvent::SystemMessage {
-                                        text: "Failed to load session from database.".to_string(),
-                                    })
-                                    .await;
-                            }
-                        }
-                    }
-                    drop(db_guard);
-                }
-                ClawMessage::Initialize => {
-                    info!("Initializing NEW Claw Session for pane {}...", self.pane_id);
-
-                    // 1. Pick a new name
-                    let name =
-                        petname::petname(2, " ").unwrap_or_else(|| "Unknown Agent".to_string());
-                    self.name = name.clone();
-
-                    // Check if database was reset (due to update in Preview Phase)
-                    // We use swap(false) to ensure only the first agent to initialize shows the notification
-                    if boxxy_db::DATABASE_WAS_RESET.swap(false, std::sync::atomic::Ordering::SeqCst)
-                    {
-                        let _ = self.tx_ui.send(ClawEngineEvent::SystemMessage {
-                            text: "⚠️ Database reset for update. This only happens during the Preview.".to_string() 
-                        }).await;
-                    }
-
-                    // 2. Clear history and update agent name in state
-                    let mut state_lock = self.state.lock().await;
-                    state_lock.agent_name = name.clone();
-                    state_lock.history.clear();
-                    drop(state_lock);
-
-                    // 3. Update Workspace Radar
-                    workspace
-                        .update_pane_state(
-                            self.pane_id.clone(),
-                            Some(self.session_id.clone()),
-                            Some(name.clone()),
-                            current_dir.clone(),
-                            None,
-                            None,
-                        )
-                        .await;
-
-                    // 4. Announce Identity to UI
-                    let _ = self
-                        .tx_ui
-                        .send(ClawEngineEvent::Identity { agent_name: name })
-                        .await;
-                }
-                ClawMessage::Reload => {
-                    info!("Reloading Claw Session state...");
-                    let new_ctx = load_session_context();
-                    self.session_context = new_ctx;
-                    if let Ok(db) = Db::new().await {
-                        *self.db.lock().await = Some(db);
-                    }
-                }
-                ClawMessage::ForegroundProcessChanged { process_name } => {
-                    let status = if process_name.is_empty() {
-                        None
-                    } else {
-                        Some(format!("Running: {}", process_name))
+        loop {
+            tokio::select! {
+                msg_res = self.rx.recv() => {
+                    let msg = match msg_res {
+                        Ok(m) => m,
+                        Err(_) => break,
                     };
-                    workspace
-                        .set_pane_status(self.pane_id.clone(), status)
-                        .await;
-                }
-                ClawMessage::CommandFinished {
-                    exit_code,
-                    snapshot,
-                    cwd,
-                } => {
-                    current_dir = cwd.clone();
 
-                    // Update workspace state
-                    let last_cmd = snapshot.lines().next().unwrap_or("").to_string();
-                    workspace
-                        .update_pane_state(
-                            self.pane_id.clone(),
-                            Some(self.session_id.clone()),
-                            Some(self.name.clone()),
-                            current_dir.clone(),
-                            Some(last_cmd),
-                            Some(snapshot.clone()),
-                        )
-                        .await;
-
-                    let mut state_lock = self.state.lock().await;
-                    if let Some(reply) = state_lock.pending_terminal_reply.take() {
-                        if exit_code == 0 {
-                            let _ = reply.send(Ok(snapshot.clone()));
-                        } else {
-                            let _ = reply.send(Err(format!(
-                                "Command failed with exit code {exit_code}:\n{snapshot}"
-                            )));
+                    let needs_initialization = match &msg {
+                        ClawMessage::ClawQuery { .. }
+                        | ClawMessage::UserMessage { .. }
+                        | ClawMessage::DelegatedTask { .. }
+                        | ClawMessage::RequestLazyDiagnosis
+                        | ClawMessage::Initialize => true,
+                        ClawMessage::CommandFinished { exit_code, .. }
+                            if *exit_code != 0 && *exit_code != 130 && *exit_code != 131 =>
+                        {
+                            self.diagnosis_mode != boxxy_preferences::config::ClawAutoDiagnosisMode::Lazy
                         }
-                    } else if exit_code != 0 {
-                        if exit_code == 130 || exit_code == 131 {
-                            continue;
-                        }
+                        _ => false,
+                    };
 
-                        let prompt = format!(
-                            "The user's command failed with exit code {exit_code}. Please analyze the terminal snapshot and suggest a fix."
+                    if !is_initialized && needs_initialization {
+                        info!(
+                            "Initializing Claw Session for pane {} ({}) upon first request...",
+                            self.pane_id, self.name
                         );
 
-                        if self.diagnosis_mode
-                            == boxxy_preferences::config::ClawAutoDiagnosisMode::Lazy
-                        {
-                            state_lock.pending_lazy_diagnosis = Some((prompt, snapshot, cwd));
+                        // If this is an explicit Initialize message, we'll handle the identity
+                        // announcement in the match block below to avoid double announcements.
+                        if !matches!(&msg, ClawMessage::Initialize) {
+                            let _ = self
+                                .tx_ui
+                                .send(ClawEngineEvent::Identity {
+                                    agent_name: self.name.clone(),
+                                })
+                                .await;
+                        }
+
+                        let session_context = load_session_context();
+                        self.session_context = session_context;
+
+                        if let Ok(db) = Db::new().await {
+                            *self.db.lock().await = Some(db);
+                            info!(
+                                "Claw Memory Database initialized for pane {} ({}).",
+                                self.pane_id, self.name
+                            );
+
+                            // Sync any manual edits from MEMORY.md back to the DB
+                            let _ = crate::memories::db::sync_markdown_to_db(self.db.clone()).await;
+
+                            // Run Memory Hygiene
+                            let _ = crate::memories::hygiene::run_hygiene(self.db.clone()).await;
+                        } else {
+                            log::error!("Failed to initialize Claw Memory Database.");
+                        }
+
+                        is_initialized = true;
+                    }
+
+                    let session_ctx = self.session_context.clone();
+
+                    match msg {
+                        ClawMessage::Deactivate => {
+                            info!("Deactivating Claw Session for pane {}...", self.pane_id);
+                            is_initialized = false;
+                            *self.db.lock().await = None;
+
+                            let mut state_lock = self.state.lock().await;
+                            state_lock.history.clear();
+                            state_lock.pending_tasks.clear();
                             drop(state_lock);
 
-                            let tx_ui = self.tx_ui.clone();
-                            let agent_name = self.name.clone();
-                            tokio::spawn(async move {
-                                let _ = tx_ui
-                                    .send(ClawEngineEvent::LazyErrorIndicator { agent_name })
-                                    .await;
-                            });
-                        } else {
+                            // Update Workspace Radar to indicate no active agent
+                            workspace
+                                .update_pane_state(
+                                    self.pane_id.clone(),
+                                    None,
+                                    None,
+                                    current_dir.clone(),
+                                    None,
+                                    None,
+                                )
+                                .await;
+                        }
+                        ClawMessage::Evict => {
+                            info!("Agent in pane {} was EVICTED.", self.pane_id);
+                            is_initialized = false;
+                            *self.db.lock().await = None;
+
+                            let mut state_lock = self.state.lock().await;
+                            state_lock.history.clear();
+                            state_lock.pending_tasks.clear();
                             drop(state_lock);
+
+                            let _ = self.tx_ui.send(ClawEngineEvent::Evicted).await;
+
+                            // Update Workspace Radar to indicate no active agent
+                            workspace
+                                .update_pane_state(
+                                    self.pane_id.clone(),
+                                    None,
+                                    None,
+                                    current_dir.clone(),
+                                    None,
+                                    None,
+                                )
+                                .await;
+                        }
+                        ClawMessage::ResumeSession { session_id } => {
+                            info!(
+                                "Resuming session {} in pane {}...",
+                                session_id, self.pane_id
+                            );
+
+                            // 1. Evict session if active elsewhere
+                            workspace.evict_session(&session_id).await;
+
+                            // 2. Load session from DB
+                            let mut db_guard = self.db.lock().await;
+                            if db_guard.is_none()
+                                && let Ok(db) = Db::new().await {
+                                    *db_guard = Some(db);
+                                }
+
+                            if let Some(db) = &*db_guard {
+                                let store = boxxy_db::store::Store::new(db.pool());
+                                match store.get_session(&session_id).await {
+                                    Ok(Some(session)) => {
+                                        // 3. Rehydrate state
+                                        self.session_id = session_id.clone();
+                                        if let Some(agent_name) = session.agent_name {
+                                            self.name = agent_name.clone();
+                                        }
+
+                                        let mut state_lock = self.state.lock().await;
+                                        state_lock.session_id = session_id.clone();
+                                        state_lock.agent_name = self.name.clone();
+
+                                        if let Some(history_json) = session.history_json
+                                            && let Ok(history) =
+                                                serde_json::from_str::<Vec<Message>>(&history_json)
+                                            {
+                                                state_lock.history = history;
+                                            }
+
+                                        if let Some(tasks_json) = session.pending_tasks_json
+                                            && let Ok(tasks) =
+                                                serde_json::from_str::<Vec<crate::engine::ScheduledTask>>(&tasks_json)
+                                            {
+                                                state_lock.pending_tasks = tasks;
+                                            }
+
+                                        // Force agent rebuild
+                                        state_lock.persistent_agent = None;
+                                        let agent_name_clone = state_lock.agent_name.clone();
+                                        let tasks_clone = state_lock.pending_tasks.clone();
+                                        drop(state_lock);
+
+                                        // 4. Update Workspace Radar
+                                        workspace
+                                            .update_pane_state(
+                                                self.pane_id.clone(),
+                                                Some(self.session_id.clone()),
+                                                Some(self.name.clone()),
+                                                current_dir.clone(),
+                                                None,
+                                                None,
+                                            )
+                                            .await;
+
+                                        // 5. Announce Identity to UI
+                                        let _ = self
+                                            .tx_ui
+                                            .send(ClawEngineEvent::Identity {
+                                                agent_name: self.name.clone(),
+                                            })
+                                            .await;
+
+                                        let _ = self.tx_ui.send(ClawEngineEvent::TaskStatusChanged {
+                                            agent_name: agent_name_clone,
+                                            tasks: tasks_clone.clone(),
+                                        }).await;
+
+                                        workspace.update_pane_tasks(self.pane_id.clone(), tasks_clone).await;
+
+                                        let _ = self
+                                            .tx_ui
+                                            .send(ClawEngineEvent::SystemMessage {
+                                                text: "Session resumed.".to_string(),
+                                            })
+                                            .await;
+
+                                        // 6. Handle CWD Switch
+                                        if let Some(last_cwd) = session.last_cwd {
+                                            let _ = self
+                                                .tx_ui
+                                                .send(ClawEngineEvent::RequestCwdSwitch { path: last_cwd })
+                                                .await;
+                                        }
+                                        is_initialized = true;
+                                    }
+                                    _ => {
+                                        let _ = self
+                                            .tx_ui
+                                            .send(ClawEngineEvent::SystemMessage {
+                                                text: "Failed to load session from database.".to_string(),
+                                            })
+                                            .await;
+                                    }
+                                }
+                            }
+                            drop(db_guard);
+                        }
+                        ClawMessage::Initialize => {
+                            info!("Initializing NEW Claw Session for pane {}...", self.pane_id);
+
+                            // 1. Pick a new name
+                            let name =
+                                petname::petname(2, " ").unwrap_or_else(|| "Unknown Agent".to_string());
+                            self.name = name.clone();
+
+                            // Check if database was reset (due to update in Preview Phase)
+                            // We use swap(false) to ensure only the first agent to initialize shows the notification
+                            if boxxy_db::DATABASE_WAS_RESET.swap(false, std::sync::atomic::Ordering::SeqCst)
+                            {
+                                let _ = self.tx_ui.send(ClawEngineEvent::SystemMessage {
+                                    text: "⚠️ Database reset for update. This only happens during the Preview.".to_string() 
+                                }).await;
+                            }
+
+                            // 2. Clear history and update agent name in state
+                            let mut state_lock = self.state.lock().await;
+                            state_lock.agent_name = name.clone();
+                            state_lock.history.clear();
+                            state_lock.pending_tasks.clear();
+                            drop(state_lock);
+
+                            // 3. Update Workspace Radar
+                            workspace
+                                .update_pane_state(
+                                    self.pane_id.clone(),
+                                    Some(self.session_id.clone()),
+                                    Some(name.clone()),
+                                    current_dir.clone(),
+                                    None,
+                                    None,
+                                )
+                                .await;
+
+                            // 4. Announce Identity to UI
+                            let _ = self
+                                .tx_ui
+                                .send(ClawEngineEvent::Identity { agent_name: name })
+                                .await;
+                        }
+                        ClawMessage::Reload => {
+                            info!("Reloading Claw Session state...");
+                            let new_ctx = load_session_context();
+                            self.session_context = new_ctx;
+                            if let Ok(db) = Db::new().await {
+                                *self.db.lock().await = Some(db);
+                            }
+                        }
+                        ClawMessage::ForegroundProcessChanged { process_name } => {
+                            let status = if process_name.is_empty() {
+                                None
+                            } else {
+                                Some(format!("Running: {}", process_name))
+                            };
+                            workspace
+                                .set_pane_status(self.pane_id.clone(), status)
+                                .await;
+                        }
+                        ClawMessage::CommandFinished {
+                            exit_code,
+                            snapshot,
+                            cwd,
+                        } => {
+                            current_dir = cwd.clone();
+
+                            // Update workspace state
+                            let last_cmd = snapshot.lines().next().unwrap_or("").to_string();
+                            workspace
+                                .update_pane_state(
+                                    self.pane_id.clone(),
+                                    Some(self.session_id.clone()),
+                                    Some(self.name.clone()),
+                                    current_dir.clone(),
+                                    Some(last_cmd),
+                                    Some(snapshot.clone()),
+                                )
+                                .await;
+
+                            let mut state_lock = self.state.lock().await;
+                            if let Some(reply) = state_lock.pending_terminal_reply.take() {
+                                if exit_code == 0 {
+                                    let _ = reply.send(Ok(snapshot.clone()));
+                                } else {
+                                    let _ = reply.send(Err(format!(
+                                        "Command failed with exit code {exit_code}:\n{snapshot}"
+                                    )));
+                                }
+                            } else if exit_code != 0 {
+                                if exit_code == 130 || exit_code == 131 {
+                                    continue;
+                                }
+
+                                let prompt = format!(
+                                    "The user's command failed with exit code {exit_code}. Please analyze the terminal snapshot and suggest a fix."
+                                );
+
+                                if self.diagnosis_mode
+                                    == boxxy_preferences::config::ClawAutoDiagnosisMode::Lazy
+                                {
+                                    state_lock.pending_lazy_diagnosis = Some((prompt, snapshot, cwd));
+                                    drop(state_lock);
+
+                                    let tx_ui = self.tx_ui.clone();
+                                    let agent_name = self.name.clone();
+                                    tokio::spawn(async move {
+                                        let _ = tx_ui
+                                            .send(ClawEngineEvent::LazyErrorIndicator { agent_name })
+                                            .await;
+                                    });
+                                } else {
+                                    drop(state_lock);
+                                    spawn_turn(
+                                        self.pane_id.clone(),
+                                        self.session_id.clone(),
+                                        self.name.clone(),
+                                        &prompt,
+                                        &snapshot,
+                                        &session_ctx,
+                                        cwd,
+                                        false,
+                                        claw_proxy.clone(),
+                                        self.db.clone(),
+                                        self.state.clone(),
+                                        self.tx_ui.clone(),
+                                        None,
+                                        vec![],
+                                    );
+                                }
+                            }
+                        }
+                        ClawMessage::RequestLazyDiagnosis => {
+                            let mut state_lock = self.state.lock().await;
+                            if let Some((prompt, snapshot, cwd)) = state_lock.pending_lazy_diagnosis.take()
+                            {
+                                drop(state_lock);
+                                spawn_turn(
+                                    self.pane_id.clone(),
+                                    self.session_id.clone(),
+                                    self.name.clone(),
+                                    &prompt,
+                                    &snapshot,
+                                    &session_ctx,
+                                    cwd,
+                                    false,
+                                    claw_proxy.clone(),
+                                    self.db.clone(),
+                                    self.state.clone(),
+                                    self.tx_ui.clone(),
+                                    None,
+                                    vec![],
+                                );
+                            }
+                        }
+                        ClawMessage::ClawQuery {
+                            query,
+                            snapshot,
+                            cwd,
+                            image_attachments,
+                        } => {
+                            current_dir = cwd.clone();
+
+                            // Update workspace state
+                            workspace
+                                .update_pane_state(
+                                    self.pane_id.clone(),
+                                    Some(self.session_id.clone()),
+                                    Some(self.name.clone()),
+                                    current_dir.clone(),
+                                    Some(query.clone()),
+                                    Some(snapshot.clone()),
+                                )
+                                .await;
+
+                            debug!(
+                                "Pane {} ({}): Direct Claw query: {query}. Starting analysis.",
+                                self.pane_id, self.name
+                            );
                             spawn_turn(
                                 self.pane_id.clone(),
                                 self.session_id.clone(),
                                 self.name.clone(),
-                                &prompt,
+                                &query,
                                 &snapshot,
                                 &session_ctx,
                                 cwd,
@@ -429,234 +527,244 @@ impl ClawSession {
                                 self.state.clone(),
                                 self.tx_ui.clone(),
                                 None,
+                                image_attachments,
+                            );
+                        }
+                        ClawMessage::FileWriteReply { approved } => {
+                            let mut state_lock = self.state.lock().await;
+                            if let Some(reply) = state_lock.pending_file_reply.take() {
+                                let _ = reply.send(approved);
+                            }
+                        }
+                        ClawMessage::FileDeleteReply { approved } => {
+                            let mut state_lock = self.state.lock().await;
+                            if let Some(reply) = state_lock.pending_file_delete_reply.take() {
+                                let _ = reply.send(approved);
+                            }
+                        }
+                        ClawMessage::KillProcessReply { approved } => {
+                            let mut state_lock = self.state.lock().await;
+                            if let Some(reply) = state_lock.pending_kill_process_reply.take() {
+                                let _ = reply.send(approved);
+                            }
+                        }
+                        ClawMessage::GetClipboardReply { approved } => {
+                            let mut state_lock = self.state.lock().await;
+                            if let Some(reply) = state_lock.pending_get_clipboard_reply.take() {
+                                let _ = reply.send(approved);
+                            }
+                        }
+                        ClawMessage::SetClipboardReply { approved } => {
+                            let mut state_lock = self.state.lock().await;
+                            if let Some(reply) = state_lock.pending_set_clipboard_reply.take() {
+                                let _ = reply.send(approved);
+                            }
+                        }
+                        ClawMessage::UserMessage {
+                            message,
+                            snapshot,
+                            cwd,
+                            image_attachments,
+                        } => {
+                            current_dir = cwd.clone();
+                            debug!(
+                                "Pane {} ({}): User reply: {message}. Checking for pending tools.",
+                                self.pane_id, self.name
+                            );
+
+                            // Update workspace state
+                            workspace
+                                .update_pane_state(
+                                    self.pane_id.clone(),
+                                    Some(self.session_id.clone()),
+                                    Some(self.name.clone()),
+                                    current_dir.clone(),
+                                    None,
+                                    Some(snapshot.clone()),
+                                )
+                                .await;
+
+                            let mut state_lock = self.state.lock().await;
+                            let mut fulfilled = false;
+
+                            if let Some(reply) = state_lock.pending_terminal_reply.take() {
+                                let _ = reply.send(Err(format!(
+                                    "User provided text feedback instead of running command: {message}"
+                                )));
+                                fulfilled = true;
+                            } else if let Some(reply) = state_lock.pending_file_reply.take() {
+                                let _ = reply.send(false);
+                                fulfilled = true;
+                            }
+
+                            if fulfilled {
+                                debug!(
+                                    "Pane {} ({}): Fulfilled pending tool with user feedback.",
+                                    self.pane_id, self.name
+                                );
+                            } else {
+                                drop(state_lock);
+                                spawn_turn(
+                                    self.pane_id.clone(),
+                                    self.session_id.clone(),
+                                    self.name.clone(),
+                                    &message,
+                                    &snapshot,
+                                    &session_ctx,
+                                    cwd,
+                                    false,
+                                    claw_proxy.clone(),
+                                    self.db.clone(),
+                                    self.state.clone(),
+                                    self.tx_ui.clone(),
+                                    None,
+                                    image_attachments,
+                                );
+                            }
+                        }
+                        ClawMessage::DelegatedTask {
+                            source_agent_name,
+                            prompt,
+                            reply_tx,
+                        } => {
+                            let snapshot = workspace
+                                .get_pane_snapshot(self.pane_id.clone())
+                                .await
+                                .unwrap_or_default();
+
+                            let full_prompt = format!(
+                                "*Task delegated from agent '{}'*: {}",
+                                source_agent_name, prompt
+                            );
+
+                            debug!(
+                                "Pane {} ({}): Received delegated task from {}.",
+                                self.pane_id, self.name, source_agent_name
+                            );
+
+                            spawn_turn(
+                                self.pane_id.clone(),
+                                self.session_id.clone(),
+                                self.name.clone(),
+                                &full_prompt,
+                                &snapshot,
+                                &session_ctx,
+                                current_dir.clone(),
+                                false,
+                                claw_proxy.clone(),
+                                self.db.clone(),
+                                self.state.clone(),
+                                self.tx_ui.clone(),
+                                Some(reply_tx),
                                 vec![],
                             );
                         }
+                        ClawMessage::CancelPending => {
+                            let mut state_lock = self.state.lock().await;
+                            if let Some(reply) = state_lock.pending_terminal_reply.take() {
+                                let _ = reply.send(Err("[USER_EXPLICIT_REJECT]".to_string()));
+                            }
+                            if let Some(reply) = state_lock.pending_file_reply.take() {
+                                let _ = reply.send(false);
+                            }
+                            if let Some(reply) = state_lock.pending_file_delete_reply.take() {
+                                let _ = reply.send(false);
+                            }
+                            if let Some(reply) = state_lock.pending_kill_process_reply.take() {
+                                let _ = reply.send(false);
+                            }
+                            if let Some(reply) = state_lock.pending_get_clipboard_reply.take() {
+                                let _ = reply.send(false);
+                            }
+                            if let Some(reply) = state_lock.pending_set_clipboard_reply.take() {
+                                let _ = reply.send(false);
+                            }
+                            debug!("Pane {}: User cancelled pending proposals.", self.pane_id);
+                            let _ = self
+                                .tx_ui
+                                .send(ClawEngineEvent::ProposalResolved {
+                                    agent_name: self.name.clone(),
+                                })
+                                .await;
+                        }
+                        ClawMessage::CancelTask { task_id } => {
+                            let mut state_lock = self.state.lock().await;
+                            state_lock.pending_tasks.retain(|t| t.id != task_id);
+                            let agent_name = state_lock.agent_name.clone();
+                            let tasks = state_lock.pending_tasks.clone();
+                            drop(state_lock);
+
+                            let _ = self.tx_ui.send(ClawEngineEvent::TaskStatusChanged {
+                                agent_name,
+                                tasks: tasks.clone(),
+                            }).await;
+
+                            workspace.update_pane_tasks(self.pane_id.clone(), tasks).await;
+                        }
+                        ClawMessage::UpdateDiagnosisMode(mode) => {
+                            self.diagnosis_mode = mode;
+                        }
                     }
                 }
-                ClawMessage::RequestLazyDiagnosis => {
+                _ = task_interval.tick() => {
+                    // 1. Process Due Tasks
+                    let now = chrono::Utc::now();
                     let mut state_lock = self.state.lock().await;
-                    if let Some((prompt, snapshot, cwd)) = state_lock.pending_lazy_diagnosis.take()
-                    {
+                    let mut completed_indices = Vec::new();
+
+                    for (i, task) in state_lock.pending_tasks.iter_mut().enumerate() {
+                        if task.due_at <= now && task.status == TaskStatus::Pending {
+                            // Execute task
+                            match task.task_type {
+                                TaskType::Notification => {
+                                    let text = task.payload.clone();
+                                    let tx_ui = self.tx_ui.clone();
+                                    tokio::spawn(async move {
+                                        let _ = tx_ui.send(ClawEngineEvent::SystemMessage { text }).await;
+                                    });
+                                }
+                                TaskType::Command | TaskType::Query => {
+                                    let message = task.payload.clone();
+                                    let tx_self = self.tx_self.clone();
+                                    let pane_id = self.pane_id.clone();
+                                    let workspace = workspace.clone();
+                                    tokio::spawn(async move {
+                                        if let Some(snapshot) = workspace.get_pane_snapshot(pane_id.clone()).await {
+                                            let cwd = workspace.get_pane_cwd(pane_id).await.unwrap_or_else(|| "/".to_string());
+                                            let _ = tx_self.send(ClawMessage::UserMessage {
+                                                message,
+                                                snapshot,
+                                                cwd,
+                                                image_attachments: vec![],
+                                            }).await;
+                                        }
+                                    });
+                                }
+                            }
+                            task.status = TaskStatus::Completed;
+                            completed_indices.push(i);
+                        }
+                    }
+
+                    if !completed_indices.is_empty() {
+                        // Prune completed tasks
+                        state_lock.pending_tasks.retain(|t| t.status == TaskStatus::Pending);
+                        let agent_name = state_lock.agent_name.clone();
+                        let agent_name_for_event = agent_name.clone();
+                        let tasks = state_lock.pending_tasks.clone();
                         drop(state_lock);
-                        spawn_turn(
-                            self.pane_id.clone(),
-                            self.session_id.clone(),
-                            self.name.clone(),
-                            &prompt,
-                            &snapshot,
-                            &session_ctx,
-                            cwd,
-                            false,
-                            claw_proxy.clone(),
-                            self.db.clone(),
-                            self.state.clone(),
-                            self.tx_ui.clone(),
-                            None,
-                            vec![],
-                        );
-                    }
-                }
-                ClawMessage::ClawQuery {
-                    query,
-                    snapshot,
-                    cwd,
-                    image_attachments,
-                } => {
-                    current_dir = cwd.clone();
 
-                    // Update workspace state
-                    workspace
-                        .update_pane_state(
-                            self.pane_id.clone(),
-                            Some(self.session_id.clone()),
-                            Some(self.name.clone()),
-                            current_dir.clone(),
-                            Some(query.clone()),
-                            Some(snapshot.clone()),
-                        )
-                        .await;
+                        let _ = self.tx_ui.send(ClawEngineEvent::TaskStatusChanged {
+                            agent_name,
+                            tasks: tasks.clone(),
+                        }).await;
 
-                    debug!(
-                        "Pane {} ({}): Direct Claw query: {query}. Starting analysis.",
-                        self.pane_id, self.name
-                    );
-                    spawn_turn(
-                        self.pane_id.clone(),
-                        self.session_id.clone(),
-                        self.name.clone(),
-                        &query,
-                        &snapshot,
-                        &session_ctx,
-                        cwd,
-                        false,
-                        claw_proxy.clone(),
-                        self.db.clone(),
-                        self.state.clone(),
-                        self.tx_ui.clone(),
-                        None,
-                        image_attachments,
-                    );
-                }
-                ClawMessage::FileWriteReply { approved } => {
-                    let mut state_lock = self.state.lock().await;
-                    if let Some(reply) = state_lock.pending_file_reply.take() {
-                        let _ = reply.send(approved);
-                    }
-                }
-                ClawMessage::FileDeleteReply { approved } => {
-                    let mut state_lock = self.state.lock().await;
-                    if let Some(reply) = state_lock.pending_file_delete_reply.take() {
-                        let _ = reply.send(approved);
-                    }
-                }
-                ClawMessage::KillProcessReply { approved } => {
-                    let mut state_lock = self.state.lock().await;
-                    if let Some(reply) = state_lock.pending_kill_process_reply.take() {
-                        let _ = reply.send(approved);
-                    }
-                }
-                ClawMessage::GetClipboardReply { approved } => {
-                    let mut state_lock = self.state.lock().await;
-                    if let Some(reply) = state_lock.pending_get_clipboard_reply.take() {
-                        let _ = reply.send(approved);
-                    }
-                }
-                ClawMessage::SetClipboardReply { approved } => {
-                    let mut state_lock = self.state.lock().await;
-                    if let Some(reply) = state_lock.pending_set_clipboard_reply.take() {
-                        let _ = reply.send(approved);
-                    }
-                }
-                ClawMessage::UserMessage {
-                    message,
-                    snapshot,
-                    cwd,
-                    image_attachments,
-                } => {
-                    current_dir = cwd.clone();
-                    debug!(
-                        "Pane {} ({}): User reply: {message}. Checking for pending tools.",
-                        self.pane_id, self.name
-                    );
+                        let _ = self.tx_ui.send(ClawEngineEvent::TaskCompleted {
+                            agent_name: agent_name_for_event,
+                        }).await;
 
-                    // Update workspace state
-                    workspace
-                        .update_pane_state(
-                            self.pane_id.clone(),
-                            Some(self.session_id.clone()),
-                            Some(self.name.clone()),
-                            current_dir.clone(),
-                            None,
-                            Some(snapshot.clone()),
-                        )
-                        .await;
-
-                    let mut state_lock = self.state.lock().await;
-                    let mut fulfilled = false;
-
-                    if let Some(reply) = state_lock.pending_terminal_reply.take() {
-                        let _ = reply.send(Err(format!(
-                            "User provided text feedback instead of running command: {message}"
-                        )));
-                        fulfilled = true;
-                    } else if let Some(reply) = state_lock.pending_file_reply.take() {
-                        let _ = reply.send(false);
-                        fulfilled = true;
+                        workspace.update_pane_tasks(self.pane_id.clone(), tasks).await;
                     }
-
-                    if fulfilled {
-                        debug!(
-                            "Pane {} ({}): Fulfilled pending tool with user feedback.",
-                            self.pane_id, self.name
-                        );
-                    } else {
-                        drop(state_lock);
-                        spawn_turn(
-                            self.pane_id.clone(),
-                            self.session_id.clone(),
-                            self.name.clone(),
-                            &message,
-                            &snapshot,
-                            &session_ctx,
-                            cwd,
-                            false,
-                            claw_proxy.clone(),
-                            self.db.clone(),
-                            self.state.clone(),
-                            self.tx_ui.clone(),
-                            None,
-                            image_attachments,
-                        );
-                    }
-                }
-                ClawMessage::DelegatedTask {
-                    source_agent_name,
-                    prompt,
-                    reply_tx,
-                } => {
-                    let snapshot = workspace
-                        .get_pane_snapshot(self.pane_id.clone())
-                        .await
-                        .unwrap_or_default();
-
-                    let full_prompt = format!(
-                        "*Task delegated from agent '{}'*: {}",
-                        source_agent_name, prompt
-                    );
-
-                    debug!(
-                        "Pane {} ({}): Received delegated task from {}.",
-                        self.pane_id, self.name, source_agent_name
-                    );
-
-                    spawn_turn(
-                        self.pane_id.clone(),
-                        self.session_id.clone(),
-                        self.name.clone(),
-                        &full_prompt,
-                        &snapshot,
-                        &session_ctx,
-                        current_dir.clone(),
-                        false,
-                        claw_proxy.clone(),
-                        self.db.clone(),
-                        self.state.clone(),
-                        self.tx_ui.clone(),
-                        Some(reply_tx),
-                        vec![],
-                    );
-                }
-                ClawMessage::CancelPending => {
-                    let mut state_lock = self.state.lock().await;
-                    if let Some(reply) = state_lock.pending_terminal_reply.take() {
-                        let _ = reply.send(Err("[USER_EXPLICIT_REJECT]".to_string()));
-                    }
-                    if let Some(reply) = state_lock.pending_file_reply.take() {
-                        let _ = reply.send(false);
-                    }
-                    if let Some(reply) = state_lock.pending_file_delete_reply.take() {
-                        let _ = reply.send(false);
-                    }
-                    if let Some(reply) = state_lock.pending_kill_process_reply.take() {
-                        let _ = reply.send(false);
-                    }
-                    if let Some(reply) = state_lock.pending_get_clipboard_reply.take() {
-                        let _ = reply.send(false);
-                    }
-                    if let Some(reply) = state_lock.pending_set_clipboard_reply.take() {
-                        let _ = reply.send(false);
-                    }
-                    debug!("Pane {}: User cancelled pending proposals.", self.pane_id);
-                    let _ = self
-                        .tx_ui
-                        .send(ClawEngineEvent::ProposalResolved {
-                            agent_name: self.name.clone(),
-                        })
-                        .await;
-                }
-                ClawMessage::UpdateDiagnosisMode(mode) => {
-                    self.diagnosis_mode = mode;
                 }
             }
         }
@@ -865,13 +973,16 @@ fn spawn_turn(
         }
 
         // 3. Build Dynamic Turn Context (The part that changes every turn)
+        let now = chrono::Utc::now();
         let turn_context = format!(
             "## CURRENT TURN CONTEXT\n\
+            System Time: `{}`\n\
             CWD: `{}`\n\
             {}\n\
             {}\n\
             {}\n\
             {}\n",
+            now.to_rfc3339(),
             cwd_clone, active_skills_text, past_memories, radar, tui_warning
         );
 
@@ -976,6 +1087,7 @@ fn spawn_turn(
 
                 // --- ATOMIC PERSISTENCE ---
                 let history_json = serde_json::to_string(&state_lock.history).unwrap_or_default();
+                let pending_tasks_json = serde_json::to_string(&state_lock.pending_tasks).unwrap_or_default();
                 let agent_name_for_db = agent_name.clone();
                 let session_id_for_db = session_id_clone.clone();
                 let cwd_for_db = cwd_clone.clone();
@@ -1002,6 +1114,7 @@ fn spawn_turn(
                                 &agent_name_for_db,
                                 &title,
                                 &history_json,
+                                &pending_tasks_json,
                                 &agent_name_for_db,
                                 &cwd_for_db,
                                 &model_id,

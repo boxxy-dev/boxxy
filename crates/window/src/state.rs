@@ -129,6 +129,7 @@ pub enum AppInput {
     UpdateDownloaded(String),
     ApplyUpdateAndRestart,
     GrabFocus,
+    CancelTask(uuid::Uuid, Option<String>), // (task_id, pane_id)
 }
 
 pub struct AppWindowInner {

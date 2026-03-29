@@ -297,9 +297,10 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
                             && inner.tabs[pos].controller.active_pane_id() == id {
                                 inner.claw_active = active;
                                 if active {
-                                    page.set_icon(Some(&gtk4::gio::ThemedIcon::new("boxxyclaw")));
+                                    page.set_indicator_icon(Some(&gtk4::gio::ThemedIcon::new("boxxyclaw")));
+                                    page.set_indicator_activatable(false);
                                 } else {
-                                    page.set_icon(None::<&gio::Icon>);
+                                    page.set_indicator_icon(None::<&gio::Icon>);
                                 }
                                 inner
                                     .claw
@@ -326,9 +327,10 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
                 let widget = tab.controller.widget();
                 let page = inner.tab_view.page(widget);
                 if active {
-                    page.set_icon(Some(&gtk4::gio::ThemedIcon::new("boxxyclaw")));
+                    page.set_indicator_icon(Some(&gtk4::gio::ThemedIcon::new("boxxyclaw")));
+                    page.set_indicator_activatable(false);
                 } else {
-                    page.set_icon(None::<&gio::Icon>);
+                    page.set_indicator_icon(None::<&gio::Icon>);
                 }
             }
         }
@@ -605,6 +607,35 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
                     .find(|t| t.controller.widget().as_ptr() as usize == target_ptr)
                 {
                     tab.controller.grab_focus();
+                }
+            }
+        }
+        AppInput::CancelTask(task_id, pane_id) => {
+            let id = if let Some(id) = pane_id {
+                Some(id)
+            } else {
+                // Get active pane ID from selected tab
+                if let Some(page) = inner.tab_view.selected_page() {
+                    let child = page.child();
+                    if let Some(pos) = inner
+                        .tabs
+                        .iter()
+                        .position(|c| c.controller.widget() == &child)
+                    {
+                        Some(inner.tabs[pos].controller.active_pane_id())
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            };
+
+            if let Some(id) = id {
+                for tab in &inner.tabs {
+                    if tab.controller.cancel_task_by_id(&id, task_id) {
+                        break;
+                    }
                 }
             }
         }

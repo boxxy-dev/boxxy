@@ -1,3 +1,19 @@
+tab > box {
+    /* Make the inner box fill the available space */
+    min-width: 100px;
+}
+
+tab image.icon {
+    /* Push everything else to the right */
+    margin-right: auto;
+}
+
+tab label.title {
+    /* Try to keep the title centered or just left-aligned after the auto margin */
+    margin-left: 0;
+    margin-right: auto;
+}
+
 headerbar {
 	min-height: 28px;
 }

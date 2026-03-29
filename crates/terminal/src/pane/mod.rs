@@ -554,6 +554,14 @@ impl TerminalPaneComponent {
             .write_all(text.as_bytes().to_vec());
     }
 
+    pub fn cancel_task(&self, task_id: uuid::Uuid) {
+        let _ = self.claw_sender.send_blocking(boxxy_claw::engine::ClawMessage::CancelTask { task_id });
+    }
+
+    pub fn write_all(&self, data: Vec<u8>) {
+        self.inner.borrow().terminal.write_all(data);
+    }
+
     pub fn spawn(&self) {
         let inner_rc = self.inner.clone();
         let id = self.id();
@@ -730,8 +738,6 @@ impl TerminalPaneComponent {
             self.inner.borrow().terminal.grab_focus();
         }
     }
-
-    pub fn resize(&self) {}
 
     pub fn is_claw_active(&self) -> bool {
         self.is_claw_active.get()

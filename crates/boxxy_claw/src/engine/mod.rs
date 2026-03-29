@@ -64,6 +64,31 @@ pub enum ClawMessage {
     ForegroundProcessChanged { process_name: String },
     /// Resume a previously saved session.
     ResumeSession { session_id: String },
+    /// Cancel a specific scheduled task.
+    CancelTask { task_id: uuid::Uuid },
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub enum TaskType {
+    Notification,
+    Command,
+    Query,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub enum TaskStatus {
+    Pending,
+    Completed,
+    Cancelled,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ScheduledTask {
+    pub id: uuid::Uuid,
+    pub task_type: TaskType,
+    pub payload: String,
+    pub due_at: chrono::DateTime<chrono::Utc>,
+    pub status: TaskStatus,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -172,4 +197,11 @@ pub enum ClawEngineEvent {
         result: String, // JSON
         usage: Option<rig::completion::Usage>,
     },
+    /// Emitted when the set of pending tasks for this agent changes.
+    TaskStatusChanged {
+        agent_name: String,
+        tasks: Vec<ScheduledTask>,
+    },
+    /// Emitted when a scheduled task has been completed and triggered.
+    TaskCompleted { agent_name: String },
 }

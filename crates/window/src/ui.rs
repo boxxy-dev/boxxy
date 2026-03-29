@@ -97,6 +97,7 @@ impl AppWindow {
 
         let tx_claw_active = tx.clone();
         let tx_claw_proactive = tx.clone();
+        let tx_claw_cancel = tx.clone();
         let claw = ClawSidebarComponent::new(
             move |active| {
                 let _ = tx_claw_active.send_blocking(AppInput::SetClawActive(active, None));
@@ -104,6 +105,9 @@ impl AppWindow {
             move |proactive| {
                 let _ =
                     tx_claw_proactive.send_blocking(AppInput::SetClawProactive(proactive, None));
+            },
+            move |task_id| {
+                let _ = tx_claw_cancel.send_blocking(AppInput::CancelTask(task_id, None));
             },
         );
 

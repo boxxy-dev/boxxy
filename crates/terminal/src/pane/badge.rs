@@ -7,8 +7,10 @@ use std::rc::Rc;
 pub struct AgentBadge {
     container: gtk::Box,
     label: gtk::Label,
+    clock_icon: gtk::Image,
     is_active: Rc<Cell<bool>>,
     is_evicted: Rc<Cell<bool>>,
+    has_tasks: Rc<Cell<bool>>,
 }
 
 impl AgentBadge {
@@ -24,6 +26,12 @@ impl AgentBadge {
             .visible(false)
             .build();
 
+        let clock_icon = gtk::Image::builder()
+            .icon_name("boxxy-timer-symbolic")
+            .visible(false)
+            .build();
+        container.append(&clock_icon);
+
         let label = gtk::Label::builder()
             .css_classes(["agent-badge-label"])
             .build();
@@ -35,9 +43,16 @@ impl AgentBadge {
         Self {
             container,
             label,
+            clock_icon,
             is_active: Rc::new(Cell::new(false)),
             is_evicted: Rc::new(Cell::new(false)),
+            has_tasks: Rc::new(Cell::new(false)),
         }
+    }
+
+    pub fn set_has_tasks(&self, has_tasks: bool) {
+        self.has_tasks.set(has_tasks);
+        self.clock_icon.set_visible(has_tasks);
     }
 
     pub fn set_evicted(&self, evicted: bool) {

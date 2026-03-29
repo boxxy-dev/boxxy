@@ -880,6 +880,7 @@ dependencies = [
  "boxxy-themes",
  "flate2",
  "getrandom 0.4.2",
+ "gstreamer",
  "gtk4",
  "libadwaita",
  "log",
@@ -1014,6 +1015,7 @@ dependencies = [
  "iana-time-zone",
  "js-sys",
  "num-traits",
+ "serde",
  "wasm-bindgen",
  "windows-link",
 ]

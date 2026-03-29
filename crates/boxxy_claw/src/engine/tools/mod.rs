@@ -3,6 +3,7 @@ pub mod scrollback;
 pub mod skills;
 pub mod terminal;
 pub mod workspace;
+pub mod tasks;
 
 use crate::engine::ClawEngineEvent;
 use crate::engine::session::SessionState;

@@ -2,6 +2,7 @@ use crate::engine::ClawEngineEvent;
 use crate::engine::session::SessionState;
 use crate::engine::tools::skills::ActivateSkillTool;
 use crate::engine::tools::terminal::TerminalCommandTool;
+use crate::engine::tools::tasks::{CancelTaskTool, ListTasksTool, ScheduleTaskTool};
 use crate::engine::tools::workspace::{
     CloseAgentTool, DelegateTaskTool, ListActiveAgentsTool, ReadPaneTool, SendKeystrokesTool,
     SetGlobalIntentTool, SpawnAgentTool,
@@ -143,6 +144,17 @@ pub fn create_claw_agent(
         Box::new(ListProcessesTool {
             proxy: claw_proxy.clone(),
             approval: approval_handler.clone(),
+        }),
+        Box::new(ScheduleTaskTool {
+            state: state.clone(),
+            tx_ui: tx_ui.clone(),
+        }),
+        Box::new(ListTasksTool {
+            state: state.clone(),
+        }),
+        Box::new(CancelTaskTool {
+            state: state.clone(),
+            tx_ui: tx_ui.clone(),
         }),
         Box::new(SetGlobalIntentTool),
     ];

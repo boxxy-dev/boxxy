@@ -13,9 +13,8 @@
     <file compressed="true" alias="icons/boxxy-appearance-symbolic.svg">icons/boxxy-appearance-symbolic.svg</file>
     <file compressed="true" alias="icons/boxxy-ai-slop-symbolic.svg">icons/boxxy-ai-slop-symbolic.svg</file>
     <file compressed="true" alias="icons/boxxy-visual-bell-symbolic.svg">icons/boxxy-visual-bell-symbolic.svg</file>
-    <file compressed="true" alias="icons/boxxy-brain-symbolic.svg">icons/boxxy-brain-symbolic.svg</file>
+    <file compressed="true" alias="icons/boxxy-timer-symbolic.svg">icons/boxxy-timer-symbolic.svg</file>
     <file compressed="true" alias="icons/boxxy-chat-symbolic.svg">icons/boxxy-chat-symbolic.svg</file>
-    <file compressed="true" alias="icons/boxxy-chat-none-symbolic.svg">icons/boxxy-chat-none-symbolic.svg</file>
     <file compressed="true" alias="icons/boxxyclaw.svg">icons/boxxyclaw.svg</file>
     <file compressed="true" alias="icons/boxxy-running-symbolic.svg">icons/boxxy-running-symbolic.svg</file>
     <file compressed="true" alias="icons/boxxy-walking2-symbolic.svg">icons/boxxy-walking2-symbolic.svg</file>
@@ -56,5 +55,6 @@
     <file compressed="true" alias="ui/preferences.ui">ui/preferences.ui</file>
     <file compressed="true" alias="ui/widgets/notification_pill.ui">ui/widgets/notification_pill.ui</file>
     <file compressed="true" alias="ui/widgets/notification_details.ui">ui/widgets/notification_details.ui</file>
+    <file compressed="true" alias="sounds/task.wav">sounds/task.wav</file>
   </gresource>
 </gresources>

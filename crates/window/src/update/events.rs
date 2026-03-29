@@ -60,11 +60,12 @@ pub fn handle_terminal_event(
                 let widget = inner.tabs[pos].controller.widget();
                 let page = inner.tab_view.page(widget);
 
-                // Update tab icon
+                // Update tab icon (swap: claw is indicator, timer is main icon)
                 if active {
-                    page.set_icon(Some(&gtk4::gio::ThemedIcon::new("boxxyclaw")));
+                    page.set_indicator_icon(Some(&gtk4::gio::ThemedIcon::new("boxxyclaw")));
+                    page.set_indicator_activatable(false);
                 } else {
-                    page.set_icon(None::<&gtk4::gio::Icon>);
+                    page.set_indicator_icon(None::<&gtk4::gio::Icon>);
                 }
 
                 if Some(&page) == inner.tab_view.selected_page().as_ref() {
@@ -82,9 +83,10 @@ pub fn handle_terminal_event(
                 // Update tab icon
                 let is_claw_active = inner.tabs[pos].controller.is_claw_active();
                 if is_claw_active {
-                    page.set_icon(Some(&gtk4::gio::ThemedIcon::new("boxxyclaw")));
+                    page.set_indicator_icon(Some(&gtk4::gio::ThemedIcon::new("boxxyclaw")));
+                    page.set_indicator_activatable(false);
                 } else {
-                    page.set_icon(None::<&gtk4::gio::Icon>);
+                    page.set_indicator_icon(None::<&gtk4::gio::Icon>);
                 }
 
                 if Some(&page) == inner.tab_view.selected_page().as_ref() {
@@ -194,6 +196,31 @@ pub fn handle_terminal_event(
                                 }
                             }
                         });
+                    }
+                    boxxy_claw::engine::ClawEngineEvent::TaskStatusChanged { tasks, .. } => {
+                        let has_pending = tasks.iter().any(|t| t.status == boxxy_claw::engine::TaskStatus::Pending);
+                        let widget = inner.tabs[pos].controller.widget();
+                        let page = inner.tab_view.page(widget);
+
+                        if has_pending {
+                            // Replace claw with colored timer composite in the indicator slot
+                            page.set_indicator_icon(Some(&gtk4::gio::ThemedIcon::new("boxxyclaw-timer")));
+                            page.set_indicator_activatable(false);
+                        } else {
+                            // Revert to normal claw indicator
+                            page.set_indicator_icon(Some(&gtk4::gio::ThemedIcon::new("boxxyclaw")));
+                            page.set_indicator_activatable(false);
+                        }
+
+                        // Update sidebar if this is the active tab
+                        if let Some(selected) = inner.tab_view.selected_page() {
+                            if selected == page {
+                                inner.claw.update_tasks(tasks);
+                            }
+                        }
+                    }
+                    boxxy_claw::engine::ClawEngineEvent::TaskCompleted { .. } => {
+                        crate::sound::play_task_completion_sound();
                     }
                     _ => {} // Other events like AgentThinking or FileWrite are handled strictly by the Pane UI
                 }

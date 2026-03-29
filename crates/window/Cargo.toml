@@ -33,4 +33,5 @@ tempfile.workspace = true
 tar.workspace = true
 flate2.workspace = true
 sha2.workspace = true
+gstreamer.workspace = true
 rand = "0.10.0"
