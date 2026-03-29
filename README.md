@@ -35,8 +35,15 @@ curl -sSf https://raw.githubusercontent.com/miifrommera/boxxy/main/scripts/insta
 ```
 Requires GTK 4.22, libAdwaita 1.9; aarch64 not currently supported because of the very slow builds, open an issue if you need it.
 
-### Flathub
-Flathub submission in progress..
+### Flatpak
+
+Stable builds. Flathub submission [closed.](https://github.com/flathub/flathub/pull/8235)
+```bash
+curl -O https://miifrommera.github.io/boxxy-flatpak-remote/boxxy.gpg && \
+  flatpak remote-add --user --if-not-exists --gpg-import=boxxy.gpg \
+  boxxy https://miifrommera.github.io/boxxy-flatpak-remote/repo && \
+  flatpak install --user boxxy dev.boxxy.BoxxyTerminal
+```
 
 ---
 
@@ -74,13 +81,12 @@ Boxxy has very little use in the wild yet, so it won't **really** be a surprise 
 ---
 
 ## Roadmap
- - **Persistent Agents.** Resume previous sessions and agent interactions even after closing the terminal
  - **Voice.** Speech to Text, Text to Speech 
  - **Characters.** Add characters with voice cloning
  - **Boxxy Marketplace.** A repo that hosts community skills and characters
  - **Cloud Backend and Sync.** That's only a maybe
 
- --- 
+--- 
 
 ## License
 MIT
