@@ -62,7 +62,7 @@ pub struct ResumeCompletionProvider;
 
 impl CompletionProvider for ResumeCompletionProvider {
     fn trigger(&self) -> String {
-        "/resume".to_string()
+        "/resume ".to_string()
     }
 
     fn get_completions(&self, query: &str) -> Vec<CompletionItem> {

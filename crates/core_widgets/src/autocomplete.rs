@@ -101,8 +101,8 @@ impl AutocompleteController {
                         if is_at_start || followed_by_space {
                             let query = &text_before[idx + trigger.len()..];
 
-                            // Allow multi-word queries for "/resume" command to support filtering sessions by title
-                            let allow_spaces = trigger.ends_with(' ') || trigger == "/resume";
+                            // Allow multi-word queries for commands that end with a space (e.g., "/resume ")
+                            let allow_spaces = trigger.ends_with(' ');
 
                             if allow_spaces || !query.contains(' ') {
                                 found_trigger = Some((provider, idx, query, trigger));
@@ -261,10 +261,14 @@ impl AutocompleteController {
 
             let mut new_text = text[..start_idx].to_string();
             new_text.push_str(replacement);
-            new_text.push(' ');
+
+            let is_command = replacement.starts_with('/');
+            if !is_command {
+                new_text.push(' ');
+            }
             new_text.push_str(&text[cursor_pos..]);
 
-            let new_cursor_pos = start_idx + replacement.len() + 1;
+            let new_cursor_pos = start_idx + replacement.len() + if is_command { 0 } else { 1 };
 
             self.entry.set_text(&new_text);
             self.entry.set_position(new_cursor_pos as i32);
