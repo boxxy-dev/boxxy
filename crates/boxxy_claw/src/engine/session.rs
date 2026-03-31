@@ -590,13 +590,16 @@ impl ClawSession {
 
                             if let Some(reply) = state_lock.pending_terminal_reply.take() {
                                 let _ = reply.send(Err(format!(
-                                    "User provided text feedback instead of running command: {message}"
+                                    "[USER_INTERRUPTION]: {message}"
                                 )));
+                                state_lock.history.push(rig::message::Message::user(message.clone()));
                                 fulfilled = true;
                             } else if let Some(reply) = state_lock.pending_file_reply.take() {
                                 let _ = reply.send(false);
+                                state_lock.history.push(rig::message::Message::user(message.clone()));
                                 fulfilled = true;
                             }
+
 
                             if fulfilled {
                                 debug!(
