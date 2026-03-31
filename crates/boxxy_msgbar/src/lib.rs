@@ -53,6 +53,16 @@ impl MsgBarComponent {
         // Remove app-notification as it adds margins and rounded corners
         widget.set_visible(false);
 
+        let entry = gtk::Entry::builder()
+            .hexpand(true)
+            .has_frame(false) // removes borders
+            .placeholder_text(
+                "Ask Boxxy-Claw... (Ctrl+V: attach, @agent: direct, /resume: session)",
+            )
+            .build();
+
+        entry.add_css_class("monospace");
+
         let icon = gtk::Image::from_icon_name("boxxyclaw");
         icon.add_css_class("accent");
 
@@ -63,13 +73,16 @@ impl MsgBarComponent {
             .margin_start(4)
             .margin_end(0)
             .valign(gtk::Align::Center)
+            .can_focus(false)
             .build();
 
         let claw_state = Rc::new(Cell::new(false));
         let claw_state_clone = claw_state.clone();
+        let claw_entry_focus = entry.clone();
         claw_toggle.connect_clicked(move |_| {
             let next = !claw_state_clone.get();
             on_claw_toggle(next);
+            claw_entry_focus.grab_focus();
         });
 
         widget.append(&claw_toggle);
@@ -82,13 +95,16 @@ impl MsgBarComponent {
             .margin_start(0)
             .margin_end(0)
             .valign(gtk::Align::Center)
+            .can_focus(false)
             .build();
 
         let proactive_state = Rc::new(Cell::new(false));
         let proactive_state_clone = proactive_state.clone();
+        let proactive_entry_focus = entry.clone();
         proactive_toggle.connect_clicked(move |_| {
             let next = !proactive_state_clone.get();
             on_proactive_toggle(next);
+            proactive_entry_focus.grab_focus();
         });
 
         widget.append(&proactive_toggle);
@@ -97,15 +113,6 @@ impl MsgBarComponent {
         tags_box.set_valign(gtk::Align::Center);
         widget.append(&tags_box);
 
-        let entry = gtk::Entry::builder()
-            .hexpand(true)
-            .has_frame(false) // removes borders
-            .placeholder_text(
-                "Ask Boxxy-Claw... (Ctrl+V: attach, @agent: direct, /resume: session)",
-            )
-            .build();
-
-        entry.add_css_class("monospace");
         widget.append(&entry);
 
         let is_active = Rc::new(Cell::new(false));
@@ -420,6 +427,7 @@ impl MsgBarComponent {
         let close_btn = gtk::Button::builder()
             .icon_name("boxxy-window-close-symbolic")
             .css_classes(["flat", "circular"])
+            .can_focus(false)
             .build();
 
         let atts_clone = attachments.clone();
