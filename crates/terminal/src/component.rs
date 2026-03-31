@@ -390,13 +390,35 @@ impl TerminalComponent {
                 if inner.active_pane_id == id {
                     let term_id = inner.id.clone();
                     let _ = TERMINAL_EVENT_BUS.send(TerminalEvent {
-                        id: term_id,
+                        id: term_id.clone(),
                         kind: TerminalEventKind::ClawStateChanged(active, proactive),
                     });
                 }
             }
+            PaneOutput::ZoomIn => {
+                let term_id = self.inner.borrow().id.clone();
+                let _ = TERMINAL_EVENT_BUS.send(TerminalEvent {
+                    id: term_id,
+                    kind: TerminalEventKind::ZoomIn,
+                });
+            }
+            PaneOutput::ZoomOut => {
+                let term_id = self.inner.borrow().id.clone();
+                let _ = TERMINAL_EVENT_BUS.send(TerminalEvent {
+                    id: term_id,
+                    kind: TerminalEventKind::ZoomOut,
+                });
+            }
+            PaneOutput::ResetZoom => {
+                let term_id = self.inner.borrow().id.clone();
+                let _ = TERMINAL_EVENT_BUS.send(TerminalEvent {
+                    id: term_id,
+                    kind: TerminalEventKind::ResetZoom,
+                });
+            }
         }
     }
+
 
     fn update_dimming(&self) {
         let inner = self.inner.borrow();

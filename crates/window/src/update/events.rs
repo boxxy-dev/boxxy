@@ -229,6 +229,15 @@ pub fn handle_terminal_event(
                     _ => {} // Other events like AgentThinking or FileWrite are handled strictly by the Pane UI
                 }
             }
+            TerminalEventKind::ZoomIn => {
+                let _ = inner.tx.send_blocking(AppInput::ZoomIn);
+            }
+            TerminalEventKind::ZoomOut => {
+                let _ = inner.tx.send_blocking(AppInput::ZoomOut);
+            }
+            TerminalEventKind::ResetZoom => {
+                let _ = inner.tx.send_blocking(AppInput::ResetZoom);
+            }
         }
     }
 }

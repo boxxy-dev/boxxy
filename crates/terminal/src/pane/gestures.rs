@@ -155,6 +155,33 @@ pub(super) fn setup_gestures(
 
     terminal.set_allow_hyperlink(true);
 
+    let scroll_ctrl = gtk::EventControllerScroll::new(gtk::EventControllerScrollFlags::VERTICAL);
+    let term_scroll = terminal.clone();
+    let cb_scroll = callback.clone();
+    scroll_ctrl.connect_scroll(move |scroll_ctrl, _, y| {
+        let state = scroll_ctrl.current_event_state();
+        let is_ctrl = state.contains(gdk::ModifierType::CONTROL_MASK);
+
+        // If Ctrl is held, we always zoom, even if mouse mode is active in the TUI.
+        // This is standard behavior in most terminal emulators to allow zooming out of a TUI.
+        if is_ctrl {
+            if y < 0.0 {
+                cb_scroll(PaneOutput::ZoomIn);
+            } else if y > 0.0 {
+                cb_scroll(PaneOutput::ZoomOut);
+            }
+            return gtk::glib::Propagation::Stop;
+        }
+
+        // Otherwise, if mouse mode is active, the TUI might want the scroll event.
+        if term_scroll.is_mouse_mode() {
+            return gtk::glib::Propagation::Proceed;
+        }
+
+        gtk::glib::Propagation::Proceed
+    });
+    terminal.add_controller(scroll_ctrl);
+
     let mouse_coords = Rc::new(RefCell::new((0.0, 0.0)));
     let motion_ctrl = gtk::EventControllerMotion::new();
     let mc_clone = mouse_coords.clone();
