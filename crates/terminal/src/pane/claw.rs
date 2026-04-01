@@ -17,6 +17,7 @@ pub(super) fn setup_claw(
     callback: std::sync::Arc<dyn Fn(PaneOutput) + Send + Sync + 'static>,
     spawn_intent: Option<String>,
     total_tokens: Rc<Cell<u64>>,
+    is_pinned: Rc<Cell<bool>>,
 ) -> (TerminalOverlay, ClawIndicator, PendingDiagnosis) {
     let pending_proactive_diagnosis =
         Rc::new(RefCell::new(None::<(String, crate::TerminalProposal)>));
@@ -160,6 +161,7 @@ pub(super) fn setup_claw(
     let claw_list_events = claw_message_list.clone();
     let inner_clone = inner.clone();
     let total_tokens_for_events = total_tokens.clone();
+    let is_pinned_for_events = is_pinned.clone();
 
     gtk::glib::spawn_future_local(async move {
         while let Ok(event) = claw_rx.recv().await {
@@ -390,8 +392,23 @@ pub(super) fn setup_claw(
                         crate::TerminalProposal::Command(command.clone()),
                     );
                 }
-                boxxy_claw::engine::ClawEngineEvent::Identity { agent_name } => {
+                boxxy_claw::engine::ClawEngineEvent::Identity { agent_name, pinned, total_tokens } => {
                     inner_clone.borrow().agent_badge.set_identity(agent_name);
+                    is_pinned_for_events.set(*pinned);
+                    inner_clone.borrow().msg_bar.update_ui(
+                        true, // Claw is active if it's sending Identity
+                        inner_clone.borrow().msg_bar.proactive_state.get(),
+                        *pinned,
+                    );
+                    total_tokens_for_events.set(*total_tokens);
+                }
+                boxxy_claw::engine::ClawEngineEvent::PinStatusChanged(pinned) => {
+                    is_pinned_for_events.set(*pinned);
+                    inner_clone.borrow().msg_bar.update_ui(
+                        inner_clone.borrow().msg_bar.claw_state.get(),
+                        inner_clone.borrow().msg_bar.proactive_state.get(),
+                        *pinned,
+                    );
                 }
                 boxxy_claw::engine::ClawEngineEvent::Evicted => {
                     inner_clone.borrow().agent_badge.set_evicted(true);
@@ -505,6 +522,58 @@ pub(super) fn setup_claw(
                         .iter()
                         .any(|t| t.status == boxxy_claw::engine::TaskStatus::Pending);
                     inner_clone.borrow().agent_badge.set_has_tasks(has_pending);
+                }
+                boxxy_claw::engine::ClawEngineEvent::RestoreHistory(rows) => {
+                    // Clear current list first
+                    while let Some(row) = claw_list_events.row_at_index(0) {
+                        claw_list_events.remove(&row);
+                    }
+                    for row in rows {
+                        match row {
+                            boxxy_claw::engine::PersistentClawRow::Diagnosis {
+                                pane_id,
+                                agent_name,
+                                content,
+                                ..
+                            } => {
+                                boxxy_claw::ui::add_diagnosis_row(
+                                    &claw_list_events,
+                                    pane_id.clone(),
+                                    agent_name.clone(),
+                                    &content,
+                                );
+                            }
+                            boxxy_claw::engine::PersistentClawRow::Suggested {
+                                pane_id,
+                                agent_name,
+                                diagnosis,
+                                command,
+                                ..
+                            } => {
+                                boxxy_claw::ui::add_suggested_row(
+                                    &claw_list_events,
+                                    pane_id.clone(),
+                                    agent_name.clone(),
+                                    &diagnosis,
+                                    &command,
+                                );
+                            }
+                            boxxy_claw::engine::PersistentClawRow::ProcessList {
+                                pane_id,
+                                agent_name,
+                                result_json,
+                                ..
+                            } => {
+                                boxxy_claw::ui::add_process_list_row(
+                                    &claw_list_events,
+                                    pane_id.clone(),
+                                    agent_name.clone(),
+                                    &result_json,
+                                    |_, _| {},
+                                );
+                            }
+                        }
+                    }
                 }
                 boxxy_claw::engine::ClawEngineEvent::TaskCompleted { .. } => {
                     // Handled by the window orchestrator for sound

@@ -130,6 +130,7 @@ pub enum AppInput {
     ApplyUpdateAndRestart,
     GrabFocus,
     CancelTask(uuid::Uuid, Option<String>), // (task_id, pane_id)
+    ClearClawHistory(Option<String>),      // (pane_id)
 }
 
 pub struct AppWindowInner {

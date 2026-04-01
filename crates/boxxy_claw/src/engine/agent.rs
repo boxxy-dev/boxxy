@@ -92,6 +92,8 @@ pub fn create_claw_agent(
     state: std::sync::Arc<tokio::sync::Mutex<SessionState>>,
     db: std::sync::Arc<tokio::sync::Mutex<Option<boxxy_db::Db>>>,
     settings: &boxxy_preferences::Settings,
+    session_id: String,
+    pane_id: String,
 ) -> ClawAgent {
     let provider = match provider {
         Some(p) => p,
@@ -106,6 +108,9 @@ pub fn create_claw_agent(
     let approval_handler = std::sync::Arc::new(ClawApprovalHandler {
         tx_ui: tx_ui.clone(),
         state: state.clone(),
+        db: db.clone(),
+        session_id: session_id.clone(),
+        pane_id: pane_id.clone(),
     });
 
     let mut tools: Vec<Box<dyn rig::tool::ToolDyn>> = vec![
@@ -125,6 +130,9 @@ pub fn create_claw_agent(
         Box::new(TerminalCommandTool {
             tx_ui: tx_ui.clone(),
             state: state.clone(),
+            db: db.clone(),
+            session_id: session_id.clone(),
+            pane_id: pane_id.clone(),
         }),
         Box::new(ListActiveAgentsTool),
         Box::new(ReadPaneTool),

@@ -5,10 +5,8 @@ use directories::ProjectDirs;
 use sqlx::SqlitePool;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use std::path::PathBuf;
-
-use tokio::sync::OnceCell;
-
 use std::sync::atomic::{AtomicBool, Ordering};
+use tokio::sync::OnceCell;
 
 pub mod models;
 pub mod store;
@@ -16,7 +14,7 @@ pub mod store;
 static DB: OnceCell<Db> = OnceCell::const_new();
 pub static DATABASE_WAS_RESET: AtomicBool = AtomicBool::new(false);
 
-const CURRENT_SCHEMA_VERSION: i32 = 3;
+const CURRENT_SCHEMA_VERSION: i32 = 7;
 
 #[derive(Clone)]
 pub struct Db {
@@ -119,9 +117,22 @@ impl Db {
                 last_cwd TEXT,
                 title TEXT,
                 model_id TEXT,
+                pinned BOOLEAN DEFAULT false,
+                cleared_at DATETIME,
+                total_tokens BIGINT DEFAULT 0,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
             );
+
+            CREATE TABLE IF NOT EXISTS claw_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT NOT NULL,
+                event_json TEXT NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_claw_events_session_id ON claw_events(session_id);
 
             CREATE TABLE IF NOT EXISTS interactions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -135,10 +146,37 @@ impl Db {
                 FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE
             );
 
+            CREATE TABLE IF NOT EXISTS memories (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                project_path TEXT,
+                content TEXT NOT NULL,
+                metadata TEXT,
+                embedding BLOB,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                last_accessed_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE TABLE IF NOT EXISTS skills (
+                name TEXT PRIMARY KEY,
+                content TEXT NOT NULL,
+                metadata TEXT,
+                pinned BOOLEAN DEFAULT false,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE TABLE IF NOT EXISTS msgbar_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                text TEXT NOT NULL,
+                attachments_json TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            );
+
+            -- Search indexes for RAG and Skills
             CREATE VIRTUAL TABLE IF NOT EXISTS interactions_fts USING fts5(
-                content,
                 content='interactions',
-                content_rowid='id'
+                content,
+                project_path
             );
 
             -- Triggers to keep FTS index updated for interactions
@@ -146,7 +184,7 @@ impl Db {
             CREATE TRIGGER interactions_ai AFTER INSERT ON interactions BEGIN
               INSERT INTO interactions_fts(rowid, content) VALUES (new.id, new.content);
             END;
-            
+
             DROP TRIGGER IF EXISTS interactions_ad;
             CREATE TRIGGER interactions_ad AFTER DELETE ON interactions BEGIN
               INSERT INTO interactions_fts(interactions_fts, rowid, content) VALUES('delete', old.id, old.content);
@@ -158,93 +196,57 @@ impl Db {
               INSERT INTO interactions_fts(rowid, content) VALUES (new.id, new.content);
             END;
 
-            CREATE TABLE IF NOT EXISTS memories (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                key TEXT NOT NULL,
-                project_path TEXT DEFAULT 'global',
-                content TEXT NOT NULL,
-                category TEXT,
-                verified BOOLEAN DEFAULT true,
-                pinned BOOLEAN DEFAULT false,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                last_accessed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                access_count INTEGER DEFAULT 0,
-                UNIQUE(key, project_path)
-            );
-
             CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
-                key,
-                content,
                 content='memories',
-                content_rowid='id'
+                content,
+                project_path
             );
 
-            -- Triggers to keep FTS index updated for long-term memories
+            -- Triggers for memories
             DROP TRIGGER IF EXISTS memories_ai;
             CREATE TRIGGER memories_ai AFTER INSERT ON memories BEGIN
-              INSERT INTO memories_fts(rowid, key, content) VALUES (new.id, new.key, new.content);
+              INSERT INTO memories_fts(rowid, content) VALUES (new.id, new.content);
             END;
 
             DROP TRIGGER IF EXISTS memories_ad;
             CREATE TRIGGER memories_ad AFTER DELETE ON memories BEGIN
-              INSERT INTO memories_fts(memories_fts, rowid, key, content) VALUES('delete', old.id, old.key, old.content);
+              INSERT INTO memories_fts(memories_fts, rowid, content) VALUES('delete', old.id, old.content);
             END;
 
             DROP TRIGGER IF EXISTS memories_au;
             CREATE TRIGGER memories_au AFTER UPDATE ON memories BEGIN
-              INSERT INTO memories_fts(memories_fts, rowid, key, content) VALUES('delete', old.id, old.key, old.content);
-              INSERT INTO memories_fts(rowid, key, content) VALUES (new.id, new.key, new.content);
+              INSERT INTO memories_fts(memories_fts, rowid, content) VALUES('delete', old.id, old.content);
+              INSERT INTO memories_fts(rowid, content) VALUES (new.id, new.content);
             END;
-
-            CREATE TABLE IF NOT EXISTS skills (
-                name TEXT PRIMARY KEY,
-                description TEXT NOT NULL,
-                triggers TEXT NOT NULL, -- Comma-separated or space-separated triggers
-                content TEXT NOT NULL,
-                pinned BOOLEAN DEFAULT false,
-                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-            );
 
             CREATE VIRTUAL TABLE IF NOT EXISTS skills_fts USING fts5(
-                name,
-                description,
-                triggers,
                 content='skills',
-                content_rowid='name'
+                name,
+                content
             );
 
-            -- Triggers to keep FTS index updated for skills
+            -- Triggers for skills
             DROP TRIGGER IF EXISTS skills_ai;
             CREATE TRIGGER skills_ai AFTER INSERT ON skills BEGIN
-              INSERT INTO skills_fts(rowid, name, description, triggers) VALUES (new.name, new.name, new.description, new.triggers);
+              INSERT INTO skills_fts(rowid, name, content) VALUES (new.rowid, new.name, new.content);
             END;
-
-            CREATE TABLE IF NOT EXISTS msgbar_history (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                text TEXT NOT NULL,
-                attachments TEXT NOT NULL,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-            );
 
             DROP TRIGGER IF EXISTS skills_ad;
             CREATE TRIGGER skills_ad AFTER DELETE ON skills BEGIN
-              INSERT INTO skills_fts(skills_fts, rowid, name, description, triggers) VALUES('delete', old.name, old.name, old.description, old.triggers);
+              INSERT INTO skills_fts(skills_fts, rowid, name, content) VALUES('delete', old.rowid, old.name, old.content);
             END;
 
             DROP TRIGGER IF EXISTS skills_au;
             CREATE TRIGGER skills_au AFTER UPDATE ON skills BEGIN
-              INSERT INTO skills_fts(skills_fts, rowid, name, description, triggers) VALUES('delete', old.name, old.name, old.description, old.triggers);
-              INSERT INTO skills_fts(rowid, name, description, triggers) VALUES (new.name, new.name, new.description, new.triggers);
+              INSERT INTO skills_fts(skills_fts, rowid, name, content) VALUES('delete', old.rowid, old.name, old.content);
+              INSERT INTO skills_fts(rowid, name, content) VALUES (new.rowid, new.name, new.content);
             END;
-            ";
+        ";
 
-        sqlx::query(schema)
-            .execute(&self.pool)
-            .await
-            .context("Failed to initialize database schema")?;
+        sqlx::query(schema).execute(&self.pool).await?;
 
-        // Ignore errors for this migration in case the column already exists
+        // Manual column migrations for existing tables if needed (not dropping)
+        // Check if pinned column exists in skills (added in v3)
         let _ = sqlx::query("ALTER TABLE skills ADD COLUMN pinned BOOLEAN DEFAULT false")
             .execute(&self.pool)
             .await;

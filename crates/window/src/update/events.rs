@@ -132,9 +132,28 @@ pub fn handle_terminal_event(
                 }
 
                 match claw_event {
+                    boxxy_claw::engine::ClawEngineEvent::Identity { .. } => {
+                        // If we got an identity, ensure the sidebar UI reflects that this pane is now active
+                        if let Some(page) = inner.tab_view.selected_page() {
+                            let child = page.child();
+                            if inner.tabs[pos].controller.widget() == &child {
+                                let active = inner.tabs[pos].controller.is_claw_active();
+                                let proactive = inner.tabs[pos].controller.is_proactive();
+                                inner.claw_active = active;
+                                inner.claw_proactive = proactive;
+                                inner.claw.update_ui(active, proactive);
+                                inner.claw.set_history_widget(
+                                    &inner.tabs[pos].controller.claw_history_widget(),
+                                );
+                            }
+                        }
+                        inner.claw.refresh_visibility();
+                        inner.claw.scroll_to_bottom();
+                    }
                     boxxy_claw::engine::ClawEngineEvent::DiagnosisComplete { .. }
                     | boxxy_claw::engine::ClawEngineEvent::InjectCommand { .. }
                     | boxxy_claw::engine::ClawEngineEvent::ProposeFileWrite { .. }
+                    | boxxy_claw::engine::ClawEngineEvent::RestoreHistory(..)
                     | boxxy_claw::engine::ClawEngineEvent::ProposeTerminalCommand { .. } => {
                         inner.claw.refresh_visibility();
                         inner.claw.scroll_to_bottom();

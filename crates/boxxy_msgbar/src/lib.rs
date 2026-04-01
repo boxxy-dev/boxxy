@@ -27,8 +27,10 @@ pub struct MsgBarComponent {
     pub history: Rc<RefCell<history::MsgHistory>>,
     pub claw_toggle: gtk::Button,
     pub proactive_toggle: gtk::Button,
+    pub pin_toggle: gtk::Button,
     pub claw_state: Rc<Cell<bool>>,
     pub proactive_state: Rc<Cell<bool>>,
+    pub pinned_state: Rc<Cell<bool>>,
     _autocomplete: Rc<boxxy_core_widgets::autocomplete::AutocompleteController>,
 }
 
@@ -38,11 +40,13 @@ impl MsgBarComponent {
         C: Fn() + 'static,
         T1: Fn(bool) + 'static,
         T2: Fn(bool) + 'static,
+        T3: Fn(bool) + 'static,
     >(
         on_submit: F,
         on_cancel: C,
         on_claw_toggle: T1,
         on_proactive_toggle: T2,
+        on_pin_toggle: T3,
     ) -> Self {
         let widget = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         widget.set_halign(gtk::Align::Fill);
@@ -108,6 +112,28 @@ impl MsgBarComponent {
         });
 
         widget.append(&proactive_toggle);
+
+        let pin_img = gtk::Image::from_icon_name("boxxy-view-pin-symbolic");
+        let pin_toggle = gtk::Button::builder()
+            .child(&pin_img)
+            .css_classes(["flat", "image-button"])
+            .tooltip_text("Pin this session")
+            .margin_start(0)
+            .margin_end(0)
+            .valign(gtk::Align::Center)
+            .can_focus(false)
+            .build();
+
+        let pinned_state = Rc::new(Cell::new(false));
+        let pinned_state_clone = pinned_state.clone();
+        let pin_entry_focus = entry.clone();
+        pin_toggle.connect_clicked(move |_| {
+            let next = !pinned_state_clone.get();
+            on_pin_toggle(next);
+            pin_entry_focus.grab_focus();
+        });
+
+        widget.append(&pin_toggle);
 
         let tags_box = gtk::Box::new(gtk::Orientation::Horizontal, 4);
         tags_box.set_valign(gtk::Align::Center);
@@ -317,8 +343,10 @@ impl MsgBarComponent {
             history,
             claw_toggle,
             proactive_toggle,
+            pin_toggle,
             claw_state,
             proactive_state,
+            pinned_state,
             _autocomplete: autocomplete_ctrl,
         }
     }
@@ -341,9 +369,10 @@ impl MsgBarComponent {
         self.history.borrow_mut().reset();
     }
 
-    pub fn update_ui(&self, active: bool, proactive: bool) {
+    pub fn update_ui(&self, active: bool, proactive: bool, pinned: bool) {
         self.claw_state.set(active);
         self.proactive_state.set(proactive);
+        self.pinned_state.set(pinned);
 
         if active {
             self.claw_toggle.remove_css_class("claw-indicator-inactive");
@@ -363,6 +392,14 @@ impl MsgBarComponent {
             self.proactive_toggle
                 .set_tooltip_text(Some("Lazy Diagnosis Mode"));
             self.proactive_toggle.remove_css_class("accent");
+        }
+
+        if pinned {
+            self.pin_toggle.add_css_class("accent");
+            self.pin_toggle.set_tooltip_text(Some("Unpin this session"));
+        } else {
+            self.pin_toggle.remove_css_class("accent");
+            self.pin_toggle.set_tooltip_text(Some("Pin this session"));
         }
     }
 

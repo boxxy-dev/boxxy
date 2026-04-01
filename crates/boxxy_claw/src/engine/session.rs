@@ -1,7 +1,7 @@
 use crate::engine::{
-    ClawEngineEvent, ClawMessage, TaskStatus, TaskType, context::load_session_context,
-    context::retrieve_memories, context::summarize_and_store,
-    dispatcher::extract_command_and_clean,
+    ClawEngineEvent, ClawMessage, PersistentClawRow, TaskStatus, TaskType,
+    context::load_session_context, context::retrieve_memories, context::summarize_and_store,
+    dispatcher::extract_command_and_clean, persist_visual_event,
 };
 use boxxy_agent::ipc::AgentClawProxy;
 use boxxy_db::Db;
@@ -14,6 +14,8 @@ pub struct SessionState {
     pub session_id: String,
     pub pane_id: String,
     pub agent_name: String,
+    pub pinned: bool,
+    pub total_tokens: u64,
     pub pending_terminal_reply: Option<tokio::sync::oneshot::Sender<Result<String, String>>>,
     pub pending_file_reply: Option<tokio::sync::oneshot::Sender<bool>>,
     pub pending_file_delete_reply: Option<tokio::sync::oneshot::Sender<bool>>,
@@ -31,6 +33,8 @@ pub struct ClawSession {
     pub pane_id: String,
     pub session_id: String,
     pub name: String,
+    pub pinned: bool,
+    pub total_tokens: u64,
     pub rx: async_channel::Receiver<ClawMessage>,
     pub tx_self: async_channel::Sender<ClawMessage>,
     pub tx_ui: async_channel::Sender<ClawEngineEvent>,
@@ -62,6 +66,8 @@ impl ClawSession {
             pane_id: pane_id.clone(),
             session_id: session_id.clone(),
             name: name.clone(),
+            pinned: false,
+            total_tokens: 0,
             rx,
             tx_self: tx.clone(),
             tx_ui,
@@ -71,6 +77,8 @@ impl ClawSession {
                 session_id,
                 pane_id: pane_id.clone(),
                 agent_name: name,
+                pinned: false,
+                total_tokens: 0,
                 pending_terminal_reply: None,
                 pending_file_reply: None,
                 pending_file_delete_reply: None,
@@ -93,6 +101,16 @@ impl ClawSession {
         tokio::spawn(async move {
             self.run(claw_proxy).await;
         });
+    }
+
+    async fn send_ui(&self, event: ClawEngineEvent) {
+        persist_visual_event(
+            self.db.clone(),
+            self.session_id.clone(),
+            self.pane_id.clone(),
+            &event,
+        );
+        let _ = self.tx_ui.send(event).await;
     }
 
     async fn run(mut self, claw_proxy: AgentClawProxy<'static>) {
@@ -155,6 +173,8 @@ impl ClawSession {
                                 .tx_ui
                                 .send(ClawEngineEvent::Identity {
                                     agent_name: self.name.clone(),
+                                    pinned: self.pinned,
+                                    total_tokens: self.total_tokens,
                                 })
                                 .await;
                         }
@@ -240,12 +260,17 @@ impl ClawSession {
                             workspace.evict_session(&session_id).await;
 
                             // 2. Load session from DB
-                            let mut db_guard = self.db.lock().await;
-                            if db_guard.is_none()
-                                && let Ok(db) = Db::new().await {
-                                    *db_guard = Some(db);
+                            {
+                                let db_guard = self.db.lock().await;
+                                if db_guard.is_none() {
+                                    if let Ok(db) = Db::new().await {
+                                        drop(db_guard);
+                                        *self.db.lock().await = Some(db);
+                                    }
                                 }
+                            }
 
+                            let db_guard = self.db.lock().await;
                             if let Some(db) = &*db_guard {
                                 let store = boxxy_db::store::Store::new(db.pool());
                                 match store.get_session(&session_id).await {
@@ -255,10 +280,14 @@ impl ClawSession {
                                         if let Some(agent_name) = session.agent_name {
                                             self.name = agent_name.clone();
                                         }
+                                        self.pinned = session.pinned;
+                                        self.total_tokens = session.total_tokens as u64;
 
                                         let mut state_lock = self.state.lock().await;
                                         state_lock.session_id = session_id.clone();
                                         state_lock.agent_name = self.name.clone();
+                                        state_lock.pinned = self.pinned;
+                                        state_lock.total_tokens = self.total_tokens;
 
                                         if let Some(history_json) = session.history_json
                                             && let Ok(history) =
@@ -280,7 +309,18 @@ impl ClawSession {
                                         let tasks_clone = state_lock.pending_tasks.clone();
                                         drop(state_lock);
 
-                                        // 4. Update Workspace Radar
+                                        // 4. Load visual history from DB
+                                        if let Ok(event_jsons) = store.get_claw_events(&session_id).await {
+                                            let rows: Vec<PersistentClawRow> = event_jsons
+                                                .into_iter()
+                                                .filter_map(|json| serde_json::from_str(&json).ok())
+                                                .collect();
+                                            if !rows.is_empty() {
+                                                let _ = self.tx_ui.send(ClawEngineEvent::RestoreHistory(rows)).await;
+                                            }
+                                        }
+
+                                        // 5. Update Workspace Radar
                                         workspace
                                             .update_pane_state(
                                                 self.pane_id.clone(),
@@ -292,11 +332,13 @@ impl ClawSession {
                                             )
                                             .await;
 
-                                        // 5. Announce Identity to UI
+                                        // 6. Announce Identity to UI
                                         let _ = self
                                             .tx_ui
                                             .send(ClawEngineEvent::Identity {
                                                 agent_name: self.name.clone(),
+                                                pinned: self.pinned,
+                                                total_tokens: self.total_tokens,
                                             })
                                             .await;
 
@@ -307,9 +349,7 @@ impl ClawSession {
 
                                         workspace.update_pane_tasks(self.pane_id.clone(), tasks_clone).await;
 
-                                        let _ = self
-                                            .tx_ui
-                                            .send(ClawEngineEvent::SystemMessage {
+                                        self.send_ui(ClawEngineEvent::SystemMessage {
                                                 text: "Session resumed.".to_string(),
                                             })
                                             .await;
@@ -347,7 +387,7 @@ impl ClawSession {
                             // We use swap(false) to ensure only the first agent to initialize shows the notification
                             if boxxy_db::DATABASE_WAS_RESET.swap(false, std::sync::atomic::Ordering::SeqCst)
                             {
-                                let _ = self.tx_ui.send(ClawEngineEvent::SystemMessage {
+                                self.send_ui(ClawEngineEvent::SystemMessage {
                                     text: "⚠️ Database reset for update. This only happens during the Preview.".to_string()
                                 }).await;
                             }
@@ -358,6 +398,23 @@ impl ClawSession {
                             state_lock.history.clear();
                             state_lock.pending_tasks.clear();
                             drop(state_lock);
+
+                            // Clear visual history in DB
+                            let db_guard = self.db.lock().await;
+                            if db_guard.is_none()
+                                && let Ok(db) = Db::new().await {
+                                    drop(db_guard);
+                                    *self.db.lock().await = Some(db);
+                                } else {
+                                    drop(db_guard);
+                                }
+
+                            let db_guard = self.db.lock().await;
+                            if let Some(db) = &*db_guard {
+                                let store = boxxy_db::store::Store::new(db.pool());
+                                let _ = store.clear_claw_events(&self.session_id).await;
+                            }
+                            drop(db_guard);
 
                             // 3. Update Workspace Radar
                             workspace
@@ -374,7 +431,11 @@ impl ClawSession {
                             // 4. Announce Identity to UI
                             let _ = self
                                 .tx_ui
-                                .send(ClawEngineEvent::Identity { agent_name: name })
+                                .send(ClawEngineEvent::Identity {
+                                    agent_name: name,
+                                    pinned: false,
+                                    total_tokens: 0,
+                                })
                                 .await;
                         }
                         ClawMessage::Reload => {
@@ -384,6 +445,49 @@ impl ClawSession {
                             if let Ok(db) = Db::new().await {
                                 *self.db.lock().await = Some(db);
                             }
+                        }
+                        ClawMessage::TogglePin(pinned) => {
+                            self.pinned = pinned;
+                            let mut state_lock = self.state.lock().await;
+                            state_lock.pinned = pinned;
+
+                            let history_json = serde_json::to_string(&state_lock.history).unwrap_or_default();
+                            let pending_tasks_json =
+                                serde_json::to_string(&state_lock.pending_tasks).unwrap_or_default();
+                            let agent_name_for_db = state_lock.agent_name.clone();
+                            let session_id_for_db = self.session_id.clone();
+                            let cwd_for_db = current_dir.clone();
+                            let total_tokens_for_db = state_lock.total_tokens as i64;
+                            let settings = boxxy_preferences::Settings::load();
+                            let model_id = settings
+                                .claw_model
+                                .as_ref()
+                                .map(|m| format!("{:?}", m))
+                                .unwrap_or_default();
+
+                            let db_for_persistence = self.db.clone();
+                            tokio::spawn(async move {
+                                let db_guard = db_for_persistence.lock().await;
+                                if let Some(db) = &*db_guard {
+                                    let store = boxxy_db::store::Store::new(db.pool());
+                                    let _ = store
+                                        .upsert_session_state(
+                                            &session_id_for_db,
+                                            &agent_name_for_db,
+                                            "", // title not updated here
+                                            &history_json,
+                                            &pending_tasks_json,
+                                            &agent_name_for_db,
+                                            &cwd_for_db,
+                                            &model_id,
+                                            pinned,
+                                            total_tokens_for_db,
+                                        )
+                                        .await;
+                                }
+                            });
+                            drop(state_lock);
+                            let _ = self.tx_ui.send(ClawEngineEvent::PinStatusChanged(pinned)).await;
                         }
                         ClawMessage::ForegroundProcessChanged { process_name } => {
                             let status = if process_name.is_empty() {
@@ -691,6 +795,14 @@ impl ClawSession {
                                 })
                                 .await;
                         }
+                        ClawMessage::SoftClearHistory => {
+                            info!("Soft-clearing Claw Session visual history for pane {}...", self.pane_id);
+                            let db_guard = self.db.lock().await;
+                            if let Some(db) = &*db_guard {
+                                let store = boxxy_db::store::Store::new(db.pool());
+                                let _ = store.mark_session_cleared(&self.session_id).await;
+                            }
+                        }
                         ClawMessage::CancelTask { task_id } => {
                             let mut state_lock = self.state.lock().await;
                             state_lock.pending_tasks.retain(|t| t.id != task_id);
@@ -723,8 +835,13 @@ impl ClawSession {
                                 TaskType::Notification => {
                                     let text = task.payload.clone();
                                     let tx_ui = self.tx_ui.clone();
+                                    let db = self.db.clone();
+                                    let session_id = self.session_id.clone();
+                                    let pane_id = self.pane_id.clone();
                                     tokio::spawn(async move {
-                                        let _ = tx_ui.send(ClawEngineEvent::SystemMessage { text }).await;
+                                        let event = ClawEngineEvent::SystemMessage { text };
+                                        persist_visual_event(db, session_id, pane_id, &event);
+                                        let _ = tx_ui.send(event).await;
                                     });
                                 }
                                 TaskType::Command | TaskType::Query => {
@@ -953,6 +1070,8 @@ fn spawn_turn(
                 state.clone(),
                 db.clone(),
                 &settings,
+                session_id_clone.clone(),
+                pane_id.clone(),
             ));
         }
 
@@ -1093,6 +1212,10 @@ fn spawn_turn(
                     .history
                     .push(rig::message::Message::assistant(response.clone()));
 
+                if let Some(usage) = usage {
+                    state_lock.total_tokens += usage.total_tokens as u64;
+                }
+
                 // --- ATOMIC PERSISTENCE ---
                 let history_json = serde_json::to_string(&state_lock.history).unwrap_or_default();
                 let pending_tasks_json =
@@ -1100,6 +1223,8 @@ fn spawn_turn(
                 let agent_name_for_db = agent_name.clone();
                 let session_id_for_db = session_id_clone.clone();
                 let cwd_for_db = cwd_clone.clone();
+                let pinned_for_db = state_lock.pinned;
+                let total_tokens_for_db = state_lock.total_tokens as i64;
                 let model_id = settings
                     .claw_model
                     .as_ref()
@@ -1127,6 +1252,8 @@ fn spawn_turn(
                                 &agent_name_for_db,
                                 &cwd_for_db,
                                 &model_id,
+                                pinned_for_db,
+                                total_tokens_for_db,
                             )
                             .await;
                     }
@@ -1207,22 +1334,32 @@ fn spawn_turn(
                         pane_id, agent_name
                     );
                 } else if let Some(command) = command_opt {
-                    let _ = tx_ui
-                        .send(ClawEngineEvent::InjectCommand {
-                            agent_name,
-                            command,
-                            diagnosis: clean_diagnosis,
-                            usage: usage,
-                        })
-                        .await;
+                    let event = ClawEngineEvent::InjectCommand {
+                        agent_name: agent_name.clone(),
+                        command,
+                        diagnosis: clean_diagnosis,
+                        usage: usage,
+                    };
+                    persist_visual_event(
+                        db.clone(),
+                        session_id_clone.clone(),
+                        pane_id.clone(),
+                        &event,
+                    );
+                    let _ = tx_ui.send(event).await;
                 } else {
-                    let _ = tx_ui
-                        .send(ClawEngineEvent::DiagnosisComplete {
-                            agent_name,
-                            diagnosis: clean_diagnosis,
-                            usage: usage,
-                        })
-                        .await;
+                    let event = ClawEngineEvent::DiagnosisComplete {
+                        agent_name: agent_name.clone(),
+                        diagnosis: clean_diagnosis,
+                        usage: usage,
+                    };
+                    persist_visual_event(
+                        db.clone(),
+                        session_id_clone.clone(),
+                        pane_id.clone(),
+                        &event,
+                    );
+                    let _ = tx_ui.send(event).await;
                 }
                 if let Some(tx) = delegate_reply_tx {
                     let _ = tx.send(response.clone());
@@ -1248,13 +1385,18 @@ fn spawn_turn(
                     format!("**Boxxy-Claw encountered an error:**\n```\n{}\n```", e)
                 };
 
-                let _ = tx_ui
-                    .send(ClawEngineEvent::DiagnosisComplete {
-                        agent_name: agent_name.clone(),
-                        diagnosis: friendly_msg,
-                        usage: None,
-                    })
-                    .await;
+                let event = ClawEngineEvent::DiagnosisComplete {
+                    agent_name: agent_name.clone(),
+                    diagnosis: friendly_msg,
+                    usage: None,
+                };
+                persist_visual_event(
+                    db.clone(),
+                    session_id_clone.clone(),
+                    pane_id.clone(),
+                    &event,
+                );
+                let _ = tx_ui.send(event).await;
 
                 if let Some(tx) = delegate_reply_tx {
                     let _ = tx.send(format!("Error: {}", e));

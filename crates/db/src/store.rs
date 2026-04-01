@@ -91,11 +91,13 @@ impl<'a> Store<'a> {
         agent_name: &str,
         last_cwd: &str,
         model_id: &str,
+        pinned: bool,
+        total_tokens: i64,
     ) -> Result<()> {
         sqlx::query(
             r"
-            INSERT INTO sessions (id, name, title, history_json, pending_tasks_json, agent_name, last_cwd, model_id, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            INSERT INTO sessions (id, name, title, history_json, pending_tasks_json, agent_name, last_cwd, model_id, pinned, total_tokens, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             ON CONFLICT(id) DO UPDATE SET
                 name = excluded.name,
                 title = CASE WHEN excluded.title != '' THEN excluded.title ELSE sessions.title END,
@@ -104,6 +106,8 @@ impl<'a> Store<'a> {
                 agent_name = excluded.agent_name,
                 last_cwd = excluded.last_cwd,
                 model_id = excluded.model_id,
+                pinned = excluded.pinned,
+                total_tokens = excluded.total_tokens,
                 updated_at = CURRENT_TIMESTAMP
             ",
         )
@@ -115,6 +119,8 @@ impl<'a> Store<'a> {
         .bind(agent_name)
         .bind(last_cwd)
         .bind(model_id)
+        .bind(pinned)
+        .bind(total_tokens)
         .execute(self.pool)
         .await?;
         Ok(())
@@ -131,18 +137,75 @@ impl<'a> Store<'a> {
     pub async fn get_recent_active_sessions(&self, limit: i64) -> Result<Vec<Session>> {
         let records = sqlx::query_as::<_, Session>(
             r"
-            SELECT s.*, COUNT(i.id) as message_count 
-            FROM sessions s
-            JOIN interactions i ON s.id = i.session_id
-            GROUP BY s.id
-            ORDER BY s.updated_at DESC
-            LIMIT ?
+            SELECT * FROM (
+                SELECT s.*, COUNT(i.id) as message_count 
+                FROM sessions s
+                JOIN interactions i ON s.id = i.session_id
+                WHERE s.pinned = true
+                GROUP BY s.id
+                ORDER BY s.updated_at DESC
+            )
+            UNION ALL
+            SELECT * FROM (
+                SELECT s.*, COUNT(i.id) as message_count 
+                FROM sessions s
+                JOIN interactions i ON s.id = i.session_id
+                WHERE s.pinned = false
+                GROUP BY s.id
+                ORDER BY s.updated_at DESC
+                LIMIT ?
+            )
+            ORDER BY pinned DESC, updated_at DESC
             ",
         )
         .bind(limit)
         .fetch_all(self.pool)
         .await?;
         Ok(records)
+    }
+
+    // --- Claw Events (UI History) ---
+    pub async fn add_claw_event(&self, session_id: &str, event_json: &str) -> Result<()> {
+        sqlx::query("INSERT INTO claw_events (session_id, event_json) VALUES (?, ?)")
+            .bind(session_id)
+            .bind(event_json)
+            .execute(self.pool)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn get_claw_events(&self, session_id: &str) -> Result<Vec<String>> {
+        let records: Vec<(String,)> = sqlx::query_as(
+            r"
+            SELECT e.event_json 
+            FROM claw_events e
+            JOIN sessions s ON e.session_id = s.id
+            WHERE e.session_id = ? 
+              AND (s.cleared_at IS NULL OR e.created_at > s.cleared_at)
+            ORDER BY e.id ASC
+            ",
+        )
+        .bind(session_id)
+        .fetch_all(self.pool)
+        .await?;
+
+        Ok(records.into_iter().map(|(json,)| json).collect())
+    }
+
+    pub async fn mark_session_cleared(&self, session_id: &str) -> Result<()> {
+        sqlx::query("UPDATE sessions SET cleared_at = CURRENT_TIMESTAMP WHERE id = ?")
+            .bind(session_id)
+            .execute(self.pool)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn clear_claw_events(&self, session_id: &str) -> Result<()> {
+        sqlx::query("DELETE FROM claw_events WHERE session_id = ?")
+            .bind(session_id)
+            .execute(self.pool)
+            .await?;
+        Ok(())
     }
 
     // --- Interactions (Episodic Memory) ---

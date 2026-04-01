@@ -3,7 +3,6 @@ use boxxy_viewer::{BlockRenderer, ContentBlock, StructuredViewer, ViewerRegistry
 use gtk::prelude::*;
 use gtk4 as gtk;
 use libadwaita as adw;
-use std::cell::Cell;
 use std::rc::Rc;
 
 pub struct ProcessListRenderer;
@@ -87,11 +86,8 @@ pub struct ClawSidebarComponent {
     widget: gtk::Box,
     status_page: adw::StatusPage,
     scroll: gtk::ScrolledWindow,
-    is_active: Rc<Cell<bool>>,
-    is_proactive: Rc<Cell<bool>>,
-    mode_toggle_btn: gtk::Button,
-    toggle_btn: gtk::Button,
     usage_lbl: gtk::Label,
+    command_panel: gtk::Box,
     current_list: Rc<std::cell::RefCell<Option<gtk::ListBox>>>,
     tasks_expander: gtk::Expander,
     tasks_list: gtk::ListBox,
@@ -100,10 +96,9 @@ pub struct ClawSidebarComponent {
 
 impl ClawSidebarComponent {
     #[must_use]
-    pub fn new<F1: Fn(bool) + 'static, F2: Fn(bool) + 'static, F3: Fn(uuid::Uuid) + 'static>(
-        on_active_toggled: F1,
-        on_proactive_toggled: F2,
+    pub fn new<F3: Fn(uuid::Uuid) + 'static, F4: Fn() + 'static>(
         on_cancel_task: F3,
+        on_soft_clear: F4,
     ) -> Self {
         let widget = gtk::Box::new(gtk::Orientation::Vertical, 6);
         widget.set_margin_top(6);
@@ -128,29 +123,28 @@ impl ClawSidebarComponent {
 
         widget.append(&scroll);
 
-        let usage_lbl = gtk::Label::builder()
-            .label("Context: 0 tokens")
-            .css_classes(["caption", "dim-label"])
-            .margin_bottom(4)
-            .visible(false)
-            .build();
-        widget.append(&usage_lbl);
-
-        let is_active = Rc::new(Cell::new(false));
-        let is_proactive = Rc::new(Cell::new(false));
-
         let current_list: Rc<std::cell::RefCell<Option<gtk::ListBox>>> =
             Rc::new(std::cell::RefCell::new(None));
 
-        // Command panel
+        // Command panel (Usage + Clear Button)
         let command_panel = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-        command_panel.set_halign(gtk::Align::Center);
+        command_panel.set_valign(gtk::Align::End);
+        command_panel.set_margin_top(4);
 
-        // 1. Clear Button
+        let usage_lbl = gtk::Label::builder()
+            .label("Context: 0 tokens")
+            .css_classes(["caption", "dim-label"])
+            .hexpand(true)
+            .halign(gtk::Align::Center)
+            .visible(false)
+            .build();
+        command_panel.append(&usage_lbl);
+
         let clear_btn = gtk::Button::builder()
-            .icon_name("boxxy-edit-clear-all-symbolic")
+            .icon_name("boxxy-edit-clear-symbolic")
             .css_classes(["flat", "image-button"])
-            .tooltip_text("Clear History")
+            .tooltip_text("Clear Screen")
+            .halign(gtk::Align::End)
             .build();
 
         let current_list_clear = current_list.clone();
@@ -164,42 +158,10 @@ impl ClawSidebarComponent {
             }
             status_page_clone.set_visible(true);
             scroll_clone.set_visible(false);
-        });
-
-        // 2. Claw Toggle Button
-        let claw_icon = gtk::Image::from_icon_name("boxxyclaw");
-        claw_icon.add_css_class("accent");
-
-        let toggle_btn = gtk::Button::builder()
-            .child(&claw_icon)
-            .css_classes(["flat", "image-button"])
-            .tooltip_text("Activate Claw")
-            .build();
-
-        let is_active_clone = is_active.clone();
-        let on_toggled_rc = std::rc::Rc::new(on_active_toggled);
-        toggle_btn.connect_clicked(move |_| {
-            let next_state = !is_active_clone.get();
-            on_toggled_rc(next_state);
-        });
-
-        // 3. Proactive Mode Button
-        let mode_toggle_btn = gtk::Button::builder()
-            .icon_name("boxxy-walking2-symbolic")
-            .css_classes(["flat", "image-button"])
-            .tooltip_text("Lazy Diagnosis Mode")
-            .build();
-
-        let is_proactive_clone = is_proactive.clone();
-        let on_proactive_rc = std::rc::Rc::new(on_proactive_toggled);
-        mode_toggle_btn.connect_clicked(move |_| {
-            let next_state = !is_proactive_clone.get();
-            on_proactive_rc(next_state);
+            on_soft_clear();
         });
 
         command_panel.append(&clear_btn);
-        command_panel.append(&mode_toggle_btn);
-        command_panel.append(&toggle_btn);
         widget.append(&command_panel);
 
         let tasks_list = gtk::ListBox::builder()
@@ -219,11 +181,8 @@ impl ClawSidebarComponent {
             widget,
             status_page,
             scroll,
-            is_active,
-            is_proactive,
-            mode_toggle_btn,
-            toggle_btn,
             usage_lbl,
+            command_panel,
             current_list,
             tasks_expander,
             tasks_list,
@@ -233,7 +192,8 @@ impl ClawSidebarComponent {
 
     #[must_use]
     pub fn is_active(&self) -> bool {
-        self.is_active.get()
+        // This is now purely tracked in the window state/msgbar
+        false
     }
 
     pub fn set_history_widget(&self, list: &gtk::ListBox) {
@@ -258,6 +218,7 @@ impl ClawSidebarComponent {
             let has_items = list.row_at_index(0).is_some();
             self.status_page.set_visible(!has_items);
             self.scroll.set_visible(has_items);
+            self.command_panel.set_visible(has_items);
         }
     }
 
@@ -275,45 +236,16 @@ impl ClawSidebarComponent {
         });
     }
 
-    pub fn update_diagnosis_mode(&self, mode: &boxxy_preferences::config::ClawAutoDiagnosisMode) {
-        match mode {
-            boxxy_preferences::config::ClawAutoDiagnosisMode::Proactive => {
-                self.mode_toggle_btn.set_icon_name("boxxy-running-symbolic");
-                self.mode_toggle_btn
-                    .set_tooltip_text(Some("Proactive Diagnosis Mode"));
-                self.mode_toggle_btn.add_css_class("accent");
-            }
-            boxxy_preferences::config::ClawAutoDiagnosisMode::Lazy => {
-                self.mode_toggle_btn
-                    .set_icon_name("boxxy-walking2-symbolic");
-                self.mode_toggle_btn
-                    .set_tooltip_text(Some("Lazy Diagnosis Mode"));
-                self.mode_toggle_btn.remove_css_class("accent");
-            }
-        }
+    pub fn update_diagnosis_mode(&self, _mode: &boxxy_preferences::config::ClawAutoDiagnosisMode) {
+        // No longer managed in sidebar UI
     }
 
-    pub fn update_active(&self, active: bool) {
-        self.is_active.set(active);
-        if active {
-            self.toggle_btn.remove_css_class("claw-indicator-inactive");
-            self.toggle_btn.set_tooltip_text(Some("Deactivate Claw"));
-        } else {
-            self.toggle_btn.add_css_class("claw-indicator-inactive");
-            self.toggle_btn.set_tooltip_text(Some("Activate Claw"));
-        }
+    pub fn update_active(&self, _active: bool) {
+        // No longer managed in sidebar UI
     }
 
-    pub fn update_ui(&self, active: bool, proactive: bool) {
-        self.is_active.set(active);
-        self.is_proactive.set(proactive);
-        self.update_active(active);
-        let mode = if proactive {
-            boxxy_preferences::config::ClawAutoDiagnosisMode::Proactive
-        } else {
-            boxxy_preferences::config::ClawAutoDiagnosisMode::Lazy
-        };
-        self.update_diagnosis_mode(&mode);
+    pub fn update_ui(&self, _active: bool, _proactive: bool) {
+        // No longer managed in sidebar UI
     }
 
     pub fn set_token_usage(&self, tokens: u64) {
@@ -431,7 +363,7 @@ pub fn add_task_row<F: Fn(uuid::Uuid) + 'static>(
 
 impl Default for ClawSidebarComponent {
     fn default() -> Self {
-        Self::new(|_| {}, |_| {}, |_| {})
+        Self::new(|_| {}, || {})
     }
 }
 

@@ -15,9 +15,14 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
+use boxxy_db::Db;
+
 pub struct ClawApprovalHandler {
     pub tx_ui: async_channel::Sender<ClawEngineEvent>,
     pub state: Arc<Mutex<SessionState>>,
+    pub db: Arc<Mutex<Option<Db>>>,
+    pub session_id: String,
+    pub pane_id: String,
 }
 
 #[async_trait::async_trait]
@@ -34,17 +39,21 @@ impl ApprovalHandler for ClawApprovalHandler {
             state.pending_file_reply = Some(tx);
         }
 
-        if self
-            .tx_ui
-            .send(ClawEngineEvent::ProposeFileWrite {
-                agent_name,
-                path,
-                content,
-                usage: None,
-            })
-            .await
-            .is_err()
-        {
+        let event = ClawEngineEvent::ProposeFileWrite {
+            agent_name,
+            path,
+            content,
+            usage: None,
+        };
+
+        crate::engine::persist_visual_event(
+            self.db.clone(),
+            self.session_id.clone(),
+            self.pane_id.clone(),
+            &event,
+        );
+
+        if self.tx_ui.send(event).await.is_err() {
             return false;
         }
 
@@ -63,16 +72,20 @@ impl ApprovalHandler for ClawApprovalHandler {
             state.pending_file_delete_reply = Some(tx);
         }
 
-        if self
-            .tx_ui
-            .send(ClawEngineEvent::ProposeFileDelete {
-                agent_name,
-                path,
-                usage: None,
-            })
-            .await
-            .is_err()
-        {
+        let event = ClawEngineEvent::ProposeFileDelete {
+            agent_name,
+            path,
+            usage: None,
+        };
+
+        crate::engine::persist_visual_event(
+            self.db.clone(),
+            self.session_id.clone(),
+            self.pane_id.clone(),
+            &event,
+        );
+
+        if self.tx_ui.send(event).await.is_err() {
             return false;
         }
 
@@ -91,17 +104,21 @@ impl ApprovalHandler for ClawApprovalHandler {
             state.pending_kill_process_reply = Some(tx);
         }
 
-        if self
-            .tx_ui
-            .send(ClawEngineEvent::ProposeKillProcess {
-                agent_name,
-                pid,
-                process_name,
-                usage: None,
-            })
-            .await
-            .is_err()
-        {
+        let event = ClawEngineEvent::ProposeKillProcess {
+            agent_name,
+            pid,
+            process_name,
+            usage: None,
+        };
+
+        crate::engine::persist_visual_event(
+            self.db.clone(),
+            self.session_id.clone(),
+            self.pane_id.clone(),
+            &event,
+        );
+
+        if self.tx_ui.send(event).await.is_err() {
             return false;
         }
 
@@ -120,15 +137,19 @@ impl ApprovalHandler for ClawApprovalHandler {
             state.pending_get_clipboard_reply = Some(tx);
         }
 
-        if self
-            .tx_ui
-            .send(ClawEngineEvent::ProposeGetClipboard {
-                agent_name,
-                usage: None,
-            })
-            .await
-            .is_err()
-        {
+        let event = ClawEngineEvent::ProposeGetClipboard {
+            agent_name,
+            usage: None,
+        };
+
+        crate::engine::persist_visual_event(
+            self.db.clone(),
+            self.session_id.clone(),
+            self.pane_id.clone(),
+            &event,
+        );
+
+        if self.tx_ui.send(event).await.is_err() {
             return false;
         }
 
@@ -147,16 +168,20 @@ impl ApprovalHandler for ClawApprovalHandler {
             state.pending_set_clipboard_reply = Some(tx);
         }
 
-        if self
-            .tx_ui
-            .send(ClawEngineEvent::ProposeSetClipboard {
-                agent_name,
-                text,
-                usage: None,
-            })
-            .await
-            .is_err()
-        {
+        let event = ClawEngineEvent::ProposeSetClipboard {
+            agent_name,
+            text,
+            usage: None,
+        };
+
+        crate::engine::persist_visual_event(
+            self.db.clone(),
+            self.session_id.clone(),
+            self.pane_id.clone(),
+            &event,
+        );
+
+        if self.tx_ui.send(event).await.is_err() {
             return false;
         }
 
@@ -168,15 +193,22 @@ impl ApprovalHandler for ClawApprovalHandler {
             let state = self.state.lock().await;
             state.agent_name.clone()
         };
-        let _ = self
-            .tx_ui
-            .send(ClawEngineEvent::ToolResult {
-                agent_name,
-                tool_name,
-                result,
-                usage: None,
-            })
-            .await;
+
+        let event = ClawEngineEvent::ToolResult {
+            agent_name,
+            tool_name,
+            result,
+            usage: None,
+        };
+
+        crate::engine::persist_visual_event(
+            self.db.clone(),
+            self.session_id.clone(),
+            self.pane_id.clone(),
+            &event,
+        );
+
+        let _ = self.tx_ui.send(event).await;
     }
 
     async fn set_thinking(&self, thinking: bool) {

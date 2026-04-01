@@ -565,6 +565,26 @@ impl TerminalComponent {
         }
     }
 
+    pub fn soft_clear_claw_history(&self, pane_id: &str) -> bool {
+        let inner = self.inner.borrow();
+        if let Some(pane_data) = inner.panes.get(pane_id) {
+            pane_data.controller.soft_clear_claw_history();
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn clear_claw_history(&self, pane_id: &str) -> bool {
+        let inner = self.inner.borrow();
+        if let Some(pane_data) = inner.panes.get(pane_id) {
+            pane_data.controller.clear_claw_history();
+            true
+        } else {
+            false
+        }
+    }
+
     pub fn cancel_task_by_id(&self, pane_id: &str, task_id: uuid::Uuid) -> bool {
         let inner = self.inner.borrow();
         if let Some(pane_data) = inner.panes.get(pane_id) {

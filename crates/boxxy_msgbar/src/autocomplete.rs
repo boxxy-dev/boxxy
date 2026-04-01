@@ -107,10 +107,16 @@ impl CompletionProvider for ResumeCompletionProvider {
                 || title.to_lowercase().contains(&query_lower)
                 || agent_name.to_lowercase().contains(&query_lower)
             {
+                let icon_name = if session.pinned {
+                    "boxxy-view-pin-symbolic".to_string()
+                } else {
+                    "boxxy-chat-symbolic".to_string()
+                };
+
                 items.push(CompletionItem {
                     display_name: format!("{title} [{msg_count} msgs]"),
                     replacement_text: format!("/resume {}", session.id),
-                    icon_name: Some("boxxy-chat-symbolic".to_string()),
+                    icon_name: Some(icon_name),
                     secondary_text: Some(format!("{agent_name} • {age} • {cwd}")),
                 });
             }

@@ -10,7 +10,8 @@ To prevent UI starvation and zombie processes, the application utilizes a **sing
 The system provides real-time visibility into LLM token usage across all providers. It implements an advanced **Next-Gen Context Hygiene** strategy to maximize efficiency for 2026 flagship models (Gemini 3.1, Claude 4.6, GPT-5.4):
 - **Cache-Aligned Restructuring**: The system preamble (Character + Toolbox) is kept 100% static at the start of every request, while volatile data (Terminal snapshots, CWD, Active skills) is moved to the end of the user message. This triggers a 90% discount via automatic Context Caching.
 - **In-Memory Persistence**: AI agent objects are kept alive per terminal pane, maintaining internal session state and enabling incremental context updates.
-- **Persistent Resumption**: Supports Pick-up-where-you-left-off capabilities via `boxxy-db`. Users can resume any of the last 10 active sessions in any terminal pane, restoring history, agent identity, and working directory.
+- **Persistent Resumption**: Supports Pick-up-where-you-left-off capabilities via `boxxy-db`. Users can resume any of the last 10 active sessions in any terminal pane, restoring history, agent identity, working directory, **cumulative token analytics**, and **persistent visual logs** in the sidebar.
+- **Pinned Sessions**: Users can "Pin" specific sessions to keep them permanently at the top of the `/resume` list. Pinned sessions do not count toward the "last 10" history limit.
 - **Aggressive History Stripping**: Past turn context (Skills, Radar, Memories) is aggressively pruned from history, leaving only the core intent to prevent linear context growth.
 
 ## Technology Stack
@@ -57,6 +58,9 @@ Host Privileged Agent. Bypasses Flatpak sandboxing to handle PTY management and 
 Agentic Reasoning Engine using an **Actor Model**. Spawns isolated `ClawSession` actors per terminal pane. Features the **"Red Pony Protocol"**: each pane is assigned a unique mnemonic name (e.g., "Red Pony") mapped to its UUID.
 
 Agents possess full **System & Environment Authority**:
+- **Persistent Interaction History**: Automatically saves visual events (diagnoses, suggestions, tool results) and **turn-based token usage** to the database. These are re-rendered instantly upon session restoration, ensuring zero context loss even for sidebar logs.
+- **Cross-Model Continuity**: Cumulative session analytics (Total Tokens) are persisted in the database, allowing users to switch LLM providers (e.g., Gemini to Claude) while maintaining a continuous record of the session's overall cost and context depth.
+- **Soft Clear Pattern**: Clicking "Clear Screen" in the sidebar marks a session-specific timestamp. Subsequent restorations only show history generated after that point, providing a clean visual state while keeping the underlying data safe.
 - **Clipboard Management**: Securely read and write to the system clipboard with user approval.
 - **Process Inspection & Control**: View real-time process lists and terminate misbehaving tasks via in-terminal agent popovers and read-only sidebar tables.
 - **Pane Lifecycle Management**: Spawn new sibling panes/tabs, inject raw keystrokes (Esc, Ctrl+C), and close active panes dynamically.
@@ -78,7 +82,7 @@ Provides a structured library of high-level tools for Boxxy agents, completely d
 Settings management using an `AdwNavigationSplitView` architecture. UI is defined in `resources/ui/preferences.ui` and supports real-time search filtering.
 
 ### 10. `boxxy-msgbar` (Library Crate)
-Provides the `MsgBarComponent`, an inline GTK input overlay for interacting with Boxxy-Claw. Triggered globally via `Ctrl+/`, it anchors a native text entry precisely over the active terminal cursor. It features a robust GTK-based autocompletion system (`AutocompleteController`) for `@agent` names and seamlessly inherits the active terminal theme's background and foreground colors. It also includes a fully persistent, lazy-loaded history system (`MsgHistory`) that preserves text and rich multimedia attachments across sessions using `boxxy-db`, featuring automatic RAM pruning for large payloads.
+Provides the `MsgBarComponent`, an inline GTK input overlay for interacting with Boxxy-Claw. Triggered globally via `Ctrl+/`, it anchors a native text entry precisely over the active terminal cursor. It features a robust GTK-based autocompletion system (`AutocompleteController`) for `@agent` names and seamlessly inherits the active terminal theme's background and foreground colors. It includes native toggle buttons for **Claw Mode**, **Proactive Diagnosis**, and **Session Pinning** (moved from the sidebar for a focused log-viewing experience). It also includes a fully persistent, lazy-loaded history system (`MsgHistory`) that preserves text and rich multimedia attachments across sessions using `boxxy-db`, featuring automatic RAM pruning for large payloads.
 
 ### 11. `boxxy-model-selection` (Library Crate)
 Data-driven model configuration UI. Uses a registry pattern to dynamically build selection dialogs and dropdowns based on registered `AiProvider` traits. Decouples AI capability discovery from the main application window.

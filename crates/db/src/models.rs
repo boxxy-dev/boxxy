@@ -14,6 +14,8 @@ pub struct Session {
     pub last_cwd: Option<String>,
     pub title: Option<String>,
     pub model_id: Option<String>,
+    pub pinned: bool,
+    pub total_tokens: i64,
     pub created_at: Option<String>,
     pub updated_at: Option<String>,
     #[sqlx(default)]

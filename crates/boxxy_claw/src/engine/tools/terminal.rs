@@ -16,9 +16,14 @@ pub struct TerminalCommandOutput {
     pub output: String,
 }
 
+use boxxy_db::Db;
+
 pub struct TerminalCommandTool {
     pub tx_ui: async_channel::Sender<ClawEngineEvent>,
     pub state: std::sync::Arc<tokio::sync::Mutex<SessionState>>,
+    pub db: std::sync::Arc<tokio::sync::Mutex<Option<Db>>>,
+    pub session_id: String,
+    pub pane_id: String,
 }
 
 impl Tool for TerminalCommandTool {
@@ -63,16 +68,21 @@ impl Tool for TerminalCommandTool {
             state.agent_name.clone()
         };
 
-        if let Err(e) = self
-            .tx_ui
-            .send(ClawEngineEvent::ProposeTerminalCommand {
-                agent_name: agent_name.clone(),
-                command: args.command.clone(),
-                explanation: args.explanation.clone(),
-                usage: None,
-            })
-            .await
-        {
+        let event = ClawEngineEvent::ProposeTerminalCommand {
+            agent_name: agent_name.clone(),
+            command: args.command.clone(),
+            explanation: args.explanation.clone(),
+            usage: None,
+        };
+
+        crate::engine::persist_visual_event(
+            self.db.clone(),
+            self.session_id.clone(),
+            self.pane_id.clone(),
+            &event,
+        );
+
+        if let Err(e) = self.tx_ui.send(event).await {
             return Err(std::io::Error::other(format!(
                 "Failed to send terminal command proposal to UI: {e}"
             )));

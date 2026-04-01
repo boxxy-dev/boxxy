@@ -639,5 +639,34 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
                 }
             }
         }
+        AppInput::ClearClawHistory(pane_id) => {
+            let id = if let Some(id) = pane_id {
+                Some(id)
+            } else {
+                // Get active pane ID from selected tab
+                if let Some(page) = inner.tab_view.selected_page() {
+                    let child = page.child();
+                    if let Some(pos) = inner
+                        .tabs
+                        .iter()
+                        .position(|c| c.controller.widget() == &child)
+                    {
+                        Some(inner.tabs[pos].controller.active_pane_id())
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            };
+
+            if let Some(id) = id {
+                for tab in &inner.tabs {
+                    if tab.controller.soft_clear_claw_history(&id) {
+                        break;
+                    }
+                }
+            }
+        }
     }
 }
