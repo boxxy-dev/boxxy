@@ -333,10 +333,6 @@ tabbox separator {
     border: 1px solid alpha(currentColor, 0.05);
 }
 
-.claw-indicator-inactive {
-    filter: grayscale(1) brightness(0.8);
-    opacity: 0.8;
-}
 
 .notification-pill {
     border-radius: 9999px;

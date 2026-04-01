@@ -24,7 +24,7 @@ impl CompletionProvider for AgentCompletionProvider {
                 items.push(CompletionItem {
                     display_name: agent.name.clone(),
                     replacement_text: format!("@{}", agent.name),
-                    icon_name: Some("boxxyclaw".to_string()),
+                    icon_name: Some("boxxy-boxxyclaw-symbolic".to_string()),
                     secondary_text: Some(agent.status),
                 });
             }

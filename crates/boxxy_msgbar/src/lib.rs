@@ -67,8 +67,8 @@ impl MsgBarComponent {
 
         entry.add_css_class("monospace");
 
-        let icon = gtk::Image::from_icon_name("boxxyclaw");
-        icon.add_css_class("accent");
+        let icon = gtk::Image::from_icon_name("boxxy-boxxyclaw-symbolic");
+        
 
         let claw_toggle = gtk::Button::builder()
             .child(&icon)
@@ -375,9 +375,9 @@ impl MsgBarComponent {
         self.pinned_state.set(pinned);
 
         if active {
-            self.claw_toggle.remove_css_class("claw-indicator-inactive");
+            self.claw_toggle.add_css_class("accent");
         } else {
-            self.claw_toggle.add_css_class("claw-indicator-inactive");
+            self.claw_toggle.remove_css_class("accent");
         }
 
         if proactive {

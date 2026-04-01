@@ -46,10 +46,10 @@ impl ClawIndicator {
         spinner.add_css_class("claw-spinner");
         btn_box.append(&spinner);
 
-        let icon = gtk::Image::from_icon_name("boxxyclaw");
+        let icon = gtk::Image::from_icon_name("boxxy-boxxyclaw-symbolic");
         icon.add_css_class("accent");
         icon.set_pixel_size(16);
-        btn_box.append(&icon);
+        // btn_box.append(&icon);
 
         let label = gtk::Label::new(Some("Working"));
         label.add_css_class("caption");
@@ -106,8 +106,7 @@ impl ClawIndicator {
         *self.action_type.borrow_mut() = 0;
         self.spinner.set_visible(true);
         self.spinner.start();
-        self.icon.set_icon_name(Some("boxxyclaw"));
-        self.icon.set_css_classes(&["accent"]);
+        self.icon.set_visible(false);
         self.label.set_text("Working");
         self.main_btn.set_can_focus(false);
         self.revealer.set_reveal_child(true);
@@ -117,6 +116,7 @@ impl ClawIndicator {
         *self.action_type.borrow_mut() = 1;
         self.spinner.stop();
         self.spinner.set_visible(false);
+        self.icon.set_visible(true);
         self.icon
             .set_icon_name(Some("boxxy-dialog-warning-symbolic"));
         self.icon.set_css_classes(&["warning"]);
@@ -137,7 +137,8 @@ impl ClawIndicator {
         *self.action_type.borrow_mut() = 2;
         self.spinner.stop();
         self.spinner.set_visible(false);
-        self.icon.set_icon_name(Some("boxxyclaw"));
+        self.icon.set_visible(true);
+        self.icon.set_icon_name(Some("boxxy-boxxyclaw-symbolic"));
         self.icon.set_css_classes(&["success"]);
         self.label.set_text("Solution Ready");
         self.main_btn.set_can_focus(true);

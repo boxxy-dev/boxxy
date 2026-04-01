@@ -289,7 +289,7 @@ pub fn adopt_orphan_tabs(inner: &mut AppWindowInner) {
                 .update_settings(inner.current_settings.clone(), palette);
 
             if tc.controller.is_claw_active() {
-                page.set_indicator_icon(Some(&gio::ThemedIcon::new("boxxyclaw")));
+                page.set_indicator_icon(Some(&gio::ThemedIcon::new("boxxy-boxxyclaw-symbolic")));
                 page.set_indicator_activatable(false);
             } else {
                 page.set_indicator_icon(None::<&gio::Icon>);
@@ -342,7 +342,7 @@ pub fn tab_page_attached(inner: &mut AppWindowInner, key: usize) {
         let widget = tc.controller.widget();
         let page = inner.tab_view.page(widget);
         if tc.controller.is_claw_active() {
-            page.set_indicator_icon(Some(&gio::ThemedIcon::new("boxxyclaw")));
+            page.set_indicator_icon(Some(&gio::ThemedIcon::new("boxxy-boxxyclaw-symbolic")));
             page.set_indicator_activatable(false);
         } else {
             page.set_indicator_icon(None::<&gio::Icon>);
@@ -416,7 +416,7 @@ pub fn focus_active_terminal(inner: &mut AppWindowInner) {
             let tab_is_claw_active = tc.controller.is_claw_active();
             inner.claw_active = tab_is_claw_active;
             if tab_is_claw_active {
-                page.set_indicator_icon(Some(&gio::ThemedIcon::new("boxxyclaw")));
+                page.set_indicator_icon(Some(&gio::ThemedIcon::new("boxxy-boxxyclaw-symbolic")));
                 page.set_indicator_activatable(false);
             } else {
                 page.set_indicator_icon(None::<&gio::Icon>);

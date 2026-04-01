@@ -449,7 +449,7 @@ impl AppWindow {
         assistant_page.set_icon_name(Some("boxxy-ai-slop-symbolic"));
 
         let claw_page = view_stack.add_titled(claw.widget(), Some("claw"), "Claw");
-        claw_page.set_icon_name(Some("boxxyclaw"));
+        claw_page.set_icon_name(Some("boxxy-boxxyclaw-symbolic"));
 
         let bookmarks_page =
             view_stack.add_titled(bookmarks_sidebar.widget(), Some("bookmarks"), "Bookmarks");

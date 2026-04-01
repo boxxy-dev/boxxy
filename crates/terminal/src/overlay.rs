@@ -17,6 +17,7 @@ pub struct TerminalOverlay {
     vbox: gtk::Box,
     outer_scroll: gtk::ScrolledWindow,
     title_label: gtk::Label,
+    title_container: gtk::Box,
     diagnosis_viewer: StructuredViewer,
     command_view: gtk::TextView,
     reply_entry: gtk::Entry,
@@ -123,16 +124,22 @@ impl TerminalOverlay {
         revealer.set_child(Some(&clamp));
 
         let header = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-        let icon = gtk::Image::from_icon_name("boxxyclaw");
+        let icon = gtk::Image::from_icon_name("boxxy-boxxyclaw-symbolic");
         icon.add_css_class("accent");
         header.append(&icon);
+
+        let title_container = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        title_container.set_halign(gtk::Align::Start);
+        title_container.set_valign(gtk::Align::Center);
+        title_container.set_hexpand(true);
 
         let title_label = gtk::Label::new(Some("Boxxy-Claw"));
         title_label.add_css_class("heading");
         title_label.set_halign(gtk::Align::Start);
         title_label.set_xalign(0.0);
-        title_label.set_hexpand(true);
-        header.append(&title_label);
+        title_container.append(&title_label);
+
+        header.append(&title_container);
 
         vbox.append(&header);
 
@@ -374,6 +381,7 @@ impl TerminalOverlay {
             vbox,
             outer_scroll: master_scroll,
             title_label,
+            title_container,
             diagnosis_viewer,
             command_view,
             reply_entry,
@@ -448,11 +456,39 @@ impl TerminalOverlay {
 
         match mode {
             OverlayMode::Claw => {
-                self.icon.set_icon_name(Some("boxxyclaw"));
+                self.icon.set_visible(false);
+                self.title_label.remove_css_class("heading");
+
+                use std::collections::hash_map::DefaultHasher;
+                use std::hash::{Hash, Hasher};
+                let mut hasher = DefaultHasher::new();
+                title.hash(&mut hasher);
+                let hash = hasher.finish();
+
+                let r = (hash & 0xFF) as u8 % 150 + 50;
+                let g = ((hash >> 8) & 0xFF) as u8 % 150 + 50;
+                let b = ((hash >> 16) & 0xFF) as u8 % 150 + 50;
+                let color = format!("rgb({}, {}, {})", r, g, b);
+
+                let css = format!(
+                    ".overlay-badge {{ background-color: {}; color: white; border-radius: 12px; padding: 4px 10px; font-weight: bold; font-size: 0.8rem; box-shadow: 0 2px 4px rgba(0,0,0,0.2); }}",
+                    color
+                );
+                let provider = gtk::CssProvider::new();
+                #[allow(deprecated)]
+                provider.load_from_data(&css);
+                #[allow(deprecated)]
+                self.title_container
+                    .style_context()
+                    .add_provider(&provider, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
+                self.title_container.add_css_class("overlay-badge");
             }
             OverlayMode::Bookmark => {
+                self.icon.set_visible(true);
                 self.icon
                     .set_icon_name(Some("boxxy-user-bookmarks-symbolic"));
+                self.title_label.add_css_class("heading");
+                self.title_container.remove_css_class("overlay-badge");
             }
         }
 

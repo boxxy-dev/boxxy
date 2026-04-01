@@ -62,7 +62,7 @@ pub fn handle_terminal_event(
 
                 // Update tab icon (swap: claw is indicator, timer is main icon)
                 if active {
-                    page.set_indicator_icon(Some(&gtk4::gio::ThemedIcon::new("boxxyclaw")));
+                    page.set_indicator_icon(Some(&gtk4::gio::ThemedIcon::new("boxxy-boxxyclaw-symbolic")));
                     page.set_indicator_activatable(false);
                 } else {
                     page.set_indicator_icon(None::<&gtk4::gio::Icon>);
@@ -83,7 +83,7 @@ pub fn handle_terminal_event(
                 // Update tab icon
                 let is_claw_active = inner.tabs[pos].controller.is_claw_active();
                 if is_claw_active {
-                    page.set_indicator_icon(Some(&gtk4::gio::ThemedIcon::new("boxxyclaw")));
+                    page.set_indicator_icon(Some(&gtk4::gio::ThemedIcon::new("boxxy-boxxyclaw-symbolic")));
                     page.set_indicator_activatable(false);
                 } else {
                     page.set_indicator_icon(None::<&gtk4::gio::Icon>);
@@ -231,7 +231,7 @@ pub fn handle_terminal_event(
                             page.set_indicator_activatable(false);
                         } else {
                             // Revert to normal claw indicator
-                            page.set_indicator_icon(Some(&gtk4::gio::ThemedIcon::new("boxxyclaw")));
+                            page.set_indicator_icon(Some(&gtk4::gio::ThemedIcon::new("boxxy-boxxyclaw-symbolic")));
                             page.set_indicator_activatable(false);
                         }
 
