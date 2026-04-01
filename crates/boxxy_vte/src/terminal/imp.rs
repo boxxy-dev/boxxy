@@ -273,7 +273,11 @@ impl ObjectImpl for TerminalWidget {
                 obj.start_cursor_blink();
 
                 // Let the IM context have first dibs on the key event (dead keys etc.)
-                if imp.im_context.borrow().filter_keypress(&ctrl.current_event().unwrap()) {
+                if imp
+                    .im_context
+                    .borrow()
+                    .filter_keypress(&ctrl.current_event().unwrap())
+                {
                     return glib::Propagation::Stop;
                 }
 
@@ -339,7 +343,9 @@ impl ObjectImpl for TerminalWidget {
             obj,
             move |ctrl, _key, _keycode, _modifier| {
                 let imp = obj.imp();
-                imp.im_context.borrow().filter_keypress(&ctrl.current_event().unwrap());
+                imp.im_context
+                    .borrow()
+                    .filter_keypress(&ctrl.current_event().unwrap());
             }
         ));
         obj.add_controller(key_ctrl);
@@ -1752,11 +1758,15 @@ impl WidgetImpl for TerminalWidget {
 
     fn realize(&self) {
         self.parent_realize();
-        self.im_context.borrow().set_client_widget(Some(&*self.obj()));
+        self.im_context
+            .borrow()
+            .set_client_widget(Some(&*self.obj()));
     }
 
     fn unrealize(&self) {
-        self.im_context.borrow().set_client_widget(None::<&gtk4::Widget>);
+        self.im_context
+            .borrow()
+            .set_client_widget(None::<&gtk4::Widget>);
         self.parent_unrealize();
     }
 }

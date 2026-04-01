@@ -149,7 +149,7 @@ impl ClawSidebarComponent {
         // 1. Clear Button
         let clear_btn = gtk::Button::builder()
             .icon_name("boxxy-edit-clear-all-symbolic")
-            .css_classes(["flat"])
+            .css_classes(["flat", "image-button"])
             .tooltip_text("Clear History")
             .build();
 
@@ -166,10 +166,13 @@ impl ClawSidebarComponent {
             scroll_clone.set_visible(false);
         });
 
-        // 2. Play/Stop Button
+        // 2. Claw Toggle Button
+        let claw_icon = gtk::Image::from_icon_name("boxxyclaw");
+        claw_icon.add_css_class("accent");
+
         let toggle_btn = gtk::Button::builder()
-            .icon_name("boxxy-media-playback-start-symbolic")
-            .css_classes(["flat", "suggested-action"])
+            .child(&claw_icon)
+            .css_classes(["flat", "image-button"])
             .tooltip_text("Activate Claw")
             .build();
 
@@ -183,7 +186,7 @@ impl ClawSidebarComponent {
         // 3. Proactive Mode Button
         let mode_toggle_btn = gtk::Button::builder()
             .icon_name("boxxy-walking2-symbolic")
-            .css_classes(["flat"])
+            .css_classes(["flat", "image-button"])
             .tooltip_text("Lazy Diagnosis Mode")
             .build();
 
@@ -293,17 +296,11 @@ impl ClawSidebarComponent {
     pub fn update_active(&self, active: bool) {
         self.is_active.set(active);
         if active {
-            self.toggle_btn
-                .set_icon_name("boxxy-media-playback-stop-symbolic");
+            self.toggle_btn.remove_css_class("claw-indicator-inactive");
             self.toggle_btn.set_tooltip_text(Some("Deactivate Claw"));
-            self.toggle_btn.remove_css_class("suggested-action");
-            self.toggle_btn.add_css_class("destructive-action");
         } else {
-            self.toggle_btn
-                .set_icon_name("boxxy-media-playback-start-symbolic");
+            self.toggle_btn.add_css_class("claw-indicator-inactive");
             self.toggle_btn.set_tooltip_text(Some("Activate Claw"));
-            self.toggle_btn.remove_css_class("destructive-action");
-            self.toggle_btn.add_css_class("suggested-action");
         }
     }
 

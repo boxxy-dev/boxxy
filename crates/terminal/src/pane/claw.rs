@@ -105,10 +105,13 @@ pub(super) fn setup_claw(
                 if let Some(inner) = inner_clone_for_cancel.upgrade() {
                     let term = inner.borrow().terminal.clone();
                     // Small delay to ensure focus sticks after the overlay is hidden
-                    gtk4::glib::timeout_add_local(std::time::Duration::from_millis(50), move || {
-                        term.grab_focus();
-                        gtk4::glib::ControlFlow::Break
-                    });
+                    gtk4::glib::timeout_add_local(
+                        std::time::Duration::from_millis(50),
+                        move || {
+                            term.grab_focus();
+                            gtk4::glib::ControlFlow::Break
+                        },
+                    );
                 }
                 if mode == OverlayMode::Claw {
                     let tx = tx_cancel.clone();

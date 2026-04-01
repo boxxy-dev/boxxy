@@ -419,7 +419,6 @@ impl TerminalComponent {
         }
     }
 
-
     fn update_dimming(&self) {
         let inner = self.inner.borrow();
         let dimming_enabled = inner
