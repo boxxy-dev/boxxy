@@ -55,6 +55,8 @@ pub struct SpawnOptions {
     pub cwd: String, // Use empty string for None
     pub argv: Vec<String>,
     pub env: Vec<(String, String)>,
+    pub cols: u16,
+    pub rows: u16,
 }
 
 #[derive(Default)]
@@ -153,6 +155,23 @@ impl BoxxyAgent {
         // Convert zbus OwnedFd to std OwnedFd
         let std_fd: std::os::unix::io::OwnedFd = pty_master.into();
         let master_fd = unsafe { PtyMaster::from_owned_fd(std_fd) };
+
+        unsafe {
+            use std::os::unix::io::AsRawFd;
+            // Provide a "Sane Default" size for the PTY *before* the shell process starts.
+            // By default, Linux initializes new PTYs as 0x0. If we spawn `bash`/`zsh` 
+            // before the GTK UI has fired its first `size_allocate` event and resized us,
+            // the shell's `.bashrc` prompt scripts might read `$TTY_WIDTH=0` and break 
+            // their rendering logic permanently (e.g. falling back to black and white).
+            // This prevents that race condition by guaranteeing a size > 0 on boot.
+            let ws = libc::winsize {
+                ws_row: options.rows,
+                ws_col: options.cols,
+                ws_xpixel: 0,
+                ws_ypixel: 0,
+            };
+            libc::ioctl(master_fd.as_raw_fd(), libc::TIOCSWINSZ, &ws);
+        }
 
         let slave_name = unsafe {
             ptsname(&master_fd).map_err(|e| {

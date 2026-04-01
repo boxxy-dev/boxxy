@@ -653,10 +653,19 @@ impl TerminalPaneComponent {
 
                     env.push(("VTE_VERSION".to_string(), "7600".to_string()));
 
+                    let (cols, rows) = {
+                        let inner = inner_rc.borrow();
+                        let c = if inner.n_columns > 0 { inner.n_columns as u16 } else { 80 };
+                        let r = if inner.n_rows > 0 { inner.n_rows as u16 } else { 24 };
+                        (c, r)
+                    };
+
                     let options = boxxy_agent::ipc::SpawnOptions {
                         cwd: working_dir.unwrap_or_default(),
                         argv: cmd,
                         env,
+                        cols,
+                        rows,
                     };
 
                     use std::os::unix::io::{AsRawFd, FromRawFd};
