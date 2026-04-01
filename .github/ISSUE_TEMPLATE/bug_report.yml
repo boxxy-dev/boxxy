@@ -40,7 +40,7 @@ body:
     id: version
     attributes:
       label: Version
-      placeholder: Found in Help → About
+      placeholder: Found in Preferences → About
     validations:
       required: true
 
