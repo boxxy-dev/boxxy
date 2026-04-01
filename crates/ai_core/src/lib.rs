@@ -20,7 +20,7 @@ impl BoxxyAgent {
     pub async fn chat(
         &self,
         prompt: &str,
-        mut history: Vec<Message>,
+        history: Vec<Message>,
     ) -> Result<(String, Option<rig::completion::Usage>), rig::completion::PromptError> {
         use rig::completion::Prompt;
 
@@ -28,7 +28,7 @@ impl BoxxyAgent {
             Self::Gemini(agent) => {
                 let res = agent
                     .prompt(prompt)
-                    .with_history(&mut history)
+                    .with_history(history.clone())
                     .extended_details()
                     .await?;
                 Ok((res.output.clone(), Some(res.usage)))
@@ -36,7 +36,7 @@ impl BoxxyAgent {
             Self::Ollama(agent) => {
                 let res = agent
                     .prompt(prompt)
-                    .with_history(&mut history)
+                    .with_history(history.clone())
                     .extended_details()
                     .await?;
                 Ok((res.output.clone(), Some(res.usage)))
@@ -44,7 +44,7 @@ impl BoxxyAgent {
             Self::Anthropic(agent) => {
                 let res = agent
                     .prompt(prompt)
-                    .with_history(&mut history)
+                    .with_history(history.clone())
                     .extended_details()
                     .await?;
                 Ok((res.output.clone(), Some(res.usage)))
@@ -52,7 +52,7 @@ impl BoxxyAgent {
             Self::OpenAi(agent) => {
                 let res = agent
                     .prompt(prompt)
-                    .with_history(&mut history)
+                    .with_history(history.clone())
                     .extended_details()
                     .await?;
                 Ok((res.output.clone(), Some(res.usage)))

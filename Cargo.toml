@@ -76,7 +76,7 @@ futures-channel = "0.3.32"
 futures-util = "0.3.32"
 log = { version = "0.4.29", features = ["std", "serde", "release_max_level_info"] }
 env_logger = "0.11.10"
-rig-core = "0.33.0"
+rig-core = "0.34.0"
 nix = { version = "0.31.2", features = ["process", "term", "fs", "signal", "ioctl", "user"] }
 zbus = { version = "5.14.0", features = ["tokio", "p2p"] }
 libc = "0.2"
@@ -111,7 +111,7 @@ notify = "8.2.0"
 uuid = { version = "1.23.0", features = ["v4"] }
 petname = "2.0.2"
 getrandom = "0.4.2"
-toml = "1.1.0"
+toml = "1.1.1"
 boxxy-bookmarks = { path = "crates/boxxy_bookmarks" }
 sysinfo = "0.38.4"
 arboard = "3.6.1"

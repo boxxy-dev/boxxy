@@ -208,10 +208,11 @@ impl TerminalPaneComponent {
                         if !is_claw_active_for_msg.get() {
                             is_claw_active_for_msg.set(true);
                             inner_arc.borrow().agent_badge.set_visible(true);
-                            inner_arc
-                                .borrow()
-                                .msg_bar
-                                .update_ui(true, is_proactive_for_msg.get(), is_pinned_for_msg.get());
+                            inner_arc.borrow().msg_bar.update_ui(
+                                true,
+                                is_proactive_for_msg.get(),
+                                is_pinned_for_msg.get(),
+                            );
                             cb_msg(PaneOutput::ClawStateChanged(
                                 id_msg.clone(),
                                 true,
@@ -271,10 +272,11 @@ impl TerminalPaneComponent {
                             .as_ref()
                             .and_then(|w| w.upgrade())
                         {
-                            inner_arc
-                                .borrow()
-                                .msg_bar
-                                .update_ui(active, is_proactive_for_active.get(), is_pinned_for_active.get());
+                            inner_arc.borrow().msg_bar.update_ui(
+                                active,
+                                is_proactive_for_active.get(),
+                                is_pinned_for_active.get(),
+                            );
                             inner_arc.borrow().agent_badge.set_visible(active);
                         }
                         cb_toggle(PaneOutput::ClawStateChanged(
@@ -302,10 +304,11 @@ impl TerminalPaneComponent {
                             .as_ref()
                             .and_then(|w| w.upgrade())
                         {
-                            inner_arc
-                                .borrow()
-                                .msg_bar
-                                .update_ui(is_claw_active_for_proactive.get(), proactive, is_pinned_for_proactive.get());
+                            inner_arc.borrow().msg_bar.update_ui(
+                                is_claw_active_for_proactive.get(),
+                                proactive,
+                                is_pinned_for_proactive.get(),
+                            );
                         }
                         cb_proactive(PaneOutput::ClawStateChanged(
                             id_proactive.clone(),
@@ -809,11 +812,8 @@ impl TerminalPaneComponent {
         self.agent_badge.set_visible(active);
 
         // Sync MsgBar toggle state
-        self.msg_bar.update_ui(
-            active,
-            self.is_proactive.get(),
-            self.is_pinned.get(),
-        );
+        self.msg_bar
+            .update_ui(active, self.is_proactive.get(), self.is_pinned.get());
 
         // If turning ON, tell the session to Initialize
         let tx = self.claw_sender.clone();
@@ -834,11 +834,8 @@ impl TerminalPaneComponent {
             boxxy_preferences::config::ClawAutoDiagnosisMode::Proactive
         );
         self.is_proactive.set(proactive);
-        self.msg_bar.update_ui(
-            self.is_claw_active.get(),
-            proactive,
-            self.is_pinned.get(),
-        );
+        self.msg_bar
+            .update_ui(self.is_claw_active.get(), proactive, self.is_pinned.get());
 
         let _ = self
             .claw_sender
@@ -855,7 +852,9 @@ impl TerminalPaneComponent {
     pub fn soft_clear_claw_history(&self) {
         let tx = self.claw_sender.clone();
         glib::spawn_future_local(async move {
-            let _ = tx.send(boxxy_claw::engine::ClawMessage::SoftClearHistory).await;
+            let _ = tx
+                .send(boxxy_claw::engine::ClawMessage::SoftClearHistory)
+                .await;
         });
     }
 

@@ -297,7 +297,9 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
                     {
                         inner.claw_active = active;
                         if active {
-                            page.set_indicator_icon(Some(&gtk4::gio::ThemedIcon::new("boxxy-boxxyclaw-symbolic")));
+                            page.set_indicator_icon(Some(&gtk4::gio::ThemedIcon::new(
+                                "boxxy-boxxyclaw-symbolic",
+                            )));
                             page.set_indicator_activatable(false);
                         } else {
                             page.set_indicator_icon(None::<&gio::Icon>);
@@ -327,7 +329,9 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
                 let widget = tab.controller.widget();
                 let page = inner.tab_view.page(widget);
                 if active {
-                    page.set_indicator_icon(Some(&gtk4::gio::ThemedIcon::new("boxxy-boxxyclaw-symbolic")));
+                    page.set_indicator_icon(Some(&gtk4::gio::ThemedIcon::new(
+                        "boxxy-boxxyclaw-symbolic",
+                    )));
                     page.set_indicator_activatable(false);
                 } else {
                     page.set_indicator_icon(None::<&gio::Icon>);

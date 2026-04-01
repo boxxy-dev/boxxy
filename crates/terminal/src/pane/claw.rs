@@ -392,7 +392,11 @@ pub(super) fn setup_claw(
                         crate::TerminalProposal::Command(command.clone()),
                     );
                 }
-                boxxy_claw::engine::ClawEngineEvent::Identity { agent_name, pinned, total_tokens } => {
+                boxxy_claw::engine::ClawEngineEvent::Identity {
+                    agent_name,
+                    pinned,
+                    total_tokens,
+                } => {
                     inner_clone.borrow().agent_badge.set_identity(agent_name);
                     is_pinned_for_events.set(*pinned);
                     inner_clone.borrow().msg_bar.update_ui(

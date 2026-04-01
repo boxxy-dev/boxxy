@@ -4,8 +4,8 @@ pub mod dispatcher;
 pub mod session;
 pub mod tools;
 
-pub use session::ClawSession;
 use boxxy_db::Db;
+pub use session::ClawSession;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -204,9 +204,7 @@ impl PersistentClawRow {
                 usage: usage.clone(),
             }),
             ClawEngineEvent::ProposeGetClipboard {
-                agent_name,
-                usage,
-                ..
+                agent_name, usage, ..
             } => Some(PersistentClawRow::Diagnosis {
                 pane_id,
                 agent_name: Some(agent_name.clone()),

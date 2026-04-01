@@ -14,7 +14,6 @@ pub enum OverlayMode {
 #[derive(Clone)]
 pub struct TerminalOverlay {
     revealer: gtk::Revealer,
-    vbox: gtk::Box,
     outer_scroll: gtk::ScrolledWindow,
     title_label: gtk::Label,
     title_container: gtk::Box,
@@ -378,7 +377,6 @@ impl TerminalOverlay {
 
         Self {
             revealer,
-            vbox,
             outer_scroll: master_scroll,
             title_label,
             title_container,
@@ -476,7 +474,7 @@ impl TerminalOverlay {
                 );
                 let provider = gtk::CssProvider::new();
                 #[allow(deprecated)]
-                provider.load_from_data(&css);
+                provider.load_from_string(&css);
                 #[allow(deprecated)]
                 self.title_container
                     .style_context()

@@ -68,7 +68,6 @@ impl MsgBarComponent {
         entry.add_css_class("monospace");
 
         let icon = gtk::Image::from_icon_name("boxxy-boxxyclaw-symbolic");
-        
 
         let claw_toggle = gtk::Button::builder()
             .child(&icon)

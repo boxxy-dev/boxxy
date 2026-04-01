@@ -80,7 +80,7 @@ impl AgentBadge {
         );
 
         let provider = gtk::CssProvider::new();
-        provider.load_from_data(&css);
+        provider.load_from_string(&css);
         #[allow(deprecated)]
         self.container
             .style_context()
