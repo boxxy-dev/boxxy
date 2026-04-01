@@ -1,8 +1,6 @@
 name: Nightly Build
 
 on:
-  schedule:
-    - cron: '0 0 * * *' # Every night at midnight
   workflow_dispatch:
 
 permissions:
@@ -96,11 +94,11 @@ jobs:
           gh release delete nightly --yes || true
           git tag -d nightly || true
           git push origin :refs/tags/nightly || true
-          
+
           # Ensure nightly tag exists on the current commit
           git tag nightly
           git push origin nightly
-          
+
           # Use wildcards to include all downloaded tarballs and checksums
           gh release create nightly *.tar.gz *.tar.gz.sha256 \
             --title "Nightly Build ($(date -u '+%Y-%m-%d'))" \
