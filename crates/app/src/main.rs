@@ -40,6 +40,31 @@ fn main() {
         boxxy_preferences::Settings::ensure_claw_skills();
     });
 
+    // Fetch API keys from host environment in the background
+    tokio::spawn(async {
+        let agent = boxxy_terminal::get_agent().await;
+        let keys_to_check = [
+            ("GEMINI_API_KEY", "Gemini"),
+            ("ANTHROPIC_API_KEY", "Anthropic"),
+            ("OPENAI_API_KEY", "OpenAI"),
+        ];
+
+        let mut found_any = false;
+        for (env_var, provider) in keys_to_check {
+            if let Ok(key) = agent.proxy().get_environment_variable(env_var.to_string()).await {
+                if !key.is_empty() {
+                    boxxy_preferences::Settings::set_env_api_key(provider, key);
+                    found_any = true;
+                }
+            }
+        }
+
+        if found_any {
+            let settings = boxxy_preferences::Settings::load();
+            let _ = boxxy_preferences::SETTINGS_EVENT_BUS.send(settings);
+        }
+    });
+
     gstreamer::init().expect("Failed to initialize GStreamer.");
 
     gio::resources_register_include!("compiled.gresource").expect("Failed to register resources.");

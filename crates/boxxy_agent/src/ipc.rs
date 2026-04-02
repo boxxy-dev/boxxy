@@ -23,6 +23,7 @@ pub trait Agent {
     async fn get_running_processes(&self, pid: u32) -> zbus::Result<Vec<(u32, String)>>;
     async fn signal_process_group(&self, pid: u32, signal: i32) -> zbus::Result<()>;
     async fn set_foreground_tracking(&self, pid: u32, enabled: bool) -> zbus::Result<()>;
+    async fn get_environment_variable(&self, name: String) -> zbus::Result<String>;
 
     #[zbus(signal)]
     async fn exited(&self, pid: u32, exit_code: i32) -> zbus::Result<()>;
@@ -366,6 +367,10 @@ impl BoxxyAgent {
             }
         }
         Ok(())
+    }
+
+    async fn get_environment_variable(&self, name: String) -> fdo::Result<String> {
+        Ok(std::env::var(name).unwrap_or_default())
     }
 
     #[zbus(signal)]

@@ -1058,7 +1058,7 @@ fn spawn_turn(
             .replace("{{available_skills}}", &available_skills_text);
 
         let creds = boxxy_ai_core::AiCredentials::new(
-            settings.api_keys.clone(),
+            settings.get_effective_api_keys(),
             settings.ollama_base_url.clone(),
         );
 
@@ -1269,7 +1269,7 @@ fn spawn_turn(
 
                 // Optional: Trigger Memory Flush if history is too long
                 let creds = boxxy_ai_core::AiCredentials::new(
-                    settings.api_keys.clone(),
+                    settings.get_effective_api_keys(),
                     settings.ollama_base_url.clone(),
                 );
 
@@ -1292,7 +1292,7 @@ fn spawn_turn(
                     .clone()
                     .or(settings.claw_model.clone());
                 let creds = boxxy_ai_core::AiCredentials::new(
-                    settings.api_keys.clone(),
+                    settings.get_effective_api_keys(),
                     settings.ollama_base_url.clone(),
                 );
 

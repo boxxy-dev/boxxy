@@ -182,7 +182,7 @@ impl AiSidebarComponent {
         let initial_claw_model = settings.claw_model.clone();
         let ollama_url = settings.ollama_base_url.clone();
         let initial_memory_model = settings.memory_model.clone();
-        let api_keys = settings.api_keys.clone();
+        let api_keys = settings.get_effective_api_keys();
 
         let model_selector = GlobalModelSelectorDialog::new(
             initial_model.clone(),
@@ -366,7 +366,7 @@ impl AiSidebarComponent {
 
         let settings = boxxy_preferences::Settings::load();
         let creds = boxxy_ai_core::AiCredentials::new(
-            settings.api_keys.clone(),
+            settings.get_effective_api_keys(),
             settings.ollama_base_url.clone(),
         );
 

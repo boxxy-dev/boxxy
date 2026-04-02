@@ -430,7 +430,7 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
                 inner.current_settings.claw_model.clone(),
                 inner.current_settings.memory_model.clone(),
                 inner.current_settings.ollama_base_url.clone(),
-                inner.current_settings.api_keys.clone(),
+                inner.current_settings.get_effective_api_keys(),
                 move |provider| {
                     let mut settings = boxxy_preferences::Settings::load();
                     settings.ai_chat_model = provider;

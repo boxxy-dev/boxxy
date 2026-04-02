@@ -13,6 +13,8 @@ pub static SETTINGS_EVENT_BUS: LazyLock<broadcast::Sender<Settings>> = LazyLock:
 
 static SETTINGS_CACHE: OnceLock<RwLock<Settings>> = OnceLock::new();
 static APP_STATE_CACHE: OnceLock<RwLock<AppState>> = OnceLock::new();
+static ENV_API_KEYS: LazyLock<RwLock<std::collections::HashMap<String, String>>> =
+    LazyLock::new(|| RwLock::new(std::collections::HashMap::new()));
 
 // --- Cursor Shape ---
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
@@ -355,6 +357,34 @@ Providing this context allows Boxxy-Claw to tailor its commands and diagnostics 
             let _ = fs::write(path, content);
             let _ = SETTINGS_EVENT_BUS.send(self.clone());
         }
+    }
+
+    pub fn set_env_api_key(provider: &str, key: String) {
+        ENV_API_KEYS.write().unwrap().insert(provider.to_string(), key);
+    }
+
+    pub fn get_env_api_key(provider: &str) -> Option<String> {
+        ENV_API_KEYS.read().unwrap().get(provider).cloned()
+    }
+
+    pub fn get_effective_api_key(&self, provider: &str) -> String {
+        if let Some(key) = self.api_keys.get(provider)
+            && !key.is_empty()
+        {
+            return key.clone();
+        }
+        Self::get_env_api_key(provider).unwrap_or_default()
+    }
+
+    pub fn get_effective_api_keys(&self) -> std::collections::HashMap<String, String> {
+        let mut keys = self.api_keys.clone();
+        let env_keys = ENV_API_KEYS.read().unwrap();
+        for (provider, key) in env_keys.iter() {
+            if !keys.contains_key(provider) || keys.get(provider).map(|k| k.is_empty()).unwrap_or(true) {
+                keys.insert(provider.clone(), key.clone());
+            }
+        }
+        keys
     }
 }
 

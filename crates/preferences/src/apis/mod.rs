@@ -77,19 +77,37 @@ pub fn setup_apis_page(
                 .unwrap_or_default();
             row.set_text(&initial_key);
 
+            let prov_name_for_env = prov.name().to_string();
+            if initial_key.is_empty() {
+                if let Some(_env_key) = Settings::get_env_api_key(&prov_name_for_env) {
+                    row.set_title(&format!("{} API Key (Set from environment)", prov.name()));
+                }
+            }
+
             let s_rc = settings_rc.clone();
             let cb = on_change.clone();
             let prov_name = prov.name().to_string();
             let update_status = update_model_status.clone();
+            let row_clone = row.clone();
+            let prov_name_clone = prov.name();
             row.connect_changed(move |entry| {
                 let mut settings_to_save = None;
                 {
                     let mut s = s_rc.borrow_mut();
                     let new_val = entry.text().to_string();
                     if s.api_keys.get(&prov_name) != Some(&new_val) {
+                        let is_empty = new_val.is_empty();
                         s.api_keys.insert(prov_name.clone(), new_val);
                         s.save();
                         settings_to_save = Some(s.clone());
+
+                        if is_empty {
+                            if let Some(_env_key) = Settings::get_env_api_key(&prov_name) {
+                                row_clone.set_title(&format!("{} API Key (Set from environment)", prov_name_clone));
+                            }
+                        } else {
+                            row_clone.set_title(&format!("{} API Key", prov_name_clone));
+                        }
                     }
                 }
 
