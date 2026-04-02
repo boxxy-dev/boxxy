@@ -96,13 +96,14 @@ fn main() {
 
     app.connect_shutdown(|_| {
         boxxy_bookmarks::manager::BookmarksManager::clean_runs_dir();
-        
-        // Flush Telemetry
-        utils::runtime().block_on(async {
-            boxxy_telemetry::shutdown().await;
-        });
     });
 
     let exit_code = app.run();
+
+    // Flush Telemetry after the main window is closed
+    utils::runtime().block_on(async {
+        boxxy_telemetry::shutdown().await;
+    });
+
     std::process::exit(exit_code.into());
 }
