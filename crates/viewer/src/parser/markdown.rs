@@ -1,4 +1,4 @@
-use super::blocks::ContentBlock;
+use super::blocks::{ContentBlock, ListItem};
 use pulldown_cmark::{CodeBlockKind, Event, Parser, Tag, TagEnd};
 
 /// Escapes text for safe inclusion in Pango markup.
@@ -15,191 +15,294 @@ pub fn escape_pango(text: &str) -> String {
     out
 }
 
+#[derive(Debug)]
+enum ParseContainer {
+    List {
+        ordered: bool,
+        items: Vec<ListItem>,
+    },
+    Item {
+        blocks: Vec<ContentBlock>,
+        checked: Option<bool>,
+    },
+    Paragraph(String, bool), // markup, is_implicit
+    Heading(u8, String),
+    BlockQuote(String),
+    CodeBlock(String, String),
+    Image {
+        url: String,
+        title: String,
+        alt: String,
+    },
+}
+
 /// Parses a Markdown string into a sequence of ContentBlocks.
 pub fn parse_markdown(input: &str) -> Vec<ContentBlock> {
     let parser = Parser::new_ext(input, pulldown_cmark::Options::all());
 
-    let mut blocks = Vec::new();
-    let mut current_text = String::new();
-
-    // Track state to handle incomplete streams
-    let mut current_block_type = None;
-
-    // For lists
-    let mut in_list = false;
-    let mut is_ordered = false;
-    let mut current_list_items = Vec::new();
-
-    // For code blocks
-    let mut current_lang = String::new();
-    let mut in_code_block = false;
+    let mut root_blocks = Vec::new();
+    let mut stack: Vec<ParseContainer> = Vec::new();
 
     for event in parser {
         match event {
-            Event::Start(tag) => match tag {
-                Tag::Paragraph => {
-                    current_block_type = Some(Tag::Paragraph);
-                    current_text.clear();
-                }
-                Tag::Heading { level, .. } => {
-                    current_block_type = Some(Tag::Heading {
-                        level,
-                        id: None,
-                        classes: vec![],
-                        attrs: vec![],
-                    });
-                    current_text.clear();
-                }
-                Tag::BlockQuote(k) => {
-                    current_block_type = Some(Tag::BlockQuote(k));
-                    current_text.clear();
-                }
-                Tag::CodeBlock(kind) => {
-                    in_code_block = true;
-                    current_block_type = Some(Tag::CodeBlock(kind.clone()));
-                    current_text.clear();
-                    if let CodeBlockKind::Fenced(lang) = kind {
-                        current_lang = lang.to_string();
-                    } else {
-                        current_lang.clear();
+            Event::Start(tag) => {
+                maybe_close_implicit_paragraph(&mut stack, &mut root_blocks);
+                match tag {
+                    Tag::Paragraph => stack.push(ParseContainer::Paragraph(String::new(), false)),
+                    Tag::Heading { level, .. } => {
+                        stack.push(ParseContainer::Heading(level as u8, String::new()))
                     }
+                    Tag::BlockQuote(_) => stack.push(ParseContainer::BlockQuote(String::new())),
+                    Tag::CodeBlock(kind) => {
+                        let lang = if let CodeBlockKind::Fenced(lang) = kind {
+                            lang.to_string()
+                        } else {
+                            String::new()
+                        };
+                        stack.push(ParseContainer::CodeBlock(lang, String::new()));
+                    }
+                    Tag::List(first_item_number) => stack.push(ParseContainer::List {
+                        ordered: first_item_number.is_some(),
+                        items: Vec::new(),
+                    }),
+                    Tag::Item => stack.push(ParseContainer::Item {
+                        blocks: Vec::new(),
+                        checked: None,
+                    }),
+                    Tag::Image { dest_url, title, .. } => {
+                        stack.push(ParseContainer::Image {
+                            url: dest_url.to_string(),
+                            title: title.to_string(),
+                            alt: String::new(),
+                        });
+                    }
+
+                    // Inline styles
+                    Tag::Strong => append_text(&mut stack, "<b>"),
+                    Tag::Emphasis => append_text(&mut stack, "<i>"),
+                    Tag::Strikethrough => append_text(&mut stack, "<s>"),
+                    _ => {}
                 }
-                Tag::List(first_item_number) => {
-                    in_list = true;
-                    is_ordered = first_item_number.is_some();
-                    current_list_items.clear();
-                    current_block_type = Some(Tag::List(first_item_number));
-                }
-                Tag::Item => {
-                    current_block_type = Some(Tag::Item);
-                    current_text.clear();
+            }
+            Event::End(tag) => {
+                if matches!(tag, TagEnd::Item | TagEnd::List(_) | TagEnd::BlockQuote(_)) {
+                    maybe_close_implicit_paragraph(&mut stack, &mut root_blocks);
                 }
 
-                // Inline styles
-                Tag::Strong => current_text.push_str("<b>"),
-                Tag::Emphasis => current_text.push_str("<i>"),
-                Tag::Strikethrough => current_text.push_str("<s>"),
-                _ => {}
-            },
-            Event::End(tag) => match tag {
-                TagEnd::Paragraph => {
-                    if in_list {
-                        current_text.push('\n');
-                    } else {
-                        blocks.push(ContentBlock::Paragraph(std::mem::take(&mut current_text)));
-                        current_block_type = None;
-                    }
-                }
-                TagEnd::Heading(level) => {
-                    blocks.push(ContentBlock::Heading {
-                        level: level as u8,
-                        markup: std::mem::take(&mut current_text),
-                    });
-                    current_block_type = None;
-                }
-                TagEnd::BlockQuote(_) => {
-                    blocks.push(ContentBlock::Blockquote(std::mem::take(&mut current_text)));
-                    current_block_type = None;
-                }
-                TagEnd::CodeBlock => {
-                    in_code_block = false;
-                    blocks.push(ContentBlock::Code {
-                        lang: std::mem::take(&mut current_lang),
-                        code: std::mem::take(&mut current_text),
-                    });
-                    current_block_type = None;
-                }
-                TagEnd::Item => {
-                    if current_text.ends_with('\n') {
-                        current_text.pop();
-                    }
-                    current_list_items.push(std::mem::take(&mut current_text));
-                }
-                TagEnd::List(_) => {
-                    in_list = false;
-                    blocks.push(ContentBlock::List {
-                        ordered: is_ordered,
-                        items: std::mem::take(&mut current_list_items),
-                    });
-                    current_block_type = None;
-                }
+                if let Some(container) = stack.pop() {
+                    let block = match (tag, container) {
+                        (TagEnd::Paragraph, ParseContainer::Paragraph(markup, _)) => {
+                            if markup.trim().is_empty() {
+                                None // Skip empty paragraphs (often created around images)
+                            } else {
+                                Some(ContentBlock::Paragraph(markup))
+                            }
+                        }
+                        (TagEnd::Heading(_), ParseContainer::Heading(level, markup)) => {
+                            Some(ContentBlock::Heading { level, markup })
+                        }
+                        (TagEnd::BlockQuote(_), ParseContainer::BlockQuote(markup)) => {
+                            Some(ContentBlock::Blockquote(markup))
+                        }
+                        (TagEnd::CodeBlock, ParseContainer::CodeBlock(lang, code)) => {
+                            Some(ContentBlock::Code { lang, code })
+                        }
+                        (TagEnd::Item, ParseContainer::Item { blocks, checked }) => {
+                            if let Some(ParseContainer::List { items, .. }) = stack.last_mut() {
+                                items.push(ListItem { blocks, checked });
+                            }
+                            None
+                        }
+                        (TagEnd::List(_), ParseContainer::List { ordered, items }) => {
+                            Some(ContentBlock::List { ordered, items })
+                        }
+                        (TagEnd::Image, ParseContainer::Image { url, title, alt }) => {
+                            Some(ContentBlock::Image { url, title, alt })
+                        }
+                        _ => None,
+                    };
 
-                // Inline styles
-                TagEnd::Strong => current_text.push_str("</b>"),
-                TagEnd::Emphasis => current_text.push_str("</i>"),
-                TagEnd::Strikethrough => current_text.push_str("</s>"),
-                _ => {}
-            },
+                    if let Some(b) = block {
+                        push_block(&mut root_blocks, &mut stack, b);
+                    }
+                }
+            }
             Event::Text(t) => {
-                if in_code_block {
-                    current_text.push_str(&t);
+                let escaped = if is_in_code_block(&stack) {
+                    t.to_string()
                 } else {
-                    current_text.push_str(&escape_pango(&t));
-                }
+                    escape_pango(&t)
+                };
+                append_text(&mut stack, &escaped);
             }
             Event::Code(c) => {
-                current_text.push_str("<tt>");
-                current_text.push_str(&escape_pango(&c));
-                current_text.push_str("</tt>");
+                append_text(&mut stack, "<tt>");
+                append_text(&mut stack, &escape_pango(&c));
+                append_text(&mut stack, "</tt>");
             }
-            Event::SoftBreak => {
-                if in_code_block {
-                    current_text.push('\n');
-                } else {
-                    current_text.push(' ');
-                }
+            Event::SoftBreak | Event::HardBreak => {
+                append_text(&mut stack, "\n");
             }
-            Event::HardBreak => {
-                if in_code_block {
-                    current_text.push('\n');
-                } else {
-                    current_text.push('\n');
+            Event::Rule => {
+                maybe_close_implicit_paragraph(&mut stack, &mut root_blocks);
+                push_block(&mut root_blocks, &mut stack, ContentBlock::Rule);
+            }
+            Event::TaskListMarker(checked) => {
+                if let Some(ParseContainer::Item { checked: c, .. }) = stack.last_mut() {
+                    *c = Some(checked);
                 }
             }
             Event::Html(html) => {
-                current_text.push_str(&escape_pango(&html));
+                append_text(&mut stack, &escape_pango(&html));
             }
             _ => {}
         }
     }
 
-    // Flush any unfinished block (essential for streaming)
-    if let Some(tag) = current_block_type {
-        match tag {
-            Tag::Paragraph => blocks.push(ContentBlock::Paragraph(current_text)),
-            Tag::Heading { level, .. } => blocks.push(ContentBlock::Heading {
-                level: level as u8,
-                markup: current_text,
-            }),
-            Tag::BlockQuote(_) => blocks.push(ContentBlock::Blockquote(current_text)),
-            Tag::CodeBlock(_) => {
-                blocks.push(ContentBlock::Code {
-                    lang: current_lang,
-                    code: current_text,
-                });
-            }
-            Tag::List(_) => {
-                blocks.push(ContentBlock::List {
-                    ordered: is_ordered,
-                    items: current_list_items,
-                });
-            }
-            Tag::Item => {
-                if current_text.ends_with('\n') {
-                    current_text.pop();
+    // Flush unfinished containers for streaming support
+    while let Some(container) = stack.pop() {
+        let block = match container {
+            ParseContainer::Paragraph(markup, _) => {
+                if markup.trim().is_empty() {
+                    None
+                } else {
+                    Some(ContentBlock::Paragraph(markup))
                 }
-                current_list_items.push(current_text);
-                blocks.push(ContentBlock::List {
-                    ordered: is_ordered,
-                    items: current_list_items,
-                });
             }
-            _ => {}
+            ParseContainer::Heading(level, markup) => Some(ContentBlock::Heading { level, markup }),
+            ParseContainer::BlockQuote(markup) => Some(ContentBlock::Blockquote(markup)),
+            ParseContainer::CodeBlock(lang, code) => Some(ContentBlock::Code { lang, code }),
+            ParseContainer::Item { blocks, checked } => {
+                if let Some(ParseContainer::List { items, .. }) = stack.last_mut() {
+                    items.push(ListItem { blocks, checked });
+                }
+                None
+            }
+            ParseContainer::List { ordered, items } => Some(ContentBlock::List { ordered, items }),
+            ParseContainer::Image { url, title, alt } => Some(ContentBlock::Image { url, title, alt }),
+        };
+
+        if let Some(b) = block {
+            push_block(&mut root_blocks, &mut stack, b);
         }
-    } else if !current_text.is_empty() && !in_list {
-        // Fallback for raw text not wrapped in any element
-        blocks.push(ContentBlock::Paragraph(current_text));
     }
 
-    blocks
+    root_blocks
+}
+
+fn is_in_code_block(stack: &[ParseContainer]) -> bool {
+    matches!(stack.last(), Some(ParseContainer::CodeBlock(_, _)))
+}
+
+fn append_text(stack: &mut Vec<ParseContainer>, text: &str) {
+    let mut needs_paragraph = false;
+    if let Some(container) = stack.last() {
+        if matches!(container, ParseContainer::Item { .. } | ParseContainer::List { .. }) {
+            needs_paragraph = true;
+        }
+    } else {
+        needs_paragraph = true;
+    }
+
+    if needs_paragraph {
+        stack.push(ParseContainer::Paragraph(String::new(), true));
+    }
+
+    if let Some(container) = stack.last_mut() {
+        match container {
+            ParseContainer::Paragraph(s, _) => s.push_str(text),
+            ParseContainer::Heading(_, s) => s.push_str(text),
+            ParseContainer::BlockQuote(s) => s.push_str(text),
+            ParseContainer::CodeBlock(_, s) => s.push_str(text),
+            ParseContainer::Image { alt, .. } => alt.push_str(text),
+            _ => {}
+        }
+    }
+}
+
+fn maybe_close_implicit_paragraph(stack: &mut Vec<ParseContainer>, root_blocks: &mut Vec<ContentBlock>) {
+    let is_implicit = if let Some(ParseContainer::Paragraph(_, implicit)) = stack.last() {
+        *implicit
+    } else {
+        false
+    };
+
+    if is_implicit {
+        if let Some(ParseContainer::Paragraph(markup, _)) = stack.pop() {
+            if !markup.trim().is_empty() {
+                push_block(root_blocks, stack, ContentBlock::Paragraph(markup));
+            }
+        }
+    }
+}
+
+fn push_block(root_blocks: &mut Vec<ContentBlock>, stack: &mut [ParseContainer], block: ContentBlock) {
+    // Find the nearest container that supports nested blocks (Item)
+    for container in stack.iter_mut().rev() {
+        if let ParseContainer::Item { blocks, .. } = container {
+            blocks.push(block);
+            return;
+        }
+    }
+    // Otherwise push to root
+    root_blocks.push(block);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_simple_list() {
+        let input = "- Item 1\n- Item 2";
+        let blocks = parse_markdown(input);
+        assert_eq!(blocks.len(), 1);
+        if let ContentBlock::List { ordered, items } = &blocks[0] {
+            assert!(!ordered);
+            assert_eq!(items.len(), 2);
+            match &items[0].blocks[0] {
+                ContentBlock::Paragraph(m) => assert_eq!(m, "Item 1"),
+                _ => panic!("Expected Paragraph"),
+            }
+        }
+    }
+
+    #[test]
+    fn test_nested_list() {
+        let input = "1. Item 1\n   - Subitem A\n   - Subitem B\n2. Item 2";
+        let blocks = parse_markdown(input);
+        assert_eq!(blocks.len(), 1);
+        if let ContentBlock::List { items, .. } = &blocks[0] {
+            assert_eq!(items.len(), 2);
+            assert_eq!(items[0].blocks.len(), 2);
+            match &items[0].blocks[1] {
+                ContentBlock::List { items: sub_items, .. } => assert_eq!(sub_items.len(), 2),
+                _ => panic!("Expected nested List"),
+            }
+        }
+    }
+
+    #[test]
+    fn test_task_list() {
+        let input = "- [ ] Task 1\n- [x] Task 2";
+        let blocks = parse_markdown(input);
+        assert_eq!(blocks.len(), 1);
+        if let ContentBlock::List { items, .. } = &blocks[0] {
+            assert_eq!(items[0].checked, Some(false));
+            assert_eq!(items[1].checked, Some(true));
+        }
+    }
+
+    #[test]
+    fn test_image() {
+        let input = "![Alt text](https://example.com/image.png \"Title\")";
+        let blocks = parse_markdown(input);
+        if let ContentBlock::Image { url, title, alt } = &blocks[0] {
+            assert_eq!(url, "https://example.com/image.png");
+            assert_eq!(title, "Title");
+            assert_eq!(alt, "Alt text");
+        } else {
+            panic!("Expected Image");
+        }
+    }
 }

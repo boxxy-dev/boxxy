@@ -149,7 +149,7 @@ pub(super) fn setup_claw(
         },
         move || {
             if let Some((diag, proposal)) = pending_diag_clone.borrow_mut().take() {
-                popover_clone.show(OverlayMode::Claw, "Boxxy-Claw", &diag, proposal);
+                popover_clone.show(OverlayMode::Claw, "Boxxy-Claw", None, &diag, proposal);
             }
         },
     );
@@ -195,6 +195,7 @@ pub(super) fn setup_claw(
                     popover_event_clone.show(
                         OverlayMode::Claw,
                         &agent_name,
+                        Some("Diagnosis"),
                         diagnosis,
                         crate::TerminalProposal::None,
                     );
@@ -230,6 +231,7 @@ pub(super) fn setup_claw(
                     popover_event_clone.show(
                         OverlayMode::Claw,
                         &agent_name,
+                        Some("Propose Command"),
                         diagnosis,
                         crate::TerminalProposal::Command(command.clone()),
                     );
@@ -256,7 +258,8 @@ pub(super) fn setup_claw(
 
                     popover_event_clone.show(
                         OverlayMode::Claw,
-                        &format!("Agent {agent_name}: Propose File Edit"),
+                        &agent_name,
+                        Some("Propose File Edit"),
                         &format!("Path: `{path}`\n\nI need to write or edit this file to complete the task."),
                         crate::TerminalProposal::FileWrite(path.clone(), content.clone())
                     );
@@ -282,6 +285,7 @@ pub(super) fn setup_claw(
                     popover_event_clone.show(
                         OverlayMode::Claw,
                         &agent_name,
+                        Some("Delete File"),
                         &format!("I want to DELETE this file:\n\n`{path}`"),
                         crate::TerminalProposal::Command(format!("rm '{path}'")),
                     );
@@ -309,6 +313,7 @@ pub(super) fn setup_claw(
                     popover_event_clone.show(
                         OverlayMode::Claw,
                         &agent_name,
+                        Some("Kill Process"),
                         &format!("I want to KILL this process:\n\nPID: {pid} ({process_name})"),
                         crate::TerminalProposal::Command(format!("kill {pid}")),
                     );
@@ -329,6 +334,7 @@ pub(super) fn setup_claw(
                     popover_event_clone.show(
                         OverlayMode::Claw,
                         &agent_name,
+                        Some("Read Clipboard"),
                         "I want to read your clipboard.",
                         crate::TerminalProposal::None,
                     );
@@ -354,6 +360,7 @@ pub(super) fn setup_claw(
                     popover_event_clone.show(
                         OverlayMode::Claw,
                         &agent_name,
+                        Some("Write Clipboard"),
                         &format!("I want to write this to your clipboard:\n\n{text}"),
                         crate::TerminalProposal::None,
                     );
@@ -388,6 +395,7 @@ pub(super) fn setup_claw(
                     popover_event_clone.show(
                         OverlayMode::Claw,
                         &agent_name,
+                        Some("Terminal Command"),
                         explanation,
                         crate::TerminalProposal::Command(command.clone()),
                     );

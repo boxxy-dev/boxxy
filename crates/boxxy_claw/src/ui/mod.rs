@@ -13,7 +13,7 @@ impl BlockRenderer for ProcessListRenderer {
         matches!(block, ContentBlock::Custom { schema, .. } if schema == "list_processes")
     }
 
-    fn render(&self, block: &ContentBlock) -> gtk::Widget {
+    fn render(&self, block: &ContentBlock, _registry: &boxxy_viewer::ViewerRegistry) -> gtk::Widget {
         if let ContentBlock::Custom { raw_payload, .. } = block {
             let vbox = gtk::Box::new(gtk::Orientation::Vertical, 4);
             if let Ok(processes) =

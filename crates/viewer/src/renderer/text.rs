@@ -13,10 +13,12 @@ impl BlockRenderer for TextRenderer {
                 | ContentBlock::Heading { .. }
                 | ContentBlock::Blockquote(_)
                 | ContentBlock::List { .. }
+                | ContentBlock::Rule
+                | ContentBlock::Image { .. }
         )
     }
 
-    fn render(&self, block: &ContentBlock) -> gtk::Widget {
+    fn render(&self, block: &ContentBlock, registry: &crate::registry::ViewerRegistry) -> gtk::Widget {
         match block {
             ContentBlock::Paragraph(markup) => {
                 let label = gtk::Label::new(None);
@@ -40,18 +42,16 @@ impl BlockRenderer for TextRenderer {
                 label.set_hexpand(true);
                 label.set_selectable(true);
 
-                // Map header levels to GTK/Libadwaita CSS classes or larger sizes
                 let (css_class, size_tag) = match level {
                     1 => ("title-1", "xx-large"),
                     2 => ("title-2", "x-large"),
                     3 => ("title-3", "large"),
                     4 => ("title-4", "medium"),
-                    _ => ("heading", "medium"), // Default for 5, 6
+                    _ => ("heading", "medium"),
                 };
 
                 label.add_css_class(css_class);
 
-                // Also wrap in a span just to ensure it's bold and sized properly even without the theme
                 let full_markup = format!("<span size=\"{}\"><b>{}</b></span>", size_tag, markup);
                 label.set_markup(&full_markup);
                 label.set_margin_top(12);
@@ -61,7 +61,7 @@ impl BlockRenderer for TextRenderer {
             }
             ContentBlock::Blockquote(markup) => {
                 let frame = gtk::Frame::new(None);
-                frame.add_css_class("view"); // Gives it a background/border in Libadwaita
+                frame.add_css_class("view");
                 frame.set_hexpand(true);
 
                 let label = gtk::Label::new(None);
@@ -79,46 +79,76 @@ impl BlockRenderer for TextRenderer {
                 label.set_margin_bottom(8);
 
                 frame.set_child(Some(&label));
-                frame.set_margin_start(8); // Indent the quote
+                frame.set_margin_start(8);
                 frame.set_margin_bottom(8);
                 frame.upcast()
             }
             ContentBlock::List { ordered, items } => {
                 let vbox = gtk::Box::new(gtk::Orientation::Vertical, 4);
                 vbox.set_margin_bottom(8);
-                vbox.set_margin_start(16); // Indent the list
+                vbox.set_margin_start(16);
                 vbox.set_hexpand(true);
 
-                for (i, item_markup) in items.iter().enumerate() {
+                for (i, item) in items.iter().enumerate() {
                     let hbox = gtk::Box::new(gtk::Orientation::Horizontal, 8);
                     hbox.set_hexpand(true);
+                    hbox.set_valign(gtk::Align::Start);
 
-                    let bullet_text = if *ordered {
-                        format!("{}.", i + 1)
+                    if let Some(checked) = item.checked {
+                        let check = gtk::CheckButton::new();
+                        check.set_active(checked);
+                        check.set_sensitive(false); // Read-only in the viewer
+                        check.set_valign(gtk::Align::Start);
+                        hbox.append(&check);
                     } else {
-                        "•".to_string()
-                    };
+                        let bullet_text = if *ordered {
+                            format!("{}.", i + 1)
+                        } else {
+                            "•".to_string()
+                        };
 
-                    let bullet_label = gtk::Label::new(Some(&bullet_text));
-                    bullet_label.set_yalign(0.0); // Align to top of the item line
+                        let bullet_label = gtk::Label::new(Some(&bullet_text));
+                        bullet_label.set_yalign(0.0);
+                        bullet_label.add_css_class("dim-label");
+                        bullet_label.set_valign(gtk::Align::Start);
+                        hbox.append(&bullet_label);
+                    }
 
-                    let content_label = gtk::Label::new(None);
-                    content_label.set_use_markup(true);
-                    content_label.set_wrap(true);
-                    content_label.set_xalign(0.0);
-                    content_label.set_halign(gtk::Align::Fill);
-                    content_label.set_hexpand(true);
-                    content_label.set_selectable(true);
-                    content_label.set_markup(item_markup);
+                    let item_vbox = gtk::Box::new(gtk::Orientation::Vertical, 0);
+                    item_vbox.set_hexpand(true);
+                    item_vbox.set_halign(gtk::Align::Fill);
 
-                    hbox.append(&bullet_label);
-                    hbox.append(&content_label);
+                    for block in &item.blocks {
+                        if let Some(widget) = registry.render_block(block) {
+                            item_vbox.append(&widget);
+                        }
+                    }
+
+                    hbox.append(&item_vbox);
                     vbox.append(&hbox);
                 }
 
                 vbox.upcast()
             }
-            _ => unreachable!(), // can_render prevents this
+            ContentBlock::Rule => {
+                let separator = gtk::Separator::new(gtk::Orientation::Horizontal);
+                separator.set_margin_top(12);
+                separator.set_margin_bottom(12);
+                separator.upcast()
+            }
+            ContentBlock::Image { url, title, alt } => {
+                let vbox = gtk::Box::new(gtk::Orientation::Vertical, 4);
+                vbox.set_margin_bottom(12);
+
+                // For now, we'll just show a link or a placeholder
+                let link = gtk::LinkButton::with_label(url, if alt.is_empty() { url } else { alt });
+                if !title.is_empty() {
+                    link.set_tooltip_text(Some(title));
+                }
+                vbox.append(&link);
+                vbox.upcast()
+            }
+            _ => unreachable!(),
         }
     }
 }

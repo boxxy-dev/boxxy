@@ -29,7 +29,7 @@ impl BlockRenderer for CodeRenderer {
         matches!(block, ContentBlock::Code { .. })
     }
 
-    fn render(&self, block: &ContentBlock) -> gtk::Widget {
+    fn render(&self, block: &ContentBlock, _registry: &crate::registry::ViewerRegistry) -> gtk::Widget {
         if let ContentBlock::Code { lang, code } = block {
             let frame = gtk::Frame::new(None);
             frame.add_css_class("view");
@@ -39,16 +39,27 @@ impl BlockRenderer for CodeRenderer {
             vbox.set_hexpand(true);
 
             let header = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-            header.set_margin_start(8);
-            header.set_margin_end(8);
-            header.set_margin_top(4);
-            header.set_margin_bottom(4);
+            header.add_css_class("code-header");
+            
+            let css = "
+                .code-header { 
+                    background-color: rgba(255, 255, 255, 0.04); 
+                    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+                    padding: 4px 8px;
+                }
+            ";
+            let provider = gtk::CssProvider::new();
+            #[allow(deprecated)]
+            provider.load_from_string(css);
+            #[allow(deprecated)]
+            header.style_context().add_provider(&provider, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
 
             let lang_label = gtk::Label::new(Some(if lang.is_empty() { "text" } else { lang }));
             lang_label.add_css_class("dim-label");
             lang_label.add_css_class("caption");
             lang_label.set_hexpand(true);
             lang_label.set_halign(gtk::Align::Start);
+            lang_label.set_margin_start(4);
             header.append(&lang_label);
 
             let copy_btn = gtk::Button::builder()
@@ -76,9 +87,6 @@ impl BlockRenderer for CodeRenderer {
 
             header.append(&copy_btn);
             vbox.append(&header);
-
-            let separator = gtk::Separator::new(gtk::Orientation::Horizontal);
-            vbox.append(&separator);
 
             // Create a local viewer instance to track generation. 
             // This allows us to cancel async highlighting if the row is recycled by GtkListView.
@@ -125,8 +133,15 @@ impl BlockRenderer for CodeRenderer {
                     let ss = get_syntax_set();
                     let ts = get_theme_set();
 
-                    let syntax = ss
-                        .find_syntax_by_token(&lang_for_highlight)
+                    let syntax = if !lang_for_highlight.is_empty() && lang_for_highlight != "text" {
+                        ss.find_syntax_by_token(&lang_for_highlight)
+                            .or_else(|| ss.find_syntax_by_extension(&lang_for_highlight))
+                    } else {
+                        None
+                    };
+
+                    let syntax = syntax
+                        .or_else(|| ss.find_syntax_by_first_line(&code_for_highlight))
                         .unwrap_or_else(|| ss.find_syntax_plain_text());
 
                     let theme = if is_dark {

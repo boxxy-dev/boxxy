@@ -538,7 +538,7 @@ impl TerminalPaneComponent {
     pub fn show_claw_popover(&self, title: &str, message: &str, proposal: crate::TerminalProposal) {
         self.claw_indicator.hide();
         self.claw_popover
-            .show(OverlayMode::Claw, title, message, proposal);
+            .show(OverlayMode::Claw, title, None, message, proposal);
     }
 
     pub fn show_bookmark_proposal(
@@ -548,7 +548,7 @@ impl TerminalPaneComponent {
         proposal: crate::TerminalProposal,
     ) {
         self.claw_popover
-            .show(OverlayMode::Bookmark, title, message, proposal);
+            .show(OverlayMode::Bookmark, title, None, message, proposal);
     }
 
     pub fn hide_claw_popover(&self) {

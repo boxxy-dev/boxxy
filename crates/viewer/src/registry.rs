@@ -31,7 +31,7 @@ impl ViewerRegistry {
         // Iterate backwards so that custom renderers can override defaults
         for renderer in self.renderers.iter().rev() {
             if renderer.can_render(block) {
-                return Some(renderer.render(block));
+                return Some(renderer.render(block, self));
             }
         }
         None

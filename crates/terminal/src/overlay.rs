@@ -16,6 +16,7 @@ pub struct TerminalOverlay {
     revealer: gtk::Revealer,
     outer_scroll: gtk::ScrolledWindow,
     title_label: gtk::Label,
+    action_label: gtk::Label,
     title_container: gtk::Box,
     diagnosis_viewer: StructuredViewer,
     command_view: gtk::TextView,
@@ -127,7 +128,7 @@ impl TerminalOverlay {
         icon.add_css_class("accent");
         header.append(&icon);
 
-        let title_container = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        let title_container = gtk::Box::new(gtk::Orientation::Horizontal, 6);
         title_container.set_halign(gtk::Align::Start);
         title_container.set_valign(gtk::Align::Center);
         title_container.set_hexpand(true);
@@ -137,6 +138,12 @@ impl TerminalOverlay {
         title_label.set_halign(gtk::Align::Start);
         title_label.set_xalign(0.0);
         title_container.append(&title_label);
+
+        let action_label = gtk::Label::new(None);
+        action_label.set_halign(gtk::Align::Start);
+        action_label.set_xalign(0.0);
+        action_label.set_visible(false);
+        title_container.append(&action_label);
 
         header.append(&title_container);
 
@@ -375,10 +382,11 @@ impl TerminalOverlay {
             }
         });
 
-        Self {
+        TerminalOverlay {
             revealer,
             outer_scroll: master_scroll,
             title_label,
+            action_label,
             title_container,
             diagnosis_viewer,
             command_view,
@@ -431,6 +439,7 @@ impl TerminalOverlay {
         &self,
         mode: OverlayMode,
         title: &str,
+        action: Option<&str>,
         diagnosis: &str,
         proposal: crate::TerminalProposal,
     ) {
@@ -476,17 +485,40 @@ impl TerminalOverlay {
                 #[allow(deprecated)]
                 provider.load_from_string(&css);
                 #[allow(deprecated)]
-                self.title_container
+                self.title_label
                     .style_context()
                     .add_provider(&provider, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
-                self.title_container.add_css_class("overlay-badge");
+                self.title_label.add_css_class("overlay-badge");
+                
+                // Clear background from container so it doesn't wrap both
+                self.title_container.remove_css_class("overlay-badge");
+
+                if let Some(act) = action {
+                    self.action_label.set_label(act);
+                    self.action_label.set_visible(true);
+                    
+                    let action_css = ".action-badge { background-color: rgba(255, 255, 255, 0.1); color: @window_fg_color; border: 1px solid rgba(255,255,255,0.1); border-radius: 12px; padding: 4px 10px; font-weight: bold; font-size: 0.8rem; margin-left: 6px; }";
+                    let action_provider = gtk::CssProvider::new();
+                    #[allow(deprecated)]
+                    action_provider.load_from_string(&action_css);
+                    #[allow(deprecated)]
+                    self.action_label
+                        .style_context()
+                        .add_provider(&action_provider, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
+                    
+                    self.action_label.add_css_class("action-badge");
+                } else {
+                    self.action_label.set_visible(false);
+                }
             }
             OverlayMode::Bookmark => {
                 self.icon.set_visible(true);
                 self.icon
                     .set_icon_name(Some("boxxy-user-bookmarks-symbolic"));
                 self.title_label.add_css_class("heading");
+                self.title_label.remove_css_class("overlay-badge");
                 self.title_container.remove_css_class("overlay-badge");
+                self.action_label.set_visible(false);
             }
         }
 
