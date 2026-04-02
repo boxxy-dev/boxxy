@@ -25,10 +25,10 @@ use serde_json::json;
 use boxxy_ai_core::AiCredentials;
 
 pub enum ClawAgent {
-    Gemini(Agent<gemini::CompletionModel>),
-    Ollama(Agent<ollama::CompletionModel>),
-    Anthropic(Agent<rig::providers::anthropic::completion::CompletionModel>),
-    OpenAi(Agent<ResponsesCompletionModel>),
+    Gemini(Agent<gemini::CompletionModel>, String, String), // Agent, Provider Name, Model Name
+    Ollama(Agent<ollama::CompletionModel>, String, String),
+    Anthropic(Agent<rig::providers::anthropic::completion::CompletionModel>, String, String),
+    OpenAi(Agent<ResponsesCompletionModel>, String, String),
     Error(String),
 }
 
@@ -42,10 +42,10 @@ impl ClawAgent {
         let start = std::time::Instant::now();
 
         let res_result = match self {
-            Self::Gemini(agent) => agent.prompt(prompt).with_history(history.clone()).extended_details().await,
-            Self::Ollama(agent) => agent.prompt(prompt).with_history(history.clone()).extended_details().await,
-            Self::Anthropic(agent) => agent.prompt(prompt).with_history(history.clone()).extended_details().await,
-            Self::OpenAi(agent) => agent.prompt(prompt).with_history(history.clone()).extended_details().await,
+            Self::Gemini(agent, _, _) => agent.prompt(prompt).with_history(history.clone()).extended_details().await,
+            Self::Ollama(agent, _, _) => agent.prompt(prompt).with_history(history.clone()).extended_details().await,
+            Self::Anthropic(agent, _, _) => agent.prompt(prompt).with_history(history.clone()).extended_details().await,
+            Self::OpenAi(agent, _, _) => agent.prompt(prompt).with_history(history.clone()).extended_details().await,
             Self::Error(e) => return Err(rig::completion::PromptError::CompletionError(
                 rig::completion::CompletionError::ProviderError(e.clone()),
             )),
@@ -54,23 +54,23 @@ impl ClawAgent {
         match res_result {
             Ok(res) => {
                 let duration = start.elapsed();
-                let model_name = match self {
-                    Self::Gemini(_) => "gemini",
-                    Self::Ollama(_) => "ollama",
-                    Self::Anthropic(_) => "anthropic",
-                    Self::OpenAi(_) => "openai",
-                    _ => "unknown",
+                let (provider_name, model_name) = match self {
+                    Self::Gemini(_, p, m) => (p.as_str(), m.as_str()),
+                    Self::Ollama(_, p, m) => (p.as_str(), m.as_str()),
+                    Self::Anthropic(_, p, m) => (p.as_str(), m.as_str()),
+                    Self::OpenAi(_, p, m) => (p.as_str(), m.as_str()),
+                    _ => ("unknown", "unknown"),
                 };
 
                 // Track Invocations
-                boxxy_telemetry::track_ai_invocation(model_name, model_name).await;
+                boxxy_telemetry::track_ai_invocation(provider_name, model_name, "claw").await;
                 
                 // Track Latency
-                boxxy_telemetry::track_ai_latency(model_name, model_name, duration.as_millis() as u64).await;
+                boxxy_telemetry::track_ai_latency(model_name, provider_name, duration.as_millis() as u64, "claw").await;
 
                 // Track Tokens
-                boxxy_telemetry::track_ai_tokens(model_name, "input", res.usage.input_tokens as u64).await;
-                boxxy_telemetry::track_ai_tokens(model_name, "output", res.usage.output_tokens as u64).await;
+                boxxy_telemetry::track_ai_tokens(model_name, "input", res.usage.input_tokens as u64, "claw").await;
+                boxxy_telemetry::track_ai_tokens(model_name, "output", res.usage.output_tokens as u64, "claw").await;
 
                 Ok((res.output.clone(), Some(res.usage)))
             }
@@ -228,7 +228,7 @@ pub fn create_claw_agent(
                 .default_max_turns(100)
                 .tools(tools);
 
-            ClawAgent::Gemini(builder.build())
+            ClawAgent::Gemini(builder.build(), "Gemini".to_string(), model.api_name().to_string())
         }
         ModelProvider::Ollama(model_name) => {
             let client: ollama::Client = ollama::Client::builder()
@@ -243,7 +243,7 @@ pub fn create_claw_agent(
                 .default_max_turns(100)
                 .tools(tools);
 
-            ClawAgent::Ollama(builder.build())
+            ClawAgent::Ollama(builder.build(), "Ollama".to_string(), model_name.clone())
         }
         ModelProvider::Anthropic(model) => {
             let key = creds.api_keys.get("Anthropic").cloned().unwrap_or_default();
@@ -255,7 +255,7 @@ pub fn create_claw_agent(
                 .default_max_turns(100)
                 .tools(tools);
 
-            ClawAgent::Anthropic(builder.build())
+            ClawAgent::Anthropic(builder.build(), "Anthropic".to_string(), model.api_name().to_string())
         }
         ModelProvider::OpenAi(model, thinking) => {
             let key = creds.api_keys.get("OpenAI").cloned().unwrap_or_default();
@@ -273,7 +273,7 @@ pub fn create_claw_agent(
                 }));
             }
 
-            ClawAgent::OpenAi(builder.build())
+            ClawAgent::OpenAi(builder.build(), "OpenAI".to_string(), model.api_name().to_string())
         }
     }
 }

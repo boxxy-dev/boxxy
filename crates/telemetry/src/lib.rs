@@ -106,35 +106,38 @@ pub async fn track_launch(os: &str, arch: &str, pkg_type: &str, version: &str, s
     ).await;
 }
 
-pub async fn track_ai_tokens(model: &str, role: &str, count: u64) {
+pub async fn track_ai_tokens(model: &str, role: &str, count: u64, feature: &str) {
     track_event(
         "ai.tokens",
         count as f64,
         vec![
             KeyValue::new("model_name", model.to_string()),
             KeyValue::new("role", role.to_string()),
+            KeyValue::new("feature", feature.to_string()),
         ],
     ).await;
 }
 
-pub async fn track_ai_invocation(provider: &str, model: &str) {
+pub async fn track_ai_invocation(provider: &str, model: &str, feature: &str) {
     track_event(
         "ai.invocations",
         1.0,
         vec![
             KeyValue::new("model_provider", provider.to_string()),
             KeyValue::new("model_name", model.to_string()),
+            KeyValue::new("feature", feature.to_string()),
         ],
     ).await;
 }
 
-pub async fn track_ai_latency(model: &str, provider: &str, ms: u64) {
+pub async fn track_ai_latency(model: &str, provider: &str, ms: u64, feature: &str) {
     track_event(
         "ai.latency",
         ms as f64,
         vec![
             KeyValue::new("model_name", model.to_string()),
             KeyValue::new("provider", provider.to_string()),
+            KeyValue::new("feature", feature.to_string()),
         ],
     ).await;
 }
