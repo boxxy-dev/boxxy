@@ -47,7 +47,7 @@ impl ClawIndicator {
         let svg = gtk::Svg::from_resource("/dev/boxxy/BoxxyTerminal/icons/boxxy-spinner.gpa");
         svg.play();
 
-        let spinner = gtk::Image::builder().paintable(&svg).pixel_size(16).build();
+        let spinner = gtk::Image::builder().paintable(&svg).pixel_size(20).build();
         spinner.add_css_class("claw-spinner");
 
         // 2. Connect the SVG to the widget's native frame clock so it can animate.
