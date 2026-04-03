@@ -449,7 +449,6 @@ impl TerminalPaneComponent {
             is_pinned.clone(),
         );
 
-
         // Keep popover height capped to the live pane height.
         let claw_popover_for_resize = claw_popover.clone();
         let height_detector = gtk::DrawingArea::new();
@@ -657,8 +656,16 @@ impl TerminalPaneComponent {
 
                     let (cols, rows) = {
                         let inner = inner_rc.borrow();
-                        let c = if inner.n_columns > 0 { inner.n_columns as u16 } else { 80 };
-                        let r = if inner.n_rows > 0 { inner.n_rows as u16 } else { 24 };
+                        let c = if inner.n_columns > 0 {
+                            inner.n_columns as u16
+                        } else {
+                            80
+                        };
+                        let r = if inner.n_rows > 0 {
+                            inner.n_rows as u16
+                        } else {
+                            24
+                        };
                         (c, r)
                     };
 

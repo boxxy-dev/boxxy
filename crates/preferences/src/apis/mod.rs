@@ -103,7 +103,10 @@ pub fn setup_apis_page(
 
                         if is_empty {
                             if let Some(_env_key) = Settings::get_env_api_key(&prov_name) {
-                                row_clone.set_title(&format!("{} API Key (Set from environment)", prov_name_clone));
+                                row_clone.set_title(&format!(
+                                    "{} API Key (Set from environment)",
+                                    prov_name_clone
+                                ));
                             }
                         } else {
                             row_clone.set_title(&format!("{} API Key", prov_name_clone));

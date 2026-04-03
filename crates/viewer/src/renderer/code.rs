@@ -29,7 +29,11 @@ impl BlockRenderer for CodeRenderer {
         matches!(block, ContentBlock::Code { .. })
     }
 
-    fn render(&self, block: &ContentBlock, _registry: &crate::registry::ViewerRegistry) -> gtk::Widget {
+    fn render(
+        &self,
+        block: &ContentBlock,
+        _registry: &crate::registry::ViewerRegistry,
+    ) -> gtk::Widget {
         if let ContentBlock::Code { lang, code } = block {
             let frame = gtk::Frame::new(None);
             frame.add_css_class("view");
@@ -40,7 +44,7 @@ impl BlockRenderer for CodeRenderer {
 
             let header = gtk::Box::new(gtk::Orientation::Horizontal, 6);
             header.add_css_class("code-header");
-            
+
             let css = "
                 .code-header { 
                     background-color: rgba(255, 255, 255, 0.04); 
@@ -52,7 +56,9 @@ impl BlockRenderer for CodeRenderer {
             #[allow(deprecated)]
             provider.load_from_string(css);
             #[allow(deprecated)]
-            header.style_context().add_provider(&provider, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
+            header
+                .style_context()
+                .add_provider(&provider, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
 
             let lang_label = gtk::Label::new(Some(if lang.is_empty() { "text" } else { lang }));
             lang_label.add_css_class("dim-label");
@@ -88,9 +94,11 @@ impl BlockRenderer for CodeRenderer {
             header.append(&copy_btn);
             vbox.append(&header);
 
-            // Create a local viewer instance to track generation. 
+            // Create a local viewer instance to track generation.
             // This allows us to cancel async highlighting if the row is recycled by GtkListView.
-            let viewer = StructuredViewer::new(Rc::new(crate::registry::ViewerRegistry::new_with_defaults()));
+            let viewer = StructuredViewer::new(Rc::new(
+                crate::registry::ViewerRegistry::new_with_defaults(),
+            ));
             unsafe {
                 vbox.set_data("viewer", viewer);
             }
@@ -119,13 +127,14 @@ impl BlockRenderer for CodeRenderer {
                 let is_dark = libadwaita::StyleManager::default().is_dark();
 
                 // Capture the shared atomic and the current generation ID
-                let (gen_handle, start_gen) = if let Some(v_ptr) = unsafe { vbox.data::<StructuredViewer>("viewer") } {
-                    let v = unsafe { v_ptr.as_ref() };
-                    (v.generation_handle(), v.generation())
-                } else {
-                    // Fallback should not happen in practice
-                    (std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)), 0)
-                };
+                let (gen_handle, start_gen) =
+                    if let Some(v_ptr) = unsafe { vbox.data::<StructuredViewer>("viewer") } {
+                        let v = unsafe { v_ptr.as_ref() };
+                        (v.generation_handle(), v.generation())
+                    } else {
+                        // Fallback should not happen in practice
+                        (std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)), 0)
+                    };
 
                 let (tx, rx) = async_channel::bounded::<String>(1);
 

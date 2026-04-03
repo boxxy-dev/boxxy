@@ -1,10 +1,10 @@
-use rig::message::Message;
-use gtk4 as gtk;
 use gtk::glib;
 use gtk::prelude::*;
 use gtk::subclass::prelude::*;
-use std::cell::RefCell;
+use gtk4 as gtk;
+use rig::message::Message;
 use std::cell::Cell;
+use std::cell::RefCell;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, glib::Enum, Default)]
 #[enum_type(name = "ChatRole")]
@@ -34,12 +34,13 @@ mod imp {
 
     impl ObjectImpl for ChatMessageObject {
         fn properties() -> &'static [glib::ParamSpec] {
-            static PROPERTIES: std::sync::LazyLock<Vec<glib::ParamSpec>> = std::sync::LazyLock::new(|| {
-                vec![
-                    glib::ParamSpecEnum::builder::<Role>("role").build(),
-                    glib::ParamSpecString::builder("content").build(),
-                ]
-            });
+            static PROPERTIES: std::sync::LazyLock<Vec<glib::ParamSpec>> =
+                std::sync::LazyLock::new(|| {
+                    vec![
+                        glib::ParamSpecEnum::builder::<Role>("role").build(),
+                        glib::ParamSpecString::builder("content").build(),
+                    ]
+                });
             PROPERTIES.as_ref()
         }
 

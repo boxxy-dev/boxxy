@@ -21,7 +21,11 @@ pub enum ContentBlock {
     Rule,
 
     /// An image.
-    Image { url: String, title: String, alt: String },
+    Image {
+        url: String,
+        title: String,
+        alt: String,
+    },
 
     /// A fenced code block. `code` is preserved *raw* (unescaped)
     /// to ensure copy-to-clipboard functionality works properly.

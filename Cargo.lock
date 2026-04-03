@@ -750,6 +750,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "boxxy-spinner-demo"
+version = "0.1.0"
+dependencies = [
+ "gtk4",
+]
+
+[[package]]
 name = "boxxy-telemetry"
 version = "0.0.31"
 dependencies = [

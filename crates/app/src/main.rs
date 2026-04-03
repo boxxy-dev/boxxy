@@ -28,7 +28,11 @@ fn main() {
         let os = System::name().unwrap_or_else(|| "Unknown".to_string());
         let arch = System::cpu_arch();
         let version = env!("CARGO_PKG_VERSION");
-        let pkg_type = if std::env::var("FLATPAK_ID").is_ok() { "flatpak" } else { "native" };
+        let pkg_type = if std::env::var("FLATPAK_ID").is_ok() {
+            "flatpak"
+        } else {
+            "native"
+        };
         let shell = std::env::var("SHELL").unwrap_or_else(|_| "unknown".to_string());
 
         boxxy_telemetry::track_launch(&os, &arch, pkg_type, version, &shell).await;
@@ -51,7 +55,11 @@ fn main() {
 
         let mut found_any = false;
         for (env_var, provider) in keys_to_check {
-            if let Ok(key) = agent.proxy().get_environment_variable(env_var.to_string()).await {
+            if let Ok(key) = agent
+                .proxy()
+                .get_environment_variable(env_var.to_string())
+                .await
+            {
                 if !key.is_empty() {
                     boxxy_preferences::Settings::set_env_api_key(provider, key);
                     found_any = true;

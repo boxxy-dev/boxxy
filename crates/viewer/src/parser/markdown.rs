@@ -69,7 +69,9 @@ pub fn parse_markdown(input: &str) -> Vec<ContentBlock> {
                         blocks: Vec::new(),
                         checked: None,
                     }),
-                    Tag::Image { dest_url, title, .. } => {
+                    Tag::Image {
+                        dest_url, title, ..
+                    } => {
                         stack.push(ParseContainer::Image {
                             url: dest_url.to_string(),
                             title: title.to_string(),
@@ -179,7 +181,9 @@ pub fn parse_markdown(input: &str) -> Vec<ContentBlock> {
                 None
             }
             ParseContainer::List { ordered, items } => Some(ContentBlock::List { ordered, items }),
-            ParseContainer::Image { url, title, alt } => Some(ContentBlock::Image { url, title, alt }),
+            ParseContainer::Image { url, title, alt } => {
+                Some(ContentBlock::Image { url, title, alt })
+            }
         };
 
         if let Some(b) = block {
@@ -197,7 +201,10 @@ fn is_in_code_block(stack: &[ParseContainer]) -> bool {
 fn append_text(stack: &mut Vec<ParseContainer>, text: &str) {
     let mut needs_paragraph = false;
     if let Some(container) = stack.last() {
-        if matches!(container, ParseContainer::Item { .. } | ParseContainer::List { .. }) {
+        if matches!(
+            container,
+            ParseContainer::Item { .. } | ParseContainer::List { .. }
+        ) {
             needs_paragraph = true;
         }
     } else {
@@ -220,7 +227,10 @@ fn append_text(stack: &mut Vec<ParseContainer>, text: &str) {
     }
 }
 
-fn maybe_close_implicit_paragraph(stack: &mut Vec<ParseContainer>, root_blocks: &mut Vec<ContentBlock>) {
+fn maybe_close_implicit_paragraph(
+    stack: &mut Vec<ParseContainer>,
+    root_blocks: &mut Vec<ContentBlock>,
+) {
     let is_implicit = if let Some(ParseContainer::Paragraph(_, implicit)) = stack.last() {
         *implicit
     } else {
@@ -236,7 +246,11 @@ fn maybe_close_implicit_paragraph(stack: &mut Vec<ParseContainer>, root_blocks: 
     }
 }
 
-fn push_block(root_blocks: &mut Vec<ContentBlock>, stack: &mut [ParseContainer], block: ContentBlock) {
+fn push_block(
+    root_blocks: &mut Vec<ContentBlock>,
+    stack: &mut [ParseContainer],
+    block: ContentBlock,
+) {
     // Find the nearest container that supports nested blocks (Item)
     for container in stack.iter_mut().rev() {
         if let ParseContainer::Item { blocks, .. } = container {
@@ -276,7 +290,9 @@ mod tests {
             assert_eq!(items.len(), 2);
             assert_eq!(items[0].blocks.len(), 2);
             match &items[0].blocks[1] {
-                ContentBlock::List { items: sub_items, .. } => assert_eq!(sub_items.len(), 2),
+                ContentBlock::List {
+                    items: sub_items, ..
+                } => assert_eq!(sub_items.len(), 2),
                 _ => panic!("Expected nested List"),
             }
         }

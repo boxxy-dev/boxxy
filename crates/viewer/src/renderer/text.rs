@@ -18,7 +18,11 @@ impl BlockRenderer for TextRenderer {
         )
     }
 
-    fn render(&self, block: &ContentBlock, registry: &crate::registry::ViewerRegistry) -> gtk::Widget {
+    fn render(
+        &self,
+        block: &ContentBlock,
+        registry: &crate::registry::ViewerRegistry,
+    ) -> gtk::Widget {
         match block {
             ContentBlock::Paragraph(markup) => {
                 let label = gtk::Label::new(None);

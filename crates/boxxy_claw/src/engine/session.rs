@@ -550,7 +550,7 @@ impl ClawSession {
                                     let agent_name = self.name.clone();
                                     tokio::spawn(async move {
                                         let _ = tx_ui
-                                            .send(ClawEngineEvent::LazyErrorIndicator { 
+                                            .send(ClawEngineEvent::LazyErrorIndicator {
                                                 agent_name,
                                                 visible: true,
                                             })

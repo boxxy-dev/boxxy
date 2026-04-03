@@ -489,14 +489,14 @@ impl TerminalOverlay {
                     .style_context()
                     .add_provider(&provider, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
                 self.title_label.add_css_class("overlay-badge");
-                
+
                 // Clear background from container so it doesn't wrap both
                 self.title_container.remove_css_class("overlay-badge");
 
                 if let Some(act) = action {
                     self.action_label.set_label(act);
                     self.action_label.set_visible(true);
-                    
+
                     let action_css = ".action-badge { background-color: rgba(255, 255, 255, 0.1); color: @window_fg_color; border: 1px solid rgba(255,255,255,0.1); border-radius: 12px; padding: 4px 10px; font-weight: bold; font-size: 0.8rem; margin-left: 6px; }";
                     let action_provider = gtk::CssProvider::new();
                     #[allow(deprecated)]
@@ -505,7 +505,7 @@ impl TerminalOverlay {
                     self.action_label
                         .style_context()
                         .add_provider(&action_provider, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
-                    
+
                     self.action_label.add_css_class("action-badge");
                 } else {
                     self.action_label.set_visible(false);

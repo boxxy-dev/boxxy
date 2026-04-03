@@ -360,7 +360,10 @@ Providing this context allows Boxxy-Claw to tailor its commands and diagnostics 
     }
 
     pub fn set_env_api_key(provider: &str, key: String) {
-        ENV_API_KEYS.write().unwrap().insert(provider.to_string(), key);
+        ENV_API_KEYS
+            .write()
+            .unwrap()
+            .insert(provider.to_string(), key);
     }
 
     pub fn get_env_api_key(provider: &str) -> Option<String> {
@@ -380,7 +383,9 @@ Providing this context allows Boxxy-Claw to tailor its commands and diagnostics 
         let mut keys = self.api_keys.clone();
         let env_keys = ENV_API_KEYS.read().unwrap();
         for (provider, key) in env_keys.iter() {
-            if !keys.contains_key(provider) || keys.get(provider).map(|k| k.is_empty()).unwrap_or(true) {
+            if !keys.contains_key(provider)
+                || keys.get(provider).map(|k| k.is_empty()).unwrap_or(true)
+            {
                 keys.insert(provider.clone(), key.clone());
             }
         }

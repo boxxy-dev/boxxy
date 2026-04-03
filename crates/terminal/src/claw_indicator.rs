@@ -6,7 +6,7 @@ use std::rc::Rc;
 #[derive(Clone)]
 pub struct ClawIndicator {
     revealer: gtk::Revealer,
-    spinner: gtk::Spinner,
+    spinner: gtk::Image,
     icon: gtk::Image,
     label: gtk::Label,
     main_btn: gtk::Button,
@@ -42,16 +42,38 @@ impl ClawIndicator {
 
         let btn_box = gtk::Box::new(gtk::Orientation::Horizontal, 6);
 
-        let spinner = gtk::Spinner::new();
+        // 1. Load the animated SVG from the compiled GResource blob.
+        // Make sure the file is registered in `crates/app/build.rs` or it will silently load empty!
+        let svg = gtk::Svg::from_resource("/dev/boxxy/BoxxyTerminal/icons/boxxy-spinner.gpa");
+        svg.play();
+
+        let spinner = gtk::Image::builder().paintable(&svg).pixel_size(16).build();
         spinner.add_css_class("claw-spinner");
+
+        // 2. Connect the SVG to the widget's native frame clock so it can animate.
+        // Using `connect_map` ensures the widget is fully mapped to a surface.
+        spinner.connect_map({
+            let svg = svg.clone();
+            move |widget| {
+                if let Some(native) = widget.native() {
+                    if let Some(surface) = native.surface() {
+                        svg.set_frame_clock(&surface.frame_clock());
+                    }
+                }
+            }
+        });
+
+        if let Some(clock) = spinner.frame_clock() {
+            svg.set_frame_clock(&clock);
+        }
         btn_box.append(&spinner);
 
         let icon = gtk::Image::from_icon_name("boxxy-boxxyclaw-symbolic");
         icon.add_css_class("accent");
         icon.set_pixel_size(16);
-        // btn_box.append(&icon);
+        btn_box.append(&icon);
 
-        let label = gtk::Label::new(Some("Working"));
+        let label = gtk::Label::new(Some("Thinking.."));
         label.add_css_class("caption");
         btn_box.append(&label);
 
@@ -105,16 +127,14 @@ impl ClawIndicator {
     pub fn show_thinking(&self) {
         *self.action_type.borrow_mut() = 0;
         self.spinner.set_visible(true);
-        self.spinner.start();
         self.icon.set_visible(false);
-        self.label.set_text("Working");
+        self.label.set_text("Thinking..");
         self.main_btn.set_can_focus(false);
         self.revealer.set_reveal_child(true);
     }
 
     pub fn show_lazy_error(&self) {
         *self.action_type.borrow_mut() = 1;
-        self.spinner.stop();
         self.spinner.set_visible(false);
         self.icon.set_visible(true);
         self.icon
@@ -135,7 +155,6 @@ impl ClawIndicator {
 
     pub fn show_diagnosis_ready(&self) {
         *self.action_type.borrow_mut() = 2;
-        self.spinner.stop();
         self.spinner.set_visible(false);
         self.icon.set_visible(true);
         self.icon.set_icon_name(Some("boxxy-boxxyclaw-symbolic"));

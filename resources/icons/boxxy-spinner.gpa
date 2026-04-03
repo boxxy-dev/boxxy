@@ -1,0 +1,71 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<svg
+  xmlns='http://www.w3.org/2000/svg'
+  xmlns:gpa='https://www.gtk.org/grappa'
+  gpa:version='1'
+  gpa:state='0'
+  width='96'
+  height='96'>
+
+  <path id='bg-col1'
+    d='M 18 80 L 18 64 M 18 60 L 18 44'
+    fill='none' stroke='black' stroke-width='16' stroke-opacity='0.1'
+    gpa:stroke='foreground' gpa:states='0' />
+
+  <path id='bg-col2'
+    d='M 38 80 L 38 64 M 38 60 L 38 44 M 38 40 L 38 24 M 38 20 L 38 4'
+    fill='none' stroke='black' stroke-width='16' stroke-opacity='0.1'
+    gpa:stroke='foreground' gpa:states='0' />
+
+  <path id='bg-col3'
+    d='M 58 80 L 58 64 M 58 60 L 58 44 M 58 40 L 58 24'
+    fill='none' stroke='black' stroke-width='16' stroke-opacity='0.1'
+    gpa:stroke='foreground' gpa:states='0' />
+
+  <path id='bg-col4'
+    d='M 78 80 L 78 64 M 78 60 L 78 44'
+    fill='none' stroke='black' stroke-width='16' stroke-opacity='0.1'
+    gpa:stroke='foreground' gpa:states='0' />
+
+
+  <path id='col1'
+    d='M 18 80 L 18 64 M 18 60 L 18 44'
+    fill='none' stroke='black' stroke-width='16'
+    gpa:stroke='#ff006e' gpa:states='0'
+    gpa:transition-type='fade' gpa:transition-duration='1000ms'
+    gpa:animation-type='automatic'
+    gpa:animation-direction='segment-alternate'
+    gpa:animation-duration='1100ms'
+    gpa:animation-easing='ease-in-out' />
+
+  <path id='col2'
+    d='M 38 80 L 38 64 M 38 60 L 38 44 M 38 40 L 38 24 M 38 20 L 38 4'
+    fill='none' stroke='#3a86ff' stroke-width='16'
+    gpa:states='0'
+    gpa:transition-type='fade' gpa:transition-duration='1000ms'
+    gpa:animation-type='automatic'
+    gpa:animation-direction='segment-alternate'
+    gpa:animation-duration='1700ms'
+    gpa:animation-easing='ease-in-out' />
+
+  <path id='col3'
+    d='M 58 80 L 58 64 M 58 60 L 58 44 M 58 40 L 58 24'
+    fill='none' stroke='#ffbe0b' stroke-width='16'
+    gpa:states='0'
+    gpa:transition-type='fade' gpa:transition-duration='1000ms'
+    gpa:animation-type='automatic'
+    gpa:animation-direction='segment-alternate'
+    gpa:animation-duration='1400ms'
+    gpa:animation-easing='ease-in-out' />
+
+  <path id='col4'
+    d='M 78 80 L 78 64 M 78 60 L 78 44'
+    fill='none' stroke='#06d6a0' stroke-width='16'
+    gpa:states='0'
+    gpa:transition-type='fade' gpa:transition-duration='1000ms'
+    gpa:animation-type='automatic'
+    gpa:animation-direction='segment-alternate'
+    gpa:animation-duration='950ms'
+    gpa:animation-easing='ease-in-out' />
+
+</svg>

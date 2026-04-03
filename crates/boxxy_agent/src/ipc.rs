@@ -160,9 +160,9 @@ impl BoxxyAgent {
         unsafe {
             use std::os::unix::io::AsRawFd;
             // Provide a "Sane Default" size for the PTY *before* the shell process starts.
-            // By default, Linux initializes new PTYs as 0x0. If we spawn `bash`/`zsh` 
+            // By default, Linux initializes new PTYs as 0x0. If we spawn `bash`/`zsh`
             // before the GTK UI has fired its first `size_allocate` event and resized us,
-            // the shell's `.bashrc` prompt scripts might read `$TTY_WIDTH=0` and break 
+            // the shell's `.bashrc` prompt scripts might read `$TTY_WIDTH=0` and break
             // their rendering logic permanently (e.g. falling back to black and white).
             // This prevents that race condition by guaranteeing a size > 0 on boot.
             let ws = libc::winsize {

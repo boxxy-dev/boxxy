@@ -5,11 +5,11 @@ pub mod session;
 pub mod tools;
 
 use boxxy_db::Db;
+use gtk4::glib;
+use gtk4::subclass::prelude::*;
 pub use session::ClawSession;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use gtk4::glib;
-use gtk4::subclass::prelude::*;
 
 pub fn persist_visual_event(
     db_cell: Arc<Mutex<Option<Db>>>,
@@ -123,11 +123,10 @@ mod imp {
 
     impl ObjectImpl for ClawRowObject {
         fn properties() -> &'static [glib::ParamSpec] {
-            static PROPERTIES: std::sync::LazyLock<Vec<glib::ParamSpec>> = std::sync::LazyLock::new(|| {
-                vec![
-                    glib::ParamSpecString::builder("content").build(),
-                ]
-            });
+            static PROPERTIES: std::sync::LazyLock<Vec<glib::ParamSpec>> =
+                std::sync::LazyLock::new(|| {
+                    vec![glib::ParamSpecString::builder("content").build()]
+                });
             PROPERTIES.as_ref()
         }
 
@@ -138,7 +137,9 @@ mod imp {
                     match row.as_ref().unwrap() {
                         PersistentClawRow::Diagnosis { content, .. } => content.to_value(),
                         PersistentClawRow::Suggested { diagnosis, .. } => diagnosis.to_value(),
-                        PersistentClawRow::ProcessList { result_json, .. } => result_json.to_value(),
+                        PersistentClawRow::ProcessList { result_json, .. } => {
+                            result_json.to_value()
+                        }
                     }
                 }
                 _ => unimplemented!(),

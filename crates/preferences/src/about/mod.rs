@@ -1,7 +1,7 @@
 use adw::prelude::*;
+use gtk::glib;
 use gtk4 as gtk;
 use libadwaita as adw;
-use gtk::glib;
 
 pub fn populate_about_page(
     page: &adw::PreferencesPage,

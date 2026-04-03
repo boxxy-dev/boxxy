@@ -21,7 +21,7 @@ members = [
     "crates/core_widgets",
     "crates/core_toolbox",
     "crates/viewer",
-    "crates/telemetry",
+    "crates/telemetry", "DEV/scripts/tests",
     ]
 
 [workspace.package]

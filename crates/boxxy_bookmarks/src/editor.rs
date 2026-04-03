@@ -283,8 +283,30 @@ impl BookmarkEditor {
         let btn_label = gtk::Label::new(Some("Generate"));
         btn_content.append(&btn_label);
 
-        let ai_spinner = gtk::Spinner::new();
+        // 1. Load the animated SVG from the compiled GResource blob.
+        // Make sure the file is registered in `crates/app/build.rs` or it will silently load empty!
+        let svg = gtk::Svg::from_resource("/dev/boxxy/BoxxyTerminal/icons/boxxy-spinner.gpa");
+        svg.play();
+
+        let ai_spinner = gtk::Image::builder().paintable(&svg).pixel_size(16).build();
         ai_spinner.set_visible(false);
+
+        // 2. Connect the SVG to the widget's native frame clock so it can animate.
+        // Using `connect_map` ensures the widget is fully mapped to a surface.
+        ai_spinner.connect_map({
+            let svg = svg.clone();
+            move |widget| {
+                if let Some(native) = widget.native() {
+                    if let Some(surface) = native.surface() {
+                        svg.set_frame_clock(&surface.frame_clock());
+                    }
+                }
+            }
+        });
+
+        if let Some(clock) = ai_spinner.frame_clock() {
+            svg.set_frame_clock(&clock);
+        }
         btn_content.append(&ai_spinner);
 
         ai_generate_btn.set_child(Some(&btn_content));
@@ -314,7 +336,6 @@ impl BookmarkEditor {
             }
 
             ai_spinner_gen.set_visible(true);
-            ai_spinner_gen.start();
             ai_btn_gen.set_sensitive(false);
             ai_text_view_gen.set_sensitive(false);
 
@@ -366,7 +387,6 @@ impl BookmarkEditor {
                         }
                     }
                 }
-                ai_spinner_inner.stop();
                 ai_spinner_inner.set_visible(false);
                 ai_btn_inner.set_sensitive(true);
                 ai_text_view_inner.set_sensitive(true);

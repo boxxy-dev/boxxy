@@ -1,10 +1,10 @@
 use crate::engine::{ScheduledTask, TaskStatus, TaskType};
+use boxxy_core_widgets::ObjectExtSafe;
 use boxxy_viewer::{BlockRenderer, ContentBlock, StructuredViewer, ViewerRegistry};
 use gtk::prelude::*;
 use gtk4 as gtk;
 use libadwaita as adw;
 use std::rc::Rc;
-use boxxy_core_widgets::ObjectExtSafe;
 
 pub struct ProcessListRenderer;
 
@@ -13,7 +13,11 @@ impl BlockRenderer for ProcessListRenderer {
         matches!(block, ContentBlock::Custom { schema, .. } if schema == "list_processes")
     }
 
-    fn render(&self, block: &ContentBlock, _registry: &boxxy_viewer::ViewerRegistry) -> gtk::Widget {
+    fn render(
+        &self,
+        block: &ContentBlock,
+        _registry: &boxxy_viewer::ViewerRegistry,
+    ) -> gtk::Widget {
         if let ContentBlock::Custom { raw_payload, .. } = block {
             let vbox = gtk::Box::new(gtk::Orientation::Vertical, 4);
             if let Ok(processes) =
@@ -154,9 +158,11 @@ impl ClawSidebarComponent {
         clear_btn.connect_clicked(move |_| {
             if let Some(list) = current_list_clear.borrow().as_ref() {
                 if let Some(model) = list.model() {
-                    if let Some(store) = model.downcast_ref::<gtk::NoSelection>()
+                    if let Some(store) = model
+                        .downcast_ref::<gtk::NoSelection>()
                         .and_then(|s| s.model())
-                        .and_then(|m| m.downcast::<gtk::gio::ListStore>().ok()) {
+                        .and_then(|m| m.downcast::<gtk::gio::ListStore>().ok())
+                    {
                         store.remove_all();
                     }
                 }
@@ -217,10 +223,11 @@ impl ClawSidebarComponent {
         let adj = self.scroll.vadjustment();
         let list_clone = list.clone();
         if let Some(model) = list.model() {
-            if let Some(store) = model.downcast_ref::<gtk::NoSelection>()
+            if let Some(store) = model
+                .downcast_ref::<gtk::NoSelection>()
                 .and_then(|s| s.model())
-                .and_then(|m| m.downcast::<gtk::gio::ListStore>().ok()) {
-                
+                .and_then(|m| m.downcast::<gtk::gio::ListStore>().ok())
+            {
                 let adj_clone = adj.clone();
                 let lv = list_clone.clone();
                 store.connect_items_changed(move |s, _, _, _| {
@@ -245,9 +252,7 @@ impl ClawSidebarComponent {
 
     pub fn refresh_visibility(&self) {
         if let Some(list) = self.current_list.borrow().as_ref() {
-            let has_items = list.model()
-                .map(|m| m.n_items() > 0)
-                .unwrap_or(false);
+            let has_items = list.model().map(|m| m.n_items() > 0).unwrap_or(false);
             self.status_page.set_visible(!has_items);
             self.scroll.set_visible(has_items);
             self.command_panel.set_visible(has_items);
@@ -442,7 +447,10 @@ pub fn create_claw_message_list() -> (gtk::ListView, gtk::gio::ListStore) {
         let viewer = vbox.get_safe_data::<StructuredViewer>("viewer").unwrap();
         let cmd_label = vbox.get_safe_data::<gtk::Label>("cmd_label").unwrap();
 
-        if let Some(obj) = list_item.item().and_downcast::<crate::engine::ClawRowObject>() {
+        if let Some(obj) = list_item
+            .item()
+            .and_downcast::<crate::engine::ClawRowObject>()
+        {
             let row = obj.get_row();
             match row {
                 crate::engine::PersistentClawRow::Diagnosis {
@@ -456,7 +464,11 @@ pub fn create_claw_message_list() -> (gtk::ListView, gtk::gio::ListStore) {
                     icon.remove_css_class("warning");
                     title.set_label("Diagnosis");
 
-                    let id_short = if pane_id.len() >= 7 { &pane_id[..7] } else { &pane_id };
+                    let id_short = if pane_id.len() >= 7 {
+                        &pane_id[..7]
+                    } else {
+                        &pane_id
+                    };
                     let pane_text = if let Some(name) = agent_name {
                         format!("{} ({})", name, id_short)
                     } else {
@@ -479,7 +491,11 @@ pub fn create_claw_message_list() -> (gtk::ListView, gtk::gio::ListStore) {
                     icon.remove_css_class("accent");
                     title.set_label("Suggested Action");
 
-                    let id_short = if pane_id.len() >= 7 { &pane_id[..7] } else { &pane_id };
+                    let id_short = if pane_id.len() >= 7 {
+                        &pane_id[..7]
+                    } else {
+                        &pane_id
+                    };
                     let pane_text = if let Some(name) = agent_name {
                         format!("{} ({})", name, id_short)
                     } else {
@@ -508,7 +524,11 @@ pub fn create_claw_message_list() -> (gtk::ListView, gtk::gio::ListStore) {
                     icon.remove_css_class("warning");
                     title.set_label("Process List");
 
-                    let id_short = if pane_id.len() >= 7 { &pane_id[..7] } else { &pane_id };
+                    let id_short = if pane_id.len() >= 7 {
+                        &pane_id[..7]
+                    } else {
+                        &pane_id
+                    };
                     let pane_text = if let Some(name) = agent_name {
                         format!("{} ({})", name, id_short)
                     } else {
@@ -545,12 +565,14 @@ pub fn add_diagnosis_row(
     agent_name: Option<String>,
     diagnosis: &str,
 ) {
-    list.append(&crate::engine::ClawRowObject::new(crate::engine::PersistentClawRow::Diagnosis {
-        pane_id,
-        agent_name,
-        content: diagnosis.to_string(),
-        usage: None,
-    }));
+    list.append(&crate::engine::ClawRowObject::new(
+        crate::engine::PersistentClawRow::Diagnosis {
+            pane_id,
+            agent_name,
+            content: diagnosis.to_string(),
+            usage: None,
+        },
+    ));
 }
 
 pub fn add_suggested_row(
@@ -560,13 +582,15 @@ pub fn add_suggested_row(
     diagnosis: &str,
     command: &str,
 ) {
-    list.append(&crate::engine::ClawRowObject::new(crate::engine::PersistentClawRow::Suggested {
-        pane_id,
-        agent_name,
-        diagnosis: diagnosis.to_string(),
-        command: command.to_string(),
-        usage: None,
-    }));
+    list.append(&crate::engine::ClawRowObject::new(
+        crate::engine::PersistentClawRow::Suggested {
+            pane_id,
+            agent_name,
+            diagnosis: diagnosis.to_string(),
+            command: command.to_string(),
+            usage: None,
+        },
+    ));
 }
 
 pub fn add_approval_row(
@@ -678,10 +702,12 @@ pub fn add_process_list_row(
     result_json: &str,
     _on_kill_request: impl Fn(u32, String) + 'static,
 ) {
-    list.append(&crate::engine::ClawRowObject::new(crate::engine::PersistentClawRow::ProcessList {
-        pane_id,
-        agent_name,
-        result_json: result_json.to_string(),
-        usage: None,
-    }));
+    list.append(&crate::engine::ClawRowObject::new(
+        crate::engine::PersistentClawRow::ProcessList {
+            pane_id,
+            agent_name,
+            result_json: result_json.to_string(),
+            usage: None,
+        },
+    ));
 }

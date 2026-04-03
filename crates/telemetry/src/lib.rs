@@ -1,9 +1,9 @@
 use lazy_static::lazy_static;
-use opentelemetry::metrics::{Meter, MeterProvider as _};
 use opentelemetry::KeyValue;
-use opentelemetry_otlp::{WithExportConfig, WithHttpConfig, Protocol};
-use opentelemetry_sdk::metrics::{PeriodicReader, SdkMeterProvider, Temporality};
+use opentelemetry::metrics::{Meter, MeterProvider as _};
+use opentelemetry_otlp::{Protocol, WithExportConfig, WithHttpConfig};
 use opentelemetry_sdk::Resource;
+use opentelemetry_sdk::metrics::{PeriodicReader, SdkMeterProvider, Temporality};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use uuid::Uuid;
@@ -26,7 +26,10 @@ pub async fn init() {
         return;
     }
 
-    let install_id = settings.install_id.clone().unwrap_or_else(|| "unknown".to_string());
+    let install_id = settings
+        .install_id
+        .clone()
+        .unwrap_or_else(|| "unknown".to_string());
 
     let endpoint = "https://qfwhesnmixgmczkdnvsu.supabase.co/functions/v1/telemetry-ingest";
     let api_key = "sb_publishable_Z-SbIil88PSj3ri24CM7aw_8vzsCFie";
@@ -46,12 +49,16 @@ pub async fn init() {
     let reader = PeriodicReader::builder(exporter)
         .with_interval(std::time::Duration::from_secs(600)) // 10 minutes
         .build();
-    
+
     let provider = SdkMeterProvider::builder()
-        .with_resource(Resource::builder_empty().with_attributes(vec![KeyValue::new("service.name", "boxxy-terminal")]).build())
+        .with_resource(
+            Resource::builder_empty()
+                .with_attributes(vec![KeyValue::new("service.name", "boxxy-terminal")])
+                .build(),
+        )
         .with_reader(reader)
         .build();
-    
+
     let meter = provider.meter("boxxy-terminal");
 
     let mut state = METRICS_STATE.lock().await;
@@ -103,7 +110,8 @@ pub async fn track_launch(os: &str, arch: &str, pkg_type: &str, version: &str, s
             KeyValue::new("version", version.to_string()),
             KeyValue::new("shell", shell.to_string()),
         ],
-    ).await;
+    )
+    .await;
 }
 
 pub async fn track_ai_tokens(model: &str, role: &str, count: u64, feature: &str) {
@@ -115,7 +123,8 @@ pub async fn track_ai_tokens(model: &str, role: &str, count: u64, feature: &str)
             KeyValue::new("role", role.to_string()),
             KeyValue::new("feature", feature.to_string()),
         ],
-    ).await;
+    )
+    .await;
 }
 
 pub async fn track_ai_invocation(provider: &str, model: &str, feature: &str) {
@@ -127,7 +136,8 @@ pub async fn track_ai_invocation(provider: &str, model: &str, feature: &str) {
             KeyValue::new("model_name", model.to_string()),
             KeyValue::new("feature", feature.to_string()),
         ],
-    ).await;
+    )
+    .await;
 }
 
 pub async fn track_ai_latency(model: &str, provider: &str, ms: u64, feature: &str) {
@@ -139,7 +149,8 @@ pub async fn track_ai_latency(model: &str, provider: &str, ms: u64, feature: &st
             KeyValue::new("provider", provider.to_string()),
             KeyValue::new("feature", feature.to_string()),
         ],
-    ).await;
+    )
+    .await;
 }
 
 pub async fn track_tool_use(tool_name: &str) {
@@ -147,7 +158,8 @@ pub async fn track_tool_use(tool_name: &str) {
         "tool.use",
         1.0,
         vec![KeyValue::new("tool_name", tool_name.to_string())],
-    ).await;
+    )
+    .await;
 }
 
 pub async fn track_session_resume(session_type: &str) {
@@ -155,5 +167,6 @@ pub async fn track_session_resume(session_type: &str) {
         "claw.session_resume",
         1.0,
         vec![KeyValue::new("session_type", session_type.to_string())],
-    ).await;
+    )
+    .await;
 }

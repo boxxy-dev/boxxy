@@ -1,13 +1,13 @@
 use crate::commands::CommandRegistry;
 use crate::types::{ChatMessage, ChatMessageObject, Role};
+use boxxy_core_widgets::{ObjectExtSafe, bind_property_async};
 use boxxy_model_selection::{GlobalModelSelectorDialog, ModelProvider};
-use gtk4 as gtk;
 use gtk::glib;
 use gtk::prelude::*;
+use gtk4 as gtk;
 use rig::message::Message;
 use std::cell::RefCell;
 use std::rc::Rc;
-use boxxy_core_widgets::{ObjectExtSafe, bind_property_async};
 
 #[derive(Clone)]
 pub struct AiSidebarComponent {
@@ -82,7 +82,9 @@ impl AiSidebarComponent {
             let bubble_box = row.first_child().and_downcast::<gtk::Box>().unwrap();
 
             if let Some(msg_obj) = list_item.item().and_downcast::<ChatMessageObject>() {
-                let viewer = container.get_safe_data::<boxxy_viewer::StructuredViewer>("viewer").unwrap();
+                let viewer = container
+                    .get_safe_data::<boxxy_viewer::StructuredViewer>("viewer")
+                    .unwrap();
 
                 // Sync initial content
                 viewer.set_content(&msg_obj.content());
@@ -105,14 +107,10 @@ impl AiSidebarComponent {
                 // Use a dedicated utility to bind the property asynchronously.
                 // This handles cross-thread updates safely and returns a handler ID for cleanup.
                 let viewer_clone = viewer.clone();
-                let handler_id = bind_property_async(
-                    &msg_obj,
-                    "content",
-                    &bubble_box,
-                    move |_, content| {
+                let handler_id =
+                    bind_property_async(&msg_obj, "content", &bubble_box, move |_, content| {
                         viewer_clone.set_content(&content);
-                    },
-                );
+                    });
 
                 // Store handler ID safely using Quarks (no unsafe pointer manipulation needed)
                 container.set_safe_data("handler_id", handler_id);
@@ -122,11 +120,15 @@ impl AiSidebarComponent {
         factory.connect_unbind(move |_, list_item| {
             let list_item = list_item.downcast_ref::<gtk::ListItem>().unwrap();
             let container = list_item.child().and_downcast::<gtk::Box>().unwrap();
-            let viewer = container.get_safe_data::<boxxy_viewer::StructuredViewer>("viewer").unwrap();
+            let viewer = container
+                .get_safe_data::<boxxy_viewer::StructuredViewer>("viewer")
+                .unwrap();
 
             // Clean up streaming signal handler safely
             if let Some(obj) = list_item.item().and_downcast::<ChatMessageObject>() {
-                if let Some(handler_id) = container.steal_safe_data::<glib::SignalHandlerId>("handler_id") {
+                if let Some(handler_id) =
+                    container.steal_safe_data::<glib::SignalHandlerId>("handler_id")
+                {
                     obj.disconnect(handler_id);
                 }
             }
@@ -213,7 +215,7 @@ impl AiSidebarComponent {
             let adj = adj_scroll.clone();
             let lv = list_view_scroll.clone();
             let n_items = store.n_items();
-            
+
             glib::idle_add_local_once(move || {
                 // User-scroll guard: only auto-scroll if already at the bottom
                 let is_at_bottom = adj.value() + adj.page_size() >= adj.upper() - 100.0;

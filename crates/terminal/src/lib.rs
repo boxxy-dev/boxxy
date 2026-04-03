@@ -61,3 +61,4 @@ pub(crate) fn get_host_shell() -> String {
 
     env::var("SHELL").unwrap_or_else(|_| "/bin/bash".into())
 }
+pub mod test_picture;
