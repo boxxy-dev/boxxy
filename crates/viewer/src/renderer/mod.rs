@@ -1,5 +1,6 @@
 pub mod code;
 pub mod text;
+pub mod image;
 
 use crate::parser::blocks::ContentBlock;
 use crate::registry::ViewerRegistry;

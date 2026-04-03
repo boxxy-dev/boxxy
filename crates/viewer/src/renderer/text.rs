@@ -14,7 +14,6 @@ impl BlockRenderer for TextRenderer {
                 | ContentBlock::Blockquote(_)
                 | ContentBlock::List { .. }
                 | ContentBlock::Rule
-                | ContentBlock::Image { .. }
         )
     }
 
@@ -139,18 +138,6 @@ impl BlockRenderer for TextRenderer {
                 separator.set_margin_top(12);
                 separator.set_margin_bottom(12);
                 separator.upcast()
-            }
-            ContentBlock::Image { url, title, alt } => {
-                let vbox = gtk::Box::new(gtk::Orientation::Vertical, 4);
-                vbox.set_margin_bottom(12);
-
-                // For now, we'll just show a link or a placeholder
-                let link = gtk::LinkButton::with_label(url, if alt.is_empty() { url } else { alt });
-                if !title.is_empty() {
-                    link.set_tooltip_text(Some(title));
-                }
-                vbox.append(&link);
-                vbox.upcast()
             }
             _ => unreachable!(),
         }

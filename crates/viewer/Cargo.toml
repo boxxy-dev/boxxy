@@ -14,3 +14,5 @@ pulldown-cmark.workspace = true
 syntect.workspace = true
 async-channel.workspace = true
 log.workspace = true
+reqwest.workspace = true
+tokio.workspace = true

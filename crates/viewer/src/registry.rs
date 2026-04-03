@@ -16,6 +16,7 @@ impl ViewerRegistry {
         // Standard renderers
         registry.register(Box::new(crate::renderer::text::TextRenderer));
         registry.register(Box::new(crate::renderer::code::CodeRenderer));
+        registry.register(Box::new(crate::renderer::image::ImageRenderer));
 
         registry
     }
