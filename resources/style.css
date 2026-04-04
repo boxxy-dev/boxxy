@@ -528,26 +528,3 @@ spinrow button.up image {
 spinrow button.down image {
     -gtk-icon-source: -gtk-icontheme("boxxy-minus-symbolic");
 }
-
-
-/* ── Claw Indicator Container ───────────────────────────────────────────── */
-
-/*
- * The container always has a dark pill background.
- * This prevents the "flying background" during revealer transitions —
- * both the badge and the expanded pill sit on top of this base layer.
- */
-
-/*
- * When the expanded revealer is open, relax the border-radius so
- * the cancel button and longer label don`t feel cramped.
- * Toggle this class in show_thinking / show_lazy_error etc.
- */
-
-/* Badge label: no extra background box needed — the container is the pill */
-
-
-/*
- * The expanded inner pill (hbox inside the main revealer).
- * Gives it its own surface so it`s never transparent during the slide.
- */
