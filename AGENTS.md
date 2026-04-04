@@ -1,18 +1,15 @@
 # Boxxy-Terminal Agents & Architecture
 
-## Philosophy
+## Observability & Debugging
 
-This project follows a modular, component-driven architecture using native **gtk4-rs** and **GTK4/Libadwaita**.
-We leverage Rust's type safety and an actor-like model to enforce a strict boundary between the UI thread and background operations.
-
-To prevent UI starvation and zombie processes, the application utilizes a **single global multi-threaded Tokio runtime** (`boxxy_ai_core::utils::runtime()`) for all I/O and CPU-heavy tasks. Communication back to the GTK main loop is handled via **bounded `async-channel`s** combined with explicit yielding (`glib::timeout_future(0).await`), ensuring the UI remains responsive under heavy load.
-
-The system provides real-time visibility into LLM token usage across all providers. It implements an advanced **Next-Gen Context Hygiene** strategy to maximize efficiency for 2026 flagship models (Gemini 3.1, Claude 4.6, GPT-5.4):
-- **Cache-Aligned Restructuring**: The system preamble (Character + Toolbox) is kept 100% static at the start of every request, while volatile data (Terminal snapshots, CWD, Active skills) is moved to the end of the user message. This triggers a 90% discount via automatic Context Caching.
-- **In-Memory Persistence**: AI agent objects are kept alive per terminal pane, maintaining internal session state and enabling incremental context updates.
-- **Persistent Resumption**: Supports Pick-up-where-you-left-off capabilities via `boxxy-db`. Users can resume any of the last 10 active sessions in any terminal pane, restoring history, agent identity, working directory, **cumulative token analytics**, and **persistent visual logs** in the sidebar.
-- **Pinned Sessions**: Users can "Pin" specific sessions to keep them permanently at the top of the `/resume` list. Pinned sessions do not count toward the "last 10" history limit.
-- **Aggressive History Stripping**: Past turn context (Skills, Radar, Memories) is aggressively pruned from history, leaving only the core intent to prevent linear context growth.
+Boxxy provides deep, real-time visibility into LLM interactions for developers and power users:
+- **Cumulative Token Analytics:** Every session tracks input, output, and total tokens, persisted in `boxxy-db` and re-rendered during session resumption.
+- **Dedicated Context Debugging:** To audit the exact payloads (System Prompt, History, Tools) sent to models, run the application with:
+  ```bash
+  BOXXY_DEBUG_CONTEXT=1 cargo run
+  ```
+  This is a strictly opt-in, high-signal logging mode that works in both debug and release builds (using `log::info!` on the `model-context` target), ensuring zero noise during standard development.
+- **Visual Sidebar Logs:** The Claw sidebar acts as a read-only debug log, rendering tool results, process lists, and agent reasoning steps as structured UI components.
 
 ## Technology Stack
 - **Language:** Rust 2024 (v1.94+)

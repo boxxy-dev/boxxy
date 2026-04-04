@@ -538,6 +538,7 @@ dependencies = [
  "ashpd",
  "async-trait",
  "boxxy-model-selection",
+ "log",
  "rig-core",
  "serde",
  "serde_json",

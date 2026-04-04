@@ -1189,17 +1189,6 @@ fn spawn_turn(
             &full_prompt
         };
 
-        log::debug!(
-            "\n=== CLAW LLM PAYLOAD START ===\n\
-            SYSTEM PROMPT:\n{}\n\n\
-            HISTORY DUMP (Context Hygiene 2.0 Check):\n{:#?}\n\n\
-            USER PROMPT (Current Turn):\n{}\n\
-            === CLAW LLM PAYLOAD END ===\n",
-            system_prompt,
-            final_history,
-            full_prompt
-        );
-
         match agent.chat(query_for_chat, final_history).await {
             Ok((response, usage)) => {
                 let _ = tx_ui

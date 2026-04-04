@@ -22,9 +22,16 @@ use rig::providers::ollama;
 use rig::providers::openai::responses_api::ResponsesCompletionModel;
 use serde_json::json;
 
-use boxxy_ai_core::AiCredentials;
+use boxxy_ai_core::{AiCredentials, ModelContextHook};
 
-pub enum ClawAgent {
+#[derive(Clone)]
+pub struct ClawAgent {
+    inner: ClawAgentInner,
+    preamble: String,
+}
+
+#[derive(Clone)]
+enum ClawAgentInner {
     Gemini(Agent<gemini::CompletionModel>, String, String), // Agent, Provider Name, Model Name
     Ollama(Agent<ollama::CompletionModel>, String, String),
     Anthropic(
@@ -45,36 +52,44 @@ impl ClawAgent {
         use rig::completion::Prompt;
         let start = std::time::Instant::now();
 
-        let res_result = match self {
-            Self::Gemini(agent, _, _) => {
+        let hook = ModelContextHook {
+            preamble: self.preamble.clone(),
+        };
+
+        let res_result = match &self.inner {
+            ClawAgentInner::Gemini(agent, _, _) => {
                 agent
                     .prompt(prompt)
-                    .with_history(history.clone())
+                    .with_history(history)
+                    .with_hook(hook)
                     .extended_details()
                     .await
             }
-            Self::Ollama(agent, _, _) => {
+            ClawAgentInner::Ollama(agent, _, _) => {
                 agent
                     .prompt(prompt)
-                    .with_history(history.clone())
+                    .with_history(history)
+                    .with_hook(hook)
                     .extended_details()
                     .await
             }
-            Self::Anthropic(agent, _, _) => {
+            ClawAgentInner::Anthropic(agent, _, _) => {
                 agent
                     .prompt(prompt)
-                    .with_history(history.clone())
+                    .with_history(history)
+                    .with_hook(hook)
                     .extended_details()
                     .await
             }
-            Self::OpenAi(agent, _, _) => {
+            ClawAgentInner::OpenAi(agent, _, _) => {
                 agent
                     .prompt(prompt)
-                    .with_history(history.clone())
+                    .with_history(history)
+                    .with_hook(hook)
                     .extended_details()
                     .await
             }
-            Self::Error(e) => {
+            ClawAgentInner::Error(e) => {
                 return Err(rig::completion::PromptError::CompletionError(
                     rig::completion::CompletionError::ProviderError(e.clone()),
                 ));
@@ -84,11 +99,11 @@ impl ClawAgent {
         match res_result {
             Ok(res) => {
                 let duration = start.elapsed();
-                let (provider_name, model_name) = match self {
-                    Self::Gemini(_, p, m) => (p.as_str(), m.as_str()),
-                    Self::Ollama(_, p, m) => (p.as_str(), m.as_str()),
-                    Self::Anthropic(_, p, m) => (p.as_str(), m.as_str()),
-                    Self::OpenAi(_, p, m) => (p.as_str(), m.as_str()),
+                let (provider_name, model_name) = match &self.inner {
+                    ClawAgentInner::Gemini(_, p, m) => (p.as_str(), m.as_str()),
+                    ClawAgentInner::Ollama(_, p, m) => (p.as_str(), m.as_str()),
+                    ClawAgentInner::Anthropic(_, p, m) => (p.as_str(), m.as_str()),
+                    ClawAgentInner::OpenAi(_, p, m) => (p.as_str(), m.as_str()),
                     _ => ("unknown", "unknown"),
                 };
 
@@ -120,13 +135,37 @@ impl ClawAgent {
                 )
                 .await;
 
+                let is_explicit = std::env::var("BOXXY_DEBUG_CONTEXT")
+                    .map(|v| v == "1")
+                    .unwrap_or(false);
+
+                if is_explicit {
+                    log::info!(
+                        target: "model-context",
+                        "\n=== MODEL RESPONSE ===\n{}\n======================\n",
+                        res.output
+                    );
+                }
+
                 Ok((res.output.clone(), Some(res.usage)))
             }
-            Err(e) => Err(e),
+            Err(e) => {
+                let is_explicit = std::env::var("BOXXY_DEBUG_CONTEXT")
+                    .map(|v| v == "1")
+                    .unwrap_or(false);
+
+                if is_explicit {
+                    log::info!(
+                        target: "model-context",
+                        "\n=== MODEL ERROR ===\n{:?}\n===================\n",
+                        e
+                    );
+                }
+                Err(e)
+            }
         }
     }
 }
-
 #[must_use]
 #[allow(clippy::too_many_arguments)]
 pub fn create_claw_agent(
@@ -145,10 +184,13 @@ pub fn create_claw_agent(
     let provider = match provider {
         Some(p) => p,
         None => {
-            return ClawAgent::Error(
-                "No Claw model selected. Please configure your models in Settings -> APIs -> Models Selection."
-                    .to_string(),
-            )
+            return ClawAgent {
+                inner: ClawAgentInner::Error(
+                    "No Claw model selected. Please configure your models in Settings -> APIs -> Models Selection."
+                        .to_string(),
+                ),
+                preamble: system_prompt.to_string(),
+            }
         }
     };
 
@@ -265,7 +307,7 @@ pub fn create_claw_agent(
         }));
     }
 
-    match provider {
+    let inner = match provider {
         ModelProvider::Gemini(model, _thinking) => {
             let key = creds.api_keys.get("Gemini").cloned().unwrap_or_default();
             let client = gemini::Client::new(key.trim()).unwrap();
@@ -276,7 +318,7 @@ pub fn create_claw_agent(
                 .default_max_turns(100)
                 .tools(tools);
 
-            ClawAgent::Gemini(
+            ClawAgentInner::Gemini(
                 builder.build(),
                 "Gemini".to_string(),
                 model.api_name().to_string(),
@@ -295,7 +337,7 @@ pub fn create_claw_agent(
                 .default_max_turns(100)
                 .tools(tools);
 
-            ClawAgent::Ollama(builder.build(), "Ollama".to_string(), model_name.clone())
+            ClawAgentInner::Ollama(builder.build(), "Ollama".to_string(), model_name.clone())
         }
         ModelProvider::Anthropic(model) => {
             let key = creds.api_keys.get("Anthropic").cloned().unwrap_or_default();
@@ -307,7 +349,7 @@ pub fn create_claw_agent(
                 .default_max_turns(100)
                 .tools(tools);
 
-            ClawAgent::Anthropic(
+            ClawAgentInner::Anthropic(
                 builder.build(),
                 "Anthropic".to_string(),
                 model.api_name().to_string(),
@@ -329,11 +371,17 @@ pub fn create_claw_agent(
                 }));
             }
 
-            ClawAgent::OpenAi(
+            ClawAgentInner::OpenAi(
                 builder.build(),
                 "OpenAI".to_string(),
                 model.api_name().to_string(),
             )
         }
+    };
+
+    ClawAgent {
+        inner,
+        preamble: system_prompt.to_string(),
     }
 }
+

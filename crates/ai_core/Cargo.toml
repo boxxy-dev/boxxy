@@ -11,7 +11,8 @@ async-trait.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 anyhow.workspace = true
+log.workspace = true
 tokio = { workspace = true, features = ["full"] }
-rig-core = "0.34.0"
+rig-core.workspace = true
 boxxy-model-selection = { path = "../model_selection" }
 ashpd = { workspace = true, features = ["flatpak"] }

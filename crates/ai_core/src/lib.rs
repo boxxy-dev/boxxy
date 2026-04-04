@@ -1,13 +1,85 @@
 use boxxy_model_selection::ModelProvider;
+use rig::agent::{HookAction, ToolCallHookAction, PromptHook};
 use rig::client::CompletionClient;
 use rig::message::Message;
 use rig::providers::openai::responses_api::ResponsesCompletionModel;
+use rig::wasm_compat::WasmCompatSend;
 use serde_json::json;
+use std::future::Future;
 
 pub mod utils;
 
 #[derive(Clone)]
-pub enum BoxxyAgent {
+pub struct ModelContextHook {
+    pub preamble: String,
+}
+
+impl<M: rig::completion::CompletionModel> PromptHook<M> for ModelContextHook {
+    fn on_completion_call(
+        &self,
+        prompt: &Message,
+        history: &[Message],
+    ) -> impl Future<Output = HookAction> + WasmCompatSend {
+        let preamble = self.preamble.clone();
+        let prompt = prompt.clone();
+        let history = history.to_vec();
+
+        // Check if model-context debugging is explicitly enabled via dedicated env var
+        let is_explicit = std::env::var("BOXXY_DEBUG_CONTEXT")
+            .map(|v| v == "1")
+            .unwrap_or(false);
+
+        async move {
+            if is_explicit {
+                log::info!(
+                    target: "model-context",
+                    "\n=== MODEL CONTEXT SEND ===\nSYSTEM PROMPT:\n{}\n\nHISTORY:\n{:#?}\n\nUSER PROMPT:\n{:#?}\n==========================\n",
+                    preamble,
+                    history,
+                    prompt
+                );
+            }
+            HookAction::cont()
+        }
+    }
+
+    fn on_tool_call(
+        &self,
+        tool_name: &str,
+        _tool_call_id: Option<String>,
+        _internal_call_id: &str,
+        args: &str,
+    ) -> impl Future<Output = ToolCallHookAction> + WasmCompatSend {
+        let tool_name = tool_name.to_string();
+        let args = args.to_string();
+
+        let is_explicit = std::env::var("BOXXY_DEBUG_CONTEXT")
+            .map(|v| v == "1")
+            .unwrap_or(false);
+
+        async move {
+            if is_explicit {
+                log::info!(
+                    target: "model-context",
+                    "\n=== MODEL TOOL CALL ===\nTOOL: {}\nARGS: {}\n=======================\n",
+                    tool_name,
+                    args
+                );
+            }
+            ToolCallHookAction::cont()
+        }
+    }
+}
+
+
+#[derive(Clone)]
+pub struct BoxxyAgent {
+    inner: BoxxyAgentInner,
+    preamble: String,
+}
+
+#[derive(Clone)]
+enum BoxxyAgentInner {
     // We use the concrete CompletionModel type from each provider since Agent is generic over the model.
     Gemini(rig::agent::Agent<rig::providers::gemini::CompletionModel>),
     Ollama(rig::agent::Agent<rig::providers::ollama::CompletionModel>),
@@ -24,42 +96,75 @@ impl BoxxyAgent {
     ) -> Result<(String, Option<rig::completion::Usage>), rig::completion::PromptError> {
         use rig::completion::Prompt;
 
-        match self {
-            Self::Gemini(agent) => {
-                let res = agent
+        let hook = ModelContextHook {
+            preamble: self.preamble.clone(),
+        };
+
+        let res_result = match &self.inner {
+            BoxxyAgentInner::Gemini(agent) => {
+                agent
                     .prompt(prompt)
-                    .with_history(history.clone())
+                    .with_history(history)
+                    .with_hook(hook)
                     .extended_details()
-                    .await?;
+                    .await
+            }
+            BoxxyAgentInner::Ollama(agent) => {
+                agent
+                    .prompt(prompt)
+                    .with_history(history)
+                    .with_hook(hook)
+                    .extended_details()
+                    .await
+            }
+            BoxxyAgentInner::Anthropic(agent) => {
+                agent
+                    .prompt(prompt)
+                    .with_history(history)
+                    .with_hook(hook)
+                    .extended_details()
+                    .await
+            }
+            BoxxyAgentInner::OpenAi(agent) => {
+                agent
+                    .prompt(prompt)
+                    .with_history(history)
+                    .with_hook(hook)
+                    .extended_details()
+                    .await
+            }
+            BoxxyAgentInner::Error(e) => {
+                return Err(rig::completion::PromptError::CompletionError(
+                    rig::completion::CompletionError::ProviderError(e.clone()),
+                ));
+            }
+        };
+
+        let is_explicit = std::env::var("BOXXY_DEBUG_CONTEXT")
+            .map(|v| v == "1")
+            .unwrap_or(false);
+
+        match res_result {
+            Ok(res) => {
+                if is_explicit {
+                    log::info!(
+                        target: "model-context",
+                        "\n=== MODEL RESPONSE ===\n{}\n======================\n",
+                        res.output
+                    );
+                }
                 Ok((res.output.clone(), Some(res.usage)))
             }
-            Self::Ollama(agent) => {
-                let res = agent
-                    .prompt(prompt)
-                    .with_history(history.clone())
-                    .extended_details()
-                    .await?;
-                Ok((res.output.clone(), Some(res.usage)))
+            Err(e) => {
+                if is_explicit {
+                    log::info!(
+                        target: "model-context",
+                        "\n=== MODEL ERROR ===\n{:?}\n===================\n",
+                        e
+                    );
+                }
+                Err(e)
             }
-            Self::Anthropic(agent) => {
-                let res = agent
-                    .prompt(prompt)
-                    .with_history(history.clone())
-                    .extended_details()
-                    .await?;
-                Ok((res.output.clone(), Some(res.usage)))
-            }
-            Self::OpenAi(agent) => {
-                let res = agent
-                    .prompt(prompt)
-                    .with_history(history.clone())
-                    .extended_details()
-                    .await?;
-                Ok((res.output.clone(), Some(res.usage)))
-            }
-            Self::Error(e) => Err(rig::completion::PromptError::CompletionError(
-                rig::completion::CompletionError::ProviderError(e.clone()),
-            )),
         }
     }
 
@@ -69,26 +174,55 @@ impl BoxxyAgent {
     ) -> Result<(String, Option<rig::completion::Usage>), rig::completion::PromptError> {
         use rig::completion::Prompt;
 
-        match self {
-            Self::Gemini(agent) => {
-                let res = agent.prompt(prompt).extended_details().await?;
+        let hook = ModelContextHook {
+            preamble: self.preamble.clone(),
+        };
+
+        let res_result = match &self.inner {
+            BoxxyAgentInner::Gemini(agent) => {
+                agent.prompt(prompt).with_hook(hook).extended_details().await
+            }
+            BoxxyAgentInner::Ollama(agent) => {
+                agent.prompt(prompt).with_hook(hook).extended_details().await
+            }
+            BoxxyAgentInner::Anthropic(agent) => {
+                agent.prompt(prompt).with_hook(hook).extended_details().await
+            }
+            BoxxyAgentInner::OpenAi(agent) => {
+                agent.prompt(prompt).with_hook(hook).extended_details().await
+            }
+            BoxxyAgentInner::Error(e) => {
+                return Err(rig::completion::PromptError::CompletionError(
+                    rig::completion::CompletionError::ProviderError(e.clone()),
+                ));
+            }
+        };
+
+        let is_explicit = std::env::var("BOXXY_DEBUG_CONTEXT")
+            .map(|v| v == "1")
+            .unwrap_or(false);
+
+        match res_result {
+            Ok(res) => {
+                if is_explicit {
+                    log::info!(
+                        target: "model-context",
+                        "\n=== MODEL RESPONSE ===\n{}\n======================\n",
+                        res.output
+                    );
+                }
                 Ok((res.output.clone(), Some(res.usage)))
             }
-            Self::Ollama(agent) => {
-                let res = agent.prompt(prompt).extended_details().await?;
-                Ok((res.output.clone(), Some(res.usage)))
+            Err(e) => {
+                if is_explicit {
+                    log::info!(
+                        target: "model-context",
+                        "\n=== MODEL ERROR ===\n{:?}\n===================\n",
+                        e
+                    );
+                }
+                Err(e)
             }
-            Self::Anthropic(agent) => {
-                let res = agent.prompt(prompt).extended_details().await?;
-                Ok((res.output.clone(), Some(res.usage)))
-            }
-            Self::OpenAi(agent) => {
-                let res = agent.prompt(prompt).extended_details().await?;
-                Ok((res.output.clone(), Some(res.usage)))
-            }
-            Self::Error(e) => Err(rig::completion::PromptError::CompletionError(
-                rig::completion::CompletionError::ProviderError(e.clone()),
-            )),
         }
     }
 }
@@ -116,14 +250,17 @@ pub fn create_agent(
     let provider = match provider {
         Some(p) => p,
         None => {
-            return BoxxyAgent::Error(
-                "No AI model selected. Please configure your models in Preferences -> APIs -> Models Selection."
-                    .to_string(),
-            )
+            return BoxxyAgent {
+                inner: BoxxyAgentInner::Error(
+                    "No AI model selected. Please configure your models in Preferences -> APIs -> Models Selection."
+                        .to_string(),
+                ),
+                preamble: system_prompt.to_string(),
+            }
         }
     };
 
-    match provider {
+    let inner = match provider {
         ModelProvider::Gemini(model, _thinking) => {
             let key = creds.api_keys.get("Gemini").cloned().unwrap_or_default();
             let client = rig::providers::gemini::Client::new(key.trim()).unwrap();
@@ -132,7 +269,7 @@ pub fn create_agent(
             let agent = rig::agent::AgentBuilder::new(gemini_model)
                 .preamble(system_prompt)
                 .build();
-            BoxxyAgent::Gemini(agent)
+            BoxxyAgentInner::Gemini(agent)
         }
         ModelProvider::Ollama(model_name) => {
             let client: rig::providers::ollama::Client = rig::providers::ollama::Client::builder()
@@ -145,7 +282,7 @@ pub fn create_agent(
             let agent = rig::agent::AgentBuilder::new(ollama_model)
                 .preamble(system_prompt)
                 .build();
-            BoxxyAgent::Ollama(agent)
+            BoxxyAgentInner::Ollama(agent)
         }
         ModelProvider::Anthropic(model) => {
             let key = creds.api_keys.get("Anthropic").cloned().unwrap_or_default();
@@ -155,7 +292,7 @@ pub fn create_agent(
             let agent = rig::agent::AgentBuilder::new(anthropic_model)
                 .preamble(system_prompt)
                 .build();
-            BoxxyAgent::Anthropic(agent)
+            BoxxyAgentInner::Anthropic(agent)
         }
         ModelProvider::OpenAi(model, thinking) => {
             let key = creds.api_keys.get("OpenAI").cloned().unwrap_or_default();
@@ -170,7 +307,13 @@ pub fn create_agent(
                 }));
             }
 
-            BoxxyAgent::OpenAi(builder.build())
+            BoxxyAgentInner::OpenAi(builder.build())
         }
+    };
+
+    BoxxyAgent {
+        inner,
+        preamble: system_prompt.to_string(),
     }
 }
+
