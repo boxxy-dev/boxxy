@@ -23,7 +23,6 @@ mod gestures;
 mod preview;
 mod ui;
 
-
 pub type PendingDiagnosis = Rc<RefCell<Option<(String, crate::TerminalProposal)>>>;
 
 /// GTK key names for characters that users commonly type literally in accelerator
@@ -80,7 +79,7 @@ pub struct TerminalPaneComponent {
     _search_bar: Rc<SearchBarComponent>,
     claw_popover: TerminalOverlay,
     claw_indicator: ClawIndicator,
-    
+
     pending_proactive_diagnosis: PendingDiagnosis,
     claw_sender: async_channel::Sender<boxxy_claw::engine::ClawMessage>,
     pub claw_message_list: gtk::ListView,
@@ -206,7 +205,9 @@ impl TerminalPaneComponent {
 
                         if !is_claw_active_for_msg.get() {
                             is_claw_active_for_msg.set(true);
-                            if let Some(ind) = &inner_arc.borrow().claw_indicator { ind.set_visible(true); }
+                            if let Some(ind) = &inner_arc.borrow().claw_indicator {
+                                ind.set_visible(true);
+                            }
                             inner_arc.borrow().msg_bar.update_ui(
                                 true,
                                 is_proactive_for_msg.get(),
@@ -276,7 +277,9 @@ impl TerminalPaneComponent {
                                 is_proactive_for_active.get(),
                                 is_pinned_for_active.get(),
                             );
-                            if let Some(ind) = &inner_arc.borrow().claw_indicator { ind.set_visible(active); }
+                            if let Some(ind) = &inner_arc.borrow().claw_indicator {
+                                ind.set_visible(active);
+                            }
                         }
                         cb_toggle(PaneOutput::ClawStateChanged(
                             id_toggle.clone(),
@@ -498,7 +501,7 @@ impl TerminalPaneComponent {
             _search_bar: search_bar_rc,
             claw_popover,
             claw_indicator,
-                        pending_proactive_diagnosis,
+            pending_proactive_diagnosis,
             claw_sender,
             claw_message_list,
             is_claw_active,
@@ -1023,7 +1026,9 @@ impl TerminalPaneComponent {
         }
 
         inner.current_settings = Some(settings);
-        if let Some(ind) = &inner.claw_indicator { ind.update_settings(); }
+        if let Some(ind) = &inner.claw_indicator {
+            ind.update_settings();
+        }
     }
 
     pub fn set_dimmed(&self, dimmed: bool) {

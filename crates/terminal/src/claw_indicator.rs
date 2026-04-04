@@ -173,7 +173,7 @@ impl ClawIndicator {
             .build();
         badge_revealer.set_child(Some(&badge_label));
         container.append(&badge_revealer);
-        
+
         let clock_icon = gtk::Image::builder()
             .icon_name("boxxy-timer-symbolic")
             .visible(false)
@@ -186,11 +186,14 @@ impl ClawIndicator {
 
         let badge_provider = gtk::CssProvider::new();
         #[allow(deprecated)]
-        badge_label.style_context().add_provider(&badge_provider, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
-        
+        badge_label
+            .style_context()
+            .add_provider(&badge_provider, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
+
         let pill_provider = gtk::CssProvider::new();
         #[allow(deprecated)]
-        hbox.style_context().add_provider(&pill_provider, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
+        hbox.style_context()
+            .add_provider(&pill_provider, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
 
         Self {
             container,
@@ -222,7 +225,7 @@ impl ClawIndicator {
         let badge_revealer_clone = self.badge_revealer.clone();
         let clock_clone = self.clock_icon.clone();
         let has_tasks_clone = self.has_tasks.clone();
-        
+
         self.cancel_btn.connect_clicked(move |_| {
             p_clone.set_reveal_child(false);
             badge_revealer_clone.set_reveal_child(true);
@@ -265,12 +268,12 @@ impl ClawIndicator {
 
         let color = self.generate_color(name);
 
-        self.badge_provider.load_from_string(
-            &format!(".badge-label {{ background-color: {}; }}", color)
-        );
-        self.pill_provider.load_from_string(
-            &format!(".indicator-pill {{ background-color: {}; }}", color)
-        );
+        self.badge_provider
+            .load_from_string(&format!(".badge-label {{ background-color: {}; }}", color));
+        self.pill_provider.load_from_string(&format!(
+            ".indicator-pill {{ background-color: {}; }}",
+            color
+        ));
 
         self.refresh_visibility();
     }
@@ -340,13 +343,10 @@ impl ClawIndicator {
 
         let badge_rev_hide = self.badge_revealer.clone();
         let clock_hide = self.clock_icon.clone();
-        gtk::glib::timeout_add_local_once(
-            std::time::Duration::from_millis(300),
-            move || {
-                badge_rev_hide.set_visible(false);
-                clock_hide.set_visible(false);
-            },
-        );
+        gtk::glib::timeout_add_local_once(std::time::Duration::from_millis(300), move || {
+            badge_rev_hide.set_visible(false);
+            clock_hide.set_visible(false);
+        });
 
         let rev_clone = self.revealer.clone();
         let badge_revealer_clone = self.badge_revealer.clone();
@@ -370,17 +370,14 @@ impl ClawIndicator {
         self.icon.set_css_classes(&["success"]);
         self.label.set_text("Solution Ready");
         self.main_btn.set_sensitive(true);
-        
+
         self.badge_revealer.set_reveal_child(false);
         let badge_rev_hide = self.badge_revealer.clone();
         let clock_hide = self.clock_icon.clone();
-        gtk::glib::timeout_add_local_once(
-            std::time::Duration::from_millis(280),
-            move || {
-                badge_rev_hide.set_visible(false);
-                clock_hide.set_visible(false);
-            },
-        );
+        gtk::glib::timeout_add_local_once(std::time::Duration::from_millis(280), move || {
+            badge_rev_hide.set_visible(false);
+            clock_hide.set_visible(false);
+        });
         self.revealer.set_reveal_child(true);
 
         let rev_clone = self.revealer.clone();

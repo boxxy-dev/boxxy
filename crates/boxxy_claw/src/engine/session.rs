@@ -122,21 +122,7 @@ impl ClawSession {
         let mut is_initialized = false;
         let mut current_dir = String::from("/");
 
-        // Register with global workspace
         let workspace = crate::registry::workspace::global_workspace().await;
-        workspace
-            .update_pane_state(
-                self.pane_id.clone(),
-                Some(self.session_id.clone()),
-                Some(self.name.clone()),
-                current_dir.clone(),
-                None,
-                None,
-            )
-            .await;
-        workspace
-            .register_pane_tx(self.pane_id.clone(), self.tx_self.clone())
-            .await;
 
         let mut task_interval = tokio::time::interval(std::time::Duration::from_secs(1));
 
@@ -200,6 +186,12 @@ impl ClawSession {
                             log::error!("Failed to initialize Claw Memory Database.");
                         }
 
+                        // Register our Sender to allow other agents/windows to delegate tasks or evict us
+                        let workspace = crate::registry::workspace::global_workspace().await;
+                        workspace
+                            .register_pane_tx(self.pane_id.clone(), self.tx_self.clone())
+                            .await;
+
                         is_initialized = true;
                     }
 
@@ -217,16 +209,7 @@ impl ClawSession {
                             drop(state_lock);
 
                             // Update Workspace Radar to indicate no active agent
-                            workspace
-                                .update_pane_state(
-                                    self.pane_id.clone(),
-                                    None,
-                                    None,
-                                    current_dir.clone(),
-                                    None,
-                                    None,
-                                )
-                                .await;
+                            workspace.unregister_pane(self.pane_id.clone()).await;
                         }
                         ClawMessage::Evict => {
                             info!("Agent in pane {} was EVICTED.", self.pane_id);
@@ -241,16 +224,7 @@ impl ClawSession {
                             let _ = self.tx_ui.send(ClawEngineEvent::Evicted).await;
 
                             // Update Workspace Radar to indicate no active agent
-                            workspace
-                                .update_pane_state(
-                                    self.pane_id.clone(),
-                                    None,
-                                    None,
-                                    current_dir.clone(),
-                                    None,
-                                    None,
-                                )
-                                .await;
+                            workspace.unregister_pane(self.pane_id.clone()).await;
                         }
                         ClawMessage::ResumeSession { session_id } => {
                             info!(

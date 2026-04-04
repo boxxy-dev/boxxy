@@ -405,7 +405,9 @@ pub(super) fn setup_claw(
                     pinned,
                     total_tokens,
                 } => {
-                    if let Some(ind) = &inner_clone.borrow().claw_indicator { ind.set_identity(agent_name); }
+                    if let Some(ind) = &inner_clone.borrow().claw_indicator {
+                        ind.set_identity(agent_name);
+                    }
                     is_pinned_for_events.set(*pinned);
                     inner_clone.borrow().msg_bar.update_ui(
                         true, // Claw is active if it's sending Identity
@@ -423,7 +425,9 @@ pub(super) fn setup_claw(
                     );
                 }
                 boxxy_claw::engine::ClawEngineEvent::Evicted => {
-                    if let Some(ind) = &inner_clone.borrow().claw_indicator { ind.set_evicted(true); }
+                    if let Some(ind) = &inner_clone.borrow().claw_indicator {
+                        ind.set_evicted(true);
+                    }
                     indicator_event_clone.hide();
                     popover_event_clone.hide();
                     boxxy_claw::ui::add_diagnosis_row(
@@ -479,9 +483,13 @@ pub(super) fn setup_claw(
                     let pane = pane_inner.terminal.clone();
 
                     if pane.is_alt_screen() {
-                        if let Some(ind) = &pane_inner.claw_indicator { ind.set_visible(false); }
+                        if let Some(ind) = &pane_inner.claw_indicator {
+                            ind.set_visible(false);
+                        }
                     } else {
-                        if let Some(ind) = &pane_inner.claw_indicator { ind.set_visible(true); }
+                        if let Some(ind) = &pane_inner.claw_indicator {
+                            ind.set_visible(true);
+                        }
                     }
 
                     let max_lines = *max_lines;
@@ -533,7 +541,9 @@ pub(super) fn setup_claw(
                     let has_pending = tasks
                         .iter()
                         .any(|t| t.status == boxxy_claw::engine::TaskStatus::Pending);
-                    if let Some(ind) = &inner_clone.borrow().claw_indicator { ind.set_has_tasks(has_pending); }
+                    if let Some(ind) = &inner_clone.borrow().claw_indicator {
+                        ind.set_has_tasks(has_pending);
+                    }
                 }
                 boxxy_claw::engine::ClawEngineEvent::RestoreHistory(rows) => {
                     // Bulk append history items to minimize UI layout passes

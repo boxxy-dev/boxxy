@@ -81,9 +81,17 @@ impl WorkspaceRegistry {
         tx: async_channel::Sender<crate::engine::ClawMessage>,
     ) {
         let mut panes = self.panes.write().await;
-        if let Some(pane) = panes.get_mut(&id) {
-            pane.tx = Some(tx);
-        }
+        let entry = panes.entry(id.clone()).or_insert_with(|| PaneState {
+            id,
+            session_id: None,
+            name: "Unknown Agent".to_string(),
+            cwd: "/".to_string(),
+            last_command: None,
+            last_snapshot: None,
+            status: None,
+            tx: None,
+        });
+        entry.tx = Some(tx);
     }
 
     pub async fn get_pane_tx_by_name(
