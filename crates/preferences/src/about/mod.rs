@@ -95,8 +95,8 @@ pub fn populate_about_page(
     // Releases Row
     let ext_icon_releases = gtk::Image::from_icon_name("boxxy-external-link-symbolic");
     let releases_row = adw::ActionRow::builder()
-        .title("Releases")
-        .subtitle("https://github.com/miifrommera/boxxy/releases")
+        .title("Changelogs")
+        .subtitle("https://boxxy.dev/releases/")
         .activatable(true)
         .build();
     releases_row.add_suffix(&ext_icon_releases);
@@ -139,7 +139,7 @@ pub fn populate_about_page(
     // Telemetry Group
     let telemetry_group = adw::PreferencesGroup::builder()
         .title("Telemetry")
-        .description("Help us improve Boxxy Terminal by sharing anonymous usage statistics.")
+        .description("During the Preview Phase, telemetry helps us identify performance issues and improve AI accuracy. Help us improve Boxxy by sharing anonymous usage statistics.")
         .build();
     let mut telemetry_rows = Vec::new();
 
@@ -150,7 +150,7 @@ pub fn populate_about_page(
 
     let telemetry_row = adw::ActionRow::builder()
         .title("Anonymous Usage Data")
-        .subtitle("During the Preview Phase, telemetry helps us identify performance issues and improve AI accuracy. No PII, paths, or prompt text are ever collected. (Requires restart)")
+        .subtitle("No PII, paths, or prompt text are ever collected. (Requires restart)")
         .build();
     telemetry_row.add_suffix(&telemetry_switch);
     telemetry_rows.push(telemetry_row.clone());
@@ -164,7 +164,7 @@ pub fn populate_about_page(
 
     let view_stats_row = adw::ActionRow::builder()
         .title("View Live Statistics")
-        .subtitle("https://boxxy.dev/telemetry")
+        .subtitle("https://boxxy.dev/live")
         .activatable(true)
         .build();
     let ext_icon3 = gtk::Image::from_icon_name("boxxy-external-link-symbolic");
@@ -173,7 +173,7 @@ pub fn populate_about_page(
 
     view_stats_row.connect_activated(move |_| {
         let _ = gtk::gio::AppInfo::launch_default_for_uri(
-            "https://boxxy.dev/telemetry",
+            "https://boxxy.dev/live",
             None::<&gtk::gio::AppLaunchContext>,
         );
     });
