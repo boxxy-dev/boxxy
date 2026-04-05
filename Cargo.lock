@@ -511,7 +511,7 @@ dependencies = [
 
 [[package]]
 name = "boxxy-agent"
-version = "0.0.31"
+version = "0.0.32"
 dependencies = [
  "anyhow",
  "arboard",
@@ -532,7 +532,7 @@ dependencies = [
 
 [[package]]
 name = "boxxy-ai-core"
-version = "0.0.31"
+version = "0.0.32"
 dependencies = [
  "anyhow",
  "ashpd",
@@ -547,7 +547,7 @@ dependencies = [
 
 [[package]]
 name = "boxxy-app"
-version = "0.0.31"
+version = "0.0.32"
 dependencies = [
  "anyhow",
  "boxxy-ai-core",
@@ -571,7 +571,7 @@ dependencies = [
 
 [[package]]
 name = "boxxy-bookmarks"
-version = "0.0.31"
+version = "0.0.32"
 dependencies = [
  "async-channel",
  "boxxy-ai-core",
@@ -593,7 +593,7 @@ dependencies = [
 
 [[package]]
 name = "boxxy-claw"
-version = "0.0.31"
+version = "0.0.32"
 dependencies = [
  "anyhow",
  "async-channel",
@@ -627,7 +627,7 @@ dependencies = [
 
 [[package]]
 name = "boxxy-command-palette"
-version = "0.0.31"
+version = "0.0.32"
 dependencies = [
  "gtk4",
  "libadwaita",
@@ -635,7 +635,7 @@ dependencies = [
 
 [[package]]
 name = "boxxy-core-toolbox"
-version = "0.0.31"
+version = "0.0.32"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -652,7 +652,7 @@ dependencies = [
 
 [[package]]
 name = "boxxy-core-widgets"
-version = "0.0.31"
+version = "0.0.32"
 dependencies = [
  "async-channel",
  "glib",
@@ -661,7 +661,7 @@ dependencies = [
 
 [[package]]
 name = "boxxy-db"
-version = "0.0.31"
+version = "0.0.32"
 dependencies = [
  "anyhow",
  "directories",
@@ -674,7 +674,7 @@ dependencies = [
 
 [[package]]
 name = "boxxy-keybindings"
-version = "0.0.31"
+version = "0.0.32"
 dependencies = [
  "anyhow",
  "gtk4",
@@ -683,7 +683,7 @@ dependencies = [
 
 [[package]]
 name = "boxxy-model-selection"
-version = "0.0.31"
+version = "0.0.32"
 dependencies = [
  "gtk4",
  "libadwaita",
@@ -694,7 +694,7 @@ dependencies = [
 
 [[package]]
 name = "boxxy-msgbar"
-version = "0.0.31"
+version = "0.0.32"
 dependencies = [
  "base64",
  "boxxy-ai-core",
@@ -714,7 +714,7 @@ dependencies = [
 
 [[package]]
 name = "boxxy-preferences"
-version = "0.0.31"
+version = "0.0.32"
 dependencies = [
  "anyhow",
  "boxxy-keybindings",
@@ -733,7 +733,7 @@ dependencies = [
 
 [[package]]
 name = "boxxy-sidebar"
-version = "0.0.31"
+version = "0.0.32"
 dependencies = [
  "anyhow",
  "async-channel",
@@ -752,7 +752,7 @@ dependencies = [
 
 [[package]]
 name = "boxxy-telemetry"
-version = "0.0.31"
+version = "0.0.32"
 dependencies = [
  "async-trait",
  "boxxy-preferences",
@@ -771,7 +771,7 @@ dependencies = [
 
 [[package]]
 name = "boxxy-terminal"
-version = "0.0.31"
+version = "0.0.32"
 dependencies = [
  "anyhow",
  "ashpd",
@@ -802,7 +802,7 @@ dependencies = [
 
 [[package]]
 name = "boxxy-themes"
-version = "0.0.31"
+version = "0.0.32"
 dependencies = [
  "anyhow",
  "directories",
@@ -820,7 +820,7 @@ dependencies = [
 
 [[package]]
 name = "boxxy-viewer"
-version = "0.0.31"
+version = "0.0.32"
 dependencies = [
  "async-channel",
  "glib",
@@ -871,7 +871,7 @@ dependencies = [
 
 [[package]]
 name = "boxxy-window"
-version = "0.0.31"
+version = "0.0.32"
 dependencies = [
  "anyhow",
  "async-channel",

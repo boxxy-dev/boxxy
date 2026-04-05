@@ -143,7 +143,7 @@ impl ClawIndicator {
         icon.set_pixel_size(13);
         btn_box.append(&icon);
 
-        let label = gtk::Label::new(Some("Thinking.."));
+        let label = gtk::Label::new(Some("Drinking Water.."));
         label.add_css_class("status-label");
         btn_box.append(&label);
 
@@ -321,7 +321,7 @@ impl ClawIndicator {
         *self.action_type.borrow_mut() = 0;
         self.spinner.set_visible(true);
         self.icon.set_visible(false);
-        self.label.set_text("Thinking..");
+        self.label.set_text("Drinking Water..");
         self.main_btn.set_can_focus(false);
         self.revealer.set_reveal_child(true);
         self.badge_revealer.set_reveal_child(false);
