@@ -102,9 +102,12 @@ pub fn handle_terminal_event(
                         .claw
                         .update_ui(inner.claw_active, inner.claw_proactive);
 
-                    inner
-                        .claw
-                        .set_history_widget(&inner.tabs[pos].controller.claw_history_widget());
+                    inner.claw.set_history_widget(
+                        &inner.tabs[pos].controller.claw_history_widget(),
+                        &inner.tabs[pos].controller.agent_name(),
+                        inner.tabs[pos].controller.is_pinned(),
+                        inner.tabs[pos].controller.is_web_search(),
+                    );
                     inner
                         .claw
                         .set_token_usage(inner.tabs[pos].controller.get_total_tokens());
@@ -136,7 +139,12 @@ pub fn handle_terminal_event(
                 }
 
                 match claw_event {
-                    boxxy_claw::engine::ClawEngineEvent::Identity { .. } => {
+                    boxxy_claw::engine::ClawEngineEvent::Identity {
+                        agent_name,
+                        pinned,
+                        web_search_enabled,
+                        ..
+                    } => {
                         // If we got an identity, ensure the sidebar UI reflects that this pane is now active
                         if let Some(page) = inner.tab_view.selected_page() {
                             let child = page.child();
@@ -148,10 +156,39 @@ pub fn handle_terminal_event(
                                 inner.claw.update_ui(active, proactive);
                                 inner.claw.set_history_widget(
                                     &inner.tabs[pos].controller.claw_history_widget(),
-                                );
+                                    &agent_name,
+                                    pinned,
+                                    web_search_enabled,
+                                    );
+                                    }
+                                    }
+                                    }
+                                    boxxy_claw::engine::ClawEngineEvent::PinStatusChanged(pinned) => {
+                                    if let Some(page) = inner.tab_view.selected_page() {
+                                    let child = page.child();
+                                    if inner.tabs[pos].controller.widget() == &child {
+                                    inner.claw.set_history_widget(
+                                    &inner.tabs[pos].controller.claw_history_widget(),
+                                    &inner.tabs[pos].controller.agent_name(),
+                                    pinned,
+                                    inner.tabs[pos].controller.is_web_search(),
+                                    );
+                                    }
+                                    }
+                                    }
+                                    boxxy_claw::engine::ClawEngineEvent::WebSearchStatusChanged(enabled) => {
+                                    if let Some(page) = inner.tab_view.selected_page() {
+                                    let child = page.child();
+                                    if inner.tabs[pos].controller.widget() == &child {
+                                    inner.claw.set_history_widget(
+                                    &inner.tabs[pos].controller.claw_history_widget(),
+                                    &inner.tabs[pos].controller.agent_name(),
+                                    inner.tabs[pos].controller.is_pinned(),
+                                    enabled,
+                                    );
+
                             }
                         }
-                        inner.claw.refresh_visibility();
                     }
                     boxxy_claw::engine::ClawEngineEvent::DiagnosisComplete { .. }
                     | boxxy_claw::engine::ClawEngineEvent::InjectCommand { .. }

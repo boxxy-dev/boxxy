@@ -24,7 +24,7 @@ The container component representing a single Tab.
 
 ## Key Features
 - **Dynamic Splits**: Supports infinite vertical and horizontal terminal splits.
-- **Per-Pane Claw State**: Claw activation, Proactive Mode, and Session Pinning are tracked **per-pane**. The `boxxy_msgbar::MsgBarComponent` triggered by `Ctrl+/` acts as the primary interface for this pane's agent. Sending a query automatically enables Claw mode for the pane if it was disabled. The pane provides rich autocompletion and maintains its own badge and UI state.
+- **Per-Pane Claw State**: Claw activation, Proactive Mode, Session Pinning, and Web Search permissions are tracked **per-pane**. The `boxxy_msgbar::MsgBarComponent` triggered by `Ctrl+/` acts as the primary interface for this pane's agent. Sending a query automatically enables Claw mode for the pane if it was disabled. The pane provides rich autocompletion and maintains its own badge and UI state.
 - **Seamless Background Images**: A single background image spans the entire tab seamlessly across all transparent terminal splits. 
 - **Agent Badge & Indicators**: Each pane features a color-coded `ClawIndicator` representing its active AI session. This unified widget smoothly animates between a compact agent identity badge and an expanded action state (e.g., "Thinking..."). It also includes a dynamic clock icon (`boxxy-running-symbolic`) that appears automatically when the agent has pending scheduled tasks, managed via `TaskStatusChanged` events.
 - **Task Proposals**: Handles `TerminalProposal::Reminder` to display scheduled tasks directly in the terminal's interactive overlay popup, maintaining a consistent UI for all agent actions.

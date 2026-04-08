@@ -429,9 +429,12 @@ pub fn focus_active_terminal(inner: &mut AppWindowInner) {
                 .claw
                 .update_ui(inner.claw_active, inner.claw_proactive);
 
-            inner
-                .claw
-                .set_history_widget(&tc.controller.claw_history_widget());
+            inner.claw.set_history_widget(
+                &tc.controller.claw_history_widget(),
+                &tc.controller.agent_name(),
+                tc.controller.is_pinned(),
+                tc.controller.is_web_search(),
+            );
             inner.claw.set_token_usage(tc.controller.get_total_tokens());
         }
     }

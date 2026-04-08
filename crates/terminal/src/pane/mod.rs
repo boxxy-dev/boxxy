@@ -87,6 +87,8 @@ pub struct TerminalPaneComponent {
     is_claw_active: Rc<Cell<bool>>,
     is_proactive: Rc<Cell<bool>>,
     is_pinned: Rc<Cell<bool>>,
+    is_web_search: Rc<Cell<bool>>,
+    agent_name: Rc<RefCell<String>>,
     msg_bar: Rc<MsgBarComponent>,
     pub total_tokens: Rc<Cell<u64>>,
     msgbar_shortcut: gtk::Shortcut,
@@ -118,6 +120,7 @@ impl std::fmt::Debug for TerminalPaneComponent {
 
 impl TerminalPaneComponent {
     pub fn new<F: Fn(PaneOutput) + Send + Sync + 'static>(init: PaneInit, callback: F) -> Self {
+        let settings = boxxy_preferences::Settings::load();
         let callback: std::sync::Arc<dyn Fn(PaneOutput) + Send + Sync + 'static> =
             std::sync::Arc::new(callback);
         let id = init.id;
@@ -150,6 +153,8 @@ impl TerminalPaneComponent {
         let is_claw_active = Rc::new(Cell::new(false));
         let is_proactive = Rc::new(Cell::new(false));
         let is_pinned = Rc::new(Cell::new(false));
+        let is_web_search = Rc::new(Cell::new(settings.web_search_on_by_default));
+        let agent_name = Rc::new(RefCell::new(String::new()));
         let claw_indicator = ClawIndicator::new(&widget);
         let total_tokens = Rc::new(Cell::new(0));
 
@@ -173,25 +178,35 @@ impl TerminalPaneComponent {
             let inner_weak_for_active = inner_weak_ref.clone();
             let inner_weak_for_proactive = inner_weak_ref.clone();
             let inner_weak_for_pin = inner_weak_ref.clone();
+            let inner_weak_for_web_search = inner_weak_ref.clone();
 
             let is_claw_active_for_msg = is_claw_active.clone();
             let is_proactive_for_msg = is_proactive.clone();
             let is_pinned_for_msg = is_pinned.clone();
+            let is_web_search_for_msg = is_web_search.clone();
 
             let is_claw_active_for_active = is_claw_active.clone();
             let is_proactive_for_active = is_proactive.clone();
             let is_pinned_for_active = is_pinned.clone();
+            let is_web_search_for_active = is_web_search.clone();
 
             let is_claw_active_for_proactive = is_claw_active.clone();
             let is_proactive_for_proactive = is_proactive.clone();
             let is_pinned_for_proactive = is_pinned.clone();
+            let is_web_search_for_proactive = is_web_search.clone();
 
             let is_claw_active_for_pin = is_claw_active.clone();
             let is_proactive_for_pin = is_proactive.clone();
             let is_pinned_for_pin = is_pinned.clone();
+            let is_web_search_for_pin = is_web_search.clone();
+
+            let is_claw_active_for_web_search = is_claw_active.clone();
+            let is_proactive_for_web_search = is_proactive.clone();
+            let is_pinned_for_web_search = is_pinned.clone();
+            let is_web_search_for_web_search = is_web_search.clone();
 
             let tx_pin_toggle = claw_sender.clone();
-
+            let tx_web_search_toggle = claw_sender.clone();
             let msg_bar = Rc::new(MsgBarComponent::new(
                 move |(query, images)| {
                     if let Some(inner_arc) = inner_weak_for_msg
@@ -212,7 +227,9 @@ impl TerminalPaneComponent {
                                 true,
                                 is_proactive_for_msg.get(),
                                 is_pinned_for_msg.get(),
+                                is_web_search_for_msg.get(),
                             );
+
                             cb_msg(PaneOutput::ClawStateChanged(
                                 id_msg.clone(),
                                 true,
@@ -276,6 +293,7 @@ impl TerminalPaneComponent {
                                 active,
                                 is_proactive_for_active.get(),
                                 is_pinned_for_active.get(),
+                                is_web_search_for_active.get(),
                             );
                             if let Some(ind) = &inner_arc.borrow().claw_indicator {
                                 ind.set_visible(active);
@@ -310,6 +328,7 @@ impl TerminalPaneComponent {
                                 is_claw_active_for_proactive.get(),
                                 proactive,
                                 is_pinned_for_proactive.get(),
+                                is_web_search_for_proactive.get(),
                             );
                         }
                         cb_proactive(PaneOutput::ClawStateChanged(
@@ -342,6 +361,7 @@ impl TerminalPaneComponent {
                                 is_claw_active_for_pin.get(),
                                 is_proactive_for_pin.get(),
                                 pinned,
+                                is_web_search_for_pin.get(),
                             );
                         }
                         let tx = tx_pin_toggle.clone();
@@ -352,7 +372,32 @@ impl TerminalPaneComponent {
                         });
                     }
                 },
+                move |enabled| {
+                    if is_web_search_for_web_search.get() != enabled {
+                        is_web_search_for_web_search.set(enabled);
+                        if let Some(inner_arc) = inner_weak_for_web_search
+                            .borrow()
+                            .as_ref()
+                            .and_then(|w| w.upgrade())
+                        {
+                            inner_arc.borrow().msg_bar.update_ui(
+                                is_claw_active_for_web_search.get(),
+                                is_proactive_for_web_search.get(),
+                                is_pinned_for_web_search.get(),
+                                enabled,
+                            );
+                        }
+                        let tx = tx_web_search_toggle.clone();
+                        glib::spawn_future_local(async move {
+                            let _ = tx
+                                .send(boxxy_claw::engine::ClawMessage::ToggleWebSearch(enabled))
+                                .await;
+                        });
+                    }
+                },
             ));
+
+            msg_bar.set_web_search_visible(settings.enable_web_search);
 
             let inner = Rc::new(RefCell::new(PaneInner {
                 terminal: terminal.clone(),
@@ -443,13 +488,16 @@ impl TerminalPaneComponent {
             id.clone(),
             claw_sender.clone(),
             claw_rx,
-            claw_list_store.clone(),
+            claw_list_store,
             callback.clone(),
             init.spawn_intent,
             total_tokens.clone(),
             is_pinned.clone(),
+            is_web_search.clone(),
+            agent_name.clone(),
             &claw_indicator,
         );
+
         inner.borrow_mut().claw_indicator = Some(claw_indicator.clone());
 
         // Keep popover height capped to the live pane height.
@@ -470,6 +518,7 @@ impl TerminalPaneComponent {
         let is_claw_active_sc = is_claw_active.clone();
         let is_proactive_sc = is_proactive.clone();
         let is_pinned_sc = is_pinned.clone();
+        let is_web_search_sc = is_web_search.clone();
         let action = gtk::CallbackAction::new(move |_, _| {
             if let Some(rect) = terminal_sc.get_cursor_rect() {
                 terminal_sc.set_focusable(false);
@@ -477,6 +526,7 @@ impl TerminalPaneComponent {
                     is_claw_active_sc.get(),
                     is_proactive_sc.get(),
                     is_pinned_sc.get(),
+                    is_web_search_sc.get(),
                 );
                 msg_bar_sc.show_at_y(rect.y() as i32, rect.height() as i32);
                 let entry_clone = msg_bar_sc.entry.clone();
@@ -507,6 +557,8 @@ impl TerminalPaneComponent {
             is_claw_active,
             is_proactive,
             is_pinned,
+            is_web_search,
+            agent_name,
             msg_bar,
             total_tokens,
             msgbar_shortcut,
@@ -519,6 +571,18 @@ impl TerminalPaneComponent {
 
     pub fn get_total_tokens(&self) -> u64 {
         self.total_tokens.get()
+    }
+
+    pub fn is_pinned(&self) -> bool {
+        self.is_pinned.get()
+    }
+
+    pub fn is_web_search(&self) -> bool {
+        self.is_web_search.get()
+    }
+
+    pub fn agent_name(&self) -> String {
+        self.agent_name.borrow().clone()
     }
 
     pub fn claw_history_widget(&self) -> gtk::ListView {
@@ -833,7 +897,7 @@ impl TerminalPaneComponent {
 
         // Sync MsgBar toggle state
         self.msg_bar
-            .update_ui(active, self.is_proactive.get(), self.is_pinned.get());
+            .update_ui(active, self.is_proactive.get(), self.is_pinned.get(), self.is_web_search.get());
 
         // If turning ON, tell the session to Initialize
         let tx = self.claw_sender.clone();
@@ -855,7 +919,7 @@ impl TerminalPaneComponent {
         );
         self.is_proactive.set(proactive);
         self.msg_bar
-            .update_ui(self.is_claw_active.get(), proactive, self.is_pinned.get());
+            .update_ui(self.is_claw_active.get(), proactive, self.is_pinned.get(), self.is_web_search.get());
 
         let _ = self
             .claw_sender
@@ -925,9 +989,34 @@ impl TerminalPaneComponent {
         let mut needs_cursor_color = true;
         let mut needs_show_grid = true;
         let mut needs_invert_scroll = true;
-
         if let Some(ref p) = inner.current_settings {
+            if p.enable_web_search != settings.enable_web_search {
+                self.msg_bar.set_web_search_visible(settings.enable_web_search);
+
+                if !settings.enable_web_search {
+                    // Force disable if globally disallowed
+                    self.is_web_search.set(false);
+                    let _ = self
+                        .claw_sender
+                        .send_blocking(boxxy_claw::engine::ClawMessage::ToggleWebSearch(false));
+                    self.msg_bar.update_ui(
+                        self.is_claw_active.get(),
+                        self.is_proactive.get(),
+                        self.is_pinned.get(),
+                        false,
+                    );
+                } else {
+                    // If enabled, send current local state to ensure it's synced
+                    let _ = self
+                        .claw_sender
+                        .send_blocking(boxxy_claw::engine::ClawMessage::ToggleWebSearch(
+                            self.is_web_search.get(),
+                        ));
+                }
+            }
+
             needs_font = p.font_name != settings.font_name || p.font_size != settings.font_size;
+
             needs_padding = p.padding != settings.padding;
             needs_cell = (p.cell_height_scale - settings.cell_height_scale).abs() > 1e-6
                 || (p.cell_width_scale - settings.cell_width_scale).abs() > 1e-6;

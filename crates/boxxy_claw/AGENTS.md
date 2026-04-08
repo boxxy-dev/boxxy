@@ -14,8 +14,8 @@ The crate uses an **Actor Model** mixed with a **Shared-Everything State** strat
   - **Chit-Chat Filtering:** The background summarizer is strictly instructed to discard social greetings or non-technical chatter by outputting `NO_TECHNICAL_CHANGE`.
   - **Robotic Frame:** Background memory extraction agents (Observer/Summarizer) are isolated from the main agent's persona using `[DATA_START]`/`[DATA_END]` tags and explicit anchor commands to enforce rigid JSON/technical outputs and prevent hallucinations.
 - **Agent Identification:** Agents identify themselves strictly by their unique pane name (e.g., "plentiful bream"), not by the underlying engine name ("Boxxy-Claw").
-- **`engine/session.rs`**: Implements the `ClawSession` actor. Each terminal pane owns its own dedicated session loop.
-- **`engine/agent.rs`**: Wraps the `rig-core` framework to create model-specific agents with tool support.
+- **`engine/session.rs`**: Implements the `ClawSession` actor. Each terminal pane owns its own dedicated session loop and tracks local capability states (like `web_search_enabled`). If capabilities change mid-session, the session forces an agent rebuild to dynamically update the available tools.
+- **`engine/agent.rs`**: Wraps the `rig-core` framework to create model-specific agents with tool support. Conditionally injects capabilities (like `WebSearchTool`) based on both global preferences and local pane state.
 - **`engine/dispatcher.rs`**: Modular parser that cleans LLM output and decides how to route suggestions back to the UI.
 - **`engine/context.rs`**: Assembles the agent's context by merging terminal snapshots, memories, and the Workspace Radar.
 - **`engine/tools/`**: Contains Boxxy-specific tools like `SysShellTool`, `TerminalCommandTool`, `ActivateSkillTool`, and global orchestration tools (`ReadPaneTool`, `SetGlobalIntentTool`). Standard host tools (file, system, web, clipboard) are now delegated to the external `boxxy-core-toolbox` crate, which `boxxy-claw` configures and connects to its UI.

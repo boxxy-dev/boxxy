@@ -1,12 +1,14 @@
 pub mod clipboard;
 pub mod file;
 pub mod network;
+pub mod search;
 pub mod system;
 pub mod utils;
 
 pub use clipboard::{GetClipboardTool, SetClipboardTool};
 pub use file::{FileDeleteTool, FileReadTool, FileWriteTool, ListDirectoryTool};
 pub use network::HttpFetchTool;
+pub use search::{TavilyProvider, WebSearchTool};
 pub use system::{GetSystemInfoTool, KillProcessTool, ListProcessesTool};
 
 /// Trait for handling user approvals for sensitive tools.

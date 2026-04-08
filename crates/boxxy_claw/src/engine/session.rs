@@ -15,6 +15,7 @@ pub struct SessionState {
     pub pane_id: String,
     pub agent_name: String,
     pub pinned: bool,
+    pub web_search_enabled: bool,
     pub total_tokens: u64,
     pub pending_terminal_reply: Option<tokio::sync::oneshot::Sender<Result<String, String>>>,
     pub pending_file_reply: Option<tokio::sync::oneshot::Sender<bool>>,
@@ -79,6 +80,7 @@ impl ClawSession {
                 pane_id: pane_id.clone(),
                 agent_name: name,
                 pinned: false,
+                web_search_enabled: settings.enable_web_search,
                 total_tokens: 0,
                 pending_terminal_reply: None,
                 pending_file_reply: None,
@@ -157,11 +159,13 @@ impl ClawSession {
                         // If this is an explicit Initialize message, we'll handle the identity
                         // announcement in the match block below to avoid double announcements.
                         if !matches!(&msg, ClawMessage::Initialize) {
+                            let web_search_enabled = self.state.lock().await.web_search_enabled;
                             let _ = self
                                 .tx_ui
                                 .send(ClawEngineEvent::Identity {
                                     agent_name: self.name.clone(),
                                     pinned: self.pinned,
+                                    web_search_enabled,
                                     total_tokens: self.total_tokens,
                                 })
                                 .await;
@@ -283,6 +287,7 @@ impl ClawSession {
                                         state_lock.persistent_agent = None;
                                         let agent_name_clone = state_lock.agent_name.clone();
                                         let tasks_clone = state_lock.pending_tasks.clone();
+                                        let web_search_enabled = state_lock.web_search_enabled;
                                         drop(state_lock);
 
                                         // 4. Load visual history from DB
@@ -314,6 +319,7 @@ impl ClawSession {
                                             .send(ClawEngineEvent::Identity {
                                                 agent_name: self.name.clone(),
                                                 pinned: self.pinned,
+                                                web_search_enabled,
                                                 total_tokens: self.total_tokens,
                                             })
                                             .await;
@@ -408,11 +414,13 @@ impl ClawSession {
                                 .await;
 
                             // 4. Announce Identity to UI
+                            let web_search_enabled = self.state.lock().await.web_search_enabled;
                             let _ = self
                                 .tx_ui
                                 .send(ClawEngineEvent::Identity {
                                     agent_name: name,
                                     pinned: false,
+                                    web_search_enabled,
                                     total_tokens: 0,
                                 })
                                 .await;
@@ -467,6 +475,15 @@ impl ClawSession {
                             });
                             drop(state_lock);
                             let _ = self.tx_ui.send(ClawEngineEvent::PinStatusChanged(pinned)).await;
+                        }
+                        ClawMessage::ToggleWebSearch(enabled) => {
+                            let mut state_lock = self.state.lock().await;
+                            if state_lock.web_search_enabled != enabled {
+                                state_lock.web_search_enabled = enabled;
+                                // Force agent rebuild to update tools
+                                state_lock.persistent_agent = None;
+                                let _ = self.tx_ui.send(ClawEngineEvent::WebSearchStatusChanged(enabled)).await;
+                            }
                         }
                         ClawMessage::ForegroundProcessChanged { process_name } => {
                             let status = if process_name.is_empty() {
@@ -1049,6 +1066,7 @@ fn spawn_turn(
                 &settings,
                 session_id_clone.clone(),
                 pane_id.clone(),
+                state_lock.web_search_enabled,
             ));
         }
 

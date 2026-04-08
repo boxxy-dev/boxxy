@@ -25,6 +25,9 @@ pub fn setup_apis_page(
     on_change: Rc<dyn Fn(Settings) + 'static>,
 ) -> Box<dyn Fn(&str) -> bool> {
     let dynamic_apis_group: adw::PreferencesGroup = builder.object("dynamic_apis_group").unwrap();
+    let group_search_engines: adw::PreferencesGroup = builder.object("group_search_engines").unwrap();
+    let tavily_api_key_entry: adw::PasswordEntryRow = builder.object("tavily_api_key_entry").unwrap();
+    let native_search_switch: adw::SwitchRow = builder.object("native_search_switch").unwrap();
     let ollama_base_url_entry: adw::EntryRow = builder.object("ollama_base_url_entry").unwrap();
     let group_ollama_api: adw::PreferencesGroup = builder.object("group_ollama_api").unwrap();
     let group_model_status: adw::PreferencesGroup = builder.object("group_model_status").unwrap();
@@ -125,6 +128,35 @@ pub fn setup_apis_page(
         }
     }
 
+    tavily_api_key_entry.set_text(
+        &settings_rc
+            .borrow()
+            .api_keys
+            .get("Tavily")
+            .cloned()
+            .unwrap_or_default(),
+    );
+    let s_rc_tavily = settings_rc.clone();
+    let cb_tavily = on_change.clone();
+    let update_status_tavily = update_model_status.clone();
+    tavily_api_key_entry.connect_changed(move |entry| {
+        let mut settings_to_save = None;
+        {
+            let mut s = s_rc_tavily.borrow_mut();
+            let new_val = entry.text().to_string();
+            if s.api_keys.get("Tavily") != Some(&new_val) {
+                s.api_keys.insert("Tavily".to_string(), new_val);
+                s.save();
+                settings_to_save = Some(s.clone());
+            }
+        }
+
+        if let Some(s) = settings_to_save {
+            update_status_tavily();
+            cb_tavily(s);
+        }
+    });
+
     ollama_base_url_entry.set_text(&settings_rc.borrow().ollama_base_url);
     let s_rc3 = settings_rc.clone();
     let cb3 = on_change.clone();
@@ -172,9 +204,20 @@ pub fn setup_apis_page(
         }
 
         let ollama_visible = match_row(ollama_base_url_entry_clone.upcast_ref(), "base url ollama");
+        let search_tavily = match_row(
+            tavily_api_key_entry.upcast_ref(),
+            "tavily api key search engines",
+        );
+        let search_native = match_row(
+            native_search_switch.upcast_ref(),
+            "use native model search engines built in gemini gpt claude not implemented",
+        );
+        
+        let search_visible = search_tavily || search_native;
         group_ollama_api.set_visible(ollama_visible);
+        group_search_engines.set_visible(search_visible);
         dynamic_apis_group.set_visible(any_visible);
 
-        any_visible || ollama_visible || models_visible
+        any_visible || ollama_visible || models_visible || search_visible
     })
 }

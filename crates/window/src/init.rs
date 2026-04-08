@@ -57,6 +57,18 @@ impl TerminalController {
         self.controller.is_proactive()
     }
 
+    pub fn is_pinned(&self) -> bool {
+        self.controller.is_pinned()
+    }
+
+    pub fn is_web_search(&self) -> bool {
+        self.controller.is_web_search()
+    }
+
+    pub fn agent_name(&self) -> String {
+        self.controller.agent_name()
+    }
+
     pub fn claw_history_widget(&self) -> gtk4::ListView {
         self.controller.claw_history_widget()
     }

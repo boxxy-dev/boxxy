@@ -17,4 +17,5 @@ log = { workspace = true }
 reqwest = { workspace = true }
 async-trait = { workspace = true }
 tokio = { workspace = true }
+thiserror = { workspace = true }
 directories = { workspace = true }

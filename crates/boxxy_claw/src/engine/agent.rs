@@ -180,6 +180,7 @@ pub fn create_claw_agent(
     settings: &boxxy_preferences::Settings,
     session_id: String,
     pane_id: String,
+    web_search_enabled: bool,
 ) -> ClawAgent {
     let provider = match provider {
         Some(p) => p,
@@ -294,6 +295,15 @@ pub fn create_claw_agent(
 
     if settings.enable_web_tools {
         tools.push(Box::new(HttpFetchTool));
+    }
+
+    if web_search_enabled && settings.enable_web_search {
+        let tavily_key = creds.api_keys.get("Tavily").cloned().unwrap_or_default();
+        if !tavily_key.is_empty() {
+            tools.push(Box::new(boxxy_core_toolbox::WebSearchTool {
+                provider: Box::new(boxxy_core_toolbox::TavilyProvider::new(tavily_key)),
+            }));
+        }
     }
 
     if settings.enable_clipboard_tools {

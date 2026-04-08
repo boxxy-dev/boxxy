@@ -28,7 +28,7 @@ impl AttachmentManager {
     pub fn new() -> Self {
         let tags_box = gtk::Box::new(gtk::Orientation::Horizontal, 4);
         tags_box.set_valign(gtk::Align::Center);
-        
+
         Self {
             tags_box,
             attachments: Rc::new(RefCell::new(Vec::new())),
@@ -129,7 +129,7 @@ impl AttachmentManager {
         let clipboard = gtk::gdk::Display::default().unwrap().clipboard();
         let entry_clone = entry.clone();
         let clipboard_clone = clipboard.clone();
-        
+
         let self_clone = self.clone();
 
         clipboard.read_text_async(None::<&gtk::gio::Cancellable>, move |res| {
@@ -146,19 +146,16 @@ impl AttachmentManager {
                     }
                 }
             }
-            
+
             if !has_text {
                 let self_clone_img = self_clone.clone();
-                clipboard_clone.read_texture_async(
-                    None::<&gtk::gio::Cancellable>,
-                    move |res| {
-                        if let Ok(Some(texture)) = res {
-                            let bytes = texture.save_to_png_bytes();
-                            let b64 = gtk::glib::base64_encode(&bytes);
-                            self_clone_img.add_attachment("Image".to_string(), b64.to_string(), true);
-                        }
-                    },
-                );
+                clipboard_clone.read_texture_async(None::<&gtk::gio::Cancellable>, move |res| {
+                    if let Ok(Some(texture)) = res {
+                        let bytes = texture.save_to_png_bytes();
+                        let b64 = gtk::glib::base64_encode(&bytes);
+                        self_clone_img.add_attachment("Image".to_string(), b64.to_string(), true);
+                    }
+                });
             }
         });
     }

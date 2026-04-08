@@ -9,6 +9,7 @@ The crate is modular, with tools grouped by functionality:
 - **`system.rs`**: Tools for system information retrieval (returning structured JSON OS/Memory/CPU data) and process management (list/kill).
 - **`clipboard.rs`**: Tools for reading and writing to the system clipboard.
 - **`network.rs`**: Tools for web fetching (`http_fetch`) with built-in timeouts and 1MB response size limits to prevent context flooding.
+- **`search/mod.rs`**: Web search functionality with a `SearchProvider` trait abstraction. Includes the `WebSearchTool` and currently implements `TavilyProvider`.
 - **`utils.rs`**: Shared utilities like robust path resolution (handling absolute, relative, and `~` home directory paths).
 
 ## Approval Protocol

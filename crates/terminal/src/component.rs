@@ -648,6 +648,33 @@ impl TerminalComponent {
         }
     }
 
+    pub fn is_pinned(&self) -> bool {
+        let inner = self.inner.borrow();
+        if let Some(pane_data) = inner.panes.get(&inner.active_pane_id) {
+            pane_data.controller.is_pinned()
+        } else {
+            false
+        }
+    }
+
+    pub fn is_web_search(&self) -> bool {
+        let inner = self.inner.borrow();
+        if let Some(pane_data) = inner.panes.get(&inner.active_pane_id) {
+            pane_data.controller.is_web_search()
+        } else {
+            false
+        }
+    }
+
+    pub fn agent_name(&self) -> String {
+        let inner = self.inner.borrow();
+        if let Some(pane_data) = inner.panes.get(&inner.active_pane_id) {
+            pane_data.controller.agent_name()
+        } else {
+            String::new()
+        }
+    }
+
     pub fn update_diagnosis_mode(&self, mode: &boxxy_preferences::config::ClawAutoDiagnosisMode) {
         let inner = self.inner.borrow();
         for pane_data in inner.panes.values() {

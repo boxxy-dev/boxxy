@@ -207,7 +207,26 @@ impl ClawSidebarComponent {
         false
     }
 
-    pub fn set_history_widget(&self, list: &gtk::ListView) {
+    pub fn set_history_widget(
+        &self,
+        list: &gtk::ListView,
+        agent_name: &str,
+        pinned: bool,
+        web_search_enabled: bool,
+    ) {
+        if !agent_name.is_empty() {
+            self.status_page
+                .set_title(&format!("Claw: {}", agent_name));
+            let mut desc = format!("System-eccentric agentic control.");
+            if pinned {
+                desc.push_str(" (Pinned)");
+            }
+            if web_search_enabled {
+                desc.push_str(" [Web Search ON]");
+            }
+            self.status_page.set_description(Some(&desc));
+        }
+
         if let Some(old) = self.current_list.borrow().as_ref()
             && old == list
         {

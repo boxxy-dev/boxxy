@@ -92,6 +92,8 @@ pub enum ClawMessage {
     ResumeSession { session_id: String },
     /// Pin or unpin the current session.
     TogglePin(bool),
+    /// Toggle web search for the current session.
+    ToggleWebSearch(bool),
     /// Cancel a specific scheduled task.
     CancelTask { task_id: uuid::Uuid },
 }
@@ -331,6 +333,7 @@ pub enum ClawEngineEvent {
     Identity {
         agent_name: String,
         pinned: bool,
+        web_search_enabled: bool,
         total_tokens: u64,
     },
     AgentThinking {
@@ -419,6 +422,7 @@ pub enum ClawEngineEvent {
         agent_name: String,
     },
     PinStatusChanged(bool),
+    WebSearchStatusChanged(bool),
     TaskStatusChanged {
         tasks: Vec<ScheduledTask>,
         agent_name: String,

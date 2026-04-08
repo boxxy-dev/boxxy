@@ -402,6 +402,24 @@
                               </object>
                             </child>
                             <child>
+                              <object class="AdwPreferencesGroup" id="group_search_engines">
+                                <property name="title" translatable="yes">Search Engines</property>
+                                <property name="description" translatable="yes">Configure API keys for web search providers.</property>
+                                <child>
+                                  <object class="AdwPasswordEntryRow" id="tavily_api_key_entry">
+                                    <property name="title" translatable="yes">Tavily API Key</property>
+                                  </object>
+                                </child>
+                                <child>
+                                  <object class="AdwSwitchRow" id="native_search_switch">
+                                    <property name="title" translatable="yes">Use Native Model Search</property>
+                                    <property name="subtitle" translatable="yes">Use built-in search from Gemini, GPT, or Claude (Not implemented yet).</property>
+                                    <property name="sensitive">False</property>
+                                  </object>
+                                </child>
+                              </object>
+                            </child>
+                            <child>
                               <object class="AdwPreferencesGroup" id="group_ollama_api">
                                 <property name="title" translatable="yes">Ollama API</property>
                                 <property name="description" translatable="yes">Configure Local Ollama settings.</property>
@@ -450,7 +468,14 @@
                                   </object>
                                 </child>
                                 <child>
+                                  <object class="AdwSwitchRow" id="web_search_by_default_switch">
+                                    <property name="title" translatable="yes">Web Search On by Default</property>
+                                    <property name="subtitle" translatable="yes">Start every new terminal with web search enabled (if allowed).</property>
+                                  </object>
+                                </child>
+                                <child>
                                   <object class="AdwSwitchRow" id="proactive_by_default_switch">
+
                                     <property name="title" translatable="yes">Proactive Mode by Default</property>
                                     <property name="subtitle" translatable="yes">Start BoxxyClaw in proactive mode for background analysis.</property>
                                   </object>
@@ -490,6 +515,12 @@
                                   <object class="AdwSwitchRow" id="enable_web_tools_switch">
                                     <property name="title" translatable="yes">Enable Web Tools</property>
                                     <property name="subtitle" translatable="yes">Allows agents to fetch content from the web (documentation, etc).</property>
+                                  </object>
+                                </child>
+                                <child>
+                                  <object class="AdwSwitchRow" id="enable_web_search_switch">
+                                    <property name="title" translatable="yes">Enable Web Search</property>
+                                    <property name="subtitle" translatable="yes">Allows agents to search the web using providers like Tavily.</property>
                                   </object>
                                 </child>
                                 <child>
