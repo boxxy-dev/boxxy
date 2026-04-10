@@ -214,7 +214,12 @@ impl BoxxyAgent {
                 // 1. Create a new session
                 libc::setsid();
 
-                // 2. Open the slave PTY
+                // 2. Ensure shell dies if the agent dies
+                if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGHUP) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+
+                // 3. Open the slave PTY
                 let slave_fd = libc::open(
                     std::ffi::CString::new(slave_name.clone()).unwrap().as_ptr(),
                     libc::O_RDWR,
