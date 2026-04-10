@@ -112,3 +112,13 @@ jobs:
           RELEASE_ID=$(gh release view nightly --json databaseId -q .databaseId)
           gh api --method PATCH /repos/${{ github.repository }}/releases/$RELEASE_ID -F draft=true
           gh api --method PATCH /repos/${{ github.repository }}/releases/$RELEASE_ID -F draft=false
+
+      - name: Trigger Flatpak sync
+        env:
+          GITHUB_TOKEN: ${{ secrets.FLATPAK_REMOTE_TOKEN }}
+        run: |
+          COMMIT_SHA=$(git rev-parse HEAD)
+          gh api repos/boxxy-dev/boxxy-flatpak-remote/dispatches \
+            --method POST \
+            -f event_type=nightly-built \
+            -f "client_payload[commit]=$COMMIT_SHA"
