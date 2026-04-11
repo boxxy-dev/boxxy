@@ -660,3 +660,57 @@ impl Tool for SetGlobalIntentTool {
         Ok(format!("Global workspace intent updated: {}", args.intent))
     }
 }
+
+#[derive(Deserialize)]
+pub struct AbortAgentArgs {
+    pub agent_name: String,
+}
+
+#[derive(Serialize)]
+pub struct AbortAgentOutput {
+    pub message: String,
+}
+
+pub struct AbortAgentTaskTool;
+
+impl Tool for AbortAgentTaskTool {
+    const NAME: &'static str = "abort_agent_task";
+
+    type Error = std::io::Error;
+    type Args = AbortAgentArgs;
+    type Output = AbortAgentOutput;
+
+    async fn definition(&self, _prompt: String) -> ToolDefinition {
+        ToolDefinition {
+            name: Self::NAME.to_string(),
+            description: "Instantly terminate another agent's active thinking or task execution. \
+            Use this if you realize a peer is heading down a wrong path or if the global goal has changed."
+                .to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "agent_name": {
+                        "type": "string",
+                        "description": "The exact name of the agent to abort."
+                    }
+                },
+                "required": ["agent_name"]
+            }),
+        }
+    }
+
+    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        boxxy_telemetry::track_tool_use(Self::NAME).await;
+        let workspace = global_workspace().await;
+        if let Some(tx) = workspace.get_pane_tx_by_name(&args.agent_name).await {
+            let _ = tx.send(crate::engine::ClawMessage::Abort).await;
+            Ok(AbortAgentOutput {
+                message: format!("Successfully sent ABORT signal to agent '{}'.", args.agent_name),
+            })
+        } else {
+            Ok(AbortAgentOutput {
+                message: format!("Agent '{}' not found.", args.agent_name),
+            })
+        }
+    }
+}

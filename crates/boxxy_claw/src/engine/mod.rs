@@ -105,6 +105,10 @@ pub enum ClawMessage {
         task_id: uuid::Uuid,
         result: String,
     },
+    /// Explicitly abort the current turn and clear the queue.
+    Abort,
+    /// Internal message sent when a background turn finishes.
+    TurnFinished,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]

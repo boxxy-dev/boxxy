@@ -8,6 +8,7 @@ use boxxy_agent::ipc::AgentClawProxy;
 use boxxy_db::Db;
 use log::{debug, info};
 use rig::message::Message;
+use std::collections::VecDeque;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -128,6 +129,8 @@ impl ClawSession {
 
         let mut is_initialized = false;
         let mut current_dir = String::from("/");
+        let mut current_turn: Option<tokio::task::JoinHandle<()>> = None;
+        let mut backlog: VecDeque<ClawMessage> = VecDeque::new();
 
         let workspace = crate::registry::workspace::global_workspace().await;
 
@@ -207,8 +210,48 @@ impl ClawSession {
                     let session_ctx = self.session_context.clone();
 
                     match msg {
+                        ClawMessage::Abort => {
+                            if let Some(handle) = current_turn.take() {
+                                handle.abort();
+                                let _ = self
+                                    .tx_ui
+                                    .send(ClawEngineEvent::AgentThinking {
+                                        agent_name: self.name.clone(),
+                                        is_thinking: false,
+                                    })
+                                    .await;
+                            }
+                            backlog.clear();
+
+                            let mut state_lock = self.state.lock().await;
+                            if let Some(reply) = state_lock.pending_terminal_reply.take() {
+                                let _ = reply.send(Err("[ABORT]".to_string()));
+                            }
+                            if let Some(reply) = state_lock.pending_file_reply.take() {
+                                let _ = reply.send(false);
+                            }
+                            if let Some(reply) = state_lock.pending_file_delete_reply.take() {
+                                let _ = reply.send(false);
+                            }
+                            if let Some(reply) = state_lock.pending_kill_process_reply.take() {
+                                let _ = reply.send(false);
+                            }
+                            if let Some(reply) = state_lock.pending_get_clipboard_reply.take() {
+                                let _ = reply.send(false);
+                            }
+                            if let Some(reply) = state_lock.pending_set_clipboard_reply.take() {
+                                let _ = reply.send(false);
+                            }
+                        }
+                        ClawMessage::TurnFinished => {
+                            current_turn = None;
+                            if let Some(next_msg) = backlog.pop_front() {
+                                let _ = self.tx_self.send(next_msg).await;
+                            }
+                        }
                         ClawMessage::Deactivate => {
                             info!("Deactivating Claw Session for pane {}...", self.pane_id);
+                            let _ = self.tx_self.send(ClawMessage::Abort).await;
                             is_initialized = false;
                             *self.db.lock().await = None;
 
@@ -222,6 +265,7 @@ impl ClawSession {
                         }
                         ClawMessage::Evict => {
                             info!("Agent in pane {} was EVICTED.", self.pane_id);
+                            let _ = self.tx_self.send(ClawMessage::Abort).await;
                             is_initialized = false;
                             *self.db.lock().await = None;
 
@@ -556,7 +600,16 @@ impl ClawSession {
                                     });
                                 } else {
                                     drop(state_lock);
-                                    spawn_turn(
+                                    if current_turn.is_some() {
+                                        backlog.push_back(ClawMessage::CommandFinished {
+                                            exit_code,
+                                            snapshot,
+                                            cwd,
+                                        });
+                                        continue;
+                                    }
+
+                                    current_turn = Some(spawn_turn(
                                         self.pane_id.clone(),
                                         self.session_id.clone(),
                                         self.name.clone(),
@@ -569,9 +622,10 @@ impl ClawSession {
                                         self.db.clone(),
                                         self.state.clone(),
                                         self.tx_ui.clone(),
+                                        self.tx_self.clone(),
                                         None,
                                         vec![],
-                                    );
+                                    ));
                                 }
                             }
                         }
@@ -580,7 +634,18 @@ impl ClawSession {
                             if let Some((prompt, snapshot, cwd)) = state_lock.pending_lazy_diagnosis.take()
                             {
                                 drop(state_lock);
-                                spawn_turn(
+                                if let Some(handle) = current_turn.take() {
+                                    handle.abort();
+                                    let _ = self
+                                        .tx_ui
+                                        .send(ClawEngineEvent::AgentThinking {
+                                            agent_name: self.name.clone(),
+                                            is_thinking: false,
+                                        })
+                                        .await;
+                                }
+                                backlog.clear();
+                                current_turn = Some(spawn_turn(
                                     self.pane_id.clone(),
                                     self.session_id.clone(),
                                     self.name.clone(),
@@ -593,9 +658,10 @@ impl ClawSession {
                                     self.db.clone(),
                                     self.state.clone(),
                                     self.tx_ui.clone(),
+                                    self.tx_self.clone(),
                                     None,
                                     vec![],
-                                );
+                                ));
                             }
                         }
                         ClawMessage::ClawQuery {
@@ -605,6 +671,17 @@ impl ClawSession {
                             image_attachments,
                         } => {
                             current_dir = cwd.clone();
+                            if let Some(handle) = current_turn.take() {
+                                handle.abort();
+                                let _ = self
+                                    .tx_ui
+                                    .send(ClawEngineEvent::AgentThinking {
+                                        agent_name: self.name.clone(),
+                                        is_thinking: false,
+                                    })
+                                    .await;
+                            }
+                            backlog.clear();
 
                             // Update workspace state
                             workspace
@@ -622,7 +699,7 @@ impl ClawSession {
                                 "Pane {} ({}): Direct Claw query: {query}. Starting analysis.",
                                 self.pane_id, self.name
                             );
-                            spawn_turn(
+                            current_turn = Some(spawn_turn(
                                 self.pane_id.clone(),
                                 self.session_id.clone(),
                                 self.name.clone(),
@@ -635,9 +712,10 @@ impl ClawSession {
                                 self.db.clone(),
                                 self.state.clone(),
                                 self.tx_ui.clone(),
+                                self.tx_self.clone(),
                                 None,
                                 image_attachments,
-                            );
+                            ));
                         }
                         ClawMessage::FileWriteReply { approved } => {
                             let mut state_lock = self.state.lock().await;
@@ -716,7 +794,18 @@ impl ClawSession {
                                 );
                             } else {
                                 drop(state_lock);
-                                spawn_turn(
+                                if let Some(handle) = current_turn.take() {
+                                    handle.abort();
+                                    let _ = self
+                                        .tx_ui
+                                        .send(ClawEngineEvent::AgentThinking {
+                                            agent_name: self.name.clone(),
+                                            is_thinking: false,
+                                        })
+                                        .await;
+                                }
+                                backlog.clear();
+                                current_turn = Some(spawn_turn(
                                     self.pane_id.clone(),
                                     self.session_id.clone(),
                                     self.name.clone(),
@@ -729,9 +818,10 @@ impl ClawSession {
                                     self.db.clone(),
                                     self.state.clone(),
                                     self.tx_ui.clone(),
+                                    self.tx_self.clone(),
                                     None,
                                     image_attachments,
-                                );
+                                ));
                             }
                         }
                         ClawMessage::DelegatedTask {
@@ -739,6 +829,19 @@ impl ClawSession {
                             prompt,
                             reply_tx,
                         } => {
+                            if current_turn.is_some() {
+                                debug!(
+                                    "Pane {} ({}): Agent is busy. Queueing delegated task from {}.",
+                                    self.pane_id, self.name, source_agent_name
+                                );
+                                backlog.push_back(ClawMessage::DelegatedTask {
+                                    source_agent_name,
+                                    prompt,
+                                    reply_tx,
+                                });
+                                continue;
+                            }
+
                             let snapshot = workspace
                                 .get_pane_snapshot(self.pane_id.clone())
                                 .await
@@ -754,7 +857,7 @@ impl ClawSession {
                                 self.pane_id, self.name, source_agent_name
                             );
 
-                            spawn_turn(
+                            current_turn = Some(spawn_turn(
                                 self.pane_id.clone(),
                                 self.session_id.clone(),
                                 self.name.clone(),
@@ -767,9 +870,10 @@ impl ClawSession {
                                 self.db.clone(),
                                 self.state.clone(),
                                 self.tx_ui.clone(),
+                                self.tx_self.clone(),
                                 Some(reply_tx),
                                 vec![],
-                            );
+                            ));
                         }
                         ClawMessage::CancelPending => {
                             let mut state_lock = self.state.lock().await;
@@ -859,7 +963,12 @@ impl ClawSession {
                                 let snapshot = workspace.get_pane_snapshot(self.pane_id.clone()).await.unwrap_or_default();
                                 let prompt = format!("WAKEUP: An event you subscribed to has occurred: {:?}", event);
 
-                                spawn_turn(
+                                if current_turn.is_some() {
+                                    backlog.push_back(ClawMessage::SubscriptionEvent { event });
+                                    continue;
+                                }
+
+                                current_turn = Some(spawn_turn(
                                     self.pane_id.clone(),
                                     self.session_id.clone(),
                                     self.name.clone(),
@@ -872,9 +981,10 @@ impl ClawSession {
                                     self.db.clone(),
                                     self.state.clone(),
                                     self.tx_ui.clone(),
+                                    self.tx_self.clone(),
                                     None,
                                     vec![],
-                                );
+                                ));
                             }
                         }
                         ClawMessage::TaskCompletedEvent { task_id, result } => {
@@ -894,7 +1004,12 @@ impl ClawSession {
                                 let snapshot = workspace.get_pane_snapshot(self.pane_id.clone()).await.unwrap_or_default();
                                 let prompt = format!("WAKEUP: Async task {} has completed with result: {}", task_id, result);
 
-                                spawn_turn(
+                                if current_turn.is_some() {
+                                    backlog.push_back(ClawMessage::TaskCompletedEvent { task_id, result });
+                                    continue;
+                                }
+
+                                current_turn = Some(spawn_turn(
                                     self.pane_id.clone(),
                                     self.session_id.clone(),
                                     self.name.clone(),
@@ -907,9 +1022,10 @@ impl ClawSession {
                                     self.db.clone(),
                                     self.state.clone(),
                                     self.tx_ui.clone(),
+                                    self.tx_self.clone(),
                                     None,
                                     vec![],
-                                );
+                                ));
                             }
                         }
                     }
@@ -1009,9 +1125,10 @@ fn spawn_turn(
     db: Arc<Mutex<Option<Db>>>,
     state: Arc<Mutex<SessionState>>,
     tx_ui: async_channel::Sender<ClawEngineEvent>,
+    tx_self: async_channel::Sender<ClawMessage>,
     delegate_reply_tx: Option<tokio::sync::oneshot::Sender<String>>,
     image_attachments: Vec<String>,
-) {
+) -> tokio::task::JoinHandle<()> {
     let prompt_clone = prompt.to_string();
     let session_id_clone = session_id.clone();
     let snapshot_clone = snapshot.to_string();
@@ -1532,5 +1649,7 @@ fn spawn_turn(
                 }
             }
         }
-    });
+
+        let _ = tx_self.send(ClawMessage::TurnFinished).await;
+    })
 }

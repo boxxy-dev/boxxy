@@ -5,8 +5,8 @@ use crate::engine::tools::skills::ActivateSkillTool;
 use crate::engine::tools::tasks::{CancelTaskTool, ListTasksTool, ScheduleTaskTool};
 use crate::engine::tools::terminal::TerminalCommandTool;
 use crate::engine::tools::workspace::{
-    CloseAgentTool, DelegateTaskAsyncTool, DelegateTaskTool, ListActiveAgentsTool, ReadPaneTool,
-    SendKeystrokesTool, SetGlobalIntentTool, SpawnAgentTool,
+    AbortAgentTaskTool, CloseAgentTool, DelegateTaskAsyncTool, DelegateTaskTool, ListActiveAgentsTool,
+    ReadPaneTool, SendKeystrokesTool, SetGlobalIntentTool, SpawnAgentTool,
 };
 use crate::engine::tools::{ClawApprovalHandler, SysShellTool};
 use boxxy_agent::ipc::AgentClawProxy;
@@ -248,6 +248,7 @@ pub async fn create_claw_agent(
         Box::new(CloseAgentTool {
             tx_ui: tx_ui.clone(),
         }),
+        Box::new(AbortAgentTaskTool),
         Box::new(SendKeystrokesTool {
             tx_ui: tx_ui.clone(),
         }),
