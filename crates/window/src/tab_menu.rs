@@ -35,6 +35,7 @@ impl TabContextMenu {
         on_set_color: impl Fn(libadwaita::TabPage, TabColor) + 'static,
         on_set_title: impl Fn(libadwaita::TabPage, Option<String>) + 'static,
         get_custom_title: impl Fn(&libadwaita::TabPage) -> Option<String> + 'static,
+        on_menu_closed: impl Fn() + 'static,
     ) -> Self {
         let current_page: Rc<RefCell<Option<libadwaita::TabPage>>> = Rc::new(RefCell::new(None));
 
@@ -48,6 +49,14 @@ impl TabContextMenu {
 
         popover.add_css_class("menu");
         popover.set_parent(tab_bar);
+        
+        let on_menu_closed_rc = Rc::new(on_menu_closed);
+        popover.connect_closed({
+            let cb = on_menu_closed_rc.clone();
+            move |_| {
+                cb();
+            }
+        });
 
         let vbox = gtk4::Box::new(gtk4::Orientation::Vertical, 4);
         vbox.set_margin_top(6);
