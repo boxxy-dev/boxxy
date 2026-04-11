@@ -13,6 +13,7 @@ pub struct SingleModelSelector {
 struct SingleModelSelectorInner {
     provider_dropdown: gtk::DropDown,
     model_dropdown: gtk::DropDown,
+    model_entry: gtk::Entry,
     thinking_dropdown: gtk::DropDown,
     model_list: gtk::StringList,
     thinking_list: gtk::StringList,
@@ -21,6 +22,7 @@ struct SingleModelSelectorInner {
     ollama_url: String,
     providers: Vec<Box<dyn AiProvider>>,
     last_selected_ollama_model: String,
+    last_selected_openrouter_model: String,
     on_change_callback: Option<Rc<dyn Fn()>>,
 }
 
@@ -60,6 +62,7 @@ impl SingleModelSelector {
                         None::<gtk::StringList>,
                         None::<&gtk::Expression>,
                     ),
+                    model_entry: gtk::Entry::new(),
                     thinking_dropdown: gtk::DropDown::new(
                         None::<gtk::StringList>,
                         None::<&gtk::Expression>,
@@ -71,6 +74,7 @@ impl SingleModelSelector {
                     ollama_url,
                     providers: vec![],
                     last_selected_ollama_model: String::new(),
+                    last_selected_openrouter_model: String::new(),
                     on_change_callback: None,
                 })),
             };
@@ -91,6 +95,11 @@ impl SingleModelSelector {
         model_label.add_css_class("dim-label");
         let model_list = gtk::StringList::new(&[]);
         let model_dropdown = gtk::DropDown::new(Some(model_list.clone()), None::<&gtk::Expression>);
+        
+        let model_entry = gtk::Entry::builder()
+            .placeholder_text("e.g. anthropic/claude-3.5-sonnet")
+            .visible(false)
+            .build();
 
         // Options Section (Dynamic)
         let options_vbox = gtk::Box::new(gtk::Orientation::Vertical, 10);
@@ -110,11 +119,13 @@ impl SingleModelSelector {
         main_vbox.append(&provider_dropdown);
         main_vbox.append(&model_label);
         main_vbox.append(&model_dropdown);
+        main_vbox.append(&model_entry);
         main_vbox.append(&options_vbox);
 
         let inner = Rc::new(RefCell::new(SingleModelSelectorInner {
             provider_dropdown: provider_dropdown.clone(),
             model_dropdown: model_dropdown.clone(),
+            model_entry: model_entry.clone(),
             thinking_dropdown: thinking_dropdown.clone(),
             model_list: model_list.clone(),
             thinking_list: thinking_list.clone(),
@@ -123,6 +134,11 @@ impl SingleModelSelector {
             ollama_url: ollama_url.clone(),
             providers,
             last_selected_ollama_model: if let Some(ModelProvider::Ollama(ref m)) = initial {
+                m.clone()
+            } else {
+                String::new()
+            },
+            last_selected_openrouter_model: if let Some(ModelProvider::OpenRouter(ref m)) = initial {
                 m.clone()
             } else {
                 String::new()
@@ -168,7 +184,11 @@ impl SingleModelSelector {
                         }
                     }
 
-                    let new_prov = prov_def.create_model_provider(m_idx, m_name, Some(t_idx));
+                    let new_prov = if prov_def.name() == "OpenRouter" {
+                        prov_def.create_model_provider(m_idx, Some(inner.model_entry.text().to_string()), Some(t_idx))
+                    } else {
+                        prov_def.create_model_provider(m_idx, m_name, Some(t_idx))
+                    };
 
                     if let ModelProvider::Ollama(ref name) = new_prov {
                         if name.is_empty() {
@@ -176,6 +196,13 @@ impl SingleModelSelector {
                         }
                         if let Ok(mut inner_mut) = s_clone.inner.try_borrow_mut() {
                             inner_mut.last_selected_ollama_model = name.clone();
+                        }
+                    } else if let ModelProvider::OpenRouter(ref name) = new_prov {
+                        if name.is_empty() {
+                            return;
+                        }
+                        if let Ok(mut inner_mut) = s_clone.inner.try_borrow_mut() {
+                            inner_mut.last_selected_openrouter_model = name.clone();
                         }
                     }
                     on_change(Some(new_prov));
@@ -204,6 +231,20 @@ impl SingleModelSelector {
             move |_| {
                 if s_clone.on_model_changed() {
                     update_state();
+                }
+            }
+        });
+        
+        model_entry.connect_changed({
+            let update_state = Rc::clone(&update_state);
+            let s_clone = self_.clone();
+            move |entry| {
+                if let Ok(mut inner) = s_clone.inner.try_borrow_mut() {
+                    inner.last_selected_openrouter_model = entry.text().to_string();
+                    if !inner.updating {
+                        drop(inner);
+                        update_state();
+                    }
                 }
             }
         });
@@ -305,7 +346,9 @@ impl SingleModelSelector {
 
         inner.providers.get(p_idx as usize).map(|prov_def| {
             let mut m_name = None;
-            if let Some(item) = inner
+            if prov_def.name() == "OpenRouter" {
+                m_name = Some(inner.model_entry.text().to_string());
+            } else if let Some(item) = inner
                 .model_list
                 .item(m_idx)
                 .and_then(|o| o.downcast::<gtk::StringObject>().ok())
@@ -335,8 +378,20 @@ impl SingleModelSelector {
 
             if let Some(prov_def) = inner.providers.get(p_idx as usize) {
                 let is_ollama = prov_def.name() == "Ollama";
+                let is_openrouter = prov_def.name() == "OpenRouter";
 
-                if !is_ollama {
+                if is_openrouter {
+                    inner.model_dropdown.set_visible(false);
+                    inner.model_entry.set_visible(true);
+                    inner.options_vbox.set_visible(false); // No thinking dropdown for OpenRouter yet
+                    if !inner.last_selected_openrouter_model.is_empty() {
+                        inner.model_entry.set_text(&inner.last_selected_openrouter_model);
+                    }
+                    inner.updating = false;
+                    should_update = true;
+                } else if !is_ollama {
+                    inner.model_dropdown.set_visible(true);
+                    inner.model_entry.set_visible(false);
                     for model in prov_def.get_models() {
                         inner.model_list.append(&model);
                     }
@@ -354,6 +409,8 @@ impl SingleModelSelector {
                     inner.updating = false;
                     should_update = true;
                 } else {
+                    inner.model_dropdown.set_visible(true);
+                    inner.model_entry.set_visible(false);
                     inner.model_list.append("Loading...");
                     inner.options_vbox.set_visible(false);
                     inner.model_dropdown.set_selected(0);
@@ -478,7 +535,18 @@ impl SingleModelSelector {
                 let prov_def = &inner.providers[p_idx];
 
                 let is_ollama = prov_name == "Ollama";
-                if !is_ollama {
+                let is_openrouter = prov_name == "OpenRouter";
+                
+                if is_openrouter {
+                    inner.model_dropdown.set_visible(false);
+                    inner.model_entry.set_visible(true);
+                    inner.options_vbox.set_visible(false);
+                    if let ModelProvider::OpenRouter(ref target_m) = provider {
+                        inner.model_entry.set_text(target_m);
+                    }
+                } else if !is_ollama {
+                    inner.model_dropdown.set_visible(true);
+                    inner.model_entry.set_visible(false);
                     inner.model_list.splice(0, inner.model_list.n_items(), &[]);
                     for m in prov_def.get_models() {
                         inner.model_list.append(&m);
@@ -495,6 +563,8 @@ impl SingleModelSelector {
                         .options_vbox
                         .set_visible(prov_def.supports_thinking(m_idx));
                 } else {
+                    inner.model_dropdown.set_visible(true);
+                    inner.model_entry.set_visible(false);
                     // Check if we already have the target Ollama model in the list
                     let mut already_set = false;
                     if let ModelProvider::Ollama(ref target_m) = provider {

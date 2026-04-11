@@ -41,6 +41,7 @@ enum ClawAgentInner {
         String,
     ),
     OpenAi(Agent<ResponsesCompletionModel>, String, String),
+    OpenRouter(Agent<ResponsesCompletionModel>, String, String),
     Error(String),
 }
 
@@ -85,6 +86,14 @@ impl ClawAgent {
             ClawAgentInner::OpenAi(agent, _, _) => {
                 agent
                     .prompt(prompt)
+                    .with_history(history.clone())
+                    .with_hook(hook.clone())
+                    .extended_details()
+                    .await
+            }
+            ClawAgentInner::OpenRouter(agent, _, _) => {
+                agent
+                    .prompt(prompt)
                     .with_history(history)
                     .with_hook(hook)
                     .extended_details()
@@ -105,6 +114,7 @@ impl ClawAgent {
                     ClawAgentInner::Ollama(_, p, m) => (p.as_str(), m.as_str()),
                     ClawAgentInner::Anthropic(_, p, m) => (p.as_str(), m.as_str()),
                     ClawAgentInner::OpenAi(_, p, m) => (p.as_str(), m.as_str()),
+                    ClawAgentInner::OpenRouter(_, p, m) => (p.as_str(), m.as_str()),
                     _ => ("unknown", "unknown"),
                 };
 
@@ -449,7 +459,7 @@ pub async fn create_claw_agent(
                 .tools(tools);
 
             if let Some(level) = thinking {
-                builder = builder.additional_params(json!({
+                builder = builder.additional_params(serde_json::json!({
                     "reasoning": { "effort": level.api_name() }
                 }));
             }
@@ -458,6 +468,26 @@ pub async fn create_claw_agent(
                 builder.build(),
                 "OpenAI".to_string(),
                 model.api_name().to_string(),
+            )
+        }
+        ModelProvider::OpenRouter(model_name) => {
+            let key = creds.api_keys.get("OpenRouter").cloned().unwrap_or_default();
+            let client = rig::providers::openai::Client::builder()
+                .api_key(key.trim())
+                .base_url("https://openrouter.ai/api/v1")
+                .build()
+                .unwrap();
+            let openrouter_model = client.completion_model(model_name.as_str());
+
+            let builder = rig::agent::AgentBuilder::new(openrouter_model)
+                .preamble(&final_preamble)
+                .default_max_turns(100)
+                .tools(tools);
+
+            ClawAgentInner::OpenRouter(
+                builder.build(),
+                "OpenRouter".to_string(),
+                model_name.clone(),
             )
         }
     };

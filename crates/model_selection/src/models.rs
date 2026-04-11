@@ -177,6 +177,7 @@ pub enum ModelProvider {
     Ollama(String),
     Anthropic(AnthropicModel),
     OpenAi(OpenAiModel, Option<ThinkingLevel>),
+    OpenRouter(String),
 }
 
 impl ModelProvider {
@@ -186,6 +187,7 @@ impl ModelProvider {
             ModelProvider::Ollama(_) => "Ollama",
             ModelProvider::Anthropic(_) => "Anthropic",
             ModelProvider::OpenAi(_, _) => "OpenAI",
+            ModelProvider::OpenRouter(_) => "OpenRouter",
         }
     }
 }

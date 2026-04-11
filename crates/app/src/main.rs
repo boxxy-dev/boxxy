@@ -51,6 +51,7 @@ fn main() {
             ("GEMINI_API_KEY", "Gemini"),
             ("ANTHROPIC_API_KEY", "Anthropic"),
             ("OPENAI_API_KEY", "OpenAI"),
+            ("OPENROUTER_API_KEY", "OpenRouter"),
         ];
 
         let mut found_any = false;

@@ -195,7 +195,7 @@ pub fn setup_apis_page(
 
         let models_visible = match_row(
             model_status_row_clone.upcast_ref(),
-            "open models selection ai claw memories status openai",
+            "open models selection ai claw memories status openai openrouter",
         );
         group_model_status.set_visible(models_visible);
 

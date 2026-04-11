@@ -84,6 +84,7 @@ enum BoxxyAgentInner {
     Ollama(rig::agent::Agent<rig::providers::ollama::CompletionModel>),
     Anthropic(rig::agent::Agent<rig::providers::anthropic::completion::CompletionModel>),
     OpenAi(rig::agent::Agent<ResponsesCompletionModel>),
+    OpenRouter(rig::agent::Agent<ResponsesCompletionModel>),
     Error(String),
 }
 
@@ -125,6 +126,14 @@ impl BoxxyAgent {
                     .await
             }
             BoxxyAgentInner::OpenAi(agent) => {
+                agent
+                    .prompt(prompt)
+                    .with_history(history.clone())
+                    .with_hook(hook)
+                    .extended_details()
+                    .await
+            }
+            BoxxyAgentInner::OpenRouter(agent) => {
                 agent
                     .prompt(prompt)
                     .with_history(history)
@@ -200,6 +209,13 @@ impl BoxxyAgent {
                     .await
             }
             BoxxyAgentInner::OpenAi(agent) => {
+                agent
+                    .prompt(prompt)
+                    .with_hook(hook)
+                    .extended_details()
+                    .await
+            }
+            BoxxyAgentInner::OpenRouter(agent) => {
                 agent
                     .prompt(prompt)
                     .with_hook(hook)
@@ -323,6 +339,20 @@ pub fn create_agent(
             }
 
             BoxxyAgentInner::OpenAi(builder.build())
+        }
+        ModelProvider::OpenRouter(model_name) => {
+            let key = creds.api_keys.get("OpenRouter").cloned().unwrap_or_default();
+            let client = rig::providers::openai::Client::builder()
+                .api_key(key.trim())
+                .base_url("https://openrouter.ai/api/v1")
+                .build()
+                .unwrap();
+            let openrouter_model = client.completion_model(model_name.as_str());
+
+            let agent = rig::agent::AgentBuilder::new(openrouter_model)
+                .preamble(system_prompt)
+                .build();
+            BoxxyAgentInner::OpenRouter(agent)
         }
     };
 

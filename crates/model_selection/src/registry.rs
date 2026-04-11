@@ -276,11 +276,40 @@ impl AiProvider for OllamaProviderImpl {
     }
 }
 
+struct OpenRouterProviderImpl;
+impl AiProvider for OpenRouterProviderImpl {
+    fn name(&self) -> &'static str {
+        "OpenRouter"
+    }
+    fn get_models(&self) -> Vec<String> {
+        vec![]
+    }
+    fn create_model_provider(
+        &self,
+        _idx: u32,
+        name: Option<String>,
+        _think: Option<u32>,
+    ) -> ModelProvider {
+        ModelProvider::OpenRouter(name.unwrap_or_default())
+    }
+    fn sync_ui(
+        &self,
+        _provider: &ModelProvider,
+        _model_dropdown: &gtk::DropDown,
+        _thinking_dropdown: &gtk::DropDown,
+        _model_list: &gtk::StringList,
+        _thinking_list: &gtk::StringList,
+    ) {
+        // UI sync is handled specially in selector.rs for custom text entry
+    }
+}
+
 pub fn get_providers() -> Vec<Box<dyn AiProvider>> {
     vec![
         Box::new(GeminiProviderImpl),
         Box::new(OllamaProviderImpl),
         Box::new(AnthropicProviderImpl),
         Box::new(OpenAiProviderImpl),
+        Box::new(OpenRouterProviderImpl),
     ]
 }
