@@ -23,6 +23,7 @@ pub struct FileReadOutput {
 pub struct FileReadTool {
     pub proxy: AgentClawProxy<'static>,
     pub current_dir: String,
+    pub approval: Arc<dyn ApprovalHandler>,
 }
 
 impl Tool for FileReadTool {
@@ -63,7 +64,16 @@ impl Tool for FileReadTool {
         let start_line = args.start_line.unwrap_or(0);
         let end_line = args.end_line.unwrap_or(0);
         match self.proxy.read_file(path, start_line, end_line).await {
-            Ok(content) => Ok(FileReadOutput { content }),
+            Ok(content) => {
+                let out = FileReadOutput { content };
+                self.approval
+                    .report_tool_result(
+                        Self::NAME.to_string(),
+                        serde_json::to_string(&out).unwrap_or_default(),
+                    )
+                    .await;
+                Ok(out)
+            }
             Err(e) => Err(std::io::Error::other(format!("IPC Error: {e}"))),
         }
     }
@@ -91,6 +101,7 @@ pub struct ListDirectoryOutput {
 pub struct ListDirectoryTool {
     pub proxy: AgentClawProxy<'static>,
     pub current_dir: String,
+    pub approval: Arc<dyn ApprovalHandler>,
 }
 
 impl Tool for ListDirectoryTool {
@@ -122,12 +133,21 @@ impl Tool for ListDirectoryTool {
         let full_path = resolve_path(&self.current_dir, &path);
 
         match self.proxy.list_directory(full_path).await {
-            Ok(entries) => Ok(ListDirectoryOutput {
-                entries: entries
-                    .into_iter()
-                    .map(|(name, is_dir, size)| DirectoryEntry { name, is_dir, size })
-                    .collect(),
-            }),
+            Ok(entries) => {
+                let out = ListDirectoryOutput {
+                    entries: entries
+                        .into_iter()
+                        .map(|(name, is_dir, size)| DirectoryEntry { name, is_dir, size })
+                        .collect(),
+                };
+                self.approval
+                    .report_tool_result(
+                        Self::NAME.to_string(),
+                        serde_json::to_string(&out).unwrap_or_default(),
+                    )
+                    .await;
+                Ok(out)
+            }
             Err(e) => Err(std::io::Error::other(format!("IPC Error: {e}"))),
         }
     }
@@ -194,17 +214,33 @@ impl Tool for FileWriteTool {
 
         if approved {
             match self.proxy.write_file(path.clone(), args.content).await {
-                Ok(()) => Ok(FileWriteOutput {
-                    success: true,
-                    message: format!("Successfully wrote to {path}"),
-                }),
+                Ok(()) => {
+                    let out = FileWriteOutput {
+                        success: true,
+                        message: format!("Successfully wrote to {path}"),
+                    };
+                    self.approval
+                        .report_tool_result(
+                            Self::NAME.to_string(),
+                            serde_json::to_string(&out).unwrap_or_default(),
+                        )
+                        .await;
+                    Ok(out)
+                }
                 Err(e) => Err(std::io::Error::other(format!("IPC Error: {e}"))),
             }
         } else {
-            Ok(FileWriteOutput {
+            let out = FileWriteOutput {
                 success: false,
                 message: "[USER_EXPLICIT_REJECT]".to_string(),
-            })
+            };
+            self.approval
+                .report_tool_result(
+                    Self::NAME.to_string(),
+                    serde_json::to_string(&out).unwrap_or_default(),
+                )
+                .await;
+            Ok(out)
         }
     }
 }
@@ -263,17 +299,33 @@ impl Tool for FileDeleteTool {
 
         if approved {
             match self.proxy.delete_file(path.clone()).await {
-                Ok(()) => Ok(FileDeleteOutput {
-                    success: true,
-                    message: format!("Successfully deleted {path}"),
-                }),
+                Ok(()) => {
+                    let out = FileDeleteOutput {
+                        success: true,
+                        message: format!("Successfully deleted {path}"),
+                    };
+                    self.approval
+                        .report_tool_result(
+                            Self::NAME.to_string(),
+                            serde_json::to_string(&out).unwrap_or_default(),
+                        )
+                        .await;
+                    Ok(out)
+                }
                 Err(e) => Err(std::io::Error::other(format!("IPC Error: {e}"))),
             }
         } else {
-            Ok(FileDeleteOutput {
+            let out = FileDeleteOutput {
                 success: false,
                 message: "[USER_EXPLICIT_REJECT]".to_string(),
-            })
+            };
+            self.approval
+                .report_tool_result(
+                    Self::NAME.to_string(),
+                    serde_json::to_string(&out).unwrap_or_default(),
+                )
+                .await;
+            Ok(out)
         }
     }
 }

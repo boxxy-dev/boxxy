@@ -181,6 +181,7 @@ mod imp {
                         PersistentClawRow::ProcessList { result_json, .. } => {
                             result_json.to_value()
                         }
+                        PersistentClawRow::ToolCall { result, .. } => result.to_value(),
                     }
                 }
                 _ => unimplemented!(),
@@ -251,6 +252,13 @@ pub enum PersistentClawRow {
         pane_id: String,
         agent_name: Option<String>,
         result_json: String,
+        usage: Option<rig::completion::Usage>,
+    },
+    ToolCall {
+        pane_id: String,
+        agent_name: Option<String>,
+        tool_name: String,
+        result: String,
         usage: Option<rig::completion::Usage>,
     },
 }
@@ -366,7 +374,13 @@ impl PersistentClawRow {
                         usage: usage.clone(),
                     })
                 } else {
-                    None
+                    Some(PersistentClawRow::ToolCall {
+                        pane_id,
+                        agent_name: Some(agent_name.clone()),
+                        tool_name: tool_name.clone(),
+                        result: result.clone(),
+                        usage: usage.clone(),
+                    })
                 }
             }
             _ => None,

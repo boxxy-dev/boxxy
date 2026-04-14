@@ -1,5 +1,6 @@
 use crate::engine::{AgentStatus, ClawEngineEvent, ClawEvent};
 use crate::registry::workspace::{global_workspace, EventFilter};
+use boxxy_core_toolbox::ApprovalHandler;
 use rig::completion::ToolDefinition;
 use rig::tool::Tool;
 use serde::{Deserialize, Serialize};
@@ -18,10 +19,13 @@ pub struct SubscribeOutput {
     pub message: String,
 }
 
+use crate::engine::tools::ClawApprovalHandler;
+
 pub struct SubscribeToPaneTool {
     pub pane_id: String,
     pub state: Arc<Mutex<crate::engine::session::SessionState>>,
     pub tx_ui: async_channel::Sender<ClawEngineEvent>,
+    pub approval: Arc<ClawApprovalHandler>,
 }
 
 impl Tool for SubscribeToPaneTool {
@@ -89,9 +93,11 @@ impl Tool for SubscribeToPaneTool {
             }).await;
         }
 
-        Ok(SubscribeOutput {
+        let res = SubscribeOutput {
             message: format!("Successfully subscribed to '{}' events from '{}'. You are now suspended until this event occurs.", args.event_type, args.agent_name),
-        })
+        };
+        self.approval.report_tool_result(Self::NAME.to_string(), serde_json::to_string(&res).unwrap_or_default()).await;
+        Ok(res)
     }
 }
 
@@ -110,6 +116,7 @@ pub struct AcquireLockTool {
     pub pane_id: String,
     pub state: Arc<Mutex<crate::engine::session::SessionState>>,
     pub tx_ui: async_channel::Sender<ClawEngineEvent>,
+    pub approval: Arc<ClawApprovalHandler>,
 }
 
 impl Tool for AcquireLockTool {
@@ -152,9 +159,15 @@ impl Tool for AcquireLockTool {
                     status: AgentStatus::Locking { resource: args.resource.clone() },
                 }).await;
 
-                Ok(LockOutput { success: true, message: format!("Successfully locked '{}'.", args.resource) })
+                let res = LockOutput { success: true, message: format!("Successfully locked '{}'.", args.resource) };
+                self.approval.report_tool_result(Self::NAME.to_string(), serde_json::to_string(&res).unwrap_or_default()).await;
+                Ok(res)
             },
-            Err(e) => Ok(LockOutput { success: false, message: e }),
+            Err(e) => {
+                let res = LockOutput { success: false, message: e };
+                self.approval.report_tool_result(Self::NAME.to_string(), serde_json::to_string(&res).unwrap_or_default()).await;
+                Ok(res)
+            }
         }
     }
 }
@@ -163,6 +176,7 @@ pub struct ReleaseLockTool {
     pub pane_id: String,
     pub state: Arc<Mutex<crate::engine::session::SessionState>>,
     pub tx_ui: async_channel::Sender<ClawEngineEvent>,
+    pub approval: Arc<ClawApprovalHandler>,
 }
 
 impl Tool for ReleaseLockTool {
@@ -203,7 +217,9 @@ impl Tool for ReleaseLockTool {
             status: AgentStatus::Active,
         }).await;
 
-        Ok(LockOutput { success: true, message: format!("Released lock on '{}'.", args.resource) })
+        let res = LockOutput { success: true, message: format!("Released lock on '{}'.", args.resource) };
+        self.approval.report_tool_result(Self::NAME.to_string(), serde_json::to_string(&res).unwrap_or_default()).await;
+        Ok(res)
     }
 }
 
@@ -215,6 +231,7 @@ pub struct PublishArgs {
 
 pub struct PublishEventTool {
     pub state: Arc<Mutex<crate::engine::session::SessionState>>,
+    pub approval: Arc<ClawApprovalHandler>,
 }
 
 impl Tool for PublishEventTool {
@@ -259,7 +276,9 @@ impl Tool for PublishEventTool {
             payload: args.payload,
         }).await;
 
-        Ok(format!("Successfully published event '{}'.", args.event_name))
+        let res = format!("Successfully published event '{}'.", args.event_name);
+        self.approval.report_tool_result(Self::NAME.to_string(), res.clone()).await;
+        Ok(res)
     }
 }
 
@@ -271,6 +290,7 @@ pub struct AwaitArgs {
 pub struct AwaitTasksTool {
     pub state: Arc<Mutex<crate::engine::session::SessionState>>,
     pub tx_ui: async_channel::Sender<ClawEngineEvent>,
+    pub approval: Arc<ClawApprovalHandler>,
 }
 
 impl Tool for AwaitTasksTool {
@@ -317,7 +337,9 @@ impl Tool for AwaitTasksTool {
             status: AgentStatus::Suspended,
         }).await;
         
-        Ok(format!("Suspending to await {} tasks. You will be woken up once they complete.", args.task_ids.len()))
+        let res = format!("Suspending to await {} tasks. You will be woken up once they complete.", args.task_ids.len());
+        self.approval.report_tool_result(Self::NAME.to_string(), res.clone()).await;
+        Ok(res)
     }
 }
 
@@ -327,7 +349,9 @@ pub struct OrchestrateArgs {
     pub action: String, // "suspend", "cancel"
 }
 
-pub struct OrchestrateAgentTool;
+pub struct OrchestrateAgentTool {
+    pub approval: Arc<ClawApprovalHandler>,
+}
 
 impl Tool for OrchestrateAgentTool {
     const NAME: &'static str = "orchestrate_agent";
@@ -379,9 +403,13 @@ impl Tool for OrchestrateAgentTool {
             };
 
             let _ = tx.send(msg).await;
-            Ok(format!("Successfully sent '{}' command to '{}'.", args.action, args.agent_name))
+            let res = format!("Successfully sent '{}' command to '{}'.", args.action, args.agent_name);
+            self.approval.report_tool_result(Self::NAME.to_string(), res.clone()).await;
+            Ok(res)
         } else {
-            Ok(format!("Agent '{}' not found.", args.agent_name))
+            let res = format!("Agent '{}' not found.", args.agent_name);
+            self.approval.report_tool_result(Self::NAME.to_string(), res.clone()).await;
+            Ok(res)
         }
     }
 }

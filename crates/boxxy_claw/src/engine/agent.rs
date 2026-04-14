@@ -225,6 +225,7 @@ pub async fn create_claw_agent(
         Box::new(crate::memories::MemoryStoreTool {
             db: db.clone(),
             current_dir: current_dir.to_string(),
+            approval: approval_handler.clone(),
         }),
         Box::new(crate::engine::tools::scrollback::ReadScrollbackTool {
             tx_ui: tx_ui.clone(),
@@ -274,28 +275,35 @@ pub async fn create_claw_agent(
             pane_id: pane_id.clone(),
             state: state.clone(),
             tx_ui: tx_ui.clone(),
+            approval: approval_handler.clone(),
         }),
         Box::new(crate::engine::tools::orchestration::AcquireLockTool {
             pane_id: pane_id.clone(),
             state: state.clone(),
             tx_ui: tx_ui.clone(),
+            approval: approval_handler.clone(),
         }),
         Box::new(crate::engine::tools::orchestration::ReleaseLockTool {
             pane_id: pane_id.clone(),
             state: state.clone(),
             tx_ui: tx_ui.clone(),
+            approval: approval_handler.clone(),
         }),
         Box::new(crate::engine::tools::orchestration::PublishEventTool {
             state: state.clone(),
+            approval: approval_handler.clone(),
         }),
         Box::new(crate::engine::tools::orchestration::AwaitTasksTool {
             state: state.clone(),
             tx_ui: tx_ui.clone(),
+            approval: approval_handler.clone(),
         }),
         Box::new(DelegateTaskAsyncTool {
             state: state.clone(),
         }),
-        Box::new(crate::engine::tools::orchestration::OrchestrateAgentTool),
+        Box::new(crate::engine::tools::orchestration::OrchestrateAgentTool {
+            approval: approval_handler.clone(),
+        }),
     ];
 
     // Conditional Core Toolbox tools
@@ -303,6 +311,7 @@ pub async fn create_claw_agent(
         tools.push(Box::new(FileReadTool {
             proxy: claw_proxy.clone(),
             current_dir: current_dir.to_string(),
+            approval: approval_handler.clone(),
         }));
         tools.push(Box::new(FileWriteTool {
             proxy: claw_proxy.clone(),
@@ -312,6 +321,7 @@ pub async fn create_claw_agent(
         tools.push(Box::new(ListDirectoryTool {
             proxy: claw_proxy.clone(),
             current_dir: current_dir.to_string(),
+            approval: approval_handler.clone(),
         }));
         tools.push(Box::new(FileDeleteTool {
             proxy: claw_proxy.clone(),
@@ -335,7 +345,9 @@ pub async fn create_claw_agent(
     }
 
     if settings.enable_web_tools {
-        tools.push(Box::new(HttpFetchTool));
+        tools.push(Box::new(HttpFetchTool {
+            approval: approval_handler.clone(),
+        }));
     }
 
     if web_search_enabled && settings.enable_web_search {

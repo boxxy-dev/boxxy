@@ -1,4 +1,5 @@
 use anyhow::Result;
+use boxxy_core_toolbox::ApprovalHandler;
 use boxxy_db::Db;
 use boxxy_db::store::Store;
 use rig::completion::ToolDefinition;
@@ -26,6 +27,7 @@ pub enum MemoryToolError {
 pub struct MemoryStoreTool {
     pub db: Arc<Mutex<Option<Db>>>,
     pub current_dir: String,
+    pub approval: Arc<crate::engine::tools::ClawApprovalHandler>,
 }
 
 impl Tool for MemoryStoreTool {
@@ -91,9 +93,15 @@ impl Tool for MemoryStoreTool {
                 Ok(_) => {
                     drop(db_guard);
                     let _ = crate::memories::db::sync_memories_to_markdown(self.db.clone()).await;
-                    Ok(format!("Successfully stored memory: {}", args.key))
+                    let result = format!("Successfully stored memory: {}", args.key);
+                    self.approval.report_tool_result(Self::NAME.to_string(), result.clone()).await;
+                    Ok(result)
                 }
-                Err(e) => Ok(format!("Error storing memory: {}", e)),
+                Err(e) => {
+                    let result = format!("Error storing memory: {}", e);
+                    self.approval.report_tool_result(Self::NAME.to_string(), result.clone()).await;
+                    Ok(result)
+                }
             }
         } else {
             Err(MemoryToolError::DbUnavailable)

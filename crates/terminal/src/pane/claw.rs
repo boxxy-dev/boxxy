@@ -574,6 +574,14 @@ pub(super) fn setup_claw(
                             result,
                             |_, _| {},
                         );
+                    } else {
+                        boxxy_claw::ui::add_tool_call_row(
+                            &claw_store_events,
+                            id.clone(),
+                            Some(agent_name.clone()),
+                            tool_name,
+                            result,
+                        );
                     }
                 }
                 boxxy_claw::engine::ClawEngineEvent::TaskStatusChanged { tasks, .. } => {

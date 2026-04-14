@@ -1,6 +1,8 @@
+use crate::ApprovalHandler;
 use rig::completion::ToolDefinition;
 use rig::tool::Tool;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 #[derive(Deserialize)]
 pub struct HttpFetchArgs {
@@ -15,7 +17,9 @@ pub struct HttpFetchOutput {
     pub headers: std::collections::HashMap<String, String>,
 }
 
-pub struct HttpFetchTool;
+pub struct HttpFetchTool {
+    pub approval: Arc<dyn ApprovalHandler>,
+}
 
 impl Tool for HttpFetchTool {
     const NAME: &'static str = "http_fetch";
@@ -88,21 +92,35 @@ impl Tool for HttpFetchTool {
             if body_bytes.len() + chunk.len() > MAX_SIZE {
                 body_bytes.extend_from_slice(&chunk[..MAX_SIZE - body_bytes.len()]);
                 let body = String::from_utf8_lossy(&body_bytes).to_string();
-                return Ok(HttpFetchOutput {
+                let out = HttpFetchOutput {
                     status,
                     body: format!("{body}\n\n[WARNING: Response body truncated at 1MB]"),
                     headers,
-                });
+                };
+                self.approval
+                    .report_tool_result(
+                        Self::NAME.to_string(),
+                        serde_json::to_string(&out).unwrap_or_default(),
+                    )
+                    .await;
+                return Ok(out);
             }
             body_bytes.extend_from_slice(&chunk);
         }
 
         let body = String::from_utf8_lossy(&body_bytes).to_string();
 
-        Ok(HttpFetchOutput {
+        let out = HttpFetchOutput {
             status,
             body,
             headers,
-        })
+        };
+        self.approval
+            .report_tool_result(
+                Self::NAME.to_string(),
+                serde_json::to_string(&out).unwrap_or_default(),
+            )
+            .await;
+        Ok(out)
     }
 }

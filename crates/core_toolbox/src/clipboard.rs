@@ -46,7 +46,16 @@ impl Tool for GetClipboardTool {
 
         if approved {
             match self.proxy.get_clipboard().await {
-                Ok(text) => Ok(GetClipboardOutput { text }),
+                Ok(text) => {
+                    let out = GetClipboardOutput { text };
+                    self.approval
+                        .report_tool_result(
+                            Self::NAME.to_string(),
+                            serde_json::to_string(&out).unwrap_or_default(),
+                        )
+                        .await;
+                    Ok(out)
+                }
                 Err(e) => Err(std::io::Error::other(format!("IPC Error: {e}"))),
             }
         } else {
@@ -104,11 +113,27 @@ impl Tool for SetClipboardTool {
 
         if approved {
             match self.proxy.set_clipboard(args.text).await {
-                Ok(()) => Ok(SetClipboardOutput { success: true }),
+                Ok(()) => {
+                    let out = SetClipboardOutput { success: true };
+                    self.approval
+                        .report_tool_result(
+                            Self::NAME.to_string(),
+                            serde_json::to_string(&out).unwrap_or_default(),
+                        )
+                        .await;
+                    Ok(out)
+                }
                 Err(e) => Err(std::io::Error::other(format!("IPC Error: {e}"))),
             }
         } else {
-            Ok(SetClipboardOutput { success: false })
+            let out = SetClipboardOutput { success: false };
+            self.approval
+                .report_tool_result(
+                    Self::NAME.to_string(),
+                    serde_json::to_string(&out).unwrap_or_default(),
+                )
+                .await;
+            Ok(out)
         }
     }
 }

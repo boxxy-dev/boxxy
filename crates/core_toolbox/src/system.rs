@@ -84,7 +84,10 @@ impl Tool for GetSystemInfoTool {
 
                 // Report to UI for structured rendering
                 self.approval
-                    .report_tool_result(Self::NAME.to_string(), info_json)
+                    .report_tool_result(
+                        Self::NAME.to_string(),
+                        serde_json::to_string(&output).unwrap_or_default(),
+                    )
                     .await;
 
                 Ok(output)
@@ -160,11 +163,12 @@ impl Tool for ListProcessesTool {
                 };
 
                 // Report to UI for structured rendering
-                if let Ok(json) = serde_json::to_string(&output.processes) {
-                    self.approval
-                        .report_tool_result(Self::NAME.to_string(), json)
-                        .await;
-                }
+                self.approval
+                    .report_tool_result(
+                        Self::NAME.to_string(),
+                        serde_json::to_string(&output).unwrap_or_default(),
+                    )
+                    .await;
 
                 Ok(output)
             }
@@ -228,20 +232,36 @@ impl Tool for KillProcessTool {
         if approved {
             let signal = args.signal.unwrap_or(15);
             match self.proxy.kill_process(args.pid, signal).await {
-                Ok(()) => Ok(KillProcessOutput {
-                    success: true,
-                    message: format!(
-                        "Successfully sent signal {} to process {}",
-                        signal, args.pid
-                    ),
-                }),
+                Ok(()) => {
+                    let out = KillProcessOutput {
+                        success: true,
+                        message: format!(
+                            "Successfully sent signal {} to process {}",
+                            signal, args.pid
+                        ),
+                    };
+                    self.approval
+                        .report_tool_result(
+                            Self::NAME.to_string(),
+                            serde_json::to_string(&out).unwrap_or_default(),
+                        )
+                        .await;
+                    Ok(out)
+                }
                 Err(e) => Err(std::io::Error::other(format!("IPC Error: {e}"))),
             }
         } else {
-            Ok(KillProcessOutput {
+            let out = KillProcessOutput {
                 success: false,
                 message: "[USER_EXPLICIT_REJECT]".to_string(),
-            })
+            };
+            self.approval
+                .report_tool_result(
+                    Self::NAME.to_string(),
+                    serde_json::to_string(&out).unwrap_or_default(),
+                )
+                .await;
+            Ok(out)
         }
     }
 }

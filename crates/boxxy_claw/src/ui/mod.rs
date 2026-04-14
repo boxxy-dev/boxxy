@@ -482,35 +482,27 @@ pub fn create_claw_message_list() -> (gtk::ListView, gtk::gio::ListStore) {
                     icon.remove_css_class("warning");
                     title.set_label("Diagnosis");
 
-                    let id_short = if pane_id.len() >= 7 {
-                        &pane_id[..7]
-                    } else {
-                        &pane_id
-                    };
                     let pane_text = if let Some(name) = agent_name {
-                        format!("{} ({})", name, id_short)
+                        name
                     } else {
-                        format!("Pane {}", id_short)
+                        "Unknown Agent".to_string()
                     };
                     pane_lbl.set_label(&pane_text);
 
                     viewer.set_content(&content);
+                    viewer.widget().set_visible(true);
                     cmd_label.set_visible(false);
                 }
-                crate::engine::PersistentClawRow::User { pane_id, content } => {
+                crate::engine::PersistentClawRow::User { pane_id: _, content } => {
                     icon.set_icon_name(Some("boxxy-comic-bubble-symbolic"));
                     icon.remove_css_class("accent");
                     icon.remove_css_class("warning");
                     title.set_label("User Message");
 
-                    let id_short = if pane_id.len() >= 7 {
-                        &pane_id[..7]
-                    } else {
-                        &pane_id
-                    };
-                    pane_lbl.set_label(&format!("Pane {id_short}"));
+                    pane_lbl.set_label("User");
 
                     viewer.set_content(&content);
+                    viewer.widget().set_visible(true);
                     cmd_label.set_visible(false);
                 }
                 crate::engine::PersistentClawRow::Suggested {
@@ -525,15 +517,10 @@ pub fn create_claw_message_list() -> (gtk::ListView, gtk::gio::ListStore) {
                     icon.remove_css_class("accent");
                     title.set_label("Suggested Action");
 
-                    let id_short = if pane_id.len() >= 7 {
-                        &pane_id[..7]
-                    } else {
-                        &pane_id
-                    };
                     let pane_text = if let Some(name) = agent_name {
-                        format!("{} ({})", name, id_short)
+                        name
                     } else {
-                        format!("Pane {}", id_short)
+                        "Unknown Agent".to_string()
                     };
                     pane_lbl.set_label(&pane_text);
 
@@ -558,20 +545,39 @@ pub fn create_claw_message_list() -> (gtk::ListView, gtk::gio::ListStore) {
                     icon.remove_css_class("warning");
                     title.set_label("Process List");
 
-                    let id_short = if pane_id.len() >= 7 {
-                        &pane_id[..7]
-                    } else {
-                        &pane_id
-                    };
                     let pane_text = if let Some(name) = agent_name {
-                        format!("{} ({})", name, id_short)
+                        name
                     } else {
-                        format!("Pane {}", id_short)
+                        "Unknown Agent".to_string()
                     };
                     pane_lbl.set_label(&pane_text);
 
                     viewer.clear();
                     viewer.append_custom_block("list_processes", &result_json);
+                    viewer.widget().set_visible(true);
+                    cmd_label.set_visible(false);
+                }
+                crate::engine::PersistentClawRow::ToolCall {
+                    pane_id,
+                    agent_name,
+                    tool_name,
+                    .. // Ignore result!
+                } => {
+                    icon.set_icon_name(Some("boxxy-build-circle-symbolic"));
+                    icon.add_css_class("accent");
+                    icon.remove_css_class("warning");
+                    title.set_label(&format!("Used tool: {tool_name}"));
+
+                    let pane_text = if let Some(name) = agent_name {
+                        name
+                    } else {
+                        "Unknown Agent".to_string()
+                    };
+                    pane_lbl.set_label(&pane_text);
+
+                    // We intentionally hide the viewer here so the tool call is just a single compact row.
+                    viewer.clear();
+                    viewer.widget().set_visible(false);
                     cmd_label.set_visible(false);
                 }
             }
@@ -631,6 +637,24 @@ pub fn add_suggested_row(
             agent_name,
             diagnosis: diagnosis.to_string(),
             command: command.to_string(),
+            usage: None,
+        },
+    ));
+}
+
+pub fn add_tool_call_row(
+    list: &gtk::gio::ListStore,
+    pane_id: String,
+    agent_name: Option<String>,
+    tool_name: &str,
+    result: &str,
+) {
+    list.append(&crate::engine::ClawRowObject::new(
+        crate::engine::PersistentClawRow::ToolCall {
+            pane_id,
+            agent_name,
+            tool_name: tool_name.to_string(),
+            result: result.to_string(),
             usage: None,
         },
     ));
