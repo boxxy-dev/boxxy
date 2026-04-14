@@ -178,20 +178,20 @@ impl Default for Settings {
             font_size: 12,
             theme: "Adwaita Dark".to_string(),
             color_scheme: ColorScheme::Default,
-            opacity: 0.8,
+            opacity: 1.0,
             background_image_path: None,
             padding: 10,
             ai_chat_width: 400,
-            preserve_working_dir: false,
+            preserve_working_dir: true,
             cell_height_scale: 1.0,
             cell_width_scale: 1.0,
             cursor_shape: CursorShape::Block,
             cursor_color_override: false,
             cursor_color: "rgb(255,255,255)".to_string(),
             cursor_blinking: true,
-            hide_scrollbars: false,
-            dim_inactive_panes: false,
-            fixed_width_tabs: false,
+            hide_scrollbars: true,
+            dim_inactive_panes: true,
+            fixed_width_tabs: true,
             api_keys: std::collections::HashMap::new(),
             ollama_base_url: "http://localhost:11434".to_string(),
             login_shell: true,
@@ -204,16 +204,16 @@ impl Default for Settings {
             claw_model: None,
             memory_model: None,
             invert_scroll: true,
-            claw_auto_diagnosis_mode: ClawAutoDiagnosisMode::Lazy,
+            claw_auto_diagnosis_mode: ClawAutoDiagnosisMode::Proactive,
             hide_agent_badge: false,
             claw_on_by_default: false,
-            web_search_on_by_default: false,
+            web_search_on_by_default: true,
             enable_file_tools: true,
             enable_system_tools: true,
-            enable_dangerous_tools: false,
+            enable_dangerous_tools: true,
             enable_web_tools: true,
             enable_clipboard_tools: true,
-            enable_web_search: false,
+            enable_web_search: true,
             enable_os_context: true,
             enable_progress_bar: true,
             colored_tabs: false,
@@ -288,37 +288,6 @@ Instructions:\n\
             let skills_dir = boxxyclaw_dir.join("skills");
             if !skills_dir.exists() {
                 let _ = fs::create_dir_all(&skills_dir);
-            }
-
-            let linux_system_dir = skills_dir.join("linux-system");
-            if !linux_system_dir.exists() {
-                let _ = fs::create_dir_all(&linux_system_dir);
-            }
-
-            let linux_system_md = linux_system_dir.join("SKILL.md");
-            if !linux_system_md.exists() {
-                let content = "---\n\
-name: linux-system\n\
-description: Information about the user's Linux system and preferences. Use when interacting with packages or system administration.\n\
-triggers:\n\
-  - update\n\
-  - install\n\
-  - package\n\
-  - system\n\
-  - os\n\
-  - linux\n\
-  - distro\n\
----\n\
-# Linux System Skill\n\n\
-This file provides Boxxy-Claw with specific information about your system to help it operate more effectively. \
-You can modify this file to include details such as:\n\n\
-- **Distribution**: Which Linux distro you are using (e.g., Ubuntu 24.04, Fedora 40, Arch Linux).\n\
-- **Desktop Environment**: The DE or Window Manager in use (e.g., GNOME 46, KDE Plasma, Sway).\n\
-- **Package Managers**: Preferred tools (e.g., `apt`, `dnf`, `pacman`, `flatpak`).\n\
-- **Additional Tools**: Any specific system administration or developer tools you want Claw to utilize.\n\
-- **System Quirks**: Any non-standard configurations or paths that Claw should be aware of.\n\n\
-Providing this context allows Boxxy-Claw to tailor its commands and diagnostics to your exact environment.\n";
-                let _ = fs::write(linux_system_md, content);
             }
         }
     }
@@ -416,8 +385,8 @@ impl Default for AppState {
         Self {
             sidebar_visible: false,
             active_sidebar_page: "assistant".to_string(),
-            window_width: 900,
-            window_height: 600,
+            window_width: 1200,
+            window_height: 800,
             is_maximized: false,
         }
     }
