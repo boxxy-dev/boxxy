@@ -16,6 +16,7 @@ pub struct Session {
     pub model_id: Option<String>,
     pub pinned: bool,
     pub total_tokens: i64,
+    pub last_dream_at: Option<String>,
     pub created_at: Option<String>,
     pub updated_at: Option<String>,
     #[sqlx(default)]
@@ -31,6 +32,7 @@ pub struct Interaction {
     pub content: String,
     pub metadata: Option<String>,
     pub embedding: Option<Vec<u8>>,
+    pub processing_state: Option<String>,
     pub created_at: Option<String>,
     pub last_accessed_at: Option<String>,
 }

@@ -157,6 +157,7 @@ async fn main() -> Result<()> {
 
     // Final Telemetry Flush before exit
     log::debug!("Performing final telemetry flush...");
+    boxxy_telemetry::seed_dream().await;
     boxxy_telemetry::flush_journal().await;
     boxxy_telemetry::shutdown().await;
 

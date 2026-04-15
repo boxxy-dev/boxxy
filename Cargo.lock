@@ -557,6 +557,7 @@ dependencies = [
  "anyhow",
  "boxxy-ai-core",
  "boxxy-bookmarks",
+ "boxxy-claw",
  "boxxy-db",
  "boxxy-preferences",
  "boxxy-telemetry",

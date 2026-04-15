@@ -12,10 +12,13 @@ Provides a persistent SQLite database for Boxxy-Terminal, serving as the Long-Te
   - **Verified Status**: Extracted facts default to `verified = false` and must be promoted by the user in `MEMORY.md`.
   - **FTS5 Integration**: All memories are automatically indexed in a virtual FTS5 table (`memories_fts`) with `project_path` scoping for fast semantic retrieval.
   - **Automatic Pruning**: Supported via `access_count` and `last_accessed_at` tracking.
-- **Session Persistence (Schema v7)**: 
+- **Interaction Schema (Episodic Memory & Dreaming)**:
+  - Tracks raw conversation and command history in the `interactions` table.
+  - Uses a `processing_state` column (`raw`, `seeded`, `dreamed`) to power the async Memory Consolidation pipeline, allowing the background `DreamOrchestrator` to batch-process un-consolidated interactions.
+- **Session Persistence (Schema v9)**:
   - **Pinned Sessions**: The `sessions` table includes a `pinned` column. Pinned sessions are excluded from the "last 10" limit and sorted to the top.
   - **Total Tokens**: Tracks the cumulative context cost of a session across different model providers and application restarts.
-  - **Soft Clear**: A `cleared_at` timestamp allows users to hide past history visuals without losing the underlying message context.
+  - **Dream History**: Includes `last_dream_at` to orchestrate when a session's history was last consolidated.  - **Soft Clear**: A `cleared_at` timestamp allows users to hide past history visuals without losing the underlying message context.
   - **Interaction Logs**: The `claw_events` table stores serialized UI events (diagnoses, proposals). It is indexed by `session_id` for fast restoration during session resumption.
 - **Session-Scoped Task Persistence**: Scheduled tasks are serialized atomically on every turn and saved alongside the conversation history. These tasks are only re-hydrated and executed when the specific session is actively resumed in a pane.
 

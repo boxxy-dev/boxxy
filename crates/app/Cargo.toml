@@ -21,6 +21,7 @@ env_logger.workspace = true
 log.workspace = true
 boxxy-preferences = { path = "../preferences" }
 boxxy-db = { path = "../db" }
+boxxy-claw = { path = "../boxxy_claw" }
 boxxy-bookmarks.workspace = true
 boxxy-telemetry = { path = "../telemetry" }
 sysinfo.workspace = true

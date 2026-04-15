@@ -97,6 +97,13 @@ pub async fn shutdown() {
     }
 }
 
+pub async fn seed_dream() {
+    if let Some(db) = DB.get() {
+        let store = boxxy_db::store::Store::new(db.pool());
+        let _ = store.seed_all_raw_interactions().await;
+    }
+}
+
 pub async fn flush_journal() {
     log::debug!("Telemetry: Starting flush_journal...");
     let db = match DB.get() {

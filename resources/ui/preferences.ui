@@ -504,6 +504,19 @@
                             </child>
 
                             <child>
+                              <object class="AdwPreferencesGroup" id="group_agent_dreaming">
+                                <property name="title" translatable="yes">Memory Consolidation</property>
+                                <property name="description" translatable="yes">Process short-term interactions into durable facts and patterns.</property>
+                                <child>
+                                  <object class="AdwSwitchRow" id="enable_auto_dreaming_switch">
+                                    <property name="title" translatable="yes">Enable Auto-Dreaming</property>
+                                    <property name="subtitle" translatable="yes">Automatically run a delayed background dream cycle on startup.</property>
+                                  </object>
+                                </child>
+                              </object>
+                            </child>
+
+                            <child>
                               <object class="AdwPreferencesGroup" id="group_agent_toolbox">
                                 <property name="title" translatable="yes">Agent Toolbox</property>
                                 <property name="description" translatable="yes">Enable or disable specific high-level tools for Boxxy agents.</property>

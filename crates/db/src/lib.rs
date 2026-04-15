@@ -5,7 +5,7 @@ use directories::ProjectDirs;
 use sqlx::SqlitePool;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
 use tokio::sync::OnceCell;
 
 pub mod models;
@@ -14,7 +14,7 @@ pub mod store;
 static DB: OnceCell<Db> = OnceCell::const_new();
 pub static DATABASE_WAS_RESET: AtomicBool = AtomicBool::new(false);
 
-const CURRENT_SCHEMA_VERSION: i32 = 8;
+const CURRENT_SCHEMA_VERSION: i32 = 9;
 
 #[derive(Clone)]
 pub struct Db {
@@ -52,30 +52,7 @@ impl Db {
 
                 temp_pool.close().await;
 
-                // 2. Validate version
-                if version.0 != CURRENT_SCHEMA_VERSION && version.0 != 0 {
-                    log::warn!(
-                        "Database version mismatch (found {}, expected {}). DROPPING DATABASE.",
-                        version.0,
-                        CURRENT_SCHEMA_VERSION
-                    );
-
-                    // Close any potential lingering handles by waiting a tiny bit if needed
-                    // though temp_pool.close() should be enough.
-                    let _ = tokio::fs::remove_file(&db_path).await;
-                    // Also remove the WAL and SHM files if they exist
-                    let _ = tokio::fs::remove_file(format!("{}-wal", db_path.display())).await;
-                    let _ = tokio::fs::remove_file(format!("{}-shm", db_path.display())).await;
-
-                    DATABASE_WAS_RESET.store(true, Ordering::SeqCst);
-                } else if version.0 == 0 {
-                    // If it's 0, we check if tables exist to decide if it's a "Legacy Unversioned" DB or a fresh one.
-                    // For this preview phase, we'll just treat 0 as "Fresh" and set the version.
-                    // But if sessions table exists, it might be legacy.
-                    // To be safe, if version is 0 and the file existed, we can just let it proceed to initialize_schema.
-                }
-
-                // 3. Re-open (or initial open) official pool
+                // 2. Re-open official pool
                 let pool = SqlitePoolOptions::new()
                     .max_connections(5)
                     .connect_with(options)
@@ -83,6 +60,18 @@ impl Db {
                     .context("Failed to connect to database")?;
 
                 let db = Self { pool };
+
+                // 3. Handle Migrations
+                if version.0 != CURRENT_SCHEMA_VERSION && version.0 != 0 {
+                    log::info!(
+                        "Database version mismatch (found {}, expected {}). Applying migrations.",
+                        version.0,
+                        CURRENT_SCHEMA_VERSION
+                    );
+
+                    db.apply_migrations(version.0).await?;
+                }
+
                 db.initialize_schema().await?;
 
                 // 4. Set/Update version
@@ -95,6 +84,41 @@ impl Db {
             .await?;
 
         Ok(db.clone())
+    }
+
+    async fn apply_migrations(&self, from_version: i32) -> Result<()> {
+        if from_version < 9 {
+            log::info!("Migrating database to version 9 (Dreaming support)...");
+            
+            // Add last_dream_at to sessions
+            let column_exists: bool = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM pragma_table_info('sessions') WHERE name='last_dream_at'"
+            )
+            .fetch_one(&self.pool)
+            .await
+            .unwrap_or(0) > 0;
+
+            if !column_exists {
+                sqlx::query("ALTER TABLE sessions ADD COLUMN last_dream_at DATETIME")
+                    .execute(&self.pool)
+                    .await?;
+            }
+
+            // Add processing_state to interactions
+            let column_exists: bool = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM pragma_table_info('interactions') WHERE name='processing_state'"
+            )
+            .fetch_one(&self.pool)
+            .await
+            .unwrap_or(0) > 0;
+
+            if !column_exists {
+                sqlx::query("ALTER TABLE interactions ADD COLUMN processing_state TEXT DEFAULT 'raw'")
+                    .execute(&self.pool)
+                    .await?;
+            }
+        }
+        Ok(())
     }
 
     fn get_db_path() -> Result<PathBuf> {
@@ -120,6 +144,7 @@ impl Db {
                 pinned BOOLEAN DEFAULT false,
                 cleared_at DATETIME,
                 total_tokens BIGINT DEFAULT 0,
+                last_dream_at DATETIME,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
             );
@@ -141,6 +166,7 @@ impl Db {
                 content TEXT NOT NULL,
                 metadata TEXT,
                 embedding BLOB,
+                processing_state TEXT DEFAULT 'raw',
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 last_accessed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE

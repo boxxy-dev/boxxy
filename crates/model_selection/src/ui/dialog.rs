@@ -82,12 +82,12 @@ impl GlobalModelSelectorDialog {
         );
         let mem_tab = build_tab(
             &memory_selector,
-            "This model is used to extract background facts and match database memories. Use a fast, lightweight model here.",
+            "This model is used to extract background facts and run the background Dream Cycle. Use a fast, lightweight model here.",
         );
 
         stack.add_titled(&ai_tab, Some("ai"), "AI Chat");
         stack.add_titled(&claw_tab, Some("claw"), "Boxxy Claw");
-        stack.add_titled(&mem_tab, Some("memory"), "Memories");
+        stack.add_titled(&mem_tab, Some("memory"), "Memories and Dreams");
 
         // Make Boxxy Claw the default view
         stack.set_visible_child_name("claw");

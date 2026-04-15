@@ -25,7 +25,8 @@ The crate uses an **Actor Model** mixed with a **Shared-Everything State** strat
 - **`registry/`**: Houses the global singletons that share data across all `ClawSession` actors efficiently without blocking.
   - **`skills.rs`**: Manages the `SkillRegistry` for semantic skill retrieval.
   - **`workspace.rs`**: Manages the `WorkspaceRegistry`, acting as the **Global Radar**. It now includes a central **EventBus** for pub/sub messaging and a **LockTable** for resource management across the entire application.
-- **`memories/`**: Manages interactions with `boxxy_db`, including the **Selective Background Observer** for implicit fact extraction.
+- **`memories/`**: Manages interactions with `boxxy_db`, including the **Selective Background Observer** for implicit fact extraction and the **Dream Orchestrator**.
+  - **Memory Consolidation ("Dreaming")**: Runs a background 3-phase LLM pipeline. Phase 1 (Ingestion) fetches "seeded" interactions. Phase 2 (Extraction) identifies permanent behavioral patterns and facts while resolving conflicts. Phase 3 (REM) promotes facts to the DB, syncs `MEMORY.md`, and logs high-level insights to `DREAMS.md`.
   - **Selective Extraction**: The observer is strictly instructed to IGNORE transient data (git branches, CWDs, agent names, image metadata). It focuses exclusively on long-term facts and user preferences.
   - **Memory Management**: Agents possess a `memory_delete` tool to prune outdated or incorrect facts from the long-term database.
   - **Hierarchical Scoping**: (Proposed) Memories are scoped either to `[global]` or to a Git-aware project root, preventing "Amnesia" when moving between subdirectories.

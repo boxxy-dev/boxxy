@@ -32,8 +32,11 @@ pub fn setup_agents_page(
         builder.object("enable_os_context_switch").unwrap();
     let enable_clipboard_tools_switch: adw::SwitchRow =
         builder.object("enable_clipboard_tools_switch").unwrap();
+    let enable_auto_dreaming_switch: adw::SwitchRow =
+        builder.object("enable_auto_dreaming_switch").unwrap();
 
     let group_agent_general: adw::PreferencesGroup = builder.object("group_agent_general").unwrap();
+    let group_agent_dreaming: adw::PreferencesGroup = builder.object("group_agent_dreaming").unwrap();
     let group_agent_toolbox: adw::PreferencesGroup = builder.object("group_agent_toolbox").unwrap();
 
     // Initialize values
@@ -44,6 +47,7 @@ pub fn setup_agents_page(
             == crate::config::ClawAutoDiagnosisMode::Proactive,
     );
     hide_agent_badge_switch.set_active(settings_rc.borrow().hide_agent_badge);
+    enable_auto_dreaming_switch.set_active(settings_rc.borrow().enable_auto_dreaming);
     enable_file_tools_switch.set_active(settings_rc.borrow().enable_file_tools);
     enable_system_tools_switch.set_active(settings_rc.borrow().enable_system_tools);
     enable_dangerous_tools_switch.set_active(settings_rc.borrow().enable_dangerous_tools);
@@ -97,6 +101,17 @@ pub fn setup_agents_page(
         let mut s = s_rc.borrow_mut();
         if s.hide_agent_badge != row.is_active() {
             s.hide_agent_badge = row.is_active();
+            s.save();
+            cb(s.clone());
+        }
+    });
+
+    let s_rc = settings_rc.clone();
+    let cb = on_change.clone();
+    enable_auto_dreaming_switch.connect_active_notify(move |row| {
+        let mut s = s_rc.borrow_mut();
+        if s.enable_auto_dreaming != row.is_active() {
+            s.enable_auto_dreaming = row.is_active();
             s.save();
             cb(s.clone());
         }
@@ -189,6 +204,7 @@ pub fn setup_agents_page(
     let enable_web_tools_switch_clone = enable_web_tools_switch.clone();
     let enable_os_context_switch_clone = enable_os_context_switch.clone();
     let enable_clipboard_tools_switch_clone = enable_clipboard_tools_switch.clone();
+    let enable_auto_dreaming_switch_clone = enable_auto_dreaming_switch.clone();
 
     Box::new(move |query: &str| {
         let match_row = |r: &gtk::Widget, text: &str| {
@@ -212,6 +228,10 @@ pub fn setup_agents_page(
         let ag2 = match_row(
             hide_agent_badge_switch_clone.upcast_ref(),
             "hide agent identity badge top right corner",
+        );
+        let ag_dream = match_row(
+            enable_auto_dreaming_switch_clone.upcast_ref(),
+            "enable auto-dreaming memory consolidation durable facts patterns",
         );
         let ag3 = match_row(
             enable_file_tools_switch_clone.upcast_ref(),
@@ -243,8 +263,9 @@ pub fn setup_agents_page(
         );
 
         group_agent_general.set_visible(ag1 || ag_web_default || ag_proactive || ag2);
+        group_agent_dreaming.set_visible(ag_dream);
         group_agent_toolbox.set_visible(ag3 || ag4 || ag5 || ag6 || ag_search || ag_os || ag7);
 
-        group_agent_general.is_visible() || group_agent_toolbox.is_visible()
+        group_agent_general.is_visible() || group_agent_dreaming.is_visible() || group_agent_toolbox.is_visible()
     })
 }

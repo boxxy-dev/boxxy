@@ -262,6 +262,53 @@ impl<'a> Store<'a> {
         Ok(())
     }
 
+    pub async fn mark_interactions_as_seeded(&self, session_id: &str) -> Result<()> {
+        sqlx::query("UPDATE interactions SET processing_state = 'seeded' WHERE session_id = ? AND processing_state = 'raw'")
+            .bind(session_id)
+            .execute(self.pool)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn seed_all_raw_interactions(&self) -> Result<()> {
+        sqlx::query("UPDATE interactions SET processing_state = 'seeded' WHERE processing_state = 'raw'")
+            .execute(self.pool)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn get_undreamed_interactions(&self) -> Result<Vec<Interaction>> {
+        let records = sqlx::query_as::<_, Interaction>(
+            "SELECT * FROM interactions WHERE processing_state = 'seeded' OR processing_state = 'raw' ORDER BY created_at ASC"
+        )
+        .fetch_all(self.pool)
+        .await?;
+        Ok(records)
+    }
+
+    pub async fn mark_interactions_as_dreamed(&self, ids: &[i64]) -> Result<()> {
+        if ids.is_empty() {
+            return Ok(());
+        }
+
+        // SQLite has a limit on parameters, but for dream batches it should be fine.
+        let query = format!(
+            "UPDATE interactions SET processing_state = 'dreamed' WHERE id IN ({})",
+            ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(",")
+        );
+
+        sqlx::query(&query).execute(self.pool).await?;
+        Ok(())
+    }
+
+    pub async fn update_session_dream_timestamp(&self, session_id: &str) -> Result<()> {
+        sqlx::query("UPDATE sessions SET last_dream_at = CURRENT_TIMESTAMP WHERE id = ?")
+            .bind(session_id)
+            .execute(self.pool)
+            .await?;
+        Ok(())
+    }
+
     pub async fn search_interactions(
         &self,
         query: &str,
@@ -271,18 +318,17 @@ impl<'a> Store<'a> {
         // Prioritize current project, then global/others
         let records = sqlx::query_as::<_, Interaction>(
             r"
-            SELECT m.id, m.session_id, m.project_path, m.content, m.metadata, m.embedding, m.created_at, m.last_accessed_at
+            SELECT m.id, m.session_id, m.project_path, m.content, m.metadata, m.embedding, m.processing_state, m.created_at, m.last_accessed_at
             FROM interactions_fts f
             JOIN interactions m ON f.rowid = m.id
             WHERE interactions_fts MATCH ?
-            ORDER BY 
+            ORDER BY
                 CASE WHEN m.project_path = ? THEN 0 ELSE 1 END,
                 rank,
                 m.last_accessed_at DESC
             LIMIT ?
             "
-        )
-        .bind(query)
+        )        .bind(query)
         .bind(project_path)
         .bind(limit)
         .fetch_all(self.pool)
@@ -306,7 +352,7 @@ impl<'a> Store<'a> {
         session_id: &str,
     ) -> Result<Vec<Interaction>> {
         let records = sqlx::query_as::<_, Interaction>(
-            "SELECT id, session_id, project_path, content, metadata, embedding, created_at, last_accessed_at FROM interactions WHERE session_id = ? AND embedding IS NOT NULL"
+            "SELECT id, session_id, project_path, content, metadata, embedding, processing_state, created_at, last_accessed_at FROM interactions WHERE session_id = ? AND embedding IS NOT NULL"
         )
         .bind(session_id)
         .fetch_all(self.pool)
@@ -834,5 +880,49 @@ mod tests {
         assert_eq!(all_skills.len(), 1);
         assert_eq!(all_skills[0].name, "RustExpert");
         assert_eq!(all_skills[0].content, "Updated Rust expert content.");
+    }
+
+    #[tokio::test]
+    async fn test_dreaming_lifecycle() {
+        let db = Db::new_in_memory().await.unwrap();
+        let store = Store::new(db.pool());
+        
+        let session_id = "sess_dream";
+        store.create_session(session_id, "Dream Session").await.unwrap();
+        
+        // 1. Insert interaction (defaults to 'raw')
+        let id1 = store.add_interaction(session_id, None, "I love rust", None, None).await.unwrap();
+        
+        // Check undreamed includes 'raw'
+        let undreamed = store.get_undreamed_interactions().await.unwrap();
+        assert_eq!(undreamed.len(), 1);
+        assert_eq!(undreamed[0].processing_state.as_deref(), Some("raw"));
+        
+        // 2. Mark as seeded
+        store.mark_interactions_as_seeded(session_id).await.unwrap();
+        
+        // Check undreamed includes 'seeded'
+        let undreamed = store.get_undreamed_interactions().await.unwrap();
+        assert_eq!(undreamed.len(), 1);
+        assert_eq!(undreamed[0].processing_state.as_deref(), Some("seeded"));
+        
+        // 3. Mark as dreamed
+        store.mark_interactions_as_dreamed(&[id1]).await.unwrap();
+        
+        // Check undreamed is now empty
+        let undreamed = store.get_undreamed_interactions().await.unwrap();
+        assert_eq!(undreamed.len(), 0);
+        
+        // 4. Update session timestamp
+        store.update_session_dream_timestamp(session_id).await.unwrap();
+        
+        // Add another raw interaction
+        let _id2 = store.add_interaction(session_id, None, "I love cargo", None, None).await.unwrap();
+        
+        // 5. Global seed all
+        store.seed_all_raw_interactions().await.unwrap();
+        let undreamed = store.get_undreamed_interactions().await.unwrap();
+        assert_eq!(undreamed.len(), 1);
+        assert_eq!(undreamed[0].processing_state.as_deref(), Some("seeded"));
     }
 }

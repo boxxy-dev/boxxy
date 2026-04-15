@@ -55,7 +55,7 @@ Main UI Orchestrator using a modular MVU pattern. Manages the `AdwApplicationWin
 Manages the split-pane terminal environment. Features a deep modular architecture (`pane/`) handling UI, gestures, events, media previews, and Claw integration.
 
 ### 4. `boxxy-agent` (Binary/Library Crate)
-Host Privileged Daemon. Bypasses Flatpak sandboxing to handle PTY management and host-level system administration via D-Bus IPC. Utilizing a **Subsystem Architecture**, it strictly separates latency-sensitive terminal I/O from background maintenance and AI-driven host operations. It implements an `AgentMode` state machine allowing it to "shed" interactive components when the UI closes, maintaining a minimal (~3MB) ghost footprint for background tasks like telemetry journaling and memory consolidation.
+Host Privileged Daemon. Bypasses Flatpak sandboxing to handle PTY management and host-level system administration via D-Bus IPC. Utilizing a **Subsystem Architecture**, it strictly separates latency-sensitive terminal I/O from background maintenance and AI-driven host operations. It implements an `AgentMode` state machine allowing it to "shed" interactive components when the UI closes, maintaining a minimal (~3MB) ghost footprint for background tasks like telemetry journaling and "Flash-Dream" memory seeding on shutdown.
 
 ### 5. `boxxy-claw` (Library Crate)
 Agentic Reasoning Engine using an **Actor Model**. Spawns isolated `ClawSession` actors per terminal pane. Features the **"Red Pony Protocol"**: each pane is assigned a unique mnemonic name (e.g., "Red Pony") mapped to its UUID.
@@ -70,6 +70,10 @@ Agents function as a **Collaborative Swarm**:
 Agents possess full **System & Environment Authority**:
 - **Location & Time Context Injection**: Agents are implicitly aware of the user's geographic location (city, country, timezone) and precise local time without requiring tool calls, achieved via a silent background fetch (`ip-api.com`) and prompt injection. If disabled by the user, a strict `[PRIVACY POLICY]` is injected forbidding the agent from attempting to deduce location or time via shell commands.
 - **Persistent Interaction History**: Automatically saves visual events (diagnoses, suggestions, tool results) and **turn-based token usage** to the database. These are re-rendered instantly upon session restoration, ensuring zero context loss even for sidebar logs. Session titles are dynamically generated in the background using a dedicated LLM call summarizing the user's initial prompt.
+- **Memory Consolidation ("Dreaming")**: A background orchestration pipeline that combats context bloat.
+  - **Phase 1 (Light Sleep):** Ingests raw interaction logs from the SQLite database.
+  - **Phase 2 (Deep Sleep):** A dedicated LLM parses the logs, extracting durable facts (OS, hardware, preferred tools) and behavioral patterns, resolving semantic conflicts before promoting them to long-term memory.
+  - **Phase 3 (REM):** Syncs insights to `MEMORY.md` and generates a human-readable `DREAMS.md` log. This process runs in a detached Tokio task 10 seconds after startup to ensure zero UI latency.
 - **Cross-Model Continuity**: Cumulative session analytics (Total Tokens) are persisted in the database, allowing users to switch LLM providers (e.g., Gemini to Claude) while maintaining a continuous record of the session's overall cost and context depth.
 - **Soft Clear Pattern**: Clicking "Clear Screen" in the sidebar marks a session-specific timestamp. Subsequent restorations only show history generated after that point, providing a clean visual state while keeping the underlying data safe.
 - **Clipboard Management**: Securely read and write to the system clipboard with user approval.
