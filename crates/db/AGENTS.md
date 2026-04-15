@@ -7,6 +7,11 @@ Provides a persistent SQLite database for Boxxy-Terminal, serving as the Long-Te
 - **Connection Management**: Handles connecting to the local `claw_memory.db` SQLite file, creating the database and directories if they don't exist.
 - **Migrations**: During the **Preview Phase**, formal migrations are bypassed in favor of an **Auto-Drop Strategy**. The database tracks its own version via `PRAGMA user_version`. If a mismatch is detected (e.g., after an update with breaking schema changes), the application automatically drops the `.db` file and recreates it. A system notification is then sent to the user via the first initialized Claw agent.
 - **Data Access**: Exposes asynchronous CRUD operations for memories (RAG facts), sessions, and persistent visual logs.
+- **Testing Standard**: ALL database operations must have corresponding unit tests in `store.rs`. New schema changes must be verified using the `Db::new_in_memory()` pattern to prevent regressions.
+- **Memory Schema (Long-term Facts)**:
+  - **Verified Status**: Extracted facts default to `verified = false` and must be promoted by the user in `MEMORY.md`.
+  - **FTS5 Integration**: All memories are automatically indexed in a virtual FTS5 table (`memories_fts`) with `project_path` scoping for fast semantic retrieval.
+  - **Automatic Pruning**: Supported via `access_count` and `last_accessed_at` tracking.
 - **Session Persistence (Schema v7)**: 
   - **Pinned Sessions**: The `sessions` table includes a `pinned` column. Pinned sessions are excluded from the "last 10" limit and sorted to the top.
   - **Total Tokens**: Tracks the cumulative context cost of a session across different model providers and application restarts.

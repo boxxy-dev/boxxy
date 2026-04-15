@@ -25,7 +25,10 @@ The crate uses an **Actor Model** mixed with a **Shared-Everything State** strat
 - **`registry/`**: Houses the global singletons that share data across all `ClawSession` actors efficiently without blocking.
   - **`skills.rs`**: Manages the `SkillRegistry` for semantic skill retrieval.
   - **`workspace.rs`**: Manages the `WorkspaceRegistry`, acting as the **Global Radar**. It now includes a central **EventBus** for pub/sub messaging and a **LockTable** for resource management across the entire application.
-- **`memories/`**: Manages interactions with `boxxy_db`, including the **Background Observer** for implicit fact extraction.
+- **`memories/`**: Manages interactions with `boxxy_db`, including the **Selective Background Observer** for implicit fact extraction.
+  - **Selective Extraction**: The observer is strictly instructed to IGNORE transient data (git branches, CWDs, agent names, image metadata). It focuses exclusively on long-term facts and user preferences.
+  - **Memory Management**: Agents possess a `memory_delete` tool to prune outdated or incorrect facts from the long-term database.
+  - **Hierarchical Scoping**: (Proposed) Memories are scoped either to `[global]` or to a Git-aware project root, preventing "Amnesia" when moving between subdirectories.
 
 ## Key Features
 - **Structured Semantic Context**: By leveraging the `boxxy-vte` engine's OSC 133 semantic prompt tracking, the Claw session receives a highly structured, markdown-formatted history of the terminal buffer (e.g., `[PROMPT]`, `[COMMAND]`, `[OUTPUT]`). This prevents the AI from hallucinating boundaries and dramatically improves the accuracy of error diagnosis and command suggestions.

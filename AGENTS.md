@@ -38,6 +38,11 @@ Boxxy provides deep, real-time visibility into LLM interactions for developers a
 - **Non-Blocking UI:** Never perform synchronous disk I/O, heavy parsing, or network calls on the main GTK thread. Use `glib::spawn_future_local` and delegate heavy tasks to the global Tokio runtime.
 - **RefCell Safety:** Avoid holding `RefCell` borrows across `.await` points to prevent runtime panics.
 
+### 5. Technical Integrity & Testing
+- **Database Logic:** ALL database operations MUST have corresponding unit tests in their respective crates (using `Db::new_in_memory()`). NEVER assume a query is correct without verification.
+- **Memory Hygiene:** The "Background Observer" must be strictly tuned to exclude transient state. Implicit memories default to `unverified` and require manual promotion in `MEMORY.md`.
+- **Validation:** Changes to core engine logic must be verified via `cargo test` and, where applicable, by adding a new YAML scenario to `scenario-runner`.
+
 ## Component Responsibilities
 
 ### 1. `boxxy-app` (Binary Crate)
@@ -138,7 +143,7 @@ To enforce clarity and predictability, Boxxy strictly adheres to the following U
 4. **The "Silent Reject" Pattern:** When a user explicitly rejects a proposal (via `CancelPending`), the LLM receives an error. To prevent the LLM from chatty, unnecessary follow-ups (e.g. "I'm sorry you didn't like that!"), the system dictates a `[SILENT_ACK]` flow. If the agent yields a `[SILENT_ACK]` token, the UI silently drops the event and returns the agent to a sleep state without prompting the user further.
 
 ## Development Protocol
+- **Git (CRITICAL):** NEVER COMMIT. The AI must NEVER automatically commit changes or push to any branch. Commits and Git operations will be performed manually by the user ONLY.
 - **MCP:** Use Context7 MCP for all library documentation and code generation.
-- **Git:** NEVER automatically commit changes. Commits must be performed manually.
 - **GTK UI Files**: When modifying `.ui` files (XML), avoid using the ampersand character (`&`) in text labels (like `title` or `subtitle` properties) if possible. GTK's Pango markup parser will often fail to render the text if the string contains a raw ampersand after XML parsing. Prefer using the word "and".
 - **Documentation:** Keep this file and crate-level `AGENTS.md` files updated with all architectural changes.
