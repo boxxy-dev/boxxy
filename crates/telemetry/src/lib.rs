@@ -303,3 +303,35 @@ pub async fn track_session_resume(session_type: &str) {
     )
     .await;
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use boxxy_db::Db;
+
+    #[tokio::test]
+    async fn test_telemetry_journal_operations() {
+        // Set up in-memory DB
+        let db = Db::new_in_memory().await.unwrap();
+        // Force the OnceCell so our test uses the memory DB instead of the real one
+        let _ = DB.set(db.clone());
+
+        // 1. Record some events
+        record_to_journal("test.metric.1", 42.0, serde_json::json!({"key": "value"})).await;
+        record_to_journal("test.metric.2", 1.5, serde_json::json!({"foo": "bar"})).await;
+
+        // 2. Verify they are in the database directly
+        let rows: Vec<(i32, String, f64, String)> = sqlx::query_as(
+            "SELECT id, metric_name, value, attributes_json FROM telemetry_journal ORDER BY id ASC"
+        )
+        .fetch_all(db.pool())
+        .await
+        .unwrap();
+
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].1, "test.metric.1");
+        assert_eq!(rows[0].2, 42.0);
+        assert_eq!(rows[1].1, "test.metric.2");
+        assert_eq!(rows[1].2, 1.5);
+    }
+}

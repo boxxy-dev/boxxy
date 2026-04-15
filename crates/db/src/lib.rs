@@ -148,16 +148,23 @@ impl Db {
 
             CREATE TABLE IF NOT EXISTS memories (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                project_path TEXT,
+                key TEXT NOT NULL,
+                project_path TEXT NOT NULL,
                 content TEXT NOT NULL,
-                metadata TEXT,
-                embedding BLOB,
+                category TEXT,
+                verified BOOLEAN DEFAULT false,
+                pinned BOOLEAN DEFAULT false,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                last_accessed_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                last_accessed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                access_count INTEGER DEFAULT 0,
+                UNIQUE(key, project_path)
             );
 
             CREATE TABLE IF NOT EXISTS skills (
                 name TEXT PRIMARY KEY,
+                description TEXT NOT NULL DEFAULT '',
+                triggers TEXT NOT NULL DEFAULT '',
                 content TEXT NOT NULL,
                 metadata TEXT,
                 pinned BOOLEAN DEFAULT false,
@@ -213,18 +220,18 @@ impl Db {
             -- Triggers for memories
             DROP TRIGGER IF EXISTS memories_ai;
             CREATE TRIGGER memories_ai AFTER INSERT ON memories BEGIN
-              INSERT INTO memories_fts(rowid, content) VALUES (new.id, new.content);
+              INSERT INTO memories_fts(rowid, content, project_path) VALUES (new.id, new.content, new.project_path);
             END;
 
             DROP TRIGGER IF EXISTS memories_ad;
             CREATE TRIGGER memories_ad AFTER DELETE ON memories BEGIN
-              INSERT INTO memories_fts(memories_fts, rowid, content) VALUES('delete', old.id, old.content);
+              INSERT INTO memories_fts(memories_fts, rowid, content, project_path) VALUES('delete', old.id, old.content, old.project_path);
             END;
 
             DROP TRIGGER IF EXISTS memories_au;
             CREATE TRIGGER memories_au AFTER UPDATE ON memories BEGIN
-              INSERT INTO memories_fts(memories_fts, rowid, content) VALUES('delete', old.id, old.content);
-              INSERT INTO memories_fts(rowid, content) VALUES (new.id, new.content);
+              INSERT INTO memories_fts(memories_fts, rowid, content, project_path) VALUES('delete', old.id, old.content, old.project_path);
+              INSERT INTO memories_fts(rowid, content, project_path) VALUES (new.id, new.content, new.project_path);
             END;
 
             CREATE VIRTUAL TABLE IF NOT EXISTS skills_fts USING fts5(
@@ -260,6 +267,22 @@ impl Db {
             .await;
 
         Ok(())
+    }
+
+    pub async fn new_in_memory() -> Result<Self> {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await?;
+
+        let db = Self { pool };
+        db.initialize_schema().await?;
+        
+        sqlx::query(&format!("PRAGMA user_version = {CURRENT_SCHEMA_VERSION}"))
+            .execute(&db.pool)
+            .await?;
+            
+        Ok(db)
     }
 
     #[must_use]

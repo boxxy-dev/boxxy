@@ -481,7 +481,7 @@ impl<'a> Store<'a> {
             r"
             SELECT m.name, m.description, m.triggers, m.content, m.pinned, m.updated_at
             FROM skills_fts f
-            JOIN skills m ON f.rowid = m.name
+            JOIN skills m ON m.name = f.name
             WHERE skills_fts MATCH ?
             ORDER BY m.pinned DESC, rank
             LIMIT ?
@@ -493,5 +493,318 @@ impl<'a> Store<'a> {
         .await?;
 
         Ok(records)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Db;
+
+    #[tokio::test]
+    async fn test_memory_insertion_and_retrieval() {
+        let db = Db::new_in_memory().await.unwrap();
+        let store = Store::new(db.pool());
+
+        let key = "test_fact";
+        let project_path = "global";
+        let content = "The sky is blue.";
+        let category = Some("general");
+
+        store
+            .add_memory(key, Some(project_path), content, category, true, false)
+            .await
+            .unwrap();
+
+        let memory = store.get_memory_by_key(key, Some(project_path)).await.unwrap().expect("Memory should exist");
+        assert_eq!(memory.key, key);
+        assert_eq!(memory.project_path, project_path);
+        assert_eq!(memory.content, content);
+        assert_eq!(memory.category.as_deref(), category);
+        assert_eq!(memory.verified, Some(true));
+        assert_eq!(memory.pinned, Some(false));
+    }
+
+    #[tokio::test]
+    async fn test_memory_upsert() {
+        let db = Db::new_in_memory().await.unwrap();
+        let store = Store::new(db.pool());
+
+        let key = "upsert_fact";
+        let project_path = "/tmp/test";
+        
+        // Initial insert
+        store
+            .add_memory(key, Some(project_path), "Initial content", None, false, false)
+            .await
+            .unwrap();
+
+        // Upsert with new content and verified status
+        store
+            .add_memory(key, Some(project_path), "Updated content", Some("new_cat"), true, true)
+            .await
+            .unwrap();
+
+        let memory = store.get_memory_by_key(key, Some(project_path)).await.unwrap().expect("Memory should exist");
+        
+        // Ensure properties are updated
+        assert_eq!(memory.content, "Updated content");
+        assert_eq!(memory.category.as_deref(), Some("new_cat"));
+        assert_eq!(memory.verified, Some(true));
+        assert_eq!(memory.pinned, Some(true));
+
+        // Ensure we didn't just insert a duplicate row
+        let all_memories = store.get_all_memories().await.unwrap();
+        assert_eq!(all_memories.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_memory_fts_search() {
+        let db = Db::new_in_memory().await.unwrap();
+        let store = Store::new(db.pool());
+
+        // Insert a verified memory (searchable)
+        store
+            .add_memory("verified_fact", None, "Rust is a fast and memory-safe language.", None, true, false)
+            .await
+            .unwrap();
+
+        // Insert an unverified memory (not searchable by default)
+        store
+            .add_memory("unverified_fact", None, "Rust might be from space.", None, false, false)
+            .await
+            .unwrap();
+            
+        // Insert a pinned memory (not searchable by default via search_memories)
+        store
+            .add_memory("pinned_fact", None, "Rust is oxidized iron.", None, true, true)
+            .await
+            .unwrap();
+
+        // Search for "Rust"
+        let results = store.search_memories("Rust", None, 10).await.unwrap();
+        
+        assert_eq!(results.len(), 1, "Only the verified, unpinned memory should be returned in search");
+        assert_eq!(results[0].key, "verified_fact");
+        assert_eq!(results[0].content, "Rust is a fast and memory-safe language.");
+    }
+
+    #[tokio::test]
+    async fn test_msgbar_history_operations() {
+        let db = Db::new_in_memory().await.unwrap();
+        let store = Store::new(db.pool());
+
+        // Insert some history
+        let id1 = store.insert_msgbar_history("hello world", "[]").await.unwrap();
+        let id2 = store.insert_msgbar_history("testing 123", "[{\"type\": \"image\"}]").await.unwrap();
+
+        // Retrieve history
+        let recent = store.get_recent_msgbar_history(10).await.unwrap();
+        assert_eq!(recent.len(), 2);
+        assert_eq!(recent[0].id, id1);
+        assert_eq!(recent[0].text, "hello world");
+        assert_eq!(recent[0].attachments_json, "[]");
+        
+        assert_eq!(recent[1].id, id2);
+        assert_eq!(recent[1].text, "testing 123");
+        assert_eq!(recent[1].attachments_json, "[{\"type\": \"image\"}]");
+
+        // Prune history
+        // Insert a 3rd message
+        store.insert_msgbar_history("message 3", "[]").await.unwrap();
+        
+        // threshold 3, target 1 (keep 1) -> deletes 2
+        store.prune_msgbar_history(3, 1).await.unwrap();
+
+        let recent_after_prune = store.get_recent_msgbar_history(10).await.unwrap();
+        assert_eq!(recent_after_prune.len(), 1);
+        assert_eq!(recent_after_prune[0].text, "message 3");
+    }
+
+    #[tokio::test]
+    async fn test_session_operations() {
+        let db = Db::new_in_memory().await.unwrap();
+        let store = Store::new(db.pool());
+
+        let session_id = "sess_1";
+        let session_name = "Session 1";
+
+        // Create session
+        store.create_session(session_id, session_name).await.unwrap();
+
+        // Get session
+        let session = store.get_session(session_id).await.unwrap().expect("Session should exist");
+        assert_eq!(session.id, session_id);
+        assert_eq!(session.name, session_name);
+        assert_eq!(session.title, None);
+        assert_eq!(session.pinned, false);
+
+        // Upsert state
+        store.upsert_session_state(
+            session_id,
+            session_name,
+            "Updated Title",
+            "[\"history\"]",
+            "[\"tasks\"]",
+            "Agent X",
+            "/tmp/cwd",
+            "model_1",
+            true, // pinned
+            42,
+        ).await.unwrap();
+
+        // Verify update
+        let updated = store.get_session(session_id).await.unwrap().expect("Session should exist");
+        assert_eq!(updated.title.as_deref(), Some("Updated Title"));
+        assert_eq!(updated.pinned, true);
+        assert_eq!(updated.total_tokens, 42);
+
+        // UI History / Claw Events
+        store.add_claw_event(session_id, "{\"event\": 1}").await.unwrap();
+        store.add_claw_event(session_id, "{\"event\": 2}").await.unwrap();
+
+        let events = store.get_claw_events(session_id).await.unwrap();
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0], "{\"event\": 1}");
+        
+        // Debug raw DB state
+        let raw_sessions: Vec<(String, bool)> = sqlx::query_as("SELECT id, pinned FROM sessions").fetch_all(store.pool).await.unwrap();
+        println!("RAW SESSIONS: {:?}", raw_sessions);
+        let raw_events: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM claw_events").fetch_one(store.pool).await.unwrap();
+        println!("RAW EVENTS COUNT: {}", raw_events);
+
+        // Recent active sessions (since pinned = true, it should appear)
+        let recent = store.get_recent_active_sessions(10).await.unwrap();
+        println!("RECENT SESSIONS: {:?}", recent);
+        assert_eq!(recent.len(), 1);
+        assert_eq!(recent[0].id, session_id);
+        assert_eq!(recent[0].message_count, 2);
+
+        // Mark cleared
+        store.mark_session_cleared(session_id).await.unwrap();
+        
+        // Sleep to ensure the timestamp advances before inserting the next event
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        
+        // add event after clear
+        store.add_claw_event(session_id, "{\"event\": 3}").await.unwrap();
+        let events_after = store.get_claw_events(session_id).await.unwrap();
+        assert_eq!(events_after.len(), 1);
+        assert_eq!(events_after[0], "{\"event\": 3}");
+
+        // Clear all events
+        store.clear_claw_events(session_id).await.unwrap();
+        let empty_events = store.get_claw_events(session_id).await.unwrap();
+        assert!(empty_events.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_interaction_operations_and_search() {
+        let db = Db::new_in_memory().await.unwrap();
+        let store = Store::new(db.pool());
+
+        let session_id = "sess_interactions";
+        store.create_session(session_id, "Int Session").await.unwrap();
+
+        let embedding = vec![0.1f32, 0.2, 0.3];
+
+        let id1 = store.add_interaction(
+            session_id,
+            Some("/proj/A"),
+            "Explaining how Rust traits work",
+            Some("meta1"),
+            Some(&embedding),
+        ).await.unwrap();
+
+        let id2 = store.add_interaction(
+            session_id,
+            Some("/proj/B"),
+            "Configuring a web server",
+            None,
+            None,
+        ).await.unwrap();
+
+        // get recent
+        let recent_a = store.get_recent_interactions_by_path("/proj/A", 10).await.unwrap();
+        assert_eq!(recent_a.len(), 1);
+        assert_eq!(recent_a[0].id, id1);
+
+        // touch
+        store.touch_interaction(id2).await.unwrap();
+
+        // fts search
+        let results = store.search_interactions("Rust", Some("/proj/A"), 10).await.unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].content, "Explaining how Rust traits work");
+
+        // embeddings
+        let embeddings = store.get_all_embeddings_for_session(session_id).await.unwrap();
+        assert_eq!(embeddings.len(), 1);
+        assert_eq!(embeddings[0].id, id1);
+        
+        let parsed = Interaction::parse_embedding(embeddings[0].embedding.clone()).unwrap();
+        assert_eq!(parsed, embedding);
+    }
+
+    #[tokio::test]
+    async fn test_skill_operations_and_search() {
+        let db = Db::new_in_memory().await.unwrap();
+        let store = Store::new(db.pool());
+
+        let skill1 = SkillRecord {
+            name: "RustExpert".to_string(),
+            description: "Helps with Rust".to_string(),
+            triggers: "rust, cargo".to_string(),
+            content: "You are a Rust expert.".to_string(),
+            pinned: true,
+            updated_at: None,
+        };
+
+        let skill2 = SkillRecord {
+            name: "PythonExpert".to_string(),
+            description: "Helps with Python".to_string(),
+            triggers: "python, pip".to_string(),
+            content: "You are a Python expert.".to_string(),
+            pinned: false,
+            updated_at: None,
+        };
+
+        // Sync (Insert)
+        store.sync_skills(&[skill1.clone(), skill2.clone()]).await.unwrap();
+
+        // Also do a direct query to see if it's in the FTS table
+        let raw_fts: Vec<(i64, String, String)> = sqlx::query_as("SELECT rowid, name, content FROM skills_fts").fetch_all(store.pool).await.unwrap();
+        println!("RAW FTS BEFORE SEARCH: {:?}", raw_fts);
+        
+        let match_test: Vec<(i64,)> = sqlx::query_as("SELECT rowid FROM skills_fts WHERE skills_fts MATCH 'Rust'").fetch_all(store.pool).await.unwrap();
+        println!("MATCH TEST FOR 'Rust': {:?}", match_test);
+
+        let raw_skills: Vec<(String, String)> = sqlx::query_as("SELECT name, content FROM skills").fetch_all(store.pool).await.unwrap();
+        println!("RAW SKILLS BEFORE SEARCH: {:?}", raw_skills);
+
+        // Search
+        let results = store.search_skills("Rust", 10).await.unwrap();
+        println!("SEARCH RESULTS: {:?}", results);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].name, "RustExpert");
+
+        // Sync (Update and Delete)
+        let skill1_updated = SkillRecord {
+            content: "Updated Rust expert content.".to_string(),
+            ..skill1
+        };
+
+        store.sync_skills(&[skill1_updated.clone()]).await.unwrap();
+
+        let all_skills = store.search_skills("expert", 10).await.unwrap();
+        println!("ALL SKILLS AFTER UPDATE: {:?}", all_skills);
+        
+        // Also do a direct query to see if it's in the FTS table
+        let raw_fts: Vec<(i64, String, String)> = sqlx::query_as("SELECT rowid, name, content FROM skills_fts").fetch_all(store.pool).await.unwrap();
+        println!("RAW FTS: {:?}", raw_fts);
+
+        assert_eq!(all_skills.len(), 1);
+        assert_eq!(all_skills[0].name, "RustExpert");
+        assert_eq!(all_skills[0].content, "Updated Rust expert content.");
     }
 }
