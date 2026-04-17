@@ -80,13 +80,13 @@ pub struct TerminalPaneComponent {
     claw_popover: TerminalOverlay,
     claw_indicator: ClawIndicator,
 
-    pending_proactive_diagnosis: PendingDiagnosis,
+    pending_sleep_diagnosis: PendingDiagnosis,
     claw_sender: async_channel::Sender<boxxy_claw::engine::ClawMessage>,
     pub claw_message_list: gtk::ListView,
 
-    is_claw_active: Rc<Cell<bool>>,
-    is_proactive: Rc<Cell<bool>>,
-    is_pinned: Rc<Cell<bool>>,
+    pub is_claw_active: Rc<Cell<bool>>,
+    pub session_status: Rc<RefCell<boxxy_claw::engine::AgentStatus>>,
+    pub is_pinned: Rc<Cell<bool>>,
     is_web_search: Rc<Cell<bool>>,
     agent_name: Rc<RefCell<String>>,
     msg_bar: Rc<MsgBarComponent>,
@@ -151,7 +151,7 @@ impl TerminalPaneComponent {
         let (claw_message_list, claw_list_store) = boxxy_claw::ui::create_claw_message_list();
 
         let is_claw_active = Rc::new(Cell::new(false));
-        let is_proactive = Rc::new(Cell::new(false));
+        let session_status = Rc::new(RefCell::new(boxxy_claw::engine::AgentStatus::Off));
         let is_pinned = Rc::new(Cell::new(false));
         let is_web_search = Rc::new(Cell::new(settings.web_search_on_by_default));
         let agent_name = Rc::new(RefCell::new(String::new()));
@@ -161,13 +161,13 @@ impl TerminalPaneComponent {
         let (msg_bar, inner) = {
             let tx_msg = claw_sender.clone();
             let tx_claw_toggle = claw_sender.clone();
-            let tx_proactive_toggle = claw_sender.clone();
+            let tx_sleep_toggle = claw_sender.clone();
             let cb_msg = callback.clone();
             let id_msg = id.clone();
             let cb_toggle = callback.clone();
             let id_toggle = id.clone();
-            let cb_proactive = callback.clone();
-            let id_proactive = id.clone();
+            let cb_sleep = callback.clone();
+            let id_sleep = id.clone();
 
             // We need a weak ref for the msg_bar callbacks, but inner isn't created yet.
             // We'll use a RefCell<Option<Weak<RefCell<PaneInner>>>> that we fill later.
@@ -176,32 +176,32 @@ impl TerminalPaneComponent {
             let inner_weak_for_msg = inner_weak_ref.clone();
             let inner_weak_for_cancel = inner_weak_ref.clone();
             let inner_weak_for_active = inner_weak_ref.clone();
-            let inner_weak_for_proactive = inner_weak_ref.clone();
+            let inner_weak_for_sleep = inner_weak_ref.clone();
             let inner_weak_for_pin = inner_weak_ref.clone();
             let inner_weak_for_web_search = inner_weak_ref.clone();
 
             let is_claw_active_for_msg = is_claw_active.clone();
-            let is_proactive_for_msg = is_proactive.clone();
+            let session_status_for_msg = session_status.clone();
             let is_pinned_for_msg = is_pinned.clone();
             let is_web_search_for_msg = is_web_search.clone();
 
             let is_claw_active_for_active = is_claw_active.clone();
-            let is_proactive_for_active = is_proactive.clone();
+            let session_status_for_active = session_status.clone();
             let is_pinned_for_active = is_pinned.clone();
             let is_web_search_for_active = is_web_search.clone();
 
-            let is_claw_active_for_proactive = is_claw_active.clone();
-            let is_proactive_for_proactive = is_proactive.clone();
-            let is_pinned_for_proactive = is_pinned.clone();
-            let is_web_search_for_proactive = is_web_search.clone();
+            let is_claw_active_for_sleep = is_claw_active.clone();
+            let session_status_for_sleep = session_status.clone();
+            let is_pinned_for_sleep = is_pinned.clone();
+            let is_web_search_for_sleep = is_web_search.clone();
 
             let is_claw_active_for_pin = is_claw_active.clone();
-            let is_proactive_for_pin = is_proactive.clone();
+            let session_status_for_pin = session_status.clone();
             let is_pinned_for_pin = is_pinned.clone();
             let is_web_search_for_pin = is_web_search.clone();
 
             let is_claw_active_for_web_search = is_claw_active.clone();
-            let is_proactive_for_web_search = is_proactive.clone();
+            let session_status_for_web_search = session_status.clone();
             let is_pinned_for_web_search = is_pinned.clone();
             let is_web_search_for_web_search = is_web_search.clone();
 
@@ -224,8 +224,7 @@ impl TerminalPaneComponent {
                                 ind.set_visible(true);
                             }
                             inner_arc.borrow().msg_bar.update_ui(
-                                true,
-                                is_proactive_for_msg.get(),
+                                session_status_for_msg.borrow().clone(),
                                 is_pinned_for_msg.get(),
                                 is_web_search_for_msg.get(),
                             );
@@ -233,7 +232,7 @@ impl TerminalPaneComponent {
                             cb_msg(PaneOutput::ClawStateChanged(
                                 id_msg.clone(),
                                 true,
-                                is_proactive_for_msg.get(),
+                                matches!(*session_status_for_msg.borrow(), boxxy_claw::engine::AgentStatus::Sleep),
                             ));
                             let tx = tx_msg.clone();
                             glib::spawn_future_local(async move {
@@ -289,9 +288,17 @@ impl TerminalPaneComponent {
                             .as_ref()
                             .and_then(|w| w.upgrade())
                         {
+                            let mut status = session_status_for_active.borrow().clone();
+                            if active && status == boxxy_claw::engine::AgentStatus::Off {
+                                status = boxxy_claw::engine::AgentStatus::Waiting;
+                                *session_status_for_active.borrow_mut() = status.clone();
+                            } else if !active {
+                                status = boxxy_claw::engine::AgentStatus::Off;
+                                *session_status_for_active.borrow_mut() = status.clone();
+                            }
+                            
                             inner_arc.borrow().msg_bar.update_ui(
-                                active,
-                                is_proactive_for_active.get(),
+                                status.clone(),
                                 is_pinned_for_active.get(),
                                 is_web_search_for_active.get(),
                             );
@@ -302,7 +309,7 @@ impl TerminalPaneComponent {
                         cb_toggle(PaneOutput::ClawStateChanged(
                             id_toggle.clone(),
                             active,
-                            is_proactive_for_active.get(),
+                            matches!(*session_status_for_active.borrow(), boxxy_claw::engine::AgentStatus::Sleep),
                         ));
                         let tx = tx_claw_toggle.clone();
                         if active {
@@ -316,35 +323,36 @@ impl TerminalPaneComponent {
                         }
                     }
                 },
-                move |proactive| {
-                    if is_proactive_for_proactive.get() != proactive {
-                        is_proactive_for_proactive.set(proactive);
-                        if let Some(inner_arc) = inner_weak_for_proactive
+                move |sleep| {
+                    let currently_sleeping = matches!(*session_status_for_sleep.borrow(), boxxy_claw::engine::AgentStatus::Sleep);
+                    if currently_sleeping != sleep {
+                        let new_status = if sleep {
+                            boxxy_claw::engine::AgentStatus::Sleep
+                        } else {
+                            boxxy_claw::engine::AgentStatus::Waiting
+                        };
+                        *session_status_for_sleep.borrow_mut() = new_status.clone();
+                        
+                        if let Some(inner_arc) = inner_weak_for_sleep
                             .borrow()
                             .as_ref()
                             .and_then(|w| w.upgrade())
                         {
                             inner_arc.borrow().msg_bar.update_ui(
-                                is_claw_active_for_proactive.get(),
-                                proactive,
-                                is_pinned_for_proactive.get(),
-                                is_web_search_for_proactive.get(),
+                                new_status,
+                                is_pinned_for_sleep.get(),
+                                is_web_search_for_sleep.get(),
                             );
                         }
-                        cb_proactive(PaneOutput::ClawStateChanged(
-                            id_proactive.clone(),
-                            is_claw_active_for_proactive.get(),
-                            proactive,
+                        cb_sleep(PaneOutput::ClawStateChanged(
+                            id_sleep.clone(),
+                            is_claw_active_for_sleep.get(),
+                            sleep,
                         ));
-                        let tx = tx_proactive_toggle.clone();
-                        let mode = if proactive {
-                            boxxy_preferences::config::ClawAutoDiagnosisMode::Proactive
-                        } else {
-                            boxxy_preferences::config::ClawAutoDiagnosisMode::Lazy
-                        };
+                        let tx = tx_sleep_toggle.clone();
                         glib::spawn_future_local(async move {
                             let _ = tx
-                                .send(boxxy_claw::engine::ClawMessage::UpdateDiagnosisMode(mode))
+                                .send(boxxy_claw::engine::ClawMessage::SleepToggle(sleep))
                                 .await;
                         });
                     }
@@ -358,8 +366,7 @@ impl TerminalPaneComponent {
                             .and_then(|w| w.upgrade())
                         {
                             inner_arc.borrow().msg_bar.update_ui(
-                                is_claw_active_for_pin.get(),
-                                is_proactive_for_pin.get(),
+                                session_status_for_pin.borrow().clone(),
                                 pinned,
                                 is_web_search_for_pin.get(),
                             );
@@ -381,8 +388,7 @@ impl TerminalPaneComponent {
                             .and_then(|w| w.upgrade())
                         {
                             inner_arc.borrow().msg_bar.update_ui(
-                                is_claw_active_for_web_search.get(),
-                                is_proactive_for_web_search.get(),
+                                session_status_for_web_search.borrow().clone(),
                                 is_pinned_for_web_search.get(),
                                 enabled,
                             );
@@ -482,7 +488,7 @@ impl TerminalPaneComponent {
         );
         widget.add_overlay(&msg_bar.widget);
 
-        let (claw_popover, pending_proactive_diagnosis) = claw::setup_claw(
+        let (claw_popover, pending_sleep_diagnosis) = claw::setup_claw(
             &widget,
             &inner,
             id.clone(),
@@ -494,6 +500,7 @@ impl TerminalPaneComponent {
             total_tokens.clone(),
             is_pinned.clone(),
             is_web_search.clone(),
+            session_status.clone(),
             agent_name.clone(),
             &claw_indicator,
         );
@@ -516,15 +523,14 @@ impl TerminalPaneComponent {
         let msg_bar_sc = msg_bar.clone();
         let terminal_sc = terminal.clone();
         let is_claw_active_sc = is_claw_active.clone();
-        let is_proactive_sc = is_proactive.clone();
+        let session_status_sc = session_status.clone();
         let is_pinned_sc = is_pinned.clone();
         let is_web_search_sc = is_web_search.clone();
         let action = gtk::CallbackAction::new(move |_, _| {
             if let Some(rect) = terminal_sc.get_cursor_rect() {
                 terminal_sc.set_focusable(false);
                 msg_bar_sc.update_ui(
-                    is_claw_active_sc.get(),
-                    is_proactive_sc.get(),
+                    session_status_sc.borrow().clone(),
                     is_pinned_sc.get(),
                     is_web_search_sc.get(),
                 );
@@ -551,11 +557,11 @@ impl TerminalPaneComponent {
             _search_bar: search_bar_rc,
             claw_popover,
             claw_indicator,
-            pending_proactive_diagnosis,
+            pending_sleep_diagnosis,
             claw_sender,
             claw_message_list,
             is_claw_active,
-            is_proactive,
+            session_status,
             is_pinned,
             is_web_search,
             agent_name,
@@ -625,7 +631,7 @@ impl TerminalPaneComponent {
     }
 
     pub fn show_diagnosis_ready(&self, diagnosis: String, proposal: crate::TerminalProposal) {
-        *self.pending_proactive_diagnosis.borrow_mut() = Some((diagnosis, proposal));
+        *self.pending_sleep_diagnosis.borrow_mut() = Some((diagnosis, proposal));
         self.claw_indicator.show_diagnosis_ready();
     }
 
@@ -873,11 +879,13 @@ impl TerminalPaneComponent {
         self.is_claw_active.get()
     }
 
-    pub fn is_proactive(&self) -> bool {
-        self.is_proactive.get()
+    pub fn is_sleep(&self) -> bool {
+        matches!(*self.session_status.borrow(), boxxy_claw::engine::AgentStatus::Sleep)
     }
 
     pub fn set_session_status(&self, status: boxxy_claw::engine::AgentStatus) {
+        *self.session_status.borrow_mut() = status.clone();
+        
         self.msg_bar.set_status(status.clone());
         self.claw_indicator.set_mode(status);
     }
@@ -900,10 +908,16 @@ impl TerminalPaneComponent {
         // Update badge visibility
         self.claw_indicator.set_visible(active);
 
+        let status = if active {
+            boxxy_claw::engine::AgentStatus::Waiting
+        } else {
+            boxxy_claw::engine::AgentStatus::Off
+        };
+        *self.session_status.borrow_mut() = status.clone();
+
         // Sync MsgBar toggle state
         self.msg_bar.update_ui(
-            active,
-            self.is_proactive.get(),
+            status,
             self.is_pinned.get(),
             self.is_web_search.get(),
         );
@@ -919,24 +933,6 @@ impl TerminalPaneComponent {
                 let _ = tx.send(boxxy_claw::engine::ClawMessage::Deactivate).await;
             });
         }
-    }
-
-    pub fn update_diagnosis_mode(&self, mode: &boxxy_preferences::config::ClawAutoDiagnosisMode) {
-        let proactive = matches!(
-            mode,
-            boxxy_preferences::config::ClawAutoDiagnosisMode::Proactive
-        );
-        self.is_proactive.set(proactive);
-        self.msg_bar.update_ui(
-            self.is_claw_active.get(),
-            proactive,
-            self.is_pinned.get(),
-            self.is_web_search.get(),
-        );
-
-        let _ = self
-            .claw_sender
-            .send_blocking(boxxy_claw::engine::ClawMessage::UpdateDiagnosisMode(*mode));
     }
 
     pub fn reload_claw(&self) {
@@ -1014,8 +1010,7 @@ impl TerminalPaneComponent {
                         .claw_sender
                         .send_blocking(boxxy_claw::engine::ClawMessage::ToggleWebSearch(false));
                     self.msg_bar.update_ui(
-                        self.is_claw_active.get(),
-                        self.is_proactive.get(),
+                        self.session_status.borrow().clone(),
                         self.is_pinned.get(),
                         false,
                     );

@@ -99,22 +99,11 @@ pub fn new_tab_with_intent(inner: &mut AppWindowInner, intent: Option<String>) {
     let palette = parsed
         .as_ref()
         .map(|p| if is_dark { p.dark } else { p.light });
+controller.update_settings(inner.current_settings.clone(), palette);
+controller.set_claw_active(inner.current_settings.claw_on_by_default);
 
-    controller.update_settings(inner.current_settings.clone(), palette);
-    controller.set_claw_active(inner.current_settings.claw_on_by_default);
-
-    let mode = if inner.current_settings.claw_auto_diagnosis_mode
-        == boxxy_preferences::config::ClawAutoDiagnosisMode::Proactive
-    {
-        boxxy_preferences::config::ClawAutoDiagnosisMode::Proactive
-    } else {
-        boxxy_preferences::config::ClawAutoDiagnosisMode::Lazy
-    };
-    controller.update_diagnosis_mode(&mode);
-
-    let widget = controller.widget().clone();
-
-    let page = inner.tab_view.append(&widget);
+let widget = controller.widget();
+let page = inner.tab_view.append(widget);
     page.set_title("Terminal");
 
     // Auto-coloring
@@ -422,12 +411,7 @@ pub fn focus_active_terminal(inner: &mut AppWindowInner) {
                 page.set_indicator_icon(None::<&gio::Icon>);
             }
 
-            let tab_is_proactive = tc.controller.is_proactive();
-            inner.claw_proactive = tab_is_proactive;
-
-            inner
-                .claw
-                .update_ui(inner.claw_active, inner.claw_proactive);
+            let tab_is_sleep = tc.controller.is_sleep();
 
             inner.claw.set_history_widget(
                 &tc.controller.claw_history_widget(),

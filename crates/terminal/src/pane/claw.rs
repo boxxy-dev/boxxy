@@ -19,6 +19,7 @@ pub(super) fn setup_claw(
     total_tokens: Rc<Cell<u64>>,
     is_pinned: Rc<Cell<bool>>,
     is_web_search: Rc<Cell<bool>>,
+    session_status: Rc<RefCell<boxxy_claw::engine::AgentStatus>>,
     agent_name: Rc<RefCell<String>>,
     claw_indicator: &ClawIndicator,
 ) -> (TerminalOverlay, PendingDiagnosis) {
@@ -186,7 +187,12 @@ pub(super) fn setup_claw(
         while let Ok(event) = claw_rx.recv().await {
             match &event {
                 boxxy_claw::engine::ClawEngineEvent::SessionStateChanged { status, .. } => {
+                    *session_status.borrow_mut() = status.clone();
                     inner_clone.borrow().msg_bar.set_status(status.clone());
+                    
+                    if let Some(indicator) = &inner_clone.borrow().claw_indicator {
+                        indicator.set_mode(status.clone());
+                    }
                 }
                 boxxy_claw::engine::ClawEngineEvent::UserMessage { content } => {
                     boxxy_claw::ui::add_user_row(&claw_store_events, id.clone(), content);
@@ -438,9 +444,9 @@ pub(super) fn setup_claw(
                     is_web_search_for_events.set(*web_search_enabled);
                     *agent_name_for_events.borrow_mut() = agent_name.clone();
 
+                    let status = session_status.borrow().clone();
                     inner_clone.borrow().msg_bar.update_ui(
-                        true, // Claw is active if it's sending Identity
-                        inner_clone.borrow().msg_bar.proactive_state.get(),
+                        status,
                         *pinned,
                         *web_search_enabled,
                     );
@@ -448,19 +454,19 @@ pub(super) fn setup_claw(
                 }
                 boxxy_claw::engine::ClawEngineEvent::PinStatusChanged(pinned) => {
                     is_pinned_for_events.set(*pinned);
+                    let status = session_status.borrow().clone();
                     inner_clone.borrow().msg_bar.update_ui(
-                        inner_clone.borrow().msg_bar.claw_state.get(),
-                        inner_clone.borrow().msg_bar.proactive_state.get(),
+                        status,
                         *pinned,
                         inner_clone.borrow().msg_bar.web_search_state.get(),
                     );
                 }
                 boxxy_claw::engine::ClawEngineEvent::WebSearchStatusChanged(enabled) => {
                     is_web_search_for_events.set(*enabled);
+                    let status = session_status.borrow().clone();
                     inner_clone.borrow().msg_bar.update_ui(
-                        inner_clone.borrow().msg_bar.claw_state.get(),
-                        inner_clone.borrow().msg_bar.proactive_state.get(),
-                        inner_clone.borrow().msg_bar.pinned_state.get(),
+                        status,
+                        inner_clone.borrow().msg_bar.pin_state.get(),
                         *enabled,
                     );
                 }

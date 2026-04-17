@@ -56,7 +56,7 @@ pub fn handle_terminal_event(
                     crate::widgets::notification::Notification::new_info(message),
                 ));
             }
-            TerminalEventKind::ClawStateChanged(active, proactive) => {
+            TerminalEventKind::ClawStateChanged(active, sleep) => {
                 let widget = inner.tabs[pos].controller.widget();
                 let page = inner.tab_view.page(widget);
 
@@ -72,10 +72,6 @@ pub fn handle_terminal_event(
 
                 if Some(&page) == inner.tab_view.selected_page().as_ref() {
                     inner.claw_active = active;
-                    inner.claw_proactive = proactive;
-                    inner
-                        .claw
-                        .update_ui(inner.claw_active, inner.claw_proactive);
                 }
             }
             TerminalEventKind::PaneFocused(_) => {
@@ -95,12 +91,6 @@ pub fn handle_terminal_event(
 
                 if Some(&page) == inner.tab_view.selected_page().as_ref() {
                     inner.claw_active = is_claw_active;
-                    let is_proactive = inner.tabs[pos].controller.is_proactive();
-                    inner.claw_proactive = is_proactive;
-
-                    inner
-                        .claw
-                        .update_ui(inner.claw_active, inner.claw_proactive);
 
                     inner.claw.set_history_widget(
                         &inner.tabs[pos].controller.claw_history_widget(),
@@ -155,10 +145,8 @@ pub fn handle_terminal_event(
                             let child = page.child();
                             if inner.tabs[pos].controller.widget() == &child {
                                 let active = inner.tabs[pos].controller.is_claw_active();
-                                let proactive = inner.tabs[pos].controller.is_proactive();
+                                let sleep = inner.tabs[pos].controller.is_sleep();
                                 inner.claw_active = active;
-                                inner.claw_proactive = proactive;
-                                inner.claw.update_ui(active, proactive);
                                 inner.claw.set_history_widget(
                                     &inner.tabs[pos].controller.claw_history_widget(),
                                     &agent_name,

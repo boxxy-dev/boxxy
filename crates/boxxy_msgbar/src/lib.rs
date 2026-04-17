@@ -18,12 +18,12 @@ pub struct MsgBarComponent {
     pub history: Rc<RefCell<history::MsgHistory>>,
     pub claw_toggle: gtk::Button,
     pub claw_image: gtk::Image,
-    pub proactive_toggle: gtk::Button,
+    pub sleep_toggle: gtk::Button,
     pub pin_toggle: gtk::Button,
     pub web_search_toggle: gtk::Button,
     pub claw_state: Rc<Cell<bool>>,
-    pub proactive_state: Rc<Cell<bool>>,
-    pub pinned_state: Rc<Cell<bool>>,
+    pub sleep_state: Rc<Cell<bool>>,
+    pub pin_state: Rc<Cell<bool>>,
     pub web_search_state: Rc<Cell<bool>>,
     _autocomplete: Rc<boxxy_core_widgets::autocomplete::AutocompleteController>,
 }
@@ -40,7 +40,7 @@ impl MsgBarComponent {
         on_submit: F,
         on_cancel: C,
         on_claw_toggle: T1,
-        on_proactive_toggle: T2,
+        on_sleep_toggle: T2,
         on_pin_toggle: T3,
         on_web_search_toggle: T4,
     ) -> Self {
@@ -86,27 +86,27 @@ impl MsgBarComponent {
 
         widget.append(&claw_toggle);
 
-        let proactive_img = gtk::Image::from_icon_name("boxxy-walking2-symbolic");
-        let proactive_toggle = gtk::Button::builder()
-            .child(&proactive_img)
+        let sleep_img = gtk::Image::from_icon_name("boxxy-bedtime-symbolic");
+        let sleep_toggle = gtk::Button::builder()
+            .child(&sleep_img)
             .css_classes(["flat", "image-button"])
-            .tooltip_text("Lazy Diagnosis Mode")
+            .tooltip_text("Sleep Mode (Passive Observer)")
             .margin_start(0)
             .margin_end(0)
             .valign(gtk::Align::Center)
             .can_focus(false)
             .build();
 
-        let proactive_state = Rc::new(Cell::new(false));
-        let proactive_state_clone = proactive_state.clone();
-        let proactive_entry_focus = entry.clone();
-        proactive_toggle.connect_clicked(move |_| {
-            let next = !proactive_state_clone.get();
-            on_proactive_toggle(next);
-            proactive_entry_focus.grab_focus();
+        let sleep_state = Rc::new(Cell::new(false));
+        let sleep_state_clone = sleep_state.clone();
+        let sleep_entry_focus = entry.clone();
+        sleep_toggle.connect_clicked(move |_| {
+            let next = !sleep_state_clone.get();
+            on_sleep_toggle(next);
+            sleep_entry_focus.grab_focus();
         });
 
-        widget.append(&proactive_toggle);
+        widget.append(&sleep_toggle);
 
         let pin_img = gtk::Image::from_icon_name("boxxy-view-pin-symbolic");
         let pin_toggle = gtk::Button::builder()
@@ -119,11 +119,11 @@ impl MsgBarComponent {
             .can_focus(false)
             .build();
 
-        let pinned_state = Rc::new(Cell::new(false));
-        let pinned_state_clone = pinned_state.clone();
+        let pin_state = Rc::new(Cell::new(false));
+        let pin_state_clone = pin_state.clone();
         let pin_entry_focus = entry.clone();
         pin_toggle.connect_clicked(move |_| {
-            let next = !pinned_state_clone.get();
+            let next = !pin_state_clone.get();
             on_pin_toggle(next);
             pin_entry_focus.grab_focus();
         });
@@ -285,36 +285,43 @@ impl MsgBarComponent {
             history,
             claw_toggle,
             claw_image,
-            proactive_toggle,
+            sleep_toggle,
             pin_toggle,
             web_search_toggle,
             claw_state,
-            proactive_state,
-            pinned_state,
+            sleep_state,
+            pin_state,
             web_search_state,
             _autocomplete: autocomplete_ctrl,
         }
     }
 
     pub fn set_status(&self, status: AgentStatus) {
-        if !self.claw_state.get() {
-            self.claw_toggle.remove_css_class("accent");
-            self.claw_toggle.remove_css_class("warning");
-            return;
+        // Reset everything
+        for cls in ["status-active", "status-sleep", "status-error", "accent", "warning"] {
+            self.claw_toggle.remove_css_class(cls);
+            self.sleep_toggle.remove_css_class(cls);
         }
 
         match status {
-            AgentStatus::Active | AgentStatus::Thinking | AgentStatus::Locking { .. } => {
-                self.claw_toggle.add_css_class("accent");
-                self.claw_toggle.remove_css_class("warning");
+            AgentStatus::Waiting | AgentStatus::Working | AgentStatus::Locking { .. } => {
+                self.claw_toggle.add_css_class("status-active");
+                self.sleep_toggle.set_tooltip_text(Some("Sleep Mode (Passive Observer)"));
+                self.sleep_state.set(false);
             }
-            AgentStatus::Suspended => {
-                self.claw_toggle.remove_css_class("accent");
-                self.claw_toggle.add_css_class("warning");
+            AgentStatus::Sleep => {
+                // If sleeping, the claw icon gets the sleep color (yellow),
+                // and the sleep icon gets the active color (accent/green).
+                self.claw_toggle.add_css_class("status-sleep");
+                self.sleep_toggle.add_css_class("status-active");
+                self.sleep_toggle.set_tooltip_text(Some("Wake up (Resume from Sleep)"));
+                self.sleep_state.set(true);
             }
-            AgentStatus::Idle => {
-                self.claw_toggle.remove_css_class("accent");
-                self.claw_toggle.remove_css_class("warning");
+            AgentStatus::Faulted { .. } => {
+                self.claw_toggle.add_css_class("status-error");
+            }
+            AgentStatus::Off => {
+                self.sleep_state.set(false);
             }
         }
     }
@@ -337,52 +344,28 @@ impl MsgBarComponent {
         self.history.borrow_mut().reset();
     }
 
-    pub fn update_ui(&self, active: bool, proactive: bool, pinned: bool, web_search: bool) {
+    pub fn update_ui(&self, status: AgentStatus, pinned: bool, web_search: bool) {
+        let active = status != AgentStatus::Off;
         self.claw_state.set(active);
-        self.proactive_state.set(proactive);
-        self.pinned_state.set(pinned);
+        self.set_status(status);
+        
+        self.pin_state.set(pinned);
         self.web_search_state.set(web_search);
 
-        self.claw_image
-            .set_icon_name(Some("boxxy-boxxyclaw-symbolic"));
-
-        if active {
-            self.claw_toggle.add_css_class("accent");
-        } else {
-            self.claw_toggle.remove_css_class("accent");
-            self.claw_toggle.remove_css_class("warning");
-            self.claw_toggle
-                .set_tooltip_text(Some("Toggle Claw for this pane"));
-        }
-
-        if proactive {
-            self.proactive_toggle
-                .set_icon_name("boxxy-running-symbolic");
-            self.proactive_toggle
-                .set_tooltip_text(Some("Proactive Diagnosis Mode"));
-            self.proactive_toggle.add_css_class("accent");
-        } else {
-            self.proactive_toggle
-                .set_icon_name("boxxy-walking2-symbolic");
-            self.proactive_toggle
-                .set_tooltip_text(Some("Lazy Diagnosis Mode"));
-            self.proactive_toggle.remove_css_class("accent");
-        }
-
         if pinned {
-            self.pin_toggle.add_css_class("accent");
+            self.pin_toggle.add_css_class("status-active");
             self.pin_toggle.set_tooltip_text(Some("Unpin this session"));
         } else {
-            self.pin_toggle.remove_css_class("accent");
+            self.pin_toggle.remove_css_class("status-active");
             self.pin_toggle.set_tooltip_text(Some("Pin this session"));
         }
 
         if web_search {
-            self.web_search_toggle.add_css_class("accent");
+            self.web_search_toggle.add_css_class("status-active");
             self.web_search_toggle
                 .set_tooltip_text(Some("Disable Web Search"));
         } else {
-            self.web_search_toggle.remove_css_class("accent");
+            self.web_search_toggle.remove_css_class("status-active");
             self.web_search_toggle
                 .set_tooltip_text(Some("Enable Web Search"));
         }

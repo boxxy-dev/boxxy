@@ -56,24 +56,6 @@ impl fmt::Display for ImagePreviewTrigger {
     }
 }
 
-// --- Claw Auto-Diagnosis Mode ---
-#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Default)]
-#[serde(rename_all = "lowercase")]
-pub enum ClawAutoDiagnosisMode {
-    #[default]
-    Proactive,
-    Lazy,
-}
-
-impl fmt::Display for ClawAutoDiagnosisMode {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            ClawAutoDiagnosisMode::Proactive => write!(f, "Proactive (Background Analysis)"),
-            ClawAutoDiagnosisMode::Lazy => write!(f, "Lazy (On Demand)"),
-        }
-    }
-}
-
 // --- Color Scheme ---
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Default)]
 #[serde(rename_all = "lowercase")]
@@ -153,7 +135,6 @@ pub struct Settings {
     pub claw_on_by_default: bool,
     pub invert_scroll: bool,
 
-    pub claw_auto_diagnosis_mode: ClawAutoDiagnosisMode,
     pub hide_agent_badge: bool,
     pub web_search_on_by_default: bool,
     pub enable_file_tools: bool,
@@ -207,7 +188,6 @@ impl Default for Settings {
             memory_model: None,
             enable_auto_dreaming: true,
             invert_scroll: true,
-            claw_auto_diagnosis_mode: ClawAutoDiagnosisMode::Proactive,
             hide_agent_badge: false,
             claw_on_by_default: false,
             web_search_on_by_default: true,

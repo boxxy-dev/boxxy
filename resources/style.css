@@ -449,6 +449,24 @@ boxxyterminalwidget {
   outline: none;
 }
 
+/* Status Indicators for MsgBar Buttons */
+.boxxy-msgbar button.status-active image {
+  color: @accent_bg_color;
+}
+
+.boxxy-msgbar button.status-sleep image {
+  color: @warning_bg_color;
+}
+
+.boxxy-msgbar button.status-error image {
+  color: @error_bg_color;
+}
+
+/* For Pin and WebSearch which use 'accent' directly in code currently */
+.boxxy-msgbar button.accent image {
+  color: @accent_bg_color;
+}
+
 /* --- Autocomplete Popover --- */
 .autocomplete-popover {
   border-radius: 8px;

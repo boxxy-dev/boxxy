@@ -1,8 +1,13 @@
 pub mod agent;
 pub mod context;
 pub mod dispatcher;
+pub mod fsm;
 pub mod session;
+pub mod summarization;
 pub mod tools;
+pub mod turn;
+
+pub use fsm::state::*;
 
 use boxxy_db::Db;
 use gtk4::glib;
@@ -36,6 +41,17 @@ pub fn persist_visual_event(
 /// Messages sent from the GTK UI down to the Claw Engine
 #[derive(Debug)]
 pub enum ClawMessage {
+    /// Request a state transition via the FSM.
+    Transition(TransitionRequest),
+    /// Fired when a state watchdog expires.
+    WatchdogTimeout {
+        task_id: uuid::Uuid,
+        state: AgentStatus,
+    },
+    /// Fired when the Dreamer finishes summarizing a Hard Wake delta.
+    WakeSummaryComplete {
+        result: Result<String, String>,
+    },
     /// A command finished in the terminal. Used for auto-diagnosis and tracking tool executions.
     CommandFinished {
         exit_code: i32,
@@ -80,8 +96,8 @@ pub enum ClawMessage {
     Evict,
     /// The engine should reload its state (database, skills)
     Reload,
-    /// Update diagnosis mode dynamically.
-    UpdateDiagnosisMode(boxxy_preferences::config::ClawAutoDiagnosisMode),
+    /// Manually trigger Sleep mode or Wake up.
+    SleepToggle(bool),
     /// Update terminal suggestions dynamically.
     /// A task delegated from another agent.
     DelegatedTask {
@@ -182,6 +198,7 @@ mod imp {
                             result_json.to_value()
                         }
                         PersistentClawRow::ToolCall { result, .. } => result.to_value(),
+                        PersistentClawRow::Command { command, .. } => command.to_value(),
                     }
                 }
                 _ => unimplemented!(),
@@ -260,6 +277,10 @@ pub enum PersistentClawRow {
         tool_name: String,
         result: String,
         usage: Option<rig::completion::Usage>,
+    },
+    Command {
+        command: String,
+        exit_code: i32,
     },
 }
 
@@ -506,13 +527,4 @@ pub enum ClawEngineEvent {
         title: String,
         message: String,
     },
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
-pub enum AgentStatus {
-    Active,
-    Thinking,
-    Suspended, // Sleeping/Awaiting
-    Locking { resource: String },
-    Idle,
 }

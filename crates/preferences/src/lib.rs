@@ -12,6 +12,6 @@ pub mod shortcuts;
 pub mod component;
 pub use component::PreferencesComponent;
 pub use config::{
-    AppState, CLAW_HEIGHT_BOUNDS, CLAW_WIDTH_BOUNDS, ClawAutoDiagnosisMode, CursorShape,
+    AppState, CLAW_HEIGHT_BOUNDS, CLAW_WIDTH_BOUNDS, CursorShape,
     ImagePreviewTrigger, SETTINGS_EVENT_BUS, Settings,
 };

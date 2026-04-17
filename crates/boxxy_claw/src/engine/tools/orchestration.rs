@@ -84,12 +84,12 @@ impl Tool for SubscribeToPaneTool {
         // Auto-suspend when subscribing
         {
             let mut state = self.state.lock().await;
-            state.is_suspended = true;
+            state.status = AgentStatus::Sleep;
             let agent_name = state.agent_name.clone();
 
             let _ = self.tx_ui.send(ClawEngineEvent::SessionStateChanged {
                 agent_name,
-                status: AgentStatus::Suspended,
+                status: AgentStatus::Sleep,
             }).await;
         }
 
@@ -214,7 +214,7 @@ impl Tool for ReleaseLockTool {
 
         let _ = self.tx_ui.send(ClawEngineEvent::SessionStateChanged {
             agent_name,
-            status: AgentStatus::Active,
+            status: AgentStatus::Waiting,
         }).await;
 
         let res = LockOutput { success: true, message: format!("Released lock on '{}'.", args.resource) };
@@ -323,7 +323,7 @@ impl Tool for AwaitTasksTool {
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
         let mut state = self.state.lock().await;
-        state.is_suspended = true;
+        state.status = AgentStatus::Sleep;
         let agent_name = state.agent_name.clone();
 
         for id_str in args.task_ids.iter() {
@@ -331,12 +331,12 @@ impl Tool for AwaitTasksTool {
                 state.awaiting_tasks.push(id);
             }
         }
+        drop(state);
 
         let _ = self.tx_ui.send(ClawEngineEvent::SessionStateChanged {
             agent_name,
-            status: AgentStatus::Suspended,
-        }).await;
-        
+            status: AgentStatus::Sleep,
+        }).await;        
         let res = format!("Suspending to await {} tasks. You will be woken up once they complete.", args.task_ids.len());
         self.approval.report_tool_result(Self::NAME.to_string(), res.clone()).await;
         Ok(res)

@@ -32,4 +32,5 @@ CRITICAL RULES:
     - When performing complex parallel tasks, PREFER `delegate_task_async` + `await_tasks` over manual spawning.
     - If multiple agents are working on the same files, ALWAYS use `acquire_lock(path)` to prevent collisions.
     - Use `subscribe_to_pane` if you need to wait for a long-running process in another pane to finish or hit an error.
+11. SLEEP MODE: If the user explicitly asks you to "go to sleep", "sleep", "stop", or "go away", you MUST immediately use the `set_agent_state(state="sleep")` tool. Do not just say you are doing it in text.
 

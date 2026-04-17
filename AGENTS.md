@@ -98,16 +98,17 @@ Provides a structured library of high-level tools for Boxxy agents, completely d
 Settings management using an `AdwNavigationSplitView` architecture. UI is defined in `resources/ui/preferences.ui` and supports real-time search filtering. Implements the **"Master Switch vs Local Toggle"** design pattern (e.g., for Web Search), separating global capability authorization from per-pane activation.
 
 ### 10. `boxxy-msgbar` (Library Crate)
-Provides the `MsgBarComponent`, an inline GTK input overlay for interacting with Boxxy-Claw. Triggered globally via `Ctrl+/`, it anchors a native text entry precisely over the active terminal cursor. It features a robust GTK-based autocompletion system (`AutocompleteController`) for `@agent` names and seamlessly inherits the active terminal theme's background and foreground colors. It includes native toggle buttons for **Claw Mode**, **Proactive Diagnosis**, **Session Pinning**, and **Web Search**.
+Provides the `MsgBarComponent`, an inline GTK input overlay for interacting with Boxxy-Claw. Triggered globally via `Ctrl+/`, it anchors a native text entry precisely over the active terminal cursor. It features a robust GTK-based autocompletion system (`AutocompleteController`) for `@agent` names and seamlessly inherits the active terminal theme's background and foreground colors. It includes native toggle buttons for **Claw Mode**, **Sleep Mode**, **Session Pinning**, and **Web Search**.
 
 It includes a **Unified Status Indicator**:
 - The bot icon on the far left serves as both the **Claw Toggle** and a **Real-time Status Monitor**. 
 - It dynamically reflects the agent's current mode:
-    - 🦖 **Active**: Awake and ready.
-    - 🧠 **Thinking**: Processing a request or running a tool.
-    - 💤 **Suspended (Sleep)**: Waiting for a peer event or sub-task completion.
-    - 🔒 **Locking**: Holding a global resource lock.
-    - ⚪ **Idle**: Claw is deactivated for this pane.
+    - 🦖 **Waiting**: Awake, full context, and ready to respond to errors or queries.
+    - 🧠 **Working**: Busy processing an LLM turn or executing a tool.
+    - 💤 **Sleep**: Suspended. Acting as a passive background observer.
+    - 🔒 **Locking**: Holding a global resource lock via an active Lease.
+    - ⚠️ **Faulted**: Stuck in an unrecoverable timeout or crash state.
+    - ⚪ **Off**: Claw is deactivated for this pane.
 
 ### 11. `boxxy-model-selection` (Library Crate)
 Data-driven model configuration UI. Uses a registry pattern to dynamically build selection dialogs and dropdowns based on registered `AiProvider` traits. Decouples AI capability discovery from the main application window.

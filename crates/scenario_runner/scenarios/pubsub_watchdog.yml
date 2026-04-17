@@ -12,17 +12,17 @@ steps:
   
   - action: "wait_for_status"
     pane: "watcher"
-    status: "Suspended"
+    status: "Sleep"
     timeout_sec: 15
 
   - action: "inject_terminal_output"
     pane: "server"
     output: "Starting service...\n[ERROR] Database connection failed.\n"
 
-  - action: "wait_for_status"
+  - action: "wait_for_tool_call"
     pane: "watcher"
-    status: "Active"
-    timeout_sec: 15
+    tool_name: "sys_shell_exec"
+    timeout_sec: 25
 
 assertions:
   - type: "file_contains"

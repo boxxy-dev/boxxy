@@ -11,6 +11,7 @@ pub struct PaneState {
     pub last_command: Option<String>,
     pub last_snapshot: Option<String>,
     pub status: Option<String>,
+    pub context_quality: Option<crate::engine::ContextQuality>,
     pub tx: Option<async_channel::Sender<crate::engine::ClawMessage>>,
     pub active_skills: Vec<String>,
 }
@@ -202,6 +203,7 @@ impl WorkspaceRegistry {
             last_command: None,
             last_snapshot: None,
             status: None,
+            context_quality: None,
             tx: None,
             active_skills: Vec::new(),
         });
@@ -218,6 +220,14 @@ impl WorkspaceRegistry {
             .values()
             .find(|p| p.name.to_lowercase() == name_lower)
             .and_then(|p| p.tx.clone())
+    }
+
+    pub async fn get_pane_tx_by_id(
+        &self,
+        id: &str,
+    ) -> Option<async_channel::Sender<crate::engine::ClawMessage>> {
+        let panes = self.panes.read().await;
+        panes.get(id).and_then(|p| p.tx.clone())
     }
 
     pub async fn update_pane_state(
@@ -238,6 +248,7 @@ impl WorkspaceRegistry {
             last_command: None,
             last_snapshot: None,
             status: None,
+            context_quality: None,
             tx: None,
             active_skills: Vec::new(),
         });
@@ -319,6 +330,13 @@ impl WorkspaceRegistry {
         }
     }
 
+    pub async fn set_pane_quality(&self, id: String, quality: Option<crate::engine::ContextQuality>) {
+        let mut panes = self.panes.write().await;
+        if let Some(pane) = panes.get_mut(&id) {
+            pane.context_quality = quality;
+        }
+    }
+
     pub async fn get_pane_snapshot(&self, id: String) -> Option<String> {
         let panes = self.panes.read().await;
         panes.get(&id).and_then(|p| p.last_snapshot.clone())
@@ -349,16 +367,40 @@ impl WorkspaceRegistry {
             radar.push_str(
                 "You can read these panes using `read_pane_buffer(agent_name)` or delegate tasks using `delegate_task(agent_name, prompt)`.\n",
             );
-            for peer in peers {
+            
+            let mut sorted_peers = peers.clone();
+            // Simple load balancing signal sort:
+            // 1. Waiting + Full Context (Best)
+            // 2. Sleep + Full Context
+            // 3. Waiting + Degraded
+            // 4. Others (Working, Locking, Faulted)
+            sorted_peers.sort_by_key(|p| {
+                let is_waiting = p.status.as_deref() == Some("Waiting");
+                let is_sleep = p.status.as_deref() == Some("Sleep");
+                let is_full = matches!(p.context_quality, Some(crate::engine::ContextQuality::Full));
+                
+                if is_waiting && is_full { 1 }
+                else if is_sleep && is_full { 2 }
+                else if is_waiting && !is_full { 3 }
+                else if is_sleep && !is_full { 4 }
+                else { 5 }
+            });
+
+            for peer in sorted_peers {
                 let cmd = peer.last_command.as_deref().unwrap_or("idle");
                 let status = peer
                     .status
                     .as_deref()
-                    .map(|s| format!(" | Status: {}", s))
-                    .unwrap_or_default();
+                    .unwrap_or("Unknown");
+                let quality = match peer.context_quality {
+                    Some(crate::engine::ContextQuality::Full) => "Full Context",
+                    Some(crate::engine::ContextQuality::Degraded) => "Degraded Context",
+                    None => "Unknown Context",
+                };
+                
                 radar.push_str(&format!(
-                    "- Agent '{}' (ID: {}): in {} | Last command `{}`{}\n",
-                    peer.name, peer.id, peer.cwd, cmd, status
+                    "- Agent '{}' (ID: {}): in {} | Last command `{}` | Status: {} [{}]\n",
+                    peer.name, peer.id, peer.cwd, cmd, status, quality
                 ));
             }
         }

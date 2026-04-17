@@ -1,8 +1,8 @@
 use crate::utils::load_prompt_fallback;
 use crate::engine::{
     ClawEngineEvent, ClawMessage, PersistentClawRow, TaskStatus, TaskType,
-    context::load_session_context, context::retrieve_memories, context::summarize_and_store,
-    dispatcher::extract_command_and_clean, persist_visual_event,
+    context::load_session_context, context::retrieve_memories,
+    dispatcher::extract_command_and_clean, persist_visual_event, turn::spawn_turn,
 };
 use boxxy_agent::ipc::claw::AgentClawProxy;
 use boxxy_db::Db;
@@ -31,8 +31,13 @@ pub struct SessionState {
     pub last_tools: Option<Vec<String>>,
     pub pending_tasks: Vec<crate::engine::ScheduledTask>,
     pub last_snapshot_hash: Option<u64>,
-    pub is_suspended: bool,
+    pub status: crate::engine::AgentStatus,
+    pub context_quality: crate::engine::ContextQuality,
+    pub parent_id: Option<uuid::Uuid>,
+    pub is_headless: bool,
+    pub sleep_timestamp: Option<i64>,
     pub awaiting_tasks: Vec<uuid::Uuid>,
+    pub tx_self: async_channel::Sender<ClawMessage>,
 }
 
 pub struct ClawSession {
@@ -47,7 +52,6 @@ pub struct ClawSession {
     pub session_context: String,
     pub db: Arc<Mutex<Option<Db>>>,
     pub state: Arc<Mutex<SessionState>>,
-    pub diagnosis_mode: boxxy_preferences::config::ClawAutoDiagnosisMode,
 }
 
 impl ClawSession {
@@ -98,13 +102,42 @@ impl ClawSession {
                 last_tools: None,
                 pending_tasks: Vec::new(),
                 last_snapshot_hash: None,
-                is_suspended: false,
+                status: crate::engine::AgentStatus::Off,
+                context_quality: crate::engine::ContextQuality::Full,
+                parent_id: None,
+                is_headless: false,
+                sleep_timestamp: None,
                 awaiting_tasks: Vec::new(),
+                tx_self: tx.clone(),
             })),
-            diagnosis_mode: boxxy_preferences::config::ClawAutoDiagnosisMode::Lazy,
         };
 
         (session, tx, rx_ui)
+    }
+
+    pub fn new_headless(
+        parent_pane_id: String,
+        parent_session_id: uuid::Uuid,
+        profile: String,
+    ) -> (Self, async_channel::Sender<ClawMessage>) {
+        let pane_id = format!("{}-headless-{}", parent_pane_id, uuid::Uuid::new_v4());
+        let (mut session, tx, _) = Self::new(pane_id.clone());
+
+        let name = format!("{} Shadow", petname::petname(1, "").unwrap_or_else(|| "Ghost".to_string()));
+        
+        // Mutate for headless execution
+        {
+            let mut state = session.state.try_lock().unwrap();
+            state.parent_id = Some(parent_session_id);
+            state.is_headless = true;
+            state.agent_name = name.clone();
+            state.status = crate::engine::AgentStatus::Working;
+        }
+
+        session.name = name;
+        session.session_context = format!("You are a specialized transient background worker. {}\n", profile);
+
+        (session, tx)
     }
 
     pub fn start(self, claw_proxy: AgentClawProxy<'static>) {
@@ -123,6 +156,162 @@ impl ClawSession {
         let _ = self.tx_ui.send(event).await;
     }
 
+    async fn clear_ui_history(&self) {
+        let _ = self.tx_ui.send(ClawEngineEvent::RestoreHistory(vec![])).await;
+    }
+
+    async fn handle_transition(
+        &self,
+        req: crate::engine::TransitionRequest,
+        current_turn: &mut Option<tokio::task::JoinHandle<()>>,
+        urgent_backlog: &mut std::collections::VecDeque<crate::engine::ClawMessage>,
+    ) {
+        let mut state_lock = self.state.lock().await;
+        let current_status = state_lock.status.clone();
+        let parent_id = state_lock.parent_id;
+
+        match crate::engine::fsm::router::FsmRouter::evaluate_transition(
+            &current_status,
+            parent_id,
+            &req,
+        ) {
+            Ok(crate::engine::fsm::router::FsmAction::AbortCurrentTurn) => {
+                if let Some(handle) = current_turn.take() {
+                    handle.abort();
+                }
+                
+                // Immediately pop urgent if we were interrupted
+                if let Some(next_msg) = urgent_backlog.pop_front() {
+                    let _ = self.tx_self.send(next_msg).await;
+                }
+            }
+            Ok(crate::engine::fsm::router::FsmAction::Proceed) => {}
+            Err(e) => {
+                log::warn!("{}", e);
+                return;
+            }
+        }
+
+        let current_quality = state_lock.context_quality.clone();
+        
+        // --- HARD WAKE INTERCEPT ---
+        // If User is waking from Sleep to Waiting, we enter Working to summarize history
+        if current_status == crate::engine::AgentStatus::Sleep
+            && req.target_state == crate::engine::AgentStatus::Waiting
+            && req.source == crate::engine::TriggerSource::User
+        {
+            state_lock.status = crate::engine::AgentStatus::Working;
+            let agent_name = self.name.clone();
+            let sleep_timestamp = state_lock.sleep_timestamp.take();
+            let db_cell = self.db.clone();
+            let session_id = self.session_id.clone();
+            let tx_self = self.tx_self.clone();
+            drop(state_lock);
+
+            let _ = self
+                .tx_ui
+                .send(crate::engine::ClawEngineEvent::SessionStateChanged {
+                    agent_name,
+                    status: crate::engine::AgentStatus::Working,
+                })
+                .await;
+
+            // Spawn the Dreamer Task
+            let task_handle = tokio::spawn(async move {
+                crate::engine::summarization::wake::summarize_wake_delta(
+                    db_cell,
+                    session_id,
+                    sleep_timestamp,
+                    tx_self,
+                ).await;
+            });
+            *current_turn = Some(task_handle);
+            return;
+        }
+        
+        // Handle entering sleep
+        if req.target_state == crate::engine::AgentStatus::Sleep {
+            state_lock.sleep_timestamp = Some(chrono::Utc::now().timestamp_millis());
+        }
+
+        state_lock.status = req.target_state.clone();
+        let agent_name = self.name.clone();
+        drop(state_lock);
+
+        let _ = self
+            .tx_ui
+            .send(crate::engine::ClawEngineEvent::SessionStateChanged {
+                agent_name,
+                status: req.target_state,
+            })
+            .await;
+            
+        crate::registry::workspace::global_workspace().await.set_pane_quality(self.pane_id.clone(), Some(current_quality)).await;
+    }
+
+    fn is_urgent_msg(msg: &ClawMessage) -> bool {
+        if let ClawMessage::Transition(req) = msg {
+            if req.source == crate::engine::TriggerSource::User {
+                return true;
+            }
+        }
+        if let ClawMessage::SubscriptionEvent { event: crate::engine::ClawEvent::Custom { name, .. } } = msg {
+            if name == "request_sleep" {
+                return true;
+            }
+        }
+        matches!(
+            msg,
+            ClawMessage::CancelPending
+                | ClawMessage::SleepToggle(_)
+                | ClawMessage::Abort
+                | ClawMessage::TurnFinished
+                | ClawMessage::ClawQuery { .. }
+                | ClawMessage::UserMessage { .. }
+        )
+    }
+
+    async fn get_next_msg(
+        rx: &async_channel::Receiver<ClawMessage>,
+        urgent_backlog: &mut VecDeque<ClawMessage>,
+        backlog: &mut VecDeque<ClawMessage>,
+        current_turn_active: bool,
+    ) -> Option<ClawMessage> {
+        while let Ok(msg) = rx.try_recv() {
+            if Self::is_urgent_msg(&msg) {
+                urgent_backlog.push_back(msg);
+            } else {
+                backlog.push_back(msg);
+            }
+        }
+
+        if let Some(m) = urgent_backlog.pop_front() {
+            return Some(m);
+        }
+        if !current_turn_active {
+            if let Some(m) = backlog.pop_front() {
+                return Some(m);
+            }
+        }
+
+        loop {
+            match rx.recv().await {
+                Ok(msg) => {
+                    if Self::is_urgent_msg(&msg) {
+                        return Some(msg);
+                    } else {
+                        if current_turn_active {
+                            backlog.push_back(msg);
+                        } else {
+                            return Some(msg);
+                        }
+                    }
+                }
+                Err(_) => return None,
+            }
+        }
+    }
+
     pub async fn run(mut self, claw_proxy: AgentClawProxy<'static>) {
         // LAZY LOADING: We don't initialize the DB or load skills until we receive a message.
         // This ensures BoxxyClaw doesn't consume memory/CPU if the user doesn't use the AI.
@@ -131,6 +320,7 @@ impl ClawSession {
         let mut current_dir = String::from("/");
         let mut current_turn: Option<tokio::task::JoinHandle<()>> = None;
         let mut backlog: VecDeque<ClawMessage> = VecDeque::new();
+        let mut urgent_backlog: VecDeque<ClawMessage> = VecDeque::new();
 
         let workspace = crate::registry::workspace::global_workspace().await;
 
@@ -138,10 +328,10 @@ impl ClawSession {
 
         loop {
             tokio::select! {
-                msg_res = self.rx.recv() => {
-                    let msg = match msg_res {
-                        Ok(m) => m,
-                        Err(_) => break,
+                msg_opt = Self::get_next_msg(&self.rx, &mut urgent_backlog, &mut backlog, current_turn.is_some()) => {
+                    let msg = match msg_opt {
+                        Some(m) => m,
+                        None => break,
                     };
 
                     let needs_initialization = match &msg {
@@ -149,11 +339,13 @@ impl ClawSession {
                         | ClawMessage::UserMessage { .. }
                         | ClawMessage::DelegatedTask { .. }
                         | ClawMessage::RequestLazyDiagnosis
+                        | ClawMessage::SleepToggle { .. }
+                        | ClawMessage::Transition { .. }
                         | ClawMessage::Initialize => true,
                         ClawMessage::CommandFinished { exit_code, .. }
                             if *exit_code != 0 && *exit_code != 130 && *exit_code != 131 =>
                         {
-                            self.diagnosis_mode != boxxy_preferences::config::ClawAutoDiagnosisMode::Lazy
+                            self.state.lock().await.status == crate::engine::AgentStatus::Waiting
                         }
                         _ => false,
                     };
@@ -245,9 +437,80 @@ impl ClawSession {
                         }
                         ClawMessage::TurnFinished => {
                             current_turn = None;
-                            if let Some(next_msg) = backlog.pop_front() {
+                            
+                            let req = crate::engine::TransitionRequest {
+                                target_state: crate::engine::AgentStatus::Waiting,
+                                source: crate::engine::TriggerSource::System,
+                            };
+                            self.handle_transition(req, &mut current_turn, &mut urgent_backlog).await;
+
+                            if let Some(next_msg) = urgent_backlog.pop_front() {
+                                let _ = self.tx_self.send(next_msg).await;
+                            } else if let Some(next_msg) = backlog.pop_front() {
                                 let _ = self.tx_self.send(next_msg).await;
                             }
+                        }
+                        ClawMessage::WakeSummaryComplete { result } => {
+                            let mut state_lock = self.state.lock().await;
+                            state_lock.status = crate::engine::AgentStatus::Waiting;
+                            
+                            match result {
+                                Ok(summary) => {
+                                    state_lock.context_quality = crate::engine::ContextQuality::Full;
+                                    state_lock.history.push(rig::message::Message::User {
+                                        content: rig::OneOrMany::one(rig::message::UserContent::text(format!("[WHILE_YOU_SLEPT]\n{}", summary))),
+                                    });
+                                }
+                                Err(e) => {
+                                    log::warn!("Dreamer fallback triggered: {}", e);
+                                    state_lock.context_quality = crate::engine::ContextQuality::Degraded;
+                                }
+                            }
+                            
+                            let current_quality = state_lock.context_quality.clone();
+                            let agent_name = self.name.clone();
+                            drop(state_lock);
+
+                            let _ = self.tx_ui.send(crate::engine::ClawEngineEvent::SessionStateChanged {
+                                agent_name,
+                                status: crate::engine::AgentStatus::Waiting,
+                            }).await;
+                            
+                            crate::registry::workspace::global_workspace().await.set_pane_quality(self.pane_id.clone(), Some(current_quality)).await;
+                            
+                            // Let the router know this background task is done
+                            let _ = self.tx_self.send(ClawMessage::TurnFinished).await;
+                        }
+                        ClawMessage::Transition(req) => {
+                            self.handle_transition(req, &mut current_turn, &mut urgent_backlog).await;
+                        }
+                        ClawMessage::WatchdogTimeout { task_id, state } => {
+                            let mut state_lock = self.state.lock().await;
+                            // Only trigger if we are still in the expected state and there are no new tasks
+                            if state_lock.status == state {
+                                drop(state_lock);
+                                log::warn!("Watchdog expired for task {:?}. Forcing Faulted state.", task_id);
+                                self.handle_transition(
+                                    crate::engine::TransitionRequest {
+                                        target_state: crate::engine::AgentStatus::Faulted { reason: "Watchdog Timeout".to_string() },
+                                        source: crate::engine::TriggerSource::System,
+                                    },
+                                    &mut current_turn,
+                                    &mut urgent_backlog,
+                                ).await;
+                            }
+                        }
+                        ClawMessage::SleepToggle(sleep) => {
+                            let target_state = if sleep {
+                                crate::engine::AgentStatus::Sleep
+                            } else {
+                                crate::engine::AgentStatus::Waiting
+                            };
+                            let req = crate::engine::TransitionRequest {
+                                target_state,
+                                source: crate::engine::TriggerSource::User,
+                            };
+                            self.handle_transition(req, &mut current_turn, &mut urgent_backlog).await;
                         }
                         ClawMessage::Deactivate => {
                             info!("Deactivating Claw Session for pane {}...", self.pane_id);
@@ -259,6 +522,8 @@ impl ClawSession {
                             state_lock.history.clear();
                             state_lock.pending_tasks.clear();
                             drop(state_lock);
+
+                            self.clear_ui_history().await;
 
                             // Update Workspace Radar to indicate no active agent
                             workspace.unregister_pane(self.pane_id.clone()).await;
@@ -274,6 +539,7 @@ impl ClawSession {
                             state_lock.pending_tasks.clear();
                             drop(state_lock);
 
+                            self.clear_ui_history().await;
                             let _ = self.tx_ui.send(ClawEngineEvent::Evicted).await;
 
                             // Update Workspace Radar to indicate no active agent
@@ -449,6 +715,8 @@ impl ClawSession {
                                 let _ = store.clear_claw_events(&self.session_id).await;
                             }
                             drop(db_guard);
+                            
+                            self.clear_ui_history().await;
 
                             // 3. Update Workspace Radar
                             workspace
@@ -582,51 +850,38 @@ impl ClawSession {
                                     "The user's command failed with exit code {exit_code}. Please analyze the terminal snapshot and suggest a fix."
                                 );
 
-                                if self.diagnosis_mode
-                                    == boxxy_preferences::config::ClawAutoDiagnosisMode::Lazy
-                                {
-                                    state_lock.pending_lazy_diagnosis = Some((prompt, snapshot, cwd));
+                                if state_lock.status != crate::engine::AgentStatus::Waiting {
                                     drop(state_lock);
-
-                                    let tx_ui = self.tx_ui.clone();
-                                    let agent_name = self.name.clone();
-                                    tokio::spawn(async move {
-                                        let _ = tx_ui
-                                            .send(ClawEngineEvent::LazyErrorIndicator {
-                                                agent_name,
-                                                visible: true,
-                                            })
-                                            .await;
-                                    });
-                                } else {
-                                    drop(state_lock);
-                                    if current_turn.is_some() {
-                                        backlog.push_back(ClawMessage::CommandFinished {
-                                            exit_code,
-                                            snapshot,
-                                            cwd,
-                                        });
-                                        continue;
-                                    }
-
-                                    current_turn = Some(spawn_turn(
-                                        self.pane_id.clone(),
-                                        self.session_id.clone(),
-                                        self.name.clone(),
-                                        &prompt,
-                                        &snapshot,
-                                        &session_ctx,
-                                        cwd,
-                                        false,
-                                        claw_proxy.clone(),
-                                        self.db.clone(),
-                                        self.state.clone(),
-                                        self.tx_ui.clone(),
-                                        self.tx_self.clone(),
-                                        None,
-                                        vec![],
-                                    ));
+                                    continue;
                                 }
+
+                                drop(state_lock);
+                                if current_turn.is_some() {
+                                    backlog.push_back(ClawMessage::CommandFinished {
+                                        exit_code,
+                                        snapshot,
+                                        cwd,
+                                    });
+                                    continue;
+                                }
+
+                                current_turn = Some(spawn_turn(
+                                    self.pane_id.clone(),
+                                    self.session_id.clone(),
+                                    self.name.clone(),
+                                    &prompt,
+                                    &snapshot,
+                                    &session_ctx,
+                                    cwd,
+                                    false,
+                                    claw_proxy.clone(),
+                                    self.db.clone(),
+                                    self.state.clone(),
+                                    self.tx_ui.clone(),
+                                    self.tx_self.clone(),
+                                    None,
+                                    vec![],
+                                ));
                             }
                         }
                         ClawMessage::RequestLazyDiagnosis => {
@@ -921,6 +1176,7 @@ impl ClawSession {
                                 let store = boxxy_db::store::Store::new(db.pool());
                                 let _ = store.mark_session_cleared(&self.session_id).await;
                             }
+                            self.clear_ui_history().await;
                         }
                         ClawMessage::CancelTask { task_id } => {
                             let mut state_lock = self.state.lock().await;
@@ -936,39 +1192,30 @@ impl ClawSession {
 
                             workspace.update_pane_tasks(self.pane_id.clone(), tasks).await;
                         }
-                        ClawMessage::UpdateDiagnosisMode(mode) => {
-                            self.diagnosis_mode = mode;
-                        }
                         ClawMessage::SubscriptionEvent { event } => {
                             let mut state_lock = self.state.lock().await;
                             
                             // Handle external sleep requests
                             if let crate::engine::ClawEvent::Custom { name, .. } = &event {
-                                if name == "request_sleep" && !state_lock.is_suspended {
-                                    log::info!("Agent {} received external sleep request. Suspending.", self.name);
-                                    state_lock.is_suspended = true;
-                                    let agent_name = self.name.clone();
-                                    let tx_ui = self.tx_ui.clone();
-                                    
-                                    tokio::spawn(async move {
-                                        let _ = tx_ui.send(crate::engine::ClawEngineEvent::SessionStateChanged {
-                                            agent_name,
-                                            status: crate::engine::AgentStatus::Suspended,
-                                        }).await;
-                                    });
+                                if name == "request_sleep" && state_lock.status != crate::engine::AgentStatus::Sleep {
+                                    drop(state_lock);
+                                    let req = crate::engine::TransitionRequest {
+                                        target_state: crate::engine::AgentStatus::Sleep,
+                                        source: crate::engine::TriggerSource::Swarm { trace_id: vec![] },
+                                    };
+                                    self.handle_transition(req, &mut current_turn, &mut urgent_backlog).await;
                                     continue;
                                 }
                             }
 
-                            if state_lock.is_suspended {
-                                state_lock.is_suspended = false;
+                            if state_lock.status == crate::engine::AgentStatus::Sleep {
                                 drop(state_lock);
 
-                                // Broadcast to UI
-                                let _ = self.tx_ui.send(crate::engine::ClawEngineEvent::SessionStateChanged {
-                                    agent_name: self.name.clone(),
-                                    status: crate::engine::AgentStatus::Active,
-                                }).await;
+                                let req = crate::engine::TransitionRequest {
+                                    target_state: crate::engine::AgentStatus::Waiting,
+                                    source: crate::engine::TriggerSource::System,
+                                };
+                                self.handle_transition(req, &mut current_turn, &mut urgent_backlog).await;
 
                                 let snapshot = workspace.get_pane_snapshot(self.pane_id.clone()).await.unwrap_or_default();
                                 let prompt = format!("WAKEUP: An event you subscribed to has occurred: {:?}", event);
@@ -1001,15 +1248,14 @@ impl ClawSession {
                             let mut state_lock = self.state.lock().await;
                             state_lock.awaiting_tasks.retain(|id| id != &task_id);
 
-                            if state_lock.is_suspended && state_lock.awaiting_tasks.is_empty() {
-                                state_lock.is_suspended = false;
+                            if state_lock.status == crate::engine::AgentStatus::Sleep && state_lock.awaiting_tasks.is_empty() {
                                 drop(state_lock);
 
-                                // Broadcast to UI
-                                let _ = self.tx_ui.send(crate::engine::ClawEngineEvent::SessionStateChanged {
-                                    agent_name: self.name.clone(),
-                                    status: crate::engine::AgentStatus::Active,
-                                }).await;
+                                let req = crate::engine::TransitionRequest {
+                                    target_state: crate::engine::AgentStatus::Waiting,
+                                    source: crate::engine::TriggerSource::System,
+                                };
+                                self.handle_transition(req, &mut current_turn, &mut urgent_backlog).await;
 
                                 let snapshot = workspace.get_pane_snapshot(self.pane_id.clone()).await.unwrap_or_default();
                                 let prompt = format!("WAKEUP: Async task {} has completed with result: {}", task_id, result);
@@ -1119,607 +1365,4 @@ impl ClawSession {
         // Unregister on loop exit
         workspace.unregister_pane(self.pane_id).await;
     }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn spawn_turn(
-    pane_id: String,
-    session_id: String,
-    agent_name: String,
-    prompt: &str,
-    snapshot: &str,
-    _session_ctx: &str,
-    cwd: String,
-    is_new_task: bool,
-    claw_proxy: AgentClawProxy<'static>,
-    db: Arc<Mutex<Option<Db>>>,
-    state: Arc<Mutex<SessionState>>,
-    tx_ui: async_channel::Sender<ClawEngineEvent>,
-    tx_self: async_channel::Sender<ClawMessage>,
-    delegate_reply_tx: Option<tokio::sync::oneshot::Sender<String>>,
-    image_attachments: Vec<String>,
-) -> tokio::task::JoinHandle<()> {
-    let prompt_clone = prompt.to_string();
-    let session_id_clone = session_id.clone();
-    let snapshot_clone = snapshot.to_string();
-    let cwd_clone = cwd.clone();
-    let images_clone = image_attachments.clone();
-
-    tokio::spawn(async move {
-        let _ = tx_ui
-            .send(ClawEngineEvent::AgentThinking {
-                agent_name: agent_name.clone(),
-                is_thinking: true,
-            })
-            .await;
-
-        if is_new_task {
-            if let Ok(mut lock) = state.try_lock() {
-                lock.history.clear();
-            } else {
-                state.lock().await.history.clear();
-            }
-        }
-
-        let db_guard = db.lock().await;
-        let past_memories = retrieve_memories(&db_guard, &prompt_clone, &cwd_clone).await;
-        drop(db_guard);
-
-        let mut state_lock = state.lock().await;
-        let settings = boxxy_preferences::Settings::load();
-
-        let mut active_skills_text = String::new();
-        let mut available_skills_text = String::new();
-        let query_lower = prompt_clone.to_lowercase();
-
-        let registry = crate::registry::skills::global_registry().await;
-
-        // Fetch Global Workspace Radar
-        let workspace = crate::registry::workspace::global_workspace().await;
-        let radar = workspace.get_global_radar(pane_id.clone()).await;
-
-        let mut tui_warning = String::new();
-        let all_agents = workspace.get_all_agents().await;
-        if let Some(me) = all_agents.iter().find(|a| a.id == pane_id) {
-            let status = &me.status;
-            if status.starts_with("Running: ") {
-                tui_warning = format!(
-                    "\n--- TUI WARNING ---\nYour pane is currently running an interactive application: {}.\nYou cannot run standard bash commands or delegate tasks to yourself to run bash commands. To interact with this application, you MUST use `send_keystrokes_to_pane` with your own agent name ('{}'). Note: You do not know the exact internal state (e.g. insert mode vs normal mode in vim), so send escape characters (\\e) first if necessary.\n-------------------\n",
-                    status, me.name
-                );
-            }
-        }
-
-        // 1. Semantic Search: Get only the TOP 1 most relevant skill to avoid context bloat
-        let mut active_skills = registry.search_relevant_skills(&prompt_clone, 1).await;
-
-        // 2. Keyword Fallback: Only add skills that were EXPLICITLY triggered by keywords in the query
-        let all_skills = registry.get_skills().await;
-        for skill in &all_skills {
-            // Avoid duplicates
-            if active_skills
-                .iter()
-                .any(|s| s.frontmatter.name == skill.frontmatter.name)
-            {
-                continue;
-            }
-
-            let mut should_load = false;
-            // We NO LONGER load trigger-less skills by default.
-            // They must be triggered or activated via tool.
-            for trigger in &skill.frontmatter.triggers {
-                if !trigger.is_empty() && query_lower.contains(&trigger.to_lowercase()) {
-                    should_load = true;
-                    break;
-                }
-            }
-
-            if should_load {
-                active_skills.push(skill.clone());
-            }
-        }
-
-        // 3. Build Active Skills Text (Full Content)
-        // We limit this to a maximum of 2 skills in full to save tokens.
-        if !active_skills.is_empty() {
-            let skill_names: Vec<String> = active_skills.iter().map(|s| s.frontmatter.name.clone()).collect();
-            workspace.update_pane_skills(pane_id.clone(), skill_names).await;
-
-            active_skills_text.push_str("\n--- ACTIVE SKILLS (FULL INSTRUCTIONS) ---\n");
-            for skill in active_skills.iter().take(2) {
-                active_skills_text.push_str(&format!("\n### SKILL: {}\n", skill.frontmatter.name));
-                active_skills_text.push_str(&skill.content);
-                active_skills_text.push('\n');
-            }
-        }
-
-        // 4. Build Available Skills Text (Compact Toolbox)
-        // Everything else is just a name and description.
-        let mut toolbox_count = 0;
-        for skill in &all_skills {
-            if active_skills
-                .iter()
-                .any(|s| s.frontmatter.name == skill.frontmatter.name)
-            {
-                continue;
-            }
-
-            if toolbox_count == 0 {
-                available_skills_text.push_str("\n--- AVAILABLE SKILLS (TOOLBOX - Compact) ---\n");
-                available_skills_text.push_str("Use `activate_skill(name)` if you need the full instructions for any of these:\n");
-            }
-
-            let description = skill
-                .frontmatter
-                .description
-                .split('.')
-                .next()
-                .unwrap_or("No description available.")
-                .trim();
-            available_skills_text
-                .push_str(&format!("- {}: {}.\n", skill.frontmatter.name, description));
-            toolbox_count += 1;
-        }
-
-        let system_prompt_template = load_prompt_fallback(
-            "/dev/boxxy/BoxxyTerminal/prompts/claw.md",
-            "claw.md",
-        );
-
-        let system_prompt =
-            system_prompt_template.replace("{{available_skills}}", &available_skills_text);
-
-        let creds = boxxy_ai_core::AiCredentials::new(
-            settings.get_effective_api_keys(),
-            settings.ollama_base_url.clone(),
-        );
-
-        // --- PHASE 3: PERSISTENT AGENT ---
-        // We check if we already have an agent instance for this session.
-        // If not, or if the model changed, we create a new one.
-        let mut agent_opt = state_lock.persistent_agent.take();
-
-        if agent_opt.is_none() {
-            agent_opt = Some(
-                crate::engine::agent::create_claw_agent(
-                    &settings.claw_model,
-                    &creds,
-                    &system_prompt,
-                    &claw_proxy,
-                    &cwd_clone,
-                    tx_ui.clone(),
-                    state.clone(),
-                    db.clone(),
-                    &settings,
-                    session_id_clone.clone(),
-                    pane_id.clone(),
-                    state_lock.web_search_enabled,
-                )
-                .await,
-            );
-        }
-
-        let agent = agent_opt.unwrap();
-
-        // Clean snapshot: remove completely empty or whitespace-only lines
-        let cleaned_snapshot: String = snapshot_clone
-            .lines()
-            .filter(|line| !line.trim().is_empty())
-            .collect::<Vec<&str>>()
-            .join("\n");
-
-        // Hash the cleaned snapshot
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
-        let mut hasher = DefaultHasher::new();
-        cleaned_snapshot.hash(&mut hasher);
-        let current_hash = hasher.finish();
-
-        let final_snapshot = if state_lock.last_snapshot_hash == Some(current_hash) {
-            "[TERMINAL_SNAPSHOT: NO_CHANGE]".to_string()
-        } else {
-            state_lock.last_snapshot_hash = Some(current_hash);
-            let mut snap = cleaned_snapshot;
-            // 1. Line limit (take only the last 50 lines)
-            let lines: Vec<&str> = snap.lines().collect();
-            if lines.len() > 50 {
-                snap = lines[lines.len() - 50..].join("\n");
-            }
-
-            // 2. Character limit
-            if snap.len() > 5000 {
-                snap = format!(
-                    "... (truncated {} chars) ...\n{}",
-                    snap.len() - 5000,
-                    &snap[snap.len() - 5000..]
-                );
-            }
-            snap
-        };
-
-        // 3. Build Dynamic Turn Context (The part that changes every turn)
-        let now = chrono::Utc::now();
-        let identity = format!(
-            "You are the Boxxy-Claw agent managing terminal pane: **{}**\n\
-            Your unique internal ID is: `{}`",
-            agent_name, pane_id
-        );
-        let turn_context = format!(
-            "## YOUR IDENTITY\n\
-            {}\n\
-            \n\
-            ## CURRENT TURN CONTEXT\n\
-            System Time: `{}`\n\
-            CWD: `{}`\n\
-            {}\n\
-            {}\n\
-            {}\n\
-            {}\n",
-            identity,
-            now.to_rfc3339(),
-            cwd_clone,
-            active_skills_text,
-            past_memories,
-            radar,
-            tui_warning
-        );
-
-        let full_prompt = format!(
-            "{}\n\n{}\n\nTerminal Snapshot:\n```\n{}\n```",
-            prompt_clone, turn_context, final_snapshot
-        );
-
-        let history = state_lock.history.clone();
-        drop(state_lock);
-
-        let mut user_msg = vec![rig::message::Message::User {
-            content: rig::OneOrMany::one(rig::message::UserContent::text(full_prompt.clone())),
-        }];
-
-        let mut is_multimodal = false;
-
-        if !images_clone.is_empty() {
-            // Rig requires multimodal content for images
-            let mut contents = vec![rig::message::UserContent::text(full_prompt.clone())];
-            for b64 in images_clone {
-                contents.push(rig::message::UserContent::image_base64(
-                    b64,
-                    Some(rig::message::ImageMediaType::PNG),
-                    None,
-                ));
-            }
-            if let Ok(many) = rig::OneOrMany::many(contents) {
-                user_msg = vec![rig::message::Message::User { content: many }];
-                is_multimodal = true;
-            }
-        }
-
-        let history_len = history.len();
-
-        // We temporarily adapt the ClawAgent to accept `Vec<Message>` for the current prompt
-        // instead of just `&str` since we need to send the multimodal `user_msg`.
-
-        // Context Hygiene 2.0: Aggressively strip ALL transient context from previous turns
-        // (Skills, Radar, Memories, and Snapshots) so history grows near-zero tokens per turn.
-        let mut final_history: Vec<rig::message::Message> = history
-            .into_iter()
-            .enumerate()
-            .map(|(i, mut msg)| {
-                // Rule 1B: Freshness Buffer - only keep the verbatim snapshot for the last 4 turns.
-                // Every user + assistant exchange is 2 messages, so 4 turns = 8 messages.
-                // We strip the dynamic blocks from anything older than the last 8 messages.
-                let is_old = history_len.saturating_sub(i) > 8;
-
-                if let rig::message::Message::User { content } = &mut msg {
-                    let mut items: Vec<rig::message::UserContent> =
-                        content.clone().into_iter().collect();
-                    for item in &mut items {
-                        if let rig::message::UserContent::Text(text) = item {
-                            if is_old {
-                                // Find the start of the dynamic block and truncate everything after it
-                                if let Some(idx) = text.text.find("\n\n## YOUR IDENTITY") {
-                                    text.text.truncate(idx);
-                                } else if let Some(idx) =
-                                    text.text.find("\n\n## CURRENT TURN CONTEXT")
-                                {
-                                    text.text.truncate(idx);
-                                } else if let Some(idx) = text.text.find("\n\n--- GLOBAL RADAR") {
-                                    text.text.truncate(idx);
-                                } else if let Some(idx) =
-                                    text.text.find("\n\nTerminal Snapshot:\n```")
-                                {
-                                    text.text.truncate(idx);
-                                }
-                            }
-                        }
-                    }
-                    if let Ok(new_content) = rig::OneOrMany::many(items) {
-                        *content = new_content;
-                    }
-                }
-                msg
-            })
-            .collect();
-
-        let query_for_chat = if is_multimodal {
-            final_history.push(user_msg.into_iter().next().unwrap());
-            ""
-        } else {
-            &full_prompt
-        };
-
-        match agent.chat(query_for_chat, final_history).await {
-            Ok((response, usage)) => {
-                let _ = tx_ui
-                    .send(ClawEngineEvent::AgentThinking {
-                        agent_name: agent_name.clone(),
-                        is_thinking: false,
-                    })
-                    .await;
-
-                let mut state_lock = state.lock().await;
-                // Put the agent and tools back for the next turn
-                state_lock.persistent_agent = Some(agent);
-
-                state_lock
-                    .history
-                    .push(rig::message::Message::user(full_prompt.clone()));
-                state_lock
-                    .history
-                    .push(rig::message::Message::assistant(response.clone()));
-
-                if let Some(usage) = usage {
-                    state_lock.total_tokens += usage.total_tokens as u64;
-                }
-
-                // --- ATOMIC PERSISTENCE ---
-                let history_json = serde_json::to_string(&state_lock.history).unwrap_or_default();
-                let pending_tasks_json =
-                    serde_json::to_string(&state_lock.pending_tasks).unwrap_or_default();
-                let agent_name_for_db = agent_name.clone();
-                let session_id_for_db = session_id_clone.clone();
-                let cwd_for_db = cwd_clone.clone();
-                let pinned_for_db = state_lock.pinned;
-                let total_tokens_for_db = state_lock.total_tokens as i64;
-                let model_id = settings
-                    .claw_model
-                    .as_ref()
-                    .map(|m| format!("{:?}", m))
-                    .unwrap_or_default();
-
-                // Count user messages to know when to generate a permanent LLM title
-                let user_msg_count = state_lock.history.iter().filter(|m| matches!(m, rig::message::Message::User { .. })).count();
-
-                // Safely extract the Db clone before spawning to prevent race conditions with Deactivate/Evict
-                let db_val = {
-                    let db_guard = db.lock().await;
-                    db_guard.as_ref().cloned()
-                };
-
-                if let Some(db_for_persistence) = db_val.clone() {
-                    tokio::spawn(async move {
-                        let store = boxxy_db::store::Store::new(db_for_persistence.pool());
-                        let _ = store
-                            .upsert_session_state(
-                                &session_id_for_db,
-                                &agent_name_for_db,
-                                "", // title is updated separately in the background LLM task
-                                &history_json,
-                                &pending_tasks_json,
-                                &agent_name_for_db,
-                                &cwd_for_db,
-                                &model_id,
-                                pinned_for_db,
-                                total_tokens_for_db,
-                            )
-                            .await;
-                    });
-                }
-
-                // Optional: Trigger Memory Flush if history is too long
-                let creds = boxxy_ai_core::AiCredentials::new(
-                    settings.get_effective_api_keys(),
-                    settings.ollama_base_url.clone(),
-                );
-
-                let _ = crate::memories::flush::flush_history(
-                    db.clone(),
-                    &mut state_lock.history,
-                    &settings.claw_model,
-                    &creds,
-                    &cwd_clone,
-                )
-                .await;
-
-                drop(state_lock);
-                let prompt_for_db = prompt_clone.clone();
-                let resp_for_db = response.clone();
-                let cwd_for_db = cwd_clone.clone();
-                let mem_model = settings
-                    .memory_model
-                    .clone()
-                    .or(settings.claw_model.clone());
-                let creds = boxxy_ai_core::AiCredentials::new(
-                    settings.get_effective_api_keys(),
-                    settings.ollama_base_url.clone(),
-                );
-
-                let session_id_for_summary = session_id_clone.clone();
-                let title_model = mem_model.clone();
-                let title_creds = creds.clone();
-                let title_prompt = prompt_clone.clone();
-
-                if let Some(db_for_summary) = db_val {
-                    tokio::spawn(async move {
-                        // --- LLM Title Generation ---
-                        let store = boxxy_db::store::Store::new(db_for_summary.pool());
-                        let mut needs_title = false;
-                        let mut current_title = String::new();
-                        
-                        if let Ok(Some(session)) = store.get_session(&session_id_for_summary).await {
-                            current_title = session.title.unwrap_or_default();
-                            if current_title.trim().is_empty() {
-                                needs_title = true;
-                            }
-                        }
-                        
-                        // Force a beautiful LLM title specifically when the user sends their VERY FIRST prompt.
-                        // This overwrites any initial greeting fallbacks.
-                        if user_msg_count == 1 {
-                            needs_title = true;
-                        } else if user_msg_count == 2 {
-                            // If the second user message provides more context, and the first title was just a greeting, upgrade it.
-                            let lower_title = current_title.to_lowercase();
-                            if lower_title.contains("greeting") || lower_title.contains("hello") || current_title.len() < 15 {
-                                needs_title = true;
-                            }
-                        }
-
-                        if needs_title && !title_prompt.trim().is_empty() {
-                            let agent = boxxy_ai_core::create_agent(
-                                &title_model,
-                                &title_creds,
-                                "You are a conversation title generator. Summarize the user's prompt in 3 to 6 words. MUST BE UNDER 40 CHARACTERS. Output ONLY the raw title, no quotes, no punctuation. Capitalize it like a title."
-                            );
-                            if let Ok(res) = agent.prompt(&title_prompt).await {
-                                let generated_title = res.0.trim().trim_matches('"').trim_matches('\'').to_string();
-                                if !generated_title.is_empty() && generated_title != current_title {
-                                    let _ = sqlx::query("UPDATE sessions SET title = ? WHERE id = ?")
-                                        .bind(&generated_title)
-                                        .bind(&session_id_for_summary)
-                                        .execute(db_for_summary.pool())
-                                        .await;
-                                    current_title = generated_title;
-                                }
-                            }
-                        }
-                        
-                        // Fallback if title is STILL empty (e.g. LLM failed)
-                        if current_title.trim().is_empty() && !title_prompt.trim().is_empty() {
-                            let first_line = title_prompt.lines()
-                                .find(|l| !l.trim().is_empty())
-                                .unwrap_or("");
-                            let fallback = first_line.chars().take(40).collect::<String>().trim().to_string();
-                            if !fallback.is_empty() {
-                                let _ = sqlx::query("UPDATE sessions SET title = ? WHERE id = ?")
-                                    .bind(fallback)
-                                    .bind(&session_id_for_summary)
-                                    .execute(db_for_summary.pool())
-                                    .await;
-                            }
-                        }
-
-                        summarize_and_store(
-                            &Some(db_for_summary.clone()),
-                            &session_id_for_summary,
-                            &prompt_for_db,
-                            &resp_for_db,
-                            &cwd_for_db,
-                            creds.clone(),
-                        )
-                        .await;
-
-                        let _ = crate::memories::extraction::extract_implicit_memory(
-                            Arc::new(Mutex::new(Some(db_for_summary.clone()))),
-                            prompt_for_db,
-                            resp_for_db,
-                            mem_model,
-                            creds,
-                            cwd_for_db,
-                        )
-                        .await;
-                    });
-                }
-                let mut command_opt = None;
-                let mut clean_diagnosis = response.clone();
-
-                let extracted = extract_command_and_clean(&response);
-                if extracted.0.is_some() {
-                    command_opt = extracted.0;
-                    clean_diagnosis = extracted.1;
-                }
-
-                if clean_diagnosis.trim() == "[SILENT_ACK]" {
-                    info!(
-                        "Pane {} ({}): Agent acknowledged rejection silently. Not sending UI event.",
-                        pane_id, agent_name
-                    );
-                } else if clean_diagnosis.trim().is_empty() && command_opt.is_none() {
-                    info!(
-                        "Pane {} ({}): Agent response was empty (likely just tool calls). Not sending UI event.",
-                        pane_id, agent_name
-                    );
-                } else if let Some(command) = command_opt {
-                    let event = ClawEngineEvent::InjectCommand {
-                        agent_name: agent_name.clone(),
-                        command,
-                        diagnosis: clean_diagnosis,
-                        usage: usage,
-                    };
-                    persist_visual_event(
-                        db.clone(),
-                        session_id_clone.clone(),
-                        pane_id.clone(),
-                        &event,
-                    );
-                    let _ = tx_ui.send(event).await;
-                } else {
-                    let event = ClawEngineEvent::DiagnosisComplete {
-                        agent_name: agent_name.clone(),
-                        diagnosis: clean_diagnosis,
-                        usage: usage,
-                    };
-                    persist_visual_event(
-                        db.clone(),
-                        session_id_clone.clone(),
-                        pane_id.clone(),
-                        &event,
-                    );
-                    let _ = tx_ui.send(event).await;
-                }
-                if let Some(tx) = delegate_reply_tx {
-                    let _ = tx.send(response.clone());
-                }
-            }
-            Err(e) => {
-                let _ = tx_ui
-                    .send(ClawEngineEvent::AgentThinking {
-                        agent_name: agent_name.clone(),
-                        is_thinking: false,
-                    })
-                    .await;
-                log::error!(
-                    "Pane {} ({}): Boxxy-Claw agent failed: {e}",
-                    pane_id,
-                    agent_name
-                );
-
-                let error_msg = format!("{}", e);
-                let friendly_msg = if error_msg.contains("does not support tools") {
-                    "**Error:** The selected Ollama model does not support tool calling.\n\nBoxxy-Claw requires a highly capable reasoning model with native tool support (like `llama3.2`, `qwen2.5`, or `mistral`) to interact with your system.\n\nPlease select a different model for Boxxy-Claw in the Model Selection menu (Ctrl+Shift+P).".to_string()
-                } else {
-                    format!("**Boxxy-Claw encountered an error:**\n```\n{}\n```", e)
-                };
-
-                let event = ClawEngineEvent::DiagnosisComplete {
-                    agent_name: agent_name.clone(),
-                    diagnosis: friendly_msg,
-                    usage: None,
-                };
-                persist_visual_event(
-                    db.clone(),
-                    session_id_clone.clone(),
-                    pane_id.clone(),
-                    &event,
-                );
-                let _ = tx_ui.send(event).await;
-
-                if let Some(tx) = delegate_reply_tx {
-                    let _ = tx.send(format!("Error: {}", e));
-                }
-            }
-        }
-
-        let _ = tx_self.send(ClawMessage::TurnFinished).await;
-    })
 }

@@ -284,10 +284,7 @@ impl AppWindow {
         });
 
         let initial_claw_active = current_settings.claw_on_by_default;
-        let initial_claw_proactive = current_settings.claw_auto_diagnosis_mode
-            == boxxy_preferences::config::ClawAutoDiagnosisMode::Proactive;
 
-        claw.update_ui(initial_claw_active, initial_claw_proactive);
 
         let inner = AppWindowInner {
             window: window.clone(),
@@ -314,7 +311,6 @@ impl AppWindow {
             app_state,
             bell_indicator,
             claw_active: initial_claw_active,
-            claw_proactive: initial_claw_proactive,
             toast_overlay,
             notifications: Vec::new(),
             initial_working_dir: init.working_dir.clone(),

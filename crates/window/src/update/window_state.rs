@@ -169,10 +169,6 @@ pub fn settings_changed(inner: &mut AppWindowInner, settings: Settings) {
 
     // from global settings here. Those are window-local states that can be toggled independently per window.
 
-    inner
-        .claw
-        .update_ui(inner.claw_active, inner.claw_proactive);
-
     super::tabs::sync_header_title(inner);
 }
 

@@ -277,10 +277,6 @@ impl ClawSidebarComponent {
         }
     }
 
-    pub fn update_diagnosis_mode(&self, _mode: &boxxy_preferences::config::ClawAutoDiagnosisMode) {
-        // No longer managed in sidebar UI
-    }
-
     pub fn update_active(&self, _active: bool) {
         // No longer managed in sidebar UI
     }
@@ -578,6 +574,23 @@ pub fn create_claw_message_list() -> (gtk::ListView, gtk::gio::ListStore) {
                     // We intentionally hide the viewer here so the tool call is just a single compact row.
                     viewer.clear();
                     viewer.widget().set_visible(false);
+                    cmd_label.set_visible(false);
+                }
+                crate::engine::PersistentClawRow::Command { command, exit_code } => {
+                    icon.set_icon_name(Some("utilities-terminal-symbolic"));
+                    icon.remove_css_class("accent");
+                    icon.remove_css_class("warning");
+                    if exit_code == 0 {
+                        title.set_label("Command Execution");
+                    } else {
+                        title.set_label(&format!("Command Failed (Exit {})", exit_code));
+                        icon.add_css_class("error");
+                    }
+
+                    pane_lbl.set_label("User");
+
+                    viewer.set_content(&command);
+                    viewer.widget().set_visible(true);
                     cmd_label.set_visible(false);
                 }
             }

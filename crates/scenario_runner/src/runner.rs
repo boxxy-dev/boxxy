@@ -199,18 +199,11 @@ impl ScenarioRunner {
                                         }
                                     }
                                     ClawEngineEvent::AgentThinking { is_thinking, .. } => {
-                                        // Only use Thinking events if explicitly asked for "thinking" or "active"
-                                        // and we are NOT waiting for a specific orchestration state like "Suspended" or "Locking"
+                                        // Deprecated / mapped to Working state
                                         let status_lower = status.to_lowercase();
-                                        if status_lower == "thinking" && is_thinking {
-                                            log::info!("✅ Reached target status: Thinking");
+                                        if status_lower == "working" && is_thinking {
+                                            log::info!("✅ Reached target status: Working (via Thinking event)");
                                             break;
-                                        }
-                                        // DANGER: We ignore thinking:false if we are specifically waiting for a transition
-                                        // from a known orchestration state. 
-                                        // For "Active", we only match if it's NOT thinking AND we aren't awaiting a more specific state.
-                                        if status_lower == "active" && !is_thinking {
-                                             log::debug!("  Ignore thinking:false for 'active' match to avoid false positives during tool execution.");
                                         }
                                     }
                                     _ => {}

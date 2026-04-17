@@ -18,7 +18,7 @@ steps:
 
   - action: "wait_for_status"
     pane: "leader"
-    status: "Active"
+    status: "Waiting"
     timeout_sec: 45
 
 assertions:

@@ -1,0 +1,51 @@
+name: "Sleep and Reminders Complex FSM"
+timeout_sec: 120
+panes:
+  - id: "assistant"
+    name: "Assistant Agent"
+steps:
+  # 1. Ask the agent to set a reminder and then go to sleep
+  - action: "prompt"
+    pane: "assistant"
+    prompt: "1. Use `schedule_task` to remind me to 'drink water' in 3 seconds. 2. Immediately use `set_agent_state` with 'sleep'. Do both in this turn."
+  
+  - action: "wait_for_status"
+    pane: "assistant"
+    status: "Sleep"
+    timeout_sec: 25
+
+  # 2. While sleeping, the reminder should fire and wake the agent up
+  - action: "wait_for_status"
+    pane: "assistant"
+    status: "Waiting"
+    timeout_sec: 20
+
+  # 3. Agent is awake now. Put it back to sleep manually.
+  - action: "prompt"
+    pane: "assistant"
+    prompt: "Thank you. Now go back to sleep."
+
+  - action: "wait_for_status"
+    pane: "assistant"
+    status: "Sleep"
+    timeout_sec: 20
+
+  # 4. Inject manual terminal output while sleeping
+  - action: "inject_terminal_output"
+    pane: "assistant"
+    output: "$ echo 'I am working manually' (exit: 0)\n"
+
+  # 5. Wake the agent up using a prompt (Hard Wake)
+  - action: "prompt"
+    pane: "assistant"
+    prompt: "Wake up and tell me what I did."
+
+  - action: "wait_for_status"
+    pane: "assistant"
+    status: "Waiting"
+    timeout_sec: 30
+
+assertions:
+  - type: "command_exit_code"
+    command: "echo 'SUCCESS'"
+    expected_code: 0

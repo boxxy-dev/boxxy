@@ -21,7 +21,7 @@ steps:
 
   - action: "wait_for_status"
     pane: "agent_b"
-    status: "Active"
+    status: "Waiting"
     timeout_sec: 30
 
 assertions:

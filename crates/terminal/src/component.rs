@@ -385,13 +385,13 @@ impl TerminalComponent {
                     });
                 }
             }
-            PaneOutput::ClawStateChanged(id, active, proactive) => {
+            PaneOutput::ClawStateChanged(id, active, sleep) => {
                 let inner = self.inner.borrow();
                 if inner.active_pane_id == id {
                     let term_id = inner.id.clone();
                     let _ = TERMINAL_EVENT_BUS.send(TerminalEvent {
                         id: term_id.clone(),
-                        kind: TerminalEventKind::ClawStateChanged(active, proactive),
+                        kind: TerminalEventKind::ClawStateChanged(active, sleep),
                     });
                 }
             }
@@ -609,20 +609,6 @@ impl TerminalComponent {
         }
     }
 
-    pub fn update_diagnosis_mode_for_pane(
-        &self,
-        pane_id: &str,
-        mode: &boxxy_preferences::config::ClawAutoDiagnosisMode,
-    ) -> bool {
-        let inner = self.inner.borrow();
-        if let Some(pane_data) = inner.panes.get(pane_id) {
-            pane_data.controller.update_diagnosis_mode(mode);
-            true
-        } else {
-            false
-        }
-    }
-
     pub fn set_session_status_for_pane(
         &self,
         pane_id: &str,
@@ -653,10 +639,10 @@ impl TerminalComponent {
         }
     }
 
-    pub fn is_proactive(&self) -> bool {
+    pub fn is_sleep(&self) -> bool {
         let inner = self.inner.borrow();
         if let Some(pane_data) = inner.panes.get(&inner.active_pane_id) {
-            pane_data.controller.is_proactive()
+            pane_data.controller.is_sleep()
         } else {
             false
         }
@@ -686,13 +672,6 @@ impl TerminalComponent {
             pane_data.controller.agent_name()
         } else {
             String::new()
-        }
-    }
-
-    pub fn update_diagnosis_mode(&self, mode: &boxxy_preferences::config::ClawAutoDiagnosisMode) {
-        let inner = self.inner.borrow();
-        for pane_data in inner.panes.values() {
-            pane_data.controller.update_diagnosis_mode(mode);
         }
     }
 
@@ -853,14 +832,6 @@ impl TerminalComponent {
         if let Some(ref settings) = inner.current_settings {
             new_controller.update_settings(settings.clone(), inner.current_palette);
             new_controller.set_claw_active(settings.claw_on_by_default);
-            let mode = if settings.claw_auto_diagnosis_mode
-                == boxxy_preferences::config::ClawAutoDiagnosisMode::Proactive
-            {
-                boxxy_preferences::config::ClawAutoDiagnosisMode::Proactive
-            } else {
-                boxxy_preferences::config::ClawAutoDiagnosisMode::Lazy
-            };
-            new_controller.update_diagnosis_mode(&mode);
         }
         new_controller.spawn();
 

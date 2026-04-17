@@ -40,15 +40,6 @@ impl TerminalController {
         self.controller.set_claw_active(active);
     }
 
-    pub fn update_diagnosis_mode_for_pane(
-        &self,
-        pane_id: &str,
-        mode: &boxxy_preferences::config::ClawAutoDiagnosisMode,
-    ) -> bool {
-        self.controller
-            .update_diagnosis_mode_for_pane(pane_id, mode)
-    }
-
     pub fn set_session_status_for_pane(
         &self,
         pane_id: &str,
@@ -59,10 +50,6 @@ impl TerminalController {
 
     pub fn is_claw_active(&self) -> bool {
         self.controller.is_claw_active()
-    }
-
-    pub fn is_proactive(&self) -> bool {
-        self.controller.is_proactive()
     }
 
     pub fn is_pinned(&self) -> bool {

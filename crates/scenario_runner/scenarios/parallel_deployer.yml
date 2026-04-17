@@ -14,7 +14,7 @@ steps:
   
   - action: "wait_for_status"
     pane: "leader"
-    status: "Suspended"
+    status: "Sleep"
     timeout_sec: 40
 
   - action: "wait_for_tool_call"

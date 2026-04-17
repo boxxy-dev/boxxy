@@ -8,6 +8,8 @@ use crate::engine::tools::workspace::{
     AbortAgentTaskTool, CloseAgentTool, DelegateTaskAsyncTool, DelegateTaskTool, ListActiveAgentsTool,
     ReadPaneTool, SendKeystrokesTool, SetGlobalIntentTool, SpawnAgentTool,
 };
+use crate::engine::tools::set_state::SetAgentStateTool;
+use crate::engine::tools::summon_headless::SummonHeadlessWorkerTool;
 use crate::engine::tools::{ClawApprovalHandler, SysShellTool};
 use boxxy_agent::ipc::claw::AgentClawProxy;
 use boxxy_core_toolbox::{
@@ -304,6 +306,13 @@ pub async fn create_claw_agent(
             approval: approval_handler.clone(),
         }),
         Box::new(DelegateTaskAsyncTool {
+            state: state.clone(),
+        }),
+        Box::new(SummonHeadlessWorkerTool {
+            state: state.clone(),
+            claw_proxy: claw_proxy.clone(),
+        }),
+        Box::new(SetAgentStateTool {
             state: state.clone(),
         }),
         Box::new(crate::engine::tools::orchestration::OrchestrateAgentTool {

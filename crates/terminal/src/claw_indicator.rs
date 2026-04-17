@@ -192,7 +192,7 @@ impl ClawIndicator {
         badge_box.append(&clock_icon);
 
         let sleep_icon = gtk::Image::builder()
-            .icon_name("boxxy-sleep-symbolic")
+            .icon_name("boxxy-bedtime-symbolic")
             .visible(false)
             .css_classes(["warning"])
             .build();
@@ -307,7 +307,7 @@ impl ClawIndicator {
         use boxxy_claw::engine::AgentStatus::*;
 
         match status {
-            Suspended => {
+            Sleep => {
                 self.set_suspended(true);
                 self.set_locking(false, None);
             }

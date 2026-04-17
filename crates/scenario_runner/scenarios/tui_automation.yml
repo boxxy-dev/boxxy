@@ -10,9 +10,9 @@ steps:
     pane: "tui_pane"
     prompt: "Start a long-running process that reads from stdin and writes to 'output.txt'. You can use `cat > output.txt`. Do not finish the command, just start it."
   
-  - action: "wait_for_status"
+  - action: "wait_for_tool_call"
     pane: "tui_pane"
-    status: "Active"
+    tool_name: "sys_shell_exec"
     timeout_sec: 20
 
   - action: "prompt"
@@ -21,7 +21,7 @@ steps:
 
   - action: "wait_for_status"
     pane: "automator"
-    status: "Active"
+    status: "Waiting"
     timeout_sec: 30
 
 assertions:
