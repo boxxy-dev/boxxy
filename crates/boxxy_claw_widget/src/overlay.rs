@@ -216,8 +216,20 @@ impl TerminalOverlay {
         let dismiss_and_refocus = {
             let host = host.clone();
             let revealer = revealer.clone();
+            let command_frame = command_frame.clone();
+            let template_box = template_box.clone();
+            let file_action_box = file_action_box.clone();
+            let action_box = action_box.clone();
+
             Rc::new(move || {
                 revealer.set_reveal_child(false);
+                // Robust hiding: Ensure that if the drawer receives a new event while fading out,
+                // the stale proposal buttons are already hidden.
+                command_frame.set_visible(false);
+                template_box.set_visible(false);
+                file_action_box.set_visible(false);
+                action_box.set_visible(false);
+
                 let host = host.clone();
                 gtk4::glib::timeout_add_local(std::time::Duration::from_millis(50), move || {
                     host.grab_focus();
@@ -717,6 +729,13 @@ impl TerminalOverlay {
 
     pub fn hide(&self) {
         self.revealer.set_reveal_child(false);
+        // Robust hiding: explicitly hide all proposal-specific action containers
+        // to ensure we don't accidentally leave stale buttons visible if the drawer
+        // re-opens later.
+        self.command_frame.set_visible(false);
+        self.template_box.set_visible(false);
+        self.file_action_box.set_visible(false);
+        self.action_box.set_visible(false);
     }
 
     pub fn grab_input_focus(&self) {

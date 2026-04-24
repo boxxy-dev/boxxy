@@ -83,6 +83,11 @@ pub fn spawn_dispatch(
                 ClawEngineEvent::LazyErrorIndicator { .. } => {
                     indicator.show_lazy_error();
                 }
+                ClawEngineEvent::DismissDrawer => {
+                    // Explicitly close the drawer from the backend. This happens when
+                    // the user rejects a proposal, and the agent outputs [SILENT_ACK].
+                    overlay.hide();
+                }
                 ClawEngineEvent::DiagnosisComplete {
                     diagnosis,
                     agent_name,

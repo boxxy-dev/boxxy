@@ -615,9 +615,12 @@ pub fn spawn_turn(
 
                 if clean_diagnosis.trim() == "[SILENT_ACK]" {
                     info!(
-                        "Pane {} ({}): Agent acknowledged rejection silently. Not sending UI event.",
+                        "Pane {} ({}): Agent acknowledged rejection silently. Sending DismissDrawer event.",
                         pane_id, agent_name
                     );
+                    // Tell the UI to actively hide the drawer and clear any pending action buttons
+                    // so we don't leave stale proposals on the screen after a rejection.
+                    let _ = tx_ui.send(ClawEngineEvent::DismissDrawer).await;
                 } else if clean_diagnosis.trim().is_empty() && command_opt.is_none() {
                     info!(
                         "Pane {} ({}): Agent response was empty (likely just tool calls). Not sending UI event.",

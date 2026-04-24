@@ -169,14 +169,20 @@ async fn spawn_agent(host_path: &PathBuf) -> Result<()> {
 
     if is_flatpak() {
         info!("Spawning agent on host: {}", host_path.display());
-        Command::new("flatpak-spawn")
-            .args(["--host", &host_path.to_string_lossy(), "--background"])
+        let mut cmd = Command::new("flatpak-spawn");
+        if let Ok(val) = std::env::var("BOXXY_DEBUG_CONTEXT") {
+            cmd.args(["--env=BOXXY_DEBUG_CONTEXT=".to_string() + &val]);
+        }
+        cmd.args(["--host", &host_path.to_string_lossy(), "--background"])
             .spawn()
             .context("Failed to spawn agent on host")?;
     } else {
         info!("Spawning native agent: {}", host_path.display());
-        Command::new(host_path)
-            .arg("--background")
+        let mut cmd = Command::new(host_path);
+        if let Ok(val) = std::env::var("BOXXY_DEBUG_CONTEXT") {
+            cmd.env("BOXXY_DEBUG_CONTEXT", val);
+        }
+        cmd.arg("--background")
             .spawn()
             .context("Failed to spawn native agent")?;
     }

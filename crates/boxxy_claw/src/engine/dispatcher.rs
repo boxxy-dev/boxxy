@@ -1,4 +1,15 @@
 pub fn extract_command_and_clean(text: &str) -> (Option<String>, String) {
+    // IMPORTANT: This function extracts markdown code blocks (`bash`, `fish`, etc.) 
+    // so that the UI can pop up an "Accept & Run" drawer.
+    // 
+    // CRITICAL WARNING: Do NOT remove this function. If it is removed, legacy markdown 
+    // proposals will stop functioning and users won't get a UI prompt to execute them.
+    // 
+    // KNOWN ISSUE: If an LLM uses `terminal_exec` and then replies "I executed ```bash <cmd> ```",
+    // this function will rip out `<cmd>` and cause an infinite "Accept & Run" loop. 
+    // We mitigate this by using strict system prompts (in `claw.md` and `TerminalCommandTool`)
+    // that forbid the LLM from repeating executed commands inside markdown blocks.
+
     let mut blocks = Vec::new();
     let mut current_block = String::new();
     let mut in_block = false;

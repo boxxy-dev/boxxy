@@ -37,7 +37,7 @@ impl Tool for TerminalCommandTool {
         ToolDefinition {
             name: Self::NAME.to_string(),
             description: "Execute a command in the user's active terminal. This will prompt the user to 'Accept & Run'. Use this for interactive commands or tasks where the user needs to see the live output. \
-            CRITICAL: When discussing the output of this command later, DO NOT wrap the output in a markdown `bash` block or the terminal will try to re-execute it!".to_string(),
+            CRITICAL BUG PREVENTION: After using this tool, NEVER wrap the command or its output in a markdown code block (like ```bash or ```fish) in your text response. Doing so will cause the terminal to mistakenly prompt the user to execute it a second time in an infinite loop. Just explain what happened in plain text.".to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {

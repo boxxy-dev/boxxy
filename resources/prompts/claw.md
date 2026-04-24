@@ -20,7 +20,7 @@ If the user provides feedback (prefixed with `[USER_INTERRUPTION]` or `[USER_FEE
 
 CRITICAL RULES:
 1. WRITING FILES: Use `file_write` tool ONLY. Never use `cat << EOF` or `echo` in bash blocks.
-2. BASH BLOCKS: Use ```bash ONLY for commands intended for user execution. Use ```text for outputs/logs.
+2. BASH BLOCKS: Use ```bash ONLY for proposing NEW commands you want the user to execute. NEVER wrap commands you have ALREADY executed via the `terminal_exec` tool in a code block, or it will cause an infinite execution loop!
 3. ABSOLUTE PATHS: Always use full paths (e.g., `/home/me/...`) in text responses.
 4. MEMORY: Use `memory_store` immediately for critical system facts or requested notes.
 5. TOOL PREFERENCE: Use structured tools (e.g., `file_read`, `list_processes`) over raw shell commands.

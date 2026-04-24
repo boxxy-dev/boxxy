@@ -162,6 +162,10 @@ pub struct FileWriteArgs {
 #[derive(Serialize)]
 pub struct FileWriteOutput {
     pub success: bool,
+    /// Explicit error feedback for the LLM. When the user rejects the write,
+    /// we pass a clear message so the LLM knows not to retry infinitely.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 pub struct FileWriteTool {
@@ -210,11 +214,17 @@ impl Tool for FileWriteTool {
 
         if approved {
             match self.env.write_file(path, args.content).await {
-                Ok(_) => Ok(FileWriteOutput { success: true }),
+                Ok(_) => Ok(FileWriteOutput {
+                    success: true,
+                    error: None,
+                }),
                 Err(e) => Err(std::io::Error::other(format!("Environment Error: {e}"))),
             }
         } else {
-            Ok(FileWriteOutput { success: false })
+            Ok(FileWriteOutput {
+                success: false,
+                error: Some("The user explicitly rejected this file write operation. Do not attempt it again.".to_string()),
+            })
         }
     }
 }
@@ -229,6 +239,9 @@ pub struct FileDeleteArgs {
 #[derive(Serialize)]
 pub struct FileDeleteOutput {
     pub success: bool,
+    /// Explicit error feedback for the LLM to prevent retry loops on user rejection.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 pub struct FileDeleteTool {
@@ -270,11 +283,20 @@ impl Tool for FileDeleteTool {
 
         if approved {
             match self.env.delete_file(path).await {
-                Ok(_) => Ok(FileDeleteOutput { success: true }),
+                Ok(_) => Ok(FileDeleteOutput {
+                    success: true,
+                    error: None,
+                }),
                 Err(e) => Err(std::io::Error::other(format!("Environment Error: {e}"))),
             }
         } else {
-            Ok(FileDeleteOutput { success: false })
+            Ok(FileDeleteOutput {
+                success: false,
+                error: Some(
+                    "The user explicitly rejected this file deletion. Do not attempt it again."
+                        .to_string(),
+                ),
+            })
         }
     }
 }

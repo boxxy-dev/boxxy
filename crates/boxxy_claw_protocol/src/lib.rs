@@ -249,6 +249,9 @@ pub enum ClawEngineEvent {
         diagnosis: String,
         usage: Option<UsageWrapper>,
     },
+    /// Forces the UI to cleanly close the Claw drawer and reset action states.
+    /// Emitted when the agent silently acknowledges a user rejection ([SILENT_ACK]).
+    DismissDrawer,
     InjectCommand {
         agent_name: String,
         command: String,
