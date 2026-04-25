@@ -171,6 +171,36 @@ impl OpenAiModel {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DeepSeekModel {
+    #[serde(rename = "deepseek-v4-pro")]
+    Pro,
+    #[serde(rename = "deepseek-v4-flash")]
+    Flash,
+}
+
+impl fmt::Display for DeepSeekModel {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            DeepSeekModel::Pro => write!(f, "DeepSeek-V4-Pro"),
+            DeepSeekModel::Flash => write!(f, "DeepSeek-V4-Flash"),
+        }
+    }
+}
+
+impl DeepSeekModel {
+    pub fn all() -> Vec<DeepSeekModel> {
+        vec![DeepSeekModel::Pro, DeepSeekModel::Flash]
+    }
+
+    pub fn api_name(&self) -> &'static str {
+        match self {
+            DeepSeekModel::Pro => "deepseek-v4-pro",
+            DeepSeekModel::Flash => "deepseek-v4-flash",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ModelProvider {
     Gemini(GeminiModel, Option<ThinkingLevel>),
@@ -178,6 +208,7 @@ pub enum ModelProvider {
     Anthropic(AnthropicModel),
     OpenAi(OpenAiModel, Option<ThinkingLevel>),
     OpenRouter(String),
+    DeepSeek(DeepSeekModel),
 }
 
 impl ModelProvider {
@@ -188,6 +219,7 @@ impl ModelProvider {
             ModelProvider::Anthropic(_) => "Anthropic",
             ModelProvider::OpenAi(_, _) => "OpenAI",
             ModelProvider::OpenRouter(_) => "OpenRouter",
+            ModelProvider::DeepSeek(_) => "DeepSeek",
         }
     }
 
@@ -198,6 +230,7 @@ impl ModelProvider {
             ModelProvider::Anthropic(model) => format!("Anthropic {}", model),
             ModelProvider::OpenAi(model, _) => format!("OpenAI {}", model),
             ModelProvider::OpenRouter(model) => format!("OpenRouter {}", model),
+            ModelProvider::DeepSeek(model) => format!("DeepSeek {}", model),
         }
     }
 }

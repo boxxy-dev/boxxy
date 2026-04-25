@@ -1,4 +1,4 @@
-use crate::models::{AnthropicModel, GeminiModel, ModelProvider, OpenAiModel};
+use crate::models::{AnthropicModel, DeepSeekModel, GeminiModel, ModelProvider, OpenAiModel};
 use gtk4 as gtk;
 use gtk4::prelude::*;
 
@@ -304,6 +304,47 @@ impl AiProvider for OpenRouterProviderImpl {
     }
 }
 
+struct DeepSeekProviderImpl;
+impl AiProvider for DeepSeekProviderImpl {
+    fn name(&self) -> &'static str {
+        "DeepSeek"
+    }
+    fn get_models(&self) -> Vec<String> {
+        DeepSeekModel::all()
+            .into_iter()
+            .map(|m| m.to_string())
+            .collect()
+    }
+    fn create_model_provider(
+        &self,
+        model_idx: u32,
+        _name: Option<String>,
+        _thinking: Option<u32>,
+    ) -> ModelProvider {
+        let am = DeepSeekModel::all();
+        let model = am
+            .get(model_idx as usize)
+            .cloned()
+            .unwrap_or(DeepSeekModel::Flash);
+        ModelProvider::DeepSeek(model)
+    }
+    fn sync_ui(
+        &self,
+        provider: &ModelProvider,
+        model_dropdown: &gtk::DropDown,
+        _thinking_dropdown: &gtk::DropDown,
+        _model_list: &gtk::StringList,
+        _thinking_list: &gtk::StringList,
+    ) {
+        if let ModelProvider::DeepSeek(m) = provider {
+            let am = DeepSeekModel::all();
+            if let Some(pos) = am.iter().position(|x| x == m) {
+                model_dropdown.set_selected(pos as u32);
+            }
+        }
+    }
+}
+
 pub fn get_providers() -> Vec<Box<dyn AiProvider>> {
     vec![
         Box::new(GeminiProviderImpl),
@@ -311,5 +352,6 @@ pub fn get_providers() -> Vec<Box<dyn AiProvider>> {
         Box::new(AnthropicProviderImpl),
         Box::new(OpenAiProviderImpl),
         Box::new(OpenRouterProviderImpl),
+        Box::new(DeepSeekProviderImpl),
     ]
 }

@@ -85,6 +85,7 @@ enum BoxxyAgentInner {
     Anthropic(rig::agent::Agent<rig::providers::anthropic::completion::CompletionModel>),
     OpenAi(rig::agent::Agent<ResponsesCompletionModel>),
     OpenRouter(rig::agent::Agent<ResponsesCompletionModel>),
+    DeepSeek(rig::agent::Agent<rig::providers::deepseek::CompletionModel>),
     Error(String),
 }
 
@@ -134,6 +135,14 @@ impl BoxxyAgent {
                     .await
             }
             BoxxyAgentInner::OpenRouter(agent) => {
+                agent
+                    .prompt(prompt)
+                    .with_history(history)
+                    .with_hook(hook)
+                    .extended_details()
+                    .await
+            }
+            BoxxyAgentInner::DeepSeek(agent) => {
                 agent
                     .prompt(prompt)
                     .with_history(history)
@@ -216,6 +225,13 @@ impl BoxxyAgent {
                     .await
             }
             BoxxyAgentInner::OpenRouter(agent) => {
+                agent
+                    .prompt(prompt)
+                    .with_hook(hook)
+                    .extended_details()
+                    .await
+            }
+            BoxxyAgentInner::DeepSeek(agent) => {
                 agent
                     .prompt(prompt)
                     .with_hook(hook)
@@ -357,6 +373,16 @@ pub fn create_agent(
                 .preamble(system_prompt)
                 .build();
             BoxxyAgentInner::OpenRouter(agent)
+        }
+        ModelProvider::DeepSeek(model) => {
+            let key = creds.api_keys.get("DeepSeek").cloned().unwrap_or_default();
+            let client = rig::providers::deepseek::Client::new(key.trim()).unwrap();
+            let deepseek_model = client.completion_model(model.api_name());
+
+            let agent = rig::agent::AgentBuilder::new(deepseek_model)
+                .preamble(system_prompt)
+                .build();
+            BoxxyAgentInner::DeepSeek(agent)
         }
     };
 

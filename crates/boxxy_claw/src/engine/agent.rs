@@ -46,6 +46,7 @@ enum ClawAgentInner {
     ),
     OpenAi(Agent<ResponsesCompletionModel>, String, String),
     OpenRouter(Agent<ResponsesCompletionModel>, String, String),
+    DeepSeek(Agent<rig::providers::deepseek::CompletionModel>, String, String),
     Error(String),
 }
 
@@ -107,6 +108,14 @@ impl ClawAgent {
                     .extended_details()
                     .await
             }
+            ClawAgentInner::DeepSeek(agent, _, _) => {
+                agent
+                    .prompt(prompt)
+                    .with_history(history)
+                    .with_hook(hook)
+                    .extended_details()
+                    .await
+            }
             ClawAgentInner::Error(e) => {
                 return Err(rig::completion::PromptError::CompletionError(
                     rig::completion::CompletionError::ProviderError(e.clone()),
@@ -123,6 +132,7 @@ impl ClawAgent {
                     ClawAgentInner::Anthropic(_, p, m) => (p.as_str(), m.as_str()),
                     ClawAgentInner::OpenAi(_, p, m) => (p.as_str(), m.as_str()),
                     ClawAgentInner::OpenRouter(_, p, m) => (p.as_str(), m.as_str()),
+                    ClawAgentInner::DeepSeek(_, p, m) => (p.as_str(), m.as_str()),
                     _ => ("unknown", "unknown"),
                 };
 
@@ -549,6 +559,22 @@ pub async fn create_claw_agent(
                 builder.build(),
                 "OpenRouter".to_string(),
                 model_name.clone(),
+            )
+        }
+        ModelProvider::DeepSeek(model) => {
+            let key = creds.api_keys.get("DeepSeek").cloned().unwrap_or_default();
+            let client = rig::providers::deepseek::Client::new(key.trim()).unwrap();
+            let deepseek_model = client.completion_model(model.api_name());
+
+            let builder = rig::agent::AgentBuilder::new(deepseek_model)
+                .preamble(&final_preamble)
+                .default_max_turns(100)
+                .tools(tools);
+
+            ClawAgentInner::DeepSeek(
+                builder.build(),
+                "DeepSeek".to_string(),
+                model.api_name().to_string(),
             )
         }
     };

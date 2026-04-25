@@ -63,6 +63,7 @@ fn main() {
             ("ANTHROPIC_API_KEY", "Anthropic"),
             ("OPENAI_API_KEY", "OpenAI"),
             ("OPENROUTER_API_KEY", "OpenRouter"),
+            ("DEEPSEEK_API_KEY", "DeepSeek"),
         ];
 
         let mut found_any = false;

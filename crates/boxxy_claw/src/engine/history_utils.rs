@@ -9,6 +9,7 @@ pub fn provider_family(model: &Option<boxxy_model_selection::ModelProvider>) -> 
         Some(boxxy_model_selection::ModelProvider::Anthropic(_)) => "anthropic",
         Some(boxxy_model_selection::ModelProvider::OpenAi(_, _)) => "openai",
         Some(boxxy_model_selection::ModelProvider::OpenRouter(_)) => "openrouter",
+        Some(boxxy_model_selection::ModelProvider::DeepSeek(_)) => "deepseek",
         None => "unknown",
     }
 }
