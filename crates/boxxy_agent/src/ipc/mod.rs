@@ -143,11 +143,6 @@ impl AgentInterface {
     ) {
         log::info!("Updating credentials for {} providers", api_keys.len());
 
-        // Hydrate from disk first so we don't accidentally overwrite
-        // newly-saved disk settings with our stale in-memory cache
-        // when the UI subsequently calls other methods.
-        boxxy_preferences::Settings::reload();
-
         let mut keys_guard = self.core.state.api_keys.write().await;
         *keys_guard = api_keys;
         let mut url_guard = self.core.state.ollama_url.write().await;

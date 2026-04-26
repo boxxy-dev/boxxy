@@ -45,6 +45,7 @@ pub struct SessionState {
     pub history: Vec<Message>,
     pub pending_lazy_diagnosis: Option<(String, String, String)>,
     pub persistent_agent: Option<crate::engine::agent::ClawAgent>,
+    pub current_memory_model: Option<boxxy_model_selection::ModelProvider>,
     pub last_tools: Option<Vec<String>>,
     pub pending_tasks: Vec<crate::engine::ScheduledTask>,
     pub last_snapshot_hash: Option<u64>,
@@ -127,6 +128,7 @@ impl ClawSession {
                 history: Vec::new(),
                 pending_lazy_diagnosis: None,
                 persistent_agent: None,
+                current_memory_model: settings.memory_model.clone(),
                 last_tools: None,
                 pending_tasks: Vec::new(),
                 last_snapshot_hash: None,
@@ -488,21 +490,18 @@ impl ClawSession {
                         ClawMessage::SettingsInvalidated => {
                             info!("[{}] Settings changed. Next turn will trigger a hot-swap.", self.name);
 
-                            // Snapshot the model labels *before* reload so we
-                            // can tell whether this change actually altered
-                            // the Claw/Dreams model selection. Any unrelated
-                            // setting (persistence toggle, font size, etc.)
-                            // should leave the sidebar alone — we used to
-                            // emit a "Models" row unconditionally, which
-                            // littered the history on every save.
-                            let before = boxxy_preferences::Settings::load();
+                            let mut state_lock = self.state.lock().await;
+
                             let model_label = |m: &Option<_>| -> String {
                                 m.as_ref()
                                     .map(|p: &boxxy_model_selection::ModelProvider| p.format_label())
                                     .unwrap_or_else(|| "Default".to_string())
                             };
-                            let (old_claw, old_memory) =
-                                (model_label(&before.claw_model), model_label(&before.memory_model));
+
+                            let (old_claw, old_memory) = (
+                                model_label(&state_lock.persistent_agent.as_ref().and_then(|a| a.config.model.clone())),
+                                model_label(&state_lock.current_memory_model)
+                            );
 
                             // Cross-process settings sync: the UI writes
                             // `settings.json` on save, but the daemon's in-memory
@@ -516,8 +515,12 @@ impl ClawSession {
 
                             if new_claw == old_claw && new_memory == old_memory {
                                 // Non-model change (persistence, theme, ...) — no log entry.
+                                drop(state_lock);
                                 continue;
                             }
+                            
+                            // Update the session's memory model tracker
+                            state_lock.current_memory_model = after.memory_model.clone();
 
                             let event = ClawEngineEvent::SystemMessage {
                                 text: format!("Claw: {new_claw} · Dreams: {new_memory}"),
@@ -529,6 +532,8 @@ impl ClawSession {
                                 &event
                             );
                             let _ = self.tx_ui.send(event).await;
+
+                            drop(state_lock);
                         }
                         ClawMessage::Abort => {
                             if let Some(handle) = current_turn.take() {

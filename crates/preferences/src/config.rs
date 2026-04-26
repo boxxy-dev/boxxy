@@ -304,11 +304,19 @@ You can add your own sensitive paths here. One path per line. Lines starting wit
             *cache.write().unwrap() = self.clone();
         }
 
-        if let Some(path) = Self::get_path()
-            && let Ok(content) = serde_json::to_string_pretty(self)
-        {
-            let _ = fs::write(path, content);
-            let _ = SETTINGS_EVENT_BUS.send(self.clone());
+        if let Some(path) = Self::get_path() {
+            if let Ok(content) = serde_json::to_string_pretty(self) {
+                // Atomic write: write to .tmp then rename.
+                // This prevents the daemon from reading a partial file and
+                // prevents settings from being wiped if a crash occurs during saving.
+                let mut tmp_path = path.clone();
+                tmp_path.set_extension("json.tmp");
+
+                if fs::write(&tmp_path, content).is_ok() {
+                    let _ = fs::rename(&tmp_path, path);
+                }
+                let _ = SETTINGS_EVENT_BUS.send(self.clone());
+            }
         }
     }
 

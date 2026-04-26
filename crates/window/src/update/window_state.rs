@@ -208,11 +208,12 @@ pub fn settings_changed(inner: &mut AppWindowInner, settings: Settings) {
     }
 
     // Re-push credentials so the daemon's in-memory `core.state.api_keys`
-    // tracks any changes the user just made in Settings → APIs.
+    // track any changes the user just made in Settings → APIs.
     // (The engine also falls back to disk, but keeping the IPC state
     // current avoids that fallback path on every turn.)
     let effective_keys = settings.get_effective_api_keys();
     let ollama_url = settings.ollama_base_url.clone();
+
     gtk4::glib::spawn_future_local(async move {
         let agent = boxxy_terminal::get_agent().await;
         let _ = agent.update_credentials(effective_keys, ollama_url).await;
