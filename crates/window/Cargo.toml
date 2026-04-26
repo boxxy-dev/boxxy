@@ -6,6 +6,9 @@ description.workspace = true
 license.workspace = true
 name = "boxxy-window"
 
+[features]
+disable-self-update = ["boxxy-ai-core/disable-self-update"]
+
 [dependencies]
 gtk4.workspace = true
 libadwaita.workspace = true

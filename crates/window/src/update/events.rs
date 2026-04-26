@@ -70,7 +70,7 @@ pub fn handle_terminal_event(
                     crate::widgets::notification::Notification::new_info(message),
                 ));
             }
-            TerminalEventKind::ClawStateChanged(active, sleep) => {
+            TerminalEventKind::ClawStateChanged(active, _sleep) => {
                 let widget = inner.tabs[pos].controller.widget();
                 let page = inner.tab_view.page(widget);
 
@@ -159,7 +159,7 @@ pub fn handle_terminal_event(
                             let child = page.child();
                             if inner.tabs[pos].controller.widget() == &child {
                                 let active = inner.tabs[pos].controller.is_claw_active();
-                                let sleep = inner.tabs[pos].controller.is_sleep();
+                                let _sleep = inner.tabs[pos].controller.is_sleep();
                                 inner.claw_active = active;
                                 inner.claw.set_history_widget(
                                     &inner.tabs[pos].controller.claw_history_widget(),

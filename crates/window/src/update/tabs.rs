@@ -412,7 +412,7 @@ pub fn focus_active_terminal(inner: &mut AppWindowInner) {
                 page.set_indicator_icon(None::<&gio::Icon>);
             }
 
-            let tab_is_sleep = tc.controller.is_sleep();
+            let _tab_is_sleep = tc.controller.is_sleep();
 
             inner.claw.set_history_widget(
                 &tc.controller.claw_history_widget(),

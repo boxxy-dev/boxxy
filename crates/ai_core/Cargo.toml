@@ -6,6 +6,11 @@ description.workspace = true
 license.workspace = true
 name = "boxxy-ai-core"
 
+[features]
+default = ["self-update"]
+self-update = []
+disable-self-update = []
+
 [dependencies]
 async-trait.workspace = true
 serde.workspace = true

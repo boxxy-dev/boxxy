@@ -28,6 +28,25 @@ pub fn is_flatpak() -> bool {
     ashpd::is_sandboxed()
 }
 
+/// Returns true if the internal self-updater is allowed to run.
+/// This is disabled in Flatpak or if the `disable-self-update` feature is enabled.
+pub fn can_self_update() -> bool {
+    #[cfg(feature = "disable-self-update")]
+    {
+        return false;
+    }
+
+    #[cfg(feature = "self-update")]
+    {
+        return !is_flatpak();
+    }
+
+    #[cfg(not(feature = "self-update"))]
+    {
+        false
+    }
+}
+
 /// Fetches the current location context in the background.
 pub async fn fetch_location_context() {
     let cache = LOCATION_CACHE.get_or_init(|| Arc::new(RwLock::new(None)));
@@ -58,4 +77,23 @@ pub async fn fetch_location_context() {
 /// Returns the current location context from cache.
 pub fn get_location_context() -> Option<LocationContext> {
     LOCATION_CACHE.get()?.read().unwrap().clone()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_can_self_update_logic() {
+        let flatpak = is_flatpak();
+        let can_update = can_self_update();
+
+        if cfg!(feature = "disable-self-update") {
+            assert!(!can_update, "Self-update must be disabled when feature is enabled");
+        } else if flatpak {
+            assert!(!can_update, "Self-update must be disabled when in flatpak");
+        } else {
+            assert!(can_update, "Self-update should be enabled for native builds without the feature flag");
+        }
+    }
 }

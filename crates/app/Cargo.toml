@@ -6,6 +6,9 @@ description.workspace = true
 license.workspace = true
 name = "boxxy-app"
 
+[features]
+disable-self-update = ["boxxy-window/disable-self-update"]
+
 [dependencies]
 tokio.workspace = true
 gtk4.workspace = true

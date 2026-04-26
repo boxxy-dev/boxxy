@@ -151,14 +151,15 @@ Provides a privacy-first observability layer for tracking agent and system usage
 
 ## Distribution & Updates
 
-Boxxy supports two primary distribution channels:
+Boxxy supports three primary distribution channels:
 
 1. **Flatpak (Flathub):** The primary sandboxed distribution. Updates are managed externally by the Flatpak system.
 2. **Native (GitHub Nightly):** A standalone installation method via `scripts/install.sh` that targets `~/.local/boxxy-terminal/`. 
+3. **System Package Managers (Nix, Arch AUR, etc.):** For environments where a system package manager handles updates. Maintainers should compile with the `disable-self-update` Cargo feature (`cargo build --release --features disable-self-update`) to strip out the internal update logic and related dependencies.
 
 ### Auto-Update Protocol (Native Only)
 For native installations, Boxxy implements an **Atomic Swap** update mechanism located in `boxxy_window::updater`:
-- **Detection:** Reuses `is_flatpak()` to disable the internal updater when sandboxed.
+- **Detection:** Uses `can_self_update()` to safely disable the internal updater when sandboxed via Flatpak or when explicitly compiled out via the `disable-self-update` feature.
 - **Verification:** Tracks the `published_at` date of the GitHub `nightly` release in `~/.local/boxxy-terminal/.last_update` to avoid redundant prompts.
 - **Persistence:** Downloads and extracts updates silently in the background.
 - **Execution:** Performs an atomic rename of the running `boxxy-terminal` and `boxxy-agent` binaries before spawning the new process and exiting. This bypasses "text file busy" errors and requires no root privileges.

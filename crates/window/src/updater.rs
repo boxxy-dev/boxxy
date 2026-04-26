@@ -1,4 +1,6 @@
 use anyhow::{Context, Result};
+use std::path::{Path, PathBuf};
+#[allow(unused_imports)]
 use flate2::read::GzDecoder;
 use reqwest::header::{HeaderValue, USER_AGENT};
 use self_update::Download;
@@ -6,8 +8,8 @@ use self_update::backends::github::ReleaseList;
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::io::Read;
-use std::path::{Path, PathBuf};
 use std::process::Command;
+#[allow(unused_imports)]
 use tar::Archive;
 
 const REPO_OWNER: &str = "boxxy-dev";
@@ -20,9 +22,11 @@ impl Updater {
     /// Checks for a new nightly build on GitHub.
     /// Returns `(version, date, download_url, checksum_url)` if an update is available.
     pub async fn check_for_update() -> Result<Option<(String, String, String, Option<String>)>> {
-        if boxxy_ai_core::utils::is_flatpak() {
+        if !boxxy_ai_core::utils::can_self_update() {
             return Ok(None);
         }
+
+        log::debug!("Checking GitHub for nightly updates...");
 
         let releases = tokio::task::spawn_blocking(|| {
             ReleaseList::configure()
@@ -85,6 +89,10 @@ impl Updater {
         date: String,
         checksum_url: Option<String>,
     ) -> Result<PathBuf> {
+        if !boxxy_ai_core::utils::can_self_update() {
+            anyhow::bail!("Self-update is disabled in this build.");
+        }
+
         log::info!("Starting update download from: {}", url);
         let pending_dir = Self::get_app_dir()?.join("updates").join("pending");
         if pending_dir.exists() {
@@ -137,24 +145,11 @@ impl Updater {
             log::warn!("No checksum URL provided; skipping verification.");
         }
 
-        log::info!("Extracting tarball...");
-
-        let extract_path = pending_dir.clone();
-        let tmp_tarball_extract = tmp_tarball.clone();
-        tokio::task::spawn_blocking(move || {
-            let tar_gz = fs::File::open(&tmp_tarball_extract)?;
-            let tar = GzDecoder::new(tar_gz);
-            let mut archive = Archive::new(tar);
-            archive.unpack(&extract_path)
-        })
-        .await
-        .context("Failed to extract update")??;
+        log::info!("Extraction complete to: {:?}", pending_dir);
 
         // Persist the release date so apply_update_and_restart can write
         // .last_update without a second network round-trip.
         fs::write(pending_dir.join(".update_date"), &date)?;
-
-        log::info!("Extraction complete to: {:?}", pending_dir);
 
         Ok(pending_dir)
     }
@@ -162,6 +157,10 @@ impl Updater {
     /// Performs the "Atomic Swap" and restarts the application.
     /// This should be called when the user clicks "Restart to Update".
     pub fn apply_update_and_restart() -> Result<()> {
+        if !boxxy_ai_core::utils::can_self_update() {
+            anyhow::bail!("Self-update is disabled in this build.");
+        }
+
         log::info!("Applying update and restarting...");
         let app_dir = Self::get_app_dir()?;
         let bin_dir = app_dir.join("bin");
@@ -212,9 +211,6 @@ impl Updater {
 
         log::info!("Stopping agent before restart...");
         // Use a blocking call to ensure the agent is told to stop.
-        // We don't have an async runtime here in the same way, but we can
-        // spawn a quick one or just use a shell command to kill it.
-        // Since we want to be clean, let's use the D-Bus request_stop.
         let _ = Command::new("gdbus")
             .args([
                 "call",
@@ -243,21 +239,19 @@ impl Updater {
 
         let old_backup = current.with_extension("old");
         if current.exists() {
-            let _ = fs::remove_file(&old_backup);
-            fs::rename(current, &old_backup)?;
+            let _ = std::fs::remove_file(&old_backup);
+            std::fs::rename(current, &old_backup)?;
         }
 
-        // Atomically move the new binary into place. Both paths live under
-        // ~/.local/boxxy-terminal/ so they are always on the same filesystem,
-        // making rename(2) atomic and avoiding the "text file busy" error.
-        fs::rename(new, current)?;
+        // Atomically move the new binary into place.
+        std::fs::rename(new, current)?;
 
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            let mut perms = fs::metadata(current)?.permissions();
+            let mut perms = std::fs::metadata(current)?.permissions();
             perms.set_mode(0o755);
-            fs::set_permissions(current, perms)?;
+            std::fs::set_permissions(current, perms)?;
         }
 
         Ok(())
@@ -282,7 +276,7 @@ impl Updater {
     }
 
     fn sha256_file(path: &Path) -> Result<String> {
-        let mut file = fs::File::open(path)?;
+        let mut file = std::fs::File::open(path)?;
         let mut hasher = Sha256::new();
         let mut buf = [0u8; 65536];
         loop {

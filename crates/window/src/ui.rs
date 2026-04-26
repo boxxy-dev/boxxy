@@ -412,24 +412,28 @@ impl AppWindow {
         }
 
         // Background update check
-        let tx_update = tx.clone();
-        tokio::spawn(async move {
-            // Wait 10 seconds after startup to not interfere with boot
-            tokio::time::sleep(std::time::Duration::from_secs(10)).await;
-            if let Ok(Some((version, date, url, checksum_url))) =
-                crate::updater::Updater::check_for_update().await
-            {
-                let notification = crate::widgets::notification::Notification::new_update(
-                    &version,
-                    &date,
-                    &url,
-                    checksum_url,
-                );
-                let _ = tx_update
-                    .send(AppInput::PushGlobalNotification(notification))
-                    .await;
-            }
-        });
+        if boxxy_ai_core::utils::can_self_update() {
+            let tx_update = tx.clone();
+            tokio::spawn(async move {
+                // Wait 10 seconds after startup to not interfere with boot
+                tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+                if let Ok(Some((version, date, url, checksum_url))) =
+                    crate::updater::Updater::check_for_update().await
+                {
+                    let notification = crate::widgets::notification::Notification::new_update(
+                        &version,
+                        &date,
+                        &url,
+                        checksum_url,
+                    );
+                    let _ = tx_update
+                        .send(AppInput::PushGlobalNotification(notification))
+                        .await;
+                }
+            });
+        } else {
+            log::debug!("Self-updater is disabled. Skipping update check.");
+        }
 
         window.present();
 
