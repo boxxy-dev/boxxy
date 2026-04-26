@@ -148,6 +148,13 @@ impl AgentManager {
         let _ = self.agent_proxy.notify_client_disconnected().await;
     }
 
+    pub async fn notify_settings_invalidated(&self) -> Result<()> {
+        self.agent_proxy
+            .notify_settings_invalidated()
+            .await
+            .context("Failed to notify agent of settings invalidation")
+    }
+
     pub async fn update_credentials(
         &self,
         api_keys: std::collections::HashMap<String, String>,

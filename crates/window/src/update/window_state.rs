@@ -216,6 +216,7 @@ pub fn settings_changed(inner: &mut AppWindowInner, settings: Settings) {
     gtk4::glib::spawn_future_local(async move {
         let agent = boxxy_terminal::get_agent().await;
         let _ = agent.update_credentials(effective_keys, ollama_url).await;
+        let _ = agent.notify_settings_invalidated().await;
     });
 
     if inner.sidebar_toolbar.width_request() != settings.ai_chat_width {

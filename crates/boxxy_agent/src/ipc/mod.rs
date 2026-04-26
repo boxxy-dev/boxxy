@@ -93,6 +93,7 @@ pub trait Agent {
     ) -> zbus::Result<()>;
     async fn notify_client_connected(&self) -> zbus::Result<bool>;
     async fn notify_client_disconnected(&self) -> zbus::Result<()>;
+    async fn notify_settings_invalidated(&self) -> zbus::Result<()>;
     async fn request_reload(&self) -> zbus::Result<()>;
     async fn request_stop(&self) -> zbus::Result<()>;
 
@@ -141,10 +142,21 @@ impl AgentInterface {
         ollama_url: String,
     ) {
         log::info!("Updating credentials for {} providers", api_keys.len());
+
+        // Hydrate from disk first so we don't accidentally overwrite
+        // newly-saved disk settings with our stale in-memory cache
+        // when the UI subsequently calls other methods.
+        boxxy_preferences::Settings::reload();
+
         let mut keys_guard = self.core.state.api_keys.write().await;
         *keys_guard = api_keys;
         let mut url_guard = self.core.state.ollama_url.write().await;
         *url_guard = ollama_url;
+    }
+
+    async fn notify_settings_invalidated(&self) {
+        log::info!("Settings invalidated signal received from UI. Reloading cache.");
+        boxxy_preferences::Settings::reload();
     }
 
     #[zbus(signal)]
