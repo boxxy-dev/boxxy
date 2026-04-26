@@ -158,7 +158,7 @@ impl AgentInterface {
     }
 
     async fn notify_settings_invalidated(&self) {
-        log::info!("Settings invalidated signal received from UI. Reloading cache.");
+        log::debug!("Settings invalidated signal received from UI. Reloading cache.");
         boxxy_preferences::Settings::reload();
     }
 
