@@ -19,7 +19,7 @@ chrono.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 lazy_static.workspace = true
-boxxy-ai-core = { path = "../ai_core" }
+boxxy-sys-utils = { path = "../sys_utils" }
 boxxy-claw = { path = "../boxxy_claw" }
 boxxy-claw-protocol = { path = "../boxxy_claw_protocol" }
 boxxy-claw-ui = { path = "../boxxy_claw_ui" }

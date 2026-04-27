@@ -1,4 +1,4 @@
-use boxxy_ai_core::utils;
+use boxxy_sys_utils;
 use boxxy_window::{AppInit, AppWindow};
 use gtk4::{gio, glib};
 use libadwaita::prelude::*;
@@ -16,7 +16,7 @@ fn main() {
         .filter_module("rustls", log::LevelFilter::Warn)
         .init();
     // Enter the global tokio runtime context so tokio::spawn works everywhere.
-    let _rt_guard = utils::runtime().enter();
+    let _rt_guard = boxxy_sys_utils::runtime().enter();
 
     // Pre-load configuration into memory before GTK touches the window system.
     // This completely removes disk I/O from the critical window mapping path.

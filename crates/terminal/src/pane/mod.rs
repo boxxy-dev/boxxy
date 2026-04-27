@@ -1171,7 +1171,7 @@ impl TerminalPaneComponent {
         let path = wd.strip_prefix("file://").unwrap_or(&wd).to_string();
 
         gtk4::glib::spawn_future_local(async move {
-            if boxxy_ai_core::utils::is_flatpak() {
+            if is_flatpak() {
                 if let Ok(dir) = std::fs::File::open(&path) {
                     use std::os::fd::AsFd;
                     let req = ashpd::desktop::open_uri::OpenDirectoryRequest::default()

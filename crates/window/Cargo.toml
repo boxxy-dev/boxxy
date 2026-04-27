@@ -7,12 +7,13 @@ license.workspace = true
 name = "boxxy-window"
 
 [features]
-disable-self-update = ["boxxy-ai-core/disable-self-update"]
+disable-self-update = ["boxxy-sys-utils/disable-self-update"]
 
 [dependencies]
 gtk4.workspace = true
 libadwaita.workspace = true
 boxxy-terminal = { path = "../terminal" }
+boxxy-sys-utils = { path = "../sys_utils" }
 boxxy-preferences = { path = "../preferences" }
 boxxy-keybindings = { path = "../keybindings" }
 boxxy-themes = { path = "../themes" }

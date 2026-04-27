@@ -267,7 +267,7 @@ impl AppWindow {
 
         let mut event_rx = boxxy_terminal::TERMINAL_EVENT_BUS.subscribe();
         let tx_event = tx.clone();
-        boxxy_ai_core::utils::runtime().spawn(async move {
+        boxxy_sys_utils::runtime().spawn(async move {
             while let Ok(event) = event_rx.recv().await {
                 let _ = tx_event
                     .send(AppInput::HandleTerminalEvent(Some(event)))
@@ -279,7 +279,7 @@ impl AppWindow {
         // existed (e.g. DB reset on schema upgrade). We wait for the agent to
         // finish initializing, then deliver it through the normal toast path.
         let tx_startup = tx.clone();
-        boxxy_ai_core::utils::runtime().spawn(async move {
+        boxxy_sys_utils::runtime().spawn(async move {
             let agent = boxxy_terminal::get_agent().await;
             if let Some(msg) = agent.take_startup_notification() {
                 // Small delay so the window finishes painting before the toast appears.
@@ -294,7 +294,7 @@ impl AppWindow {
 
         let mut settings_rx = boxxy_preferences::SETTINGS_EVENT_BUS.subscribe();
         let tx_settings = tx.clone();
-        boxxy_ai_core::utils::runtime().spawn(async move {
+        boxxy_sys_utils::runtime().spawn(async move {
             while let Ok(settings) = settings_rx.recv().await {
                 let _ = tx_settings.send_blocking(AppInput::SettingsChanged(settings));
             }
@@ -412,7 +412,7 @@ impl AppWindow {
         }
 
         // Background update check
-        if boxxy_ai_core::utils::can_self_update() {
+        if boxxy_sys_utils::can_self_update() {
             let tx_update = tx.clone();
             tokio::spawn(async move {
                 // Wait 10 seconds after startup to not interfere with boot

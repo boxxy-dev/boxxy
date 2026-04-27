@@ -7,8 +7,6 @@ use rig::wasm_compat::WasmCompatSend;
 use serde_json::json;
 use std::future::Future;
 
-pub mod utils;
-
 #[derive(Clone)]
 pub struct ModelContextHook {
     pub preamble: String,

@@ -22,7 +22,7 @@ impl Updater {
     /// Checks for a new nightly build on GitHub.
     /// Returns `(version, date, download_url, checksum_url)` if an update is available.
     pub async fn check_for_update() -> Result<Option<(String, String, String, Option<String>)>> {
-        if !boxxy_ai_core::utils::can_self_update() {
+        if !boxxy_sys_utils::can_self_update() {
             return Ok(None);
         }
 
@@ -89,7 +89,7 @@ impl Updater {
         date: String,
         checksum_url: Option<String>,
     ) -> Result<PathBuf> {
-        if !boxxy_ai_core::utils::can_self_update() {
+        if !boxxy_sys_utils::can_self_update() {
             anyhow::bail!("Self-update is disabled in this build.");
         }
 
@@ -169,7 +169,7 @@ impl Updater {
     /// Performs the "Atomic Swap" and restarts the application.
     /// This should be called when the user clicks "Restart to Update".
     pub fn apply_update_and_restart() -> Result<()> {
-        if !boxxy_ai_core::utils::can_self_update() {
+        if !boxxy_sys_utils::can_self_update() {
             anyhow::bail!("Self-update is disabled in this build.");
         }
 

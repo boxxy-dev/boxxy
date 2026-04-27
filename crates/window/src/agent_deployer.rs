@@ -2,7 +2,7 @@
 //! host-side boxxy-agent binary is present and matches our version.
 
 use anyhow::{Context, Result};
-use boxxy_ai_core::utils::is_flatpak;
+use boxxy_sys_utils::is_flatpak;
 use log::{info, warn};
 use std::path::PathBuf;
 use tokio::process::Command;

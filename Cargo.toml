@@ -25,6 +25,7 @@ members = [
     "crates/telemetry",
     "crates/boxxy_mcp",
     "crates/scenario_runner",
+    "crates/sys_utils",
     ]
 
 [workspace.package]
@@ -123,6 +124,7 @@ pulldown-cmark = "0.13.3"
 syntect = "5.3.0"
 boxxy-viewer = { path = "crates/viewer" }
 boxxy-telemetry = { path = "crates/telemetry" }
+boxxy-sys-utils = { path = "crates/sys_utils" }
 boxxy-mcp = { path = "crates/boxxy_mcp" }
 rmcp = { version = "1.4.0", features = ["client", "macros", "transport-streamable-http-client-reqwest", "transport-child-process", "server", "schemars", "transport-io", "which-command"] }
 keyring = "3.6.3"

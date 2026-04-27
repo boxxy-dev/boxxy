@@ -15,8 +15,8 @@ gtk4.workspace = true
 libadwaita.workspace = true
 anyhow.workspace = true
 boxxy-window.workspace = true
+boxxy-sys-utils.workspace = true
 boxxy-terminal.workspace = true
-boxxy-ai-core = { path = "../ai_core" }
 gdk-pixbuf.workspace = true
 gio.workspace = true
 gstreamer.workspace = true

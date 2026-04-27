@@ -21,6 +21,7 @@ directories.workspace = true
 home = { workspace = true }
 notify.workspace = true
 boxxy-ai-core = { path = "../ai_core" }
+boxxy-sys-utils = { path = "../sys_utils" }
 boxxy-core-toolbox = { path = "../core_toolbox" }
 boxxy-telemetry = { path = "../telemetry" }
 boxxy-claw-protocol = { path = "../boxxy_claw_protocol" }

@@ -47,7 +47,7 @@ impl MsgHistory {
 
         let items_rc = GLOBAL_HISTORY.clone();
 
-        let () = boxxy_ai_core::utils::runtime().block_on(async move {
+        let () = boxxy_sys_utils::runtime().block_on(async move {
             if let Ok(db) = boxxy_db::Db::new().await {
                 let store = boxxy_db::store::Store::new(db.pool());
                 if let Ok(records) = store.get_recent_msgbar_history(MAX_HISTORY_ITEMS).await {
@@ -103,7 +103,7 @@ impl MsgHistory {
     }
 
     fn save_to_db(&self, text: String, attachments: Vec<Attachment>) {
-        boxxy_ai_core::utils::runtime().spawn(async move {
+        boxxy_sys_utils::runtime().spawn(async move {
             if let Ok(db) = boxxy_db::Db::new().await {
                 let store = boxxy_db::store::Store::new(db.pool());
                 if let Ok(json) = serde_json::to_string(&attachments)

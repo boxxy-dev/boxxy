@@ -129,7 +129,7 @@ impl CompletionProvider for ResumeCompletionProvider {
         let query_lower = query.trim().to_lowercase();
         let mut items = Vec::new();
 
-        let runtime = boxxy_ai_core::utils::runtime();
+        let runtime = boxxy_sys_utils::runtime();
         let sessions = runtime.block_on(async {
             if let Ok(db) = boxxy_db::Db::new().await {
                 let store = boxxy_db::store::Store::new(db.pool());

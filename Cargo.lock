@@ -549,11 +549,9 @@ name = "boxxy-ai-core"
 version = "0.0.34"
 dependencies = [
  "anyhow",
- "ashpd",
  "async-trait",
  "boxxy-model-selection",
  "log",
- "reqwest 0.13.2",
  "rig-core",
  "serde",
  "serde_json",
@@ -565,11 +563,11 @@ name = "boxxy-app"
 version = "0.0.34"
 dependencies = [
  "anyhow",
- "boxxy-ai-core",
  "boxxy-bookmarks",
  "boxxy-claw",
  "boxxy-db",
  "boxxy-preferences",
+ "boxxy-sys-utils",
  "boxxy-telemetry",
  "boxxy-terminal",
  "boxxy-window",
@@ -621,6 +619,7 @@ dependencies = [
  "boxxy-mcp",
  "boxxy-model-selection",
  "boxxy-preferences",
+ "boxxy-sys-utils",
  "boxxy-telemetry",
  "chrono",
  "directories",
@@ -682,13 +681,13 @@ version = "0.0.34"
 dependencies = [
  "async-channel",
  "base64",
- "boxxy-ai-core",
  "boxxy-claw",
  "boxxy-claw-protocol",
  "boxxy-claw-ui",
  "boxxy-core-widgets",
  "boxxy-db",
  "boxxy-preferences",
+ "boxxy-sys-utils",
  "boxxy-viewer",
  "chrono",
  "glib",
@@ -829,6 +828,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "boxxy-sys-utils"
+version = "0.0.34"
+dependencies = [
+ "ashpd",
+ "log",
+ "parking_lot",
+ "reqwest 0.13.2",
+ "serde",
+ "tokio",
+]
+
+[[package]]
 name = "boxxy-telemetry"
 version = "0.0.34"
 dependencies = [
@@ -859,12 +870,12 @@ dependencies = [
  "async-channel",
  "async-trait",
  "boxxy-agent",
- "boxxy-ai-core",
  "boxxy-claw",
  "boxxy-claw-protocol",
  "boxxy-claw-ui",
  "boxxy-claw-widget",
  "boxxy-preferences",
+ "boxxy-sys-utils",
  "boxxy-themes",
  "boxxy-viewer",
  "boxxy-vte",
@@ -971,6 +982,7 @@ dependencies = [
  "boxxy-model-selection",
  "boxxy-preferences",
  "boxxy-sidebar",
+ "boxxy-sys-utils",
  "boxxy-terminal",
  "boxxy-themes",
  "flate2",

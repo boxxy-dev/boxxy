@@ -454,14 +454,14 @@ pub async fn create_claw_agent(
     let settings = boxxy_preferences::Settings::load();
     if settings.enable_os_context {
         // Trigger fetch (it's cached)
-        boxxy_ai_core::utils::fetch_location_context().await;
+        boxxy_sys_utils::fetch_location_context().await;
 
         let now = chrono::Local::now();
         let time_str = now.format("%Y-%m-%d %H:%M:%S").to_string();
 
         let mut context_block = format!("\n\n[ENVIRONMENT CONTEXT]\nTime: {}", time_str);
 
-        if let Some(loc) = boxxy_ai_core::utils::get_location_context() {
+        if let Some(loc) = boxxy_sys_utils::get_location_context() {
             context_block.push_str(&format!(
                 "\nLocation: {}, {}\nTimezone: {}",
                 loc.city, loc.country, loc.timezone

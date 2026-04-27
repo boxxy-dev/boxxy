@@ -97,21 +97,24 @@ Agents possess full **System & Environment Authority**:
 Headless pure-Rust terminal emulator. Renders via GSK Snapshot and supports Kittygraphics natively. OSC 7/8/133 support. Features native semantic prompt tracking (`Flags::SEMANTIC_*`) embedded directly into the terminal cell grid to provide structured context blocks (`[PROMPT]`, `[COMMAND]`, `[OUTPUT]`).
 
 ### 7. `boxxy-ai-core` (Library Crate)
-Unified AI interface layer. Abstracts multiple providers (Gemini, Anthropic, Ollama) behind a single `BoxxyAgent` interface. Manages `AiCredentials` mapping and the global multi-threaded Tokio runtime.
+Unified AI interface layer. Abstracts multiple providers (Gemini, Anthropic, Ollama) behind a single `BoxxyAgent` interface. Manages `AiCredentials` mapping and provider configuration. System utilities (runtime, Flatpak detection, location context) have been extracted to `boxxy-sys-utils`.
 
-### 8. `boxxy-core-toolbox` (Library Crate)
+### 8. `boxxy-sys-utils` (Library Crate)
+Minimal, leaf-level utility crate for system environment detection and global async runtime management. Decouples system-level checks (Flatpak detection, self-updater availability) and the global Tokio runtime from the AI stack, allowing UI and terminal crates to remain lightweight. Provides the *mechanism* for location fetching; all *policy* (e.g., privacy toggles) lives in callers.
+
+### 9. `boxxy-core-toolbox` (Library Crate)
 Provides a structured library of high-level tools for Boxxy agents, completely decoupled from the reasoning engine. Includes:
 - **Host Operations:** File management (with line-range limits), process inspection, system info (structured JSON), and clipboard access.
 - **Web/Network:** HTTP fetching with built-in timeouts and 1MB size limits.
 - **Web Search:** A modular `SearchProvider` trait allowing real-time web queries (currently implemented via Tavily). Both `http_fetch` and `web_search` call `ApprovalHandler::report_tool_result` on completion so their results appear as structured rows in the Claw sidebar log.
 - **Approval Protocol:** Uses the `ApprovalHandler` trait to ensure dangerous actions (like `rm` or `kill`) always prompt the user via the GTK UI before execution. Every tool must call both `report_tool_started` (shows the tool name in the real-time indicator) and `report_tool_result` (emits the `ToolResult` sidebar row) to be fully visible in the UI.
 
-### 9. `boxxy-preferences` (Library Crate)
+### 10. `boxxy-preferences` (Library Crate)
 Settings management using an `AdwNavigationSplitView` architecture. UI is defined in `resources/ui/preferences.ui` and supports real-time search filtering. Implements the **"Master Switch vs Local Toggle"** design pattern (e.g., for Web Search), separating global capability authorization from per-pane activation.
 
 The **Characters page** (`src/characters/mod.rs`) lists all installed characters (avatar, display name, duties, color swatch) loaded directly from disk via `character_loader::load_characters()`. It provides two management actions: "Open Characters Folder" (launches the file manager at the characters dir) and "Reset to Defaults" (double-confirmation destructive action that calls `character_loader::reset_to_defaults()`). Changes to character files only take effect after restarting the `boxxy-agent` daemon, since the registry is seeded at daemon startup. The color swatch is a `gtk::Button` rendered with a per-instance CSS class (`pref-color-dot-{n}`) using `background-image: none` to suppress libadwaita gradient overrides.
 
-### 10. `boxxy-claw-widget` (Library Crate)
+### 11. `boxxy-claw-widget` (Library Crate)
 The reusable Claw drawer UI. Owns every widget the user sees when interacting with an agent in a pane: the slide-down overlay drawer, the floating `ClawIndicator` badge, the merged input bar (formerly the standalone `boxxy-msgbar` crate), the neutral `Proposal` enum, and the event-dispatch loop that turns `ClawEngineEvent`s into widget mutations.
 
 The crate is surface-agnostic: it talks to its host through the `ClawHost` trait (inject a line, execute a script, grab focus, ask for scrollback, send a `ClawMessage`, forward an event, etc.). Today the terminal pane is the only implementor via `PaneClawHost`, but any future surface (standalone chat window, mobile shell) can drive the same UI by implementing the trait.
@@ -136,23 +139,23 @@ The msgbar's **Unified Status Indicator**:
     - ⚠️ **Faulted**: Stuck in an unrecoverable timeout or crash state.
     - ⚪ **Off**: Claw is deactivated for this pane.
 
-### 11. `boxxy-model-selection` (Library Crate)
+### 12. `boxxy-model-selection` (Library Crate)
 Data-driven model configuration UI. Uses a registry pattern to dynamically build selection dialogs and dropdowns based on registered `AiProvider` traits. Decouples AI capability discovery from the main application window.
 
-### 12. `boxxy-claw-protocol` (Library Crate)
+### 13. `boxxy-claw-protocol` (Library Crate)
 Pure-data DTO layer shared between the UI and the daemon across the D-Bus boundary. Defines `ClawMessage`, `ClawEngineEvent`, `PersistentClawRow`, `AgentStatus`, `ScheduledTask`, `UsageWrapper`, and the `ClawEnvironment` trait. Contains no GTK types, no reasoning-engine internals — every field serialises cleanly via serde. Both `boxxy-claw` and `boxxy-claw-ui` depend on it; neither depends on the other.
 
 Also owns the **Character system** types and loader:
 - `characters.rs` — `CharacterConfig` (id, name, display_name, color, duties, personality), `CharacterInfo` (config + status + has_avatar), `CharacterStatus` (Available / Active { pane_id }), `OrphanGroup` (for sessions whose character was deleted). Exposes a global lock-free `CHARACTER_CACHE: ArcSwap<Vec<CharacterInfo>>` and a `CHARACTER_CACHE_VERSION: AtomicU64` counter that UI components poll to detect registry changes without subscribing to D-Bus signals directly.
 - `character_loader.rs` — disk I/O for the character registry. Characters live at `~/.config/boxxy-terminal/boxxyclaw/characters/<slug>/CHARACTER.toml` (+ optional `AVATAR.png`). Key functions: `load_characters()` (reads all dirs, auto-generates missing UUIDs, deduplicates collisions, sorts by `characters.json` order), `ensure_default_character()` (extracts bundled defaults on first run), `reset_to_defaults()` (wipes all dirs and re-extracts). The three bundled defaults (niko-una, levi-kujo, kuro) are embedded at compile time via `include_bytes!` from `resources/characters/`.
 
-### 13. `boxxy-claw-ui` (Library Crate)
+### 14. `boxxy-claw-ui` (Library Crate)
 All GTK widgets for the Claw sidebar page (right-hand `ViewStack` tab). Provides `ClawSidebarComponent` (the outer shell: status page, token counter, pending-tasks drawer, "Clear" button) and `create_claw_message_list` (the per-pane virtual list of diagnosis / suggestion / tool-call / process-list / user-message rows). Rows are recycled via `boxxy_core_widgets::ObjectExtSafe` so long histories stay cheap. Strictly display-only — the `add_*_approval_row` helpers format proposals as Diagnosis rows and deliberately ignore their callback args.
 
-### 14. `boxxy-mcp` (Library Crate)
+### 15. `boxxy-mcp` (Library Crate)
 Implements the Model Context Protocol (MCP) using `rmcp`. It provides a `McpClientManager` to orchestrate connections via Stdio and HTTP(SSE/Streamable). Features dynamic tool ingestion, bridging JSON Schema Draft 7 to `rig` via `DynamicMcpTool`, and employs a "Lazy Boot" caching strategy to prevent slow startup times when configuring heavy Node.js MCP servers.
 
-### 15. `boxxy-telemetry` (Library Crate)
+### 16. `boxxy-telemetry` (Library Crate)
 Provides a privacy-first observability layer for tracking agent and system usage.
 - **Durable SQLite Journaling:** UI processes (`boxxy-app`) write telemetry events instantly to a local `telemetry_journal` SQLite table, ensuring zero UI lag and zero data loss on abrupt shutdowns.
 - **Agent-Delegated Flushing:** The background `boxxy-agent` daemon periodically drains this local journal and exports the metrics to the Supabase backend using the OpenTelemetry (OTLP) SDK.

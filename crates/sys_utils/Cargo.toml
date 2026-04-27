@@ -1,0 +1,20 @@
+[package]
+name = "boxxy-sys-utils"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description = "Minimal, leaf-level utility crate for system environment detection and global async runtime management."
+license.workspace = true
+
+[features]
+default = ["self-update"]
+self-update = []
+disable-self-update = []
+
+[dependencies]
+ashpd         = { workspace = true, features = ["flatpak"] }
+tokio         = { workspace = true, features = ["full"] }
+reqwest       = { workspace = true }
+serde         = { workspace = true }
+log           = { workspace = true }
+parking_lot   = { workspace = true }
