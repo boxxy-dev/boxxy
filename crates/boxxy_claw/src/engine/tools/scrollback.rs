@@ -62,6 +62,14 @@ impl Tool for ReadScrollbackTool {
             state.agent_name.clone()
         };
 
+        let _ = self
+            .tx_ui
+            .send(ClawEngineEvent::ToolCallStarted {
+                agent_name: agent_name.clone(),
+                tool_name: Self::NAME.to_string(),
+            })
+            .await;
+
         let req = ClawEngineEvent::RequestScrollback {
             agent_name,
             max_lines: args.max_lines,

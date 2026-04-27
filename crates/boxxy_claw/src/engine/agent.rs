@@ -22,7 +22,6 @@ use rig::message::Message;
 use rig::providers::gemini;
 use rig::providers::ollama;
 use rig::providers::openai::responses_api::ResponsesCompletionModel;
-use serde_json::json;
 use std::sync::Arc;
 
 use crate::engine::agent_config::AgentConfig;
@@ -274,7 +273,9 @@ pub async fn create_claw_agent(
             tx_ui: tx_ui.clone(),
             state: state.clone(),
         }),
-        Box::new(ActivateSkillTool),
+        Box::new(ActivateSkillTool {
+            approval: approval_handler.clone(),
+        }),
         Box::new(TerminalCommandTool {
             tx_ui: tx_ui.clone(),
             state: state.clone(),
@@ -286,6 +287,7 @@ pub async fn create_claw_agent(
         Box::new(ReadPaneTool),
         Box::new(DelegateTaskTool {
             state: state.clone(),
+            tx_ui: tx_ui.clone(),
         }),
         Box::new(SpawnAgentTool {
             tx_ui: tx_ui.clone(),
@@ -308,6 +310,7 @@ pub async fn create_claw_agent(
         }),
         Box::new(ListTasksTool {
             state: state.clone(),
+            tx_ui: tx_ui.clone(),
         }),
         Box::new(CancelTaskTool {
             state: state.clone(),
@@ -343,13 +346,19 @@ pub async fn create_claw_agent(
         }),
         Box::new(DelegateTaskAsyncTool {
             state: state.clone(),
+            tx_ui: tx_ui.clone(),
         }),
         Box::new(SummonHeadlessWorkerTool {
             state: state.clone(),
             env: (*env).clone(),
+            tx_ui: tx_ui.clone(),
         }),
         Box::new(SetAgentStateTool {
             state: state.clone(),
+            tx_ui: tx_ui.clone(),
+        }),
+        Box::new(crate::engine::tools::memory::MemoryTool {
+            approval: approval_handler.clone(),
         }),
         Box::new(crate::engine::tools::orchestration::OrchestrateAgentTool {
             approval: approval_handler.clone(),
@@ -383,6 +392,7 @@ pub async fn create_claw_agent(
     if config.system_tools_enabled {
         tools.push(Box::new(GetSystemInfoTool {
             env: (*env).clone(),
+            approval: approval_handler.clone(),
         }));
     }
 
@@ -404,6 +414,7 @@ pub async fn create_claw_agent(
         if !tavily_key.is_empty() {
             tools.push(Box::new(boxxy_core_toolbox::WebSearchTool {
                 provider: Box::new(boxxy_core_toolbox::TavilyProvider::new(tavily_key)),
+                approval: approval_handler.clone(),
             }));
         }
     }

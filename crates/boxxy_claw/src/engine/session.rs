@@ -1,9 +1,7 @@
 use crate::engine::{
     ClawEngineEvent, ClawEnvironment, ClawMessage, PersistentClawRow, TaskStatus, TaskType,
-    context::load_session_context, context::retrieve_memories,
-    dispatcher::extract_command_and_clean, persist_visual_event, turn::spawn_turn,
+    context::load_session_context, persist_visual_event, turn::spawn_turn,
 };
-use crate::utils::load_prompt_fallback;
 use boxxy_db::Db;
 use log::{debug, info};
 use rig::message::Message;

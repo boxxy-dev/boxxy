@@ -27,6 +27,8 @@ pub trait ApprovalHandler: Send + Sync {
     async fn propose_set_clipboard(&self, text: String) -> bool;
     /// Report a structured tool result (e.g. process list).
     async fn report_tool_result(&self, tool_name: String, result: String);
+    /// Report that a tool call has started.
+    async fn report_tool_started(&self, tool_name: String);
     /// Update the agent's thinking status in the UI.
     async fn set_thinking(&self, thinking: bool);
 }

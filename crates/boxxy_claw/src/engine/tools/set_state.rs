@@ -1,4 +1,4 @@
-use crate::engine::{AgentStatus, ClawMessage};
+use crate::engine::ClawMessage;
 use rig::completion::ToolDefinition;
 use rig::tool::Tool;
 use serde::{Deserialize, Serialize};
@@ -18,6 +18,7 @@ pub struct SetStateOutput {
 
 pub struct SetAgentStateTool {
     pub state: Arc<Mutex<crate::engine::session::SessionState>>,
+    pub tx_ui: async_channel::Sender<crate::engine::ClawEngineEvent>,
 }
 
 impl Tool for SetAgentStateTool {
@@ -47,6 +48,18 @@ impl Tool for SetAgentStateTool {
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
         boxxy_telemetry::track_tool_use(Self::NAME).await;
+
+        let agent_name = {
+            let state = self.state.lock().await;
+            state.agent_name.clone()
+        };
+
+        let _ = self.tx_ui
+            .send(crate::engine::ClawEngineEvent::ToolCallStarted {
+                agent_name,
+                tool_name: Self::NAME.to_string(),
+            })
+            .await;
 
         if args.state.to_lowercase() == "sleep" {
             log::debug!("Executing set_agent_state('sleep') tool...");

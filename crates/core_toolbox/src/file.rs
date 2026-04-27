@@ -59,6 +59,7 @@ impl Tool for FileReadTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        self.approval.report_tool_started(Self::NAME.to_string()).await;
         boxxy_telemetry::track_tool_use(Self::NAME).await;
         let path = resolve_path(&self.current_dir, &args.path);
         let start_line = args.start_line.unwrap_or(0);
@@ -128,6 +129,7 @@ impl Tool for ListDirectoryTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        self.approval.report_tool_started(Self::NAME.to_string()).await;
         boxxy_telemetry::track_tool_use(Self::NAME).await;
         let path = resolve_path(&self.current_dir, &args.path.unwrap_or_default());
         match self.env.list_directory(path).await {
@@ -203,6 +205,7 @@ impl Tool for FileWriteTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        self.approval.report_tool_started(Self::NAME.to_string()).await;
         boxxy_telemetry::track_tool_use(Self::NAME).await;
         let path = resolve_path(&self.current_dir, &args.path);
         self.approval.set_thinking(false).await;
@@ -275,6 +278,7 @@ impl Tool for FileDeleteTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        self.approval.report_tool_started(Self::NAME.to_string()).await;
         boxxy_telemetry::track_tool_use(Self::NAME).await;
         let path = resolve_path(&self.current_dir, &args.path);
         self.approval.set_thinking(false).await;

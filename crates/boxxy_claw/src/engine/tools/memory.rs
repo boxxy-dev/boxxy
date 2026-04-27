@@ -17,7 +17,9 @@ pub struct MemoryOutput {
 }
 
 /// Tool for saving persistent facts or preferences to the agent's long-term memory file.
-pub struct MemoryTool;
+pub struct MemoryTool {
+    pub approval: std::sync::Arc<dyn boxxy_core_toolbox::ApprovalHandler>,
+}
 
 impl Tool for MemoryTool {
     const NAME: &'static str = "remember_fact";
@@ -45,6 +47,7 @@ impl Tool for MemoryTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        self.approval.report_tool_started(Self::NAME.to_string()).await;
         if let Some(dirs) = directories::ProjectDirs::from("org", "boxxy", "boxxy-terminal") {
             let config_dir = dirs.config_dir();
             let memory_path = config_dir.join("boxxyclaw").join("CLAW_STATE.md");

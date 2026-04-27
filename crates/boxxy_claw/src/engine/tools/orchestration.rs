@@ -64,6 +64,7 @@ impl Tool for SubscribeToPaneTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        self.approval.report_tool_started(Self::NAME.to_string()).await;
         let workspace = global_workspace().await;
         let target_pane_id = workspace.resolve_pane_id_by_name(&args.agent_name).await;
 
@@ -169,6 +170,7 @@ impl Tool for AcquireLockTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        self.approval.report_tool_started(Self::NAME.to_string()).await;
         let workspace = global_workspace().await;
         match workspace
             .acquire_lock(self.pane_id.clone(), args.resource.clone())
@@ -251,6 +253,7 @@ impl Tool for ReleaseLockTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        self.approval.report_tool_started(Self::NAME.to_string()).await;
         let workspace = global_workspace().await;
         workspace
             .release_lock(self.pane_id.clone(), args.resource.clone())
@@ -325,6 +328,7 @@ impl Tool for PublishEventTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        self.approval.report_tool_started(Self::NAME.to_string()).await;
         let agent_name = {
             let state = self.state.lock().await;
             state.agent_name.clone()
@@ -387,6 +391,7 @@ impl Tool for AwaitTasksTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        self.approval.report_tool_started(Self::NAME.to_string()).await;
         let mut state = self.state.lock().await;
         state.status = AgentStatus::Sleep;
         let agent_name = state.agent_name.clone();
@@ -458,6 +463,7 @@ impl Tool for OrchestrateAgentTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        self.approval.report_tool_started(Self::NAME.to_string()).await;
         let workspace = global_workspace().await;
         if let Some(tx) = workspace.get_pane_tx_by_name(&args.agent_name).await {
             let msg = match args.action.as_str() {

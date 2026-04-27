@@ -172,6 +172,7 @@ impl PersistentClawRowExt {
                 pane_id,
                 content: text.clone(),
             }),
+            ClawEngineEvent::ToolCallStarted { .. } => None,
             _ => None,
         }
     }

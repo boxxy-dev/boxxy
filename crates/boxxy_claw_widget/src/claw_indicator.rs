@@ -365,13 +365,21 @@ impl ClawIndicator {
         }
     }
 
-    pub fn show_thinking(&self, agent_name: &str) {
+    pub fn show_thinking(&self, agent_name: &str, tool_name: Option<&str>) {
         self.is_active.set(true);
-        self.label.set_label("Drinking Water..");
+
+        let label_text = if let Some(tool) = tool_name {
+            format!("{}..", self.pretty_tool_name(tool))
+        } else {
+            "Drinking Water..".to_string()
+        };
+
+        self.label.set_label(&label_text);
+        self.icon.set_visible(false);
+
         self.main_btn.set_visible(false);
         self.revealer.set_reveal_child(true);
         self.spinner.set_visible(true);
-        self.icon.set_visible(false);
         self.hbox.remove_css_class("destructive-action");
 
         let registry = boxxy_claw_protocol::characters::CHARACTER_CACHE.load();
@@ -386,6 +394,33 @@ impl ClawIndicator {
             ".status-label {{ color: {}; }} .claw-spinner {{ color: {}; }}",
             color, color
         ));
+    }
+
+    fn pretty_tool_name(&self, tool: &str) -> String {
+        match tool {
+            "sys_shell_exec" => "Executing command".to_string(),
+            "file_read" | "read_file" => "Reading file".to_string(),
+            "file_write" | "write_file" | "replace" => "Writing file".to_string(),
+            "file_delete" => "Deleting file".to_string(),
+            "list_directory" => "Listing directory".to_string(),
+            "get_system_info" => "Fetching system info".to_string(),
+            "list_processes" => "Listing processes".to_string(),
+            "kill_process" => "Killing process".to_string(),
+            "get_clipboard" => "Reading clipboard".to_string(),
+            "set_clipboard" => "Writing clipboard".to_string(),
+            "web_search" => "Searching the web".to_string(),
+            "http_fetch" => "Fetching URL".to_string(),
+            "memory_store" => "Saving memory".to_string(),
+            "memory_delete" => "Deleting memory".to_string(),
+            "read_scrollback_page" => "Reading terminal scrollback".to_string(),
+            "terminal_exec" => "Executing terminal command".to_string(),
+            "spawn_agent" => "Spawning agent".to_string(),
+            "close_agent" => "Closing agent".to_string(),
+            "delegate_task" => "Delegating task".to_string(),
+            "delegate_task_async" => "Delegating task".to_string(),
+            "summon_headless_worker" => "Summoning worker".to_string(),
+            _ => tool.replace('_', " "),
+        }
     }
 
     pub fn show_diagnosis_ready(&self) {

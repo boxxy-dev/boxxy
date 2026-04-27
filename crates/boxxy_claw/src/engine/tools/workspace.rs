@@ -57,6 +57,14 @@ impl Tool for SpawnAgentTool {
             state.agent_name.clone()
         };
 
+        let _ = self
+            .tx_ui
+            .send(ClawEngineEvent::ToolCallStarted {
+                agent_name: my_name.clone(),
+                tool_name: Self::NAME.to_string(),
+            })
+            .await;
+
         let loc = match args.location.to_lowercase().as_str() {
             "vertical" => SpawnLocation::VerticalSplit,
             "horizontal" => SpawnLocation::HorizontalSplit,
@@ -130,6 +138,15 @@ impl Tool for CloseAgentTool {
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
         boxxy_telemetry::track_tool_use(Self::NAME).await;
+
+        let _ = self
+            .tx_ui
+            .send(ClawEngineEvent::ToolCallStarted {
+                agent_name: "Workspace Manager".to_string(), // Best effort for name here
+                tool_name: Self::NAME.to_string(),
+            })
+            .await;
+
         if let Err(e) = self
             .tx_ui
             .send(ClawEngineEvent::RequestCloseAgent {
@@ -221,6 +238,7 @@ pub struct DelegateTaskOutput {
 
 pub struct DelegateTaskTool {
     pub state: std::sync::Arc<tokio::sync::Mutex<crate::engine::session::SessionState>>,
+    pub tx_ui: async_channel::Sender<ClawEngineEvent>,
 }
 
 impl Tool for DelegateTaskTool {
@@ -265,6 +283,13 @@ impl Tool for DelegateTaskTool {
             state.pending_delegations.insert(request_id, reply_tx);
             (state.agent_name.clone(), reply_rx)
         };
+
+        let _ = self.tx_ui
+            .send(ClawEngineEvent::ToolCallStarted {
+                agent_name: my_name.clone(),
+                tool_name: Self::NAME.to_string(),
+            })
+            .await;
 
         if args.agent_name.to_lowercase() == my_name.to_lowercase() {
             return Ok(DelegateTaskOutput {
@@ -316,6 +341,7 @@ pub struct DelegateTaskAsyncOutput {
 
 pub struct DelegateTaskAsyncTool {
     pub state: std::sync::Arc<tokio::sync::Mutex<crate::engine::session::SessionState>>,
+    pub tx_ui: async_channel::Sender<ClawEngineEvent>,
 }
 
 impl Tool for DelegateTaskAsyncTool {
@@ -359,6 +385,13 @@ impl Tool for DelegateTaskAsyncTool {
             state.pending_delegations.insert(request_id, reply_tx);
             (state.agent_name.clone(), reply_rx)
         };
+
+        let _ = self.tx_ui
+            .send(ClawEngineEvent::ToolCallStarted {
+                agent_name: my_name.clone(),
+                tool_name: Self::NAME.to_string(),
+            })
+            .await;
 
         if let Some(tx) = workspace.get_pane_tx_by_name(&args.agent_name).await {
             let req = crate::engine::ClawMessage::DelegatedTask {
@@ -456,6 +489,15 @@ impl Tool for SendKeystrokesTool {
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
         boxxy_telemetry::track_tool_use(Self::NAME).await;
+
+        let _ = self
+            .tx_ui
+            .send(ClawEngineEvent::ToolCallStarted {
+                agent_name: "Workspace Automation".to_string(), // Best effort
+                tool_name: Self::NAME.to_string(),
+            })
+            .await;
+
         log::debug!(
             "SendKeystrokesTool called with target '{}' and keys: {:?}",
             args.agent_name,
@@ -531,6 +573,15 @@ impl Tool for SendCommandToPaneTool {
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
         boxxy_telemetry::track_tool_use(Self::NAME).await;
+
+        let _ = self
+            .tx_ui
+            .send(ClawEngineEvent::ToolCallStarted {
+                agent_name: "Workspace Automation".to_string(), // Best effort
+                tool_name: Self::NAME.to_string(),
+            })
+            .await;
+
         let workspace = global_workspace().await;
         let request_id = uuid::Uuid::new_v4();
 

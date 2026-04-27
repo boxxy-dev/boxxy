@@ -85,7 +85,7 @@ pub enum ClawEvent {
 }
 
 /// Serializable wrapper for rig::completion::Usage
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct UsageWrapper {
     pub input_tokens: u64,
     pub output_tokens: u64,
@@ -100,7 +100,7 @@ impl From<Usage> for UsageWrapper {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum PersistentClawRow {
     Diagnosis {
         pane_id: String,
@@ -140,6 +140,19 @@ pub enum PersistentClawRow {
         pane_id: String,
         content: String,
     },
+}
+
+impl PersistentClawRow {
+    pub fn is_overlay_visible(&self) -> bool {
+        match self {
+            Self::User { .. }
+            | Self::Diagnosis { .. }
+            | Self::Suggested { .. }
+            | Self::SystemMessage { .. }
+            | Self::Command { .. } => true,
+            Self::ToolCall { .. } | Self::ProcessList { .. } => false,
+        }
+    }
 }
 
 /// Messages sent from the GTK UI down to the Claw Engine
@@ -333,6 +346,10 @@ pub enum ClawEngineEvent {
         tool_name: String,
         result: String,
         usage: Option<UsageWrapper>,
+    },
+    ToolCallStarted {
+        agent_name: String,
+        tool_name: String,
     },
     LazyErrorIndicator {
         visible: bool,

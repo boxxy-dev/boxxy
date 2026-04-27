@@ -21,6 +21,7 @@ pub struct SummonHeadlessOutput {
 pub struct SummonHeadlessWorkerTool {
     pub state: Arc<Mutex<SessionState>>,
     pub env: Arc<dyn ClawEnvironment>,
+    pub tx_ui: async_channel::Sender<crate::engine::ClawEngineEvent>,
 }
 
 impl Tool for SummonHeadlessWorkerTool {
@@ -65,6 +66,13 @@ impl Tool for SummonHeadlessWorkerTool {
                 reply_rx,
             )
         };
+
+        let _ = self.tx_ui
+            .send(crate::engine::ClawEngineEvent::ToolCallStarted {
+                agent_name: my_name.clone(),
+                tool_name: Self::NAME.to_string(),
+            })
+            .await;
 
         // Create and spawn the headless session
         let (session, tx_child) =

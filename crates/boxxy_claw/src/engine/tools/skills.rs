@@ -14,7 +14,9 @@ pub struct ActivateSkillOutput {
 }
 
 /// Tool for dynamically loading the full content of a skill from the Toolbox.
-pub struct ActivateSkillTool;
+pub struct ActivateSkillTool {
+    pub approval: std::sync::Arc<dyn boxxy_core_toolbox::ApprovalHandler>,
+}
 
 impl Tool for ActivateSkillTool {
     const NAME: &'static str = "activate_skill";
@@ -44,6 +46,7 @@ impl Tool for ActivateSkillTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        self.approval.report_tool_started(Self::NAME.to_string()).await;
         boxxy_telemetry::track_tool_use(Self::NAME).await;
         let registry = crate::registry::skills::global_registry().await;
         let all_skills = registry.get_skills().await;

@@ -1,5 +1,5 @@
 use crate::engine::{
-    ClawEngineEvent, ClawEnvironment, ClawMessage, PersistentClawRow, TaskStatus, TaskType,
+    ClawEngineEvent, ClawEnvironment, ClawMessage,
     context::retrieve_memories, dispatcher::extract_command_and_clean, persist_visual_event,
     session::SessionState, summarization::turn::summarize_and_store,
 };
@@ -7,7 +7,6 @@ use crate::utils::load_prompt_fallback;
 use boxxy_claw_protocol::UsageWrapper;
 use boxxy_db::Db;
 use log::info;
-use rig::message::Message;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 pub fn spawn_turn(

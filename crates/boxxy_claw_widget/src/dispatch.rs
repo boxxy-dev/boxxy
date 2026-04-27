@@ -63,6 +63,13 @@ pub fn spawn_dispatch(
                         boxxy_claw_ui::add_user_row(&overlay_store, id.clone(), content);
                     }
                 }
+                ClawEngineEvent::ToolCallStarted {
+                    agent_name: event_agent_name,
+                    tool_name,
+                } => {
+                    indicator.show_thinking(event_agent_name, Some(tool_name));
+                    overlay.set_indicator_slot_visible(true);
+                }
                 ClawEngineEvent::AgentThinking {
                     is_thinking,
                     agent_name: event_agent_name,
@@ -70,7 +77,7 @@ pub fn spawn_dispatch(
                     overlay.set_thinking(*is_thinking);
                     if *is_thinking {
                         msg_bar.set_input_sensitive(false);
-                        indicator.show_thinking(event_agent_name);
+                        indicator.show_thinking(event_agent_name, None);
                         if !overlay.is_visible() {
                             overlay.show_chat_only(event_agent_name);
                         }
@@ -517,15 +524,6 @@ pub fn spawn_dispatch(
                             result,
                             |_, _| {},
                         );
-                        if overlay.history_mode() {
-                            boxxy_claw_ui::add_process_list_row(
-                                &overlay_store,
-                                id.clone(),
-                                Some(agent_name.clone()),
-                                result,
-                                |_, _| {},
-                            );
-                        }
                     } else {
                         boxxy_claw_ui::add_tool_call_row(
                             &sidebar_store,
@@ -534,15 +532,6 @@ pub fn spawn_dispatch(
                             tool_name,
                             result,
                         );
-                        if overlay.history_mode() {
-                            boxxy_claw_ui::add_tool_call_row(
-                                &overlay_store,
-                                id.clone(),
-                                Some(agent_name.clone()),
-                                tool_name,
-                                result,
-                            );
-                        }
                     }
                 }
                 ClawEngineEvent::TaskStatusChanged { tasks, .. } => {
@@ -566,8 +555,11 @@ pub fn spawn_dispatch(
                         // wrapper around the same data.
                         let mut overlay_items = Vec::with_capacity(rows.len());
                         for row in rows {
-                            overlay_items
-                                .push(boxxy_claw_ui::row_object::ClawRowObject::new(row.clone()));
+                            if row.is_overlay_visible() {
+                                overlay_items.push(boxxy_claw_ui::row_object::ClawRowObject::new(
+                                    row.clone(),
+                                ));
+                            }
                         }
                         overlay_store.remove_all();
                         overlay_store.extend_from_slice(&overlay_items);

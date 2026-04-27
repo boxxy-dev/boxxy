@@ -59,15 +59,23 @@ impl Tool for TerminalCommandTool {
         boxxy_telemetry::track_tool_use(Self::NAME).await;
         let (tx, rx) = tokio::sync::oneshot::channel();
 
-        {
-            let mut state = self.state.lock().await;
-            state.pending_terminal_reply = Some(tx);
-        }
-
         let agent_name = {
             let state = self.state.lock().await;
             state.agent_name.clone()
         };
+
+        let _ = self
+            .tx_ui
+            .send(ClawEngineEvent::ToolCallStarted {
+                agent_name: agent_name.clone(),
+                tool_name: Self::NAME.to_string(),
+            })
+            .await;
+
+        {
+            let mut state = self.state.lock().await;
+            state.pending_terminal_reply = Some(tx);
+        }
 
         let event = ClawEngineEvent::ProposeTerminalCommand {
             agent_name: agent_name.clone(),

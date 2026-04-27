@@ -212,6 +212,20 @@ impl ApprovalHandler for ClawApprovalHandler {
         let _ = self.tx_ui.send(event).await;
     }
 
+    async fn report_tool_started(&self, tool_name: String) {
+        let agent_name = {
+            let state = self.state.lock().await;
+            state.agent_name.clone()
+        };
+        let _ = self
+            .tx_ui
+            .send(ClawEngineEvent::ToolCallStarted {
+                agent_name,
+                tool_name,
+            })
+            .await;
+    }
+
     async fn set_thinking(&self, thinking: bool) {
         let agent_name = {
             let state = self.state.lock().await;
@@ -271,6 +285,7 @@ impl Tool for SysShellTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        self.approval.report_tool_started(Self::NAME.to_string()).await;
         boxxy_telemetry::track_tool_use(Self::NAME).await;
         let command = if self.current_dir.is_empty() {
             args.command
