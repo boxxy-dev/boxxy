@@ -145,6 +145,18 @@ impl Updater {
             log::warn!("No checksum URL provided; skipping verification.");
         }
 
+        log::info!("Extracting tarball...");
+        let extract_path = pending_dir.clone();
+        let tmp_tarball_extract = tmp_tarball.clone();
+        tokio::task::spawn_blocking(move || {
+            let tar_gz = fs::File::open(&tmp_tarball_extract)?;
+            let tar = GzDecoder::new(tar_gz);
+            let mut archive = Archive::new(tar);
+            archive.unpack(&extract_path)
+        })
+        .await
+        .context("Failed to extract update")??;
+
         log::info!("Extraction complete to: {:?}", pending_dir);
 
         // Persist the release date so apply_update_and_restart can write
