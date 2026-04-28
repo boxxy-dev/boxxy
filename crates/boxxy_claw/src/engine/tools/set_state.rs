@@ -49,14 +49,16 @@ impl Tool for SetAgentStateTool {
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
         boxxy_telemetry::track_tool_use(Self::NAME).await;
 
-        let agent_name = {
+        let (agent_name, character_id) = {
             let state = self.state.lock().await;
-            state.agent_name.clone()
+            (state.agent_name.clone(), state.character_id.clone())
         };
 
-        let _ = self.tx_ui
+        let _ = self
+            .tx_ui
             .send(crate::engine::ClawEngineEvent::ToolCallStarted {
                 agent_name,
+                character_id,
                 tool_name: Self::NAME.to_string(),
             })
             .await;

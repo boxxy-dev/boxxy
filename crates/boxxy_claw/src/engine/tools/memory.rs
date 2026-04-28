@@ -47,7 +47,9 @@ impl Tool for MemoryTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        self.approval.report_tool_started(Self::NAME.to_string()).await;
+        self.approval
+            .report_tool_started(Self::NAME.to_string())
+            .await;
         if let Some(dirs) = directories::ProjectDirs::from("org", "boxxy", "boxxy-terminal") {
             let config_dir = dirs.config_dir();
             let memory_path = config_dir.join("boxxyclaw").join("CLAW_STATE.md");

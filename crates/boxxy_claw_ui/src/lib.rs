@@ -13,7 +13,9 @@ use boxxy_core_widgets::ObjectExtSafe;
 use boxxy_viewer::{BlockRenderer, ContentBlock, StructuredViewer, ViewerRegistry};
 use gtk::prelude::*;
 use gtk4 as gtk;
+use gtk4::gdk;
 use gtk4::gio;
+use libadwaita as adw;
 use std::rc::Rc;
 
 pub mod row_object;
@@ -183,6 +185,10 @@ pub fn create_claw_message_list() -> (gtk::ListView, gio::ListStore) {
         let icon = gtk::Image::new();
         header.append(&icon);
 
+        let avatar = adw::Avatar::new(24, None, false);
+        avatar.set_visible(false);
+        header.append(&avatar);
+
         let title = gtk::Label::new(None);
         title.add_css_class("heading");
         title.set_halign(gtk::Align::Start);
@@ -208,6 +214,7 @@ pub fn create_claw_message_list() -> (gtk::ListView, gio::ListStore) {
         vbox.append(&cmd_label);
 
         vbox.set_safe_data("icon", icon);
+        vbox.set_safe_data("avatar", avatar);
         vbox.set_safe_data("title", title);
         vbox.set_safe_data("pane_lbl", pane_lbl);
         vbox.set_safe_data("viewer", viewer);
@@ -221,6 +228,7 @@ pub fn create_claw_message_list() -> (gtk::ListView, gio::ListStore) {
         let vbox = list_item.child().and_downcast::<gtk::Box>().unwrap();
 
         let icon = vbox.get_safe_data::<gtk::Image>("icon").unwrap();
+        let avatar = vbox.get_safe_data::<adw::Avatar>("avatar").unwrap();
         let title = vbox.get_safe_data::<gtk::Label>("title").unwrap();
         let pane_lbl = vbox.get_safe_data::<gtk::Label>("pane_lbl").unwrap();
         let viewer = vbox.get_safe_data::<StructuredViewer>("viewer").unwrap();
@@ -232,6 +240,8 @@ pub fn create_claw_message_list() -> (gtk::ListView, gio::ListStore) {
 
         // Reset per-row state that specific variants may mutate.
         icon.set_visible(true);
+        avatar.set_visible(false);
+        avatar.set_custom_image(None::<&gdk::Texture>);
         pane_lbl.set_visible(true);
         title.set_visible(true);
         title.remove_css_class("accent");
@@ -257,9 +267,50 @@ pub fn create_claw_message_list() -> (gtk::ListView, gio::ListStore) {
             name.unwrap_or_else(|| "Unknown Agent".to_string())
         };
 
+        let set_agent_header = |char_id: &Option<String>,
+                                fallback_name: &Option<String>,
+                                default_icon: &str,
+                                icon_class: Option<&str>| {
+            let mut name_set = false;
+            if let Some(id) = char_id {
+                let cache = boxxy_claw_protocol::characters::CHARACTER_CACHE.load();
+                if let Some(info) = cache.iter().find(|c| &c.config.id == id) {
+                    title.set_label(&info.config.display_name);
+                    avatar.set_text(Some(&info.config.display_name));
+                    name_set = true;
+
+                    if info.has_avatar {
+                        if let Ok(dir) = boxxy_claw_protocol::character_loader::get_characters_dir()
+                        {
+                            let avatar_path = dir.join(&info.config.name).join("AVATAR.png");
+                            if let Ok(texture) = gdk::Texture::from_filename(&avatar_path) {
+                                avatar.set_custom_image(Some(&texture));
+                                avatar.set_visible(true);
+                                icon.set_visible(false);
+                            }
+                        }
+                    }
+                }
+            }
+
+            if !name_set {
+                title.set_label(&agent_or_unknown(fallback_name.clone()));
+                avatar.set_visible(false);
+                icon.set_visible(true);
+            }
+
+            if icon.is_visible() {
+                icon.set_icon_name(Some(default_icon));
+                if let Some(cls) = icon_class {
+                    icon.add_css_class(cls);
+                }
+            }
+        };
+
         match obj.get_row() {
             PersistentClawRow::SystemMessage { content, .. } => {
                 icon.set_visible(false);
+                avatar.set_visible(false);
                 pane_lbl.set_visible(false);
                 title.set_visible(false);
                 vbox.add_css_class("system-message");
@@ -272,13 +323,12 @@ pub fn create_claw_message_list() -> (gtk::ListView, gio::ListStore) {
             }
             PersistentClawRow::Diagnosis {
                 agent_name,
+                character_id,
                 content,
                 ..
             } => {
-                icon.set_icon_name(Some("boxxyclaw"));
-                icon.add_css_class("accent");
-                title.set_label("Diagnosis");
-                pane_lbl.set_label(&agent_or_unknown(agent_name));
+                set_agent_header(&character_id, &agent_name, "boxxyclaw", Some("accent"));
+                pane_lbl.set_visible(false);
                 vbox.add_css_class("claw-row-diagnosis");
 
                 viewer.set_content(&content);
@@ -287,6 +337,7 @@ pub fn create_claw_message_list() -> (gtk::ListView, gio::ListStore) {
             }
             PersistentClawRow::User { content, .. } => {
                 icon.set_icon_name(Some("boxxy-comic-bubble-symbolic"));
+                avatar.set_visible(false);
                 title.set_label("You");
                 pane_lbl.set_visible(false);
                 vbox.add_css_class("claw-row-user");
@@ -297,14 +348,18 @@ pub fn create_claw_message_list() -> (gtk::ListView, gio::ListStore) {
             }
             PersistentClawRow::Suggested {
                 agent_name,
+                character_id,
                 diagnosis,
                 command,
                 ..
             } => {
-                icon.set_icon_name(Some("boxxy-dialog-warning-symbolic"));
-                icon.add_css_class("warning");
-                title.set_label("Suggested Action");
-                pane_lbl.set_label(&agent_or_unknown(agent_name));
+                set_agent_header(
+                    &character_id,
+                    &agent_name,
+                    "boxxy-dialog-warning-symbolic",
+                    Some("warning"),
+                );
+                pane_lbl.set_visible(false);
                 vbox.add_css_class("claw-row-suggested");
 
                 if diagnosis.is_empty() {
@@ -319,13 +374,12 @@ pub fn create_claw_message_list() -> (gtk::ListView, gio::ListStore) {
             }
             PersistentClawRow::ProcessList {
                 agent_name,
+                character_id,
                 result_json,
                 ..
             } => {
-                icon.set_icon_name(Some("boxxyclaw"));
-                icon.add_css_class("accent");
-                title.set_label("Process List");
-                pane_lbl.set_label(&agent_or_unknown(agent_name));
+                set_agent_header(&character_id, &agent_name, "boxxyclaw", Some("accent"));
+                pane_lbl.set_visible(false);
                 vbox.add_css_class("claw-row-process-list");
 
                 viewer.clear();
@@ -335,13 +389,18 @@ pub fn create_claw_message_list() -> (gtk::ListView, gio::ListStore) {
             }
             PersistentClawRow::ToolCall {
                 agent_name,
+                character_id,
                 tool_name,
                 ..
             } => {
-                icon.set_icon_name(Some("boxxy-build-circle-symbolic"));
-                icon.add_css_class("accent");
+                set_agent_header(
+                    &character_id,
+                    &agent_name,
+                    "boxxy-build-circle-symbolic",
+                    Some("accent"),
+                );
                 title.set_label(&format!("Used tool: {tool_name}"));
-                pane_lbl.set_label(&agent_or_unknown(agent_name));
+                pane_lbl.set_visible(false);
                 vbox.add_css_class("claw-row-tool-call");
 
                 // Tool results can be huge (whole file contents); show a
@@ -352,6 +411,7 @@ pub fn create_claw_message_list() -> (gtk::ListView, gio::ListStore) {
             }
             PersistentClawRow::Command { command, exit_code } => {
                 icon.set_icon_name(Some("utilities-terminal-symbolic"));
+                avatar.set_visible(false);
                 if exit_code == 0 {
                     title.set_label("Command Execution");
                 } else {
@@ -407,11 +467,13 @@ pub fn add_diagnosis_row(
     store: &gio::ListStore,
     pane_id: String,
     agent_name: Option<String>,
+    character_id: Option<String>,
     content: &str,
 ) {
     store.append(&ClawRowObject::new(PersistentClawRow::Diagnosis {
         pane_id,
         agent_name,
+        character_id,
         content: content.to_string(),
         usage: None,
     }));
@@ -428,12 +490,14 @@ pub fn add_suggested_row(
     store: &gio::ListStore,
     pane_id: String,
     agent_name: Option<String>,
+    character_id: Option<String>,
     diagnosis: &str,
     command: &str,
 ) {
     store.append(&ClawRowObject::new(PersistentClawRow::Suggested {
         pane_id,
         agent_name,
+        character_id,
         diagnosis: diagnosis.to_string(),
         command: command.to_string(),
         usage: None,
@@ -444,12 +508,14 @@ pub fn add_tool_call_row(
     store: &gio::ListStore,
     pane_id: String,
     agent_name: Option<String>,
+    character_id: Option<String>,
     tool_name: &str,
     result: &str,
 ) {
     store.append(&ClawRowObject::new(PersistentClawRow::ToolCall {
         pane_id,
         agent_name,
+        character_id,
         tool_name: tool_name.to_string(),
         result: result.to_string(),
         usage: None,
@@ -460,12 +526,14 @@ pub fn add_process_list_row(
     store: &gio::ListStore,
     pane_id: String,
     agent_name: Option<String>,
+    character_id: Option<String>,
     result_json: &str,
     _on_kill_request: impl Fn(u32, String) + 'static,
 ) {
     store.append(&ClawRowObject::new(PersistentClawRow::ProcessList {
         pane_id,
         agent_name,
+        character_id,
         result_json: result_json.to_string(),
         usage: None,
     }));
@@ -478,6 +546,7 @@ pub fn add_approval_row(
     store: &gio::ListStore,
     pane_id: String,
     agent_name: Option<String>,
+    character_id: Option<String>,
     command: &str,
     _on_text_reply: impl Fn(String) + 'static,
 ) {
@@ -485,6 +554,7 @@ pub fn add_approval_row(
         store,
         pane_id,
         agent_name,
+        character_id,
         &format!("Proposed command:\n```bash\n{command}\n```"),
     );
 }
@@ -493,6 +563,7 @@ pub fn add_file_write_approval_row(
     store: &gio::ListStore,
     pane_id: String,
     agent_name: Option<String>,
+    character_id: Option<String>,
     path: &str,
     content: &str,
     _on_reply: impl Fn(bool) + 'static,
@@ -502,6 +573,7 @@ pub fn add_file_write_approval_row(
         store,
         pane_id,
         agent_name,
+        character_id,
         &format!("Proposed file write to `{path}`:\n```\n{content}\n```"),
     );
 }
@@ -510,6 +582,7 @@ pub fn add_file_delete_approval_row(
     store: &gio::ListStore,
     pane_id: String,
     agent_name: Option<String>,
+    character_id: Option<String>,
     path: &str,
     _on_reply: impl Fn(bool) + 'static,
     _on_text_reply: impl Fn(String) + 'static,
@@ -518,6 +591,7 @@ pub fn add_file_delete_approval_row(
         store,
         pane_id,
         agent_name,
+        character_id,
         &format!("Proposed file deletion: `{path}`"),
     );
 }
@@ -526,6 +600,7 @@ pub fn add_kill_process_approval_row(
     store: &gio::ListStore,
     pane_id: String,
     agent_name: Option<String>,
+    character_id: Option<String>,
     pid: u32,
     process_name: &str,
     _on_reply: impl Fn(bool) + 'static,
@@ -535,6 +610,7 @@ pub fn add_kill_process_approval_row(
         store,
         pane_id,
         agent_name,
+        character_id,
         &format!("Proposed killing process: {process_name} (PID: {pid})"),
     );
 }
@@ -543,6 +619,7 @@ pub fn add_clipboard_get_approval_row(
     store: &gio::ListStore,
     pane_id: String,
     agent_name: Option<String>,
+    character_id: Option<String>,
     _on_reply: impl Fn(bool) + 'static,
     _on_text_reply: impl Fn(String) + 'static,
 ) {
@@ -550,6 +627,7 @@ pub fn add_clipboard_get_approval_row(
         store,
         pane_id,
         agent_name,
+        character_id,
         "Proposed reading from clipboard.",
     );
 }
@@ -558,6 +636,7 @@ pub fn add_clipboard_set_approval_row(
     store: &gio::ListStore,
     pane_id: String,
     agent_name: Option<String>,
+    character_id: Option<String>,
     text: &str,
     _on_reply: impl Fn(bool) + 'static,
     _on_text_reply: impl Fn(String) + 'static,
@@ -566,6 +645,7 @@ pub fn add_clipboard_set_approval_row(
         store,
         pane_id,
         agent_name,
+        character_id,
         &format!("Proposed writing to clipboard:\n```\n{text}\n```"),
     );
 }

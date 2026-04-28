@@ -65,6 +65,7 @@ pub fn spawn_dispatch(
                 }
                 ClawEngineEvent::ToolCallStarted {
                     agent_name: event_agent_name,
+                    character_id: _,
                     tool_name,
                 } => {
                     indicator.show_thinking(event_agent_name, Some(tool_name));
@@ -73,6 +74,7 @@ pub fn spawn_dispatch(
                 ClawEngineEvent::AgentThinking {
                     is_thinking,
                     agent_name: event_agent_name,
+                    character_id: _,
                 } => {
                     overlay.set_thinking(*is_thinking);
                     if *is_thinking {
@@ -88,7 +90,7 @@ pub fn spawn_dispatch(
                         overlay.set_indicator_slot_visible(false);
                     }
                 }
-                ClawEngineEvent::LazyErrorIndicator { .. } => {
+                ClawEngineEvent::LazyErrorIndicator { character_id, .. } => {
                     indicator.show_lazy_error();
                     overlay.set_indicator_slot_visible(true);
                 }
@@ -100,6 +102,7 @@ pub fn spawn_dispatch(
                 ClawEngineEvent::DiagnosisComplete {
                     diagnosis,
                     agent_name,
+                    character_id,
                     usage,
                 } => {
                     if let Some(usage) = usage {
@@ -109,6 +112,7 @@ pub fn spawn_dispatch(
                         &sidebar_store,
                         id.clone(),
                         Some(agent_name.clone()),
+                        Some(character_id.clone()),
                         diagnosis,
                     );
                     if overlay.history_mode() {
@@ -116,6 +120,7 @@ pub fn spawn_dispatch(
                             &overlay_store,
                             id.clone(),
                             Some(agent_name.clone()),
+                            Some(character_id.clone()),
                             diagnosis,
                         );
                     }
@@ -138,6 +143,7 @@ pub fn spawn_dispatch(
                     command,
                     diagnosis,
                     agent_name,
+                    character_id,
                     usage,
                 } => {
                     if let Some(usage) = usage {
@@ -148,6 +154,7 @@ pub fn spawn_dispatch(
                             &sidebar_store,
                             id.clone(),
                             Some(agent_name.clone()),
+                            Some(character_id.clone()),
                             diagnosis,
                         );
                         if overlay.history_mode() {
@@ -155,6 +162,7 @@ pub fn spawn_dispatch(
                                 &overlay_store,
                                 id.clone(),
                                 Some(agent_name.clone()),
+                                Some(character_id.clone()),
                                 diagnosis,
                             );
                         }
@@ -163,6 +171,7 @@ pub fn spawn_dispatch(
                         &sidebar_store,
                         id.clone(),
                         Some(agent_name.clone()),
+                        Some(character_id.clone()),
                         command,
                         |_| {},
                     );
@@ -171,6 +180,7 @@ pub fn spawn_dispatch(
                             &overlay_store,
                             id.clone(),
                             Some(agent_name.clone()),
+                            Some(character_id.clone()),
                             command,
                             |_| {},
                         );
@@ -189,6 +199,7 @@ pub fn spawn_dispatch(
                     path,
                     content,
                     agent_name,
+                    character_id,
                     usage,
                 } => {
                     if let Some(usage) = usage {
@@ -198,6 +209,7 @@ pub fn spawn_dispatch(
                         &sidebar_store,
                         id.clone(),
                         Some(agent_name.clone()),
+                        Some(character_id.clone()),
                         path,
                         content,
                         |_| {},
@@ -208,6 +220,7 @@ pub fn spawn_dispatch(
                             &overlay_store,
                             id.clone(),
                             Some(agent_name.clone()),
+                            Some(character_id.clone()),
                             path,
                             content,
                             |_| {},
@@ -230,6 +243,7 @@ pub fn spawn_dispatch(
                 ClawEngineEvent::ProposeFileDelete {
                     path,
                     agent_name,
+                    character_id,
                     usage,
                 } => {
                     if let Some(usage) = usage {
@@ -239,6 +253,7 @@ pub fn spawn_dispatch(
                         &sidebar_store,
                         id.clone(),
                         Some(agent_name.clone()),
+                        Some(character_id.clone()),
                         path,
                         |_| {},
                         |_| {},
@@ -248,6 +263,7 @@ pub fn spawn_dispatch(
                             &overlay_store,
                             id.clone(),
                             Some(agent_name.clone()),
+                            Some(character_id.clone()),
                             path,
                             |_| {},
                             |_| {},
@@ -265,6 +281,7 @@ pub fn spawn_dispatch(
                     pid,
                     process_name,
                     agent_name,
+                    character_id,
                     usage,
                 } => {
                     if let Some(usage) = usage {
@@ -274,6 +291,7 @@ pub fn spawn_dispatch(
                         &sidebar_store,
                         id.clone(),
                         Some(agent_name.clone()),
+                        Some(character_id.clone()),
                         *pid,
                         process_name,
                         |_| {},
@@ -284,6 +302,7 @@ pub fn spawn_dispatch(
                             &overlay_store,
                             id.clone(),
                             Some(agent_name.clone()),
+                            Some(character_id.clone()),
                             *pid,
                             process_name,
                             |_| {},
@@ -301,7 +320,11 @@ pub fn spawn_dispatch(
                         },
                     );
                 }
-                ClawEngineEvent::ProposeGetClipboard { agent_name, usage } => {
+                ClawEngineEvent::ProposeGetClipboard {
+                    agent_name,
+                    character_id,
+                    usage,
+                } => {
                     if let Some(usage) = usage {
                         total_tokens.set(total_tokens.get() + usage_total(usage));
                     }
@@ -309,6 +332,7 @@ pub fn spawn_dispatch(
                         &sidebar_store,
                         id.clone(),
                         Some(agent_name.clone()),
+                        Some(character_id.clone()),
                         |_| {},
                         |_| {},
                     );
@@ -317,6 +341,7 @@ pub fn spawn_dispatch(
                             &overlay_store,
                             id.clone(),
                             Some(agent_name.clone()),
+                            Some(character_id.clone()),
                             |_| {},
                             |_| {},
                         );
@@ -331,6 +356,7 @@ pub fn spawn_dispatch(
                 }
                 ClawEngineEvent::ProposeSetClipboard {
                     agent_name,
+                    character_id,
                     text,
                     usage,
                 } => {
@@ -341,6 +367,7 @@ pub fn spawn_dispatch(
                         &sidebar_store,
                         id.clone(),
                         Some(agent_name.clone()),
+                        Some(character_id.clone()),
                         text,
                         |_| {},
                         |_| {},
@@ -350,6 +377,7 @@ pub fn spawn_dispatch(
                             &overlay_store,
                             id.clone(),
                             Some(agent_name.clone()),
+                            Some(character_id.clone()),
                             text,
                             |_| {},
                             |_| {},
@@ -367,6 +395,7 @@ pub fn spawn_dispatch(
                     command,
                     explanation,
                     agent_name,
+                    character_id,
                     usage,
                 } => {
                     if let Some(usage) = usage {
@@ -377,6 +406,7 @@ pub fn spawn_dispatch(
                             &sidebar_store,
                             id.clone(),
                             Some(agent_name.clone()),
+                            Some(character_id.clone()),
                             explanation,
                         );
                         if overlay.history_mode() {
@@ -384,6 +414,7 @@ pub fn spawn_dispatch(
                                 &overlay_store,
                                 id.clone(),
                                 Some(agent_name.clone()),
+                                Some(character_id.clone()),
                                 explanation,
                             );
                         }
@@ -392,6 +423,7 @@ pub fn spawn_dispatch(
                         &sidebar_store,
                         id.clone(),
                         Some(agent_name.clone()),
+                        Some(character_id.clone()),
                         command,
                         |_| {},
                     );
@@ -400,6 +432,7 @@ pub fn spawn_dispatch(
                             &overlay_store,
                             id.clone(),
                             Some(agent_name.clone()),
+                            Some(character_id.clone()),
                             command,
                             |_| {},
                         );
@@ -449,12 +482,14 @@ pub fn spawn_dispatch(
                         &sidebar_store,
                         id.clone(),
                         None,
+                        None,
                         "Agent was EVICTED because the session was resumed in another pane.",
                     );
                     if overlay.history_mode() {
                         boxxy_claw_ui::add_diagnosis_row(
                             &overlay_store,
                             id.clone(),
+                            None,
                             None,
                             "Agent was EVICTED because the session was resumed in another pane.",
                         );
@@ -476,6 +511,7 @@ pub fn spawn_dispatch(
                     max_lines,
                     offset_lines,
                     request_id,
+                    character_id: _,
                     ..
                 } => {
                     // Hide the badge while a TUI owns the host —
@@ -509,6 +545,7 @@ pub fn spawn_dispatch(
                 }
                 ClawEngineEvent::ToolResult {
                     agent_name,
+                    character_id,
                     tool_name,
                     result,
                     usage,
@@ -521,6 +558,7 @@ pub fn spawn_dispatch(
                             &sidebar_store,
                             id.clone(),
                             Some(agent_name.clone()),
+                            Some(character_id.clone()),
                             result,
                             |_, _| {},
                         );
@@ -529,6 +567,7 @@ pub fn spawn_dispatch(
                             &sidebar_store,
                             id.clone(),
                             Some(agent_name.clone()),
+                            Some(character_id.clone()),
                             tool_name,
                             result,
                         );

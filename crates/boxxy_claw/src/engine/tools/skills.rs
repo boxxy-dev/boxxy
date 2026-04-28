@@ -46,7 +46,9 @@ impl Tool for ActivateSkillTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        self.approval.report_tool_started(Self::NAME.to_string()).await;
+        self.approval
+            .report_tool_started(Self::NAME.to_string())
+            .await;
         boxxy_telemetry::track_tool_use(Self::NAME).await;
         let registry = crate::registry::skills::global_registry().await;
         let all_skills = registry.get_skills().await;

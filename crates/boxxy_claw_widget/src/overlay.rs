@@ -126,7 +126,7 @@ impl TerminalOverlay {
             }
             let was_idle = !sticky.get();
             sticky.set(true);
-            
+
             let lv = list_items.clone();
             let is_auto = is_auto_items.clone();
             gtk::glib::idle_add_local_once(move || {
@@ -136,7 +136,7 @@ impl TerminalOverlay {
                     is_auto.set(false);
                 });
             });
-            
+
             if was_idle {
                 let sticky_timer = sticky.clone();
                 gtk::glib::timeout_add_local(std::time::Duration::from_millis(1200), move || {
@@ -156,9 +156,9 @@ impl TerminalOverlay {
             if is_auto.get() {
                 return;
             }
-            
+
             let at_bottom = (current_val + a.page_size() - a.upper()).abs() < 60.0;
-            
+
             // If the user scrolls up away from the bottom, clear the sticky flag
             // so we don't yank them back down.
             if current_val < old_val - 1.0 {
@@ -487,7 +487,9 @@ impl TerminalOverlay {
 
         // Returns true if the character with the given UUID is Active in another holder.
         let is_taken = |id: &str| -> bool {
-            claims.iter().any(|claim| claim.character_id == id && claim.holder_id != host_id)
+            claims
+                .iter()
+                .any(|claim| claim.character_id == id && claim.holder_id != host_id)
         };
 
         // Auto-default (or auto-correct): ensure `pending` always points to a
@@ -795,8 +797,7 @@ impl TerminalOverlay {
         self.character_selector_box.set_visible(show_picker);
 
         // If the picker shouldn't be shown, we don't need to poll the registry.
-        if !show_picker {
-        }
+        if !show_picker {}
 
         // 4. If the agent is actively thinking, we show no actions.
         if is_thinking {

@@ -73,7 +73,9 @@ impl Tool for MemoryStoreTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        self.approval.report_tool_started(Self::NAME.to_string()).await;
+        self.approval
+            .report_tool_started(Self::NAME.to_string())
+            .await;
         let db_guard = self.db.lock().await;
         if let Some(db) = db_guard.as_ref() {
             let store = Store::new(db.pool());
@@ -158,7 +160,9 @@ impl Tool for MemoryDeleteTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        self.approval.report_tool_started(Self::NAME.to_string()).await;
+        self.approval
+            .report_tool_started(Self::NAME.to_string())
+            .await;
         let db_guard = self.db.lock().await;
         if let Some(db) = db_guard.as_ref() {
             let store = Store::new(db.pool());

@@ -50,7 +50,9 @@ impl Tool for HttpFetchTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        self.approval.report_tool_started(Self::NAME.to_string()).await;
+        self.approval
+            .report_tool_started(Self::NAME.to_string())
+            .await;
         boxxy_telemetry::track_tool_use(Self::NAME).await;
         let client = reqwest::Client::builder()
             .user_agent("Boxxy-Claw/0.1.0")
@@ -110,9 +112,15 @@ impl Tool for HttpFetchTool {
             let raw = String::from_utf8_lossy(&body_bytes);
             let text = strip_html_tags(&raw);
             if text.len() > MAX_TEXT {
-                format!("{}\n\n[NOTE: Page text truncated to 50KB]", &text[..MAX_TEXT])
+                format!(
+                    "{}\n\n[NOTE: Page text truncated to 50KB]",
+                    &text[..MAX_TEXT]
+                )
             } else if was_truncated {
-                format!("{}\n\n[NOTE: Source HTML was truncated before stripping]", text)
+                format!(
+                    "{}\n\n[NOTE: Source HTML was truncated before stripping]",
+                    text
+                )
             } else {
                 text
             }

@@ -63,7 +63,9 @@ impl Tool for WebSearchTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        self.approval.report_tool_started(Self::NAME.to_string()).await;
+        self.approval
+            .report_tool_started(Self::NAME.to_string())
+            .await;
         boxxy_telemetry::track_tool_use(Self::NAME).await;
 
         let depth = match args.search_depth.as_deref() {

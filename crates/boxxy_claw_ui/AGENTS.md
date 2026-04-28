@@ -31,16 +31,16 @@ Used by `boxxy-terminal`'s pane module to push rows into the per-pane store. The
 
 ## Visual Language
 
-Each row shares the same layout (icon + heading + dim pane label + viewer + optional monospace command line) with per-variant styling:
+Each row shares the same layout (avatar + heading + dim pane label + viewer + optional monospace command line) with per-variant styling. Agent-originated rows use the `character_id` to dynamically load the character's display name and custom `AVATAR.png` from the `CHARACTER_CACHE`.
 
-| Row variant | Icon | Heading | Extra styling |
+| Row variant | Icon/Avatar | Heading | Extra styling |
 |---|---|---|---|
 | SystemMessage | — (hidden) | "Models" | `accent` title, `system-message` row class |
-| User | `boxxy-comic-bubble-symbolic` | "User Message" | — |
-| Diagnosis | `boxxyclaw` | "Diagnosis" | `accent` icon |
-| Suggested | `boxxy-dialog-warning-symbolic` | "Suggested Action" | `warning` icon; command shown in monospace |
-| ProcessList | `boxxyclaw` | "Process List" | `accent` icon; custom renderer fills the viewer |
-| ToolCall | `boxxy-build-circle-symbolic` | `Used tool: {name}` | `accent` icon; viewer hidden (compact row) |
+| User | `boxxy-comic-bubble-symbolic` | "You" | — |
+| Diagnosis | Character Avatar | Character Name | Fallback to "boxxyclaw" icon |
+| Suggested | Character Avatar | Character Name | Fallback to "boxxy-dialog-warning-symbolic"; command shown in monospace |
+| ProcessList | Character Avatar | Character Name | Fallback to "boxxyclaw" icon; custom renderer fills the viewer |
+| ToolCall | Character Avatar | `Used tool: {name}` | Fallback to "boxxy-build-circle-symbolic"; viewer hidden (compact row) |
 | Command | `utilities-terminal-symbolic` | "Command Execution" or "Command Failed (Exit N)" | `error` icon when exit != 0 |
 
 ## Dependencies

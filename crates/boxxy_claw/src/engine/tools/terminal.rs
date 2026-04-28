@@ -59,15 +59,16 @@ impl Tool for TerminalCommandTool {
         boxxy_telemetry::track_tool_use(Self::NAME).await;
         let (tx, rx) = tokio::sync::oneshot::channel();
 
-        let agent_name = {
+        let (agent_name, character_id) = {
             let state = self.state.lock().await;
-            state.agent_name.clone()
+            (state.agent_name.clone(), state.character_id.clone())
         };
 
         let _ = self
             .tx_ui
             .send(ClawEngineEvent::ToolCallStarted {
                 agent_name: agent_name.clone(),
+                character_id: character_id.clone(),
                 tool_name: Self::NAME.to_string(),
             })
             .await;
@@ -79,6 +80,7 @@ impl Tool for TerminalCommandTool {
 
         let event = ClawEngineEvent::ProposeTerminalCommand {
             agent_name: agent_name.clone(),
+            character_id: character_id.clone(),
             command: args.command.clone(),
             explanation: args.explanation.clone(),
             usage: None,
@@ -101,6 +103,7 @@ impl Tool for TerminalCommandTool {
             .tx_ui
             .send(ClawEngineEvent::AgentThinking {
                 agent_name: agent_name.clone(),
+                character_id: character_id.clone(),
                 is_thinking: false,
             })
             .await;
@@ -109,6 +112,7 @@ impl Tool for TerminalCommandTool {
             .tx_ui
             .send(ClawEngineEvent::AgentThinking {
                 agent_name,
+                character_id,
                 is_thinking: true,
             })
             .await;

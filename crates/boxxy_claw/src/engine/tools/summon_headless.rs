@@ -55,7 +55,7 @@ impl Tool for SummonHeadlessWorkerTool {
         boxxy_telemetry::track_tool_use(Self::NAME).await;
         let task_id = uuid::Uuid::new_v4();
 
-        let (my_pane_id, my_session_id, my_name, reply_rx) = {
+        let (my_pane_id, my_session_id, my_name, character_id, reply_rx) = {
             let mut state = self.state.lock().await;
             let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
             state.pending_delegations.insert(task_id, reply_tx);
@@ -63,13 +63,16 @@ impl Tool for SummonHeadlessWorkerTool {
                 state.pane_id.clone(),
                 uuid::Uuid::parse_str(&state.session_id).unwrap_or_default(),
                 state.agent_name.clone(),
+                state.character_id.clone(),
                 reply_rx,
             )
         };
 
-        let _ = self.tx_ui
+        let _ = self
+            .tx_ui
             .send(crate::engine::ClawEngineEvent::ToolCallStarted {
                 agent_name: my_name.clone(),
+                character_id,
                 tool_name: Self::NAME.to_string(),
             })
             .await;

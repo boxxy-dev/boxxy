@@ -38,7 +38,9 @@ impl Tool for GetClipboardTool {
     }
 
     async fn call(&self, _args: Self::Args) -> Result<Self::Output, Self::Error> {
-        self.approval.report_tool_started(Self::NAME.to_string()).await;
+        self.approval
+            .report_tool_started(Self::NAME.to_string())
+            .await;
         boxxy_telemetry::track_tool_use(Self::NAME).await;
         self.approval.set_thinking(false).await;
         let approved = self.approval.propose_get_clipboard().await;
@@ -98,7 +100,9 @@ impl Tool for SetClipboardTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        self.approval.report_tool_started(Self::NAME.to_string()).await;
+        self.approval
+            .report_tool_started(Self::NAME.to_string())
+            .await;
         boxxy_telemetry::track_tool_use(Self::NAME).await;
         self.approval.set_thinking(false).await;
         let approved = self.approval.propose_set_clipboard(args.text.clone()).await;

@@ -1,15 +1,17 @@
 use crate::claw::CharacterRegistry;
 use boxxy_claw::registry::workspace::WorkspaceRegistry;
 use futures_util::StreamExt;
-use std::sync::Arc;
-use zbus::Connection;
-use tokio::sync::{Mutex, watch, OnceCell};
 use std::collections::HashSet;
+use std::sync::Arc;
+use tokio::sync::{Mutex, OnceCell, watch};
+use zbus::Connection;
 
 static ACTIVE_CLIENTS: OnceCell<Mutex<HashSet<String>>> = OnceCell::const_new();
 
 async fn get_active_clients() -> &'static Mutex<HashSet<String>> {
-    ACTIVE_CLIENTS.get_or_init(|| async { Mutex::new(HashSet::new()) }).await
+    ACTIVE_CLIENTS
+        .get_or_init(|| async { Mutex::new(HashSet::new()) })
+        .await
 }
 
 pub async fn register_client(bus_name: String) {
@@ -48,12 +50,16 @@ pub async fn spawn_owner_tracker(
                 let mut clients = clients_mutex.lock().await;
                 clients.remove(args.name.as_str())
             };
-            
+
             if was_client {
                 let current = *client_count_tx.borrow();
                 let new_count = current.saturating_sub(1);
                 let _ = client_count_tx.send(new_count);
-                log::info!("Client {} disconnected. Total clients: {}", args.name, new_count);
+                log::info!(
+                    "Client {} disconnected. Total clients: {}",
+                    args.name,
+                    new_count
+                );
             }
 
             // Fast path: skip lock acquisition if we don't own anything.

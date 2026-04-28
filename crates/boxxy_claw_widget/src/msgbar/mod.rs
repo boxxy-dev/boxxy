@@ -356,11 +356,13 @@ impl MsgBarComponent {
 
         let registry = boxxy_claw_protocol::characters::CHARACTER_CACHE.load();
         if let Some(info) = registry.iter().find(|c| c.config.id == character_id) {
-
             // Try to find the inner GtkEntry (which is wrapped in the GtkBox)
             if let Some(entry) = self.widget.last_child() {
                 if let Ok(entry) = entry.downcast::<gtk::Entry>() {
-                    entry.set_placeholder_text(Some(&format!("Message {}...", info.config.display_name)));
+                    entry.set_placeholder_text(Some(&format!(
+                        "Message {}...",
+                        info.config.display_name
+                    )));
                 }
             }
 

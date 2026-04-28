@@ -189,7 +189,7 @@ impl AutocompleteController {
         for item in items {
             let row = gtk::ListBoxRow::new();
             row.set_widget_name(&item.replacement_text);
-            
+
             if item.disabled {
                 row.set_sensitive(false);
                 row.set_activatable(false);

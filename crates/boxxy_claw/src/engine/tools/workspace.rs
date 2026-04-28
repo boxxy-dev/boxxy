@@ -52,15 +52,16 @@ impl Tool for SpawnAgentTool {
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
         boxxy_telemetry::track_tool_use(Self::NAME).await;
-        let my_name = {
+        let (my_name, character_id) = {
             let state = self.state.lock().await;
-            state.agent_name.clone()
+            (state.agent_name.clone(), state.character_id.clone())
         };
 
         let _ = self
             .tx_ui
             .send(ClawEngineEvent::ToolCallStarted {
                 agent_name: my_name.clone(),
+                character_id: character_id.clone(),
                 tool_name: Self::NAME.to_string(),
             })
             .await;
@@ -109,6 +110,7 @@ pub struct CloseAgentOutput {
 
 pub struct CloseAgentTool {
     pub tx_ui: async_channel::Sender<ClawEngineEvent>,
+    pub state: std::sync::Arc<tokio::sync::Mutex<crate::engine::session::SessionState>>,
 }
 
 impl Tool for CloseAgentTool {
@@ -138,11 +140,16 @@ impl Tool for CloseAgentTool {
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
         boxxy_telemetry::track_tool_use(Self::NAME).await;
+        let (agent_name, character_id) = {
+            let state = self.state.lock().await;
+            (state.agent_name.clone(), state.character_id.clone())
+        };
 
         let _ = self
             .tx_ui
             .send(ClawEngineEvent::ToolCallStarted {
-                agent_name: "Workspace Manager".to_string(), // Best effort for name here
+                agent_name,
+                character_id,
                 tool_name: Self::NAME.to_string(),
             })
             .await;
@@ -178,7 +185,10 @@ pub struct ReadPaneOutput {
     pub content: String,
 }
 
-pub struct ReadPaneTool;
+pub struct ReadPaneTool {
+    pub tx_ui: async_channel::Sender<ClawEngineEvent>,
+    pub state: std::sync::Arc<tokio::sync::Mutex<crate::engine::session::SessionState>>,
+}
 
 impl Tool for ReadPaneTool {
     const NAME: &'static str = "read_pane_buffer";
@@ -206,6 +216,21 @@ impl Tool for ReadPaneTool {
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
         boxxy_telemetry::track_tool_use(Self::NAME).await;
+
+        let (agent_name, character_id) = {
+            let state = self.state.lock().await;
+            (state.agent_name.clone(), state.character_id.clone())
+        };
+
+        let _ = self
+            .tx_ui
+            .send(ClawEngineEvent::ToolCallStarted {
+                agent_name: agent_name.clone(),
+                character_id,
+                tool_name: Self::NAME.to_string(),
+            })
+            .await;
+
         let workspace = global_workspace().await;
         if let Some(pane_id) = workspace.resolve_pane_id_by_name(&args.agent_name).await {
             match workspace.get_pane_snapshot(pane_id).await {
@@ -277,16 +302,22 @@ impl Tool for DelegateTaskTool {
         let workspace = global_workspace().await;
         let request_id = uuid::Uuid::new_v4();
 
-        let (my_name, reply_rx) = {
+        let (my_name, character_id, reply_rx) = {
             let mut state = self.state.lock().await;
             let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
             state.pending_delegations.insert(request_id, reply_tx);
-            (state.agent_name.clone(), reply_rx)
+            (
+                state.agent_name.clone(),
+                state.character_id.clone(),
+                reply_rx,
+            )
         };
 
-        let _ = self.tx_ui
+        let _ = self
+            .tx_ui
             .send(ClawEngineEvent::ToolCallStarted {
                 agent_name: my_name.clone(),
+                character_id: character_id.clone(),
                 tool_name: Self::NAME.to_string(),
             })
             .await;
@@ -379,16 +410,22 @@ impl Tool for DelegateTaskAsyncTool {
         let workspace = global_workspace().await;
         let request_id = uuid::Uuid::new_v4();
 
-        let (my_name, reply_rx) = {
+        let (my_name, character_id, reply_rx) = {
             let mut state = self.state.lock().await;
             let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
             state.pending_delegations.insert(request_id, reply_tx);
-            (state.agent_name.clone(), reply_rx)
+            (
+                state.agent_name.clone(),
+                state.character_id.clone(),
+                reply_rx,
+            )
         };
 
-        let _ = self.tx_ui
+        let _ = self
+            .tx_ui
             .send(ClawEngineEvent::ToolCallStarted {
                 agent_name: my_name.clone(),
+                character_id: character_id.clone(),
                 tool_name: Self::NAME.to_string(),
             })
             .await;
@@ -453,6 +490,7 @@ pub struct SendKeystrokesOutput {
 
 pub struct SendKeystrokesTool {
     pub tx_ui: async_channel::Sender<ClawEngineEvent>,
+    pub state: std::sync::Arc<tokio::sync::Mutex<crate::engine::session::SessionState>>,
 }
 
 impl Tool for SendKeystrokesTool {
@@ -490,10 +528,16 @@ impl Tool for SendKeystrokesTool {
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
         boxxy_telemetry::track_tool_use(Self::NAME).await;
 
+        let (agent_name, character_id) = {
+            let state = self.state.lock().await;
+            (state.agent_name.clone(), state.character_id.clone())
+        };
+
         let _ = self
             .tx_ui
             .send(ClawEngineEvent::ToolCallStarted {
-                agent_name: "Workspace Automation".to_string(), // Best effort
+                agent_name: agent_name.clone(),
+                character_id,
                 tool_name: Self::NAME.to_string(),
             })
             .await;
@@ -539,6 +583,7 @@ pub struct SendCommandOutput {
 
 pub struct SendCommandToPaneTool {
     pub tx_ui: async_channel::Sender<ClawEngineEvent>,
+    pub state: std::sync::Arc<tokio::sync::Mutex<crate::engine::session::SessionState>>,
 }
 
 impl Tool for SendCommandToPaneTool {
@@ -574,10 +619,16 @@ impl Tool for SendCommandToPaneTool {
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
         boxxy_telemetry::track_tool_use(Self::NAME).await;
 
+        let (agent_name, character_id) = {
+            let state = self.state.lock().await;
+            (state.agent_name.clone(), state.character_id.clone())
+        };
+
         let _ = self
             .tx_ui
             .send(ClawEngineEvent::ToolCallStarted {
-                agent_name: "Workspace Automation".to_string(), // Best effort
+                agent_name: agent_name.clone(),
+                character_id,
                 tool_name: Self::NAME.to_string(),
             })
             .await;
@@ -638,7 +689,10 @@ pub struct AgentInfo {
     pub status: String,
 }
 
-pub struct ListActiveAgentsTool;
+pub struct ListActiveAgentsTool {
+    pub tx_ui: async_channel::Sender<ClawEngineEvent>,
+    pub state: std::sync::Arc<tokio::sync::Mutex<crate::engine::session::SessionState>>,
+}
 
 impl Tool for ListActiveAgentsTool {
     const NAME: &'static str = "list_active_agents";
@@ -661,6 +715,20 @@ impl Tool for ListActiveAgentsTool {
     }
 
     async fn call(&self, _args: Self::Args) -> Result<Self::Output, Self::Error> {
+        let (agent_name, character_id) = {
+            let state = self.state.lock().await;
+            (state.agent_name.clone(), state.character_id.clone())
+        };
+
+        let _ = self
+            .tx_ui
+            .send(ClawEngineEvent::ToolCallStarted {
+                agent_name: agent_name.clone(),
+                character_id,
+                tool_name: Self::NAME.to_string(),
+            })
+            .await;
+
         let workspace = global_workspace().await;
         // We get all panes directly from the registry
         // To do this we might need a public method in WorkspaceRegistry or just read the field if it was public
@@ -724,7 +792,10 @@ pub struct AbortAgentOutput {
     pub message: String,
 }
 
-pub struct AbortAgentTaskTool;
+pub struct AbortAgentTaskTool {
+    pub tx_ui: async_channel::Sender<ClawEngineEvent>,
+    pub state: std::sync::Arc<tokio::sync::Mutex<crate::engine::session::SessionState>>,
+}
 
 impl Tool for AbortAgentTaskTool {
     const NAME: &'static str = "abort_agent_task";
@@ -754,6 +825,20 @@ impl Tool for AbortAgentTaskTool {
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
         boxxy_telemetry::track_tool_use(Self::NAME).await;
+        let (agent_name, character_id) = {
+            let state = self.state.lock().await;
+            (state.agent_name.clone(), state.character_id.clone())
+        };
+
+        let _ = self
+            .tx_ui
+            .send(ClawEngineEvent::ToolCallStarted {
+                agent_name: agent_name.clone(),
+                character_id,
+                tool_name: Self::NAME.to_string(),
+            })
+            .await;
+
         let workspace = global_workspace().await;
         if let Some(tx) = workspace.get_pane_tx_by_name(&args.agent_name).await {
             let _ = tx.send(crate::engine::ClawMessage::Abort).await;

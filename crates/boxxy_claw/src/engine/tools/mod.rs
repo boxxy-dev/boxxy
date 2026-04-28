@@ -30,9 +30,9 @@ pub struct ClawApprovalHandler {
 impl ApprovalHandler for ClawApprovalHandler {
     async fn propose_file_write(&self, path: String, content: String) -> bool {
         let (tx, rx) = tokio::sync::oneshot::channel();
-        let agent_name = {
+        let (agent_name, character_id) = {
             let state = self.state.lock().await;
-            state.agent_name.clone()
+            (state.agent_name.clone(), state.character_id.clone())
         };
 
         {
@@ -42,6 +42,7 @@ impl ApprovalHandler for ClawApprovalHandler {
 
         let event = ClawEngineEvent::ProposeFileWrite {
             agent_name,
+            character_id,
             path,
             content,
             usage: None,
@@ -63,9 +64,9 @@ impl ApprovalHandler for ClawApprovalHandler {
 
     async fn propose_file_delete(&self, path: String) -> bool {
         let (tx, rx) = tokio::sync::oneshot::channel();
-        let agent_name = {
+        let (agent_name, character_id) = {
             let state = self.state.lock().await;
-            state.agent_name.clone()
+            (state.agent_name.clone(), state.character_id.clone())
         };
 
         {
@@ -75,6 +76,7 @@ impl ApprovalHandler for ClawApprovalHandler {
 
         let event = ClawEngineEvent::ProposeFileDelete {
             agent_name,
+            character_id,
             path,
             usage: None,
         };
@@ -95,9 +97,9 @@ impl ApprovalHandler for ClawApprovalHandler {
 
     async fn propose_kill_process(&self, pid: u32, process_name: String) -> bool {
         let (tx, rx) = tokio::sync::oneshot::channel();
-        let agent_name = {
+        let (agent_name, character_id) = {
             let state = self.state.lock().await;
-            state.agent_name.clone()
+            (state.agent_name.clone(), state.character_id.clone())
         };
 
         {
@@ -107,6 +109,7 @@ impl ApprovalHandler for ClawApprovalHandler {
 
         let event = ClawEngineEvent::ProposeKillProcess {
             agent_name,
+            character_id,
             pid,
             process_name,
             usage: None,
@@ -128,9 +131,9 @@ impl ApprovalHandler for ClawApprovalHandler {
 
     async fn propose_get_clipboard(&self) -> bool {
         let (tx, rx) = tokio::sync::oneshot::channel();
-        let agent_name = {
+        let (agent_name, character_id) = {
             let state = self.state.lock().await;
-            state.agent_name.clone()
+            (state.agent_name.clone(), state.character_id.clone())
         };
 
         {
@@ -140,6 +143,7 @@ impl ApprovalHandler for ClawApprovalHandler {
 
         let event = ClawEngineEvent::ProposeGetClipboard {
             agent_name,
+            character_id,
             usage: None,
         };
 
@@ -159,9 +163,9 @@ impl ApprovalHandler for ClawApprovalHandler {
 
     async fn propose_set_clipboard(&self, text: String) -> bool {
         let (tx, rx) = tokio::sync::oneshot::channel();
-        let agent_name = {
+        let (agent_name, character_id) = {
             let state = self.state.lock().await;
-            state.agent_name.clone()
+            (state.agent_name.clone(), state.character_id.clone())
         };
 
         {
@@ -171,6 +175,7 @@ impl ApprovalHandler for ClawApprovalHandler {
 
         let event = ClawEngineEvent::ProposeSetClipboard {
             agent_name,
+            character_id,
             text,
             usage: None,
         };
@@ -190,13 +195,14 @@ impl ApprovalHandler for ClawApprovalHandler {
     }
 
     async fn report_tool_result(&self, tool_name: String, result: String) {
-        let agent_name = {
+        let (agent_name, character_id) = {
             let state = self.state.lock().await;
-            state.agent_name.clone()
+            (state.agent_name.clone(), state.character_id.clone())
         };
 
         let event = ClawEngineEvent::ToolResult {
             agent_name,
+            character_id,
             tool_name,
             result,
             usage: None,
@@ -213,28 +219,30 @@ impl ApprovalHandler for ClawApprovalHandler {
     }
 
     async fn report_tool_started(&self, tool_name: String) {
-        let agent_name = {
+        let (agent_name, character_id) = {
             let state = self.state.lock().await;
-            state.agent_name.clone()
+            (state.agent_name.clone(), state.character_id.clone())
         };
         let _ = self
             .tx_ui
             .send(ClawEngineEvent::ToolCallStarted {
                 agent_name,
+                character_id,
                 tool_name,
             })
             .await;
     }
 
     async fn set_thinking(&self, thinking: bool) {
-        let agent_name = {
+        let (agent_name, character_id) = {
             let state = self.state.lock().await;
-            state.agent_name.clone()
+            (state.agent_name.clone(), state.character_id.clone())
         };
         let _ = self
             .tx_ui
             .send(ClawEngineEvent::AgentThinking {
                 agent_name,
+                character_id,
                 is_thinking: thinking,
             })
             .await;
@@ -285,7 +293,9 @@ impl Tool for SysShellTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        self.approval.report_tool_started(Self::NAME.to_string()).await;
+        self.approval
+            .report_tool_started(Self::NAME.to_string())
+            .await;
         boxxy_telemetry::track_tool_use(Self::NAME).await;
         let command = if self.current_dir.is_empty() {
             args.command

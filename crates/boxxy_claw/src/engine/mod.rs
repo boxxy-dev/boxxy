@@ -58,17 +58,20 @@ impl PersistentClawRowExt {
             }),
             ClawEngineEvent::DiagnosisComplete {
                 agent_name,
+                character_id,
                 diagnosis,
                 usage,
                 ..
             } => Some(PersistentClawRow::Diagnosis {
                 pane_id,
                 agent_name: Some(agent_name.clone()),
+                character_id: Some(character_id.clone()),
                 content: diagnosis.clone(),
                 usage: usage.clone(),
             }),
             ClawEngineEvent::InjectCommand {
                 agent_name,
+                character_id,
                 command,
                 diagnosis,
                 usage,
@@ -76,12 +79,14 @@ impl PersistentClawRowExt {
             } => Some(PersistentClawRow::Suggested {
                 pane_id,
                 agent_name: Some(agent_name.clone()),
+                character_id: Some(character_id.clone()),
                 diagnosis: diagnosis.clone(),
                 command: command.clone(),
                 usage: usage.clone(),
             }),
             ClawEngineEvent::ProposeFileWrite {
                 agent_name,
+                character_id,
                 path,
                 content,
                 usage,
@@ -89,22 +94,26 @@ impl PersistentClawRowExt {
             } => Some(PersistentClawRow::Diagnosis {
                 pane_id,
                 agent_name: Some(agent_name.clone()),
+                character_id: Some(character_id.clone()),
                 content: format!("Proposed file write to `{path}`:\n```\n{content}\n```"),
                 usage: usage.clone(),
             }),
             ClawEngineEvent::ProposeFileDelete {
                 agent_name,
+                character_id,
                 path,
                 usage,
                 ..
             } => Some(PersistentClawRow::Diagnosis {
                 pane_id,
                 agent_name: Some(agent_name.clone()),
+                character_id: Some(character_id.clone()),
                 content: format!("Proposed file deletion: `{path}`"),
                 usage: usage.clone(),
             }),
             ClawEngineEvent::ProposeKillProcess {
                 agent_name,
+                character_id,
                 pid,
                 process_name,
                 usage,
@@ -112,24 +121,30 @@ impl PersistentClawRowExt {
             } => Some(PersistentClawRow::Diagnosis {
                 pane_id,
                 agent_name: Some(agent_name.clone()),
+                character_id: Some(character_id.clone()),
                 content: format!("Proposed killing process: {process_name} (PID: {pid})"),
                 usage: usage.clone(),
             }),
-            ClawEngineEvent::ProposeGetClipboard { agent_name, usage } => {
-                Some(PersistentClawRow::Diagnosis {
-                    pane_id,
-                    agent_name: Some(agent_name.clone()),
-                    content: "Proposed reading from clipboard.".to_string(),
-                    usage: usage.clone(),
-                })
-            }
+            ClawEngineEvent::ProposeGetClipboard {
+                agent_name,
+                character_id,
+                usage,
+            } => Some(PersistentClawRow::Diagnosis {
+                pane_id,
+                agent_name: Some(agent_name.clone()),
+                character_id: Some(character_id.clone()),
+                content: "Proposed reading from clipboard.".to_string(),
+                usage: usage.clone(),
+            }),
             ClawEngineEvent::ProposeSetClipboard {
                 agent_name,
+                character_id,
                 text,
                 usage,
             } => Some(PersistentClawRow::Diagnosis {
                 pane_id,
                 agent_name: Some(agent_name.clone()),
+                character_id: Some(character_id.clone()),
                 content: format!("Proposed writing to clipboard:\n```\n{text}\n```"),
                 usage: usage.clone(),
             }),
@@ -137,16 +152,19 @@ impl PersistentClawRowExt {
                 command,
                 explanation,
                 agent_name,
+                character_id,
                 usage,
             } => Some(PersistentClawRow::Suggested {
                 pane_id,
                 agent_name: Some(agent_name.clone()),
+                character_id: Some(character_id.clone()),
                 diagnosis: explanation.clone(),
                 command: command.clone(),
                 usage: usage.clone(),
             }),
             ClawEngineEvent::ToolResult {
                 agent_name,
+                character_id,
                 tool_name,
                 result,
                 usage,
@@ -155,6 +173,7 @@ impl PersistentClawRowExt {
                     Some(PersistentClawRow::ProcessList {
                         pane_id,
                         agent_name: Some(agent_name.clone()),
+                        character_id: Some(character_id.clone()),
                         result_json: result.clone(),
                         usage: usage.clone(),
                     })
@@ -162,6 +181,7 @@ impl PersistentClawRowExt {
                     Some(PersistentClawRow::ToolCall {
                         pane_id,
                         agent_name: Some(agent_name.clone()),
+                        character_id: Some(character_id.clone()),
                         tool_name: tool_name.clone(),
                         result: result.clone(),
                         usage: usage.clone(),

@@ -34,23 +34,18 @@ pub fn maybe_sanitize_history<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use boxxy_model_selection::{ModelProvider, GeminiModel, AnthropicModel};
+    use boxxy_model_selection::{AnthropicModel, GeminiModel, ModelProvider};
 
     fn gemini_config() -> AgentConfig {
         AgentConfig {
-            model: Some(ModelProvider::Gemini(
-                GeminiModel::Flash,
-                None,
-            )),
+            model: Some(ModelProvider::Gemini(GeminiModel::Flash, None)),
             ..Default::default()
         }
     }
 
     fn anthropic_config() -> AgentConfig {
         AgentConfig {
-            model: Some(ModelProvider::Anthropic(
-                AnthropicModel::ClaudeSonnet,
-            )),
+            model: Some(ModelProvider::Anthropic(AnthropicModel::ClaudeSonnet)),
             ..Default::default()
         }
     }

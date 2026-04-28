@@ -56,13 +56,15 @@ pub async fn start_services(
     tokio::spawn(async move {
         while let Ok(snapshot) = rx_registry.recv().await {
             if let Ok(snapshot_json) = serde_json::to_string(&snapshot) {
-                let _ = conn_for_signals.emit_signal(
-                    Option::<zbus::names::BusName>::None,
-                    "/dev/boxxy/Agent",
-                    "dev.boxxy.BoxxyTerminal.Agent",
-                    "ClaimsChanged",
-                    &(snapshot_json,),
-                ).await;
+                let _ = conn_for_signals
+                    .emit_signal(
+                        Option::<zbus::names::BusName>::None,
+                        "/dev/boxxy/Agent",
+                        "dev.boxxy.BoxxyTerminal.Agent",
+                        "ClaimsChanged",
+                        &(snapshot_json,),
+                    )
+                    .await;
             }
         }
     });
@@ -199,14 +201,18 @@ impl AgentInterface {
         &self,
         #[zbus(header)] header: zbus::message::Header<'_>,
     ) -> String {
-        let owner_bus_name = header.sender().map(|s| s.as_str().to_string()).unwrap_or_default();
+        let owner_bus_name = header
+            .sender()
+            .map(|s| s.as_str().to_string())
+            .unwrap_or_default();
         crate::ipc::client_tracker::register_client(owner_bus_name).await;
 
         let current = *self.client_count_tx.borrow();
         let _ = self.client_count_tx.send(current + 1);
         log::info!("Client connected. Total clients: {}", current + 1);
 
-        let db_was_reset = boxxy_db::DATABASE_WAS_RESET.swap(false, std::sync::atomic::Ordering::SeqCst);
+        let db_was_reset =
+            boxxy_db::DATABASE_WAS_RESET.swap(false, std::sync::atomic::Ordering::SeqCst);
         let snapshot = self.core.registry.snapshot().await;
 
         let token = boxxy_claw_protocol::characters::StartupToken {
@@ -233,21 +239,35 @@ impl AgentInterface {
     ) -> String {
         let kind = match boxxy_claw_protocol::characters::HolderKind::try_from(holder_kind) {
             Ok(k) => k,
-            Err(_) => return serde_json::to_string(&Result::<boxxy_claw_protocol::characters::ClaimedSession, boxxy_claw_protocol::characters::ClaimError>::Err(boxxy_claw_protocol::characters::ClaimError::UnknownCharacter { character_id })).unwrap_or_default(),
+            Err(_) => {
+                return serde_json::to_string(&Result::<
+                    boxxy_claw_protocol::characters::ClaimedSession,
+                    boxxy_claw_protocol::characters::ClaimError,
+                >::Err(
+                    boxxy_claw_protocol::characters::ClaimError::UnknownCharacter { character_id },
+                ))
+                .unwrap_or_default();
+            }
         };
 
-        let owner_bus_name = header.sender().map(|s| s.as_str().to_string()).unwrap_or_default();
-        let result = self.do_claim(emitter, conn, holder_id, kind, character_id, owner_bus_name).await;
+        let owner_bus_name = header
+            .sender()
+            .map(|s| s.as_str().to_string())
+            .unwrap_or_default();
+        let result = self
+            .do_claim(emitter, conn, holder_id, kind, character_id, owner_bus_name)
+            .await;
         serde_json::to_string(&result).unwrap_or_default()
     }
 
-    async fn release_holder(
-        &self,
-        holder_id: String,
-    ) {
+    async fn release_holder(&self, holder_id: String) {
         if let Some(claim) = self.core.registry.release_holder(&holder_id).await {
-            log::info!("Released holder {} (kind {:?})", holder_id, claim.holder_kind);
-            
+            log::info!(
+                "Released holder {} (kind {:?})",
+                holder_id,
+                claim.holder_kind
+            );
+
             if claim.holder_kind == boxxy_claw_protocol::characters::HolderKind::Pane {
                 let workspace = boxxy_claw::registry::workspace::global_workspace().await;
                 workspace.release_all_locks(&claim.holder_id).await;
@@ -257,7 +277,9 @@ impl AgentInterface {
     }
 
     async fn resolve_peer(&self, query_json: String) -> String {
-        if let Ok(query) = serde_json::from_str::<boxxy_claw_protocol::characters::PeerQuery>(&query_json) {
+        if let Ok(query) =
+            serde_json::from_str::<boxxy_claw_protocol::characters::PeerQuery>(&query_json)
+        {
             let snapshot = self.core.registry.snapshot().await;
             let match_opt = match query {
                 boxxy_claw_protocol::characters::PeerQuery::ByCharacterId(id) => {
@@ -265,7 +287,11 @@ impl AgentInterface {
                 }
                 boxxy_claw_protocol::characters::PeerQuery::ByCharacterDisplayName(name) => {
                     let mut found_id = None;
-                    if let Some(info) = snapshot.catalog.iter().find(|c| c.config.display_name.eq_ignore_ascii_case(&name)) {
+                    if let Some(info) = snapshot
+                        .catalog
+                        .iter()
+                        .find(|c| c.config.display_name.eq_ignore_ascii_case(&name))
+                    {
                         found_id = Some(info.config.id.clone());
                     }
                     if let Some(id) = found_id {
@@ -274,20 +300,23 @@ impl AgentInterface {
                         None
                     }
                 }
-                boxxy_claw_protocol::characters::PeerQuery::ByPetname(petname) => {
-                    snapshot.claims.into_iter().find(|c| c.petname.eq_ignore_ascii_case(&petname))
-                }
+                boxxy_claw_protocol::characters::PeerQuery::ByPetname(petname) => snapshot
+                    .claims
+                    .into_iter()
+                    .find(|c| c.petname.eq_ignore_ascii_case(&petname)),
                 boxxy_claw_protocol::characters::PeerQuery::ByHolderId(id) => {
                     snapshot.claims.into_iter().find(|c| c.holder_id == id)
                 }
             };
 
             if let Some(claim) = match_opt {
-                let display_name = snapshot.catalog.iter()
+                let display_name = snapshot
+                    .catalog
+                    .iter()
                     .find(|c| c.config.id == claim.character_id)
                     .map(|c| c.config.display_name.clone())
                     .unwrap_or_else(|| "Unknown".to_string());
-                
+
                 let info = boxxy_claw_protocol::characters::PeerInfo {
                     holder_id: claim.holder_id,
                     holder_kind: claim.holder_kind,
@@ -299,7 +328,8 @@ impl AgentInterface {
                 return serde_json::to_string(&Some(info)).unwrap_or_default();
             }
         }
-        serde_json::to_string(&Option::<boxxy_claw_protocol::characters::PeerInfo>::None).unwrap_or_default()
+        serde_json::to_string(&Option::<boxxy_claw_protocol::characters::PeerInfo>::None)
+            .unwrap_or_default()
     }
 
     async fn request_reload(&self) {
@@ -392,15 +422,29 @@ impl AgentInterface {
         holder_kind: boxxy_claw_protocol::characters::HolderKind,
         character_id: String,
         owner_bus_name: String,
-    ) -> Result<boxxy_claw_protocol::characters::ClaimedSession, boxxy_claw_protocol::characters::ClaimError> {
-        let claim_res = self.core.registry.try_claim(holder_id.clone(), holder_kind, character_id.clone(), owner_bus_name.clone()).await;
+    ) -> Result<
+        boxxy_claw_protocol::characters::ClaimedSession,
+        boxxy_claw_protocol::characters::ClaimError,
+    > {
+        let claim_res = self
+            .core
+            .registry
+            .try_claim(
+                holder_id.clone(),
+                holder_kind,
+                character_id.clone(),
+                owner_bus_name.clone(),
+            )
+            .await;
 
         match claim_res {
             Ok(claimed_session) => {
                 let session_id = claimed_session.session_id.clone();
                 let character_display_name = {
                     let snapshot = self.core.registry.snapshot().await;
-                    snapshot.catalog.iter()
+                    snapshot
+                        .catalog
+                        .iter()
                         .find(|c| c.config.id == character_id)
                         .map(|c| c.config.display_name.clone())
                         .unwrap_or_else(|| "Unknown".to_string())
@@ -416,7 +460,9 @@ impl AgentInterface {
                 // Register with workspace before emitting signal
                 if holder_kind == boxxy_claw_protocol::characters::HolderKind::Pane {
                     let workspace = boxxy_claw::registry::workspace::global_workspace().await;
-                    workspace.register_pane_tx(holder_id.clone(), tx.clone()).await;
+                    workspace
+                        .register_pane_tx(holder_id.clone(), tx.clone())
+                        .await;
                 }
 
                 {
@@ -453,10 +499,17 @@ impl AgentInterface {
                 let character_display_name_clone = character_display_name.clone();
                 tokio::spawn(async move {
                     while let Ok(event) = rx_ui.recv().await {
-                        maybe_send_desktop_notification(&conn_clone, &character_display_name_clone, &event).await;
+                        maybe_send_desktop_notification(
+                            &conn_clone,
+                            &character_display_name_clone,
+                            &event,
+                        )
+                        .await;
 
                         if let Ok(event_json) = serde_json::to_string(&event) {
-                            let _ = Self::claw_event(&emitter, session_id_clone.clone(), event_json).await;
+                            let _ =
+                                Self::claw_event(&emitter, session_id_clone.clone(), event_json)
+                                    .await;
                         }
                     }
                 });

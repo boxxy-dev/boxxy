@@ -1,9 +1,6 @@
 use crate::engine::dispatcher::extract_command_and_clean;
 
-pub fn process_snapshot(
-    snapshot: &str,
-    last_snapshot_hash: &mut Option<u64>,
-) -> String {
+pub fn process_snapshot(snapshot: &str, last_snapshot_hash: &mut Option<u64>) -> String {
     // 1. Snapshot Management: Only include if changed to save tokens
     let mut final_snapshot = snapshot.to_string();
     let current_hash = {

@@ -85,11 +85,17 @@ mod tests {
         let can_update = can_self_update();
 
         if cfg!(feature = "disable-self-update") {
-            assert!(!can_update, "Self-update must be disabled when feature is enabled");
+            assert!(
+                !can_update,
+                "Self-update must be disabled when feature is enabled"
+            );
         } else if flatpak {
             assert!(!can_update, "Self-update must be disabled when in flatpak");
         } else {
-            assert!(can_update, "Self-update should be enabled for native builds without the feature flag");
+            assert!(
+                can_update,
+                "Self-update should be enabled for native builds without the feature flag"
+            );
         }
     }
 }

@@ -105,6 +105,7 @@ pub enum PersistentClawRow {
     Diagnosis {
         pane_id: String,
         agent_name: Option<String>,
+        character_id: Option<String>,
         content: String,
         usage: Option<UsageWrapper>,
     },
@@ -115,6 +116,7 @@ pub enum PersistentClawRow {
     Suggested {
         pane_id: String,
         agent_name: Option<String>,
+        character_id: Option<String>,
         diagnosis: String,
         command: String,
         usage: Option<UsageWrapper>,
@@ -122,12 +124,14 @@ pub enum PersistentClawRow {
     ProcessList {
         pane_id: String,
         agent_name: Option<String>,
+        character_id: Option<String>,
         result_json: String,
         usage: Option<UsageWrapper>,
     },
     ToolCall {
         pane_id: String,
         agent_name: Option<String>,
+        character_id: Option<String>,
         tool_name: String,
         result: String,
         usage: Option<UsageWrapper>,
@@ -253,9 +257,11 @@ pub enum ClawEngineEvent {
     AgentThinking {
         is_thinking: bool,
         agent_name: String,
+        character_id: String,
     },
     SessionStateChanged {
         agent_name: String,
+        character_id: String,
         status: AgentStatus,
     },
     UserMessage {
@@ -263,6 +269,7 @@ pub enum ClawEngineEvent {
     },
     DiagnosisComplete {
         agent_name: String,
+        character_id: String,
         diagnosis: String,
         usage: Option<UsageWrapper>,
     },
@@ -271,44 +278,52 @@ pub enum ClawEngineEvent {
     DismissDrawer,
     InjectCommand {
         agent_name: String,
+        character_id: String,
         command: String,
         diagnosis: String,
         usage: Option<UsageWrapper>,
     },
     ProposeFileWrite {
         agent_name: String,
+        character_id: String,
         path: String,
         content: String,
         usage: Option<UsageWrapper>,
     },
     ProposeFileDelete {
         agent_name: String,
+        character_id: String,
         path: String,
         usage: Option<UsageWrapper>,
     },
     ProposeKillProcess {
         agent_name: String,
+        character_id: String,
         pid: u32,
         process_name: String,
         usage: Option<UsageWrapper>,
     },
     ProposeGetClipboard {
         agent_name: String,
+        character_id: String,
         usage: Option<UsageWrapper>,
     },
     ProposeSetClipboard {
         agent_name: String,
+        character_id: String,
         text: String,
         usage: Option<UsageWrapper>,
     },
     ProposeTerminalCommand {
         agent_name: String,
+        character_id: String,
         command: String,
         explanation: String,
         usage: Option<UsageWrapper>,
     },
     ProposalResolved {
         agent_name: String,
+        character_id: String,
         approved: bool,
     },
     SystemMessage {
@@ -325,6 +340,7 @@ pub enum ClawEngineEvent {
     /// Request scrollback content from the UI (via Correlation ID)
     RequestScrollback {
         agent_name: String,
+        character_id: String,
         max_lines: usize,
         offset_lines: usize,
         request_id: Uuid,
@@ -343,23 +359,27 @@ pub enum ClawEngineEvent {
     },
     ToolResult {
         agent_name: String,
+        character_id: String,
         tool_name: String,
         result: String,
         usage: Option<UsageWrapper>,
     },
     ToolCallStarted {
         agent_name: String,
+        character_id: String,
         tool_name: String,
     },
     LazyErrorIndicator {
         visible: bool,
         agent_name: String,
+        character_id: String,
     },
     PinStatusChanged(bool),
     WebSearchStatusChanged(bool),
     TaskStatusChanged {
         tasks: Vec<ScheduledTask>,
         agent_name: String,
+        character_id: String,
     },
     RestoreHistory(Vec<PersistentClawRow>),
     Evicted,

@@ -56,22 +56,24 @@ impl Tool for ReadScrollbackTool {
         let request_id = uuid::Uuid::new_v4();
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
 
-        let agent_name = {
+        let (agent_name, character_id) = {
             let mut state = self.state.lock().await;
             state.pending_scrollbacks.insert(request_id, reply_tx);
-            state.agent_name.clone()
+            (state.agent_name.clone(), state.character_id.clone())
         };
 
         let _ = self
             .tx_ui
             .send(ClawEngineEvent::ToolCallStarted {
                 agent_name: agent_name.clone(),
+                character_id: character_id.clone(),
                 tool_name: Self::NAME.to_string(),
             })
             .await;
 
         let req = ClawEngineEvent::RequestScrollback {
             agent_name,
+            character_id,
             max_lines: args.max_lines,
             offset_lines: args.offset_lines,
             request_id,

@@ -52,14 +52,16 @@ impl Tool for ScheduleTaskTool {
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
         boxxy_telemetry::track_tool_use(Self::NAME).await;
 
-        let agent_name = {
+        let (agent_name, character_id) = {
             let state = self.state.lock().await;
-            state.agent_name.clone()
+            (state.agent_name.clone(), state.character_id.clone())
         };
 
-        let _ = self.tx_ui
+        let _ = self
+            .tx_ui
             .send(ClawEngineEvent::ToolCallStarted {
-                agent_name,
+                agent_name: agent_name.clone(),
+                character_id: character_id.clone(),
                 tool_name: Self::NAME.to_string(),
             })
             .await;
@@ -82,11 +84,12 @@ impl Tool for ScheduleTaskTool {
             status: TaskStatus::Pending,
         };
 
-        let (agent_name, tasks, pane_id) = {
+        let (agent_name, character_id, tasks, pane_id) = {
             let mut state = self.state.lock().await;
             state.pending_tasks.push(task);
             (
                 state.agent_name.clone(),
+                state.character_id.clone(),
                 state.pending_tasks.clone(),
                 state.pane_id.clone(),
             )
@@ -96,6 +99,7 @@ impl Tool for ScheduleTaskTool {
             .tx_ui
             .send(ClawEngineEvent::TaskStatusChanged {
                 agent_name,
+                character_id,
                 tasks: tasks.clone(),
             })
             .await;
@@ -148,17 +152,20 @@ impl Tool for ListTasksTool {
 
     async fn call(&self, _args: Self::Args) -> Result<Self::Output, Self::Error> {
         boxxy_telemetry::track_tool_use(Self::NAME).await;
-        let (agent_name, tasks) = {
+        let (agent_name, character_id, tasks) = {
             let state = self.state.lock().await;
             (
                 state.agent_name.clone(),
+                state.character_id.clone(),
                 state.pending_tasks.clone(),
             )
         };
 
-        let _ = self.tx_ui
+        let _ = self
+            .tx_ui
             .send(ClawEngineEvent::ToolCallStarted {
                 agent_name,
+                character_id,
                 tool_name: Self::NAME.to_string(),
             })
             .await;
@@ -207,14 +214,16 @@ impl Tool for CancelTaskTool {
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
         boxxy_telemetry::track_tool_use(Self::NAME).await;
 
-        let agent_name = {
+        let (agent_name, character_id) = {
             let state = self.state.lock().await;
-            state.agent_name.clone()
+            (state.agent_name.clone(), state.character_id.clone())
         };
 
-        let _ = self.tx_ui
+        let _ = self
+            .tx_ui
             .send(ClawEngineEvent::ToolCallStarted {
-                agent_name,
+                agent_name: agent_name.clone(),
+                character_id: character_id.clone(),
                 tool_name: Self::NAME.to_string(),
             })
             .await;
@@ -222,13 +231,14 @@ impl Tool for CancelTaskTool {
         let id = Uuid::parse_str(&args.task_id)
             .map_err(|e| std::io::Error::other(format!("Invalid UUID: {e}")))?;
 
-        let (found, agent_name, tasks, pane_id) = {
+        let (found, agent_name, character_id, tasks, pane_id) = {
             let mut state = self.state.lock().await;
             let initial_len = state.pending_tasks.len();
             state.pending_tasks.retain(|t| t.id != id);
             (
                 state.pending_tasks.len() < initial_len,
                 state.agent_name.clone(),
+                state.character_id.clone(),
                 state.pending_tasks.clone(),
                 state.pane_id.clone(),
             )
@@ -239,6 +249,7 @@ impl Tool for CancelTaskTool {
                 .tx_ui
                 .send(ClawEngineEvent::TaskStatusChanged {
                     agent_name,
+                    character_id,
                     tasks: tasks.clone(),
                 })
                 .await;

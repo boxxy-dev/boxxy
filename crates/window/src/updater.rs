@@ -1,5 +1,4 @@
 use anyhow::{Context, Result};
-use std::path::{Path, PathBuf};
 #[allow(unused_imports)]
 use flate2::read::GzDecoder;
 use reqwest::header::{HeaderValue, USER_AGENT};
@@ -8,6 +7,7 @@ use self_update::backends::github::ReleaseList;
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::io::Read;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 #[allow(unused_imports)]
 use tar::Archive;

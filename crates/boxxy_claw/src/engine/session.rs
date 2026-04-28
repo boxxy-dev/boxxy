@@ -312,11 +312,13 @@ impl ClawSession {
 
                     // Notify UI that thinking has stopped
                     let agent_name = state_lock.agent_name.clone();
+                    let character_id = state_lock.character_id.clone();
                     let tx_ui = self.tx_ui.clone();
                     tokio::spawn(async move {
                         let _ = tx_ui
                             .send(crate::engine::ClawEngineEvent::AgentThinking {
                                 agent_name,
+                                character_id,
                                 is_thinking: false,
                             })
                             .await;
@@ -345,6 +347,7 @@ impl ClawSession {
         {
             state_lock.status = crate::engine::AgentStatus::Working;
             let agent_name = self.name.clone();
+            let character_id = self.character_id.clone();
             let sleep_timestamp = state_lock.sleep_timestamp.take();
             let db_cell = self.db.clone();
             let session_id = self.session_id.clone();
@@ -355,6 +358,7 @@ impl ClawSession {
                 .tx_ui
                 .send(crate::engine::ClawEngineEvent::SessionStateChanged {
                     agent_name,
+                    character_id,
                     status: crate::engine::AgentStatus::Working,
                 })
                 .await;
@@ -380,12 +384,14 @@ impl ClawSession {
 
         state_lock.status = req.target_state.clone();
         let agent_name = self.name.clone();
+        let character_id = self.character_id.clone();
         drop(state_lock);
 
         let _ = self
             .tx_ui
             .send(crate::engine::ClawEngineEvent::SessionStateChanged {
                 agent_name,
+                character_id,
                 status: req.target_state,
             })
             .await;
@@ -517,12 +523,15 @@ impl ClawSession {
                         // If this is an explicit Initialize message, we'll handle the identity
                         // announcement in the match block below to avoid double announcements.
                         if !matches!(&msg, ClawMessage::Initialize) {
-                            let web_search_enabled = self.state.lock().await.web_search_enabled;
+                            let (web_search_enabled, char_id) = {
+                                let state_lock = self.state.lock().await;
+                                (state_lock.web_search_enabled, state_lock.character_id.clone())
+                            };
                             let _ = self
                                 .tx_ui
                                 .send(ClawEngineEvent::Identity {
                                     agent_name: self.name.clone(),
-                                    character_id: self.character_id.clone(),
+                                    character_id: char_id,
                                     pinned: self.pinned,
                                     web_search_enabled,
                                     total_tokens: self.total_tokens,
@@ -616,10 +625,10 @@ impl ClawSession {
                                     .tx_ui
                                     .send(ClawEngineEvent::AgentThinking {
                                         agent_name: self.name.clone(),
+                                        character_id: self.character_id.clone(),
                                         is_thinking: false,
                                     })
-                                    .await;
-                            }
+                                    .await;                            }
                             backlog.clear();
 
                             let mut state_lock = self.state.lock().await;
@@ -680,8 +689,10 @@ impl ClawSession {
                             let agent_name = self.name.clone();
                             drop(state_lock);
 
+                            let character_id = self.character_id.clone();
                             let _ = self.tx_ui.send(crate::engine::ClawEngineEvent::SessionStateChanged {
                                 agent_name,
+                                character_id,
                                 status: crate::engine::AgentStatus::Waiting,
                             }).await;
 
@@ -894,6 +905,7 @@ impl ClawSession {
 
                                         let _ = self.tx_ui.send(ClawEngineEvent::TaskStatusChanged {
                                             agent_name: agent_name_clone,
+                                            character_id: self.character_id.clone(),
                                             tasks: tasks_clone.clone(),
                                         }).await;
 
@@ -1011,7 +1023,7 @@ impl ClawSession {
                                 self.pane_id.clone(),
                                 &event
                             );
-                            
+
                             // A brief delay ensures the UI has fully processed the `Identity` event
                             // and created the overlay/sidebar structures before we append the SystemMessage.
                             // Without this, the listview virtualization might race against the history clearing.
@@ -1175,11 +1187,13 @@ impl ClawSession {
                                     state_lock.pending_lazy_diagnosis =
                                         Some((prompt.clone(), snapshot.clone(), cwd.clone()));
                                     drop(state_lock);
+                                    let character_id = self.character_id.clone();
                                     let _ = self
                                         .tx_ui
                                         .send(ClawEngineEvent::LazyErrorIndicator {
                                             visible: true,
                                             agent_name: self.name.clone(),
+                                            character_id,
                                         })
                                         .await;
                                     continue;
@@ -1225,10 +1239,10 @@ impl ClawSession {
                                         .tx_ui
                                         .send(ClawEngineEvent::AgentThinking {
                                             agent_name: self.name.clone(),
+                                            character_id: self.character_id.clone(),
                                             is_thinking: false,
                                         })
-                                        .await;
-                                }
+                                        .await;                                }
                                 backlog.clear();
                                 current_turn = Some(spawn_turn(
                                     self.pane_id.clone(),
@@ -1267,10 +1281,10 @@ impl ClawSession {
                                     .tx_ui
                                     .send(ClawEngineEvent::AgentThinking {
                                         agent_name: self.name.clone(),
+                                        character_id: self.character_id.clone(),
                                         is_thinking: false,
                                     })
-                                    .await;
-                            }
+                                    .await;                            }
                             backlog.clear();
 
                             // Update workspace state
@@ -1382,10 +1396,10 @@ impl ClawSession {
                                         .tx_ui
                                         .send(ClawEngineEvent::AgentThinking {
                                             agent_name: self.name.clone(),
+                                            character_id: self.character_id.clone(),
                                             is_thinking: false,
                                         })
-                                        .await;
-                                }
+                                        .await;                                }
                                 backlog.clear();
                                 current_turn = Some(spawn_turn(
                                     self.pane_id.clone(),
@@ -1463,10 +1477,12 @@ impl ClawSession {
                             drop(state_lock);
 
                             debug!("Pane {}: User cancelled pending proposals.", self.pane_id);
+                            let character_id = self.character_id.clone();
                             let _ = self
                                 .tx_ui
                                 .send(ClawEngineEvent::ProposalResolved {
                                     agent_name: self.name.clone(),
+                                    character_id,
                                     approved: false,
                                 })
                                 .await;
@@ -1484,11 +1500,13 @@ impl ClawSession {
                             let mut state_lock = self.state.lock().await;
                             state_lock.pending_tasks.retain(|t| t.id != task_id);
                             let agent_name = state_lock.agent_name.clone();
+                            let character_id = state_lock.character_id.clone();
                             let tasks = state_lock.pending_tasks.clone();
                             drop(state_lock);
 
                             let _ = self.tx_ui.send(ClawEngineEvent::TaskStatusChanged {
                                 agent_name,
+                                character_id,
                                 tasks: tasks.clone(),
                             }).await;
 
@@ -1662,12 +1680,14 @@ impl ClawSession {
                         // Prune completed tasks
                         state_lock.pending_tasks.retain(|t| t.status == TaskStatus::Pending);
                         let agent_name = state_lock.agent_name.clone();
+                        let character_id = state_lock.character_id.clone();
                         let agent_name_for_event = agent_name.clone();
                         let tasks = state_lock.pending_tasks.clone();
                         drop(state_lock);
 
                         let _ = self.tx_ui.send(ClawEngineEvent::TaskStatusChanged {
                             agent_name,
+                            character_id,
                             tasks: tasks.clone(),
                         }).await;
 

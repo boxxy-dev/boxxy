@@ -7,7 +7,8 @@
 
 use anyhow::Result;
 use boxxy_claw_protocol::characters::{
-    CharacterInfo, CharacterStatus, ClaimError, ClaimedSession, CharacterClaim, RegistrySnapshot, HolderKind
+    CharacterClaim, CharacterInfo, CharacterStatus, ClaimError, ClaimedSession, HolderKind,
+    RegistrySnapshot,
 };
 use std::collections::{HashMap, HashSet};
 use tokio::sync::RwLock;
@@ -47,17 +48,22 @@ impl CharacterRegistry {
         // Map them to the first available character in the catalog.
         let mut migrations = HashMap::new();
         if let Some(first_char) = catalog.first() {
-            let catalog_ids: HashSet<String> = catalog.iter().map(|c| c.config.id.clone()).collect();
-            
+            let catalog_ids: HashSet<String> =
+                catalog.iter().map(|c| c.config.id.clone()).collect();
+
             let query = "SELECT DISTINCT character_id FROM sessions";
-            let res = sqlx::query_as::<sqlx::Sqlite, (String,)> (query)
+            let res = sqlx::query_as::<sqlx::Sqlite, (String,)>(query)
                 .fetch_all(db.pool())
                 .await;
 
             if let Ok(session_char_ids) = res {
                 for (char_id,) in session_char_ids {
                     if !char_id.is_empty() && !catalog_ids.contains(&char_id) {
-                        log::info!("Migrating orphan character ID {} -> {}", char_id, first_char.config.id);
+                        log::info!(
+                            "Migrating orphan character ID {} -> {}",
+                            char_id,
+                            first_char.config.id
+                        );
                         migrations.insert(char_id, first_char.config.id.clone());
                     }
                 }
@@ -96,14 +102,14 @@ impl CharacterRegistry {
 
         // 1. Check for migrations
         if let Some(to_id) = inner.migrations.get(&character_id) {
-            return Err(ClaimError::Migrated { from_id: character_id, to_id: to_id.clone() });
+            return Err(ClaimError::Migrated {
+                from_id: character_id,
+                to_id: to_id.clone(),
+            });
         }
 
         // 2. Validate character exists
-        if !inner
-            .catalog
-            .iter()
-            .any(|c| c.config.id == character_id) {
+        if !inner.catalog.iter().any(|c| c.config.id == character_id) {
             return Err(ClaimError::UnknownCharacter { character_id });
         }
 
@@ -178,7 +184,7 @@ impl CharacterRegistry {
             }
             inner.revision += 1;
             let _ = self.on_change.send(inner.snapshot());
-            
+
             return Some(CharacterClaim {
                 holder_id: holder_id.to_string(),
                 holder_kind: claim.holder_kind,
@@ -242,7 +248,10 @@ impl RegistryInner {
             });
 
             // Update status in the catalog snapshot
-            if let Some(info) = catalog.iter_mut().find(|c| c.config.id == owned.character_id) {
+            if let Some(info) = catalog
+                .iter_mut()
+                .find(|c| c.config.id == owned.character_id)
+            {
                 if owned.holder_kind == HolderKind::Pane {
                     info.status = CharacterStatus::Active {
                         pane_id: holder_id.clone(),

@@ -38,9 +38,15 @@ pub fn spawn_turn(
     let session_ctx_clone = _session_ctx.to_string();
 
     tokio::spawn(async move {
+        let character_id = {
+            let state_lock = state.lock().await;
+            state_lock.character_id.clone()
+        };
+
         let _ = tx_ui
             .send(ClawEngineEvent::AgentThinking {
                 agent_name: agent_name.clone(),
+                character_id,
                 is_thinking: true,
             })
             .await;
@@ -55,12 +61,13 @@ pub fn spawn_turn(
             let db_guard = db.lock().await;
             db_guard.clone()
         };
-        let past_memories = crate::engine::context::retrieve_memories(&db_opt, &prompt_clone, &cwd_clone).await;
+        let past_memories =
+            crate::engine::context::retrieve_memories(&db_opt, &prompt_clone, &cwd_clone).await;
 
         let settings = boxxy_preferences::Settings::load();
 
         // 1. Build Skills Context
-        let (active_skills_text, _available_skills_text) = 
+        let (active_skills_text, _available_skills_text) =
             skills::build_skills_context(&prompt_clone, &pane_id).await;
 
         // 2. Fetch Global Workspace Radar
@@ -82,15 +89,24 @@ pub fn spawn_turn(
         // --- ATOMIC STATE SNAPSHOT ---
         // Lock state once to extract ALL needed fields and update history/hash.
         // CRITICAL: Do NOT call create_claw_agent while holding this lock!
-        let (persistent_agent, mcp_handle, web_search_enabled, history, history_len, full_prompt) = {
+        let (
+            persistent_agent,
+            mcp_handle,
+            web_search_enabled,
+            history,
+            history_len,
+            full_prompt,
+            character_id,
+        ) = {
             let mut state_lock = state.lock().await;
-            
+
             // 3. Process Snapshot
-            let final_snapshot_text = snapshot::process_snapshot(&snapshot_clone, &mut state_lock.last_snapshot_hash);
+            let final_snapshot_text =
+                snapshot::process_snapshot(&snapshot_clone, &mut state_lock.last_snapshot_hash);
 
             let now = chrono::Local::now();
             let identity = format!("Agent Name: **{}**\nUnique ID: `{}`", agent_name, pane_id);
-            
+
             let turn_context = format!(
                 "## YOUR IDENTITY\n\
                 {}\n\
@@ -117,15 +133,18 @@ pub fn spawn_turn(
             );
 
             // --- AMNESIA FIX: IMMEDIATE PUSH ---
-            state_lock.history.push(rig::message::Message::user(full_prompt.clone()));
-            
+            state_lock
+                .history
+                .push(rig::message::Message::user(full_prompt.clone()));
+
             let h = state_lock.history.clone();
             let l = h.len();
             let mcp = state_lock.mcp_handle.clone();
             let web = state_lock.web_search_enabled;
             let agent = state_lock.persistent_agent.take();
+            let char_id = state_lock.character_id.clone();
 
-            (agent, mcp, web, h, l, full_prompt)
+            (agent, mcp, web, h, l, full_prompt, char_id)
         };
 
         // 4. Resolve Agent (after lock is released to prevent deadlock)
@@ -187,6 +206,7 @@ pub fn spawn_turn(
                 let _ = tx_ui
                     .send(ClawEngineEvent::AgentThinking {
                         agent_name: agent_name.clone(),
+                        character_id: character_id.clone(),
                         is_thinking: false,
                     })
                     .await;
@@ -194,7 +214,9 @@ pub fn spawn_turn(
                 {
                     let mut state_lock = state.lock().await;
                     state_lock.persistent_agent = Some(agent.clone());
-                    state_lock.history.push(rig::message::Message::assistant(response.clone()));
+                    state_lock
+                        .history
+                        .push(rig::message::Message::assistant(response.clone()));
 
                     if let Some(usage) = usage {
                         state_lock.total_tokens += usage.total_tokens as u64;
@@ -224,48 +246,73 @@ pub fn spawn_turn(
                 }
 
                 if clean_diagnosis.trim() == "[SILENT_ACK]" {
-                    info!("Pane {} ({}): Agent acknowledged rejection silently.", pane_id, agent_name);
+                    info!(
+                        "Pane {} ({}): Agent acknowledged rejection silently.",
+                        pane_id, agent_name
+                    );
                     let _ = tx_ui.send(ClawEngineEvent::DismissDrawer).await;
                 } else if clean_diagnosis.trim().is_empty() && command_opt.is_none() {
-                    info!("Pane {} ({}): Agent response was empty.", pane_id, agent_name);
+                    info!(
+                        "Pane {} ({}): Agent response was empty.",
+                        pane_id, agent_name
+                    );
                 } else if let Some(command) = command_opt {
                     let event = ClawEngineEvent::InjectCommand {
                         agent_name: agent_name.clone(),
+                        character_id: character_id.clone(),
                         command,
                         diagnosis: clean_diagnosis,
                         usage: usage.map(UsageWrapper::from),
                     };
                     state.lock().await.pending_inject_command = true;
-                    persist_visual_event(db.clone(), session_id_clone.clone(), pane_id.clone(), &event);
+                    persist_visual_event(
+                        db.clone(),
+                        session_id_clone.clone(),
+                        pane_id.clone(),
+                        &event,
+                    );
                     let _ = tx_ui.send(event).await;
                 } else {
                     let event = ClawEngineEvent::DiagnosisComplete {
                         agent_name: agent_name.clone(),
+                        character_id: character_id.clone(),
                         diagnosis: clean_diagnosis,
                         usage: usage.map(UsageWrapper::from),
                     };
-                    persist_visual_event(db.clone(), session_id_clone.clone(), pane_id.clone(), &event);
+                    persist_visual_event(
+                        db.clone(),
+                        session_id_clone.clone(),
+                        pane_id.clone(),
+                        &event,
+                    );
                     let _ = tx_ui.send(event).await;
                 }
 
                 if let Some(request_id) = delegate_reply_id {
-                    let _ = tx_ui.send(ClawEngineEvent::DelegatedTaskReply {
-                        request_id,
-                        result: response.clone(),
-                    }).await;
+                    let _ = tx_ui
+                        .send(ClawEngineEvent::DelegatedTaskReply {
+                            request_id,
+                            result: response.clone(),
+                        })
+                        .await;
                 }
             }
             Err(e) => {
                 let _ = tx_ui
                     .send(ClawEngineEvent::AgentThinking {
                         agent_name: agent_name.clone(),
+                        character_id: character_id.clone(),
                         is_thinking: false,
                     })
                     .await;
-                
+
                 state.lock().await.persistent_agent = Some(agent);
 
-                log::error!("Pane {} ({}): Boxxy-Claw agent failed: {e}", pane_id, agent_name);
+                log::error!(
+                    "Pane {} ({}): Boxxy-Claw agent failed: {e}",
+                    pane_id,
+                    agent_name
+                );
 
                 let error_msg = format!("{}", e);
                 let friendly_msg = if error_msg.contains("does not support tools") {
@@ -276,17 +323,25 @@ pub fn spawn_turn(
 
                 let event = ClawEngineEvent::DiagnosisComplete {
                     agent_name: agent_name.clone(),
+                    character_id: character_id.clone(),
                     diagnosis: friendly_msg,
                     usage: None,
                 };
-                persist_visual_event(db.clone(), session_id_clone.clone(), pane_id.clone(), &event);
+                persist_visual_event(
+                    db.clone(),
+                    session_id_clone.clone(),
+                    pane_id.clone(),
+                    &event,
+                );
                 let _ = tx_ui.send(event).await;
 
                 if let Some(request_id) = delegate_reply_id {
-                    let _ = tx_ui.send(ClawEngineEvent::DelegatedTaskReply {
-                        request_id,
-                        result: format!("Error: {}", e),
-                    }).await;
+                    let _ = tx_ui
+                        .send(ClawEngineEvent::DelegatedTaskReply {
+                            request_id,
+                            result: format!("Error: {}", e),
+                        })
+                        .await;
                 }
                 let _ = tx_self.send(ClawMessage::TurnFinished).await;
             }

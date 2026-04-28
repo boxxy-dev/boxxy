@@ -25,7 +25,9 @@ impl CompletionProvider for AgentCompletionProvider {
             {
                 let badge_color = Some(info.config.color.clone());
 
-                let is_taken = claims.iter().any(|claim| claim.character_id == info.config.id);
+                let is_taken = claims
+                    .iter()
+                    .any(|claim| claim.character_id == info.config.id);
 
                 let (secondary_text, icon_name) = if is_taken {
                     ("In Use".to_string(), "boxxy-chat-symbolic".to_string())
@@ -196,7 +198,9 @@ impl CompletionProvider for ResumeCompletionProvider {
 
                 if let Some(info) = char_info {
                     let claims = boxxy_claw_protocol::characters::CLAIMS_CACHE.load();
-                    let is_taken = claims.iter().any(|claim| claim.character_id == info.config.id);
+                    let is_taken = claims
+                        .iter()
+                        .any(|claim| claim.character_id == info.config.id);
                     if is_taken {
                         is_disabled = true;
                         display_age = "In Use".to_string();

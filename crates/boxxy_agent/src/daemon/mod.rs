@@ -66,7 +66,13 @@ impl DaemonCore {
         // Spawn the client owner tracker. This handles automatic cleanup of
         // character assignments and swarm locks when a UI process disconnects.
         let workspace = boxxy_claw::registry::workspace::global_workspace().await;
-        crate::ipc::client_tracker::spawn_owner_tracker(&conn, registry.clone(), workspace, client_tx.clone()).await?;
+        crate::ipc::client_tracker::spawn_owner_tracker(
+            &conn,
+            registry.clone(),
+            workspace,
+            client_tx.clone(),
+        )
+        .await?;
 
         // Wire up UPower now that we have a connection. Failures are
         // logged and non-fatal — `power` stays at the AC default.

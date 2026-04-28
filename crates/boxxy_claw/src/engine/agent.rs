@@ -45,7 +45,11 @@ enum ClawAgentInner {
     ),
     OpenAi(Agent<ResponsesCompletionModel>, String, String),
     OpenRouter(Agent<ResponsesCompletionModel>, String, String),
-    DeepSeek(Agent<rig::providers::deepseek::CompletionModel>, String, String),
+    DeepSeek(
+        Agent<rig::providers::deepseek::CompletionModel>,
+        String,
+        String,
+    ),
     Error(String),
 }
 
@@ -283,8 +287,14 @@ pub async fn create_claw_agent(
             session_id: session_id.clone(),
             pane_id: pane_id.clone(),
         }),
-        Box::new(ListActiveAgentsTool),
-        Box::new(ReadPaneTool),
+        Box::new(ListActiveAgentsTool {
+            tx_ui: tx_ui.clone(),
+            state: state.clone(),
+        }),
+        Box::new(ReadPaneTool {
+            tx_ui: tx_ui.clone(),
+            state: state.clone(),
+        }),
         Box::new(DelegateTaskTool {
             state: state.clone(),
             tx_ui: tx_ui.clone(),
@@ -295,10 +305,15 @@ pub async fn create_claw_agent(
         }),
         Box::new(CloseAgentTool {
             tx_ui: tx_ui.clone(),
+            state: state.clone(),
         }),
-        Box::new(AbortAgentTaskTool),
+        Box::new(AbortAgentTaskTool {
+            tx_ui: tx_ui.clone(),
+            state: state.clone(),
+        }),
         Box::new(SendKeystrokesTool {
             tx_ui: tx_ui.clone(),
+            state: state.clone(),
         }),
         Box::new(ListProcessesTool {
             env: (*env).clone(),

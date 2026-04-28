@@ -1,13 +1,9 @@
-pub async fn build_skills_context(
-    prompt: &str,
-    _pane_id: &str,
-) -> (String, String) {
+pub async fn build_skills_context(prompt: &str, _pane_id: &str) -> (String, String) {
     let mut active_skills_text = String::new();
     let mut available_skills_text = String::new();
     let query_lower = prompt.to_lowercase();
 
     let registry = crate::registry::skills::global_registry().await;
-
 
     // 1. Semantic Search: Get only the TOP 1 most relevant skill to avoid context bloat
     let mut active_skills = registry.search_relevant_skills(prompt, 1).await;
@@ -63,8 +59,9 @@ pub async fn build_skills_context(
 
     if !available_skills.is_empty() {
         available_skills_text.push_str("\n--- AVAILABLE SKILLS (TOOLBOX - Compact) ---\n");
-        available_skills_text
-            .push_str("Use `activate_skill(name)` if you need the full instructions for any of these:\n");
+        available_skills_text.push_str(
+            "Use `activate_skill(name)` if you need the full instructions for any of these:\n",
+        );
         for skill in available_skills {
             available_skills_text.push_str(&format!(
                 "- {}: {}\n",

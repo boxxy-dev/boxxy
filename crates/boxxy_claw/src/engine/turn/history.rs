@@ -3,10 +3,7 @@ use rig::message::Message;
 /// Prepares the history for a new chat completion.
 /// Returns a history ready to either be passed directly to `rig` (non-multimodal)
 /// or have the current turn's multimodal message appended (multimodal path).
-pub fn prepare_query_history(
-    history: Vec<Message>,
-    history_len: usize,
-) -> Vec<Message> {
+pub fn prepare_query_history(history: Vec<Message>, history_len: usize) -> Vec<Message> {
     // Context Hygiene 2.0: Aggressively strip ALL transient context from previous turns
     // (Skills, Radar, Memories, and Snapshots) so history grows near-zero tokens per turn.
     let mut final_history: Vec<Message> = history
@@ -27,14 +24,12 @@ pub fn prepare_query_history(
                             // Find the start of the dynamic block and truncate everything after it
                             if let Some(idx) = text.text.find("\n\n## YOUR IDENTITY") {
                                 text.text.truncate(idx);
-                            } else if let Some(idx) =
-                                text.text.find("\n\n## CURRENT TURN CONTEXT")
+                            } else if let Some(idx) = text.text.find("\n\n## CURRENT TURN CONTEXT")
                             {
                                 text.text.truncate(idx);
                             } else if let Some(idx) = text.text.find("\n\n--- GLOBAL RADAR") {
                                 text.text.truncate(idx);
-                            } else if let Some(idx) =
-                                text.text.find("\n\nTerminal Snapshot:\n```")
+                            } else if let Some(idx) = text.text.find("\n\nTerminal Snapshot:\n```")
                             {
                                 text.text.truncate(idx);
                             }
@@ -70,8 +65,12 @@ mod tests {
     use super::*;
     use rig::message::Message;
 
-    fn user(s: &str) -> Message  { Message::user(s.to_string()) }
-    fn asst(s: &str)  -> Message { Message::assistant(s.to_string()) }
+    fn user(s: &str) -> Message {
+        Message::user(s.to_string())
+    }
+    fn asst(s: &str) -> Message {
+        Message::assistant(s.to_string())
+    }
 
     #[test]
     fn normal_turn_no_repair_needed() {

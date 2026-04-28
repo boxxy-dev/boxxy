@@ -69,11 +69,16 @@ impl AgentManager {
                 let mut last_seen_revision = 0;
                 while let Some(msg) = stream.next().await {
                     let args = msg.args().expect("Failed to parse claims_changed args");
-                    if let Ok(snapshot) = serde_json::from_str::<boxxy_claw_protocol::characters::RegistrySnapshot>(&args.snapshot_json) {
+                    if let Ok(snapshot) = serde_json::from_str::<
+                        boxxy_claw_protocol::characters::RegistrySnapshot,
+                    >(&args.snapshot_json)
+                    {
                         if snapshot.revision > last_seen_revision {
                             last_seen_revision = snapshot.revision;
-                            boxxy_claw_protocol::characters::CLAIMS_CACHE.store(std::sync::Arc::new(snapshot.claims));
-                            boxxy_claw_protocol::characters::CHARACTER_CACHE.store(std::sync::Arc::new(snapshot.catalog));
+                            boxxy_claw_protocol::characters::CLAIMS_CACHE
+                                .store(std::sync::Arc::new(snapshot.claims));
+                            boxxy_claw_protocol::characters::CHARACTER_CACHE
+                                .store(std::sync::Arc::new(snapshot.catalog));
                         }
                     }
                 }
@@ -85,9 +90,12 @@ impl AgentManager {
         // broadcasting it immediately — TERMINAL_EVENT_BUS is a broadcast
         // channel that drops messages with no receivers, and the window hasn't
         // subscribed yet at this point in the startup sequence.
-        
+
         let startup_token_json = agent_proxy.claim_startup_token().await.unwrap_or_default();
-        let startup_notification = if let Ok(token) = serde_json::from_str::<boxxy_claw_protocol::characters::StartupToken>(&startup_token_json) {
+        let startup_notification = if let Ok(token) = serde_json::from_str::<
+            boxxy_claw_protocol::characters::StartupToken,
+        >(&startup_token_json)
+        {
             if token.db_was_reset {
                 Some("Database reset: Conversation history was cleared for a schema update. This only happens during the Preview.".to_string())
             } else {
@@ -170,15 +178,28 @@ impl AgentManager {
         Ok(())
     }
 
-    pub async fn claim_startup_token(&self) -> Result<boxxy_claw_protocol::characters::StartupToken> {
-        let token_json = self.agent_proxy.claim_startup_token().await.context("Failed to get startup token")?;
+    pub async fn claim_startup_token(
+        &self,
+    ) -> Result<boxxy_claw_protocol::characters::StartupToken> {
+        let token_json = self
+            .agent_proxy
+            .claim_startup_token()
+            .await
+            .context("Failed to get startup token")?;
         let token = serde_json::from_str(&token_json).context("Failed to parse StartupToken")?;
         Ok(token)
     }
 
-    pub async fn get_registry_snapshot(&self) -> Result<boxxy_claw_protocol::characters::RegistrySnapshot> {
-        let snapshot_json = self.agent_proxy.get_registry_snapshot().await.context("Failed to get registry snapshot")?;
-        let snapshot = serde_json::from_str(&snapshot_json).context("Failed to parse RegistrySnapshot")?;
+    pub async fn get_registry_snapshot(
+        &self,
+    ) -> Result<boxxy_claw_protocol::characters::RegistrySnapshot> {
+        let snapshot_json = self
+            .agent_proxy
+            .get_registry_snapshot()
+            .await
+            .context("Failed to get registry snapshot")?;
+        let snapshot =
+            serde_json::from_str(&snapshot_json).context("Failed to parse RegistrySnapshot")?;
         Ok(snapshot)
     }
 
@@ -194,9 +215,11 @@ impl AgentManager {
             .await
             .context("Failed to try claim character via Agent")?;
 
-        let result: Result<boxxy_claw_protocol::characters::ClaimedSession, boxxy_claw_protocol::characters::ClaimError> = 
-            serde_json::from_str(&result_json).context("Failed to parse claim result")?;
-            
+        let result: Result<
+            boxxy_claw_protocol::characters::ClaimedSession,
+            boxxy_claw_protocol::characters::ClaimError,
+        > = serde_json::from_str(&result_json).context("Failed to parse claim result")?;
+
         let claimed_session = result.map_err(|e| anyhow::anyhow!("Claim failed: {:?}", e))?;
         let session_id = claimed_session.session_id;
 
@@ -233,9 +256,16 @@ impl AgentManager {
             .context("Failed to release holder via Agent")
     }
 
-    pub async fn resolve_peer(&self, query: boxxy_claw_protocol::characters::PeerQuery) -> Result<Option<boxxy_claw_protocol::characters::PeerInfo>> {
+    pub async fn resolve_peer(
+        &self,
+        query: boxxy_claw_protocol::characters::PeerQuery,
+    ) -> Result<Option<boxxy_claw_protocol::characters::PeerInfo>> {
         let query_json = serde_json::to_string(&query).context("Failed to serialize PeerQuery")?;
-        let result_json = self.agent_proxy.resolve_peer(query_json).await.context("Failed to resolve peer")?;
+        let result_json = self
+            .agent_proxy
+            .resolve_peer(query_json)
+            .await
+            .context("Failed to resolve peer")?;
         let info = serde_json::from_str(&result_json).context("Failed to parse PeerInfo")?;
         Ok(info)
     }
