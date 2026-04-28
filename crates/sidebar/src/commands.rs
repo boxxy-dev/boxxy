@@ -53,6 +53,7 @@ impl CompletionProvider for SidebarCommandProvider {
                 secondary_text: None,
                 badge_text: None,
                 badge_color: None,
+                disabled: false,
             })
             .collect()
     }

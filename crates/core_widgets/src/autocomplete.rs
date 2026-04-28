@@ -14,6 +14,7 @@ pub struct CompletionItem {
     pub secondary_text: Option<String>,
     pub badge_text: Option<String>,
     pub badge_color: Option<String>,
+    pub disabled: bool,
 }
 
 pub trait CompletionProvider {
@@ -184,9 +185,16 @@ impl AutocompleteController {
             self.list.remove(&child);
         }
 
+        let mut first_selectable = None;
         for item in items {
             let row = gtk::ListBoxRow::new();
             row.set_widget_name(&item.replacement_text);
+            
+            if item.disabled {
+                row.set_sensitive(false);
+                row.set_activatable(false);
+                row.set_selectable(false);
+            }
 
             let hbox = gtk::Box::new(gtk::Orientation::Horizontal, 8);
             hbox.set_margin_top(4);
@@ -279,17 +287,36 @@ impl AutocompleteController {
 
             row.set_child(Some(&hbox));
             self.list.append(&row);
+
+            if !item.disabled && first_selectable.is_none() {
+                first_selectable = Some(row);
+            }
         }
 
-        if let Some(first) = self.list.row_at_index(0) {
+        if let Some(first) = first_selectable {
             self.list.select_row(Some(&first));
         }
     }
 
     fn move_selection(&self, delta: i32) {
         let current_idx = self.list.selected_row().map_or(0, |r| r.index());
-        let next_idx = (current_idx + delta).max(0);
-        if let Some(row) = self.list.row_at_index(next_idx) {
+        let mut next_idx = current_idx + delta;
+        let mut found_row = None;
+
+        // Keep stepping by delta until we find a selectable row or hit the bounds.
+        while next_idx >= 0 {
+            if let Some(row) = self.list.row_at_index(next_idx) {
+                if row.is_selectable() {
+                    found_row = Some(row);
+                    break;
+                }
+                next_idx += delta;
+            } else {
+                break;
+            }
+        }
+
+        if let Some(row) = found_row {
             self.list.select_row(Some(&row));
 
             // Ensure the newly selected row is visible within the scrolled window.

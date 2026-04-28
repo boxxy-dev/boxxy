@@ -46,6 +46,7 @@ impl CompletionProvider for AgentCompletionProvider {
                     secondary_text: Some(secondary_text),
                     badge_text: None,
                     badge_color,
+                    disabled: false,
                 });
             }
         }
@@ -74,6 +75,7 @@ impl CompletionProvider for CommandCompletionProvider {
                 secondary_text: None,
                 badge_text: None,
                 badge_color: None,
+                disabled: false,
             });
         }
 
@@ -188,6 +190,16 @@ impl CompletionProvider for ResumeCompletionProvider {
                     .map(|c| c.config.display_name.clone())
                     .unwrap_or_else(|| char_name.clone());
 
+                let mut is_disabled = false;
+                let mut display_age = age;
+
+                if let Some(info) = char_info {
+                    if matches!(info.status, boxxy_claw_protocol::characters::CharacterStatus::Active { .. }) {
+                        is_disabled = true;
+                        display_age = "In Use".to_string();
+                    }
+                }
+
                 let icon_name = if session.pinned {
                     "boxxy-view-pin-symbolic".to_string()
                 } else {
@@ -209,9 +221,10 @@ impl CompletionProvider for ResumeCompletionProvider {
                     replacement_text: format!("/resume {}", session.id),
                     icon_name: Some(icon_name),
                     icon_path: avatar_path,
-                    secondary_text: Some(age),
+                    secondary_text: Some(display_age),
                     badge_text: Some(badge_text),
                     badge_color: Some(badge_color),
+                    disabled: is_disabled,
                 });
             }
         }
