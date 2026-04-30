@@ -221,20 +221,14 @@ impl Updater {
         // Update .last_update file with the build date.
         fs::write(app_dir.join(".last_update"), nightly_date)?;
 
-        log::info!("Stopping agent before restart...");
-        // Use a blocking call to ensure the agent is told to stop.
-        let _ = Command::new("gdbus")
-            .args([
-                "call",
-                "--session",
-                "--dest",
-                "dev.boxxy.BoxxyAgent",
-                "--object-path",
-                "/dev/boxxy/Agent",
-                "--method",
-                "dev.boxxy.BoxxyTerminal.Agent.request_stop",
-            ])
+        log::info!("Stopping old agent before restart...");
+        let _ = Command::new(bin_dir.join("boxxy-agent"))
+            .arg("stop")
             .output();
+
+        // We do NOT need to manually start the new agent here. 
+        // crates/window/src/agent_deployer.rs automatically checks for and 
+        // spawns the agent when the new `boxxy-terminal` process starts.
 
         log::info!("Restarting app...");
         let _ = Command::new(bin_dir.join("boxxy-terminal"))
