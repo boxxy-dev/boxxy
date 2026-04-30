@@ -525,15 +525,26 @@ pub async fn create_claw_agent(
 
             ClawAgentInner::Ollama(builder.build(), "Ollama".to_string(), model_name.clone())
         }
-        ModelProvider::Anthropic(model) => {
+        ModelProvider::Anthropic(model, thinking) => {
             let key = creds.api_keys.get("Anthropic").cloned().unwrap_or_default();
             let client = rig::providers::anthropic::Client::new(key.trim()).unwrap();
             let anthropic_model = client.completion_model(model.api_name());
 
-            let builder = rig::agent::AgentBuilder::new(anthropic_model)
+            let mut builder = rig::agent::AgentBuilder::new(anthropic_model)
                 .preamble(&final_preamble)
                 .default_max_turns(100)
                 .tools(tools);
+
+            if let Some(level) = thinking {
+                if *level != boxxy_model_selection::ThinkingLevel::None {
+                    builder = builder.additional_params(serde_json::json!({
+                        "thinking": {
+                            "type": "enabled",
+                            "budget_tokens": level.anthropic_budget_tokens()
+                        }
+                    }));
+                }
+            }
 
             ClawAgentInner::Anthropic(
                 builder.build(),

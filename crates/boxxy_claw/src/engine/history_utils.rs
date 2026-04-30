@@ -6,7 +6,7 @@ pub fn provider_family(model: &Option<boxxy_model_selection::ModelProvider>) -> 
     match model {
         Some(boxxy_model_selection::ModelProvider::Gemini(_, _)) => "gemini",
         Some(boxxy_model_selection::ModelProvider::Ollama(_)) => "ollama",
-        Some(boxxy_model_selection::ModelProvider::Anthropic(_)) => "anthropic",
+        Some(boxxy_model_selection::ModelProvider::Anthropic(_, _)) => "anthropic",
         Some(boxxy_model_selection::ModelProvider::OpenAi(_, _)) => "openai",
         Some(boxxy_model_selection::ModelProvider::OpenRouter(_)) => "openrouter",
         Some(boxxy_model_selection::ModelProvider::DeepSeek(_)) => "deepseek",
@@ -45,7 +45,7 @@ mod tests {
 
     fn anthropic_config() -> AgentConfig {
         AgentConfig {
-            model: Some(ModelProvider::Anthropic(AnthropicModel::ClaudeSonnet)),
+            model: Some(ModelProvider::Anthropic(AnthropicModel::ClaudeSonnet, None)),
             ..Default::default()
         }
     }

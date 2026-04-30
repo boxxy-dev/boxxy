@@ -329,14 +329,26 @@ pub fn create_agent(
                 .build();
             BoxxyAgentInner::Ollama(agent)
         }
-        ModelProvider::Anthropic(model) => {
+        ModelProvider::Anthropic(model, thinking) => {
             let key = creds.api_keys.get("Anthropic").cloned().unwrap_or_default();
             let client = rig::providers::anthropic::Client::new(key.trim()).unwrap();
             let anthropic_model = client.completion_model(model.api_name());
 
-            let agent = rig::agent::AgentBuilder::new(anthropic_model)
-                .preamble(system_prompt)
-                .build();
+            let mut builder = rig::agent::AgentBuilder::new(anthropic_model)
+                .preamble(system_prompt);
+
+            if let Some(level) = thinking {
+                if *level != boxxy_model_selection::ThinkingLevel::None {
+                    builder = builder.additional_params(serde_json::json!({
+                        "thinking": {
+                            "type": "enabled",
+                            "budget_tokens": level.anthropic_budget_tokens()
+                        }
+                    }));
+                }
+            }
+
+            let agent = builder.build();
             BoxxyAgentInner::Anthropic(agent)
         }
         ModelProvider::OpenAi(model, thinking) => {

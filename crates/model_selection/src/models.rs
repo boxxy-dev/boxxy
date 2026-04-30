@@ -91,12 +91,23 @@ impl ThinkingLevel {
             ThinkingLevel::XHigh => "xhigh",
         }
     }
+
+    pub fn anthropic_budget_tokens(&self) -> u32 {
+        match self {
+            ThinkingLevel::Low => 2_000,
+            ThinkingLevel::Medium => 8_000,
+            ThinkingLevel::High => 32_000,
+            _ => 2_000, // Fallback for Minimal/XHigh/None if mistakenly applied
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AnthropicModel {
     #[serde(rename = "claude-opus-4-6")]
     ClaudeOpus,
+    #[serde(rename = "claude-opus-4-7")]
+    ClaudeOpus47,
     #[serde(rename = "claude-sonnet-4-6")]
     ClaudeSonnet,
 }
@@ -105,6 +116,7 @@ impl fmt::Display for AnthropicModel {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             AnthropicModel::ClaudeOpus => write!(f, "Claude Opus 4.6"),
+            AnthropicModel::ClaudeOpus47 => write!(f, "Claude Opus 4.7"),
             AnthropicModel::ClaudeSonnet => write!(f, "Claude Sonnet 4.6"),
         }
     }
@@ -112,14 +124,31 @@ impl fmt::Display for AnthropicModel {
 
 impl AnthropicModel {
     pub fn all() -> Vec<AnthropicModel> {
-        vec![AnthropicModel::ClaudeSonnet, AnthropicModel::ClaudeOpus]
+        vec![AnthropicModel::ClaudeSonnet, AnthropicModel::ClaudeOpus, AnthropicModel::ClaudeOpus47]
     }
 
     pub fn api_name(&self) -> &'static str {
         match self {
             AnthropicModel::ClaudeOpus => "claude-opus-4-6",
+            AnthropicModel::ClaudeOpus47 => "claude-opus-4-7",
             AnthropicModel::ClaudeSonnet => "claude-sonnet-4-6",
         }
+    }
+
+    pub fn supports_extended_thinking(&self) -> bool {
+        match self {
+            AnthropicModel::ClaudeOpus47 => false, // Adaptive only, no budget param
+            _ => true,
+        }
+    }
+
+    pub fn available_thinking_levels(&self) -> Vec<ThinkingLevel> {
+        vec![
+            ThinkingLevel::None,
+            ThinkingLevel::Low,
+            ThinkingLevel::Medium,
+            ThinkingLevel::High,
+        ]
     }
 }
 
@@ -205,7 +234,7 @@ impl DeepSeekModel {
 pub enum ModelProvider {
     Gemini(GeminiModel, Option<ThinkingLevel>),
     Ollama(String),
-    Anthropic(AnthropicModel),
+    Anthropic(AnthropicModel, Option<ThinkingLevel>),
     OpenAi(OpenAiModel, Option<ThinkingLevel>),
     OpenRouter(String),
     DeepSeek(DeepSeekModel),
@@ -216,7 +245,7 @@ impl ModelProvider {
         match self {
             ModelProvider::Gemini(_, _) => "Gemini",
             ModelProvider::Ollama(_) => "Ollama",
-            ModelProvider::Anthropic(_) => "Anthropic",
+            ModelProvider::Anthropic(_, _) => "Anthropic",
             ModelProvider::OpenAi(_, _) => "OpenAI",
             ModelProvider::OpenRouter(_) => "OpenRouter",
             ModelProvider::DeepSeek(_) => "DeepSeek",
@@ -227,7 +256,7 @@ impl ModelProvider {
         match self {
             ModelProvider::Gemini(model, _) => format!("Google/{}", model),
             ModelProvider::Ollama(model) => format!("Ollama/{}", model),
-            ModelProvider::Anthropic(model) => format!("Anthropic/{}", model),
+            ModelProvider::Anthropic(model, _) => format!("Anthropic/{}", model),
             ModelProvider::OpenAi(model, _) => format!("OpenAI/{}", model),
             ModelProvider::OpenRouter(model) => format!("OpenRouter/{}", model),
             ModelProvider::DeepSeek(model) => format!("DeepSeek/{}", model),

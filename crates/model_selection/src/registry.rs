@@ -128,31 +128,68 @@ impl AiProvider for AnthropicProviderImpl {
             .map(|m| m.to_string())
             .collect()
     }
+    fn supports_thinking(&self, model_idx: u32) -> bool {
+        let am = AnthropicModel::all();
+        if let Some(m) = am.get(model_idx as usize) {
+            m.supports_extended_thinking()
+        } else {
+            false
+        }
+    }
+    fn get_thinking_levels(&self, model_idx: u32) -> Vec<String> {
+        let am = AnthropicModel::all();
+        if let Some(m) = am.get(model_idx as usize) {
+            m.available_thinking_levels().into_iter().map(|l| l.to_string()).collect()
+        } else {
+            vec![]
+        }
+    }
     fn create_model_provider(
         &self,
         model_idx: u32,
         _name: Option<String>,
-        _thinking: Option<u32>,
+        thinking_idx: Option<u32>,
     ) -> ModelProvider {
         let am = AnthropicModel::all();
         let model = am
             .get(model_idx as usize)
             .cloned()
             .unwrap_or(AnthropicModel::ClaudeSonnet);
-        ModelProvider::Anthropic(model)
+        
+        let thinking = if model.supports_extended_thinking() {
+             if let Some(idx) = thinking_idx {
+                model.available_thinking_levels().get(idx as usize).cloned()
+             } else {
+                 None
+             }
+        } else {
+             None
+        };
+
+        ModelProvider::Anthropic(model, thinking)
     }
     fn sync_ui(
         &self,
         provider: &ModelProvider,
         model_dropdown: &gtk::DropDown,
-        _thinking_dropdown: &gtk::DropDown,
+        thinking_dropdown: &gtk::DropDown,
         _model_list: &gtk::StringList,
-        _thinking_list: &gtk::StringList,
+        thinking_list: &gtk::StringList,
     ) {
-        if let ModelProvider::Anthropic(m) = provider {
+        if let ModelProvider::Anthropic(m, t) = provider {
             let am = AnthropicModel::all();
             if let Some(pos) = am.iter().position(|x| x == m) {
                 model_dropdown.set_selected(pos as u32);
+                thinking_list.splice(0, thinking_list.n_items(), &[]);
+                let levels = m.available_thinking_levels();
+                for l in &levels {
+                    thinking_list.append(&l.to_string());
+                }
+                if let Some(think) = t
+                    && let Some(t_pos) = levels.iter().position(|l| l == think)
+                {
+                    thinking_dropdown.set_selected(t_pos as u32);
+                }
             }
         }
     }
