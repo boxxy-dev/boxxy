@@ -334,8 +334,8 @@ pub fn create_agent(
             let client = rig::providers::anthropic::Client::new(key.trim()).unwrap();
             let anthropic_model = client.completion_model(model.api_name());
 
-            let mut builder = rig::agent::AgentBuilder::new(anthropic_model)
-                .preamble(system_prompt);
+            let mut builder =
+                rig::agent::AgentBuilder::new(anthropic_model).preamble(system_prompt);
 
             if let Some(level) = thinking {
                 if *level != boxxy_model_selection::ThinkingLevel::None {

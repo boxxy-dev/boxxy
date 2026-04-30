@@ -139,7 +139,10 @@ impl AiProvider for AnthropicProviderImpl {
     fn get_thinking_levels(&self, model_idx: u32) -> Vec<String> {
         let am = AnthropicModel::all();
         if let Some(m) = am.get(model_idx as usize) {
-            m.available_thinking_levels().into_iter().map(|l| l.to_string()).collect()
+            m.available_thinking_levels()
+                .into_iter()
+                .map(|l| l.to_string())
+                .collect()
         } else {
             vec![]
         }
@@ -155,15 +158,15 @@ impl AiProvider for AnthropicProviderImpl {
             .get(model_idx as usize)
             .cloned()
             .unwrap_or(AnthropicModel::ClaudeSonnet);
-        
+
         let thinking = if model.supports_extended_thinking() {
-             if let Some(idx) = thinking_idx {
+            if let Some(idx) = thinking_idx {
                 model.available_thinking_levels().get(idx as usize).cloned()
-             } else {
-                 None
-             }
+            } else {
+                None
+            }
         } else {
-             None
+            None
         };
 
         ModelProvider::Anthropic(model, thinking)

@@ -12,7 +12,6 @@ serde_json.workspace = true
 anyhow.workspace = true
 log.workspace = true
 rmcp.workspace = true
-keyring.workspace = true
 tokio = { workspace = true, features = ["process", "sync", "time", "macros", "rt"] }
 rig-core.workspace = true
 async-trait.workspace = true

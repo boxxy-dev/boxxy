@@ -124,7 +124,11 @@ impl fmt::Display for AnthropicModel {
 
 impl AnthropicModel {
     pub fn all() -> Vec<AnthropicModel> {
-        vec![AnthropicModel::ClaudeSonnet, AnthropicModel::ClaudeOpus, AnthropicModel::ClaudeOpus47]
+        vec![
+            AnthropicModel::ClaudeSonnet,
+            AnthropicModel::ClaudeOpus,
+            AnthropicModel::ClaudeOpus47,
+        ]
     }
 
     pub fn api_name(&self) -> &'static str {
