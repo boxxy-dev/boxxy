@@ -6,10 +6,27 @@ pub fn translate_key(key: Key, modifiers: ModifierType, is_app_cursor: bool) -> 
 
     let ctrl = modifiers.contains(ModifierType::CONTROL_MASK);
     let alt = modifiers.contains(ModifierType::ALT_MASK);
+    let shift = modifiers.contains(ModifierType::SHIFT_MASK);
 
-    if alt {
-        bytes.push(b'\x1b');
-    }
+    // Standard modifier code: 1=none, 2=shift, 3=alt, 4=shift+alt, 5=ctrl, 6=shift+ctrl, 7=alt+ctrl, 8=shift+alt+ctrl
+    let modifier_code = {
+        let mut code = 1;
+        if shift {
+            code += 1;
+        }
+        if alt {
+            code += 2;
+        }
+        if ctrl {
+            code += 4;
+        }
+        code
+    };
+
+    let has_modifier = modifier_code > 1;
+
+    // Prepend Esc for Alt if it's not a special CSI sequence
+    let prepend_esc = alt;
 
     // Handle special keys
     match key {
@@ -22,7 +39,11 @@ pub fn translate_key(key: Key, modifiers: ModifierType, is_app_cursor: bool) -> 
             return Some(bytes);
         }
         Key::Delete => {
-            bytes.extend_from_slice(b"\x1b[3~");
+            if has_modifier {
+                bytes.extend_from_slice(format!("\x1b[3;{}~", modifier_code).as_bytes());
+            } else {
+                bytes.extend_from_slice(b"\x1b[3~");
+            }
             return Some(bytes);
         }
         Key::Tab => {
@@ -34,7 +55,9 @@ pub fn translate_key(key: Key, modifiers: ModifierType, is_app_cursor: bool) -> 
             return Some(bytes);
         }
         Key::Up => {
-            if is_app_cursor {
+            if has_modifier {
+                bytes.extend_from_slice(format!("\x1b[1;{}A", modifier_code).as_bytes());
+            } else if is_app_cursor {
                 bytes.extend_from_slice(b"\x1bOA");
             } else {
                 bytes.extend_from_slice(b"\x1b[A");
@@ -42,7 +65,9 @@ pub fn translate_key(key: Key, modifiers: ModifierType, is_app_cursor: bool) -> 
             return Some(bytes);
         }
         Key::Down => {
-            if is_app_cursor {
+            if has_modifier {
+                bytes.extend_from_slice(format!("\x1b[1;{}B", modifier_code).as_bytes());
+            } else if is_app_cursor {
                 bytes.extend_from_slice(b"\x1bOB");
             } else {
                 bytes.extend_from_slice(b"\x1b[B");
@@ -50,7 +75,9 @@ pub fn translate_key(key: Key, modifiers: ModifierType, is_app_cursor: bool) -> 
             return Some(bytes);
         }
         Key::Right => {
-            if is_app_cursor {
+            if has_modifier {
+                bytes.extend_from_slice(format!("\x1b[1;{}C", modifier_code).as_bytes());
+            } else if is_app_cursor {
                 bytes.extend_from_slice(b"\x1bOC");
             } else {
                 bytes.extend_from_slice(b"\x1b[C");
@@ -58,7 +85,9 @@ pub fn translate_key(key: Key, modifiers: ModifierType, is_app_cursor: bool) -> 
             return Some(bytes);
         }
         Key::Left => {
-            if is_app_cursor {
+            if has_modifier {
+                bytes.extend_from_slice(format!("\x1b[1;{}D", modifier_code).as_bytes());
+            } else if is_app_cursor {
                 bytes.extend_from_slice(b"\x1bOD");
             } else {
                 bytes.extend_from_slice(b"\x1b[D");
@@ -66,7 +95,9 @@ pub fn translate_key(key: Key, modifiers: ModifierType, is_app_cursor: bool) -> 
             return Some(bytes);
         }
         Key::Home => {
-            if is_app_cursor {
+            if has_modifier {
+                bytes.extend_from_slice(format!("\x1b[1;{}H", modifier_code).as_bytes());
+            } else if is_app_cursor {
                 bytes.extend_from_slice(b"\x1bOH");
             } else {
                 bytes.extend_from_slice(b"\x1b[H");
@@ -74,7 +105,9 @@ pub fn translate_key(key: Key, modifiers: ModifierType, is_app_cursor: bool) -> 
             return Some(bytes);
         }
         Key::End => {
-            if is_app_cursor {
+            if has_modifier {
+                bytes.extend_from_slice(format!("\x1b[1;{}F", modifier_code).as_bytes());
+            } else if is_app_cursor {
                 bytes.extend_from_slice(b"\x1bOF");
             } else {
                 bytes.extend_from_slice(b"\x1b[F");
@@ -82,11 +115,19 @@ pub fn translate_key(key: Key, modifiers: ModifierType, is_app_cursor: bool) -> 
             return Some(bytes);
         }
         Key::Page_Up => {
-            bytes.extend_from_slice(b"\x1b[5~");
+            if has_modifier {
+                bytes.extend_from_slice(format!("\x1b[5;{}~", modifier_code).as_bytes());
+            } else {
+                bytes.extend_from_slice(b"\x1b[5~");
+            }
             return Some(bytes);
         }
         Key::Page_Down => {
-            bytes.extend_from_slice(b"\x1b[6~");
+            if has_modifier {
+                bytes.extend_from_slice(format!("\x1b[6;{}~", modifier_code).as_bytes());
+            } else {
+                bytes.extend_from_slice(b"\x1b[6~");
+            }
             return Some(bytes);
         }
         Key::F1 => {
@@ -146,11 +187,16 @@ pub fn translate_key(key: Key, modifiers: ModifierType, is_app_cursor: bool) -> 
             // Control combinations: A-Z map to 1-26
             let c = ch.to_ascii_uppercase();
             if c.is_ascii_uppercase() {
+                if alt {
+                    bytes.push(0x1b);
+                }
                 bytes.push(c as u8 - b'A' + 1);
                 return Some(bytes);
             }
-            // Add other ctrl mappings (like Ctrl+Space, etc.) if needed
         } else {
+            if prepend_esc {
+                bytes.push(0x1b);
+            }
             let mut b = [0; 4];
             let s = ch.encode_utf8(&mut b);
             bytes.extend_from_slice(s.as_bytes());
@@ -159,4 +205,68 @@ pub fn translate_key(key: Key, modifiers: ModifierType, is_app_cursor: bool) -> 
     }
 
     if bytes.is_empty() { None } else { Some(bytes) }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gtk4::gdk::ModifierType;
+
+    #[test]
+    fn test_translate_basic_keys() {
+        assert_eq!(translate_key(Key::Return, ModifierType::empty(), false), Some(vec![b'\r']));
+        assert_eq!(translate_key(Key::BackSpace, ModifierType::empty(), false), Some(vec![0x7f]));
+        assert_eq!(translate_key(Key::Tab, ModifierType::empty(), false), Some(vec![b'\t']));
+        assert_eq!(translate_key(Key::Escape, ModifierType::empty(), false), Some(vec![0x1b]));
+    }
+
+    #[test]
+    fn test_translate_arrows_no_mod() {
+        assert_eq!(translate_key(Key::Up, ModifierType::empty(), false), Some(b"\x1b[A".to_vec()));
+        assert_eq!(translate_key(Key::Down, ModifierType::empty(), false), Some(b"\x1b[B".to_vec()));
+        assert_eq!(translate_key(Key::Right, ModifierType::empty(), false), Some(b"\x1b[C".to_vec()));
+        assert_eq!(translate_key(Key::Left, ModifierType::empty(), false), Some(b"\x1b[D".to_vec()));
+    }
+
+    #[test]
+    fn test_translate_arrows_app_cursor() {
+        assert_eq!(translate_key(Key::Up, ModifierType::empty(), true), Some(b"\x1bOA".to_vec()));
+        assert_eq!(translate_key(Key::Down, ModifierType::empty(), true), Some(b"\x1bOB".to_vec()));
+        assert_eq!(translate_key(Key::Right, ModifierType::empty(), true), Some(b"\x1bOC".to_vec()));
+        assert_eq!(translate_key(Key::Left, ModifierType::empty(), true), Some(b"\x1bOD".to_vec()));
+    }
+
+    #[test]
+    fn test_translate_ctrl_chars() {
+        assert_eq!(translate_key(Key::a, ModifierType::CONTROL_MASK, false), Some(vec![1]));
+        assert_eq!(translate_key(Key::c, ModifierType::CONTROL_MASK, false), Some(vec![3]));
+        assert_eq!(translate_key(Key::z, ModifierType::CONTROL_MASK, false), Some(vec![26]));
+    }
+
+    #[test]
+    fn test_translate_arrows_with_modifiers() {
+        // Ctrl + Right -> \x1b[1;5C
+        assert_eq!(translate_key(Key::Right, ModifierType::CONTROL_MASK, false), Some(b"\x1b[1;5C".to_vec()));
+        // Alt + Left -> \x1b[1;3D
+        assert_eq!(translate_key(Key::Left, ModifierType::ALT_MASK, false), Some(b"\x1b[1;3D".to_vec()));
+        // Ctrl + Alt + Up -> \x1b[1;7A
+        assert_eq!(translate_key(Key::Up, ModifierType::CONTROL_MASK | ModifierType::ALT_MASK, false), Some(b"\x1b[1;7A".to_vec()));
+    }
+
+    #[test]
+    fn test_translate_home_end_with_modifiers() {
+        assert_eq!(translate_key(Key::Home, ModifierType::CONTROL_MASK, false), Some(b"\x1b[1;5H".to_vec()));
+        assert_eq!(translate_key(Key::End, ModifierType::ALT_MASK, false), Some(b"\x1b[1;3F".to_vec()));
+    }
+
+    #[test]
+    fn test_translate_delete_page_with_modifiers() {
+        assert_eq!(translate_key(Key::Delete, ModifierType::CONTROL_MASK, false), Some(b"\x1b[3;5~".to_vec()));
+        assert_eq!(translate_key(Key::Page_Up, ModifierType::SHIFT_MASK, false), Some(b"\x1b[5;2~".to_vec()));
+    }
+
+    #[test]
+    fn test_translate_ctrl_alt_chars() {
+        assert_eq!(translate_key(Key::c, ModifierType::CONTROL_MASK | ModifierType::ALT_MASK, false), Some(vec![0x1b, 3]));
+    }
 }

@@ -73,19 +73,19 @@ pub const CLOSE_PANE: Keybinding = Keybinding {
 };
 
 pub const FOCUS_LEFT: Keybinding = Keybinding {
-    trigger: "<Ctrl>Left",
+    trigger: "<Ctrl><Alt>Left",
     action_name: "win.focus-left",
 };
 pub const FOCUS_RIGHT: Keybinding = Keybinding {
-    trigger: "<Ctrl>Right",
+    trigger: "<Ctrl><Alt>Right",
     action_name: "win.focus-right",
 };
 pub const FOCUS_UP: Keybinding = Keybinding {
-    trigger: "<Ctrl>Up",
+    trigger: "<Ctrl><Alt>Up",
     action_name: "win.focus-up",
 };
 pub const FOCUS_DOWN: Keybinding = Keybinding {
-    trigger: "<Ctrl>Down",
+    trigger: "<Ctrl><Alt>Down",
     action_name: "win.focus-down",
 };
 
