@@ -1179,6 +1179,77 @@ impl WidgetImpl for TerminalWidget {
             let (char_width, char_height) = (cs.0 as f32, cs.1 as f32);
             let mut offset_y = 0.0_f32;
 
+            use crate::engine::term::cell::Flags;
+            const STYLE_FLAGS: Flags = Flags::from_bits_truncate(
+                Flags::BOLD.bits()
+                    | Flags::ITALIC.bits()
+                    | Flags::UNDERLINE.bits()
+                    | Flags::STRIKEOUT.bits()
+                    | Flags::HIDDEN.bits()
+                    | Flags::DOUBLE_UNDERLINE.bits()
+                    | Flags::UNDERCURL.bits()
+                    | Flags::DOTTED_UNDERLINE.bits()
+                    | Flags::DASHED_UNDERLINE.bits(),
+            );
+
+            let palette = self.palette.borrow();
+            let apply_style = |layout: &gtk4::pango::Layout,
+                               flags: Flags,
+                               ucolor: Option<crate::engine::ansi::Color>,
+                               palette: &[gtk4::gdk::RGBA],
+                               default_fg: gtk4::gdk::RGBA| {
+                let attr_list = gtk4::pango::AttrList::new();
+                if flags.contains(Flags::BOLD) {
+                    attr_list.insert(gtk4::pango::AttrInt::new_weight(gtk4::pango::Weight::Bold));
+                }
+                if flags.contains(Flags::ITALIC) {
+                    attr_list.insert(gtk4::pango::AttrInt::new_style(gtk4::pango::Style::Italic));
+                }
+                if flags.contains(Flags::STRIKEOUT) {
+                    attr_list.insert(gtk4::pango::AttrInt::new_strikethrough(true));
+                }
+
+                let underline = if flags.contains(Flags::DOUBLE_UNDERLINE) {
+                    gtk4::pango::Underline::Double
+                } else if flags.contains(Flags::UNDERCURL) {
+                    gtk4::pango::Underline::Error
+                } else if flags.contains(Flags::DOTTED_UNDERLINE) {
+                    gtk4::pango::Underline::Error
+                } else if flags.contains(Flags::DASHED_UNDERLINE) {
+                    gtk4::pango::Underline::Single
+                } else if flags.contains(Flags::UNDERLINE) {
+                    gtk4::pango::Underline::Single
+                } else {
+                    gtk4::pango::Underline::None
+                };
+
+                if underline != gtk4::pango::Underline::None {
+                    attr_list.insert(gtk4::pango::AttrInt::new_underline(underline));
+                    if let Some(color) = ucolor {
+                        let rgba = match color {
+                            crate::engine::ansi::Color::Spec(rgb) => gtk4::gdk::RGBA::new(
+                                rgb.r as f32 / 255.0,
+                                rgb.g as f32 / 255.0,
+                                rgb.b as f32 / 255.0,
+                                1.0,
+                            ),
+                            crate::engine::ansi::Color::Indexed(idx) => {
+                                palette.get(idx as usize).cloned().unwrap_or(default_fg)
+                            }
+                            crate::engine::ansi::Color::Named(named) => {
+                                palette.get(named as usize).cloned().unwrap_or(default_fg)
+                            }
+                        };
+                        attr_list.insert(gtk4::pango::AttrColor::new_underline_color(
+                            (rgba.red() * 65535.0) as u16,
+                            (rgba.green() * 65535.0) as u16,
+                            (rgba.blue() * 65535.0) as u16,
+                        ));
+                    }
+                }
+                layout.set_attributes(Some(&attr_list));
+            };
+
             if (self.cell_width_scale.get() - 1.0).abs() > f64::EPSILON
                 || (self.cell_height_scale.get() - 1.0).abs() > f64::EPSILON
             {
@@ -1198,7 +1269,6 @@ impl WidgetImpl for TerminalWidget {
             }
 
             let selection_range = state.selection_range;
-            let palette = self.palette.borrow();
             let draw_kitty_images = |is_background: bool| {
                 let mut texture_cache = self.kitty_textures.borrow_mut();
 
@@ -1453,6 +1523,8 @@ impl WidgetImpl for TerminalWidget {
 
                 // 2. Text pass
                 let mut current_fg = fg_color_default;
+                let mut current_flags = Flags::empty();
+                let mut current_ucolor: Option<crate::engine::ansi::Color> = None;
                 let mut line_str = String::new();
                 start_col = 0.0_f32;
                 for col in 0..state.columns {
@@ -1551,19 +1623,34 @@ impl WidgetImpl for TerminalWidget {
                             | crate::engine::term::cell::Flags::LEADING_WIDE_CHAR_SPACER,
                     );
                     let is_filling = is_cell_filling_char(cell.c);
-                    if fg != current_fg || is_wide || is_spacer || is_filling {
+
+                    let style_flags = cell.flags & STYLE_FLAGS;
+                    let ucolor = cell.underline_color();
+
+                    if fg != current_fg
+                        || style_flags != current_flags
+                        || ucolor != current_ucolor
+                        || is_wide
+                        || is_spacer
+                        || is_filling
+                    {
                         if !line_str.is_empty() {
+                            apply_style(&layout, current_flags, current_ucolor, &palette, fg_color_default);
                             layout.set_text(&line_str);
-                            snapshot.save();
-                            snapshot.translate(&gtk4::graphene::Point::new(
-                                start_col,
-                                row as f32 * char_height + offset_y,
-                            ));
-                            snapshot.append_layout(&layout, &current_fg);
-                            snapshot.restore();
+                            if !current_flags.contains(Flags::HIDDEN) {
+                                snapshot.save();
+                                snapshot.translate(&gtk4::graphene::Point::new(
+                                    start_col,
+                                    row as f32 * char_height + offset_y,
+                                ));
+                                snapshot.append_layout(&layout, &current_fg);
+                                snapshot.restore();
+                            }
                             line_str.clear();
                         }
                         current_fg = fg;
+                        current_flags = style_flags;
+                        current_ucolor = ucolor;
                     }
                     if !is_spacer {
                         if line_str.is_empty() {
@@ -1576,62 +1663,71 @@ impl WidgetImpl for TerminalWidget {
                             }
                         }
                         if is_wide {
+                            apply_style(&layout, current_flags, current_ucolor, &palette, fg_color_default);
                             layout.set_text(&line_str);
                             let (_, logical) = layout.extents();
                             let actual_width = logical.width() as f32 / gtk4::pango::SCALE as f32;
                             let target_width = char_width * 2.0;
-                            snapshot.save();
-                            snapshot.translate(&gtk4::graphene::Point::new(
-                                start_col,
-                                row as f32 * char_height + offset_y,
-                            ));
-                            if (actual_width - target_width).abs() > 0.1 {
-                                let s = target_width / actual_width;
-                                snapshot.scale(s, s);
-                                let ah = logical.height() as f32 / gtk4::pango::SCALE as f32;
-                                let scaled_h = ah * s;
-                                if scaled_h < char_height {
-                                    snapshot.translate(&gtk4::graphene::Point::new(
-                                        0.0,
-                                        (char_height - scaled_h) / 2.0,
-                                    ));
+                            if !current_flags.contains(Flags::HIDDEN) {
+                                snapshot.save();
+                                snapshot.translate(&gtk4::graphene::Point::new(
+                                    start_col,
+                                    row as f32 * char_height + offset_y,
+                                ));
+                                if (actual_width - target_width).abs() > 0.1 {
+                                    let s = target_width / actual_width;
+                                    snapshot.scale(s, s);
+                                    let ah = logical.height() as f32 / gtk4::pango::SCALE as f32;
+                                    let scaled_h = ah * s;
+                                    if scaled_h < char_height {
+                                        snapshot.translate(&gtk4::graphene::Point::new(
+                                            0.0,
+                                            (char_height - scaled_h) / 2.0,
+                                        ));
+                                    }
                                 }
+                                snapshot.append_layout(&layout, &current_fg);
+                                snapshot.restore();
                             }
-                            snapshot.append_layout(&layout, &current_fg);
-                            snapshot.restore();
                             line_str.clear();
                         } else if is_filling {
                             // Scale box-drawing / block / powerline chars to fill the cell exactly,
                             // matching Ghostty's behaviour of cell-perfect glyph rendering.
+                            apply_style(&layout, current_flags, current_ucolor, &palette, fg_color_default);
                             layout.set_text(&line_str);
                             let (_, logical) = layout.extents();
                             let aw = (logical.width() as f32 / gtk4::pango::SCALE as f32).max(0.1);
                             let ah = (logical.height() as f32 / gtk4::pango::SCALE as f32).max(0.1);
                             let sx = char_width / aw;
                             let sy = char_height / ah;
-                            snapshot.save();
-                            snapshot.translate(&gtk4::graphene::Point::new(
-                                start_col,
-                                row as f32 * char_height,
-                            ));
-                            if (sx - 1.0).abs() > 0.02 || (sy - 1.0).abs() > 0.02 {
-                                snapshot.scale(sx, sy);
+                            if !current_flags.contains(Flags::HIDDEN) {
+                                snapshot.save();
+                                snapshot.translate(&gtk4::graphene::Point::new(
+                                    start_col,
+                                    row as f32 * char_height,
+                                ));
+                                if (sx - 1.0).abs() > 0.02 || (sy - 1.0).abs() > 0.02 {
+                                    snapshot.scale(sx, sy);
+                                }
+                                snapshot.append_layout(&layout, &current_fg);
+                                snapshot.restore();
                             }
-                            snapshot.append_layout(&layout, &current_fg);
-                            snapshot.restore();
                             line_str.clear();
                         }
                     }
                 }
                 if !line_str.is_empty() {
+                    apply_style(&layout, current_flags, current_ucolor, &palette, fg_color_default);
                     layout.set_text(&line_str);
-                    snapshot.save();
-                    snapshot.translate(&gtk4::graphene::Point::new(
-                        start_col,
-                        row as f32 * char_height + offset_y,
-                    ));
-                    snapshot.append_layout(&layout, &current_fg);
-                    snapshot.restore();
+                    if !current_flags.contains(Flags::HIDDEN) {
+                        snapshot.save();
+                        snapshot.translate(&gtk4::graphene::Point::new(
+                            start_col,
+                            row as f32 * char_height + offset_y,
+                        ));
+                        snapshot.append_layout(&layout, &current_fg);
+                        snapshot.restore();
+                    }
                 }
                 for col in 0..state.columns {
                     let point = Point::new(Line(row - display_offset), Column(col));
