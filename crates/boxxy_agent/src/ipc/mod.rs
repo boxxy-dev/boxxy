@@ -136,6 +136,9 @@ pub trait Agent {
     /// discover sessions it can reattach to.
     async fn list_claw_sessions(&self) -> zbus::Result<Vec<(String, String, String)>>;
 
+    /// Requests that the UI raises the window and focuses the specified pane.
+    async fn request_focus_pane(&self, pane_id: String) -> zbus::Result<()>;
+
     #[zbus(signal)]
     async fn claw_event(&self, session_id: String, event_json: String) -> zbus::Result<()>;
 
@@ -371,6 +374,24 @@ impl AgentInterface {
             .iter()
             .map(|(sid, s)| (sid.clone(), s.pane_id.clone(), s.agent_name.clone()))
             .collect()
+    }
+
+    async fn request_focus_pane(
+        &self,
+        #[zbus(signal_emitter)] emitter: zbus::object_server::SignalEmitter<'_>,
+        pane_id: String,
+    ) {
+        log::info!("Focus requested for pane {}", pane_id);
+        let manager = self.session_manager.lock().await;
+        // Find any session tied to this pane. Usually there is only one.
+        for (sid, session) in manager.sessions.iter() {
+            if session.pane_id == pane_id {
+                let event = ClawEngineEvent::FocusPane;
+                if let Ok(event_json) = serde_json::to_string(&event) {
+                    let _ = Self::claw_event(&emitter, sid.clone(), event_json).await;
+                }
+            }
+        }
     }
 
     #[zbus(signal)]

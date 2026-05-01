@@ -99,6 +99,9 @@ pub fn spawn_dispatch(
                     // the user rejects a proposal, and the agent outputs [SILENT_ACK].
                     overlay.hide();
                 }
+                ClawEngineEvent::FocusPane => {
+                    host.focus();
+                }
                 ClawEngineEvent::DiagnosisComplete {
                     diagnosis,
                     agent_name,

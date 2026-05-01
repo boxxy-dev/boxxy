@@ -361,10 +361,13 @@ impl TerminalComponent {
                 if inner.active_pane_id == id {
                     let term_id = inner.id.clone();
                     let _ = TERMINAL_EVENT_BUS.send(TerminalEvent {
-                        id: term_id,
+                        id: term_id.clone(),
                         kind: TerminalEventKind::FocusClawSidebar,
                     });
                 }
+            }
+            PaneOutput::RequestFocus(id) => {
+                self.focus_pane_by_id(&id);
             }
             PaneOutput::ForegroundProcessChanged(id, process_name) => {
                 let inner = self.inner.borrow();
@@ -584,6 +587,46 @@ impl TerminalComponent {
 
     pub fn active_pane_id(&self) -> String {
         self.inner.borrow().active_pane_id.clone()
+    }
+
+    pub fn focus_pane_by_id(&self, id: &str) -> bool {
+        let mut inner = self.inner.borrow_mut();
+        if !inner.panes.contains_key(id) {
+            return false;
+        }
+
+        if inner.active_pane_id != id {
+            inner.active_pane_id = id.to_string();
+            let term_id = inner.id.clone();
+            let _ = TERMINAL_EVENT_BUS.send(TerminalEvent {
+                id: term_id.clone(),
+                kind: TerminalEventKind::PaneFocused(id.to_string()),
+            });
+        }
+
+        let pane_data = inner.panes.get(id).unwrap();
+        let controller = pane_data.controller.clone();
+        let is_maximized = inner.is_maximized;
+        let maximized_container = inner.maximized_container.clone();
+
+        if is_maximized {
+            // If maximized, we must ensure the widget is in the maximized container.
+            // We'll use our existing toggle logic but target the new pane.
+            let leaf_widget = controller.widget().clone();
+
+            // 1. Remove all current widgets from max container
+            while let Some(child) = maximized_container.first_child() {
+                maximized_container.remove(&child);
+            }
+
+            // 2. Append new widget
+            maximized_container.append(&leaf_widget);
+        }
+
+        controller.grab_focus();
+        drop(inner);
+        self.update_dimming();
+        true
     }
 
     pub fn set_claw_active_for_pane(&self, pane_id: &str, active: bool) -> bool {

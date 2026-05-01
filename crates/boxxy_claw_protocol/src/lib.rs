@@ -276,6 +276,8 @@ pub enum ClawEngineEvent {
     /// Forces the UI to cleanly close the Claw drawer and reset action states.
     /// Emitted when the agent silently acknowledges a user rejection ([SILENT_ACK]).
     DismissDrawer,
+    /// Requests that the UI raises the window and focuses this specific pane.
+    FocusPane,
     InjectCommand {
         agent_name: String,
         character_id: String,

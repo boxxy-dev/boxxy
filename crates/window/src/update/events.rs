@@ -196,6 +196,21 @@ pub fn handle_terminal_event(
                             }
                         }
                     }
+                    ClawEngineEvent::DismissDrawer => {
+                        inner.claw.refresh_visibility();
+                    }
+                    ClawEngineEvent::FocusPane => {
+                        // Raise the window
+                        inner.window.present();
+
+                        // Select the tab containing this pane
+                        let widget = inner.tabs[pos].controller.widget();
+                        let page = inner.tab_view.page(widget);
+                        inner.tab_view.set_selected_page(&page);
+
+                        // Focus the specific pane within the terminal component
+                        inner.tabs[pos].controller.focus_pane_by_id(&p_id);
+                    }
                     ClawEngineEvent::DiagnosisComplete { .. }
                     | ClawEngineEvent::InjectCommand { .. }
                     | ClawEngineEvent::ProposeFileWrite { .. }

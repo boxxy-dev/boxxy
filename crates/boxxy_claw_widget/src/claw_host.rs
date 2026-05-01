@@ -73,6 +73,9 @@ pub trait ClawHost: 'static {
     /// this host (e.g. when the user clicks the bug/inspect icon).
     fn focus_sidebar(&self);
 
+    /// Raise the window and select the tab / pane that contains this host.
+    fn focus(&self);
+
     /// Change the host's working directory to `path`. Host decides the
     /// mechanism — the terminal impl checks `is_busy()`, validates the
     /// path exists, and injects a `cd` command, falling back to a

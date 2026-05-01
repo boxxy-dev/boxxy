@@ -64,6 +64,7 @@ pub enum PaneOutput {
     Osc133D(String, Option<i32>),
     ClawEvent(String, boxxy_claw_protocol::ClawEngineEvent),
     FocusClawSidebar(String),
+    RequestFocus(String),
     ForegroundProcessChanged(String, String), // id, process_name
     Notification(String, String),             // id, message
     ClawStateChanged(String, bool, bool),     // id, is_active, is_proactive

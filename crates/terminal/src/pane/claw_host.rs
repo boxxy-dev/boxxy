@@ -142,6 +142,10 @@ impl ClawHost for PaneClawHost {
         (self.callback)(PaneOutput::FocusClawSidebar(self.id.clone()));
     }
 
+    fn focus(&self) {
+        (self.callback)(PaneOutput::RequestFocus(self.id.clone()));
+    }
+
     fn cd(&self, path: String) {
         let Some(inner) = self.inner_weak.upgrade() else {
             return;
