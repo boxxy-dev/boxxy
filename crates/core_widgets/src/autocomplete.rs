@@ -92,7 +92,12 @@ impl AutocompleteController {
             let mut found_trigger = None;
 
             if cursor_pos > 0 {
-                let text_before = &text[..cursor_pos];
+                let byte_cursor_pos = text
+                    .char_indices()
+                    .nth(cursor_pos)
+                    .map(|(i, _)| i)
+                    .unwrap_or(text.len());
+                let text_before = &text[..byte_cursor_pos];
                 for provider in &c_clone.providers {
                     let trigger = provider.trigger();
                     if let Some(idx) = text_before.rfind(&trigger) {
@@ -355,6 +360,11 @@ impl AutocompleteController {
         if let Some((_trigger, start_idx)) = trigger_info {
             let text = self.entry.text().to_string();
             let cursor_pos = self.entry.position() as usize;
+            let byte_cursor_pos = text
+                .char_indices()
+                .nth(cursor_pos)
+                .map(|(i, _)| i)
+                .unwrap_or(text.len());
 
             let mut new_text = text[..start_idx].to_string();
             new_text.push_str(replacement);
@@ -363,9 +373,11 @@ impl AutocompleteController {
             if !is_command {
                 new_text.push(' ');
             }
-            new_text.push_str(&text[cursor_pos..]);
+            new_text.push_str(&text[byte_cursor_pos..]);
 
-            let new_cursor_pos = start_idx + replacement.len() + if is_command { 0 } else { 1 };
+            let start_char_pos = text[..start_idx].chars().count();
+            let replacement_char_len = replacement.chars().count();
+            let new_cursor_pos = start_char_pos + replacement_char_len + if is_command { 0 } else { 1 };
 
             self.entry.set_text(&new_text);
             self.entry.set_position(new_cursor_pos as i32);
