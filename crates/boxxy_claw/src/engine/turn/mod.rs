@@ -340,7 +340,8 @@ pub fn spawn_turn(
                             agent_name: agent_name.clone(),
                             character_id: character_id.clone(),
                             duration_secs: duration.as_secs(),
-                            message: "Agent turn ended with an error after a long duration.".to_string(),
+                            message: "Agent turn ended with an error after a long duration."
+                                .to_string(),
                         })
                         .await;
                 }

@@ -298,15 +298,21 @@ pub fn handle_terminal_event(
                             }
                         }
                     }
-                    ClawEngineEvent::TaskCompleted { agent_name, character_id, message, .. } => {
+                    ClawEngineEvent::TaskCompleted {
+                        agent_name,
+                        character_id,
+                        message,
+                        ..
+                    } => {
                         let settings = boxxy_preferences::Settings::load();
                         if settings.enable_timer_sounds {
                             crate::sound::play_timer_completion_sound();
                         }
-                        
-                        let first_name = agent_name.split_whitespace().next().unwrap_or(&agent_name);
+
+                        let first_name =
+                            agent_name.split_whitespace().next().unwrap_or(&agent_name);
                         let mut icon_path = "boxxyclaw-symbolic".to_string();
-                        
+
                         let registry = boxxy_claw_protocol::characters::CHARACTER_CACHE.load();
                         if let Some(info) = registry.iter().find(|c| c.config.id == *character_id) {
                             if info.has_avatar {
@@ -320,7 +326,9 @@ pub fn handle_terminal_event(
                             }
                         }
 
-                        let display_message = message.clone().unwrap_or_else(|| format!("{} has finished a timer.", first_name));
+                        let display_message = message
+                            .clone()
+                            .unwrap_or_else(|| format!("{} has finished a timer.", first_name));
 
                         let _ = inner.tx.send_blocking(AppInput::PushGlobalNotification(
                             crate::widgets::notification::Notification {
@@ -338,13 +346,19 @@ pub fn handle_terminal_event(
                             },
                         ));
                     }
-                    ClawEngineEvent::LongTaskCompleted { agent_name, character_id, message, .. } => {
+                    ClawEngineEvent::LongTaskCompleted {
+                        agent_name,
+                        character_id,
+                        message,
+                        ..
+                    } => {
                         let settings = boxxy_preferences::Settings::load();
                         if settings.enable_task_sounds {
                             crate::sound::play_task_completion_sound();
                         }
 
-                        let first_name = agent_name.split_whitespace().next().unwrap_or(&agent_name);
+                        let first_name =
+                            agent_name.split_whitespace().next().unwrap_or(&agent_name);
                         let mut icon_path = "boxxyclaw-symbolic".to_string();
 
                         let registry = boxxy_claw_protocol::characters::CHARACTER_CACHE.load();

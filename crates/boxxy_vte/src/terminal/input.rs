@@ -214,59 +214,136 @@ mod tests {
 
     #[test]
     fn test_translate_basic_keys() {
-        assert_eq!(translate_key(Key::Return, ModifierType::empty(), false), Some(vec![b'\r']));
-        assert_eq!(translate_key(Key::BackSpace, ModifierType::empty(), false), Some(vec![0x7f]));
-        assert_eq!(translate_key(Key::Tab, ModifierType::empty(), false), Some(vec![b'\t']));
-        assert_eq!(translate_key(Key::Escape, ModifierType::empty(), false), Some(vec![0x1b]));
+        assert_eq!(
+            translate_key(Key::Return, ModifierType::empty(), false),
+            Some(vec![b'\r'])
+        );
+        assert_eq!(
+            translate_key(Key::BackSpace, ModifierType::empty(), false),
+            Some(vec![0x7f])
+        );
+        assert_eq!(
+            translate_key(Key::Tab, ModifierType::empty(), false),
+            Some(vec![b'\t'])
+        );
+        assert_eq!(
+            translate_key(Key::Escape, ModifierType::empty(), false),
+            Some(vec![0x1b])
+        );
     }
 
     #[test]
     fn test_translate_arrows_no_mod() {
-        assert_eq!(translate_key(Key::Up, ModifierType::empty(), false), Some(b"\x1b[A".to_vec()));
-        assert_eq!(translate_key(Key::Down, ModifierType::empty(), false), Some(b"\x1b[B".to_vec()));
-        assert_eq!(translate_key(Key::Right, ModifierType::empty(), false), Some(b"\x1b[C".to_vec()));
-        assert_eq!(translate_key(Key::Left, ModifierType::empty(), false), Some(b"\x1b[D".to_vec()));
+        assert_eq!(
+            translate_key(Key::Up, ModifierType::empty(), false),
+            Some(b"\x1b[A".to_vec())
+        );
+        assert_eq!(
+            translate_key(Key::Down, ModifierType::empty(), false),
+            Some(b"\x1b[B".to_vec())
+        );
+        assert_eq!(
+            translate_key(Key::Right, ModifierType::empty(), false),
+            Some(b"\x1b[C".to_vec())
+        );
+        assert_eq!(
+            translate_key(Key::Left, ModifierType::empty(), false),
+            Some(b"\x1b[D".to_vec())
+        );
     }
 
     #[test]
     fn test_translate_arrows_app_cursor() {
-        assert_eq!(translate_key(Key::Up, ModifierType::empty(), true), Some(b"\x1bOA".to_vec()));
-        assert_eq!(translate_key(Key::Down, ModifierType::empty(), true), Some(b"\x1bOB".to_vec()));
-        assert_eq!(translate_key(Key::Right, ModifierType::empty(), true), Some(b"\x1bOC".to_vec()));
-        assert_eq!(translate_key(Key::Left, ModifierType::empty(), true), Some(b"\x1bOD".to_vec()));
+        assert_eq!(
+            translate_key(Key::Up, ModifierType::empty(), true),
+            Some(b"\x1bOA".to_vec())
+        );
+        assert_eq!(
+            translate_key(Key::Down, ModifierType::empty(), true),
+            Some(b"\x1bOB".to_vec())
+        );
+        assert_eq!(
+            translate_key(Key::Right, ModifierType::empty(), true),
+            Some(b"\x1bOC".to_vec())
+        );
+        assert_eq!(
+            translate_key(Key::Left, ModifierType::empty(), true),
+            Some(b"\x1bOD".to_vec())
+        );
     }
 
     #[test]
     fn test_translate_ctrl_chars() {
-        assert_eq!(translate_key(Key::a, ModifierType::CONTROL_MASK, false), Some(vec![1]));
-        assert_eq!(translate_key(Key::c, ModifierType::CONTROL_MASK, false), Some(vec![3]));
-        assert_eq!(translate_key(Key::z, ModifierType::CONTROL_MASK, false), Some(vec![26]));
+        assert_eq!(
+            translate_key(Key::a, ModifierType::CONTROL_MASK, false),
+            Some(vec![1])
+        );
+        assert_eq!(
+            translate_key(Key::c, ModifierType::CONTROL_MASK, false),
+            Some(vec![3])
+        );
+        assert_eq!(
+            translate_key(Key::z, ModifierType::CONTROL_MASK, false),
+            Some(vec![26])
+        );
     }
 
     #[test]
     fn test_translate_arrows_with_modifiers() {
         // Ctrl + Right -> \x1b[1;5C
-        assert_eq!(translate_key(Key::Right, ModifierType::CONTROL_MASK, false), Some(b"\x1b[1;5C".to_vec()));
+        assert_eq!(
+            translate_key(Key::Right, ModifierType::CONTROL_MASK, false),
+            Some(b"\x1b[1;5C".to_vec())
+        );
         // Alt + Left -> \x1b[1;3D
-        assert_eq!(translate_key(Key::Left, ModifierType::ALT_MASK, false), Some(b"\x1b[1;3D".to_vec()));
+        assert_eq!(
+            translate_key(Key::Left, ModifierType::ALT_MASK, false),
+            Some(b"\x1b[1;3D".to_vec())
+        );
         // Ctrl + Alt + Up -> \x1b[1;7A
-        assert_eq!(translate_key(Key::Up, ModifierType::CONTROL_MASK | ModifierType::ALT_MASK, false), Some(b"\x1b[1;7A".to_vec()));
+        assert_eq!(
+            translate_key(
+                Key::Up,
+                ModifierType::CONTROL_MASK | ModifierType::ALT_MASK,
+                false
+            ),
+            Some(b"\x1b[1;7A".to_vec())
+        );
     }
 
     #[test]
     fn test_translate_home_end_with_modifiers() {
-        assert_eq!(translate_key(Key::Home, ModifierType::CONTROL_MASK, false), Some(b"\x1b[1;5H".to_vec()));
-        assert_eq!(translate_key(Key::End, ModifierType::ALT_MASK, false), Some(b"\x1b[1;3F".to_vec()));
+        assert_eq!(
+            translate_key(Key::Home, ModifierType::CONTROL_MASK, false),
+            Some(b"\x1b[1;5H".to_vec())
+        );
+        assert_eq!(
+            translate_key(Key::End, ModifierType::ALT_MASK, false),
+            Some(b"\x1b[1;3F".to_vec())
+        );
     }
 
     #[test]
     fn test_translate_delete_page_with_modifiers() {
-        assert_eq!(translate_key(Key::Delete, ModifierType::CONTROL_MASK, false), Some(b"\x1b[3;5~".to_vec()));
-        assert_eq!(translate_key(Key::Page_Up, ModifierType::SHIFT_MASK, false), Some(b"\x1b[5;2~".to_vec()));
+        assert_eq!(
+            translate_key(Key::Delete, ModifierType::CONTROL_MASK, false),
+            Some(b"\x1b[3;5~".to_vec())
+        );
+        assert_eq!(
+            translate_key(Key::Page_Up, ModifierType::SHIFT_MASK, false),
+            Some(b"\x1b[5;2~".to_vec())
+        );
     }
 
     #[test]
     fn test_translate_ctrl_alt_chars() {
-        assert_eq!(translate_key(Key::c, ModifierType::CONTROL_MASK | ModifierType::ALT_MASK, false), Some(vec![0x1b, 3]));
+        assert_eq!(
+            translate_key(
+                Key::c,
+                ModifierType::CONTROL_MASK | ModifierType::ALT_MASK,
+                false
+            ),
+            Some(vec![0x1b, 3])
+        );
     }
 }

@@ -226,8 +226,8 @@ impl Updater {
             .arg("stop")
             .output();
 
-        // We do NOT need to manually start the new agent here. 
-        // crates/window/src/agent_deployer.rs automatically checks for and 
+        // We do NOT need to manually start the new agent here.
+        // crates/window/src/agent_deployer.rs automatically checks for and
         // spawns the agent when the new `boxxy-terminal` process starts.
 
         log::info!("Restarting app...");

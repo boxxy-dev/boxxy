@@ -1635,7 +1635,13 @@ impl WidgetImpl for TerminalWidget {
                         || is_filling
                     {
                         if !line_str.is_empty() {
-                            apply_style(&layout, current_flags, current_ucolor, &palette, fg_color_default);
+                            apply_style(
+                                &layout,
+                                current_flags,
+                                current_ucolor,
+                                &palette,
+                                fg_color_default,
+                            );
                             layout.set_text(&line_str);
                             if !current_flags.contains(Flags::HIDDEN) {
                                 snapshot.save();
@@ -1663,7 +1669,13 @@ impl WidgetImpl for TerminalWidget {
                             }
                         }
                         if is_wide {
-                            apply_style(&layout, current_flags, current_ucolor, &palette, fg_color_default);
+                            apply_style(
+                                &layout,
+                                current_flags,
+                                current_ucolor,
+                                &palette,
+                                fg_color_default,
+                            );
                             layout.set_text(&line_str);
                             let (_, logical) = layout.extents();
                             let actual_width = logical.width() as f32 / gtk4::pango::SCALE as f32;
@@ -1693,7 +1705,13 @@ impl WidgetImpl for TerminalWidget {
                         } else if is_filling {
                             // Scale box-drawing / block / powerline chars to fill the cell exactly,
                             // matching Ghostty's behaviour of cell-perfect glyph rendering.
-                            apply_style(&layout, current_flags, current_ucolor, &palette, fg_color_default);
+                            apply_style(
+                                &layout,
+                                current_flags,
+                                current_ucolor,
+                                &palette,
+                                fg_color_default,
+                            );
                             layout.set_text(&line_str);
                             let (_, logical) = layout.extents();
                             let aw = (logical.width() as f32 / gtk4::pango::SCALE as f32).max(0.1);
@@ -1717,7 +1735,13 @@ impl WidgetImpl for TerminalWidget {
                     }
                 }
                 if !line_str.is_empty() {
-                    apply_style(&layout, current_flags, current_ucolor, &palette, fg_color_default);
+                    apply_style(
+                        &layout,
+                        current_flags,
+                        current_ucolor,
+                        &palette,
+                        fg_color_default,
+                    );
                     layout.set_text(&line_str);
                     if !current_flags.contains(Flags::HIDDEN) {
                         snapshot.save();

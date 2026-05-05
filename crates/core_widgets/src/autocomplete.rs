@@ -377,7 +377,8 @@ impl AutocompleteController {
 
             let start_char_pos = text[..start_idx].chars().count();
             let replacement_char_len = replacement.chars().count();
-            let new_cursor_pos = start_char_pos + replacement_char_len + if is_command { 0 } else { 1 };
+            let new_cursor_pos =
+                start_char_pos + replacement_char_len + if is_command { 0 } else { 1 };
 
             self.entry.set_text(&new_text);
             self.entry.set_position(new_cursor_pos as i32);

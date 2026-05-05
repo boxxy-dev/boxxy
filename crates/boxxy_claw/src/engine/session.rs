@@ -1653,7 +1653,7 @@ impl ClawSession {
                                         let _ = tx_ui.send(event).await;
 
                                         // We no longer emit PushGlobalNotification here.
-                                        // Instead, we rely on the TaskCompleted event that gets emitted 
+                                        // Instead, we rely on the TaskCompleted event that gets emitted
                                         // at the end of this block to trigger the UI notification.
                                     });
                                 }
