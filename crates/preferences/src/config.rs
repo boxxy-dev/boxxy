@@ -132,6 +132,8 @@ pub struct Settings {
     pub enable_web_search: bool,
     pub enable_os_context: bool,
     pub enable_progress_bar: bool,
+    pub enable_timer_sounds: bool,
+    pub enable_task_sounds: bool,
     pub colored_tabs: bool,
     /// When true, the in-terminal Claw overlay keeps a scrollable history
     /// of messages (mirroring the sidebar logger). When false, each new
@@ -190,6 +192,8 @@ impl Default for Settings {
             enable_web_search: true,
             enable_os_context: true,
             enable_progress_bar: true,
+            enable_timer_sounds: true,
+            enable_task_sounds: true,
             colored_tabs: false,
             maintain_overlay_history: true,
             claw_msgbar_shortcut: "<Ctrl>slash".to_string(),

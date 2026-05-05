@@ -418,18 +418,6 @@ async fn maybe_send_desktop_notification(
         ClawEngineEvent::PushGlobalNotification { title, message } => {
             notifier::send(conn, title, message).await;
         }
-        ClawEngineEvent::TaskCompleted {
-            agent_name: task_agent,
-            ..
-        } => {
-            let title = format!("{} finished a task", task_agent);
-            notifier::send(
-                conn,
-                &title,
-                &format!("Agent {} completed a background task.", agent_name),
-            )
-            .await;
-        }
         _ => {}
     }
 }

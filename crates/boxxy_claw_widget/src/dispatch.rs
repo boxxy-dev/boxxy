@@ -608,6 +608,7 @@ pub fn spawn_dispatch(
                     }
                 }
                 ClawEngineEvent::TaskCompleted { .. }
+                | ClawEngineEvent::LongTaskCompleted { .. }
                 | ClawEngineEvent::PushGlobalNotification { .. }
                 | ClawEngineEvent::DelegatedTaskReply { .. } => {
                     // Routed by the window orchestrator / swarm layer;

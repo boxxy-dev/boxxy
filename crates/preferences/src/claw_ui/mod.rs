@@ -12,9 +12,14 @@ pub fn setup_claw_ui_page(
 ) -> Box<dyn Fn(&str) -> bool> {
     let maintain_overlay_history_switch: adw::SwitchRow =
         builder.object("maintain_overlay_history_switch").unwrap();
+    let enable_timer_sounds_switch: adw::SwitchRow =
+        builder.object("enable_timer_sounds_switch").unwrap();
+    let enable_task_sounds_switch: adw::SwitchRow =
+        builder.object("enable_task_sounds_switch").unwrap();
     let claw_msgbar_shortcut_entry: gtk::Entry =
         builder.object("claw_msgbar_shortcut_entry").unwrap();
     let reset_claw_shortcut_btn: gtk::Button = builder.object("reset_claw_shortcut_btn").unwrap();
+    let group_claw_sounds: adw::PreferencesGroup = builder.object("group_claw_sounds").unwrap();
     let group_claw_ui_behavior: adw::PreferencesGroup =
         builder.object("group_claw_ui_behavior").unwrap();
     let group_claw_ui_shortcuts: adw::PreferencesGroup =
@@ -27,6 +32,8 @@ pub fn setup_claw_ui_page(
     {
         let s = settings_rc.borrow();
         maintain_overlay_history_switch.set_active(s.maintain_overlay_history);
+        enable_timer_sounds_switch.set_active(s.enable_timer_sounds);
+        enable_task_sounds_switch.set_active(s.enable_task_sounds);
         claw_msgbar_shortcut_entry.set_text(&s.claw_msgbar_shortcut);
     }
 
@@ -42,6 +49,40 @@ pub fn setup_claw_ui_page(
         let mut s = s_rc.borrow_mut();
         if s.maintain_overlay_history != val {
             s.maintain_overlay_history = val;
+            s.save();
+            cb(s.clone());
+        }
+    });
+
+    // Enable-timer-sounds toggle
+    let s_rc = settings_rc.clone();
+    let cb = on_change.clone();
+    let is_up = is_updating.clone();
+    enable_timer_sounds_switch.connect_active_notify(move |row: &adw::SwitchRow| {
+        if is_up.get() {
+            return;
+        }
+        let val = row.is_active();
+        let mut s = s_rc.borrow_mut();
+        if s.enable_timer_sounds != val {
+            s.enable_timer_sounds = val;
+            s.save();
+            cb(s.clone());
+        }
+    });
+
+    // Enable-task-sounds toggle
+    let s_rc = settings_rc.clone();
+    let cb = on_change.clone();
+    let is_up = is_updating.clone();
+    enable_task_sounds_switch.connect_active_notify(move |row: &adw::SwitchRow| {
+        if is_up.get() {
+            return;
+        }
+        let val = row.is_active();
+        let mut s = s_rc.borrow_mut();
+        if s.enable_task_sounds != val {
+            s.enable_task_sounds = val;
             s.save();
             cb(s.clone());
         }
@@ -93,9 +134,12 @@ pub fn setup_claw_ui_page(
         }
     });
 
+    let group_claw_sounds_clone = group_claw_sounds.clone();
     let group_claw_ui_behavior_clone = group_claw_ui_behavior.clone();
     let group_claw_ui_shortcuts_clone = group_claw_ui_shortcuts.clone();
     let maintain_overlay_history_switch_clone = maintain_overlay_history_switch.clone();
+    let enable_timer_sounds_switch_clone = enable_timer_sounds_switch.clone();
+    let enable_task_sounds_switch_clone = enable_task_sounds_switch.clone();
     let claw_msgbar_shortcut_entry_clone = claw_msgbar_shortcut_entry.clone();
     let reset_claw_shortcut_btn_clone = reset_claw_shortcut_btn.clone();
 
@@ -105,6 +149,15 @@ pub fn setup_claw_ui_page(
             r.set_visible(m);
             m
         };
+
+        let timer_sounds = match_row(
+            enable_timer_sounds_switch_clone.upcast_ref(),
+            "enable timer sounds scheduled reminder notification finishing",
+        );
+        let task_sounds = match_row(
+            enable_task_sounds_switch_clone.upcast_ref(),
+            "enable task sounds agent long-running task finishing",
+        );
 
         let maintain = match_row(
             maintain_overlay_history_switch_clone.upcast_ref(),
@@ -121,11 +174,13 @@ pub fn setup_claw_ui_page(
         );
 
         let behavior_visible = maintain;
+        let sounds_visible = timer_sounds || task_sounds;
         let shortcut_visible = s_accel || reset_shortcut;
 
+        group_claw_sounds_clone.set_visible(sounds_visible);
         group_claw_ui_behavior_clone.set_visible(behavior_visible);
         group_claw_ui_shortcuts_clone.set_visible(shortcut_visible);
 
-        behavior_visible || shortcut_visible
+        behavior_visible || sounds_visible || shortcut_visible
     })
 }

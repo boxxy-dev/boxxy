@@ -71,5 +71,6 @@
     <file compressed="true" alias="ui/widgets/notification_details.ui">ui/widgets/notification_details.ui</file>
     <file compressed="true" alias="ui/claw_overlay.ui">ui/claw_overlay.ui</file>
     <file compressed="true" alias="sounds/task.wav">sounds/task.wav</file>
+    <file compressed="true" alias="sounds/timer.wav">sounds/timer.wav</file>
   </gresource>
 </gresources>

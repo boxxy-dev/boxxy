@@ -201,8 +201,10 @@ pub fn spawn_turn(
             &full_prompt
         };
 
+        let start_time = std::time::Instant::now();
         match agent.chat(query_for_chat, final_history).await {
             Ok((response, usage)) => {
+                let duration = start_time.elapsed();
                 let _ = tx_ui
                     .send(ClawEngineEvent::AgentThinking {
                         agent_name: agent_name.clone(),
@@ -210,6 +212,31 @@ pub fn spawn_turn(
                         is_thinking: false,
                     })
                     .await;
+
+                if duration.as_secs() >= 7 {
+                    let mut summary = response.trim().to_string();
+                    if summary.is_empty() {
+                        summary = "Task completed silently.".to_string();
+                    } else if summary.lines().count() > 1 || summary.len() > 100 {
+                        // Extract first non-empty line
+                        if let Some(first_line) = summary.lines().find(|l| !l.trim().is_empty()) {
+                            summary = first_line.trim().to_string();
+                            if summary.len() > 100 {
+                                summary.truncate(97);
+                                summary.push_str("...");
+                            }
+                        }
+                    }
+
+                    let _ = tx_ui
+                        .send(ClawEngineEvent::LongTaskCompleted {
+                            agent_name: agent_name.clone(),
+                            character_id: character_id.clone(),
+                            duration_secs: duration.as_secs(),
+                            message: summary,
+                        })
+                        .await;
+                }
 
                 {
                     let mut state_lock = state.lock().await;
@@ -298,6 +325,7 @@ pub fn spawn_turn(
                 }
             }
             Err(e) => {
+                let duration = start_time.elapsed();
                 let _ = tx_ui
                     .send(ClawEngineEvent::AgentThinking {
                         agent_name: agent_name.clone(),
@@ -305,6 +333,17 @@ pub fn spawn_turn(
                         is_thinking: false,
                     })
                     .await;
+
+                if duration.as_secs() >= 7 {
+                    let _ = tx_ui
+                        .send(ClawEngineEvent::LongTaskCompleted {
+                            agent_name: agent_name.clone(),
+                            character_id: character_id.clone(),
+                            duration_secs: duration.as_secs(),
+                            message: "Agent turn ended with an error after a long duration.".to_string(),
+                        })
+                        .await;
+                }
 
                 state.lock().await.persistent_agent = Some(agent);
 

@@ -388,6 +388,14 @@ pub enum ClawEngineEvent {
     TaskCompleted {
         agent_name: String,
         task_id: Uuid,
+        character_id: String,
+        message: Option<String>,
+    },
+    LongTaskCompleted {
+        agent_name: String,
+        character_id: String,
+        duration_secs: u64,
+        message: String,
     },
     PushGlobalNotification {
         title: String,

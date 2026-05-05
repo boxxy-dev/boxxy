@@ -298,8 +298,83 @@ pub fn handle_terminal_event(
                             }
                         }
                     }
-                    ClawEngineEvent::TaskCompleted { .. } => {
-                        crate::sound::play_task_completion_sound();
+                    ClawEngineEvent::TaskCompleted { agent_name, character_id, message, .. } => {
+                        let settings = boxxy_preferences::Settings::load();
+                        if settings.enable_timer_sounds {
+                            crate::sound::play_timer_completion_sound();
+                        }
+                        
+                        let first_name = agent_name.split_whitespace().next().unwrap_or(&agent_name);
+                        let mut icon_path = "boxxyclaw-symbolic".to_string();
+                        
+                        let registry = boxxy_claw_protocol::characters::CHARACTER_CACHE.load();
+                        if let Some(info) = registry.iter().find(|c| c.config.id == *character_id) {
+                            if info.has_avatar {
+                                let mut path = gtk4::glib::user_config_dir();
+                                path.push("boxxy-terminal");
+                                path.push("boxxyclaw");
+                                path.push("characters");
+                                path.push(&info.config.name);
+                                path.push("AVATAR.png");
+                                icon_path = path.to_string_lossy().to_string();
+                            }
+                        }
+
+                        let display_message = message.clone().unwrap_or_else(|| format!("{} has finished a timer.", first_name));
+
+                        let _ = inner.tx.send_blocking(AppInput::PushGlobalNotification(
+                            crate::widgets::notification::Notification {
+                                id: uuid::Uuid::new_v4().to_string(),
+                                level: crate::widgets::notification::NotificationLevel::Info,
+                                title: format!("{} sends a reminder", first_name),
+                                message: display_message,
+                                icon_name: icon_path,
+                                actions: vec![crate::widgets::notification::NotificationAction {
+                                    label: "Dismiss".to_string(),
+                                    action_name: "win.dismiss-notification".to_string(),
+                                    is_primary: false,
+                                }],
+                                details: Vec::new(),
+                            },
+                        ));
+                    }
+                    ClawEngineEvent::LongTaskCompleted { agent_name, character_id, message, .. } => {
+                        let settings = boxxy_preferences::Settings::load();
+                        if settings.enable_task_sounds {
+                            crate::sound::play_task_completion_sound();
+                        }
+
+                        let first_name = agent_name.split_whitespace().next().unwrap_or(&agent_name);
+                        let mut icon_path = "boxxyclaw-symbolic".to_string();
+
+                        let registry = boxxy_claw_protocol::characters::CHARACTER_CACHE.load();
+                        if let Some(info) = registry.iter().find(|c| c.config.id == *character_id) {
+                            if info.has_avatar {
+                                let mut path = gtk4::glib::user_config_dir();
+                                path.push("boxxy-terminal");
+                                path.push("boxxyclaw");
+                                path.push("characters");
+                                path.push(&info.config.name);
+                                path.push("AVATAR.png");
+                                icon_path = path.to_string_lossy().to_string();
+                            }
+                        }
+
+                        let _ = inner.tx.send_blocking(AppInput::PushGlobalNotification(
+                            crate::widgets::notification::Notification {
+                                id: uuid::Uuid::new_v4().to_string(),
+                                level: crate::widgets::notification::NotificationLevel::Info,
+                                title: format!("{} completed a task", first_name),
+                                message,
+                                icon_name: icon_path,
+                                actions: vec![crate::widgets::notification::NotificationAction {
+                                    label: "Dismiss".to_string(),
+                                    action_name: "win.dismiss-notification".to_string(),
+                                    is_primary: false,
+                                }],
+                                details: Vec::new(),
+                            },
+                        ));
                     }
                     ClawEngineEvent::PushGlobalNotification { title, message } => {
                         let _ = inner.tx.send_blocking(AppInput::PushGlobalNotification(

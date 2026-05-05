@@ -1630,8 +1630,14 @@ impl ClawSession {
                     let mut state_lock = self.state.lock().await;
                     let mut completed_indices = Vec::new();
 
+                    let mut completed_payload: Option<String> = None;
+
                     for (i, task) in state_lock.pending_tasks.iter_mut().enumerate() {
                         if task.due_at <= now && task.status == TaskStatus::Pending {
+                            // Grab the first payload we see for the notification
+                            if completed_payload.is_none() && task.task_type == TaskType::Notification {
+                                completed_payload = Some(task.payload.clone());
+                            }
                             // Execute task
                             match task.task_type {
                                 TaskType::Notification => {
@@ -1646,11 +1652,9 @@ impl ClawSession {
                                         persist_visual_event(db, session_id, pane_id, &event);
                                         let _ = tx_ui.send(event).await;
 
-                                        // Then emit the global desktop notification event
-                                        let _ = tx_ui.send(ClawEngineEvent::PushGlobalNotification {
-                                            title: "Boxxy Reminder".to_string(),
-                                            message: text,
-                                        }).await;
+                                        // We no longer emit PushGlobalNotification here.
+                                        // Instead, we rely on the TaskCompleted event that gets emitted 
+                                        // at the end of this block to trigger the UI notification.
                                     });
                                 }
                                 TaskType::Command | TaskType::Query => {
@@ -1687,13 +1691,15 @@ impl ClawSession {
 
                         let _ = self.tx_ui.send(ClawEngineEvent::TaskStatusChanged {
                             agent_name,
-                            character_id,
+                            character_id: character_id.clone(),
                             tasks: tasks.clone(),
                         }).await;
 
                         let _ = self.tx_ui.send(ClawEngineEvent::TaskCompleted {
                             agent_name: agent_name_for_event,
                             task_id: uuid::Uuid::nil(), // Placeholder for now as we don't have it easily available here
+                            character_id,
+                            message: completed_payload,
                         }).await;
 
                         workspace.update_pane_tasks(self.pane_id.clone(), tasks).await;

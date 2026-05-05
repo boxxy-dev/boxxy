@@ -384,6 +384,7 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
                 if let Some(app) = inner.window.application() {
                     let notif = gtk4::gio::Notification::new(&title);
                     notif.set_body(Some(&msg));
+                    
                     if ready.icon_name == "boxxyclaw-symbolic" {
                         if let Ok(bytes) = gtk4::gio::resources_lookup_data(
                             "/dev/boxxy/BoxxyTerminal/icons/boxxyclaw.svg",
@@ -391,7 +392,17 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
                         ) {
                             notif.set_icon(&gtk4::gio::BytesIcon::new(&bytes));
                         }
+                    } else if ready.icon_name.starts_with("/") {
+                        // Assume absolute file path for custom character avatars
+                        let file = gtk4::gio::File::for_path(&ready.icon_name);
+                        let icon = gtk4::gio::FileIcon::new(&file);
+                        notif.set_icon(&icon);
+                    } else if !ready.icon_name.is_empty() {
+                         // Fallback for themed icons if needed
+                         let icon = gtk4::gio::ThemedIcon::new(&ready.icon_name);
+                         notif.set_icon(&icon);
                     }
+                    
                     app.send_notification(None, &notif);
                 }
             }

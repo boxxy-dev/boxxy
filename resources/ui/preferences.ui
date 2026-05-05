@@ -126,7 +126,7 @@
                               <object class="GtkListBoxRow" id="nav_claw_ui">
                                 <property name="child">
                                   <object class="GtkLabel">
-                                    <property name="label" translatable="yes">Claw UI</property>
+                                    <property name="label" translatable="yes">Claw UI &amp; Sounds</property>
                                     <property name="xalign">0</property>
                                     <property name="margin-start">12</property>
                                     <property name="margin-end">12</property>
@@ -655,6 +655,24 @@
                                         <property name="valign">center</property>
                                       </object>
                                     </child>
+                                  </object>
+                                </child>
+                              </object>
+                            </child>
+
+                            <child>
+                              <object class="AdwPreferencesGroup" id="group_claw_sounds">
+                                <property name="title" translatable="yes">Sounds</property>
+                                <child>
+                                  <object class="AdwSwitchRow" id="enable_timer_sounds_switch">
+                                    <property name="title" translatable="yes">Enable Timer Sounds</property>
+                                    <property name="subtitle" translatable="yes">Play a sound when a scheduled reminder or timer finishes.</property>
+                                  </object>
+                                </child>
+                                <child>
+                                  <object class="AdwSwitchRow" id="enable_task_sounds_switch">
+                                    <property name="title" translatable="yes">Enable Task Sounds</property>
+                                    <property name="subtitle" translatable="yes">Play a sound when an agent finishes a long-running task.</property>
                                   </object>
                                 </child>
                               </object>
