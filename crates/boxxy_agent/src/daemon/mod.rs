@@ -120,7 +120,7 @@ impl DaemonCore {
         if let Ok(characters_dir) = boxxy_claw_protocol::character_loader::get_characters_dir() {
             let (watcher_tx, mut watcher_rx) = tokio::sync::mpsc::channel::<()>(4);
             crate::character_watcher::spawn_character_watcher(characters_dir, watcher_tx).await;
-            
+
             let registry_for_reload = registry.clone();
             let workspace_for_reload = workspace.clone();
             tokio::spawn(async move {
@@ -140,7 +140,9 @@ impl DaemonCore {
                                     if personality_changed || was_migrated {
                                         log::info!(
                                             "Sending SettingsInvalidated to pane {} (personality_changed={}, migrated={})",
-                                            claim.holder_id, personality_changed, was_migrated
+                                            claim.holder_id,
+                                            personality_changed,
+                                            was_migrated
                                         );
                                         if let Some(tx) = workspace_for_reload
                                             .get_pane_tx_by_id(&claim.holder_id)

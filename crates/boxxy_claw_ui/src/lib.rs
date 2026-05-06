@@ -275,7 +275,9 @@ pub fn create_claw_message_list() -> (gtk::ListView, gio::ListStore) {
             if let Some(id) = char_id {
                 let cache = boxxy_claw_protocol::characters::CHARACTER_CACHE.load();
                 if let Some(info) = cache.iter().find(|c| c.config.id == *id) {
-                    let formatted_name = info.config.name
+                    let formatted_name = info
+                        .config
+                        .name
                         .split('-')
                         .map(|word| {
                             let mut c = word.chars();
@@ -290,8 +292,7 @@ pub fn create_claw_message_list() -> (gtk::ListView, gio::ListStore) {
                     title.set_label(&formatted_name);
                     avatar.set_text(Some(&formatted_name));
                     if info.has_avatar {
-                        if let Ok(dir) =
-                            boxxy_claw_protocol::character_loader::get_characters_dir()
+                        if let Ok(dir) = boxxy_claw_protocol::character_loader::get_characters_dir()
                         {
                             let avatar_path = dir.join(&info.config.name).join("AVATAR.png");
                             if let Ok(texture) = gdk::Texture::from_filename(&avatar_path) {

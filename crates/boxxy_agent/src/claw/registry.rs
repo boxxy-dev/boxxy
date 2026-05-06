@@ -10,9 +10,9 @@ use boxxy_claw_protocol::characters::{
     CharacterClaim, CharacterInfo, CharacterStatus, ClaimError, ClaimedSession, HolderKind,
     RegistrySnapshot,
 };
+use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
-use std::collections::hash_map::DefaultHasher;
 use tokio::sync::RwLock;
 
 fn hash_personality(config: &boxxy_claw_protocol::characters::CharacterConfig) -> u64 {
@@ -145,8 +145,7 @@ impl CharacterRegistry {
                         holder_id,
                         first_char.config.id
                     );
-                    new_migrations
-                        .insert(claim.character_id.clone(), first_char.config.id.clone());
+                    new_migrations.insert(claim.character_id.clone(), first_char.config.id.clone());
                     migrated_holder_ids.push(holder_id.clone());
                 }
             }

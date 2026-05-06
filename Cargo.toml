@@ -75,7 +75,7 @@ serde_json = "1.0"
 sourceview5 = "0.11"
 chrono = { version = "0.4", features = ["serde"] }
 async-channel = "2.5.0"
-tokio = { version = "1.52.1", features = ["full"] }
+tokio = { version = "1.52.2", features = ["full"] }
 lazy_static = "1.5.0"
 futures-channel = "0.3.32"
 futures-util = "0.3.32"
@@ -84,7 +84,7 @@ env_logger = "0.11.10"
 rig-core = "0.36.0"
 nix = { version = "0.31.2", features = ["process", "term", "fs", "signal", "ioctl", "user"] }
 zbus = { version = "5.15.0", features = ["tokio", "p2p"] }
-zvariant = "5.10.1"
+zvariant = "5.11.0"
 libc = "0.2"
 enumflags2 = "0.7"
 ashpd = { version = "0.13.10", features = ["flatpak", "open_uri"] }
@@ -128,7 +128,7 @@ boxxy-viewer = { path = "crates/viewer" }
 boxxy-telemetry = { path = "crates/telemetry" }
 boxxy-sys-utils = { path = "crates/sys_utils" }
 boxxy-mcp = { path = "crates/boxxy_mcp" }
-rmcp = { version = "1.5.0", features = ["client", "macros", "transport-streamable-http-client-reqwest", "transport-child-process", "server", "schemars", "transport-io", "which-command"] }
+rmcp = { version = "1.6.0", features = ["client", "macros", "transport-streamable-http-client-reqwest", "transport-child-process", "server", "schemars", "transport-io", "which-command"] }
 opentelemetry = "0.31.0"
 opentelemetry_sdk = { version = "0.31.0", features = ["rt-tokio"] }
 opentelemetry-otlp = { version = "0.31.1", features = ["http-json", "reqwest", "reqwest-rustls"] }

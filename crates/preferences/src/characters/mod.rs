@@ -18,11 +18,11 @@ pub fn setup_characters_page(builder: &gtk::Builder) -> Box<dyn Fn(&str) -> bool
     let page: adw::PreferencesPage = builder.object("page_characters").unwrap();
 
     let chars_dir = boxxy_claw_protocol::character_loader::get_characters_dir().ok();
-    
+
     // Initial fetch from cache
     let initial_catalog = boxxy_claw_protocol::characters::CHARACTER_CACHE.load();
     let characters = (**initial_catalog).clone();
-    
+
     let rows = Rc::new(RefCell::new(Vec::new()));
 
     // === Characters list group ===
@@ -38,12 +38,7 @@ pub fn setup_characters_page(builder: &gtk::Builder) -> Box<dyn Fn(&str) -> bool
     page.add(&chars_group);
 
     // Initial render
-    render_characters(
-        &chars_group,
-        characters,
-        rows.clone(),
-        chars_dir.clone(),
-    );
+    render_characters(&chars_group, characters, rows.clone(), chars_dir.clone());
 
     // Setup reactivity: poll the CLAIMS_CACHE and CHARACTER_CACHE
     let mut last_catalog_json = serde_json::to_string(&*initial_catalog).unwrap_or_default();
@@ -71,10 +66,14 @@ pub fn setup_characters_page(builder: &gtk::Builder) -> Box<dyn Fn(&str) -> bool
         for row_data in current_rows.iter() {
             let active_claim = claims.iter().find(|c| c.character_id == row_data.char_id);
 
-            row_data.row.set_subtitle(&glib::markup_escape_text(&row_data.duties));
-            
+            row_data
+                .row
+                .set_subtitle(&glib::markup_escape_text(&row_data.duties));
+
             if active_claim.is_some() {
-                row_data.row.set_title(&format!("{} (Active)", row_data.title));
+                row_data
+                    .row
+                    .set_title(&format!("{} (Active)", row_data.title));
                 row_data.row.add_css_class("success");
             } else {
                 row_data.row.set_title(&row_data.title);
@@ -179,9 +178,11 @@ fn render_characters(
     } else {
         for character in characters.iter() {
             let row = adw::ActionRow::new();
-            
+
             // Format name: "niko-una" -> "Niko Una"
-            let formatted_name = character.config.name
+            let formatted_name = character
+                .config
+                .name
                 .split('-')
                 .map(|word| {
                     let mut c = word.chars();
@@ -192,7 +193,7 @@ fn render_characters(
                 })
                 .collect::<Vec<String>>()
                 .join(" ");
-                
+
             row.set_title(&glib::markup_escape_text(&formatted_name));
             row.set_subtitle(&glib::markup_escape_text(&character.config.duties));
 
@@ -236,16 +237,26 @@ fn render_characters(
                 if let Ok(source_id_str) = value.get::<String>() {
                     if source_id_str != target_id {
                         let mut chars = characters_dnd.clone();
-                        let source_idx_opt = chars.iter().position(|c| c.config.id == source_id_str);
+                        let source_idx_opt =
+                            chars.iter().position(|c| c.config.id == source_id_str);
                         let target_idx_opt = chars.iter().position(|c| c.config.id == target_id);
 
-                        if let (Some(source_idx), Some(target_idx)) = (source_idx_opt, target_idx_opt) {
+                        if let (Some(source_idx), Some(target_idx)) =
+                            (source_idx_opt, target_idx_opt)
+                        {
                             let item = chars.remove(source_idx);
                             chars.insert(target_idx, item);
-                            
-                            let order: Vec<String> = chars.iter().map(|c| c.config.name.clone()).collect();
-                            let _ = boxxy_claw_protocol::character_loader::save_character_order(order);
-                            render_characters(&chars_group_dnd, chars, rows_dnd.clone(), chars_dir_dnd.clone());
+
+                            let order: Vec<String> =
+                                chars.iter().map(|c| c.config.name.clone()).collect();
+                            let _ =
+                                boxxy_claw_protocol::character_loader::save_character_order(order);
+                            render_characters(
+                                &chars_group_dnd,
+                                chars,
+                                rows_dnd.clone(),
+                                chars_dir_dnd.clone(),
+                            );
                         }
                     }
                     return true;

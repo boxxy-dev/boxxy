@@ -359,7 +359,9 @@ impl MsgBarComponent {
             // Try to find the inner GtkEntry (which is wrapped in the GtkBox)
             if let Some(entry) = self.widget.last_child() {
                 if let Ok(entry) = entry.downcast::<gtk::Entry>() {
-                    let formatted_name = info.config.name
+                    let formatted_name = info
+                        .config
+                        .name
                         .split('-')
                         .map(|word| {
                             let mut c = word.chars();
@@ -371,10 +373,7 @@ impl MsgBarComponent {
                         .collect::<Vec<String>>()
                         .join(" ");
 
-                    entry.set_placeholder_text(Some(&format!(
-                        "Message {}...",
-                        formatted_name
-                    )));
+                    entry.set_placeholder_text(Some(&format!("Message {}...", formatted_name)));
                 }
             }
 

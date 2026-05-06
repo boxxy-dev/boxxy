@@ -23,10 +23,7 @@ fn get_max_mtime(dir: &Path) -> SystemTime {
     max_mtime
 }
 
-pub async fn spawn_character_watcher(
-    characters_dir: PathBuf,
-    tx: tokio::sync::mpsc::Sender<()>,
-) {
+pub async fn spawn_character_watcher(characters_dir: PathBuf, tx: tokio::sync::mpsc::Sender<()>) {
     tokio::task::spawn_blocking(move || {
         let (inner_tx, inner_rx) = std::sync::mpsc::channel();
 
@@ -40,7 +37,10 @@ pub async fn spawn_character_watcher(
 
         if !characters_dir.exists() {
             if let Err(e) = std::fs::create_dir_all(&characters_dir) {
-                error!("Failed to create characters directory {:?}: {}", characters_dir, e);
+                error!(
+                    "Failed to create characters directory {:?}: {}",
+                    characters_dir, e
+                );
             }
         }
 
@@ -48,11 +48,17 @@ pub async fn spawn_character_watcher(
             .watcher()
             .watch(&characters_dir, RecursiveMode::Recursive)
         {
-            warn!("Failed to watch characters directory {:?}: {}", characters_dir, e);
+            warn!(
+                "Failed to watch characters directory {:?}: {}",
+                characters_dir, e
+            );
             return;
         }
 
-        info!("Watching character directory for changes: {:?}", characters_dir);
+        info!(
+            "Watching character directory for changes: {:?}",
+            characters_dir
+        );
 
         let mut last_mtime = get_max_mtime(&characters_dir);
 

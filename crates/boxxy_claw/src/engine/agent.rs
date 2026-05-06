@@ -462,10 +462,8 @@ pub async fn create_claw_agent(
     }
 
     // --- Load Base Prompt ---
-    let mut final_preamble = load_prompt_fallback(
-        "/dev/boxxy/BoxxyTerminal/prompts/claw.md",
-        "claw.md",
-    );
+    let mut final_preamble =
+        load_prompt_fallback("/dev/boxxy/BoxxyTerminal/prompts/claw.md", "claw.md");
     // {{available_skills}} is now injected per-turn in the user message; strip the placeholder
     final_preamble = final_preamble.replace("{{available_skills}}", "");
 
