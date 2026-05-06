@@ -681,3 +681,8 @@ spinrow button.down image {
     filter: grayscale(100%);
     opacity: 0.4;
 }
+
+/* Active character row: keep only the title green, not the duties subtitle */
+row.success .subtitle {
+    color: @dim_label_color;
+}

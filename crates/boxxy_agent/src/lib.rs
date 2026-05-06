@@ -1,3 +1,4 @@
+pub mod character_watcher;
 pub mod claw;
 pub mod core;
 pub mod daemon;

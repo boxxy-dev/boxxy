@@ -10,6 +10,7 @@ use std::rc::Rc;
 struct RowData {
     char_id: String,
     duties: String,
+    title: String,
     row: adw::ActionRow,
 }
 
@@ -17,7 +18,11 @@ pub fn setup_characters_page(builder: &gtk::Builder) -> Box<dyn Fn(&str) -> bool
     let page: adw::PreferencesPage = builder.object("page_characters").unwrap();
 
     let chars_dir = boxxy_claw_protocol::character_loader::get_characters_dir().ok();
-    let characters = boxxy_claw_protocol::character_loader::load_characters().unwrap_or_default();
+    
+    // Initial fetch from cache
+    let initial_catalog = boxxy_claw_protocol::characters::CHARACTER_CACHE.load();
+    let characters = (**initial_catalog).clone();
+    
     let rows = Rc::new(RefCell::new(Vec::new()));
 
     // === Characters list group ===
@@ -25,7 +30,7 @@ pub fn setup_characters_page(builder: &gtk::Builder) -> Box<dyn Fn(&str) -> bool
     chars_group.set_title("Available Characters");
     chars_group.set_description(Some(
         "Characters available for assignment to terminal panes. \
-        Changes only take effect after restarting the Boxxy daemon.\n\n\
+        Edits to CHARACTER.toml or AVATAR.png take effect immediately on the next interaction.\n\n\
         Note: If a character is removed, any of their past sessions \
         will automatically be reassigned to the first available character.",
     ));
@@ -40,35 +45,39 @@ pub fn setup_characters_page(builder: &gtk::Builder) -> Box<dyn Fn(&str) -> bool
         chars_dir.clone(),
     );
 
-    // Setup reactivity: poll the CLAIMS_CACHE to show which agents are busy
+    // Setup reactivity: poll the CLAIMS_CACHE and CHARACTER_CACHE
+    let mut last_catalog_json = serde_json::to_string(&*initial_catalog).unwrap_or_default();
     let rows_poll = rows.clone();
+    let chars_group_poll = chars_group.clone();
+    let chars_dir_poll = chars_dir.clone();
+
     glib::timeout_add_local(std::time::Duration::from_millis(500), move || {
         let claims = boxxy_claw_protocol::characters::CLAIMS_CACHE.load();
+        let catalog = boxxy_claw_protocol::characters::CHARACTER_CACHE.load();
+
+        let current_json = serde_json::to_string(&*catalog).unwrap_or_default();
+        if current_json != last_catalog_json {
+            last_catalog_json = current_json;
+            render_characters(
+                &chars_group_poll,
+                (**catalog).clone(),
+                rows_poll.clone(),
+                chars_dir_poll.clone(),
+            );
+        }
+
         let current_rows = rows_poll.borrow();
 
         for row_data in current_rows.iter() {
             let active_claim = claims.iter().find(|c| c.character_id == row_data.char_id);
 
-            if let Some(claim) = active_claim {
-                let status_text = match claim.holder_kind {
-                    boxxy_claw_protocol::characters::HolderKind::Pane => {
-                        let petname = if claim.petname.is_empty() {
-                            String::new()
-                        } else {
-                            format!(" ({})", claim.petname)
-                        };
-                        format!("Active in pane {}{}", claim.holder_id, petname)
-                    }
-                };
-                row_data.row.set_subtitle(&format!(
-                    "<b>{}</b>",
-                    glib::markup_escape_text(&status_text)
-                ));
-                row_data.row.set_use_markup(true);
+            row_data.row.set_subtitle(&glib::markup_escape_text(&row_data.duties));
+            
+            if active_claim.is_some() {
+                row_data.row.set_title(&format!("{} (Active)", row_data.title));
                 row_data.row.add_css_class("success");
             } else {
-                row_data.row.set_subtitle(&glib::markup_escape_text(&row_data.duties));
-                row_data.row.set_use_markup(false);
+                row_data.row.set_title(&row_data.title);
                 row_data.row.remove_css_class("success");
             }
         }
@@ -170,7 +179,21 @@ fn render_characters(
     } else {
         for character in characters.iter() {
             let row = adw::ActionRow::new();
-            row.set_title(&glib::markup_escape_text(&character.config.display_name));
+            
+            // Format name: "niko-una" -> "Niko Una"
+            let formatted_name = character.config.name
+                .split('-')
+                .map(|word| {
+                    let mut c = word.chars();
+                    match c.next() {
+                        None => String::new(),
+                        Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+                    }
+                })
+                .collect::<Vec<String>>()
+                .join(" ");
+                
+            row.set_title(&glib::markup_escape_text(&formatted_name));
             row.set_subtitle(&glib::markup_escape_text(&character.config.duties));
 
             // Avatar — adw::Avatar handles circular clipping automatically
@@ -239,6 +262,7 @@ fn render_characters(
             new_rows.push(RowData {
                 char_id: character.config.id.clone(),
                 duties: character.config.duties.clone(),
+                title: formatted_name,
                 row,
             });
         }

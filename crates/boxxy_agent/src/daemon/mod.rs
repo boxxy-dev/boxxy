@@ -69,7 +69,7 @@ impl DaemonCore {
         crate::ipc::client_tracker::spawn_owner_tracker(
             &conn,
             registry.clone(),
-            workspace,
+            workspace.clone(),
             client_tx.clone(),
         )
         .await?;
@@ -115,6 +115,52 @@ impl DaemonCore {
                 }
             }
         });
+
+        // Spawn character watcher for hot-reloading
+        if let Ok(characters_dir) = boxxy_claw_protocol::character_loader::get_characters_dir() {
+            let (watcher_tx, mut watcher_rx) = tokio::sync::mpsc::channel::<()>(4);
+            crate::character_watcher::spawn_character_watcher(characters_dir, watcher_tx).await;
+            
+            let registry_for_reload = registry.clone();
+            let workspace_for_reload = workspace.clone();
+            tokio::spawn(async move {
+                while watcher_rx.recv().await.is_some() {
+                    log::info!("Character catalog change detected, reloading...");
+                    match registry_for_reload.reload_catalog().await {
+                        Ok((changed_char_ids, migrated_holder_ids)) => {
+                            if !changed_char_ids.is_empty() || !migrated_holder_ids.is_empty() {
+                                let snapshot = registry_for_reload.snapshot().await;
+                                for claim in snapshot.claims {
+                                    let personality_changed =
+                                        changed_char_ids.contains(&claim.character_id);
+                                    // Use holder_id for migrated panes to avoid invalidating
+                                    // unrelated sessions that happen to share the fallback character.
+                                    let was_migrated =
+                                        migrated_holder_ids.contains(&claim.holder_id);
+                                    if personality_changed || was_migrated {
+                                        log::info!(
+                                            "Sending SettingsInvalidated to pane {} (personality_changed={}, migrated={})",
+                                            claim.holder_id, personality_changed, was_migrated
+                                        );
+                                        if let Some(tx) = workspace_for_reload
+                                            .get_pane_tx_by_id(&claim.holder_id)
+                                            .await
+                                        {
+                                            let _ = tx
+                                                .send(boxxy_claw_protocol::ClawMessage::SettingsInvalidated)
+                                                .await;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            log::warn!("Character hot-reload aborted (parse error): {e}");
+                        }
+                    }
+                }
+            });
+        }
 
         // The D-Bus connection + spawned tasks keep the daemon alive;
         // this loop is just the "don't return" anchor.

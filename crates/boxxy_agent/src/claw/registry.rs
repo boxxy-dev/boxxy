@@ -11,7 +11,16 @@ use boxxy_claw_protocol::characters::{
     RegistrySnapshot,
 };
 use std::collections::{HashMap, HashSet};
+use std::hash::{Hash, Hasher};
+use std::collections::hash_map::DefaultHasher;
 use tokio::sync::RwLock;
+
+fn hash_personality(config: &boxxy_claw_protocol::characters::CharacterConfig) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    config.duties.hash(&mut hasher);
+    config.personality.hash(&mut hasher);
+    hasher.finish()
+}
 
 pub struct CharacterRegistry {
     inner: RwLock<RegistryInner>,
@@ -89,6 +98,71 @@ impl CharacterRegistry {
 
     pub fn subscribe(&self) -> tokio::sync::broadcast::Receiver<RegistrySnapshot> {
         self.on_change.subscribe()
+    }
+
+    /// Returns `(changed_char_ids, migrated_holder_ids)`.
+    /// - `changed_char_ids`: character UUIDs whose duties/personality content changed.
+    /// - `migrated_holder_ids`: pane holder IDs whose character was deleted and remapped.
+    /// Kept separate so callers can match on `claim.character_id` vs `claim.holder_id`
+    /// without accidentally invalidating unrelated sessions sharing the fallback character.
+    pub async fn reload_catalog(&self) -> Result<(Vec<String>, Vec<String>)> {
+        // 1. Load new catalog
+        let new_catalog = boxxy_claw_protocol::character_loader::load_characters()?;
+
+        let mut inner = self.inner.write().await;
+
+        // 2. Compute hashes of OLD catalog
+        let mut old_hashes = HashMap::new();
+        for c in &inner.catalog {
+            old_hashes.insert(c.config.id.clone(), hash_personality(&c.config));
+        }
+
+        // 3. Replace catalog
+        inner.catalog = new_catalog;
+
+        // 4. Find changed character_ids (based on duties + personality)
+        let mut changed_char_ids = Vec::new();
+        for c in &inner.catalog {
+            let new_hash = hash_personality(&c.config);
+            if let Some(old_hash) = old_hashes.get(&c.config.id) {
+                if new_hash != *old_hash {
+                    changed_char_ids.push(c.config.id.clone());
+                }
+            }
+        }
+
+        // 5. Orphan check (migrate deleted characters)
+        let catalog_ids: HashSet<String> =
+            inner.catalog.iter().map(|c| c.config.id.clone()).collect();
+        let mut new_migrations = HashMap::new();
+        let mut migrated_holder_ids = Vec::new();
+        if let Some(first_char) = inner.catalog.first() {
+            for (holder_id, claim) in &inner.claims {
+                if !catalog_ids.contains(&claim.character_id) {
+                    log::warn!(
+                        "Character {} was deleted, mapping holder {} to {}",
+                        claim.character_id,
+                        holder_id,
+                        first_char.config.id
+                    );
+                    new_migrations
+                        .insert(claim.character_id.clone(), first_char.config.id.clone());
+                    migrated_holder_ids.push(holder_id.clone());
+                }
+            }
+            for claim in inner.claims.values_mut() {
+                if let Some(new_id) = new_migrations.get(&claim.character_id) {
+                    claim.character_id = new_id.clone();
+                }
+            }
+        }
+        inner.migrations.extend(new_migrations);
+
+        // 6. Broadcast updated registry
+        inner.revision += 1;
+        let _ = self.on_change.send(inner.snapshot());
+
+        Ok((changed_char_ids, migrated_holder_ids))
     }
 
     pub async fn try_claim(

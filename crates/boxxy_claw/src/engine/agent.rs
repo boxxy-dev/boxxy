@@ -461,9 +461,20 @@ pub async fn create_claw_agent(
         log::debug!("Injecting tool into Rig: {}", def.name);
     }
 
-    // --- Inject Location & Time Context ---
-    let mut final_preamble = config.preamble.clone();
+    // --- Load Base Prompt ---
+    let mut final_preamble = load_prompt_fallback(
+        "/dev/boxxy/BoxxyTerminal/prompts/claw.md",
+        "claw.md",
+    );
+    // {{available_skills}} is now injected per-turn in the user message; strip the placeholder
+    final_preamble = final_preamble.replace("{{available_skills}}", "");
 
+    if !config.preamble.is_empty() {
+        final_preamble.push_str("\n");
+        final_preamble.push_str(&config.preamble);
+    }
+
+    // --- Inject Location & Time Context ---
     // We only inject OS context if it's currently globally enabled in boxxy_preferences::Settings.
     // We could add this to AgentConfig, but let's query the live settings for now
     let settings = boxxy_preferences::Settings::load();
