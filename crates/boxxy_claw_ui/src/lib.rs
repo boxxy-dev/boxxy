@@ -299,6 +299,8 @@ pub fn create_claw_message_list() -> (gtk::ListView, gio::ListStore) {
                             }
                         }
                     }
+                    avatar.set_visible(true);
+                    icon.set_visible(false);
                     name_set = true;
                 }
             }
