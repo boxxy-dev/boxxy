@@ -596,8 +596,11 @@ impl ClawSession {
                             let (new_claw, new_memory) =
                                 (model_label(&after.claw_model), model_label(&after.memory_model));
 
+                            // Always force rebuild to pick up new tools, API keys, or models
+                            state_lock.persistent_agent = None;
+
                             if new_claw == old_claw && new_memory == old_memory {
-                                // Non-model change (persistence, theme, ...) — no log entry.
+                                // Non-model change (persistence, theme, keys, etc) — no visual log entry.
                                 drop(state_lock);
                                 continue;
                             }
