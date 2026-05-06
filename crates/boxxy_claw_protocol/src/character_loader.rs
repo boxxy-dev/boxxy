@@ -2,6 +2,7 @@ use crate::characters::{CharacterConfig, CharacterInfo};
 use anyhow::{Context, Result};
 use directories::ProjectDirs;
 use serde::Deserialize;
+use serde_json;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -193,6 +194,16 @@ pub fn load_characters() -> Result<Vec<CharacterInfo>> {
     }
 
     Ok(characters)
+}
+
+/// Persists the character order to characters.json.
+/// The order is a list of character names (directory names).
+pub fn save_character_order(order: Vec<String>) -> Result<()> {
+    let base_dir = get_characters_dir()?;
+    let json_path = base_dir.join("characters.json");
+    let content = serde_json::to_string_pretty(&order)?;
+    fs::write(json_path, content).context("Failed to write character order")?;
+    Ok(())
 }
 
 /// Loads a single character from a directory.

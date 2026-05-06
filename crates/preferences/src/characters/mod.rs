@@ -3,13 +3,22 @@ use gtk4 as gtk;
 use gtk4::gdk;
 use gtk4::glib;
 use libadwaita as adw;
+use std::cell::RefCell;
+use std::path::PathBuf;
+use std::rc::Rc;
+
+struct RowData {
+    char_id: String,
+    duties: String,
+    row: adw::ActionRow,
+}
 
 pub fn setup_characters_page(builder: &gtk::Builder) -> Box<dyn Fn(&str) -> bool> {
     let page: adw::PreferencesPage = builder.object("page_characters").unwrap();
 
     let chars_dir = boxxy_claw_protocol::character_loader::get_characters_dir().ok();
     let characters = boxxy_claw_protocol::character_loader::load_characters().unwrap_or_default();
-    let mut rows = Vec::new();
+    let rows = Rc::new(RefCell::new(Vec::new()));
 
     // === Characters list group ===
     let chars_group = adw::PreferencesGroup::new();
@@ -21,57 +30,24 @@ pub fn setup_characters_page(builder: &gtk::Builder) -> Box<dyn Fn(&str) -> bool
         will automatically be reassigned to the first available character.",
     ));
 
-    if characters.is_empty() {
-        let label = gtk::Label::new(Some(
-            "No characters found. Open the characters folder to add one.",
-        ));
-        label.set_wrap(true);
-        label.set_margin_top(8);
-        label.set_margin_bottom(8);
-        label.add_css_class("dim-label");
-        chars_group.add(&label);
-    } else {
-        for character in &characters {
-            let row = adw::ActionRow::new();
-            row.set_title(&glib::markup_escape_text(&character.config.display_name));
-            row.set_subtitle(&glib::markup_escape_text(&character.config.duties));
-
-            // Avatar — adw::Avatar handles circular clipping automatically
-            let avatar = adw::Avatar::new(52, Some(&character.config.display_name), true);
-            if character.has_avatar {
-                if let Some(dir) = &chars_dir {
-                    let avatar_path = dir.join(&character.config.name).join("AVATAR.png");
-                    if let Ok(texture) = gdk::Texture::from_filename(&avatar_path) {
-                        avatar.set_custom_image(Some(&texture));
-                    }
-                }
-            }
-            avatar.set_margin_top(8);
-            avatar.set_margin_bottom(8);
-            row.add_prefix(&avatar);
-
-            // Color swatch
-            let swatch = make_color_dot(&character.config.color);
-            row.add_suffix(&swatch);
-
-            chars_group.add(&row);
-            rows.push((
-                character.config.id.clone(),
-                character.config.duties.clone(),
-                row,
-            ));
-        }
-    }
-
     page.add(&chars_group);
 
+    // Initial render
+    render_characters(
+        &chars_group,
+        characters,
+        rows.clone(),
+        chars_dir.clone(),
+    );
+
     // Setup reactivity: poll the CLAIMS_CACHE to show which agents are busy
-    let rows_clone = rows.clone();
+    let rows_poll = rows.clone();
     glib::timeout_add_local(std::time::Duration::from_millis(500), move || {
         let claims = boxxy_claw_protocol::characters::CLAIMS_CACHE.load();
+        let current_rows = rows_poll.borrow();
 
-        for (char_id, duties, row) in &rows_clone {
-            let active_claim = claims.iter().find(|c| c.character_id == *char_id);
+        for row_data in current_rows.iter() {
+            let active_claim = claims.iter().find(|c| c.character_id == row_data.char_id);
 
             if let Some(claim) = active_claim {
                 let status_text = match claim.holder_kind {
@@ -84,16 +60,16 @@ pub fn setup_characters_page(builder: &gtk::Builder) -> Box<dyn Fn(&str) -> bool
                         format!("Active in pane {}{}", claim.holder_id, petname)
                     }
                 };
-                row.set_subtitle(&format!(
+                row_data.row.set_subtitle(&format!(
                     "<b>{}</b>",
                     glib::markup_escape_text(&status_text)
                 ));
-                row.set_use_markup(true);
-                row.add_css_class("success");
+                row_data.row.set_use_markup(true);
+                row_data.row.add_css_class("success");
             } else {
-                row.set_subtitle(&glib::markup_escape_text(duties));
-                row.set_use_markup(false);
-                row.remove_css_class("success");
+                row_data.row.set_subtitle(&glib::markup_escape_text(&row_data.duties));
+                row_data.row.set_use_markup(false);
+                row_data.row.remove_css_class("success");
             }
         }
 
@@ -103,6 +79,7 @@ pub fn setup_characters_page(builder: &gtk::Builder) -> Box<dyn Fn(&str) -> bool
     // === Management group ===
     let manage_group = adw::PreferencesGroup::new();
     manage_group.set_title("Manage");
+    // ... (rest of management group setup)
 
     // Open characters folder
     let open_row = adw::ActionRow::new();
@@ -163,6 +140,111 @@ pub fn setup_characters_page(builder: &gtk::Builder) -> Box<dyn Fn(&str) -> bool
         manage_group_clone.set_visible(matches);
         matches
     })
+}
+
+fn render_characters(
+    chars_group: &adw::PreferencesGroup,
+    characters: Vec<boxxy_claw_protocol::characters::CharacterInfo>,
+    rows: Rc<RefCell<Vec<RowData>>>,
+    chars_dir: Option<PathBuf>,
+) {
+    // Clear the group first. Instead of trying to clear the group's internal children directly
+    // which causes GTK critical errors, we will just remove the specific rows we added.
+    let current_rows = rows.borrow();
+    for row_data in current_rows.iter() {
+        chars_group.remove(&row_data.row);
+    }
+    drop(current_rows);
+
+    let mut new_rows = Vec::new();
+
+    if characters.is_empty() {
+        let label = gtk::Label::new(Some(
+            "No characters found. Open the characters folder to add one.",
+        ));
+        label.set_wrap(true);
+        label.set_margin_top(8);
+        label.set_margin_bottom(8);
+        label.add_css_class("dim-label");
+        chars_group.add(&label);
+    } else {
+        for character in characters.iter() {
+            let row = adw::ActionRow::new();
+            row.set_title(&glib::markup_escape_text(&character.config.display_name));
+            row.set_subtitle(&glib::markup_escape_text(&character.config.duties));
+
+            // Avatar — adw::Avatar handles circular clipping automatically
+            let avatar = adw::Avatar::new(52, Some(&character.config.display_name), true);
+            if character.has_avatar {
+                if let Some(dir) = &chars_dir {
+                    let avatar_path = dir.join(&character.config.name).join("AVATAR.png");
+                    if let Ok(texture) = gdk::Texture::from_filename(&avatar_path) {
+                        avatar.set_custom_image(Some(&texture));
+                    }
+                }
+            }
+            avatar.set_margin_top(8);
+            avatar.set_margin_bottom(8);
+            row.add_prefix(&avatar);
+
+            // Drag indicator
+            let drag_icon = gtk::Image::from_icon_name("list-drag-handle-symbolic");
+            drag_icon.set_valign(gtk::Align::Center);
+            drag_icon.add_css_class("dim-label");
+            drag_icon.set_margin_end(6);
+            row.add_prefix(&drag_icon);
+
+            // Drag and Drop
+            let drag_source = gtk::DragSource::new();
+            drag_source.set_actions(gdk::DragAction::MOVE);
+            let id_str = character.config.id.clone();
+            drag_source.connect_prepare(move |_, _, _| {
+                Some(gdk::ContentProvider::for_value(&id_str.to_value()))
+            });
+            row.add_controller(drag_source);
+
+            let drop_target = gtk::DropTarget::new(glib::Type::STRING, gdk::DragAction::MOVE);
+            let target_id = character.config.id.clone();
+            let characters_dnd = characters.clone();
+            let rows_dnd = rows.clone();
+            let chars_group_dnd = chars_group.clone();
+            let chars_dir_dnd = chars_dir.clone();
+            drop_target.connect_drop(move |_, value, _, _| {
+                if let Ok(source_id_str) = value.get::<String>() {
+                    if source_id_str != target_id {
+                        let mut chars = characters_dnd.clone();
+                        let source_idx_opt = chars.iter().position(|c| c.config.id == source_id_str);
+                        let target_idx_opt = chars.iter().position(|c| c.config.id == target_id);
+
+                        if let (Some(source_idx), Some(target_idx)) = (source_idx_opt, target_idx_opt) {
+                            let item = chars.remove(source_idx);
+                            chars.insert(target_idx, item);
+                            
+                            let order: Vec<String> = chars.iter().map(|c| c.config.name.clone()).collect();
+                            let _ = boxxy_claw_protocol::character_loader::save_character_order(order);
+                            render_characters(&chars_group_dnd, chars, rows_dnd.clone(), chars_dir_dnd.clone());
+                        }
+                    }
+                    return true;
+                }
+                false
+            });
+            row.add_controller(drop_target);
+
+            // Color swatch
+            let swatch = make_color_dot(&character.config.color);
+            row.add_suffix(&swatch);
+
+            chars_group.add(&row);
+            new_rows.push(RowData {
+                char_id: character.config.id.clone(),
+                duties: character.config.duties.clone(),
+                row,
+            });
+        }
+    }
+
+    *rows.borrow_mut() = new_rows;
 }
 
 fn show_reset_confirmation(parent: &gtk::Button) {
