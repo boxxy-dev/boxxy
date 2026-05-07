@@ -10,8 +10,6 @@ pub fn setup_agents_page(
     settings_rc: Rc<RefCell<Settings>>,
     on_change: Rc<dyn Fn(Settings) + 'static>,
 ) -> Box<dyn Fn(&str) -> bool> {
-    let claw_on_by_default_switch: adw::SwitchRow =
-        builder.object("claw_on_by_default_switch").unwrap();
     let web_search_by_default_switch: adw::SwitchRow =
         builder.object("web_search_by_default_switch").unwrap();
     let hide_agent_badge_switch: adw::SwitchRow =
@@ -39,7 +37,6 @@ pub fn setup_agents_page(
     let group_agent_toolbox: adw::PreferencesGroup = builder.object("group_agent_toolbox").unwrap();
 
     // Initialize values
-    claw_on_by_default_switch.set_active(settings_rc.borrow().claw_on_by_default);
     web_search_by_default_switch.set_active(settings_rc.borrow().web_search_on_by_default);
     hide_agent_badge_switch.set_active(settings_rc.borrow().hide_agent_badge);
     enable_auto_dreaming_switch.set_active(settings_rc.borrow().enable_auto_dreaming);
@@ -52,17 +49,6 @@ pub fn setup_agents_page(
     enable_clipboard_tools_switch.set_active(settings_rc.borrow().enable_clipboard_tools);
 
     // Connect signals
-    let s_rc = settings_rc.clone();
-    let cb = on_change.clone();
-    claw_on_by_default_switch.connect_active_notify(move |row| {
-        let mut s = s_rc.borrow_mut();
-        if s.claw_on_by_default != row.is_active() {
-            s.claw_on_by_default = row.is_active();
-            s.save();
-            cb(s.clone());
-        }
-    });
-
     let s_rc = settings_rc.clone();
     let cb = on_change.clone();
     web_search_by_default_switch.connect_active_notify(move |row| {
@@ -173,7 +159,6 @@ pub fn setup_agents_page(
         }
     });
 
-    let claw_on_by_default_switch_clone = claw_on_by_default_switch.clone();
     let web_search_by_default_switch_clone = web_search_by_default_switch.clone();
     let hide_agent_badge_switch_clone = hide_agent_badge_switch.clone();
     let enable_file_tools_switch_clone = enable_file_tools_switch.clone();
@@ -191,10 +176,6 @@ pub fn setup_agents_page(
             m
         };
 
-        let ag1 = match_row(
-            claw_on_by_default_switch_clone.upcast_ref(),
-            "boxxyclaw on by default start automatically new terminal",
-        );
         let ag_web_default = match_row(
             web_search_by_default_switch_clone.upcast_ref(),
             "web search on by default allowed automatically",
@@ -236,7 +217,7 @@ pub fn setup_agents_page(
             "enable clipboard tools read write copy paste",
         );
 
-        group_agent_general.set_visible(ag1 || ag_web_default || ag2);
+        group_agent_general.set_visible(ag_web_default || ag2);
         group_agent_dreaming.set_visible(ag_dream);
         group_agent_toolbox.set_visible(ag3 || ag4 || ag5 || ag6 || ag_search || ag_os || ag7);
 

@@ -300,8 +300,6 @@ impl AppWindow {
             }
         });
 
-        let initial_claw_active = current_settings.claw_on_by_default;
-
         let inner = AppWindowInner {
             window: window.clone(),
             tabs: Vec::new(),
@@ -326,7 +324,7 @@ impl AppWindow {
             current_settings,
             app_state,
             bell_indicator,
-            claw_active: initial_claw_active,
+            claw_active: false,
             toast_overlay,
             notifications: Vec::new(),
             initial_working_dir: init.working_dir.clone(),

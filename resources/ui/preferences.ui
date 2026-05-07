@@ -500,12 +500,6 @@
                               <object class="AdwPreferencesGroup" id="group_agent_general">
                                 <property name="title" translatable="yes">General</property>
                                 <child>
-                                  <object class="AdwSwitchRow" id="claw_on_by_default_switch">
-                                    <property name="title" translatable="yes">BoxxyClaw On by Default</property>
-                                    <property name="subtitle" translatable="yes">Start BoxxyClaw automatically for every new terminal.</property>
-                                  </object>
-                                </child>
-                                <child>
                                   <object class="AdwSwitchRow" id="web_search_by_default_switch">
                                     <property name="title" translatable="yes">Web Search On by Default</property>
                                     <property name="subtitle" translatable="yes">Start every new terminal with web search enabled (if allowed).</property>

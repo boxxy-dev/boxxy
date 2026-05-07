@@ -884,7 +884,6 @@ impl TerminalComponent {
 
         if let Some(ref settings) = inner.current_settings {
             new_controller.update_settings(settings.clone(), inner.current_palette);
-            new_controller.set_claw_active(settings.claw_on_by_default);
         }
         new_controller.spawn();
 

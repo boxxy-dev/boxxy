@@ -119,7 +119,6 @@ pub struct Settings {
     pub claw_model: Option<ModelProvider>,
     pub memory_model: Option<ModelProvider>,
     pub enable_auto_dreaming: bool,
-    pub claw_on_by_default: bool,
     pub invert_scroll: bool,
 
     pub hide_agent_badge: bool,
@@ -182,7 +181,6 @@ impl Default for Settings {
             enable_auto_dreaming: true,
             invert_scroll: true,
             hide_agent_badge: false,
-            claw_on_by_default: false,
             web_search_on_by_default: true,
             enable_file_tools: true,
             enable_system_tools: true,
