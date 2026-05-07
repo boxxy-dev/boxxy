@@ -392,6 +392,9 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
                         ) {
                             notif.set_icon(&gtk4::gio::BytesIcon::new(&bytes));
                         }
+                    } else if ready.icon_name == "boxxy-up-arrow-in-a-star-symbolic" {
+                        let icon = gtk4::gio::ThemedIcon::new("software-update-available-symbolic");
+                        notif.set_icon(&icon);
                     } else if ready.icon_name.starts_with("/") {
                         // Assume absolute file path for custom character avatars
                         let file = gtk4::gio::File::for_path(&ready.icon_name);
