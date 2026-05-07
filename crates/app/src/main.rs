@@ -49,8 +49,10 @@ fn main() {
         let version = env!("CARGO_PKG_VERSION");
         let pkg_type = if is_flatpak { "flatpak" } else { "native" };
         let shell = std::env::var("SHELL").unwrap_or_else(|_| "unknown".to_string());
+        let desktop =
+            std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_else(|_| "unknown".to_string());
 
-        boxxy_telemetry::track_launch(&os, &arch, pkg_type, version, &shell).await;
+        boxxy_telemetry::track_launch(&os, &arch, pkg_type, version, &shell, &desktop).await;
     });
 
     // Ensure all default files are generated immediately on first run

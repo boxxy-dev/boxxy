@@ -261,7 +261,14 @@ pub async fn track_event(name: &str, value: f64, attributes: Vec<KeyValue>) {
     record_to_journal(name, value, journal_attrs).await;
 }
 
-pub async fn track_launch(os: &str, arch: &str, pkg_type: &str, version: &str, shell: &str) {
+pub async fn track_launch(
+    os: &str,
+    arch: &str,
+    pkg_type: &str,
+    version: &str,
+    shell: &str,
+    desktop: &str,
+) {
     track_event(
         "app.launch",
         1.0,
@@ -271,6 +278,7 @@ pub async fn track_launch(os: &str, arch: &str, pkg_type: &str, version: &str, s
             KeyValue::new("pkg_type", pkg_type.to_string()),
             KeyValue::new("version", version.to_string()),
             KeyValue::new("shell", shell.to_string()),
+            KeyValue::new("desktop", desktop.to_string()),
         ],
     )
     .await;
