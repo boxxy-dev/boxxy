@@ -1,43 +1,22 @@
+# Boxxy
 
-Boxxy is the ONLY app you'll ever need ..but, yeah, it does look like a Linux Terminal :p
+**A self-improving Linux terminal powered by AI characters.**
 
-![Boxxy](https://i.imgur.com/NlKIIpP.png)
+![Boxxy](https://i.imgur.com/7NtOXBp.png)
 
-## Getting Started
-
-Read the [Getting Started](https://boxxy.dev/getting-started/) and check news on [Releases](https://github.com/boxxy-dev/boxxy/releases)
-
----
-
-## Features
-Boxxy is currently in early preview, but it does have most of the things you expect from a terminal:
-
-- Split panes with softswap
-- Bookmarks
-- Preview images and videos (via GTK popover)
-- AI Chat
-- Integrated Self Improving Claw 🦀
-- Search
-- Support images with Kitty Graphics Protocol
-- Command Palette
-- Themes
-- And some more! 
+Boxxy is a full terminal emulator with an agentic AI layer — **BoxxyClaw** — built directly into it. Unlike chat-window add-ons, BoxxyClaw has eyes on your shell, reads your terminal buffer, remembers your preferences, and can autonomously fix broken dependencies, manage system configs, and run your scripts. Just press `Ctrl+/` and you're in.
 
 ---
 
-## Installation
+## Install
 
-### Native
-
-Nightly builds. It supports automatic updates from within the app. If self-updates fail, you can update by rerunning the installation script
+**Native** (nightly, auto-updates)
 ```bash
 curl -sSf https://raw.githubusercontent.com/boxxy-dev/boxxy/main/scripts/install.sh | sh
 ```
-Requires GTK 4.22, libAdwaita 1.9; aarch64 not currently supported because of the very slow builds, open an issue if you need it.
+Requires GTK 4.22, libAdwaita 1.9.
 
-### Flatpak
-
-Stable builds. Flathub submission [closed.](https://github.com/flathub/flathub/pull/8235)
+**Flatpak** (stable)
 ```bash
 curl -O https://boxxy-dev.github.io/boxxy-flatpak-remote/boxxy.gpg && \
   flatpak remote-add --user --if-not-exists --gpg-import=boxxy.gpg \
@@ -47,46 +26,30 @@ curl -O https://boxxy-dev.github.io/boxxy-flatpak-remote/boxxy.gpg && \
 
 ---
 
-## Not Yet Another Terminal Emulator
-While Boxxy is more than capable of running your Linux commands, that's not her primary goal; Boxxy is specifically designed to integrate `boxxy-claw`, a super fast [OpenClaw](https://github.com/openclaw/openclaw) agent, similar to [ZeroClaw](https://github.com/zeroclaw-labs/zeroclaw) with a very tight integration with the Linux terminal and your Linux system.
+## Architecture
 
-Also Boxxy is **made to be fun!** There is a `Characters` feature planned with community plugins that will be able to change the AI personality, and AI voice (with voice cloning).
-
-Boxxy has 4 major components:
-
-- `boxxy-app`: The UI
-- `boxxy-agent`: The privileged agent that runs outside the sandbox. It is responsible for bypassing Flatpak limitations, managing your PTY and host processes, and securely piping that data back to the UI.
-- `boxxy-vte`: A headless, modern VTE written in pure Rust
-- `boxxy-claw`: The agentic part of Boxxy; The original reason Boxxy was created :p
+| Crate | Role |
+| :--- | :--- |
+| `boxxy-app` | GTK4/Adwaita UI |
+| `boxxy-agent` | Host-level daemon — PTY management, shell tools, character claims, D-Bus IPC |
+| `boxxy-vte` | Headless terminal engine written in pure Rust |
+| `boxxy-claw` | Agentic intelligence layer — characters, memory, skills, toolbox |
 
 ---
 
-## Development
+## Documentation
 
-See [Development](https://boxxy.dev/development)
+Full docs at **[boxxy.dev](https://boxxy.dev)**
 
----
-
-## Common Issues
-Boxxy has very little use in the wild yet, so it won't **really** be a surprise to discover stupid bugs. But most particularly you will face 4 kinds:
-
-- **APP:** Typical UI bugs; Also clear (or backup) the current configuration, as Boxxy  while in Preview doesn't automatically handle settings migrations for newer versions. 
-
-- **VTE:** Some feature in VTE doesn't work correctly, some CLI app is broken? Please, if possible, compare with [Ghostty](https://github.com/ghostty-org/ghostty) which has very solid mechanics
-
-- **SESSION:** Boxxy might fail to read environment variables; 100% that's an issue on Flatpak builds and in `boxxy-agent`
-
-- **CLAW:** If you use Ollama models, if possible, please re-test a behavior at least with Gemini Flash Lite with "Low" thinking level; 
+- [Getting Started](https://boxxy.dev/getting-started)
+- [How It Works](https://boxxy.dev/how-it-works)
+- [Characters](https://boxxy.dev/characters)
+- [Skills](https://boxxy.dev/skills)
+- [MCP Support](https://boxxy.dev/mcp)
+- [Development](https://boxxy.dev/development)
 
 ---
-
-## Roadmap
- - **Voice.** Speech to Text, Text to Speech 
- - **Characters.** Add characters with voice cloning
- - **Boxxy Marketplace.** A repo that hosts community skills and characters
- - **Cloud Backend and Sync.** That's only a maybe
-
---- 
 
 ## License
+
 MIT
