@@ -43,6 +43,7 @@ pub struct SessionState {
     pub history: Vec<Message>,
     pub pending_lazy_diagnosis: Option<(String, String, String)>,
     pub persistent_agent: Option<crate::engine::agent::ClawAgent>,
+    pub current_claw_model: Option<boxxy_model_selection::ModelProvider>,
     pub current_memory_model: Option<boxxy_model_selection::ModelProvider>,
     pub last_tools: Option<Vec<String>>,
     pub pending_tasks: Vec<crate::engine::ScheduledTask>,
@@ -190,6 +191,7 @@ impl ClawSession {
                 history: Vec::new(),
                 pending_lazy_diagnosis: None,
                 persistent_agent: None,
+                current_claw_model: settings.claw_model.clone(),
                 current_memory_model: settings.memory_model.clone(),
                 last_tools: None,
                 pending_tasks: Vec::new(),
@@ -582,7 +584,7 @@ impl ClawSession {
                             };
 
                             let (old_claw, old_memory) = (
-                                model_label(&state_lock.persistent_agent.as_ref().and_then(|a| a.config.model.clone())),
+                                model_label(&state_lock.current_claw_model),
                                 model_label(&state_lock.current_memory_model)
                             );
 
@@ -605,11 +607,12 @@ impl ClawSession {
                                 continue;
                             }
 
-                            // Update the session's memory model tracker
+                            // Update the session's model trackers
+                            state_lock.current_claw_model = after.claw_model.clone();
                             state_lock.current_memory_model = after.memory_model.clone();
 
                             let event = ClawEngineEvent::SystemMessage {
-                                text: format!("Claw: {new_claw} . Dreams: {new_memory}"),
+                                text: format!("Claw: {new_claw} ● Dreams: {new_memory}"),
                             };
                             crate::engine::persist_visual_event(
                                 self.db.clone(),
@@ -918,11 +921,17 @@ impl ClawSession {
                                         boxxy_telemetry::track_session_resume(session_type).await;
 
                                         let settings = boxxy_preferences::Settings::load();
-                                        let claw_model = settings.claw_model.as_ref().map(|m| m.format_label()).unwrap_or_else(|| "Default".to_string());
-                                        let memory_model = settings.memory_model.as_ref().map(|m| m.format_label()).unwrap_or_else(|| "Default".to_string());
+                                        let claw_model_label = settings.claw_model.as_ref().map(|m| m.format_label()).unwrap_or_else(|| "Default".to_string());
+                                        let memory_model_label = settings.memory_model.as_ref().map(|m| m.format_label()).unwrap_or_else(|| "Default".to_string());
+
+                                        {
+                                            let mut state_lock = self.state.lock().await;
+                                            state_lock.current_claw_model = settings.claw_model.clone();
+                                            state_lock.current_memory_model = settings.memory_model.clone();
+                                        }
 
                                         self.send_ui(ClawEngineEvent::SystemMessage {
-                                                text: format!("Claw: {} ● Dreams: {}", claw_model, memory_model),
+                                                text: format!("Claw: {} ● Dreams: {}", claw_model_label, memory_model_label),
                                             })
                                             .await;
 
@@ -1014,11 +1023,17 @@ impl ClawSession {
                                 .await;
 
                             let settings = boxxy_preferences::Settings::load();
-                            let claw_model = settings.claw_model.as_ref().map(|m| m.format_label()).unwrap_or_else(|| "Default".to_string());
-                            let memory_model = settings.memory_model.as_ref().map(|m| m.format_label()).unwrap_or_else(|| "Default".to_string());
+                            let claw_model_label = settings.claw_model.as_ref().map(|m| m.format_label()).unwrap_or_else(|| "Default".to_string());
+                            let memory_model_label = settings.memory_model.as_ref().map(|m| m.format_label()).unwrap_or_else(|| "Default".to_string());
+
+                            {
+                                let mut state_lock = self.state.lock().await;
+                                state_lock.current_claw_model = settings.claw_model.clone();
+                                state_lock.current_memory_model = settings.memory_model.clone();
+                            }
 
                             let event = ClawEngineEvent::SystemMessage {
-                                text: format!("Claw: {} ● Dreams: {}", claw_model, memory_model),
+                                text: format!("Claw: {} ● Dreams: {}", claw_model_label, memory_model_label),
                             };
                             crate::engine::persist_visual_event(
                                 self.db.clone(),
