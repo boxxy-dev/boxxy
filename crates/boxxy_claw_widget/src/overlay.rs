@@ -1,6 +1,7 @@
 use crate::claw_host::ClawHost;
 use crate::msgbar::MsgBarComponent;
 use crate::proposal::Proposal;
+use crate::tips::TipsCycle;
 use boxxy_claw_protocol::ClawMessage;
 use boxxy_viewer::StructuredViewer;
 use gtk::prelude::*;
@@ -8,6 +9,7 @@ use gtk4 as gtk;
 use gtk4::gio;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
+use boxxy_preferences::config::Settings;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum OverlayMode {
@@ -44,6 +46,7 @@ pub struct TerminalOverlay {
     history_enabled: Rc<Cell<bool>>,
     history_sticky: Rc<Cell<bool>>,
     is_auto_scrolling: Rc<Cell<bool>>,
+    tips_cycle: TipsCycle,
     /// Character name pre-selected in the picker before any session starts.
     selected_character: Rc<RefCell<String>>,
     host: Rc<dyn ClawHost>,
@@ -389,6 +392,11 @@ impl TerminalOverlay {
         });
         revealer.add_controller(esc_controller);
 
+        let tip_label: gtk::Label = builder.object("tip_label").unwrap();
+        let tip_revealer: gtk::Revealer = builder.object("tip_revealer").unwrap();
+        let tips_cycle = TipsCycle::new(tip_label, tip_revealer);
+        tips_cycle.set_enabled(Settings::load().enable_tips);
+
         let s = Self {
             revealer,
             indicator_slot,
@@ -415,6 +423,7 @@ impl TerminalOverlay {
             history_enabled,
             history_sticky,
             is_auto_scrolling,
+            tips_cycle,
             selected_character: pending_character,
             history_list,
             history_store,
@@ -754,6 +763,7 @@ impl TerminalOverlay {
         *self.current_proposal.borrow_mut() = Proposal::None;
         self.is_thinking.set(false);
         self.sync_action_state();
+        self.tips_cycle.stop();
     }
 
     pub fn grab_input_focus(&self) {
@@ -800,37 +810,47 @@ impl TerminalOverlay {
         if !show_picker {}
 
         // 4. If the agent is actively thinking, we show no actions.
-        if is_thinking {
-            return;
+        if !is_thinking {
+            // 5. Show actions based strictly on the current proposal state
+            match proposal {
+                Proposal::Command(_) => {
+                    self.command_frame.set_visible(true);
+                    self.action_box.set_visible(true);
+                    self.accept_btn.set_visible(true);
+                    self.reject_btn.set_visible(true);
+                }
+                Proposal::Bookmark { .. } => {
+                    self.command_frame.set_visible(true);
+                    self.action_box.set_visible(true);
+                    self.accept_btn.set_visible(true);
+                    self.reject_btn.set_visible(true);
+                    self.template_box.set_visible(true);
+                }
+                Proposal::FileWrite { .. }
+                | Proposal::FileDelete { .. }
+                | Proposal::KillProcess { .. }
+                | Proposal::GetClipboard
+                | Proposal::SetClipboard(_) => {
+                    self.file_action_box.set_visible(true);
+                    self.action_box.set_visible(false);
+                }
+                Proposal::None => {
+                    // Idle state: just Okay and Inspect (handled above)
+                    self.action_box.set_visible(true);
+                    self.ok_btn.set_visible(true);
+                }
+            }
         }
 
-        // 5. Show actions based strictly on the current proposal state
-        match proposal {
-            Proposal::Command(_) => {
-                self.command_frame.set_visible(true);
-                self.action_box.set_visible(true);
-                self.accept_btn.set_visible(true);
-                self.reject_btn.set_visible(true);
-            }
-            Proposal::Bookmark { .. } => {
-                self.command_frame.set_visible(true);
-                self.action_box.set_visible(true);
-                self.accept_btn.set_visible(true);
-                self.reject_btn.set_visible(true);
-                self.template_box.set_visible(true);
-            }
-            Proposal::FileWrite { .. }
-            | Proposal::FileDelete { .. }
-            | Proposal::KillProcess { .. }
-            | Proposal::GetClipboard
-            | Proposal::SetClipboard(_) => {
-                self.file_action_box.set_visible(true);
-            }
-            Proposal::None => {
-                // Idle state: just Okay and Inspect (handled above)
-                self.action_box.set_visible(true);
-                self.ok_btn.set_visible(true);
-            }
+        // Show tips only while the agent is working — gives the user something
+        // to read while waiting, and keeps the UI clean otherwise.
+        let should_tip = self.tips_cycle.is_enabled()
+            && is_thinking
+            && self.revealer.reveals_child();
+        if should_tip {
+            self.tips_cycle.start();
+        } else {
+            self.tips_cycle.stop();
         }
     }
 

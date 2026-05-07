@@ -11,6 +11,9 @@ pub mod dispatch;
 pub mod msgbar;
 pub mod overlay;
 pub mod proposal;
+pub mod tips;
+
+pub use tips::TipsCycle;
 
 pub use claw_host::ClawHost;
 pub use claw_indicator::ClawIndicator;

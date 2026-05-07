@@ -12,6 +12,8 @@ pub fn setup_claw_ui_page(
 ) -> Box<dyn Fn(&str) -> bool> {
     let maintain_overlay_history_switch: adw::SwitchRow =
         builder.object("maintain_overlay_history_switch").unwrap();
+    let enable_tips_switch: adw::SwitchRow =
+        builder.object("enable_tips_switch").unwrap();
     let enable_timer_sounds_switch: adw::SwitchRow =
         builder.object("enable_timer_sounds_switch").unwrap();
     let enable_task_sounds_switch: adw::SwitchRow =
@@ -35,6 +37,7 @@ pub fn setup_claw_ui_page(
     {
         let s = settings_rc.borrow();
         maintain_overlay_history_switch.set_active(s.maintain_overlay_history);
+        enable_tips_switch.set_active(s.enable_tips);
         enable_timer_sounds_switch.set_active(s.enable_timer_sounds);
         enable_task_sounds_switch.set_active(s.enable_task_sounds);
         hide_character_badge_switch.set_active(s.hide_character_badge);
@@ -53,6 +56,23 @@ pub fn setup_claw_ui_page(
         let mut s = s_rc.borrow_mut();
         if s.maintain_overlay_history != val {
             s.maintain_overlay_history = val;
+            s.save();
+            cb(s.clone());
+        }
+    });
+
+    // Enable-tips toggle
+    let s_rc = settings_rc.clone();
+    let cb = on_change.clone();
+    let is_up = is_updating.clone();
+    enable_tips_switch.connect_active_notify(move |row: &adw::SwitchRow| {
+        if is_up.get() {
+            return;
+        }
+        let val = row.is_active();
+        let mut s = s_rc.borrow_mut();
+        if s.enable_tips != val {
+            s.enable_tips = val;
             s.save();
             cb(s.clone());
         }
@@ -160,6 +180,7 @@ pub fn setup_claw_ui_page(
     let group_claw_ui_behavior_clone = group_claw_ui_behavior.clone();
     let group_claw_ui_shortcuts_clone = group_claw_ui_shortcuts.clone();
     let maintain_overlay_history_switch_clone = maintain_overlay_history_switch.clone();
+    let enable_tips_switch_clone = enable_tips_switch.clone();
     let enable_timer_sounds_switch_clone = enable_timer_sounds_switch.clone();
     let enable_task_sounds_switch_clone = enable_task_sounds_switch.clone();
     let hide_character_badge_switch_clone = hide_character_badge_switch.clone();
@@ -190,6 +211,11 @@ pub fn setup_claw_ui_page(
             maintain_overlay_history_switch_clone.upcast_ref(),
             "maintain session history overlay log scrollable conversation",
         );
+        
+        let tips = match_row(
+            enable_tips_switch_clone.upcast_ref(),
+            "tips usage hints rotating help",
+        );
 
         let s_accel = match_row(
             claw_msgbar_shortcut_entry_clone.upcast_ref(),
@@ -200,7 +226,7 @@ pub fn setup_claw_ui_page(
             "reset default claw ui shortcut keybinding",
         );
 
-        let behavior_visible = maintain;
+        let behavior_visible = maintain || tips;
         let sounds_visible = timer_sounds || task_sounds;
         let identity_visible = hide_badge;
         let shortcut_visible = s_accel || reset_shortcut;

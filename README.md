@@ -11,7 +11,7 @@ Boxxy is a full terminal emulator with an agentic AI layer — **BoxxyClaw** —
 ## Install
 Boxxy is currently in Preview. 
 
-**Native Nightly** (Requires GTK 4.22, libAdwaita 1.,)
+**Native Nightly** (Requires GTK 4.22, libAdwaita 1.9)
 ```bash
 curl -sSf https://raw.githubusercontent.com/boxxy-dev/boxxy/main/scripts/install.sh | sh
 ```

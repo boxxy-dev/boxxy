@@ -610,11 +610,17 @@
                           <object class="AdwPreferencesPage" id="page_claw_ui">
                             <child>
                               <object class="AdwPreferencesGroup" id="group_claw_ui_behavior">
-                                <property name="title" translatable="yes">Behavior</property>
+                                <property name="title">Behavior</property>
                                 <child>
                                   <object class="AdwSwitchRow" id="maintain_overlay_history_switch">
-                                    <property name="title" translatable="yes">Maintain Session History in Overlay</property>
-                                    <property name="subtitle" translatable="yes">Show a scrollable log of the conversation in the in-terminal overlay, like the sidebar logger. When off, the overlay shows only the latest message.</property>
+                                    <property name="title">Maintain Session History in Overlay</property>
+                                    <property name="subtitle">Show a scrollable log of the conversation in the in-terminal overlay, like the sidebar logger. When off, the overlay shows only the latest message.</property>
+                                  </object>
+                                </child>
+                                <child>
+                                  <object class="AdwSwitchRow" id="enable_tips_switch">
+                                    <property name="title">Show usage tips</property>
+                                    <property name="subtitle">Display rotating usage hints in the Claw drawer while the agent is thinking.</property>
                                   </object>
                                 </child>
                               </object>

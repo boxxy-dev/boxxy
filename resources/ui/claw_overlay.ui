@@ -94,74 +94,94 @@
               </object>
             </child>
             <child>
-              <object class="GtkBox" id="action_row">
-                <property name="orientation">horizontal</property>
-                <property name="spacing">12</property>
-                <property name="halign">start</property>
-                <child>
-                  <object class="GtkBox" id="file_action_box">
+              <object class="GtkCenterBox" id="action_row">
+                <property name="margin-top">4</property>
+                <child type="start">
+                  <object class="GtkBox" id="action_row_start">
                     <property name="orientation">horizontal</property>
-                    <property name="spacing">6</property>
+                    <property name="spacing">12</property>
                     <child>
-                      <object class="GtkButton" id="reject_file_btn">
-                        <property name="label">Reject</property>
-                        <style>
-                          <class name="destructive-action"/>
-                        </style>
+                      <object class="GtkBox" id="file_action_box">
+                        <property name="orientation">horizontal</property>
+                        <property name="spacing">6</property>
+                        <child>
+                          <object class="GtkButton" id="reject_file_btn">
+                            <property name="label">Reject</property>
+                            <style>
+                              <class name="destructive-action"/>
+                            </style>
+                          </object>
+                        </child>
+                        <child>
+                          <object class="GtkButton" id="approve_file_btn">
+                            <property name="label">Approve &amp; Write</property>
+                            <style>
+                              <class name="suggested-action"/>
+                            </style>
+                          </object>
+                        </child>
                       </object>
                     </child>
                     <child>
-                      <object class="GtkButton" id="approve_file_btn">
-                        <property name="label">Approve &amp; Write</property>
-                        <style>
-                          <class name="suggested-action"/>
-                        </style>
+                      <object class="GtkBox" id="action_box">
+                        <property name="orientation">horizontal</property>
+                        <property name="spacing">6</property>
+                        <child>
+                          <object class="GtkButton" id="inspect_btn">
+                            <property name="icon-name">boxxy-bug-symbolic</property>
+                            <property name="tooltip-text">Open in Sidebar</property>
+                            <style>
+                              <class name="flat"/>
+                            </style>
+                          </object>
+                        </child>
+                        <child>
+                          <object class="GtkButton" id="reject_btn">
+                            <property name="label">Reject</property>
+                            <style>
+                              <class name="destructive-action"/>
+                            </style>
+                          </object>
+                        </child>
+                        <child>
+                          <object class="GtkButton" id="ok_btn">
+                            <property name="label">Okay</property>
+                          </object>
+                        </child>
+                        <child>
+                          <object class="GtkButton" id="accept_btn">
+                            <property name="label">Accept &amp; Run</property>
+                            <style>
+                              <class name="suggested-action"/>
+                            </style>
+                          </object>
+                        </child>
+                      </object>
+                    </child>
+                    <child>
+                      <object class="GtkBox" id="indicator_slot">
+                        <property name="orientation">horizontal</property>
+                        <property name="spacing">6</property>
+                        <property name="halign">start</property>
+                        <property name="visible">false</property>
                       </object>
                     </child>
                   </object>
                 </child>
-                <child>
-                  <object class="GtkBox" id="action_box">
-                    <property name="orientation">horizontal</property>
-                    <property name="spacing">6</property>
+                <child type="center">
+                  <object class="GtkRevealer" id="tip_revealer">
+                    <property name="transition-type">crossfade</property>
+                    <property name="transition-duration">250</property>
+                    <property name="reveal-child">false</property>
                     <child>
-                      <object class="GtkButton" id="inspect_btn">
-                        <property name="icon-name">boxxy-bug-symbolic</property>
-                        <property name="tooltip-text">Open in Sidebar</property>
+                      <object class="GtkLabel" id="tip_label">
+                        <property name="visible">true</property>
                         <style>
-                          <class name="flat"/>
+                          <class name="dimmed"/>
+                          <class name="caption"/>
                         </style>
                       </object>
                     </child>
-                    <child>
-                      <object class="GtkButton" id="reject_btn">
-                        <property name="label">Reject</property>
-                        <style>
-                          <class name="destructive-action"/>
-                        </style>
-                      </object>
-                    </child>
-                    <child>
-                      <object class="GtkButton" id="ok_btn">
-                        <property name="label">Okay</property>
-                      </object>
-                    </child>
-                    <child>
-                      <object class="GtkButton" id="accept_btn">
-                        <property name="label">Accept &amp; Run</property>
-                        <style>
-                          <class name="suggested-action"/>
-                        </style>
-                      </object>
-                    </child>
-                  </object>
-                </child>
-                <child>
-                  <object class="GtkBox" id="indicator_slot">
-                    <property name="orientation">horizontal</property>
-                    <property name="spacing">6</property>
-                    <property name="halign">start</property>
-                    <property name="visible">false</property>
                   </object>
                 </child>
               </object>

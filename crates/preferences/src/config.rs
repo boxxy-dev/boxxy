@@ -139,6 +139,7 @@ pub struct Settings {
     /// message replaces the previous one in the overlay. Off by default
     /// because the overlay normally shows only the latest turn.
     pub maintain_overlay_history: bool,
+    pub enable_tips: bool,
     pub claw_msgbar_shortcut: String,
     pub enable_telemetry: bool,
     pub install_id: Option<String>,
@@ -194,6 +195,7 @@ impl Default for Settings {
             enable_task_sounds: true,
             colored_tabs: false,
             maintain_overlay_history: true,
+            enable_tips: true,
             claw_msgbar_shortcut: "<Ctrl>slash".to_string(),
             enable_telemetry: true, // ON by default during Preview
             install_id: None,
