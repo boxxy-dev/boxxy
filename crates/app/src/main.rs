@@ -29,14 +29,25 @@ fn main() {
 
         // Track app.launch
         use sysinfo::System;
-        let os = System::name().unwrap_or_else(|| "Unknown".to_string());
+        let is_flatpak = std::env::var("FLATPAK_ID").is_ok();
+        let os = if is_flatpak {
+            // Inside the Flatpak sandbox, /etc/os-release belongs to the GNOME Platform
+            // runtime, not the host. /run/host/os-release always has the real host OS.
+            std::fs::read_to_string("/run/host/os-release")
+                .ok()
+                .and_then(|content| {
+                    content
+                        .lines()
+                        .find(|l| l.starts_with("NAME="))
+                        .map(|l| l.trim_start_matches("NAME=").trim_matches('"').to_string())
+                })
+                .unwrap_or_else(|| System::name().unwrap_or_else(|| "Unknown".to_string()))
+        } else {
+            System::name().unwrap_or_else(|| "Unknown".to_string())
+        };
         let arch = System::cpu_arch();
         let version = env!("CARGO_PKG_VERSION");
-        let pkg_type = if std::env::var("FLATPAK_ID").is_ok() {
-            "flatpak"
-        } else {
-            "native"
-        };
+        let pkg_type = if is_flatpak { "flatpak" } else { "native" };
         let shell = std::env::var("SHELL").unwrap_or_else(|_| "unknown".to_string());
 
         boxxy_telemetry::track_launch(&os, &arch, pkg_type, version, &shell).await;
