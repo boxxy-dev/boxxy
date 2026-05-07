@@ -9,14 +9,14 @@ Boxxy is a full terminal emulator with an agentic AI layer — **BoxxyClaw** —
 ---
 
 ## Install
+Boxxy is currently in Preview. 
 
-**Native** (nightly, auto-updates)
+**Native Nightly** (Requires GTK 4.22, libAdwaita 1.,)
 ```bash
 curl -sSf https://raw.githubusercontent.com/boxxy-dev/boxxy/main/scripts/install.sh | sh
 ```
-Requires GTK 4.22, libAdwaita 1.9.
 
-**Flatpak** (stable)
+**Flatpak Nightly**
 ```bash
 curl -O https://boxxy-dev.github.io/boxxy-flatpak-remote/boxxy.gpg && \
   flatpak remote-add --user --if-not-exists --gpg-import=boxxy.gpg \
