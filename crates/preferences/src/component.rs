@@ -59,8 +59,8 @@ impl PreferencesComponent {
         nav_apis.set_widget_name("nav_apis");
         let nav_characters: gtk::ListBoxRow = builder.object("nav_characters").unwrap();
         nav_characters.set_widget_name("nav_characters");
-        let nav_agents: gtk::ListBoxRow = builder.object("nav_agents").unwrap();
-        nav_agents.set_widget_name("nav_agents");
+        let nav_toolbox: gtk::ListBoxRow = builder.object("nav_toolbox").unwrap();
+        nav_toolbox.set_widget_name("nav_toolbox");
         let nav_mcp: gtk::ListBoxRow = builder.object("nav_mcp").unwrap();
         nav_mcp.set_widget_name("nav_mcp");
         let nav_claw_ui: gtk::ListBoxRow = builder.object("nav_claw_ui").unwrap();
@@ -93,9 +93,9 @@ impl PreferencesComponent {
                         title_clone.set_title("Characters");
                         "characters"
                     }
-                    "nav_agents" => {
-                        title_clone.set_title("Agents");
-                        "agents"
+                    "nav_toolbox" => {
+                        title_clone.set_title("Toolbox & Permissions");
+                        "toolbox"
                     }
                     "nav_mcp" => {
                         title_clone.set_title("MCP");
@@ -138,8 +138,8 @@ impl PreferencesComponent {
         let apis_filter =
             crate::apis::setup_apis_page(&builder, settings_rc.clone(), cb_rc.clone());
         let characters_filter = crate::characters::setup_characters_page(&builder);
-        let agents_filter =
-            crate::agents::setup_agents_page(&builder, settings_rc.clone(), cb_rc.clone());
+        let toolbox_filter =
+            crate::toolbox::setup_toolbox_page(&builder, settings_rc.clone(), cb_rc.clone());
         let mcp_filter = crate::mcp::setup_mcp_page(&builder, settings_rc.clone(), cb_rc.clone());
         let claw_ui_filter =
             crate::claw_ui::setup_claw_ui_page(&builder, settings_rc.clone(), cb_rc.clone());
@@ -163,7 +163,7 @@ impl PreferencesComponent {
         let nav_previews_clone = nav_previews.clone();
         let nav_apis_clone = nav_apis.clone();
         let nav_characters_clone = nav_characters.clone();
-        let nav_agents_clone = nav_agents.clone();
+        let nav_toolbox_clone = nav_toolbox.clone();
         let nav_mcp_clone = nav_mcp.clone();
         let nav_claw_ui_clone = nav_claw_ui.clone();
         let nav_advanced_clone = nav_advanced.clone();
@@ -177,7 +177,7 @@ impl PreferencesComponent {
             nav_previews_clone.set_visible(previews_filter(&query));
             nav_apis_clone.set_visible(apis_filter(&query));
             nav_characters_clone.set_visible(characters_filter(&query));
-            nav_agents_clone.set_visible(agents_filter(&query));
+            nav_toolbox_clone.set_visible(toolbox_filter(&query));
             nav_mcp_clone.set_visible(mcp_filter(&query));
             nav_claw_ui_clone.set_visible(claw_ui_filter(&query));
             nav_advanced_clone.set_visible(advanced_filter(&query));

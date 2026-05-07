@@ -95,10 +95,10 @@
                               </object>
                             </child>
                             <child>
-                              <object class="GtkListBoxRow" id="nav_agents">
+                              <object class="GtkListBoxRow" id="nav_toolbox">
                                 <property name="child">
                                   <object class="GtkLabel">
-                                    <property name="label" translatable="yes">Agents</property>
+                                    <property name="label" translatable="yes">Toolbox &amp; Permissions</property>
                                     <property name="xalign">0</property>
                                     <property name="margin-start">12</property>
                                     <property name="margin-end">12</property>
@@ -493,12 +493,13 @@
 
                     <child>
                       <object class="AdwViewStackPage">
-                        <property name="name">agents</property>
+                        <property name="name">toolbox</property>
+                        <property name="title" translatable="yes">Toolbox &amp; Permissions</property>
                         <property name="child">
-                          <object class="AdwPreferencesPage" id="page_agents">
+                          <object class="AdwPreferencesPage" id="page_toolbox">
                             <child>
-                              <object class="AdwPreferencesGroup" id="group_agent_general">
-                                <property name="title" translatable="yes">General</property>
+                              <object class="AdwPreferencesGroup" id="group_toolbox_permissions">
+                                <property name="title" translatable="yes">Permissions</property>
                                 <child>
                                   <object class="AdwSwitchRow" id="web_search_by_default_switch">
                                     <property name="title" translatable="yes">Web Search On by Default</property>
@@ -509,7 +510,7 @@
                             </child>
 
                             <child>
-                              <object class="AdwPreferencesGroup" id="group_agent_dreaming">
+                              <object class="AdwPreferencesGroup" id="group_toolbox_dreaming">
                                 <property name="title" translatable="yes">Memory Consolidation</property>
                                 <property name="description" translatable="yes">Process short-term interactions into durable facts and patterns.</property>
                                 <child>
@@ -522,8 +523,8 @@
                             </child>
 
                             <child>
-                              <object class="AdwPreferencesGroup" id="group_agent_toolbox">
-                                <property name="title" translatable="yes">Agent Toolbox</property>
+                              <object class="AdwPreferencesGroup" id="group_toolbox_tools">
+                                <property name="title" translatable="yes">Toolbox</property>
                                 <property name="description" translatable="yes">Enable or disable specific high-level tools for Boxxy agents.</property>
                                 <child>
                                   <object class="AdwSwitchRow" id="enable_file_tools_switch">

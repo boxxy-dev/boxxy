@@ -5,7 +5,7 @@ use libadwaita as adw;
 use std::cell::RefCell;
 use std::rc::Rc;
 
-pub fn setup_agents_page(
+pub fn setup_toolbox_page(
     builder: &gtk::Builder,
     settings_rc: Rc<RefCell<Settings>>,
     on_change: Rc<dyn Fn(Settings) + 'static>,
@@ -29,10 +29,10 @@ pub fn setup_agents_page(
     let enable_auto_dreaming_switch: adw::SwitchRow =
         builder.object("enable_auto_dreaming_switch").unwrap();
 
-    let group_agent_general: adw::PreferencesGroup = builder.object("group_agent_general").unwrap();
-    let group_agent_dreaming: adw::PreferencesGroup =
-        builder.object("group_agent_dreaming").unwrap();
-    let group_agent_toolbox: adw::PreferencesGroup = builder.object("group_agent_toolbox").unwrap();
+    let group_toolbox_permissions: adw::PreferencesGroup = builder.object("group_toolbox_permissions").unwrap();
+    let group_toolbox_dreaming: adw::PreferencesGroup =
+        builder.object("group_toolbox_dreaming").unwrap();
+    let group_toolbox_tools: adw::PreferencesGroup = builder.object("group_toolbox_tools").unwrap();
 
     // Initialize values
     web_search_by_default_switch.set_active(settings_rc.borrow().web_search_on_by_default);
@@ -163,7 +163,7 @@ pub fn setup_agents_page(
 
         let ag_web_default = match_row(
             web_search_by_default_switch_clone.upcast_ref(),
-            "web search on by default allowed automatically",
+            "web search on by default allowed automatically permissions toolbox",
         );
         let ag_dream = match_row(
             enable_auto_dreaming_switch_clone.upcast_ref(),
@@ -171,7 +171,7 @@ pub fn setup_agents_page(
         );
         let ag3 = match_row(
             enable_file_tools_switch_clone.upcast_ref(),
-            "enable file tools read write list delete search",
+            "enable file tools read write list delete search toolbox",
         );
         let ag4 = match_row(
             enable_system_tools_switch_clone.upcast_ref(),
@@ -198,12 +198,12 @@ pub fn setup_agents_page(
             "enable clipboard tools read write copy paste",
         );
 
-        group_agent_general.set_visible(ag_web_default);
-        group_agent_dreaming.set_visible(ag_dream);
-        group_agent_toolbox.set_visible(ag3 || ag4 || ag5 || ag6 || ag_search || ag_os || ag7);
+        group_toolbox_permissions.set_visible(ag_web_default);
+        group_toolbox_dreaming.set_visible(ag_dream);
+        group_toolbox_tools.set_visible(ag3 || ag4 || ag5 || ag6 || ag_search || ag_os || ag7);
 
-        group_agent_general.is_visible()
-            || group_agent_dreaming.is_visible()
-            || group_agent_toolbox.is_visible()
+        group_toolbox_permissions.is_visible()
+            || group_toolbox_dreaming.is_visible()
+            || group_toolbox_tools.is_visible()
     })
 }

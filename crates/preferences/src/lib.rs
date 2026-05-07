@@ -1,6 +1,6 @@
 pub mod about;
 pub mod advanced;
-pub mod agents;
+pub mod toolbox;
 pub mod apis;
 pub mod appearance;
 pub mod characters;
