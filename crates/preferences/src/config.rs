@@ -121,7 +121,7 @@ pub struct Settings {
     pub enable_auto_dreaming: bool,
     pub invert_scroll: bool,
 
-    pub hide_agent_badge: bool,
+    pub hide_character_badge: bool,
     pub web_search_on_by_default: bool,
     pub enable_file_tools: bool,
     pub enable_system_tools: bool,
@@ -180,7 +180,7 @@ impl Default for Settings {
             memory_model: None,
             enable_auto_dreaming: true,
             invert_scroll: true,
-            hide_agent_badge: false,
+            hide_character_badge: false,
             web_search_on_by_default: true,
             enable_file_tools: true,
             enable_system_tools: true,

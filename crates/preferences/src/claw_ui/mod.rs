@@ -16,10 +16,13 @@ pub fn setup_claw_ui_page(
         builder.object("enable_timer_sounds_switch").unwrap();
     let enable_task_sounds_switch: adw::SwitchRow =
         builder.object("enable_task_sounds_switch").unwrap();
+    let hide_character_badge_switch: adw::SwitchRow =
+        builder.object("hide_character_badge_switch").unwrap();
     let claw_msgbar_shortcut_entry: gtk::Entry =
         builder.object("claw_msgbar_shortcut_entry").unwrap();
     let reset_claw_shortcut_btn: gtk::Button = builder.object("reset_claw_shortcut_btn").unwrap();
     let group_claw_sounds: adw::PreferencesGroup = builder.object("group_claw_sounds").unwrap();
+    let group_claw_identity: adw::PreferencesGroup = builder.object("group_claw_identity").unwrap();
     let group_claw_ui_behavior: adw::PreferencesGroup =
         builder.object("group_claw_ui_behavior").unwrap();
     let group_claw_ui_shortcuts: adw::PreferencesGroup =
@@ -34,6 +37,7 @@ pub fn setup_claw_ui_page(
         maintain_overlay_history_switch.set_active(s.maintain_overlay_history);
         enable_timer_sounds_switch.set_active(s.enable_timer_sounds);
         enable_task_sounds_switch.set_active(s.enable_task_sounds);
+        hide_character_badge_switch.set_active(s.hide_character_badge);
         claw_msgbar_shortcut_entry.set_text(&s.claw_msgbar_shortcut);
     }
 
@@ -88,6 +92,23 @@ pub fn setup_claw_ui_page(
         }
     });
 
+    // Hide-character-badge toggle
+    let s_rc = settings_rc.clone();
+    let cb = on_change.clone();
+    let is_up = is_updating.clone();
+    hide_character_badge_switch.connect_active_notify(move |row: &adw::SwitchRow| {
+        if is_up.get() {
+            return;
+        }
+        let val = row.is_active();
+        let mut s = s_rc.borrow_mut();
+        if s.hide_character_badge != val {
+            s.hide_character_badge = val;
+            s.save();
+            cb(s.clone());
+        }
+    });
+
     // Save helper shared by activate and focus-out
     let save_shortcut = {
         let s_rc = settings_rc.clone();
@@ -135,11 +156,13 @@ pub fn setup_claw_ui_page(
     });
 
     let group_claw_sounds_clone = group_claw_sounds.clone();
+    let group_claw_identity_clone = group_claw_identity.clone();
     let group_claw_ui_behavior_clone = group_claw_ui_behavior.clone();
     let group_claw_ui_shortcuts_clone = group_claw_ui_shortcuts.clone();
     let maintain_overlay_history_switch_clone = maintain_overlay_history_switch.clone();
     let enable_timer_sounds_switch_clone = enable_timer_sounds_switch.clone();
     let enable_task_sounds_switch_clone = enable_task_sounds_switch.clone();
+    let hide_character_badge_switch_clone = hide_character_badge_switch.clone();
     let claw_msgbar_shortcut_entry_clone = claw_msgbar_shortcut_entry.clone();
     let reset_claw_shortcut_btn_clone = reset_claw_shortcut_btn.clone();
 
@@ -158,6 +181,10 @@ pub fn setup_claw_ui_page(
             enable_task_sounds_switch_clone.upcast_ref(),
             "enable task sounds agent long-running task finishing",
         );
+        let hide_badge = match_row(
+            hide_character_badge_switch_clone.upcast_ref(),
+            "hide character badge agent identity top right corner",
+        );
 
         let maintain = match_row(
             maintain_overlay_history_switch_clone.upcast_ref(),
@@ -175,12 +202,14 @@ pub fn setup_claw_ui_page(
 
         let behavior_visible = maintain;
         let sounds_visible = timer_sounds || task_sounds;
+        let identity_visible = hide_badge;
         let shortcut_visible = s_accel || reset_shortcut;
 
         group_claw_sounds_clone.set_visible(sounds_visible);
+        group_claw_identity_clone.set_visible(identity_visible);
         group_claw_ui_behavior_clone.set_visible(behavior_visible);
         group_claw_ui_shortcuts_clone.set_visible(shortcut_visible);
 
-        behavior_visible || sounds_visible || shortcut_visible
+        behavior_visible || sounds_visible || identity_visible || shortcut_visible
     })
 }

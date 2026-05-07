@@ -714,6 +714,7 @@ impl TerminalPaneComponent {
         // Apply the initial overlay-history setting so the drawer renders
         // in the right mode before any user interaction.
         claw_popover.set_history_mode(settings.maintain_overlay_history);
+        claw_indicator.update_settings(settings.hide_character_badge);
 
         inner.borrow_mut().claw_indicator = Some(claw_indicator.clone());
 
@@ -1325,9 +1326,10 @@ impl TerminalPaneComponent {
             }
         }
 
+        let hide_badge = settings.hide_character_badge;
         inner.current_settings = Some(settings);
         if let Some(ind) = &inner.claw_indicator {
-            ind.update_settings();
+            ind.update_settings(hide_badge);
         }
     }
 

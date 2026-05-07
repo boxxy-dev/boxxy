@@ -29,6 +29,7 @@ pub struct ClawIndicator {
     pill_provider: gtk::CssProvider,
     is_drawer_open: Rc<Cell<bool>>,
     is_claw_active: Rc<Cell<bool>>,
+    hide_character_badge: Rc<Cell<bool>>,
 }
 
 impl ClawIndicator {
@@ -254,6 +255,7 @@ impl ClawIndicator {
             pill_provider,
             is_drawer_open: Rc::new(Cell::new(false)),
             is_claw_active: Rc::new(Cell::new(false)),
+            hide_character_badge: Rc::new(Cell::new(false)),
         }
     }
 
@@ -312,8 +314,9 @@ impl ClawIndicator {
     fn update_visibility(&self) {
         let claw_active = self.is_claw_active.get();
         let drawer_open = self.is_drawer_open.get();
+        let hide_badge = self.hide_character_badge.get();
         self.badge_container
-            .set_visible(claw_active && !drawer_open);
+            .set_visible(claw_active && !drawer_open && !hide_badge);
         self.container.set_visible(claw_active);
     }
 
@@ -512,7 +515,10 @@ impl ClawIndicator {
         self.badge_revealer.set_reveal_child(true);
     }
 
-    pub fn update_settings(&self) {
-        // No-op for now
+    pub fn update_settings(&self, hide_character_badge: bool) {
+        if self.hide_character_badge.get() != hide_character_badge {
+            self.hide_character_badge.set(hide_character_badge);
+            self.update_visibility();
+        }
     }
 }

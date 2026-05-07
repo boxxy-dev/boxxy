@@ -505,12 +505,6 @@
                                     <property name="subtitle" translatable="yes">Start every new terminal with web search enabled (if allowed).</property>
                                   </object>
                                 </child>
-                                <child>
-                                  <object class="AdwSwitchRow" id="hide_agent_badge_switch">
-                                    <property name="title" translatable="yes">Hide Agent Badge</property>
-                                    <property name="subtitle" translatable="yes">Hide the agent identity badge in the top right corner.</property>
-                                  </object>
-                                </child>
                               </object>
                             </child>
 
@@ -667,6 +661,18 @@
                                   <object class="AdwSwitchRow" id="enable_task_sounds_switch">
                                     <property name="title" translatable="yes">Enable Task Sounds</property>
                                     <property name="subtitle" translatable="yes">Play a sound when an agent finishes a long-running task.</property>
+                                  </object>
+                                </child>
+                              </object>
+                            </child>
+
+                            <child>
+                              <object class="AdwPreferencesGroup" id="group_claw_identity">
+                                <property name="title" translatable="yes">Identity</property>
+                                <child>
+                                  <object class="AdwSwitchRow" id="hide_character_badge_switch">
+                                    <property name="title" translatable="yes">Hide Character Badge</property>
+                                    <property name="subtitle" translatable="yes">Hide the character identity badge in the top right corner.</property>
                                   </object>
                                 </child>
                               </object>
