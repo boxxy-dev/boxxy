@@ -25,6 +25,10 @@ pub struct Notification {
     pub icon_name: String,
     pub actions: Vec<NotificationAction>,
     pub details: Vec<(String, String)>, // Key-Value pairs for the popover (e.g. "Version": "v1.2")
+    #[serde(default)]
+    /// If true, the notification will not be displayed as an in-app `adw::Toast`.
+    /// Useful for background tasks where the result is already visible in the Claw overlay.
+    pub suppress_toast: bool,
 }
 
 impl Notification {
@@ -59,6 +63,7 @@ impl Notification {
                 },
             ],
             details,
+            suppress_toast: false,
         }
     }
 
@@ -82,6 +87,7 @@ impl Notification {
                 },
             ],
             details: vec![("Version".to_string(), version.to_string())],
+            suppress_toast: false,
         }
     }
 
@@ -98,6 +104,7 @@ impl Notification {
                 is_primary: false,
             }],
             details: Vec::new(),
+            suppress_toast: false,
         }
     }
 }

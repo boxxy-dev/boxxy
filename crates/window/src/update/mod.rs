@@ -414,7 +414,7 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
 
             let toast = adw::Toast::new(&ready.message);
 
-            if ready.level == crate::widgets::notification::NotificationLevel::Update {
+            if is_update {
                 toast.set_timeout(0); // Permanent until dismissed
                 toast.set_button_label(Some("Details"));
 
@@ -510,7 +510,11 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
                 toast.set_timeout(5);
             }
 
-            inner.toast_overlay.add_toast(toast);
+            // Only show the in-app toast if it's not suppressed.
+            // This avoids UI spam for events that the user can already see in the active Claw drawer.
+            if !ready.suppress_toast {
+                inner.toast_overlay.add_toast(toast);
+            }
         }
         AppInput::DismissNotification(id) => {
             inner.notifications.retain(|n| n.id != id);

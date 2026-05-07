@@ -343,6 +343,7 @@ pub fn handle_terminal_event(
                                     is_primary: false,
                                 }],
                                 details: Vec::new(),
+                                suppress_toast: false,
                             },
                         ));
                     }
@@ -387,6 +388,8 @@ pub fn handle_terminal_event(
                                     is_primary: false,
                                 }],
                                 details: Vec::new(),
+                                // Redundant because the agent's message is already in the Claw overlay
+                                suppress_toast: true,
                             },
                         ));
                     }
@@ -404,6 +407,7 @@ pub fn handle_terminal_event(
                                     is_primary: false,
                                 }],
                                 details: Vec::new(),
+                                suppress_toast: false,
                             },
                         ));
                     }
