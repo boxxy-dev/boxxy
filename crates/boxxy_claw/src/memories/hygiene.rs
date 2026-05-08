@@ -28,10 +28,10 @@ pub async fn run_hygiene(db: Arc<Mutex<Option<Db>>>) -> anyhow::Result<()> {
         );
     }
 
-    // 2. Delete implicit (extracted) memories that haven't been accessed in 30 days
+    // 2. Delete implicit/candidate memories that haven't been accessed in 30 days
     // We EXPLICITLY KEEP 'manual_sync', 'preference', and 'pinned' memories.
     let deleted_memories = sqlx::query(
-        "DELETE FROM memories WHERE category = 'extracted' AND last_accessed_at < datetime('now', '-30 days')"
+        "DELETE FROM memories WHERE category IN ('candidate', 'extracted') AND last_accessed_at < datetime('now', '-30 days')"
     )
     .execute(pool)
     .await?
@@ -39,8 +39,24 @@ pub async fn run_hygiene(db: Arc<Mutex<Option<Db>>>) -> anyhow::Result<()> {
 
     if deleted_memories > 0 {
         debug!(
-            "Hygiene: Pruned {} stale extracted facts.",
+            "Hygiene: Pruned {} stale candidate facts.",
             deleted_memories
+        );
+    }
+
+    // 3. New Rule: Prune noise from quarantine
+    // If a candidate fact has only been observed once and hasn't been reinforced/updated in 14 days, discard it.
+    let pruned_noise = sqlx::query(
+        "DELETE FROM memories WHERE verified = false AND category IN ('candidate', 'extracted') AND observation_count < 2 AND updated_at < datetime('now', '-14 days')"
+    )
+    .execute(pool)
+    .await?
+    .rows_affected();
+
+    if pruned_noise > 0 {
+        debug!(
+            "Hygiene: Pruned {} noise entries from memory quarantine.",
+            pruned_noise
         );
     }
 

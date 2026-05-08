@@ -49,19 +49,12 @@ pub async fn extract_implicit_memory(
                     fact.get("key").and_then(|k| k.as_str()),
                     fact.get("content").and_then(|c| c.as_str()),
                 ) {
-                    // Implicitly extracted facts are NOT verified and NOT pinned
+                    // Implicitly extracted facts are candidates and require reinforcement
                     let _ = store
-                        .add_memory(
-                            key,
-                            Some(&project_path),
-                            content,
-                            Some("extracted"),
-                            false,
-                            false,
-                        )
+                        .upsert_dream_candidate(key, Some(&project_path), content, 0.5)
                         .await;
                     log::debug!(
-                        "Background Observer extracted Fact for project {}: {} -> {}",
+                        "Background Observer extracted Candidate for project {}: {} -> {}",
                         project_path,
                         key,
                         content

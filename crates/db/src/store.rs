@@ -400,7 +400,7 @@ impl<'a> Store<'a> {
 
     // --- Global Memories (Long-term Facts) ---
 
-    /// Upsert a memory by key (`ZeroClaw` model)
+    /// Upsert a memory by key (Manual sync or Tool model)
     pub async fn add_memory(
         &self,
         key: &str,
@@ -411,15 +411,20 @@ impl<'a> Store<'a> {
         pinned: bool,
     ) -> Result<()> {
         let path = project_path.unwrap_or("global");
+        // Default to 'preference' if no category provided, as this is usually from a tool
+        let cat = category.unwrap_or("preference");
+
         sqlx::query(
             r"
-            INSERT INTO memories (key, project_path, content, category, verified, pinned, updated_at, last_accessed_at) 
-            VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            INSERT INTO memories (key, project_path, content, category, verified, pinned, observation_count, confidence_score, updated_at, last_accessed_at) 
+            VALUES (?, ?, ?, ?, ?, ?, 1, 1.0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
             ON CONFLICT(key, project_path) DO UPDATE SET 
                 content = excluded.content,
-                category = COALESCE(excluded.category, memories.category),
+                category = excluded.category,
                 verified = excluded.verified,
                 pinned = excluded.pinned,
+                observation_count = memories.observation_count,
+                confidence_score = 1.0,
                 updated_at = CURRENT_TIMESTAMP,
                 last_accessed_at = CURRENT_TIMESTAMP
             "
@@ -427,12 +432,163 @@ impl<'a> Store<'a> {
         .bind(key)
         .bind(path)
         .bind(content)
-        .bind(category)
+        .bind(cat)
         .bind(verified)
         .bind(pinned)
         .execute(self.pool)
         .await?;
         Ok(())
+    }
+
+    /// Upsert a memory candidate from a dream or per-turn extraction.
+    /// Increments observation_count and updates confidence_score (taking the MAX).
+    /// Does NOT overwrite manual_sync or preference memories.
+    pub async fn upsert_dream_candidate(
+        &self,
+        key: &str,
+        project_path: Option<&str>,
+        content: &str,
+        confidence: f64,
+    ) -> Result<()> {
+        let path = project_path.unwrap_or("global");
+        sqlx::query(
+            r"
+            INSERT INTO memories (key, project_path, content, category, verified, pinned, observation_count, confidence_score, updated_at, last_accessed_at, access_count)
+            VALUES (?, ?, ?, 'candidate', false, false, 1, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0)
+            ON CONFLICT(key, project_path) DO UPDATE SET
+                content = CASE WHEN memories.category NOT IN ('manual_sync', 'preference') THEN excluded.content ELSE memories.content END,
+                observation_count = memories.observation_count + 1,
+                confidence_score = MAX(memories.confidence_score, excluded.confidence_score),
+                updated_at = CURRENT_TIMESTAMP,
+                last_accessed_at = CURRENT_TIMESTAMP
+            WHERE memories.category NOT IN ('manual_sync', 'preference')
+            "
+        )
+        .bind(key)
+        .bind(path)
+        .bind(content)
+        .bind(confidence)
+        .execute(self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Promotes candidates to verified=true if they meet the threshold.
+    /// Returns the list of promoted memories.
+    pub async fn promote_threshold_memories(
+        &self,
+        min_observations: i64,
+        min_confidence: f64,
+    ) -> Result<Vec<(String, String, i64, f64)>> {
+        let promoted = sqlx::query_as::<_, (String, String, i64, f64)>(
+            r"
+            UPDATE memories 
+            SET verified = true, category = 'dreamed', updated_at = CURRENT_TIMESTAMP 
+            WHERE verified = false 
+              AND category IN ('candidate', 'extracted') 
+              AND observation_count >= ? 
+              AND confidence_score >= ?
+            RETURNING key, content, observation_count, confidence_score
+            "
+        )
+        .bind(min_observations)
+        .bind(min_confidence)
+        .fetch_all(self.pool)
+        .await?;
+
+        Ok(promoted)
+    }
+
+    /// Demotes a memory back to candidate status (unverified, count=0).
+    /// Used for conflict resolution.
+    pub async fn demote_memory_by_key(
+        &self,
+        key: &str,
+        project_path: Option<&str>,
+    ) -> Result<bool> {
+        let path = project_path.unwrap_or("global");
+        let result = sqlx::query(
+            r"
+            UPDATE memories 
+            SET verified = false, category = 'candidate', observation_count = 0, updated_at = CURRENT_TIMESTAMP 
+            WHERE key = ? AND project_path = ? AND category IN ('candidate', 'extracted', 'dreamed')
+            "
+        )
+        .bind(key)
+        .bind(path)
+        .execute(self.pool)
+        .await?;
+
+        Ok(result.rows_affected() > 0)
+    }
+
+    pub async fn get_memory_paths(&self, key: &str) -> Result<Vec<String>> {
+        let records: Vec<(String,)> = sqlx::query_as("SELECT project_path FROM memories WHERE key = ?")
+            .bind(key)
+            .fetch_all(self.pool)
+            .await?;
+        Ok(records.into_iter().map(|(p,)| p).collect())
+    }
+
+    /// Retrieves unverified candidates that match the query.
+    pub async fn search_provisional_memories(
+        &self,
+        query: &str,
+        project_path: Option<&str>,
+        limit: i64,
+    ) -> Result<Vec<Memory>> {
+        let records = sqlx::query_as::<_, Memory>(
+            r"
+            SELECT m.id, m.key, m.project_path, m.content, m.category, m.verified, m.pinned, m.observation_count, m.confidence_score, m.created_at, m.updated_at, m.last_accessed_at, m.access_count
+            FROM memories_fts f
+            JOIN memories m ON f.rowid = m.id
+            WHERE memories_fts MATCH ? AND m.verified = false AND m.category IN ('candidate', 'extracted')
+            ORDER BY 
+                CASE WHEN m.project_path = ? THEN 0 WHEN m.project_path = 'global' THEN 1 ELSE 2 END,
+                rank,
+                m.updated_at DESC
+            LIMIT ?
+            "
+        )
+        .bind(query)
+        .bind(project_path)
+        .bind(limit)
+        .fetch_all(self.pool)
+        .await?;
+
+        Ok(records)
+    }
+
+    /// Unconditionally retrieves key environmental facts regardless of search relevance.
+    pub async fn get_bootstrap_memories(
+        &self,
+        keys: &[&str],
+        project_path: Option<&str>,
+    ) -> Result<Vec<Memory>> {
+        let path = project_path.unwrap_or("global");
+        if keys.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Build the query with IN (?, ?, ...)
+        let placeholders = keys.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let query = format!(
+            "SELECT id, key, project_path, content, category, verified, pinned, observation_count, confidence_score, created_at, updated_at, last_accessed_at, access_count \
+             FROM memories \
+             WHERE verified = true AND key IN ({}) \
+               AND (project_path = ? OR project_path = 'global') \
+             ORDER BY project_path DESC, key ASC",
+            placeholders
+        );
+
+        let mut sql_query = sqlx::query_as::<_, Memory>(&query);
+        for key in keys {
+            sql_query = sql_query.bind(key);
+        }
+        sql_query = sql_query.bind(path);
+
+        let records = sql_query.fetch_all(self.pool).await?;
+        Ok(records)
     }
 
     pub async fn get_memory_by_key(
@@ -442,7 +598,7 @@ impl<'a> Store<'a> {
     ) -> Result<Option<Memory>> {
         let path = project_path.unwrap_or("global");
         let memory = sqlx::query_as::<_, Memory>(
-            "SELECT id, key, project_path, content, category, verified, pinned, created_at, updated_at, last_accessed_at, access_count FROM memories WHERE key = ? AND project_path = ?"
+            "SELECT id, key, project_path, content, category, verified, pinned, observation_count, confidence_score, created_at, updated_at, last_accessed_at, access_count FROM memories WHERE key = ? AND project_path = ?"
         )
         .bind(key)
         .bind(path)
@@ -459,7 +615,7 @@ impl<'a> Store<'a> {
     ) -> Result<Vec<Memory>> {
         let records = sqlx::query_as::<_, Memory>(
             r"
-            SELECT m.id, m.key, m.project_path, m.content, m.category, m.verified, m.pinned, m.created_at, m.updated_at, m.last_accessed_at, m.access_count
+            SELECT m.id, m.key, m.project_path, m.content, m.category, m.verified, m.pinned, m.observation_count, m.confidence_score, m.created_at, m.updated_at, m.last_accessed_at, m.access_count
             FROM memories_fts f
             JOIN memories m ON f.rowid = m.id
             WHERE memories_fts MATCH ? AND m.verified = true AND m.pinned = false
@@ -491,7 +647,7 @@ impl<'a> Store<'a> {
     pub async fn get_pinned_memories(&self, project_path: Option<&str>) -> Result<Vec<Memory>> {
         let path = project_path.unwrap_or("global");
         let records = sqlx::query_as::<_, Memory>(
-            "SELECT id, key, project_path, content, category, verified, pinned, created_at, updated_at, last_accessed_at, access_count FROM memories WHERE pinned = true AND (project_path = ? OR project_path = 'global') ORDER BY project_path DESC, key ASC"
+            "SELECT id, key, project_path, content, category, verified, pinned, observation_count, confidence_score, created_at, updated_at, last_accessed_at, access_count FROM memories WHERE pinned = true AND (project_path = ? OR project_path = 'global') ORDER BY project_path DESC, key ASC"
         )
         .bind(path)
         .fetch_all(self.pool)
@@ -502,7 +658,7 @@ impl<'a> Store<'a> {
 
     pub async fn get_all_memories(&self) -> Result<Vec<Memory>> {
         let records = sqlx::query_as::<_, Memory>(
-            "SELECT id, key, project_path, content, category, verified, pinned, created_at, updated_at, last_accessed_at, access_count FROM memories ORDER BY project_path DESC, key ASC"
+            "SELECT id, key, project_path, content, category, verified, pinned, observation_count, confidence_score, created_at, updated_at, last_accessed_at, access_count FROM memories ORDER BY project_path DESC, key ASC"
         )
         .fetch_all(self.pool)
         .await?;
@@ -1140,5 +1296,81 @@ mod tests {
         let after = store.get_session(session_id).await.unwrap().unwrap();
         assert_eq!(after.character_id, "new-uuid-222");
         assert_eq!(after.character_display_name, "New Character");
+    }
+
+    #[tokio::test]
+    async fn test_threshold_memory_system() {
+        let db = Db::new_in_memory().await.unwrap();
+        let store = Store::new(db.pool());
+
+        // 1. Initial upsert (candidate)
+        store.upsert_dream_candidate("os", None, "Fedora", 0.5).await.unwrap();
+        
+        let mem = store.get_memory_by_key("os", None).await.unwrap().unwrap();
+        assert_eq!(mem.verified, Some(false));
+        assert_eq!(mem.observation_count, 1);
+        assert_eq!(mem.confidence_score, 0.5);
+        assert_eq!(mem.category.as_deref(), Some("candidate"));
+
+        // 2. Reinforce with higher confidence
+        store.upsert_dream_candidate("os", None, "Fedora Linux", 0.9).await.unwrap();
+        
+        let mem = store.get_memory_by_key("os", None).await.unwrap().unwrap();
+        assert_eq!(mem.verified, Some(false));
+        assert_eq!(mem.observation_count, 2);
+        assert_eq!(mem.confidence_score, 0.9); // MAX(0.5, 0.9)
+        assert_eq!(mem.content, "Fedora Linux"); // Updated content
+
+        // 3. Promote (threshold not met: min_count=3)
+        let promoted = store.promote_threshold_memories(3, 0.8).await.unwrap();
+        assert!(promoted.is_empty());
+        let mem = store.get_memory_by_key("os", None).await.unwrap().unwrap();
+        assert_eq!(mem.verified, Some(false));
+
+        // 4. Promote (threshold met: min_count=2, min_score=0.8)
+        let promoted = store.promote_threshold_memories(2, 0.8).await.unwrap();
+        assert_eq!(promoted.len(), 1);
+        assert_eq!(promoted[0].0, "os");
+        
+        let mem = store.get_memory_by_key("os", None).await.unwrap().unwrap();
+        assert_eq!(mem.verified, Some(true));
+        assert_eq!(mem.category.as_deref(), Some("dreamed"));
+
+        // 5. Conflict Resolution: Demote
+        let demoted = store.demote_memory_by_key("os", None).await.unwrap();
+        assert!(demoted);
+        
+        let mem = store.get_memory_by_key("os", None).await.unwrap().unwrap();
+        assert_eq!(mem.verified, Some(false));
+        assert_eq!(mem.observation_count, 0);
+        assert_eq!(mem.category.as_deref(), Some("candidate"));
+
+        // 6. Manual Safety: Do not demote manual_sync
+        store.add_memory("shell", None, "fish", Some("manual_sync"), true, false).await.unwrap();
+        let demoted = store.demote_memory_by_key("shell", None).await.unwrap();
+        assert!(!demoted); // Should return false
+        
+        let mem = store.get_memory_by_key("shell", None).await.unwrap().unwrap();
+        assert_eq!(mem.verified, Some(true)); // Still verified
+        assert_eq!(mem.category.as_deref(), Some("manual_sync"));
+
+        // 7. Search Provisional (FTS)
+        // Note: FTS requires a real insert/update cycle to index.
+        store.upsert_dream_candidate("editor", None, "User uses vim", 0.5).await.unwrap();
+        
+        let prov = store.search_provisional_memories("vim", None, 10).await.unwrap();
+        assert_eq!(prov.len(), 1);
+        assert_eq!(prov[0].key, "editor");
+        assert_eq!(prov[0].verified, Some(false));
+
+        // 8. Bootstrap Retrieval
+        store.add_memory("os_type", None, "Linux", None, true, false).await.unwrap();
+        store.add_memory("package_manager", None, "dnf", None, true, false).await.unwrap();
+        
+        let bootstrap = store.get_bootstrap_memories(&["os_type", "package_manager", "missing_key"], None).await.unwrap();
+        assert_eq!(bootstrap.len(), 2);
+        assert!(bootstrap.iter().any(|m| m.key == "os_type"));
+        assert!(bootstrap.iter().any(|m| m.key == "package_manager"));
+        assert!(!bootstrap.iter().any(|m| m.key == "missing_key"));
     }
 }

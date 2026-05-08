@@ -49,6 +49,8 @@ pub struct Memory {
     pub category: Option<String>,
     pub verified: Option<bool>,
     pub pinned: Option<bool>,
+    pub observation_count: i64,
+    pub confidence_score: f64,
     pub created_at: Option<String>,
     pub updated_at: Option<String>,
     pub last_accessed_at: Option<String>,

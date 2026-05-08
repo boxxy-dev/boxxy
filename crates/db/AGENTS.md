@@ -9,9 +9,10 @@ Provides a persistent SQLite database for Boxxy-Terminal, serving as the Long-Te
 - **Data Access**: Exposes asynchronous CRUD operations for memories (RAG facts), sessions, and persistent visual logs.
 - **Testing Standard**: ALL database operations must have corresponding unit tests in `store.rs`. New schema changes must be verified using the `Db::new_in_memory()` pattern to prevent regressions.
 - **Memory Schema (Long-term Facts)**:
-  - **Verified Status**: Extracted facts default to `verified = false` and must be promoted by the user in `MEMORY.md`.
+  - **Verified Status**: Employs a threshold-based reinforcement model. Extracted facts are stored as unverified candidates and only auto-promoted to `verified = true` if they cross strict `observation_count` and `confidence_score` thresholds.
+  - **Reinforcement Tracking**: The `memories` table includes `observation_count` (frequency of extraction) and `confidence_score` (max LLM certainty) to drive the automated promotion system.
   - **FTS5 Integration**: All memories are automatically indexed in a virtual FTS5 table (`memories_fts`) with `project_path` scoping for fast semantic retrieval.
-  - **Automatic Pruning**: Supported via `access_count` and `last_accessed_at` tracking.
+  - **Automatic Pruning**: Supported via `access_count` and `last_accessed_at` tracking, with enhanced hygiene rules for pruning unverified noise.
 - **Interaction Schema (Episodic Memory & Dreaming)**:
   - Tracks raw conversation and command history in the `interactions` table.
   - Uses a `processing_state` column (`raw`, `seeded`, `dreamed`) to power the async Memory Consolidation pipeline, allowing the background `DreamOrchestrator` to batch-process un-consolidated interactions.

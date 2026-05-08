@@ -157,6 +157,8 @@ impl Db {
                 category TEXT,
                 verified BOOLEAN DEFAULT false,
                 pinned BOOLEAN DEFAULT false,
+                observation_count INTEGER DEFAULT 1,
+                confidence_score REAL DEFAULT 0.0,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 last_accessed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -266,6 +268,14 @@ impl Db {
         // Manual column migrations for existing tables if needed (not dropping)
         // Check if pinned column exists in skills (added in v3)
         let _ = sqlx::query("ALTER TABLE skills ADD COLUMN pinned BOOLEAN DEFAULT false")
+            .execute(&self.pool)
+            .await;
+
+        let _ = sqlx::query("ALTER TABLE memories ADD COLUMN observation_count INTEGER DEFAULT 1")
+            .execute(&self.pool)
+            .await;
+
+        let _ = sqlx::query("ALTER TABLE memories ADD COLUMN confidence_score REAL DEFAULT 0.0")
             .execute(&self.pool)
             .await;
 
