@@ -11,6 +11,20 @@ use zbus::interface;
 use zbus::object_server::SignalEmitter;
 use zbus::zvariant::OwnedFd;
 
+fn is_leaked_multiplexer_prefix(key: &str) -> bool {
+    key.starts_with("TMUX")
+        || key.starts_with("ZELLIJ")
+        || key.starts_with("KITTY_")
+        || key.starts_with("ALACRITTY_")
+        || key.starts_with("VSCODE_")
+}
+
+const LEAKED_MULTIPLEXER_EXACT: &[&str] = &["STY", "WINDOW", "WT_SESSION"];
+
+fn is_leaked_multiplexer_var(key: &str) -> bool {
+    is_leaked_multiplexer_prefix(key) || LEAKED_MULTIPLEXER_EXACT.contains(&key)
+}
+
 pub struct PtySubsystem {
     state: AgentState,
 }
@@ -143,6 +157,18 @@ impl PtySubsystem {
             cmd.args(&options.argv[1..]);
         }
 
+        // Surgically remove leaked variables from the daemon's inherited environment.
+        // We do NOT use `env_clear()` because in Flatpak mode, the UI relies on the
+        // daemon to provide critical vars like PATH and DISPLAY.
+        for key in LEAKED_MULTIPLEXER_EXACT {
+            cmd.env_remove(key);
+        }
+        for (k, _) in std::env::vars() {
+            if is_leaked_multiplexer_prefix(&k) {
+                cmd.env_remove(&k);
+            }
+        }
+
         if !options.cwd.is_empty() {
             cmd.current_dir(&options.cwd);
         }
@@ -157,7 +183,9 @@ impl PtySubsystem {
         }
 
         for (key, value) in options.env {
-            cmd.env(key, value);
+            if !is_leaked_multiplexer_var(&key) {
+                cmd.env(key, value);
+            }
         }
 
         let master_raw_fd = master_fd.as_raw_fd();

@@ -20,8 +20,6 @@ Boxxy provides deep, real-time visibility into LLM interactions for developers a
 ## Coding Guidelines
 
 ### 1. Rust Code Style
-- **Formatting:** Always format with `cargo fmt --all` after writing or editing Rust files to ensure consistency across the workspace.
-- **Enforcement:** Code must pass `cargo fmt --all -- --check` with zero diff. This project strictly follows the Rust 2024 style guidelines as configured in `rustfmt.toml`.
 - **Inline Comments:** Use short, concise inline comments to explain *why* a particular approach was taken, especially for complex async flows, GTK property bindings, or state machine transitions. Avoid over-commenting obvious syntax. Maintain existing comments, updating them only if they become obsolete.
 
 ### 2. Modularity & Scoping
@@ -56,6 +54,8 @@ Manages the split-pane terminal environment. Features a deep modular architectur
 
 ### 4. `boxxy-agent` (Binary/Library Crate)
 Host-privileged daemon that sits between the sandboxed UI and the operating system. Exposes four D-Bus interfaces on the session bus (`Agent`, `Pty`, `Claw`, `Maintenance`) from a single process. It is the **single source of truth for character assignments**, maintaining a volatile in-memory `CharacterRegistry` of active claims keyed by `holder_id`. Claims are automatically released when a UI process disconnects or crashes via `ipc/client_tracker.rs`, which subscribes to `org.freedesktop.DBus.NameOwnerChanged` and calls `release_owner(bus_name)` on disconnection, cascading swarm lock cleanup for any `HolderKind::Pane` claims. Orphan character migration (sessions referencing a deleted character UUID) is handled both at daemon startup and at runtime during catalog hot-reloads by mapping them to the first available catalog entry. Hosts `ClawSession` actors (per-pane AI reasoning), owns the PTY registry (viewer ref-count, persistence flag, 4 MB ring buffer per detached session, zombie-sweep on a 4 h TTL), and runs the background Dream Cycle at `niceness 19` gated on UPower + ghost-mode (see §"Memory Consolidation" below). The binary also provides CLI subcommands — `start`, `stop`, `restart`, `list-sessions` — used by the UI's updater and for manual inspection.
+
+**PTY Environment Scrubbing:** On `SpawnPty`, the daemon surgically removes inherited multiplexer identity vars (`TMUX*`, `ZELLIJ*`, `KITTY_*`, `ALACRITTY_*`, `VSCODE_*`, `STY`, `WINDOW`, `WT_SESSION`) via `env_remove`. `env_clear()` is explicitly forbidden — in Flatpak mode the UI passes only terminal-identity vars and the daemon's host environment is the sole source of `PATH`, `DISPLAY`, etc.
 
 The daemon runs a **Character Catalog Watcher** (`character_watcher.rs`) that monitors `~/.config/boxxy-terminal/boxxyclaw/characters/` for filesystem changes using `notify-debouncer-mini` with a 500 ms debounce. On any `.toml`, `.png`, or `.json` modification, it calls `CharacterRegistry::reload_catalog()`, which: reloads the catalog from disk; computes a duties+personality hash to identify changed characters; migrates orphaned claims to the first available character; bumps the registry revision and broadcasts a `claims_changed` D-Bus signal. Sessions whose character's personality changed receive a `SettingsInvalidated` message (matched by `character_id`); sessions whose character was deleted and remapped receive it via their `holder_id` — keeping the two cases separate to avoid spurious rebuilds of unrelated sessions. Changes to character `duties` or `personality` take effect on the very next agent turn without restarting the daemon or UI.
 
