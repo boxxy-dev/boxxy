@@ -907,10 +907,22 @@ impl TerminalPaneComponent {
                     crate::get_host_shell()
                 }
             };
-            let mut cmd = vec![shell];
-            if settings.login_shell {
-                cmd.push("--login".into());
-            }
+
+            let cmd = if settings.use_custom_command && !settings.custom_command.trim().is_empty() {
+                match glib::shell_parse_argv(&settings.custom_command) {
+                    Ok(argv) if !argv.is_empty() => argv
+                        .into_iter()
+                        .map(|os| os.to_string_lossy().into_owned())
+                        .collect(),
+                    _ => vec!["/bin/sh".into(), "-c".into(), settings.custom_command.clone()],
+                }
+            } else {
+                let mut c = vec![shell];
+                if settings.login_shell {
+                    c.push("--login".into());
+                }
+                c
+            };
 
             match agent.create_pty().await {
                 Ok(master_fd) => {

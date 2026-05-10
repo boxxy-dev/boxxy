@@ -714,6 +714,17 @@
                                   </object>
                                 </child>
                                 <child>
+                                  <object class="AdwEntryRow" id="custom_command_entry">
+                                    <property name="title" translatable="yes">Run a custom command</property>
+                                    <property name="show-apply-button">True</property>
+                                    <child type="suffix">
+                                      <object class="GtkSwitch" id="use_custom_command_switch">
+                                        <property name="valign">center</property>
+                                      </object>
+                                    </child>
+                                  </object>
+                                </child>
+                                <child>
                                   <object class="AdwSwitchRow" id="show_vte_grid_switch">
                                     <property name="title" translatable="yes">Show VTE Grid</property>
                                     <property name="subtitle" translatable="yes">Draw grid lines representing terminal cells.</property>

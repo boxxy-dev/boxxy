@@ -13,6 +13,9 @@ pub fn setup_advanced_page(
     on_reload_engine: Rc<dyn Fn() + 'static>,
 ) -> Box<dyn Fn(&str) -> bool> {
     let login_shell_switch: adw::SwitchRow = builder.object("login_shell_switch").unwrap();
+    let use_custom_command_switch: gtk::Switch =
+        builder.object("use_custom_command_switch").unwrap();
+    let custom_command_entry: adw::EntryRow = builder.object("custom_command_entry").unwrap();
     let show_vte_grid_switch: adw::SwitchRow = builder.object("show_vte_grid_switch").unwrap();
     let pty_persistence_switch: adw::SwitchRow = builder.object("pty_persistence_switch").unwrap();
     let custom_regex_entry: adw::EntryRow = builder.object("custom_regex_entry").unwrap();
@@ -29,12 +32,39 @@ pub fn setup_advanced_page(
     let group_config: adw::PreferencesGroup = builder.object("group_config").unwrap();
 
     login_shell_switch.set_active(settings_rc.borrow().login_shell);
+
     let s_rc = settings_rc.clone();
     let cb = on_change.clone();
     login_shell_switch.connect_active_notify(move |row| {
         let mut s = s_rc.borrow_mut();
         if s.login_shell != row.is_active() {
             s.login_shell = row.is_active();
+            s.save();
+            cb(s.clone());
+        }
+    });
+
+    use_custom_command_switch.set_active(settings_rc.borrow().use_custom_command);
+    custom_command_entry.set_text(&settings_rc.borrow().custom_command);
+
+    let s_rc = settings_rc.clone();
+    let cb = on_change.clone();
+    use_custom_command_switch.connect_active_notify(move |row| {
+        let mut s = s_rc.borrow_mut();
+        if s.use_custom_command != row.is_active() {
+            s.use_custom_command = row.is_active();
+            s.save();
+            cb(s.clone());
+        }
+    });
+
+    let s_rc = settings_rc.clone();
+    let cb = on_change.clone();
+    custom_command_entry.connect_changed(move |entry| {
+        let mut s = s_rc.borrow_mut();
+        let text = entry.text().to_string();
+        if s.custom_command != text {
+            s.custom_command = text;
             s.save();
             cb(s.clone());
         }
@@ -140,6 +170,8 @@ pub fn setup_advanced_page(
     });
 
     let login_shell_switch_clone = login_shell_switch.clone();
+    let use_custom_command_switch_clone = use_custom_command_switch.clone();
+    let custom_command_entry_clone = custom_command_entry.clone();
     let show_vte_grid_switch_clone = show_vte_grid_switch.clone();
     let pty_persistence_switch_clone = pty_persistence_switch.clone();
     let custom_regex_entry_clone = custom_regex_entry.clone();
@@ -162,7 +194,15 @@ pub fn setup_advanced_page(
             show_vte_grid_switch_clone.upcast_ref(),
             "show vte grid lines representing cells",
         );
+        let ad2a = match_row(
+            use_custom_command_switch_clone.upcast_ref(),
+            "run a custom command instead of my shell",
+        );
         let ad2b = match_row(
+            custom_command_entry_clone.upcast_ref(),
+            "custom command instead of my shell",
+        );
+        let ad2c = match_row(
             pty_persistence_switch_clone.upcast_ref(),
             "persistent shells detach background buffer",
         );
@@ -180,7 +220,7 @@ pub fn setup_advanced_page(
             "reset everything delete all configuration destructive",
         );
 
-        group_shell.set_visible(ad1 || ad2 || ad2b);
+        group_shell.set_visible(ad1 || ad2 || ad2a || ad2b || ad2c);
         group_terminal_interaction.set_visible(ad3 || ad4);
         group_config.set_visible(ad5 || ad6);
 
