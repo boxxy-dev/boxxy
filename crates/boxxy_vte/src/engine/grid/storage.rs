@@ -162,21 +162,15 @@ impl<T> Storage<T> {
         let b = self.compute_index(b);
 
         unsafe {
+            // SAFETY: The debug_assert above confirms Row<T> is exactly 4 usizes wide.
             // Cast to a qword array to opt out of copy restrictions and avoid
-            // drop hazards. Byte array is no good here since for whatever
-            // reason LLVM won't optimized it.
-            let a_ptr = self.inner.as_mut_ptr().add(a) as *mut MaybeUninit<usize>;
-            let b_ptr = self.inner.as_mut_ptr().add(b) as *mut MaybeUninit<usize>;
+            // drop hazards. Byte arrays prevent LLVM vectorization here.
+            let a_ptr = self.inner.as_mut_ptr().add(a) as *mut MaybeUninit<[usize; 4]>;
+            let b_ptr = self.inner.as_mut_ptr().add(b) as *mut MaybeUninit<[usize; 4]>;
 
-            // Copy 1 qword at a time.
-            //
-            // The optimizer unrolls this loop and vectorizes it.
-            let mut tmp: MaybeUninit<usize>;
-            for i in 0..4 {
-                tmp = *a_ptr.offset(i);
-                *a_ptr.offset(i) = *b_ptr.offset(i);
-                *b_ptr.offset(i) = tmp;
-            }
+            let tmp = *a_ptr;
+            *a_ptr = *b_ptr;
+            *b_ptr = tmp;
         }
     }
 

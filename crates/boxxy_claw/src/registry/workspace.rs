@@ -124,7 +124,7 @@ impl WorkspaceRegistry {
                         EventFilter::ProcessExited {
                             pane_id: filter_pane_id,
                         },
-                    ) => filter_pane_id.is_none() || filter_pane_id.as_ref() == Some(pane_id),
+                    ) => filter_pane_id.as_ref().is_none_or(|id| id == pane_id),
 
                     (
                         crate::engine::ClawEvent::OutputMatch { pane_id, regex, .. },
@@ -143,7 +143,7 @@ impl WorkspaceRegistry {
                             name: filter_name,
                         },
                     ) => {
-                        (filter_source.is_none() || filter_source.as_ref() == Some(source_agent))
+                        filter_source.as_ref().is_none_or(|source| source == source_agent)
                             && name == filter_name
                     }
                     _ => false,

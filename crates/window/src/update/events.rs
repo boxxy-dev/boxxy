@@ -153,48 +153,41 @@ pub fn handle_terminal_event(
                         pinned,
                         web_search_enabled,
                         ..
-                    } => {
+                    } if let Some(page) = inner.tab_view.selected_page()
+                        && inner.tabs[pos].controller.widget() == &page.child() =>
+                    {
                         // If we got an identity, ensure the sidebar UI reflects that this pane is now active
-                        if let Some(page) = inner.tab_view.selected_page() {
-                            let child = page.child();
-                            if inner.tabs[pos].controller.widget() == &child {
-                                let active = inner.tabs[pos].controller.is_claw_active();
-                                let _sleep = inner.tabs[pos].controller.is_sleep();
-                                inner.claw_active = active;
-                                inner.claw.set_history_widget(
-                                    &inner.tabs[pos].controller.claw_history_widget(),
-                                    &agent_name,
-                                    pinned,
-                                    web_search_enabled,
-                                );
-                            }
-                        }
+                        let active = inner.tabs[pos].controller.is_claw_active();
+                        let _sleep = inner.tabs[pos].controller.is_sleep();
+                        inner.claw_active = active;
+                        inner.claw.set_history_widget(
+                            &inner.tabs[pos].controller.claw_history_widget(),
+                            &agent_name,
+                            pinned,
+                            web_search_enabled,
+                        );
                     }
-                    ClawEngineEvent::PinStatusChanged(pinned) => {
-                        if let Some(page) = inner.tab_view.selected_page() {
-                            let child = page.child();
-                            if inner.tabs[pos].controller.widget() == &child {
-                                inner.claw.set_history_widget(
-                                    &inner.tabs[pos].controller.claw_history_widget(),
-                                    &inner.tabs[pos].controller.agent_name(),
-                                    pinned,
-                                    inner.tabs[pos].controller.is_web_search(),
-                                );
-                            }
-                        }
+                    ClawEngineEvent::PinStatusChanged(pinned)
+                        if let Some(page) = inner.tab_view.selected_page()
+                            && inner.tabs[pos].controller.widget() == &page.child() =>
+                    {
+                        inner.claw.set_history_widget(
+                            &inner.tabs[pos].controller.claw_history_widget(),
+                            &inner.tabs[pos].controller.agent_name(),
+                            pinned,
+                            inner.tabs[pos].controller.is_web_search(),
+                        );
                     }
-                    ClawEngineEvent::WebSearchStatusChanged(enabled) => {
-                        if let Some(page) = inner.tab_view.selected_page() {
-                            let child = page.child();
-                            if inner.tabs[pos].controller.widget() == &child {
-                                inner.claw.set_history_widget(
-                                    &inner.tabs[pos].controller.claw_history_widget(),
-                                    &inner.tabs[pos].controller.agent_name(),
-                                    inner.tabs[pos].controller.is_pinned(),
-                                    enabled,
-                                );
-                            }
-                        }
+                    ClawEngineEvent::WebSearchStatusChanged(enabled)
+                        if let Some(page) = inner.tab_view.selected_page()
+                            && inner.tabs[pos].controller.widget() == &page.child() =>
+                    {
+                        inner.claw.set_history_widget(
+                            &inner.tabs[pos].controller.claw_history_widget(),
+                            &inner.tabs[pos].controller.agent_name(),
+                            inner.tabs[pos].controller.is_pinned(),
+                            enabled,
+                        );
                     }
                     ClawEngineEvent::DismissDrawer => {
                         inner.claw.refresh_visibility();

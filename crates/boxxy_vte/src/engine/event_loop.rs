@@ -285,6 +285,7 @@ where
                                 let text = self.terminal.semantic_bounds_to_string(start_point, end_point);
                                 let _ = sender.send(text);
                             },                            Ok(Msg::Shutdown) | Err(_) => {
+                                core::hint::cold_path();
                                 break 'event_loop;
                             }
                         }

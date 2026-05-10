@@ -279,23 +279,22 @@ impl CommandPaletteComponent {
             };
 
             match keyval {
-                gtk4::gdk::Key::Up => {
-                    if let Some(row) = inner.listbox.selected_row() {
-                        let mut idx = row.index() - 1;
-                        while idx >= 0 {
-                            if is_visible(idx as usize) {
-                                if let Some(prev) = inner.listbox.row_at_index(idx) {
-                                    inner.listbox.select_row(Some(&prev));
-                                    prev.grab_focus();
-                                    inner.search_entry.grab_focus();
-                                }
-                                break;
+                gtk4::gdk::Key::Up if let Some(row) = inner.listbox.selected_row() => {
+                    let mut idx = row.index() - 1;
+                    while idx >= 0 {
+                        if is_visible(idx as usize) {
+                            if let Some(prev) = inner.listbox.row_at_index(idx) {
+                                inner.listbox.select_row(Some(&prev));
+                                prev.grab_focus();
+                                inner.search_entry.grab_focus();
                             }
-                            idx -= 1;
+                            break;
                         }
+                        idx -= 1;
                     }
                     gtk4::glib::Propagation::Stop
                 }
+                gtk4::gdk::Key::Up => gtk4::glib::Propagation::Stop,
                 gtk4::gdk::Key::Down => {
                     let mut idx = if let Some(row) = inner.listbox.selected_row() {
                         row.index() + 1

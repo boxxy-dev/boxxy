@@ -1763,6 +1763,7 @@ mod pending_drain_tests {
             history: Vec::new(),
             pending_lazy_diagnosis: None,
             persistent_agent: None,
+            current_claw_model: None,
             current_memory_model: None,
             last_tools: None,
             pending_tasks: Vec::new(),

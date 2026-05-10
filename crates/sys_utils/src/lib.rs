@@ -58,15 +58,16 @@ pub async fn fetch_location_context() {
 
     // Use http://ip-api.com/json/ (Free, no key required, returns city/country/timezone)
     // Note: Free tier does not support HTTPS.
-    match client.get("http://ip-api.com/json/").send().await {
-        Ok(res) => {
-            if let Ok(loc) = res.json::<LocationContext>().await {
-                *cache.write() = Some(loc);
-            }
-        }
+    let res = match client.get("http://ip-api.com/json/").send().await {
+        Ok(r) => r,
         Err(e) => {
             log::warn!("Failed to fetch location context: {}", e);
+            return;
         }
+    };
+
+    if let Ok(loc) = res.json::<LocationContext>().await {
+        *cache.write() = Some(loc);
     }
 }
 

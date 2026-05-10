@@ -12,10 +12,10 @@ Boxxy provides deep, real-time visibility into LLM interactions for developers a
 - **Visual Sidebar Logs:** The Claw sidebar acts as a read-only debug log, rendering tool results, process lists, and agent reasoning steps as structured UI components.
 
 ## Technology Stack
-- **Language:** Rust 2024 (v1.94+)
+- **Language:** Rust 2024 (v1.95+)
 - **Concurrency:** tokio v1.50, async-channel v2.3
 - **UI Toolkit:** GTK 4.22 + Libadwaita 1.90 (via `gtk4-rs` 0.11)
-- **Terminal Engine:** Custom async-first lock-free ANSI state machine absorbed directly into the `boxxy-vte` crate — no dependency on `libvte` or any C terminal library.
+- **Terminal Engine:** Custom async-first lock-free ANSI state machine. Optimized for Rust 1.95+ with `core::hint::cold_path` and safe stack-allocated OSC dispatch, eliminating legacy `unsafe` pointer casts.
 
 ## Coding Guidelines
 

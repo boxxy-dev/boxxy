@@ -109,15 +109,13 @@ async fn test_pub_sub_event_routing() {
 
     // Check if subscriber received the message
     match rx.try_recv() {
-        Ok(ClawMessage::SubscriptionEvent { event }) => {
-            if let ClawEvent::ProcessExited { pane_id, exit_code } = event {
-                assert_eq!(pane_id, "other_pane");
-                assert_eq!(exit_code, 0);
-            } else {
-                panic!("Received wrong event type");
-            }
+        Ok(ClawMessage::SubscriptionEvent { ref event })
+            if let ClawEvent::ProcessExited { pane_id, exit_code } = event =>
+        {
+            assert_eq!(pane_id, "other_pane");
+            assert_eq!(*exit_code, 0);
         }
-        _ => panic!("Subscriber did not receive event"),
+        _ => panic!("Subscriber did not receive event or wrong event type"),
     }
 }
 

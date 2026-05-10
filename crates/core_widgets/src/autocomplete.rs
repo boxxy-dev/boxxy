@@ -164,13 +164,11 @@ impl AutocompleteController {
                         c_clone.move_selection(1);
                         gtk::glib::Propagation::Stop
                     }
-                    gtk::gdk::Key::Return | gtk::gdk::Key::Tab => {
-                        if let Some(row) = c_clone.list.selected_row() {
-                            c_clone.apply_completion(row.widget_name().as_str());
-                            gtk::glib::Propagation::Stop
-                        } else {
-                            gtk::glib::Propagation::Proceed
-                        }
+                    gtk::gdk::Key::Return | gtk::gdk::Key::Tab
+                        if let Some(row) = c_clone.list.selected_row() =>
+                    {
+                        c_clone.apply_completion(row.widget_name().as_str());
+                        gtk::glib::Propagation::Stop
                     }
                     gtk::gdk::Key::Escape => {
                         c_clone.popover.popdown();

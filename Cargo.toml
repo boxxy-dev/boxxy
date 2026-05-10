@@ -31,6 +31,7 @@ members = [
 [workspace.package]
 version = "0.0.34"
 edition = "2024"
+rust-version = "1.95"
 authors = ["Mii <miifrommera@gmail.com>"]
 description = "Stupid Linux Terminal"
 license = "MIT"
