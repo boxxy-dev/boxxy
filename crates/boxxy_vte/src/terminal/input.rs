@@ -38,7 +38,15 @@ pub fn translate_key(key: Key, modifiers: ModifierType, is_app_cursor: bool) -> 
             bytes.push(0x7f); // DEL
             return Some(bytes);
         }
-        Key::Delete => {
+        Key::Insert | Key::KP_Insert => {
+            if has_modifier {
+                bytes.extend_from_slice(format!("\x1b[2;{}~", modifier_code).as_bytes());
+            } else {
+                bytes.extend_from_slice(b"\x1b[2~");
+            }
+            return Some(bytes);
+        }
+        Key::Delete | Key::KP_Delete => {
             if has_modifier {
                 bytes.extend_from_slice(format!("\x1b[3;{}~", modifier_code).as_bytes());
             } else {
@@ -46,7 +54,7 @@ pub fn translate_key(key: Key, modifiers: ModifierType, is_app_cursor: bool) -> 
             }
             return Some(bytes);
         }
-        Key::Tab => {
+        Key::Tab | Key::KP_Tab => {
             bytes.push(b'\t');
             return Some(bytes);
         }
@@ -54,7 +62,7 @@ pub fn translate_key(key: Key, modifiers: ModifierType, is_app_cursor: bool) -> 
             bytes.push(0x1b);
             return Some(bytes);
         }
-        Key::Up => {
+        Key::Up | Key::KP_Up => {
             if has_modifier {
                 bytes.extend_from_slice(format!("\x1b[1;{}A", modifier_code).as_bytes());
             } else if is_app_cursor {
@@ -64,7 +72,7 @@ pub fn translate_key(key: Key, modifiers: ModifierType, is_app_cursor: bool) -> 
             }
             return Some(bytes);
         }
-        Key::Down => {
+        Key::Down | Key::KP_Down => {
             if has_modifier {
                 bytes.extend_from_slice(format!("\x1b[1;{}B", modifier_code).as_bytes());
             } else if is_app_cursor {
@@ -74,7 +82,7 @@ pub fn translate_key(key: Key, modifiers: ModifierType, is_app_cursor: bool) -> 
             }
             return Some(bytes);
         }
-        Key::Right => {
+        Key::Right | Key::KP_Right => {
             if has_modifier {
                 bytes.extend_from_slice(format!("\x1b[1;{}C", modifier_code).as_bytes());
             } else if is_app_cursor {
@@ -84,7 +92,7 @@ pub fn translate_key(key: Key, modifiers: ModifierType, is_app_cursor: bool) -> 
             }
             return Some(bytes);
         }
-        Key::Left => {
+        Key::Left | Key::KP_Left => {
             if has_modifier {
                 bytes.extend_from_slice(format!("\x1b[1;{}D", modifier_code).as_bytes());
             } else if is_app_cursor {
@@ -94,7 +102,7 @@ pub fn translate_key(key: Key, modifiers: ModifierType, is_app_cursor: bool) -> 
             }
             return Some(bytes);
         }
-        Key::Home => {
+        Key::Home | Key::KP_Home => {
             if has_modifier {
                 bytes.extend_from_slice(format!("\x1b[1;{}H", modifier_code).as_bytes());
             } else if is_app_cursor {
@@ -104,7 +112,7 @@ pub fn translate_key(key: Key, modifiers: ModifierType, is_app_cursor: bool) -> 
             }
             return Some(bytes);
         }
-        Key::End => {
+        Key::End | Key::KP_End => {
             if has_modifier {
                 bytes.extend_from_slice(format!("\x1b[1;{}F", modifier_code).as_bytes());
             } else if is_app_cursor {
@@ -114,7 +122,7 @@ pub fn translate_key(key: Key, modifiers: ModifierType, is_app_cursor: bool) -> 
             }
             return Some(bytes);
         }
-        Key::Page_Up => {
+        Key::Page_Up | Key::KP_Page_Up => {
             if has_modifier {
                 bytes.extend_from_slice(format!("\x1b[5;{}~", modifier_code).as_bytes());
             } else {
@@ -122,11 +130,19 @@ pub fn translate_key(key: Key, modifiers: ModifierType, is_app_cursor: bool) -> 
             }
             return Some(bytes);
         }
-        Key::Page_Down => {
+        Key::Page_Down | Key::KP_Page_Down => {
             if has_modifier {
                 bytes.extend_from_slice(format!("\x1b[6;{}~", modifier_code).as_bytes());
             } else {
                 bytes.extend_from_slice(b"\x1b[6~");
+            }
+            return Some(bytes);
+        }
+        Key::KP_Begin => {
+            if has_modifier {
+                bytes.extend_from_slice(format!("\x1b[1;{}E", modifier_code).as_bytes());
+            } else {
+                bytes.extend_from_slice(b"\x1b[E");
             }
             return Some(bytes);
         }
@@ -344,6 +360,38 @@ mod tests {
                 false
             ),
             Some(vec![0x1b, 3])
+        );
+    }
+
+    #[test]
+    fn test_translate_kp_keys() {
+        assert_eq!(
+            translate_key(Key::KP_Up, ModifierType::empty(), false),
+            Some(b"\x1b[A".to_vec())
+        );
+        assert_eq!(
+            translate_key(Key::KP_Home, ModifierType::empty(), false),
+            Some(b"\x1b[H".to_vec())
+        );
+        assert_eq!(
+            translate_key(Key::Insert, ModifierType::empty(), false),
+            Some(b"\x1b[2~".to_vec())
+        );
+        assert_eq!(
+            translate_key(Key::KP_Insert, ModifierType::empty(), false),
+            Some(b"\x1b[2~".to_vec())
+        );
+        assert_eq!(
+            translate_key(Key::KP_Begin, ModifierType::empty(), false),
+            Some(b"\x1b[E".to_vec())
+        );
+        assert_eq!(
+            translate_key(Key::KP_Tab, ModifierType::empty(), false),
+            Some(vec![b'\t'])
+        );
+        assert_eq!(
+            translate_key(Key::KP_Delete, ModifierType::empty(), false),
+            Some(b"\x1b[3~".to_vec())
         );
     }
 }
