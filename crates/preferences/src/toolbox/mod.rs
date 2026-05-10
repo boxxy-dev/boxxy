@@ -29,7 +29,8 @@ pub fn setup_toolbox_page(
     let enable_auto_dreaming_switch: adw::SwitchRow =
         builder.object("enable_auto_dreaming_switch").unwrap();
 
-    let group_toolbox_permissions: adw::PreferencesGroup = builder.object("group_toolbox_permissions").unwrap();
+    let group_toolbox_permissions: adw::PreferencesGroup =
+        builder.object("group_toolbox_permissions").unwrap();
     let group_toolbox_dreaming: adw::PreferencesGroup =
         builder.object("group_toolbox_dreaming").unwrap();
     let group_toolbox_tools: adw::PreferencesGroup = builder.object("group_toolbox_tools").unwrap();

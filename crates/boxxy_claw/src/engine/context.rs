@@ -165,7 +165,9 @@ pub async fn retrieve_memories(
             result.push_str("\n--- PROVISIONAL CANDIDATES (treat with skepticism) ---\n");
             for mem in candidates {
                 let line = format!("- [PROVISIONAL] {}: {}\n", mem.key, mem.content);
-                if current_budget_chars + line.len() > max_budget_chars || provisional_budget_chars + line.len() > max_provisional_budget {
+                if current_budget_chars + line.len() > max_budget_chars
+                    || provisional_budget_chars + line.len() > max_provisional_budget
+                {
                     break;
                 }
                 result.push_str(&line);

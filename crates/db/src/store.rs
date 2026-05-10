@@ -489,7 +489,7 @@ impl<'a> Store<'a> {
               AND observation_count >= ? 
               AND confidence_score >= ?
             RETURNING key, content, observation_count, confidence_score
-            "
+            ",
         )
         .bind(min_observations)
         .bind(min_confidence)
@@ -523,10 +523,11 @@ impl<'a> Store<'a> {
     }
 
     pub async fn get_memory_paths(&self, key: &str) -> Result<Vec<String>> {
-        let records: Vec<(String,)> = sqlx::query_as("SELECT project_path FROM memories WHERE key = ?")
-            .bind(key)
-            .fetch_all(self.pool)
-            .await?;
+        let records: Vec<(String,)> =
+            sqlx::query_as("SELECT project_path FROM memories WHERE key = ?")
+                .bind(key)
+                .fetch_all(self.pool)
+                .await?;
         Ok(records.into_iter().map(|(p,)| p).collect())
     }
 
@@ -1304,8 +1305,11 @@ mod tests {
         let store = Store::new(db.pool());
 
         // 1. Initial upsert (candidate)
-        store.upsert_dream_candidate("os", None, "Fedora", 0.5).await.unwrap();
-        
+        store
+            .upsert_dream_candidate("os", None, "Fedora", 0.5)
+            .await
+            .unwrap();
+
         let mem = store.get_memory_by_key("os", None).await.unwrap().unwrap();
         assert_eq!(mem.verified, Some(false));
         assert_eq!(mem.observation_count, 1);
@@ -1313,8 +1317,11 @@ mod tests {
         assert_eq!(mem.category.as_deref(), Some("candidate"));
 
         // 2. Reinforce with higher confidence
-        store.upsert_dream_candidate("os", None, "Fedora Linux", 0.9).await.unwrap();
-        
+        store
+            .upsert_dream_candidate("os", None, "Fedora Linux", 0.9)
+            .await
+            .unwrap();
+
         let mem = store.get_memory_by_key("os", None).await.unwrap().unwrap();
         assert_eq!(mem.verified, Some(false));
         assert_eq!(mem.observation_count, 2);
@@ -1331,7 +1338,7 @@ mod tests {
         let promoted = store.promote_threshold_memories(2, 0.8).await.unwrap();
         assert_eq!(promoted.len(), 1);
         assert_eq!(promoted[0].0, "os");
-        
+
         let mem = store.get_memory_by_key("os", None).await.unwrap().unwrap();
         assert_eq!(mem.verified, Some(true));
         assert_eq!(mem.category.as_deref(), Some("dreamed"));
@@ -1339,35 +1346,57 @@ mod tests {
         // 5. Conflict Resolution: Demote
         let demoted = store.demote_memory_by_key("os", None).await.unwrap();
         assert!(demoted);
-        
+
         let mem = store.get_memory_by_key("os", None).await.unwrap().unwrap();
         assert_eq!(mem.verified, Some(false));
         assert_eq!(mem.observation_count, 0);
         assert_eq!(mem.category.as_deref(), Some("candidate"));
 
         // 6. Manual Safety: Do not demote manual_sync
-        store.add_memory("shell", None, "fish", Some("manual_sync"), true, false).await.unwrap();
+        store
+            .add_memory("shell", None, "fish", Some("manual_sync"), true, false)
+            .await
+            .unwrap();
         let demoted = store.demote_memory_by_key("shell", None).await.unwrap();
         assert!(!demoted); // Should return false
-        
-        let mem = store.get_memory_by_key("shell", None).await.unwrap().unwrap();
+
+        let mem = store
+            .get_memory_by_key("shell", None)
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(mem.verified, Some(true)); // Still verified
         assert_eq!(mem.category.as_deref(), Some("manual_sync"));
 
         // 7. Search Provisional (FTS)
         // Note: FTS requires a real insert/update cycle to index.
-        store.upsert_dream_candidate("editor", None, "User uses vim", 0.5).await.unwrap();
-        
-        let prov = store.search_provisional_memories("vim", None, 10).await.unwrap();
+        store
+            .upsert_dream_candidate("editor", None, "User uses vim", 0.5)
+            .await
+            .unwrap();
+
+        let prov = store
+            .search_provisional_memories("vim", None, 10)
+            .await
+            .unwrap();
         assert_eq!(prov.len(), 1);
         assert_eq!(prov[0].key, "editor");
         assert_eq!(prov[0].verified, Some(false));
 
         // 8. Bootstrap Retrieval
-        store.add_memory("os_type", None, "Linux", None, true, false).await.unwrap();
-        store.add_memory("package_manager", None, "dnf", None, true, false).await.unwrap();
-        
-        let bootstrap = store.get_bootstrap_memories(&["os_type", "package_manager", "missing_key"], None).await.unwrap();
+        store
+            .add_memory("os_type", None, "Linux", None, true, false)
+            .await
+            .unwrap();
+        store
+            .add_memory("package_manager", None, "dnf", None, true, false)
+            .await
+            .unwrap();
+
+        let bootstrap = store
+            .get_bootstrap_memories(&["os_type", "package_manager", "missing_key"], None)
+            .await
+            .unwrap();
         assert_eq!(bootstrap.len(), 2);
         assert!(bootstrap.iter().any(|m| m.key == "os_type"));
         assert!(bootstrap.iter().any(|m| m.key == "package_manager"));

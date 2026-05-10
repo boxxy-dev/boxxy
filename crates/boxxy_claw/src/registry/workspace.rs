@@ -143,7 +143,9 @@ impl WorkspaceRegistry {
                             name: filter_name,
                         },
                     ) => {
-                        filter_source.as_ref().is_none_or(|source| source == source_agent)
+                        filter_source
+                            .as_ref()
+                            .is_none_or(|source| source == source_agent)
                             && name == filter_name
                     }
                     _ => false,

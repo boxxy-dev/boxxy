@@ -914,7 +914,11 @@ impl TerminalPaneComponent {
                         .into_iter()
                         .map(|os| os.to_string_lossy().into_owned())
                         .collect(),
-                    _ => vec!["/bin/sh".into(), "-c".into(), settings.custom_command.clone()],
+                    _ => vec![
+                        "/bin/sh".into(),
+                        "-c".into(),
+                        settings.custom_command.clone(),
+                    ],
                 }
             } else {
                 let mut c = vec![shell];

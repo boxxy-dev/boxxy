@@ -163,12 +163,13 @@ impl TipsCycle {
             let remaining_ms = ((min_duration_us - elapsed_us) / 1000) as u64;
             let rev = self.revealer.clone();
             let hide_timer_rc = self.hide_timer_id.clone();
-            let hide_id = gtk::glib::timeout_add_local_once(Duration::from_millis(remaining_ms), move || {
-                if let Ok(mut timer) = hide_timer_rc.try_borrow_mut() {
-                    timer.take();
-                }
-                rev.set_reveal_child(false);
-            });
+            let hide_id =
+                gtk::glib::timeout_add_local_once(Duration::from_millis(remaining_ms), move || {
+                    if let Ok(mut timer) = hide_timer_rc.try_borrow_mut() {
+                        timer.take();
+                    }
+                    rev.set_reveal_child(false);
+                });
             *self.hide_timer_id.borrow_mut() = Some(hide_id);
         } else {
             self.revealer.set_reveal_child(false);

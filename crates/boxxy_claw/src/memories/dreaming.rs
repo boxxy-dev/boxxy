@@ -141,23 +141,48 @@ impl DreamOrchestrator {
                                 let paths = store.get_memory_paths(key).await.unwrap_or_default();
                                 let mut demoted_any = false;
                                 for path in &paths {
-                                    let path_opt = if path == "global" { None } else { Some(path.as_str()) };
-                                    if store.demote_memory_by_key(key, path_opt).await.unwrap_or(false) {
+                                    let path_opt = if path == "global" {
+                                        None
+                                    } else {
+                                        Some(path.as_str())
+                                    };
+                                    if store
+                                        .demote_memory_by_key(key, path_opt)
+                                        .await
+                                        .unwrap_or(false)
+                                    {
                                         demoted_any = true;
-                                        debug!("Dream Cycle demoted conflicted key '{}' in path '{}'", key, path);
+                                        debug!(
+                                            "Dream Cycle demoted conflicted key '{}' in path '{}'",
+                                            key, path
+                                        );
                                     }
                                 }
 
                                 if !demoted_any {
-                                    debug!("Dream Cycle conflict reported for key '{}', but no demotable memory was found.", key);
+                                    debug!(
+                                        "Dream Cycle conflict reported for key '{}', but no demotable memory was found.",
+                                        key
+                                    );
                                 }
 
-                                if let Some(resolved) = conflict.get("resolved_content").and_then(|c| c.as_str()) {
+                                if let Some(resolved) =
+                                    conflict.get("resolved_content").and_then(|c| c.as_str())
+                                {
                                     // Re-candidate the fix. We default to 'global' if we demoted something global,
                                     // otherwise we use the first path we found or just global.
-                                    let target_path = if paths.contains(&"global".to_string()) { None } else { paths.first().map(|p| p.as_str()) };
-                                    let _ = store.upsert_dream_candidate(key, target_path, resolved, 0.9).await;
-                                    debug!("Dream Cycle re-candidated resolved key: {} -> {}", key, resolved);
+                                    let target_path = if paths.contains(&"global".to_string()) {
+                                        None
+                                    } else {
+                                        paths.first().map(|p| p.as_str())
+                                    };
+                                    let _ = store
+                                        .upsert_dream_candidate(key, target_path, resolved, 0.9)
+                                        .await;
+                                    debug!(
+                                        "Dream Cycle re-candidated resolved key: {} -> {}",
+                                        key, resolved
+                                    );
                                 }
                             }
                         }

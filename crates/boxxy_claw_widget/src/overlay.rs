@@ -3,13 +3,13 @@ use crate::msgbar::MsgBarComponent;
 use crate::proposal::Proposal;
 use crate::tips::TipsCycle;
 use boxxy_claw_protocol::ClawMessage;
+use boxxy_preferences::config::Settings;
 use boxxy_viewer::StructuredViewer;
 use gtk::prelude::*;
 use gtk4 as gtk;
 use gtk4::gio;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
-use boxxy_preferences::config::Settings;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum OverlayMode {
@@ -844,9 +844,8 @@ impl TerminalOverlay {
 
         // Show tips only while the agent is working — gives the user something
         // to read while waiting, and keeps the UI clean otherwise.
-        let should_tip = self.tips_cycle.is_enabled()
-            && is_thinking
-            && self.revealer.reveals_child();
+        let should_tip =
+            self.tips_cycle.is_enabled() && is_thinking && self.revealer.reveals_child();
         if should_tip {
             self.tips_cycle.start();
         } else {

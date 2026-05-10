@@ -12,8 +12,7 @@ pub fn setup_claw_ui_page(
 ) -> Box<dyn Fn(&str) -> bool> {
     let maintain_overlay_history_switch: adw::SwitchRow =
         builder.object("maintain_overlay_history_switch").unwrap();
-    let enable_tips_switch: adw::SwitchRow =
-        builder.object("enable_tips_switch").unwrap();
+    let enable_tips_switch: adw::SwitchRow = builder.object("enable_tips_switch").unwrap();
     let enable_timer_sounds_switch: adw::SwitchRow =
         builder.object("enable_timer_sounds_switch").unwrap();
     let enable_task_sounds_switch: adw::SwitchRow =
@@ -211,7 +210,7 @@ pub fn setup_claw_ui_page(
             maintain_overlay_history_switch_clone.upcast_ref(),
             "maintain session history overlay log scrollable conversation",
         );
-        
+
         let tips = match_row(
             enable_tips_switch_clone.upcast_ref(),
             "tips usage hints rotating help",
