@@ -1,7 +1,7 @@
 # Telemetry Crate (`boxxy-telemetry`)
 
 ## Responsibility
-Provides a privacy-first, industry-standard observability layer for Boxxy Terminal using **OpenTelemetry (OTel) v0.31.0**. It handles the collection, batching, and secure export of anonymous usage statistics to a Supabase backend.
+Provides a privacy-first, industry-standard observability layer for Boxxy Terminal using **OpenTelemetry (OTel) v0.32.0**. It handles the collection, batching, and secure export of anonymous usage statistics to a Supabase backend.
 
 ## Architectural Design
 

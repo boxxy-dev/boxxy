@@ -130,8 +130,8 @@ boxxy-telemetry = { path = "crates/telemetry" }
 boxxy-sys-utils = { path = "crates/sys_utils" }
 boxxy-mcp = { path = "crates/boxxy_mcp" }
 rmcp = { version = "1.6.0", features = ["client", "macros", "transport-streamable-http-client-reqwest", "transport-child-process", "server", "schemars", "transport-io", "which-command"] }
-opentelemetry = "0.31.0"
-opentelemetry_sdk = { version = "0.31.0", features = ["rt-tokio"] }
-opentelemetry-otlp = { version = "0.31.1", features = ["http-json", "reqwest", "reqwest-rustls"] }
-opentelemetry-http = "0.31.0"
-opentelemetry-stdout = { version = "0.31.0", features = ["metrics"] }
+opentelemetry = "0.32.0"
+opentelemetry_sdk = { version = "0.32.0", features = ["rt-tokio"] }
+opentelemetry-otlp = { version = "0.32.0", features = ["http-json", "reqwest", "reqwest-rustls"] }
+opentelemetry-http = "0.32.0"
+opentelemetry-stdout = { version = "0.32.0", features = ["metrics"] }

@@ -1,10 +1,11 @@
 use lazy_static::lazy_static;
 use opentelemetry::KeyValue;
-use opentelemetry::metrics::{Meter, MeterProvider as _};
+use opentelemetry::metrics::{Counter, Meter, MeterProvider as _};
 use opentelemetry_otlp::{Protocol, WithExportConfig, WithHttpConfig};
 use opentelemetry_sdk::Resource;
 use opentelemetry_sdk::metrics::{PeriodicReader, SdkMeterProvider, Temporality};
 use serde_json::json;
+use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{Mutex, OnceCell};
 use uuid::Uuid;
@@ -19,7 +20,16 @@ static DB: OnceCell<boxxy_db::Db> = OnceCell::const_new();
 struct MetricsState {
     provider: SdkMeterProvider,
     meter: Meter,
+    counters: HashMap<String, Counter<f64>>,
     install_id: String,
+}
+
+impl MetricsState {
+    fn get_counter(&mut self, name: &str) -> &Counter<f64> {
+        self.counters
+            .entry(name.to_string())
+            .or_insert_with(|| self.meter.f64_counter(name.to_string()).build())
+    }
 }
 
 /// Initialize the telemetry database connection.
@@ -83,6 +93,7 @@ pub async fn init() {
     *state = Some(MetricsState {
         provider,
         meter,
+        counters: HashMap::new(),
         install_id: install_id.clone(),
     });
 
@@ -115,8 +126,8 @@ pub async fn flush_journal() {
         }
     };
 
-    let state_lock = METRICS_STATE.lock().await;
-    let state = match &*state_lock {
+    let mut state_lock = METRICS_STATE.lock().await;
+    let state = match &mut *state_lock {
         Some(state) => state,
         None => {
             log::warn!(
@@ -179,7 +190,7 @@ pub async fn flush_journal() {
                 }
             }
 
-            let counter = state.meter.f64_counter(name.clone()).build();
+            let counter = state.get_counter(name);
 
             // DEBUG: Print the exact data being handed to OTel
             log::debug!(
