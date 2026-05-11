@@ -12,6 +12,7 @@ pub struct AgentConfig {
     pub web_search_local_enabled: bool,
     pub mcp_servers: Vec<boxxy_mcp::config::McpServerConfig>,
     pub preamble: String,
+    pub user_name: Option<String>,
 }
 
 impl AgentConfig {
@@ -20,6 +21,12 @@ impl AgentConfig {
         web_search_local_enabled: bool,
         preamble: String,
     ) -> Self {
+        let user_name = if settings.user_profile.display_name.trim().is_empty() {
+            None
+        } else {
+            Some(settings.user_profile.display_name.trim().to_string())
+        };
+
         Self {
             model: settings.claw_model.clone(),
             file_tools_enabled: settings.enable_file_tools,
@@ -36,6 +43,7 @@ impl AgentConfig {
                 .cloned()
                 .collect(),
             preamble,
+            user_name,
         }
     }
 

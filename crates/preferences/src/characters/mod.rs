@@ -28,7 +28,7 @@ pub fn setup_characters_page(
     user_group.set_title("You");
 
     let display_name_row = adw::EntryRow::new();
-    display_name_row.set_title("Display Name");
+    display_name_row.set_title("What the model calls you");
     display_name_row.set_text(&settings_rc.borrow().user_profile.display_name);
 
     let user_avatar = adw::Avatar::new(42, None, true);

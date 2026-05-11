@@ -472,6 +472,15 @@ pub async fn create_claw_agent(
         final_preamble.push_str(&config.preamble);
     }
 
+    // --- Inject User Name ---
+    if let Some(user_name) = &config.user_name {
+        final_preamble.push_str("\n\n[USER INFO]\n");
+        final_preamble.push_str(&format!(
+            "The user's name is: {}.\nYou should address them by this name when appropriate.",
+            user_name
+        ));
+    }
+
     // --- Inject Location & Time Context ---
     // We only inject OS context if it's currently globally enabled in boxxy_preferences::Settings.
     // We could add this to AgentConfig, but let's query the live settings for now
