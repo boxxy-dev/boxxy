@@ -9,6 +9,7 @@ pub mod mcp;
 pub mod previews;
 pub mod shortcuts;
 pub mod toolbox;
+pub mod user_profile;
 
 pub mod component;
 pub use component::PreferencesComponent;

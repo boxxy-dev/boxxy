@@ -587,6 +587,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "boxxy-assets"
+version = "0.1.0"
+dependencies = [
+ "directories",
+ "image",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "boxxy-bookmarks"
 version = "0.0.34"
 dependencies = [
@@ -668,6 +677,7 @@ dependencies = [
  "anyhow",
  "boxxy-claw-protocol",
  "boxxy-core-widgets",
+ "boxxy-preferences",
  "boxxy-viewer",
  "chrono",
  "gtk4",
@@ -795,6 +805,7 @@ name = "boxxy-preferences"
 version = "0.0.34"
 dependencies = [
  "anyhow",
+ "boxxy-assets",
  "boxxy-claw-protocol",
  "boxxy-keybindings",
  "boxxy-mcp",
@@ -805,6 +816,7 @@ dependencies = [
  "gtk4",
  "libadwaita",
  "log",
+ "regex",
  "serde",
  "serde_json",
  "tokio",

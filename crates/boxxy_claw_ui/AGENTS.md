@@ -45,4 +45,4 @@ Each row shares the same layout (avatar + heading + dim pane label + viewer + op
 
 ## Dependencies
 
-`boxxy-claw-protocol` (DTOs), `boxxy-viewer` (`StructuredViewer` + renderer trait), `boxxy-core-widgets` (`ObjectExtSafe`), `gtk4`, `libadwaita`, `uuid`, `chrono`. Explicitly **not** `boxxy-claw` — the engine knows nothing about GTK and this crate knows nothing about reasoning.
+`boxxy-claw-protocol` (DTOs), `boxxy-preferences` (current user profile display settings), `boxxy-viewer` (`StructuredViewer` + renderer trait), `boxxy-core-widgets` (`ObjectExtSafe`), `gtk4`, `libadwaita`, `uuid`, `chrono`. Explicitly **not** `boxxy-claw` — the engine knows nothing about GTK and this crate knows nothing about reasoning.

@@ -79,6 +79,17 @@ impl fmt::Display for ColorScheme {
 pub const DEFAULT_FILE_REGEX: &str =
     r#"(?:https?://[^\s"'<>]+|/[\w.@:/-]+|~[\w.@:/-]+|\.{1,2}/[\w.@:/-]+)"#;
 
+// --- User Profile ---
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
+pub struct UserProfile {
+    /// User's display name. Empty string = not set (show placeholder "You").
+    #[serde(default)]
+    pub display_name: String,
+    /// Hex color override (e.g. "#a1b2c3"). None uses the built-in default.
+    #[serde(default)]
+    pub color: Option<String>,
+}
+
 // --- User Configurable Settings ---
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(default)]
@@ -96,6 +107,7 @@ pub struct Settings {
     pub custom_command: String,
     pub cell_height_scale: f64,
     pub cell_width_scale: f64,
+    pub user_profile: UserProfile,
     pub cursor_shape: CursorShape,
     pub cursor_color_override: bool,
     pub cursor_color: String,
@@ -164,6 +176,7 @@ impl Default for Settings {
             custom_command: String::new(),
             cell_height_scale: 1.0,
             cell_width_scale: 1.0,
+            user_profile: UserProfile::default(),
             cursor_shape: CursorShape::Block,
             cursor_color_override: false,
             cursor_color: "rgb(255,255,255)".to_string(),

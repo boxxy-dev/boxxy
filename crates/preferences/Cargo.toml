@@ -17,6 +17,8 @@ anyhow.workspace = true
 boxxy-themes.workspace = true
 tokio.workspace = true
 log.workspace = true
+regex.workspace = true
+boxxy-assets = { path = "../boxxy_assets" }
 boxxy-keybindings.workspace = true
 boxxy-model-selection = { path = "../model_selection" }
 boxxy-mcp = { path = "../boxxy_mcp" }

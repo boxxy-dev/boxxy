@@ -10,11 +10,13 @@
 
 use boxxy_claw_protocol::PersistentClawRow;
 use boxxy_core_widgets::ObjectExtSafe;
+use boxxy_preferences::user_profile;
 use boxxy_viewer::{BlockRenderer, ContentBlock, StructuredViewer, ViewerRegistry};
 use gtk::prelude::*;
 use gtk4 as gtk;
 use gtk4::gdk;
 use gtk4::gio;
+use gtk4::glib;
 use libadwaita as adw;
 use std::rc::Rc;
 
@@ -342,20 +344,18 @@ pub fn create_claw_message_list() -> (gtk::ListView, gio::ListStore) {
             }
         };
 
-        let get_user_info = || -> (String, String) {
-            static USER_INFO: std::sync::LazyLock<(String, String)> =
-                std::sync::LazyLock::new(|| {
-                    let user = std::env::var("USER").unwrap_or_else(|_| "You".to_string());
-                    let formatted = {
-                        let mut chars = user.chars();
-                        match chars.next() {
-                            None => String::new(),
-                            Some(f) => f.to_uppercase().collect::<String>() + chars.as_str(),
-                        }
-                    };
-                    (user, formatted)
-                });
-            USER_INFO.clone()
+        let set_user_header = || {
+            let profile = user_profile::current();
+
+            icon.set_visible(false);
+            user_profile::configure_avatar(&avatar, &profile);
+            avatar.set_visible(true);
+            title.set_markup(&format!(
+                "<span foreground=\"{}\"><b>{}</b></span>",
+                glib::markup_escape_text(&profile.color),
+                glib::markup_escape_text(&profile.display_name)
+            ));
+            pane_lbl.set_visible(false);
         };
 
         match obj.get_row() {
@@ -387,17 +387,7 @@ pub fn create_claw_message_list() -> (gtk::ListView, gio::ListStore) {
                 cmd_label.set_visible(false);
             }
             PersistentClawRow::User { content, .. } => {
-                let (_, formatted_name) = get_user_info();
-                let color = "#0461be"; // Default user color
-
-                icon.set_visible(false);
-                avatar.set_text(Some(&formatted_name));
-                avatar.set_visible(true);
-                title.set_markup(&format!(
-                    "<span foreground=\"{}\"><b>{}</b></span>",
-                    color, formatted_name
-                ));
-                pane_lbl.set_visible(false);
+                set_user_header();
                 hbox.add_css_class("claw-row-user");
 
                 viewer.set_content(&content);
@@ -468,17 +458,7 @@ pub fn create_claw_message_list() -> (gtk::ListView, gio::ListStore) {
                 cmd_label.set_visible(false);
             }
             PersistentClawRow::Command { command, exit_code } => {
-                let (_, formatted_name) = get_user_info();
-                let color = "#0461be"; // Default user color
-
-                icon.set_visible(false);
-                avatar.set_text(Some(&formatted_name));
-                avatar.set_visible(true);
-
-                title.set_markup(&format!(
-                    "<span foreground=\"{}\">{}</span>",
-                    color, formatted_name
-                ));
+                set_user_header();
 
                 let status = if exit_code == 0 {
                     "Command Execution"

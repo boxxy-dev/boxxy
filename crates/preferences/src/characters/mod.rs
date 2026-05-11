@@ -1,3 +1,5 @@
+use crate::config::Settings;
+use crate::user_profile;
 use adw::prelude::*;
 use gtk4 as gtk;
 use gtk4::gdk;
@@ -14,8 +16,204 @@ struct RowData {
     row: adw::ActionRow,
 }
 
-pub fn setup_characters_page(builder: &gtk::Builder) -> Box<dyn Fn(&str) -> bool> {
+pub fn setup_characters_page(
+    builder: &gtk::Builder,
+    settings_rc: Rc<RefCell<Settings>>,
+    on_change: Rc<dyn Fn(Settings) + 'static>,
+) -> Box<dyn Fn(&str) -> bool> {
     let page: adw::PreferencesPage = builder.object("page_characters").unwrap();
+
+    // === User Profile group ===
+    let user_group = adw::PreferencesGroup::new();
+    user_group.set_title("You");
+
+    let display_name_row = adw::EntryRow::new();
+    display_name_row.set_title("Display Name");
+    display_name_row.set_text(&settings_rc.borrow().user_profile.display_name);
+
+    let user_avatar = adw::Avatar::new(42, None, true);
+    user_avatar.set_margin_top(8);
+    user_avatar.set_margin_bottom(8);
+    user_profile::configure_avatar(
+        &user_avatar,
+        &user_profile::effective(&settings_rc.borrow()),
+    );
+    display_name_row.add_prefix(&user_avatar);
+
+    let s_rc = settings_rc.clone();
+    let cb = on_change.clone();
+    let avatar_clone = user_avatar.clone();
+    display_name_row.connect_changed(move |entry| {
+        let text = entry.text().to_string();
+        let mut s = s_rc.borrow_mut();
+        if s.user_profile.display_name != text {
+            s.user_profile.display_name = text.clone();
+            s.save();
+            user_profile::configure_avatar(&avatar_clone, &user_profile::effective(&s));
+            cb(s.clone());
+        }
+    });
+    user_group.add(&display_name_row);
+
+    // Upload & Color Actions
+    let actions_row = adw::ActionRow::new();
+
+    let upload_btn = gtk::Button::with_label("Upload Avatar…");
+    upload_btn.set_valign(gtk::Align::Center);
+    actions_row.add_prefix(&upload_btn);
+
+    let remove_avatar_btn = gtk::Button::with_label("Remove Avatar");
+    remove_avatar_btn.set_valign(gtk::Align::Center);
+    remove_avatar_btn.add_css_class("flat");
+    let avatar_exists = boxxy_assets::user::get_user_avatar_path()
+        .as_ref()
+        .is_some_and(|path| path.exists());
+    remove_avatar_btn.set_visible(avatar_exists);
+    actions_row.add_prefix(&remove_avatar_btn);
+
+    let s_rc_upload = settings_rc.clone();
+    let avatar_clone2 = user_avatar.clone();
+    let remove_avatar_btn_upload = remove_avatar_btn.clone();
+    upload_btn.connect_clicked(move |btn| {
+        let window = btn.root().and_downcast::<gtk::Window>();
+        let dialog = gtk::FileDialog::new();
+        dialog.set_title("Select Avatar");
+        let filter = gtk::FileFilter::new();
+        filter.set_name(Some("Images"));
+        filter.add_mime_type("image/png");
+        filter.add_mime_type("image/jpeg");
+        filter.add_mime_type("image/webp");
+        let filters = gtk::gio::ListStore::new::<gtk::FileFilter>();
+        filters.append(&filter);
+        dialog.set_filters(Some(&filters));
+
+        let s_rc_upload = s_rc_upload.clone();
+        let avatar_clone2 = avatar_clone2.clone();
+        let btn_clone = btn.clone();
+        let remove_avatar_btn_upload = remove_avatar_btn_upload.clone();
+
+        dialog.open(
+            window.as_ref(),
+            None::<&gtk::gio::Cancellable>,
+            move |result| {
+                if let Ok(file) = result {
+                    if let Some(path) = file.path() {
+                        let s_rc_upload = s_rc_upload.clone();
+                        let avatar_clone2 = avatar_clone2.clone();
+                        let btn_clone = btn_clone.clone();
+
+                        glib::spawn_future_local(async move {
+                            let bytes = match tokio::fs::read(&path).await {
+                                Ok(b) => b,
+                                Err(e) => {
+                                    log::error!("Failed to read avatar file: {}", e);
+                                    return;
+                                }
+                            };
+
+                            let process_result = tokio::task::spawn_blocking(move || {
+                                boxxy_assets::image::process_avatar(&bytes)
+                            })
+                            .await;
+
+                            if let Ok(Ok(output)) = process_result {
+                                if let Some(user_avatar_path) =
+                                    boxxy_assets::user::get_user_avatar_path()
+                                {
+                                    if tokio::fs::write(&user_avatar_path, &output.png_bytes)
+                                        .await
+                                        .is_ok()
+                                    {
+                                        user_profile::configure_avatar(
+                                            &avatar_clone2,
+                                            &user_profile::effective(&s_rc_upload.borrow()),
+                                        );
+                                        remove_avatar_btn_upload.set_visible(true);
+
+                                        if let Some(pref_win) = btn_clone
+                                            .root()
+                                            .and_downcast::<adw::PreferencesWindow>(
+                                        ) {
+                                            pref_win.add_toast(adw::Toast::new("Avatar updated"));
+                                        }
+                                    }
+                                }
+                            } else if let Some(pref_win) =
+                                btn_clone.root().and_downcast::<adw::PreferencesWindow>()
+                            {
+                                pref_win.add_toast(adw::Toast::new("Failed to process avatar."));
+                            }
+                        });
+                    }
+                }
+            },
+        );
+    });
+
+    let s_rc_remove = settings_rc.clone();
+    let avatar_remove_clone = user_avatar.clone();
+    let remove_avatar_btn_clone = remove_avatar_btn.clone();
+    remove_avatar_btn.connect_clicked(move |btn| {
+        let s_rc_remove = s_rc_remove.clone();
+        let avatar_remove_clone = avatar_remove_clone.clone();
+        let remove_avatar_btn_clone = remove_avatar_btn_clone.clone();
+        let btn_clone = btn.clone();
+
+        glib::spawn_future_local(async move {
+            if let Some(path) = boxxy_assets::user::get_user_avatar_path()
+                && let Err(e) = tokio::fs::remove_file(&path).await
+                && e.kind() != std::io::ErrorKind::NotFound
+            {
+                log::error!("Failed to remove user avatar: {}", e);
+                if let Some(pref_win) = btn_clone.root().and_downcast::<adw::PreferencesWindow>() {
+                    pref_win.add_toast(adw::Toast::new("Failed to remove avatar."));
+                }
+                return;
+            }
+
+            user_profile::configure_avatar(
+                &avatar_remove_clone,
+                &user_profile::effective(&s_rc_remove.borrow()),
+            );
+            remove_avatar_btn_clone.set_visible(false);
+
+            if let Some(pref_win) = btn_clone.root().and_downcast::<adw::PreferencesWindow>() {
+                pref_win.add_toast(adw::Toast::new("Avatar removed"));
+            }
+        });
+    });
+
+    let color_btn = gtk::ColorButton::new();
+    color_btn.set_valign(gtk::Align::Center);
+    user_profile::set_default_color_button(&color_btn, &settings_rc.borrow());
+
+    let color_box = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    color_box.set_valign(gtk::Align::Center);
+    color_box.append(&color_btn);
+    actions_row.add_suffix(&color_box);
+
+    let s_rc2 = settings_rc.clone();
+    let cb2 = on_change.clone();
+    let avatar_color_clone = user_avatar.clone();
+    color_btn.connect_color_set(move |cb_btn| {
+        let rgba = cb_btn.rgba();
+        let hex = format!(
+            "#{:02x}{:02x}{:02x}",
+            (rgba.red() * 255.0) as u8,
+            (rgba.green() * 255.0) as u8,
+            (rgba.blue() * 255.0) as u8
+        );
+        let mut s = s_rc2.borrow_mut();
+        if s.user_profile.color.as_deref() != Some(&hex) {
+            s.user_profile.color = Some(hex);
+            s.save();
+            user_profile::configure_avatar(&avatar_color_clone, &user_profile::effective(&s));
+            cb2(s.clone());
+        }
+    });
+
+    user_group.add(&actions_row);
+    page.add(&user_group);
 
     let chars_dir = boxxy_claw_protocol::character_loader::get_characters_dir().ok();
 
@@ -268,6 +466,89 @@ fn render_characters(
             // Color swatch
             let swatch = make_color_dot(&character.config.color);
             row.add_suffix(&swatch);
+
+            // Upload Avatar Action
+            let upload_char_btn = gtk::Button::from_icon_name("document-edit-symbolic");
+            upload_char_btn.set_valign(gtk::Align::Center);
+            upload_char_btn.add_css_class("flat");
+            upload_char_btn.set_tooltip_text(Some("Upload Avatar"));
+            row.add_suffix(&upload_char_btn);
+
+            let char_name = character.config.name.clone();
+            let chars_dir_upload = chars_dir.clone();
+            upload_char_btn.connect_clicked(move |btn| {
+                let window = btn.root().and_downcast::<gtk::Window>();
+                let dialog = gtk::FileDialog::new();
+                dialog.set_title("Select Character Avatar");
+                let filter = gtk::FileFilter::new();
+                filter.set_name(Some("Images"));
+                filter.add_mime_type("image/png");
+                filter.add_mime_type("image/jpeg");
+                filter.add_mime_type("image/webp");
+                let filters = gtk::gio::ListStore::new::<gtk::FileFilter>();
+                filters.append(&filter);
+                dialog.set_filters(Some(&filters));
+
+                let char_name = char_name.clone();
+                let chars_dir_upload = chars_dir_upload.clone();
+                let btn_clone = btn.clone();
+
+                dialog.open(
+                    window.as_ref(),
+                    None::<&gtk::gio::Cancellable>,
+                    move |result| {
+                        if let Ok(file) = result {
+                            if let Some(path) = file.path() {
+                                let char_name = char_name.clone();
+                                let chars_dir_upload = chars_dir_upload.clone();
+                                let btn_clone = btn_clone.clone();
+
+                                glib::spawn_future_local(async move {
+                                    let bytes = match tokio::fs::read(&path).await {
+                                        Ok(b) => b,
+                                        Err(e) => {
+                                            log::error!("Failed to read avatar file: {}", e);
+                                            return;
+                                        }
+                                    };
+
+                                    let process_result = tokio::task::spawn_blocking(move || {
+                                        boxxy_assets::image::process_avatar(&bytes)
+                                    })
+                                    .await;
+
+                                    if let Ok(Ok(output)) = process_result {
+                                        if let Some(base_dir) = &chars_dir_upload {
+                                            let char_dir = base_dir.join(&char_name);
+                                            let avatar_path = char_dir.join("AVATAR.png");
+
+                                            if tokio::fs::write(&avatar_path, &output.png_bytes)
+                                                .await
+                                                .is_ok()
+                                            {
+                                                if let Some(pref_win) = btn_clone
+                                                    .root()
+                                                    .and_downcast::<adw::PreferencesWindow>()
+                                                {
+                                                    pref_win.add_toast(adw::Toast::new(
+                                                        "Avatar updated.",
+                                                    ));
+                                                }
+                                            }
+                                        }
+                                    } else if let Some(pref_win) =
+                                        btn_clone.root().and_downcast::<adw::PreferencesWindow>()
+                                    {
+                                        pref_win.add_toast(adw::Toast::new(
+                                            "Failed to process avatar.",
+                                        ));
+                                    }
+                                });
+                            }
+                        }
+                    },
+                );
+            });
 
             chars_group.add(&row);
             new_rows.push(RowData {

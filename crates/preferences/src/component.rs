@@ -137,7 +137,8 @@ impl PreferencesComponent {
             crate::previews::setup_previews_page(&builder, settings_rc.clone(), cb_rc.clone());
         let apis_filter =
             crate::apis::setup_apis_page(&builder, settings_rc.clone(), cb_rc.clone());
-        let characters_filter = crate::characters::setup_characters_page(&builder);
+        let characters_filter =
+            crate::characters::setup_characters_page(&builder, settings_rc.clone(), cb_rc.clone());
         let toolbox_filter =
             crate::toolbox::setup_toolbox_page(&builder, settings_rc.clone(), cb_rc.clone());
         let mcp_filter = crate::mcp::setup_mcp_page(&builder, settings_rc.clone(), cb_rc.clone());
