@@ -9,7 +9,7 @@ pub use clipboard::{GetClipboardTool, SetClipboardTool};
 pub use file::{FileDeleteTool, FileReadTool, FileWriteTool, ListDirectoryTool};
 pub use network::HttpFetchTool;
 pub use search::{TavilyProvider, WebSearchTool};
-pub use system::{GetSystemInfoTool, KillProcessTool, ListProcessesTool};
+pub use system::{GetSystemInfoTool, KillProcessTool, ListProcessesTool, RunBackgroundCommandTool};
 
 /// Trait for handling user approvals for sensitive tools.
 /// Implemented by boxxy-claw to bridge with the UI.
@@ -19,6 +19,8 @@ pub trait ApprovalHandler: Send + Sync {
     async fn propose_file_write(&self, path: String, content: String) -> bool;
     /// Propose deleting a file from the host system.
     async fn propose_file_delete(&self, path: String) -> bool;
+    /// Propose running a command in the background.
+    async fn propose_background_command(&self, command: String, explanation: String) -> bool;
     /// Propose killing a process on the host system.
     async fn propose_kill_process(&self, pid: u32, process_name: String) -> bool;
     /// Propose reading the system clipboard.

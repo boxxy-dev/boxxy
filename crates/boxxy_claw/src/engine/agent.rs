@@ -13,7 +13,8 @@ use crate::engine::{ClawEngineEvent, ClawEnvironment};
 use crate::utils::load_prompt_fallback;
 use boxxy_core_toolbox::{
     FileDeleteTool, FileReadTool, FileWriteTool, GetClipboardTool, GetSystemInfoTool,
-    HttpFetchTool, KillProcessTool, ListDirectoryTool, ListProcessesTool, SetClipboardTool,
+    HttpFetchTool, KillProcessTool, ListDirectoryTool, ListProcessesTool, RunBackgroundCommandTool,
+    SetClipboardTool,
 };
 use boxxy_model_selection::ModelProvider;
 use rig::agent::Agent;
@@ -413,6 +414,10 @@ pub async fn create_claw_agent(
 
     if config.dangerous_tools_enabled {
         tools.push(Box::new(KillProcessTool {
+            env: (*env).clone(),
+            approval: approval_handler.clone(),
+        }));
+        tools.push(Box::new(RunBackgroundCommandTool {
             env: (*env).clone(),
             approval: approval_handler.clone(),
         }));

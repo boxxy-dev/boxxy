@@ -401,6 +401,13 @@ impl ClawEnvironment for DbusClawEnvironment {
             .context("D-Bus exec_shell failed")
     }
 
+    async fn spawn_detached(&self, command: String, cwd: String) -> Result<u32> {
+        self.proxy
+            .spawn_detached(command, cwd)
+            .await
+            .context("D-Bus spawn_detached failed")
+    }
+
     async fn read_file(&self, path: String, start_line: u32, end_line: u32) -> Result<String> {
         self.proxy
             .read_file(path, start_line, end_line)

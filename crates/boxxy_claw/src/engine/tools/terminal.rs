@@ -36,8 +36,9 @@ impl Tool for TerminalCommandTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Execute a command in the user's active terminal. This will prompt the user to 'Accept & Run'. Use this for interactive commands or tasks where the user needs to see the live output. \
-            CRITICAL BUG PREVENTION: After using this tool, NEVER wrap the command or its output in a markdown code block (like ```bash or ```fish) in your text response. Doing so will cause the terminal to mistakenly prompt the user to execute it a second time in an infinite loop. Just explain what happened in plain text.".to_string(),
+            description: "Execute a command in the user's active terminal. This will prompt the user to 'Accept & Run'. Use this for interactive commands (ls, git, cat) where the user needs to see the live output. \
+            CRITICAL: DO NOT use this tool for GUI applications (Chrome, VS Code) or long-running dev servers that would block the terminal. For those, you MUST use the `run_background_command` tool instead. \
+            BUG PREVENTION: After using this tool, NEVER wrap the command or its output in a markdown code block (like ```bash) in your text response. Just explain in plain text.".to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {

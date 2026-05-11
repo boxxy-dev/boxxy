@@ -24,6 +24,10 @@ pub enum Proposal {
         pid: u32,
         name: String,
     },
+    BackgroundCommand {
+        command: String,
+        explanation: String,
+    },
     GetClipboard,
     SetClipboard(String),
 }

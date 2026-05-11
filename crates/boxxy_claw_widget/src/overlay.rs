@@ -292,19 +292,40 @@ impl TerminalOverlay {
                 Proposal::FileWrite { .. } => ClawMessage::FileWriteReply { approved },
                 Proposal::FileDelete { .. } => ClawMessage::FileDeleteReply { approved },
                 Proposal::KillProcess { .. } => ClawMessage::KillProcessReply { approved },
+                Proposal::BackgroundCommand { .. } => ClawMessage::BackgroundCommandReply { approved },
                 Proposal::GetClipboard => ClawMessage::GetClipboardReply { approved },
                 Proposal::SetClipboard(_) => ClawMessage::SetClipboardReply { approved },
-                _ => ClawMessage::FileWriteReply { approved },
+                _ => unreachable!(),
             }
         };
 
         let host_approve = host.clone();
         let cp_approve = current_proposal.clone();
         let dismiss_approve = dismiss_and_refocus.clone();
+        
+        // Use a clone of the action boxes to hide them directly inside the closure
+        // since we can't easily capture `self` or a weak self.
+        let file_action_box_clone = file_action_box.clone();
+        let action_box_clone = action_box.clone();
+        let ok_btn_clone = ok_btn.clone();
+        
         approve_file_btn.connect_clicked(move |_| {
-            let msg = make_file_reply(&cp_approve.borrow(), true);
+            let proposal = cp_approve.borrow().clone();
+            let msg = make_file_reply(&proposal, true);
             host_approve.send_claw(msg);
-            dismiss_approve();
+            
+            // Background commands keep the drawer open because they don't block the terminal
+            // and the user is likely still conversing with the agent.
+            if !matches!(proposal, Proposal::BackgroundCommand { .. }) {
+                dismiss_approve();
+            } else {
+                // If we don't dismiss, we still need to clear the proposal state
+                // so the buttons disappear and it returns to the 'idle' state waiting for the tool result.
+                *cp_approve.borrow_mut() = Proposal::None;
+                file_action_box_clone.set_visible(false);
+                action_box_clone.set_visible(true);
+                ok_btn_clone.set_visible(true);
+            }
         });
 
         let host_reject_file = host.clone();
@@ -472,6 +493,11 @@ impl TerminalOverlay {
 
     pub fn set_thinking(&self, thinking: bool) {
         self.is_thinking.set(thinking);
+        self.sync_action_state();
+    }
+
+    pub fn clear_proposal(&self) {
+        *self.current_proposal.borrow_mut() = Proposal::None;
         self.sync_action_state();
     }
 
@@ -813,29 +839,36 @@ impl TerminalOverlay {
         if !is_thinking {
             // 5. Show actions based strictly on the current proposal state
             match proposal {
-                Proposal::Command(_) => {
+                Proposal::Command(_) | Proposal::Bookmark { .. } => {
                     self.command_frame.set_visible(true);
                     self.action_box.set_visible(true);
                     self.accept_btn.set_visible(true);
                     self.reject_btn.set_visible(true);
+                    self.template_box.set_visible(matches!(proposal, Proposal::Bookmark { .. }));
                 }
-                Proposal::Bookmark { .. } => {
-                    self.command_frame.set_visible(true);
-                    self.action_box.set_visible(true);
-                    self.accept_btn.set_visible(true);
-                    self.reject_btn.set_visible(true);
-                    self.template_box.set_visible(true);
+                Proposal::BackgroundCommand { .. } => {
+                    self.approve_file_btn.set_label("Approve & Launch");
+                    self.file_action_box.set_visible(true);
+                    self.action_box.set_visible(false);
                 }
                 Proposal::FileWrite { .. }
                 | Proposal::FileDelete { .. }
                 | Proposal::KillProcess { .. }
                 | Proposal::GetClipboard
                 | Proposal::SetClipboard(_) => {
+                    self.approve_file_btn.set_label(
+                        if matches!(proposal, Proposal::FileDelete { .. } | Proposal::KillProcess { .. }) {
+                            "Approve & Delete"
+                        } else if matches!(proposal, Proposal::GetClipboard | Proposal::SetClipboard(_)) {
+                            "Approve"
+                        } else {
+                            "Approve & Write"
+                        }
+                    );
                     self.file_action_box.set_visible(true);
                     self.action_box.set_visible(false);
                 }
                 Proposal::None => {
-                    // Idle state: just Okay and Inspect (handled above)
                     self.action_box.set_visible(true);
                     self.ok_btn.set_visible(true);
                 }

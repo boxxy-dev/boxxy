@@ -39,6 +39,47 @@ impl ClawEnvironment for ClawSubsystem {
         Ok((exit_code, stdout, stderr))
     }
 
+    async fn spawn_detached(&self, command: String, cwd: String) -> anyhow::Result<u32> {
+        use std::os::unix::process::CommandExt;
+
+        if !std::path::Path::new(&cwd).exists() {
+            return Err(anyhow::anyhow!("Working directory does not exist: {}", cwd));
+        }
+
+        let mut child = unsafe {
+            Command::new("bash")
+                .arg("-c")
+                .arg(&command)
+                .current_dir(&cwd)
+                .stdin(Stdio::null())
+                .stdout(Stdio::inherit())
+                .stderr(Stdio::piped())
+                .pre_exec(|| {
+                    libc::setsid();
+                    Ok(())
+                })
+                .spawn()?
+        };
+
+        let pid = child.id().unwrap_or(0);
+
+        tokio::select! {
+            result = child.wait_with_output() => {
+                let out = result?;
+                if !out.status.success() {
+                    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+                    return Err(anyhow::anyhow!("Process exited immediately: {}", stderr));
+                }
+                // Exited with code 0 immediately — launcher script pattern, still valid
+                Ok(pid)
+            }
+            _ = tokio::time::sleep(std::time::Duration::from_millis(250)) => {
+                // Still running — drop the piped stderr handle, detach fully
+                Ok(pid)
+            }
+        }
+    }
+
     async fn read_file(
         &self,
         path: String,
@@ -233,6 +274,12 @@ impl ClawEnvironment for ClawSubsystem {
 impl ClawSubsystem {
     async fn exec_shell(&self, command: String) -> fdo::Result<(i32, String, String)> {
         ClawEnvironment::exec_shell(self, command)
+            .await
+            .map_err(|e| fdo::Error::Failed(e.to_string()))
+    }
+
+    async fn spawn_detached(&self, command: String, cwd: String) -> fdo::Result<u32> {
+        ClawEnvironment::spawn_detached(self, command, cwd)
             .await
             .map_err(|e| fdo::Error::Failed(e.to_string()))
     }

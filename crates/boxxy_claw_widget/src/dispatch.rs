@@ -323,6 +323,48 @@ pub fn spawn_dispatch(
                         },
                     );
                 }
+                ClawEngineEvent::ProposeBackgroundCommand {
+                    command,
+                    explanation,
+                    agent_name,
+                    character_id,
+                    usage,
+                } => {
+                    if let Some(usage) = usage {
+                        total_tokens.set(total_tokens.get() + usage_total(usage));
+                    }
+                    
+                    boxxy_claw_ui::add_approval_row(
+                        &sidebar_store,
+                        id.clone(),
+                        Some(agent_name.clone()),
+                        Some(character_id.clone()),
+                        command,
+                        |_| {},
+                    );
+                    
+                    if overlay.history_mode() {
+                        boxxy_claw_ui::add_approval_row(
+                            &overlay_store,
+                            id.clone(),
+                            Some(agent_name.clone()),
+                            Some(character_id.clone()),
+                            command,
+                            |_| {},
+                        );
+                    }
+                    
+                    overlay.show(
+                        OverlayMode::Claw,
+                        agent_name,
+                        Some("Background Command"),
+                        &format!("{}\n\n`{}`", explanation, command),
+                        crate::Proposal::BackgroundCommand {
+                            command: command.clone(),
+                            explanation: explanation.clone(),
+                        },
+                    );
+                }
                 ClawEngineEvent::ProposeGetClipboard {
                     agent_name,
                     character_id,
@@ -565,6 +607,38 @@ pub fn spawn_dispatch(
                             result,
                             |_, _| {},
                         );
+                    } else if tool_name == "run_background_command" {
+                        boxxy_claw_ui::add_tool_call_row(
+                            &sidebar_store,
+                            id.clone(),
+                            Some(agent_name.clone()),
+                            Some(character_id.clone()),
+                            &tool_name,
+                            &result,
+                        );
+                        // Surface a brief confirmation in the overlay so the user
+                        // sees the launch result without opening the sidebar.
+                        let notice = serde_json::from_str::<serde_json::Value>(&result)
+                            .ok()
+                            .and_then(|v| {
+                                let ok = v.get("success").and_then(|s| s.as_bool()).unwrap_or(false);
+                                if ok {
+                                    v.get("message")
+                                        .and_then(|m| m.as_str())
+                                        .map(|m| format!("⚙ {}", m))
+                                } else {
+                                    v.get("message")
+                                        .and_then(|m| m.as_str())
+                                        .map(|m| format!("✗ {}", m))
+                                }
+                            });
+                        if let Some(msg) = notice {
+                            boxxy_claw_ui::add_system_message_row(
+                                &overlay_store,
+                                id.clone(),
+                                &msg,
+                            );
+                        }
                     } else {
                         boxxy_claw_ui::add_tool_call_row(
                             &sidebar_store,

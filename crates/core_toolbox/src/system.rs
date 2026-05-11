@@ -5,6 +5,10 @@ use rig::tool::Tool;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
+pub mod background;
+
+pub use background::RunBackgroundCommandTool;
+
 // --- SYSTEM INFO ---
 
 #[derive(Deserialize)]

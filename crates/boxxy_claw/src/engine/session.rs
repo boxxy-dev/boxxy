@@ -34,6 +34,7 @@ pub struct SessionState {
     pub pending_file_reply: Option<tokio::sync::oneshot::Sender<bool>>,
     pub pending_file_delete_reply: Option<tokio::sync::oneshot::Sender<bool>>,
     pub pending_kill_process_reply: Option<tokio::sync::oneshot::Sender<bool>>,
+    pub pending_background_reply: Option<tokio::sync::oneshot::Sender<bool>>,
     pub pending_get_clipboard_reply: Option<tokio::sync::oneshot::Sender<bool>>,
     pub pending_set_clipboard_reply: Option<tokio::sync::oneshot::Sender<bool>>,
     pub pending_scrollbacks:
@@ -113,6 +114,9 @@ impl SessionState {
         if let Some(reply) = self.pending_kill_process_reply.take() {
             let _ = reply.send(false);
         }
+        if let Some(reply) = self.pending_background_reply.take() {
+            let _ = reply.send(false);
+        }
         if let Some(reply) = self.pending_get_clipboard_reply.take() {
             let _ = reply.send(false);
         }
@@ -184,6 +188,7 @@ impl ClawSession {
                 pending_file_reply: None,
                 pending_file_delete_reply: None,
                 pending_kill_process_reply: None,
+                pending_background_reply: None,
                 pending_get_clipboard_reply: None,
                 pending_set_clipboard_reply: None,
                 pending_scrollbacks: std::collections::HashMap::new(),
@@ -429,6 +434,7 @@ impl ClawSession {
                 | ClawMessage::FileWriteReply { .. }
                 | ClawMessage::FileDeleteReply { .. }
                 | ClawMessage::KillProcessReply { .. }
+                | ClawMessage::BackgroundCommandReply { .. }
                 | ClawMessage::GetClipboardReply { .. }
                 | ClawMessage::SetClipboardReply { .. }
                 | ClawMessage::ScrollbackReply { .. }
@@ -1357,6 +1363,12 @@ impl ClawSession {
                                 let _ = reply.send(approved);
                             }
                         }
+                        ClawMessage::BackgroundCommandReply { approved } => {
+                            let mut state_lock = self.state.lock().await;
+                            if let Some(reply) = state_lock.pending_background_reply.take() {
+                                let _ = reply.send(approved);
+                            }
+                        }
                         ClawMessage::GetClipboardReply { approved } => {
                             let mut state_lock = self.state.lock().await;
                             if let Some(reply) = state_lock.pending_get_clipboard_reply.take() {
@@ -1756,6 +1768,7 @@ mod pending_drain_tests {
             pending_file_reply: None,
             pending_file_delete_reply: None,
             pending_kill_process_reply: None,
+            pending_background_reply: None,
             pending_get_clipboard_reply: None,
             pending_set_clipboard_reply: None,
             pending_scrollbacks: HashMap::new(),

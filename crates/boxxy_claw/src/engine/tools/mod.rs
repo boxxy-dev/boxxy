@@ -129,6 +129,40 @@ impl ApprovalHandler for ClawApprovalHandler {
         rx.await.unwrap_or(false)
     }
 
+    async fn propose_background_command(&self, command: String, explanation: String) -> bool {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let (agent_name, character_id) = {
+            let state = self.state.lock().await;
+            (state.agent_name.clone(), state.character_id.clone())
+        };
+
+        {
+            let mut state = self.state.lock().await;
+            state.pending_background_reply = Some(tx);
+        }
+
+        let event = ClawEngineEvent::ProposeBackgroundCommand {
+            agent_name,
+            character_id,
+            command,
+            explanation,
+            usage: None,
+        };
+
+        crate::engine::persist_visual_event(
+            self.db.clone(),
+            self.session_id.clone(),
+            self.pane_id.clone(),
+            &event,
+        );
+
+        if self.tx_ui.send(event).await.is_err() {
+            return false;
+        }
+
+        rx.await.unwrap_or(false)
+    }
+
     async fn propose_get_clipboard(&self) -> bool {
         let (tx, rx) = tokio::sync::oneshot::channel();
         let (agent_name, character_id) = {

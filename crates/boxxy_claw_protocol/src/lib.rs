@@ -193,6 +193,9 @@ pub enum ClawMessage {
     FileDeleteReply {
         approved: bool,
     },
+    BackgroundCommandReply {
+        approved: bool,
+    },
     KillProcessReply {
         approved: bool,
     },
@@ -305,6 +308,13 @@ pub enum ClawEngineEvent {
         process_name: String,
         usage: Option<UsageWrapper>,
     },
+    ProposeBackgroundCommand {
+        agent_name: String,
+        character_id: String,
+        command: String,
+        explanation: String,
+        usage: Option<UsageWrapper>,
+    },
     ProposeGetClipboard {
         agent_name: String,
         character_id: String,
@@ -406,6 +416,7 @@ pub enum ClawEngineEvent {
 #[async_trait::async_trait]
 pub trait ClawEnvironment: Send + Sync + 'static {
     async fn exec_shell(&self, command: String) -> anyhow::Result<(i32, String, String)>;
+    async fn spawn_detached(&self, command: String, cwd: String) -> anyhow::Result<u32>;
     async fn read_file(
         &self,
         path: String,
