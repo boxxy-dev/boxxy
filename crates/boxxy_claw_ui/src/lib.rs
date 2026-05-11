@@ -174,21 +174,39 @@ pub fn create_claw_message_list() -> (gtk::ListView, gio::ListStore) {
 
     factory.connect_setup(move |_, list_item| {
         let list_item = list_item.downcast_ref::<gtk::ListItem>().unwrap();
-        let vbox = gtk::Box::new(gtk::Orientation::Vertical, 4);
-        vbox.add_css_class("claw-virtual-row");
+
+        // Discord-style layout:
+        // hbox (root)
+        // ├── left_col (vertical box for avatar/icon)
+        // └── vbox (content column)
+        //     ├── header (hbox for title, pane_lbl)
+        //     ├── viewer
+        //     └── cmd_label
+        let hbox = gtk::Box::new(gtk::Orientation::Horizontal, 16);
+        hbox.add_css_class("claw-virtual-row");
         // `claw-row` is always present so consumers (drawer, sidebar)
         // can target "any claw row" generically. The per-variant
         // `claw-row-<kind>` class is rewritten in `connect_bind`.
-        vbox.add_css_class("claw-row");
+        hbox.add_css_class("claw-row");
+
+        let left_col = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        left_col.set_valign(gtk::Align::Start);
+        left_col.set_size_request(42, -1);
+        hbox.append(&left_col);
+
+        let icon = gtk::Image::new();
+        icon.set_pixel_size(42);
+        left_col.append(&icon);
+
+        let avatar = adw::Avatar::new(42, None, true);
+        avatar.set_visible(false);
+        left_col.append(&avatar);
+
+        let vbox = gtk::Box::new(gtk::Orientation::Vertical, 2);
+        vbox.set_hexpand(true);
+        hbox.append(&vbox);
 
         let header = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-        let icon = gtk::Image::new();
-        header.append(&icon);
-
-        let avatar = adw::Avatar::new(24, None, false);
-        avatar.set_visible(false);
-        header.append(&avatar);
-
         let title = gtk::Label::new(None);
         title.add_css_class("heading");
         title.set_halign(gtk::Align::Start);
@@ -213,26 +231,26 @@ pub fn create_claw_message_list() -> (gtk::ListView, gio::ListStore) {
         cmd_label.set_visible(false);
         vbox.append(&cmd_label);
 
-        vbox.set_safe_data("icon", icon);
-        vbox.set_safe_data("avatar", avatar);
-        vbox.set_safe_data("title", title);
-        vbox.set_safe_data("pane_lbl", pane_lbl);
-        vbox.set_safe_data("viewer", viewer);
-        vbox.set_safe_data("cmd_label", cmd_label);
+        hbox.set_safe_data("icon", icon);
+        hbox.set_safe_data("avatar", avatar);
+        hbox.set_safe_data("title", title);
+        hbox.set_safe_data("pane_lbl", pane_lbl);
+        hbox.set_safe_data("viewer", viewer);
+        hbox.set_safe_data("cmd_label", cmd_label);
 
-        list_item.set_child(Some(&vbox));
+        list_item.set_child(Some(&hbox));
     });
 
     factory.connect_bind(move |_, list_item| {
         let list_item = list_item.downcast_ref::<gtk::ListItem>().unwrap();
-        let vbox = list_item.child().and_downcast::<gtk::Box>().unwrap();
+        let hbox = list_item.child().and_downcast::<gtk::Box>().unwrap();
 
-        let icon = vbox.get_safe_data::<gtk::Image>("icon").unwrap();
-        let avatar = vbox.get_safe_data::<adw::Avatar>("avatar").unwrap();
-        let title = vbox.get_safe_data::<gtk::Label>("title").unwrap();
-        let pane_lbl = vbox.get_safe_data::<gtk::Label>("pane_lbl").unwrap();
-        let viewer = vbox.get_safe_data::<StructuredViewer>("viewer").unwrap();
-        let cmd_label = vbox.get_safe_data::<gtk::Label>("cmd_label").unwrap();
+        let icon = hbox.get_safe_data::<gtk::Image>("icon").unwrap();
+        let avatar = hbox.get_safe_data::<adw::Avatar>("avatar").unwrap();
+        let title = hbox.get_safe_data::<gtk::Label>("title").unwrap();
+        let pane_lbl = hbox.get_safe_data::<gtk::Label>("pane_lbl").unwrap();
+        let viewer = hbox.get_safe_data::<StructuredViewer>("viewer").unwrap();
+        let cmd_label = hbox.get_safe_data::<gtk::Label>("cmd_label").unwrap();
 
         let Some(obj) = list_item.item().and_downcast::<ClawRowObject>() else {
             return;
@@ -248,7 +266,7 @@ pub fn create_claw_message_list() -> (gtk::ListView, gio::ListStore) {
         icon.remove_css_class("accent");
         icon.remove_css_class("warning");
         icon.remove_css_class("error");
-        vbox.remove_css_class("system-message");
+        hbox.remove_css_class("system-message");
         // Strip every per-variant class — rows are recycled across
         // variants, so the new bind picks exactly one below.
         for cls in [
@@ -260,7 +278,7 @@ pub fn create_claw_message_list() -> (gtk::ListView, gio::ListStore) {
             "claw-row-tool-call",
             "claw-row-command",
         ] {
-            vbox.remove_css_class(cls);
+            hbox.remove_css_class(cls);
         }
 
         let agent_or_unknown = |name: Option<String>| -> String {
@@ -289,7 +307,10 @@ pub fn create_claw_message_list() -> (gtk::ListView, gio::ListStore) {
                         .collect::<Vec<String>>()
                         .join(" ");
 
-                    title.set_label(&formatted_name);
+                    title.set_markup(&format!(
+                        "<span foreground=\"{}\"><b>{}</b></span>",
+                        info.config.color, formatted_name
+                    ));
                     avatar.set_text(Some(&formatted_name));
                     if info.has_avatar {
                         if let Ok(dir) = boxxy_claw_protocol::character_loader::get_characters_dir()
@@ -307,7 +328,8 @@ pub fn create_claw_message_list() -> (gtk::ListView, gio::ListStore) {
             }
 
             if !name_set {
-                title.set_label(&agent_or_unknown(fallback_name.clone()));
+                let name = agent_or_unknown(fallback_name.clone());
+                title.set_markup(&format!("<b>{}</b>", name));
                 avatar.set_visible(false);
                 icon.set_visible(true);
             }
@@ -320,15 +342,31 @@ pub fn create_claw_message_list() -> (gtk::ListView, gio::ListStore) {
             }
         };
 
+        let get_user_info = || -> (String, String) {
+            static USER_INFO: std::sync::LazyLock<(String, String)> =
+                std::sync::LazyLock::new(|| {
+                    let user = std::env::var("USER").unwrap_or_else(|_| "You".to_string());
+                    let formatted = {
+                        let mut chars = user.chars();
+                        match chars.next() {
+                            None => String::new(),
+                            Some(f) => f.to_uppercase().collect::<String>() + chars.as_str(),
+                        }
+                    };
+                    (user, formatted)
+                });
+            USER_INFO.clone()
+        };
+
         match obj.get_row() {
             PersistentClawRow::SystemMessage { content, .. } => {
                 icon.set_visible(false);
                 avatar.set_visible(false);
                 pane_lbl.set_visible(false);
                 title.set_visible(false);
-                vbox.add_css_class("system-message");
-                vbox.add_css_class("claw-row-system");
-                vbox.add_css_class("dimmed");
+                hbox.add_css_class("system-message");
+                hbox.add_css_class("claw-row-system");
+                hbox.add_css_class("dimmed");
 
                 viewer.set_content(&content);
                 viewer.widget().set_visible(true);
@@ -342,18 +380,25 @@ pub fn create_claw_message_list() -> (gtk::ListView, gio::ListStore) {
             } => {
                 set_agent_header(&character_id, &agent_name, "boxxyclaw", Some("accent"));
                 pane_lbl.set_visible(false);
-                vbox.add_css_class("claw-row-diagnosis");
+                hbox.add_css_class("claw-row-diagnosis");
 
                 viewer.set_content(&content);
                 viewer.widget().set_visible(true);
                 cmd_label.set_visible(false);
             }
             PersistentClawRow::User { content, .. } => {
-                icon.set_icon_name(Some("boxxy-comic-bubble-symbolic"));
-                avatar.set_visible(false);
-                title.set_label("You");
+                let (_, formatted_name) = get_user_info();
+                let color = "#0461be"; // Default user color
+
+                icon.set_visible(false);
+                avatar.set_text(Some(&formatted_name));
+                avatar.set_visible(true);
+                title.set_markup(&format!(
+                    "<span foreground=\"{}\"><b>{}</b></span>",
+                    color, formatted_name
+                ));
                 pane_lbl.set_visible(false);
-                vbox.add_css_class("claw-row-user");
+                hbox.add_css_class("claw-row-user");
 
                 viewer.set_content(&content);
                 viewer.widget().set_visible(true);
@@ -373,7 +418,7 @@ pub fn create_claw_message_list() -> (gtk::ListView, gio::ListStore) {
                     Some("warning"),
                 );
                 pane_lbl.set_visible(false);
-                vbox.add_css_class("claw-row-suggested");
+                hbox.add_css_class("claw-row-suggested");
 
                 if diagnosis.is_empty() {
                     viewer.widget().set_visible(false);
@@ -393,7 +438,7 @@ pub fn create_claw_message_list() -> (gtk::ListView, gio::ListStore) {
             } => {
                 set_agent_header(&character_id, &agent_name, "boxxyclaw", Some("accent"));
                 pane_lbl.set_visible(false);
-                vbox.add_css_class("claw-row-process-list");
+                hbox.add_css_class("claw-row-process-list");
 
                 viewer.clear();
                 viewer.append_custom_block("list_processes", &result_json);
@@ -414,7 +459,7 @@ pub fn create_claw_message_list() -> (gtk::ListView, gio::ListStore) {
                 );
                 title.set_label(&format!("Used tool: {tool_name}"));
                 pane_lbl.set_visible(false);
-                vbox.add_css_class("claw-row-tool-call");
+                hbox.add_css_class("claw-row-tool-call");
 
                 // Tool results can be huge (whole file contents); show a
                 // compact single-row label instead.
@@ -423,16 +468,27 @@ pub fn create_claw_message_list() -> (gtk::ListView, gio::ListStore) {
                 cmd_label.set_visible(false);
             }
             PersistentClawRow::Command { command, exit_code } => {
-                icon.set_icon_name(Some("utilities-terminal-symbolic"));
-                avatar.set_visible(false);
-                if exit_code == 0 {
-                    title.set_label("Command Execution");
+                let (_, formatted_name) = get_user_info();
+                let color = "#0461be"; // Default user color
+
+                icon.set_visible(false);
+                avatar.set_text(Some(&formatted_name));
+                avatar.set_visible(true);
+
+                title.set_markup(&format!(
+                    "<span foreground=\"{}\">{}</span>",
+                    color, formatted_name
+                ));
+
+                let status = if exit_code == 0 {
+                    "Command Execution"
                 } else {
-                    title.set_label(&format!("Command Failed (Exit {exit_code})"));
-                    icon.add_css_class("error");
-                }
-                pane_lbl.set_label("User");
-                vbox.add_css_class("claw-row-command");
+                    "Command Failed"
+                };
+                pane_lbl.set_label(status);
+                pane_lbl.set_visible(true);
+
+                hbox.add_css_class("claw-row-command");
 
                 viewer.set_content(&command);
                 viewer.widget().set_visible(true);
@@ -445,8 +501,8 @@ pub fn create_claw_message_list() -> (gtk::ListView, gio::ListStore) {
     // from racing with the next bind on the same recycled widget.
     factory.connect_unbind(move |_, list_item| {
         let list_item = list_item.downcast_ref::<gtk::ListItem>().unwrap();
-        let vbox = list_item.child().and_downcast::<gtk::Box>().unwrap();
-        if let Some(viewer) = vbox.get_safe_data::<StructuredViewer>("viewer") {
+        let hbox = list_item.child().and_downcast::<gtk::Box>().unwrap();
+        if let Some(viewer) = hbox.get_safe_data::<StructuredViewer>("viewer") {
             viewer.clear();
         }
     });

@@ -120,12 +120,10 @@ tabbar tab.tab-slate:selected { background-image: linear-gradient(0deg, alpha(#6
     margin: 12px;
 }
 
-/* Strip all interactive states from ListView row wrappers — hover background,
-   double-click flash (active), focus ring, and selection highlight all come
-   from listview > row pseudo-classes and must be zeroed here so the inner
-   .claw-virtual-row card is the only visible surface. */
+/* Strip all interactive states from ListView row wrappers — double-click flash (active),
+   focus ring, and selection highlight all come from listview > row pseudo-classes
+   and must be zeroed here so the inner .claw-virtual-row card handles visuals. */
 .virtual-history > row,
-.virtual-history > row:hover,
 .virtual-history > row:focus,
 .virtual-history > row:focus-within,
 .virtual-history > row:selected,
@@ -141,14 +139,21 @@ tabbar tab.tab-slate:selected { background-image: linear-gradient(0deg, alpha(#6
 
 /* ── Claw Sidebar Virtual Rows ─────────────────────────────────────────── */
 .claw-virtual-row {
-    background-color: @card_bg_color;
-    border-radius: 12px;
+    background-color: transparent;
+    border-radius: 4px;
     margin: 4px 6px;
-    padding: 8px;
+    padding: 6px 8px;
+    transition: background-color 0.15s ease;
+}
+
+/* Hover highlight */
+.virtual-history > row:hover .claw-virtual-row,
+.claw-virtual-row:hover {
+    background-color: alpha(@window_fg_color, 0.05);
 }
 
 .claw-virtual-row .heading {
-    font-weight: bold;
+	/*font-weight: bold;*/
     font-size: 1.05em;
 }
 
@@ -157,22 +162,30 @@ tabbar tab.tab-slate:selected { background-image: linear-gradient(0deg, alpha(#6
     opacity: 0.7;
 }
 
+.claw-row-user {
+	font-size: 1.05em;
+}
+
+.claw-row-diagnosis {
+	font-size: 1.05em;
+}
+
 /* ── AI Chat ──────────────────────────────────────────────────────────────── */
 
 .message-bubble {
-	padding: 10px 14px;
-	border-radius: 12px;
+	padding: 0;
+	border-radius: 0;
 }
 
 .user-message {
-	background-color: @accent_bg_color;
-	color: @accent_fg_color;
-	border-radius: 16px 16px 4px 16px;
+	background-color: transparent;
+	color: inherit;
+	border-radius: 0;
 }
 
 .assistant-message {
-	background-color: @card_bg_color;
-	border-radius: 4px 16px 16px 16px;
+	background-color: transparent;
+	border-radius: 0;
 }
 
 /* Code blocks */
