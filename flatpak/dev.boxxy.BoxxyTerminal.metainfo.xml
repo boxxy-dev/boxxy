@@ -11,15 +11,6 @@
 	<summary>The Stupid Linux Terminal</summary>
 	<description>
 	    <p>A Terminal written in GTK and Rust that integrates a blazing fast Claw-like AI!</p>
-	    <p>Features:</p>
-	    <ul>
-	    <li>Split panes with soft swap</li>
-	    <li>Preview videos via GTK widget</li>
-	    <li>Kitty Graphics Protocol support</li>
-	    <li>Self improving AI with local models and memories 🦀</li>
-	    <li>Headless modern terminal in pure Rust</li>
-	    <li>And a few more..</li>
-	    </ul>
 	    <p>NOTE: Boxxy is in preview. Short term memories database might get wiped, since Boxxy doesn't support migrations yet</p>
 	</description>
 
@@ -61,7 +52,7 @@
   </categories>
 
   <releases>
-    <release version="0.0.34" date="2026-04-18">
+    <release version="0.0.35" date="2026-05-12">
       <description>
         <p>Initial</p>
       </description>
