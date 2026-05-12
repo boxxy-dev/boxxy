@@ -333,7 +333,7 @@ pub fn spawn_dispatch(
                     if let Some(usage) = usage {
                         total_tokens.set(total_tokens.get() + usage_total(usage));
                     }
-                    
+
                     boxxy_claw_ui::add_approval_row(
                         &sidebar_store,
                         id.clone(),
@@ -342,7 +342,7 @@ pub fn spawn_dispatch(
                         command,
                         |_| {},
                     );
-                    
+
                     if overlay.history_mode() {
                         boxxy_claw_ui::add_approval_row(
                             &overlay_store,
@@ -353,7 +353,7 @@ pub fn spawn_dispatch(
                             |_| {},
                         );
                     }
-                    
+
                     overlay.show(
                         OverlayMode::Claw,
                         agent_name,
@@ -621,7 +621,8 @@ pub fn spawn_dispatch(
                         let notice = serde_json::from_str::<serde_json::Value>(&result)
                             .ok()
                             .and_then(|v| {
-                                let ok = v.get("success").and_then(|s| s.as_bool()).unwrap_or(false);
+                                let ok =
+                                    v.get("success").and_then(|s| s.as_bool()).unwrap_or(false);
                                 if ok {
                                     v.get("message")
                                         .and_then(|m| m.as_str())
@@ -633,18 +634,15 @@ pub fn spawn_dispatch(
                                 }
                             });
                         if let Some(msg) = notice {
-                            boxxy_claw_ui::add_system_message_row(
-                                &overlay_store,
-                                id.clone(),
-                                &msg,
-                            );
+                            boxxy_claw_ui::add_system_message_row(&overlay_store, id.clone(), &msg);
                         }
 
                         // Pending to Idle guard
                         if matches!(*overlay.state().borrow(), OverlayState::Pending) {
                             overlay.set_state(OverlayState::Idle);
                         }
-                        } else {                        boxxy_claw_ui::add_tool_call_row(
+                    } else {
+                        boxxy_claw_ui::add_tool_call_row(
                             &sidebar_store,
                             id.clone(),
                             Some(agent_name.clone()),

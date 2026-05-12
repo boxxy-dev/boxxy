@@ -1,6 +1,6 @@
-use crate::AssetError;
 use super::pipeline::Pipeline;
 use super::transform::{Resize, SquareCrop};
+use crate::AssetError;
 use image::ImageFormat;
 use std::io::Cursor;
 
@@ -9,11 +9,7 @@ pub const MAX_DIMENSION: u32 = 4096;
 pub const AVATAR_SIZE: u32 = 256;
 const MIN_DIMENSION: u32 = 16;
 
-const ALLOWED_FORMATS: &[ImageFormat] = &[
-    ImageFormat::Png,
-    ImageFormat::Jpeg,
-    ImageFormat::WebP,
-];
+const ALLOWED_FORMATS: &[ImageFormat] = &[ImageFormat::Png, ImageFormat::Jpeg, ImageFormat::WebP];
 
 pub struct AvatarOutput {
     /// PNG-encoded bytes, ready to write as `AVATAR.png`.
@@ -53,9 +49,10 @@ pub fn process_avatar(input: &[u8]) -> Result<AvatarOutput, AssetError> {
         return Err(AssetError::DimensionsTooLarge(w, h, MAX_DIMENSION));
     }
 
-    let pipeline = Pipeline::new()
-        .add(SquareCrop)
-        .add(Resize { width: AVATAR_SIZE, height: AVATAR_SIZE });
+    let pipeline = Pipeline::new().add(SquareCrop).add(Resize {
+        width: AVATAR_SIZE,
+        height: AVATAR_SIZE,
+    });
 
     let processed = pipeline.run(decoded)?;
 
@@ -75,7 +72,8 @@ mod tests {
     fn create_synthetic_png(width: u32, height: u32) -> Vec<u8> {
         let img = DynamicImage::ImageRgb8(RgbImage::new(width, height));
         let mut bytes = Vec::new();
-        img.write_to(&mut Cursor::new(&mut bytes), ImageFormat::Png).unwrap();
+        img.write_to(&mut Cursor::new(&mut bytes), ImageFormat::Png)
+            .unwrap();
         bytes
     }
 
@@ -86,7 +84,9 @@ mod tests {
             *pixel = image::Rgb([200, 50, 50]);
         }
         let mut bytes = Vec::new();
-        DynamicImage::ImageRgb8(img).write_to(&mut Cursor::new(&mut bytes), ImageFormat::Png).unwrap();
+        DynamicImage::ImageRgb8(img)
+            .write_to(&mut Cursor::new(&mut bytes), ImageFormat::Png)
+            .unwrap();
 
         let output = process_avatar(&bytes).unwrap();
 
@@ -114,13 +114,19 @@ mod tests {
     fn test_dimensions_too_small() {
         let tiny_png = create_synthetic_png(10, 10);
         let result = process_avatar(&tiny_png);
-        assert!(matches!(result, Err(AssetError::DimensionsTooSmall(10, 10, _))));
+        assert!(matches!(
+            result,
+            Err(AssetError::DimensionsTooSmall(10, 10, _))
+        ));
     }
 
     #[test]
     fn test_dimensions_too_large() {
         let huge_png = create_synthetic_png(4097, 100);
         let result = process_avatar(&huge_png);
-        assert!(matches!(result, Err(AssetError::DimensionsTooLarge(4097, 100, _))));
+        assert!(matches!(
+            result,
+            Err(AssetError::DimensionsTooLarge(4097, 100, _))
+        ));
     }
 }

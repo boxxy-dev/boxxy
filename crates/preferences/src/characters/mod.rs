@@ -528,8 +528,8 @@ fn render_characters(
                                             {
                                                 if let Some(pref_win) = btn_clone
                                                     .root()
-                                                    .and_downcast::<adw::PreferencesWindow>()
-                                                {
+                                                    .and_downcast::<adw::PreferencesWindow>(
+                                                ) {
                                                     pref_win.add_toast(adw::Toast::new(
                                                         "Avatar updated.",
                                                     ));

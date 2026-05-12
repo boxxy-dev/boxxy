@@ -1,5 +1,5 @@
 use crate::AssetError;
-use image::{imageops, DynamicImage};
+use image::{DynamicImage, imageops};
 
 pub trait Transformation: Send + Sync {
     fn apply(&self, image: DynamicImage) -> Result<DynamicImage, AssetError>;
@@ -28,7 +28,7 @@ impl Transformation for SquareCrop {
         let size = std::cmp::min(w, h);
         let x = (w - size) / 2;
         let y = (h - size) / 2;
-        
+
         let cropped = image.crop(x, y, size, size);
         Ok(cropped)
     }
@@ -42,7 +42,10 @@ mod tests {
     #[test]
     fn test_resize() {
         let img = DynamicImage::ImageRgba8(RgbaImage::new(100, 200));
-        let resize = Resize { width: 50, height: 50 };
+        let resize = Resize {
+            width: 50,
+            height: 50,
+        };
         let result = resize.apply(img).unwrap();
         assert_eq!(result.width(), 50);
         assert_eq!(result.height(), 50);

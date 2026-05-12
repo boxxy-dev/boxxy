@@ -61,7 +61,7 @@ impl Tool for RunBackgroundCommandTool {
             .report_tool_started(Self::NAME.to_string())
             .await;
         boxxy_telemetry::track_tool_use(Self::NAME).await;
-        
+
         self.approval.set_thinking(false).await;
         let approved = self
             .approval
@@ -70,12 +70,19 @@ impl Tool for RunBackgroundCommandTool {
         self.approval.set_thinking(true).await;
 
         if approved {
-            match self.env.spawn_detached(args.command.clone(), args.cwd.clone()).await {
+            match self
+                .env
+                .spawn_detached(args.command.clone(), args.cwd.clone())
+                .await
+            {
                 Ok(pid) => {
                     let out = RunBackgroundCommandOutput {
                         success: true,
                         pid: Some(pid),
-                        message: format!("Successfully launched process in background with PID: {}", pid),
+                        message: format!(
+                            "Successfully launched process in background with PID: {}",
+                            pid
+                        ),
                     };
                     self.approval
                         .report_tool_result(

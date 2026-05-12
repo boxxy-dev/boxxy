@@ -299,7 +299,9 @@ impl TerminalOverlay {
                 Proposal::FileWrite { .. } => ClawMessage::FileWriteReply { approved },
                 Proposal::FileDelete { .. } => ClawMessage::FileDeleteReply { approved },
                 Proposal::KillProcess { .. } => ClawMessage::KillProcessReply { approved },
-                Proposal::BackgroundCommand { .. } => ClawMessage::BackgroundCommandReply { approved },
+                Proposal::BackgroundCommand { .. } => {
+                    ClawMessage::BackgroundCommandReply { approved }
+                }
                 Proposal::GetClipboard => ClawMessage::GetClipboardReply { approved },
                 Proposal::SetClipboard(_) => ClawMessage::SetClipboardReply { approved },
                 _ => unreachable!(),
@@ -309,37 +311,36 @@ impl TerminalOverlay {
         let host_approve = host.clone();
         let state_approve = state.clone();
         let dismiss_approve = dismiss_and_refocus.clone();
-        
+
         let file_action_box_clone = file_action_box.clone();
         let action_box_clone = action_box.clone();
         let ok_btn_clone = ok_btn.clone();
         let tips_cycle_clone = tips_cycle.clone();
         let revealer_clone = revealer.clone();
-        
+
         approve_file_btn.connect_clicked(move |_| {
             let proposal = if let OverlayState::Action(p) = &*state_approve.borrow() {
                 p.clone()
             } else {
                 return;
             };
-            
+
             let msg = make_file_reply(&proposal, true);
             host_approve.send_claw(msg);
-            
+
             // Background commands keep the drawer open because they don't block the terminal
             // and the user is likely still conversing with the agent.
             if !matches!(proposal, Proposal::BackgroundCommand { .. }) {
                 dismiss_approve();
             } else {
                 *state_approve.borrow_mut() = OverlayState::Pending;
-                // Manually do what sync_action_state would do for Pending state, 
+                // Manually do what sync_action_state would do for Pending state,
                 // since we don't have an Rc<TerminalOverlay> or `self` here.
                 file_action_box_clone.set_visible(false);
                 action_box_clone.set_visible(true);
                 ok_btn_clone.set_visible(true);
-                
-                let should_tip =
-                    tips_cycle_clone.is_enabled() && revealer_clone.reveals_child();
+
+                let should_tip = tips_cycle_clone.is_enabled() && revealer_clone.reveals_child();
                 if should_tip {
                     tips_cycle_clone.start_with_messages(crate::tips::PENDING_TIPS);
                 } else {
@@ -383,7 +384,7 @@ impl TerminalOverlay {
             } else {
                 return;
             };
-            
+
             match proposal {
                 Proposal::Bookmark {
                     filename,
@@ -506,7 +507,7 @@ impl TerminalOverlay {
     pub fn widget(&self) -> &gtk::Revealer {
         &self.revealer
     }
-    
+
     pub fn state(&self) -> Rc<RefCell<OverlayState>> {
         self.state.clone()
     }
@@ -684,9 +685,9 @@ impl TerminalOverlay {
         self.diagnosis_viewer.set_content(diagnosis);
         self.msg_bar.entry.set_text("");
         self.template_entry.set_text("");
-        
+
         *self.current_mode.borrow_mut() = mode;
-        
+
         match proposal {
             Proposal::None => self.set_state(OverlayState::Idle),
             _ => self.set_state(OverlayState::Action(proposal.clone())),
@@ -751,7 +752,7 @@ impl TerminalOverlay {
         self.msg_bar.entry.set_text("");
         self.template_entry.set_text("");
         *self.current_mode.borrow_mut() = OverlayMode::Claw;
-        
+
         self.set_state(OverlayState::Idle);
 
         self.revealer.set_reveal_child(true);
@@ -879,8 +880,7 @@ impl TerminalOverlay {
                 self.tips_cycle.stop();
             }
             OverlayState::Thinking => {
-                let should_tip =
-                    self.tips_cycle.is_enabled() && self.revealer.reveals_child();
+                let should_tip = self.tips_cycle.is_enabled() && self.revealer.reveals_child();
                 if should_tip {
                     self.tips_cycle.start();
                 } else {
@@ -890,10 +890,10 @@ impl TerminalOverlay {
             OverlayState::Pending => {
                 self.action_box.set_visible(true);
                 self.ok_btn.set_visible(true);
-                let should_tip =
-                    self.tips_cycle.is_enabled() && self.revealer.reveals_child();
+                let should_tip = self.tips_cycle.is_enabled() && self.revealer.reveals_child();
                 if should_tip {
-                    self.tips_cycle.start_with_messages(crate::tips::PENDING_TIPS);
+                    self.tips_cycle
+                        .start_with_messages(crate::tips::PENDING_TIPS);
                 } else {
                     self.tips_cycle.stop();
                 }
@@ -906,7 +906,8 @@ impl TerminalOverlay {
                         self.action_box.set_visible(true);
                         self.accept_btn.set_visible(true);
                         self.reject_btn.set_visible(true);
-                        self.template_box.set_visible(matches!(proposal, Proposal::Bookmark { .. }));
+                        self.template_box
+                            .set_visible(matches!(proposal, Proposal::Bookmark { .. }));
                     }
                     Proposal::BackgroundCommand { .. } => {
                         self.approve_file_btn.set_label("Approve & Launch");
@@ -919,13 +920,19 @@ impl TerminalOverlay {
                     | Proposal::GetClipboard
                     | Proposal::SetClipboard(_) => {
                         self.approve_file_btn.set_label(
-                            if matches!(proposal, Proposal::FileDelete { .. } | Proposal::KillProcess { .. }) {
+                            if matches!(
+                                proposal,
+                                Proposal::FileDelete { .. } | Proposal::KillProcess { .. }
+                            ) {
                                 "Approve & Delete"
-                            } else if matches!(proposal, Proposal::GetClipboard | Proposal::SetClipboard(_)) {
+                            } else if matches!(
+                                proposal,
+                                Proposal::GetClipboard | Proposal::SetClipboard(_)
+                            ) {
                                 "Approve"
                             } else {
                                 "Approve & Write"
-                            }
+                            },
                         );
                         self.file_action_box.set_visible(true);
                         self.action_box.set_visible(false);

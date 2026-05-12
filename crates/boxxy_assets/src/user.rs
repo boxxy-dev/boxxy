@@ -1,6 +1,6 @@
+use directories::ProjectDirs;
 use std::fs;
 use std::path::PathBuf;
-use directories::ProjectDirs;
 
 /// Gets the `~/.config/boxxy-terminal/user/` directory, creating it if it doesn't exist.
 pub fn get_user_dir() -> Option<PathBuf> {

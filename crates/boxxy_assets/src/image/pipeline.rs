@@ -1,5 +1,5 @@
-use crate::AssetError;
 use super::transform::Transformation;
+use crate::AssetError;
 use image::DynamicImage;
 
 pub struct Pipeline {
@@ -43,10 +43,11 @@ mod tests {
     #[test]
     fn test_pipeline() {
         let img = DynamicImage::ImageRgba8(RgbaImage::new(100, 200));
-        let pipeline = Pipeline::new()
-            .add(SquareCrop)
-            .add(Resize { width: 50, height: 50 });
-            
+        let pipeline = Pipeline::new().add(SquareCrop).add(Resize {
+            width: 50,
+            height: 50,
+        });
+
         let result = pipeline.run(img).unwrap();
         assert_eq!(result.width(), 50);
         assert_eq!(result.height(), 50);
