@@ -5,7 +5,7 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::Duration;
 
-const TIPS: &[&str] = &[
+pub const TIPS: &[&str] = &[
     "There is a Boxxy Extension for GNOME Shell",
     "Try `@character: direct` to talk to another character",
     "Use `/resume: session` to pick up where you left off",
@@ -22,8 +22,19 @@ const TIPS: &[&str] = &[
     "Try editing the personality of your characters",
 ];
 
-fn next_index(current: usize) -> usize {
-    let n = TIPS.len();
+pub const PENDING_TIPS: &[&str] = &[
+    "Launching in the background…",
+    "Working in the background — you can keep typing",
+    "Background task in progress",
+];
+
+fn next_index(current: usize, n: usize) -> usize {
+    if n == 0 {
+        return 0;
+    }
+    if n == 1 {
+        return 0;
+    }
     let now = gtk::glib::monotonic_time() as u64;
     // Mix time and current index for better entropy
     let mut x = now ^ (current as u64).wrapping_mul(0x9E3779B97F4A7C15);
@@ -81,7 +92,11 @@ impl TipsCycle {
     }
 
     pub fn start(&self) {
-        if self.is_active.get() || !self.enabled.get() {
+        self.start_with_messages(TIPS);
+    }
+
+    pub fn start_with_messages(&self, tips: &'static [&'static str]) {
+        if self.is_active.get() || !self.enabled.get() || tips.is_empty() {
             return;
         }
 
@@ -101,9 +116,9 @@ impl TipsCycle {
                 timer.take();
             }
 
-            let next = next_index(current_index_clone.get());
+            let next = next_index(current_index_clone.get(), tips.len());
             current_index_clone.set(next);
-            label_clone.set_text(TIPS[next]);
+            label_clone.set_text(tips[next]);
             revealer_clone.set_reveal_child(true);
             last_shown.set(gtk::glib::monotonic_time() as u64);
         });
@@ -119,7 +134,7 @@ impl TipsCycle {
             if !cycle_revealer.reveals_child() {
                 return gtk::glib::ControlFlow::Continue;
             }
-            let next = next_index(cycle_index.get());
+            let next = next_index(cycle_index.get(), tips.len());
             cycle_index.set(next);
 
             // Fade out, change text, fade in
@@ -127,7 +142,7 @@ impl TipsCycle {
             let lbl = cycle_label.clone();
             let rev = cycle_revealer.clone();
             gtk::glib::timeout_add_local_once(Duration::from_millis(300), move || {
-                lbl.set_text(TIPS[next]);
+                lbl.set_text(tips[next]);
                 rev.set_reveal_child(true);
             });
 

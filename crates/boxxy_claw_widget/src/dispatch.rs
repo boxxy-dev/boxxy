@@ -11,7 +11,7 @@
 //! by implementing `ClawHost` differently.
 
 use crate::msgbar::MsgBarComponent;
-use crate::{ClawHost, ClawIndicator, OverlayMode, TerminalOverlay};
+use crate::{ClawHost, ClawIndicator, OverlayMode, TerminalOverlay, state::OverlayState};
 use boxxy_claw_protocol::{AgentStatus, ClawEngineEvent, ClawMessage, UsageWrapper};
 use gtk4 as gtk;
 use gtk4::gio;
@@ -639,8 +639,12 @@ pub fn spawn_dispatch(
                                 &msg,
                             );
                         }
-                    } else {
-                        boxxy_claw_ui::add_tool_call_row(
+
+                        // Pending to Idle guard
+                        if matches!(*overlay.state().borrow(), OverlayState::Pending) {
+                            overlay.set_state(OverlayState::Idle);
+                        }
+                        } else {                        boxxy_claw_ui::add_tool_call_row(
                             &sidebar_store,
                             id.clone(),
                             Some(agent_name.clone()),

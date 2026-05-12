@@ -1,6 +1,7 @@
 use crate::claw_host::ClawHost;
 use crate::msgbar::MsgBarComponent;
 use crate::proposal::Proposal;
+use crate::state::OverlayState;
 use crate::tips::TipsCycle;
 use boxxy_claw_protocol::ClawMessage;
 use boxxy_preferences::config::Settings;
@@ -39,9 +40,8 @@ pub struct TerminalOverlay {
     template_box: gtk::Box,
     file_action_box: gtk::Box,
     action_box: gtk::Box,
-    current_proposal: Rc<RefCell<Proposal>>,
+    state: Rc<RefCell<OverlayState>>,
     current_mode: Rc<RefCell<OverlayMode>>,
-    is_thinking: Rc<Cell<bool>>,
     active_agent: Rc<RefCell<String>>,
     history_enabled: Rc<Cell<bool>>,
     history_sticky: Rc<Cell<bool>>,
@@ -88,6 +88,11 @@ impl TerminalOverlay {
         let diagnosis_container: gtk::Box = builder.object("diagnosis_container").unwrap();
         let diagnosis_viewer = StructuredViewer::new(boxxy_claw_ui::get_claw_viewer_registry());
         diagnosis_container.append(diagnosis_viewer.widget());
+
+        let tip_label: gtk::Label = builder.object("tip_label").unwrap();
+        let tip_revealer: gtk::Revealer = builder.object("tip_revealer").unwrap();
+        let tips_cycle = TipsCycle::new(tip_label, tip_revealer);
+        tips_cycle.set_enabled(Settings::load().enable_tips);
 
         // Embed the merged msgbar into the drawer's bottom area. The
         // msgbar owns attachments, autocomplete, history nav, Ctrl+V
@@ -225,9 +230,8 @@ impl TerminalOverlay {
             revealer_for_target.set_can_target(revealed);
         });
 
-        let current_proposal = Rc::new(RefCell::new(Proposal::None));
+        let state = Rc::new(RefCell::new(OverlayState::Idle));
         let current_mode = Rc::new(RefCell::new(OverlayMode::Claw));
-        let is_thinking = Rc::new(Cell::new(false));
         let active_agent = Rc::new(RefCell::new(String::new()));
         let history_enabled = Rc::new(Cell::new(false));
 
@@ -243,6 +247,7 @@ impl TerminalOverlay {
             let template_box = template_box.clone();
             let file_action_box = file_action_box.clone();
             let action_box = action_box.clone();
+            let state_rc = state.clone();
 
             Rc::new(move || {
                 revealer.set_reveal_child(false);
@@ -252,6 +257,8 @@ impl TerminalOverlay {
                 template_box.set_visible(false);
                 file_action_box.set_visible(false);
                 action_box.set_visible(false);
+
+                *state_rc.borrow_mut() = OverlayState::Idle;
 
                 let host = host.clone();
                 gtk4::glib::timeout_add_local(std::time::Duration::from_millis(50), move || {
@@ -300,17 +307,22 @@ impl TerminalOverlay {
         };
 
         let host_approve = host.clone();
-        let cp_approve = current_proposal.clone();
+        let state_approve = state.clone();
         let dismiss_approve = dismiss_and_refocus.clone();
         
-        // Use a clone of the action boxes to hide them directly inside the closure
-        // since we can't easily capture `self` or a weak self.
         let file_action_box_clone = file_action_box.clone();
         let action_box_clone = action_box.clone();
         let ok_btn_clone = ok_btn.clone();
+        let tips_cycle_clone = tips_cycle.clone();
+        let revealer_clone = revealer.clone();
         
         approve_file_btn.connect_clicked(move |_| {
-            let proposal = cp_approve.borrow().clone();
+            let proposal = if let OverlayState::Action(p) = &*state_approve.borrow() {
+                p.clone()
+            } else {
+                return;
+            };
+            
             let msg = make_file_reply(&proposal, true);
             host_approve.send_claw(msg);
             
@@ -319,21 +331,31 @@ impl TerminalOverlay {
             if !matches!(proposal, Proposal::BackgroundCommand { .. }) {
                 dismiss_approve();
             } else {
-                // If we don't dismiss, we still need to clear the proposal state
-                // so the buttons disappear and it returns to the 'idle' state waiting for the tool result.
-                *cp_approve.borrow_mut() = Proposal::None;
+                *state_approve.borrow_mut() = OverlayState::Pending;
+                // Manually do what sync_action_state would do for Pending state, 
+                // since we don't have an Rc<TerminalOverlay> or `self` here.
                 file_action_box_clone.set_visible(false);
                 action_box_clone.set_visible(true);
                 ok_btn_clone.set_visible(true);
+                
+                let should_tip =
+                    tips_cycle_clone.is_enabled() && revealer_clone.reveals_child();
+                if should_tip {
+                    tips_cycle_clone.start_with_messages(crate::tips::PENDING_TIPS);
+                } else {
+                    tips_cycle_clone.stop();
+                }
             }
         });
 
         let host_reject_file = host.clone();
-        let cp_reject = current_proposal.clone();
+        let state_reject = state.clone();
         let dismiss_reject_file = dismiss_and_refocus.clone();
         reject_file_btn.connect_clicked(move |_| {
-            let msg = make_file_reply(&cp_reject.borrow(), false);
-            host_reject_file.send_claw(msg);
+            if let OverlayState::Action(p) = &*state_reject.borrow() {
+                let msg = make_file_reply(p, false);
+                host_reject_file.send_claw(msg);
+            }
             dismiss_reject_file();
         });
 
@@ -352,11 +374,16 @@ impl TerminalOverlay {
         // widget stays IO-free.
         let host_accept = host.clone();
         let cmd_view_clone = command_view.clone();
-        let current_proposal_for_accept = current_proposal.clone();
+        let state_for_accept = state.clone();
         let template_entry_clone = template_entry.clone();
         let dismiss_accept = dismiss_and_refocus.clone();
         accept_btn.connect_clicked(move |_| {
-            let proposal = current_proposal_for_accept.borrow().clone();
+            let proposal = if let OverlayState::Action(p) = &*state_for_accept.borrow() {
+                p.clone()
+            } else {
+                return;
+            };
+            
             match proposal {
                 Proposal::Bookmark {
                     filename,
@@ -413,11 +440,6 @@ impl TerminalOverlay {
         });
         revealer.add_controller(esc_controller);
 
-        let tip_label: gtk::Label = builder.object("tip_label").unwrap();
-        let tip_revealer: gtk::Revealer = builder.object("tip_revealer").unwrap();
-        let tips_cycle = TipsCycle::new(tip_label, tip_revealer);
-        tips_cycle.set_enabled(Settings::load().enable_tips);
-
         let s = Self {
             revealer,
             indicator_slot,
@@ -437,9 +459,8 @@ impl TerminalOverlay {
             template_box,
             file_action_box,
             action_box,
-            current_proposal,
+            state,
             current_mode,
-            is_thinking,
             active_agent,
             history_enabled,
             history_sticky,
@@ -485,20 +506,37 @@ impl TerminalOverlay {
     pub fn widget(&self) -> &gtk::Revealer {
         &self.revealer
     }
+    
+    pub fn state(&self) -> Rc<RefCell<OverlayState>> {
+        self.state.clone()
+    }
 
     pub fn set_active_agent(&self, agent_name: &str) {
         *self.active_agent.borrow_mut() = agent_name.to_string();
         self.sync_action_state();
     }
 
-    pub fn set_thinking(&self, thinking: bool) {
-        self.is_thinking.set(thinking);
+    pub fn set_state(&self, new_state: OverlayState) {
+        *self.state.borrow_mut() = new_state;
         self.sync_action_state();
     }
 
+    pub fn set_thinking(&self, thinking: bool) {
+        let current = self.state.borrow().clone();
+        match (current, thinking) {
+            (OverlayState::Idle, true) => self.set_state(OverlayState::Thinking),
+            (OverlayState::Idle, false) => {}
+            (OverlayState::Thinking, true) => {}
+            (OverlayState::Thinking, false) => self.set_state(OverlayState::Idle),
+            (OverlayState::Pending, true) => self.set_state(OverlayState::Thinking),
+            (OverlayState::Pending, false) => self.set_state(OverlayState::Idle),
+            (OverlayState::Action(_), _) => {} // no-op, proposal blocks
+        }
+    }
+
     pub fn clear_proposal(&self) {
-        *self.current_proposal.borrow_mut() = Proposal::None;
-        self.sync_action_state();
+        // Usually called when we want to just go back to Idle
+        self.set_state(OverlayState::Idle);
     }
 
     pub fn refresh_character_selector(&self, current_agent: &str) {
@@ -646,11 +684,13 @@ impl TerminalOverlay {
         self.diagnosis_viewer.set_content(diagnosis);
         self.msg_bar.entry.set_text("");
         self.template_entry.set_text("");
-        *self.current_proposal.borrow_mut() = proposal.clone();
+        
         *self.current_mode.borrow_mut() = mode;
-        self.is_thinking.set(false);
-
-        self.sync_action_state();
+        
+        match proposal {
+            Proposal::None => self.set_state(OverlayState::Idle),
+            _ => self.set_state(OverlayState::Action(proposal.clone())),
+        }
 
         match proposal {
             Proposal::Command(cmd) => {
@@ -710,11 +750,9 @@ impl TerminalOverlay {
         self.diagnosis_viewer.set_content("");
         self.msg_bar.entry.set_text("");
         self.template_entry.set_text("");
-        *self.current_proposal.borrow_mut() = Proposal::None;
         *self.current_mode.borrow_mut() = OverlayMode::Claw;
-        self.is_thinking.set(false);
-
-        self.sync_action_state();
+        
+        self.set_state(OverlayState::Idle);
 
         self.revealer.set_reveal_child(true);
     }
@@ -786,9 +824,7 @@ impl TerminalOverlay {
         // Robust hiding: clear the proposal state and sync visibility
         // so that stale buttons aren't briefly visible during fade-out
         // or the next time the drawer opens.
-        *self.current_proposal.borrow_mut() = Proposal::None;
-        self.is_thinking.set(false);
-        self.sync_action_state();
+        self.set_state(OverlayState::Idle);
         self.tips_cycle.stop();
     }
 
@@ -810,8 +846,7 @@ impl TerminalOverlay {
 
     pub fn sync_action_state(&self) {
         let mode = *self.current_mode.borrow();
-        let proposal = self.current_proposal.borrow().clone();
-        let is_thinking = self.is_thinking.get();
+        let state = self.state.borrow().clone();
         let has_active_agent = !self.active_agent.borrow().is_empty();
 
         // 1. Hide everything by default to prevent stale buttons
@@ -828,65 +863,87 @@ impl TerminalOverlay {
         self.inspect_btn.set_visible(mode == OverlayMode::Claw);
 
         // 3. Character Selector Box logic
-        // Only visible if in Claw mode, NOT thinking, and no active agent is set yet.
-        let show_picker = mode == OverlayMode::Claw && !is_thinking && !has_active_agent;
+        // Only visible if in Claw mode, NOT thinking/pending, and no active agent is set yet.
+        let is_working = matches!(state, OverlayState::Thinking | OverlayState::Pending);
+        let show_picker = mode == OverlayMode::Claw && !is_working && !has_active_agent;
         self.character_selector_box.set_visible(show_picker);
 
         // If the picker shouldn't be shown, we don't need to poll the registry.
         if !show_picker {}
 
-        // 4. If the agent is actively thinking, we show no actions.
-        if !is_thinking {
-            // 5. Show actions based strictly on the current proposal state
-            match proposal {
-                Proposal::Command(_) | Proposal::Bookmark { .. } => {
-                    self.command_frame.set_visible(true);
-                    self.action_box.set_visible(true);
-                    self.accept_btn.set_visible(true);
-                    self.reject_btn.set_visible(true);
-                    self.template_box.set_visible(matches!(proposal, Proposal::Bookmark { .. }));
-                }
-                Proposal::BackgroundCommand { .. } => {
-                    self.approve_file_btn.set_label("Approve & Launch");
-                    self.file_action_box.set_visible(true);
-                    self.action_box.set_visible(false);
-                }
-                Proposal::FileWrite { .. }
-                | Proposal::FileDelete { .. }
-                | Proposal::KillProcess { .. }
-                | Proposal::GetClipboard
-                | Proposal::SetClipboard(_) => {
-                    self.approve_file_btn.set_label(
-                        if matches!(proposal, Proposal::FileDelete { .. } | Proposal::KillProcess { .. }) {
-                            "Approve & Delete"
-                        } else if matches!(proposal, Proposal::GetClipboard | Proposal::SetClipboard(_)) {
-                            "Approve"
-                        } else {
-                            "Approve & Write"
-                        }
-                    );
-                    self.file_action_box.set_visible(true);
-                    self.action_box.set_visible(false);
-                }
-                Proposal::None => {
-                    self.action_box.set_visible(true);
-                    self.ok_btn.set_visible(true);
+        // 4. Pure state machine mapping
+        match state {
+            OverlayState::Idle => {
+                self.action_box.set_visible(true);
+                self.ok_btn.set_visible(true);
+                self.tips_cycle.stop();
+            }
+            OverlayState::Thinking => {
+                let should_tip =
+                    self.tips_cycle.is_enabled() && self.revealer.reveals_child();
+                if should_tip {
+                    self.tips_cycle.start();
+                } else {
+                    self.tips_cycle.stop();
                 }
             }
-        }
-
-        // Show tips only while the agent is working — gives the user something
-        // to read while waiting, and keeps the UI clean otherwise.
-        let should_tip =
-            self.tips_cycle.is_enabled() && is_thinking && self.revealer.reveals_child();
-        if should_tip {
-            self.tips_cycle.start();
-        } else {
-            self.tips_cycle.stop();
+            OverlayState::Pending => {
+                self.action_box.set_visible(true);
+                self.ok_btn.set_visible(true);
+                let should_tip =
+                    self.tips_cycle.is_enabled() && self.revealer.reveals_child();
+                if should_tip {
+                    self.tips_cycle.start_with_messages(crate::tips::PENDING_TIPS);
+                } else {
+                    self.tips_cycle.stop();
+                }
+            }
+            OverlayState::Action(proposal) => {
+                self.tips_cycle.stop();
+                match proposal {
+                    Proposal::Command(_) | Proposal::Bookmark { .. } => {
+                        self.command_frame.set_visible(true);
+                        self.action_box.set_visible(true);
+                        self.accept_btn.set_visible(true);
+                        self.reject_btn.set_visible(true);
+                        self.template_box.set_visible(matches!(proposal, Proposal::Bookmark { .. }));
+                    }
+                    Proposal::BackgroundCommand { .. } => {
+                        self.approve_file_btn.set_label("Approve & Launch");
+                        self.file_action_box.set_visible(true);
+                        self.action_box.set_visible(false);
+                    }
+                    Proposal::FileWrite { .. }
+                    | Proposal::FileDelete { .. }
+                    | Proposal::KillProcess { .. }
+                    | Proposal::GetClipboard
+                    | Proposal::SetClipboard(_) => {
+                        self.approve_file_btn.set_label(
+                            if matches!(proposal, Proposal::FileDelete { .. } | Proposal::KillProcess { .. }) {
+                                "Approve & Delete"
+                            } else if matches!(proposal, Proposal::GetClipboard | Proposal::SetClipboard(_)) {
+                                "Approve"
+                            } else {
+                                "Approve & Write"
+                            }
+                        );
+                        self.file_action_box.set_visible(true);
+                        self.action_box.set_visible(false);
+                    }
+                    Proposal::None => {
+                        self.action_box.set_visible(true);
+                        self.ok_btn.set_visible(true);
+                    }
+                }
+            }
         }
     }
 
     pub fn current_proposal(&self) -> Proposal {
-        self.current_proposal.borrow().clone()
+        if let OverlayState::Action(p) = &*self.state.borrow() {
+            p.clone()
+        } else {
+            Proposal::None
+        }
     }
 }

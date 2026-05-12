@@ -21,3 +21,4 @@ pub use dispatch::spawn_dispatch;
 pub use msgbar::{Attachment, AttachmentManager, MsgBarComponent};
 pub use overlay::{OverlayMode, TerminalOverlay};
 pub use proposal::Proposal;
+pub mod state;
