@@ -16,7 +16,7 @@ chrono = { workspace = true }
 futures-util = { workspace = true }
 tokio = { workspace = true }
 log.workspace = true
-rig-core.workspace = true
+rig.workspace = true
 directories.workspace = true
 home = { workspace = true }
 notify.workspace = true

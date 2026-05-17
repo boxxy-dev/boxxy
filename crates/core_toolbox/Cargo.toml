@@ -10,7 +10,7 @@ license.workspace = true
 anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-rig-core.workspace = true
+rig.workspace = true
 boxxy-claw-protocol = { path = "../boxxy_claw_protocol" }
 boxxy-telemetry = { path = "../telemetry" }
 log = { workspace = true }

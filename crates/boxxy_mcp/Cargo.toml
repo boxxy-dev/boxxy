@@ -13,7 +13,7 @@ anyhow.workspace = true
 log.workspace = true
 rmcp.workspace = true
 tokio = { workspace = true, features = ["process", "sync", "time", "macros", "rt"] }
-rig-core.workspace = true
+rig.workspace = true
 async-trait.workspace = true
 thiserror.workspace = true
 reqwest.workspace = true

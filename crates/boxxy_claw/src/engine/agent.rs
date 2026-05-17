@@ -59,11 +59,11 @@ impl ClawAgent {
         &self.config == candidate
     }
 
-    pub async fn chat(
+    pub async fn chat<P: Into<Message> + Send>(
         &self,
-        prompt: &str,
+        prompt: P,
         history: Vec<Message>,
-    ) -> Result<(String, Option<rig::completion::Usage>), rig::completion::PromptError> {
+    ) -> Result<(String, Option<rig::completion::Usage>, Option<Vec<Message>>), rig::completion::PromptError> {
         use rig::completion::Prompt;
         let start = std::time::Instant::now();
 
@@ -71,10 +71,12 @@ impl ClawAgent {
             preamble: self.preamble.clone(),
         };
 
+        let msg = prompt.into();
+
         let res_result = match &self.inner {
             ClawAgentInner::Gemini(agent, _, _) => {
                 agent
-                    .prompt(prompt)
+                    .prompt(msg.clone())
                     .with_history(history)
                     .with_hook(hook)
                     .extended_details()
@@ -82,7 +84,7 @@ impl ClawAgent {
             }
             ClawAgentInner::Ollama(agent, _, _) => {
                 agent
-                    .prompt(prompt)
+                    .prompt(msg.clone())
                     .with_history(history)
                     .with_hook(hook)
                     .extended_details()
@@ -90,7 +92,7 @@ impl ClawAgent {
             }
             ClawAgentInner::Anthropic(agent, _, _) => {
                 agent
-                    .prompt(prompt)
+                    .prompt(msg.clone())
                     .with_history(history)
                     .with_hook(hook)
                     .extended_details()
@@ -98,7 +100,7 @@ impl ClawAgent {
             }
             ClawAgentInner::OpenAi(agent, _, _) => {
                 agent
-                    .prompt(prompt)
+                    .prompt(msg.clone())
                     .with_history(history.clone())
                     .with_hook(hook.clone())
                     .extended_details()
@@ -106,7 +108,7 @@ impl ClawAgent {
             }
             ClawAgentInner::OpenRouter(agent, _, _) => {
                 agent
-                    .prompt(prompt)
+                    .prompt(msg.clone())
                     .with_history(history)
                     .with_hook(hook)
                     .extended_details()
@@ -114,7 +116,7 @@ impl ClawAgent {
             }
             ClawAgentInner::DeepSeek(agent, _, _) => {
                 agent
-                    .prompt(prompt)
+                    .prompt(msg.clone())
                     .with_history(history)
                     .with_hook(hook)
                     .extended_details()
@@ -182,7 +184,7 @@ impl ClawAgent {
                     );
                 }
 
-                Ok((res.output.clone(), Some(res.usage)))
+                Ok((res.output.clone(), Some(res.usage), res.messages))
             }
             Err(e) => {
                 let is_explicit = std::env::var("BOXXY_DEBUG_CONTEXT")

@@ -87,7 +87,7 @@ impl DreamOrchestrator {
             interactions_text
         );
 
-        let (response, _) = agent
+        let (response, _, _) = agent
             .prompt(&prompt)
             .await
             .map_err(|e| anyhow::anyhow!("LLM Error: {:?}", e))?;

@@ -88,21 +88,23 @@ enum BoxxyAgentInner {
 }
 
 impl BoxxyAgent {
-    pub async fn chat(
+    pub async fn chat<P: Into<Message> + Send>(
         &self,
-        prompt: &str,
+        prompt: P,
         history: Vec<Message>,
-    ) -> Result<(String, Option<rig::completion::Usage>), rig::completion::PromptError> {
+    ) -> Result<(String, Option<rig::completion::Usage>, Option<Vec<Message>>), rig::completion::PromptError> {
         use rig::completion::Prompt;
 
         let hook = ModelContextHook {
             preamble: self.preamble.clone(),
         };
 
+        let msg = prompt.into();
+
         let res_result = match &self.inner {
             BoxxyAgentInner::Gemini(agent) => {
                 agent
-                    .prompt(prompt)
+                    .prompt(msg.clone())
                     .with_history(history)
                     .with_hook(hook)
                     .extended_details()
@@ -110,7 +112,7 @@ impl BoxxyAgent {
             }
             BoxxyAgentInner::Ollama(agent) => {
                 agent
-                    .prompt(prompt)
+                    .prompt(msg.clone())
                     .with_history(history)
                     .with_hook(hook)
                     .extended_details()
@@ -118,7 +120,7 @@ impl BoxxyAgent {
             }
             BoxxyAgentInner::Anthropic(agent) => {
                 agent
-                    .prompt(prompt)
+                    .prompt(msg.clone())
                     .with_history(history)
                     .with_hook(hook)
                     .extended_details()
@@ -126,7 +128,7 @@ impl BoxxyAgent {
             }
             BoxxyAgentInner::OpenAi(agent) => {
                 agent
-                    .prompt(prompt)
+                    .prompt(msg.clone())
                     .with_history(history.clone())
                     .with_hook(hook)
                     .extended_details()
@@ -134,7 +136,7 @@ impl BoxxyAgent {
             }
             BoxxyAgentInner::OpenRouter(agent) => {
                 agent
-                    .prompt(prompt)
+                    .prompt(msg.clone())
                     .with_history(history)
                     .with_hook(hook)
                     .extended_details()
@@ -142,7 +144,7 @@ impl BoxxyAgent {
             }
             BoxxyAgentInner::DeepSeek(agent) => {
                 agent
-                    .prompt(prompt)
+                    .prompt(msg.clone())
                     .with_history(history)
                     .with_hook(hook)
                     .extended_details()
@@ -168,7 +170,7 @@ impl BoxxyAgent {
                         res.output
                     );
                 }
-                Ok((res.output.clone(), Some(res.usage)))
+                Ok((res.output.clone(), Some(res.usage), res.messages))
             }
             Err(e) => {
                 if is_explicit {
@@ -186,7 +188,7 @@ impl BoxxyAgent {
     pub async fn prompt(
         &self,
         prompt: &str,
-    ) -> Result<(String, Option<rig::completion::Usage>), rig::completion::PromptError> {
+    ) -> Result<(String, Option<rig::completion::Usage>, Option<Vec<Message>>), rig::completion::PromptError> {
         use rig::completion::Prompt;
 
         let hook = ModelContextHook {
@@ -256,7 +258,7 @@ impl BoxxyAgent {
                         res.output
                     );
                 }
-                Ok((res.output.clone(), Some(res.usage)))
+                Ok((res.output.clone(), Some(res.usage), res.messages))
             }
             Err(e) => {
                 if is_explicit {

@@ -386,7 +386,7 @@ impl AiSidebarComponent {
         glib::spawn_future_local(async move {
             if let Ok(res) = rx.await {
                 match res {
-                    Ok((r, usage)) => comp_clone.receive_response(r, usage),
+                    Ok((r, usage, _messages)) => comp_clone.receive_response(r, usage),
                     Err(e) => comp_clone.receive_response(format!("Error: {e}"), None),
                 }
             }

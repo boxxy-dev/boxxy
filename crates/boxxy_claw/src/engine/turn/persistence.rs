@@ -87,14 +87,22 @@ pub async fn perform_persistence(ctx: PersistenceContext, state: Arc<Mutex<Sessi
         ctx.settings.ollama_base_url.clone(),
     );
 
-    let _ = crate::engine::summarization::history::flush_history(
-        ctx.db.clone(),
-        &mut state_lock.history,
-        &ctx.settings.claw_model,
-        &creds,
-        &ctx.cwd,
-    )
-    .await;
+    let evicted_messages = if state_lock.history.len() >= 15 {
+        state_lock.history.drain(0..10).collect::<Vec<_>>()
+    } else {
+        vec![]
+    };
+
+    if !evicted_messages.is_empty() {
+        use rig::memory::DemotionHook;
+        let extractor = crate::engine::summarization::history::DemotionExtractor {
+            db: ctx.db.clone(),
+            claw_model: ctx.settings.claw_model.clone(),
+            creds: creds.clone(),
+            project_path: ctx.cwd.clone(),
+        };
+        let _ = extractor.on_demote(&ctx.session_id, evicted_messages).await;
+    }
 
     drop(state_lock);
 

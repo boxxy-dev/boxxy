@@ -13,5 +13,5 @@ serde_json.workspace = true
 anyhow.workspace = true
 log.workspace = true
 tokio = { workspace = true, features = ["full"] }
-rig-core.workspace = true
+rig.workspace = true
 boxxy-model-selection = { path = "../model_selection" }

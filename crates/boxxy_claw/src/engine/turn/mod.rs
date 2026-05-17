@@ -172,7 +172,7 @@ pub fn spawn_turn(
         };
 
         // 5. Prepare History
-        let mut final_history = history::prepare_query_history(history, history_len);
+        let final_history = history::prepare_query_history(history, history_len);
 
         let mut is_multimodal = false;
         let mut user_msg = vec![rig::message::Message::User {
@@ -195,15 +195,15 @@ pub fn spawn_turn(
         }
 
         let query_for_chat = if is_multimodal {
-            final_history.push(user_msg.into_iter().next().unwrap());
-            ""
+            user_msg.into_iter().next().unwrap()
         } else {
-            &full_prompt
+            rig::message::Message::user(full_prompt.clone())
         };
 
+        let pre_chat_len = final_history.len();
         let start_time = std::time::Instant::now();
         match agent.chat(query_for_chat, final_history).await {
-            Ok((response, usage)) => {
+            Ok((response, usage, messages)) => {
                 let duration = start_time.elapsed();
                 let _ = tx_ui
                     .send(ClawEngineEvent::AgentThinking {
@@ -241,9 +241,19 @@ pub fn spawn_turn(
                 {
                     let mut state_lock = state.lock().await;
                     state_lock.persistent_agent = Some(agent.clone());
-                    state_lock
-                        .history
-                        .push(rig::message::Message::assistant(response.clone()));
+                    
+                    if let Some(msgs) = messages {
+                        let new_tail: Vec<rig::message::Message> = msgs
+                            .into_iter()
+                            .skip(pre_chat_len)
+                            .skip_while(|m| matches!(m, rig::message::Message::User { .. }))
+                            .collect();
+                        state_lock.history.extend(new_tail);
+                    } else {
+                        state_lock
+                            .history
+                            .push(rig::message::Message::assistant(response.clone()));
+                    }
 
                     if let Some(usage) = usage {
                         state_lock.total_tokens += usage.total_tokens as u64;

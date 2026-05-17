@@ -1,27 +1,64 @@
 use crate::utils::load_prompt_fallback;
-use boxxy_db::Db;
 use boxxy_db::store::Store;
+use boxxy_db::Db;
 use boxxy_model_selection::ModelProvider;
 use log::{debug, info};
 use rig::message::Message;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
+#[derive(Clone)]
+pub struct DemotionExtractor {
+    pub db: Arc<Mutex<Option<Db>>>,
+    pub claw_model: Option<ModelProvider>,
+    pub creds: boxxy_ai_core::AiCredentials,
+    pub project_path: String,
+}
+
+impl rig::memory::DemotionHook for DemotionExtractor {
+    fn on_demote<'a>(
+        &'a self,
+        _session_id: &'a str,
+        messages: Vec<Message>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), rig::memory::MemoryError>> + Send + 'a>> {
+        let db_clone = self.db.clone();
+        let claw_model_clone = self.claw_model.clone();
+        let creds_clone = self.creds.clone();
+        let project_path_clone = self.project_path.clone();
+
+        Box::pin(async move {
+            if messages.is_empty() {
+                return Ok(());
+            }
+
+            tokio::spawn(async move {
+                let _ = flush_history(
+                    db_clone,
+                    messages,
+                    &claw_model_clone,
+                    &creds_clone,
+                    &project_path_clone,
+                )
+                .await;
+            });
+
+            Ok(())
+        })
+    }
+}
+
 pub async fn flush_history(
     db: Arc<Mutex<Option<Db>>>,
-    history: &mut Vec<Message>,
+    evicted_messages: Vec<Message>,
     claw_model: &Option<ModelProvider>,
     creds: &boxxy_ai_core::AiCredentials,
     project_path: &str,
 ) -> anyhow::Result<()> {
-    if history.len() < 15 {
+    if evicted_messages.is_empty() {
         return Ok(());
     }
 
-    info!("Context window reaching capacity. Triggering Memory Flush...");
-
-    // We take the first 10 messages (5 turns) to summarize and remove
-    let evicted_messages = history.drain(0..10).collect::<Vec<_>>();
+    info!("Processing evicted messages. Triggering Memory Extraction...");
 
     let mut text_to_summarize = String::new();
     for msg in evicted_messages {

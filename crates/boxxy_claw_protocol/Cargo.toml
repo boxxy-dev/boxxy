@@ -12,7 +12,7 @@ toml = { workspace = true }
 directories = { workspace = true }
 uuid = { workspace = true, features = ["serde"] }
 chrono = { workspace = true }
-rig-core = { workspace = true }
+rig = { workspace = true }
 log = { workspace = true }
 tokio = { workspace = true }
 anyhow = { workspace = true }

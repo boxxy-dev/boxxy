@@ -18,4 +18,4 @@ serde_json = { workspace = true }
 log = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
-rig-core = { workspace = true }
+rig = { workspace = true }

@@ -76,7 +76,7 @@ pub async fn summarize_wake_delta(
                 )
                 .await
                 {
-                    Ok(Ok((summary, _))) => {
+                    Ok(Ok((summary, _, _))) => {
                         summary_result = Ok(summary.trim().to_string());
                     }
                     Ok(Err(e)) => {
