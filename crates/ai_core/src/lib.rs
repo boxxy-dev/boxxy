@@ -308,14 +308,27 @@ pub fn create_agent(
     };
 
     let inner = match provider {
-        ModelProvider::Gemini(model, _thinking) => {
+        ModelProvider::Gemini(model, thinking) => {
             let key = creds.api_keys.get("Gemini").cloned().unwrap_or_default();
             let client = rig::providers::gemini::Client::new(key.trim()).unwrap();
             let gemini_model = client.completion_model(model.api_name());
 
-            let agent = rig::agent::AgentBuilder::new(gemini_model)
-                .preamble(system_prompt)
-                .build();
+            let mut builder = rig::agent::AgentBuilder::new(gemini_model)
+                .preamble(system_prompt);
+
+            if let Some(level) = thinking {
+                if *level != boxxy_model_selection::ThinkingLevel::None {
+                    builder = builder.additional_params(serde_json::json!({
+                        "generationConfig": {
+                            "thinkingConfig": {
+                                "thinkingLevel": level.api_name()
+                            }
+                        }
+                    }));
+                }
+            }
+
+            let agent = builder.build();
             BoxxyAgentInner::Gemini(agent)
         }
         ModelProvider::Ollama(model_name) => {

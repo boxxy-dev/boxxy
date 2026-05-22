@@ -83,7 +83,7 @@ impl AiProvider for GeminiProviderImpl {
         let model = am
             .get(model_idx as usize)
             .cloned()
-            .unwrap_or(GeminiModel::Flash);
+            .unwrap_or(GeminiModel::FlashLite);
         let levels = model.available_thinking_levels();
         let thinking = thinking_idx
             .and_then(|idx| levels.get(idx as usize))

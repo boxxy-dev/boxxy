@@ -519,15 +519,27 @@ pub async fn create_claw_agent(
     }
 
     let inner = match provider {
-        ModelProvider::Gemini(model, _thinking) => {
+        ModelProvider::Gemini(model, thinking) => {
             let key = creds.api_keys.get("Gemini").cloned().unwrap_or_default();
             let client = gemini::Client::new(key.trim()).unwrap();
             let gemini_model = client.completion_model(model.api_name());
 
-            let builder = rig::agent::AgentBuilder::new(gemini_model)
+            let mut builder = rig::agent::AgentBuilder::new(gemini_model)
                 .preamble(&final_preamble)
                 .default_max_turns(100)
                 .tools(tools);
+
+            if let Some(level) = thinking {
+                if *level != boxxy_model_selection::ThinkingLevel::None {
+                    builder = builder.additional_params(serde_json::json!({
+                        "generationConfig": {
+                            "thinkingConfig": {
+                                "thinkingLevel": level.api_name()
+                            }
+                        }
+                    }));
+                }
+            }
 
             ClawAgentInner::Gemini(
                 builder.build(),

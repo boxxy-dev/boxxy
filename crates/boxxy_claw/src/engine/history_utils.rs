@@ -38,7 +38,7 @@ mod tests {
 
     fn gemini_config() -> AgentConfig {
         AgentConfig {
-            model: Some(ModelProvider::Gemini(GeminiModel::Flash, None)),
+            model: Some(ModelProvider::Gemini(GeminiModel::FlashLite, None)),
             ..Default::default()
         }
     }

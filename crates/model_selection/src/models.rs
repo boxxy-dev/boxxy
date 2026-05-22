@@ -3,30 +3,30 @@ use std::fmt;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum GeminiModel {
-    #[serde(rename = "gemini-3.1-pro-preview")]
-    Pro,
+    #[serde(rename = "gemini-3.5-flash")]
+    Flash3_5,
     #[serde(rename = "gemini-3.1-flash-lite-preview")]
-    Flash,
+    FlashLite,
 }
 
 impl fmt::Display for GeminiModel {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            GeminiModel::Pro => write!(f, "Gemini 3.1 Pro"),
-            GeminiModel::Flash => write!(f, "Gemini 3.1 Flash Lite"),
+            GeminiModel::Flash3_5 => write!(f, "Gemini 3.5 Flash"),
+            GeminiModel::FlashLite => write!(f, "Gemini 3.1 Flash Lite"),
         }
     }
 }
 
 impl GeminiModel {
     pub fn all() -> Vec<GeminiModel> {
-        vec![GeminiModel::Pro, GeminiModel::Flash]
+        vec![GeminiModel::Flash3_5, GeminiModel::FlashLite]
     }
 
     pub fn api_name(&self) -> &'static str {
         match self {
-            GeminiModel::Pro => "gemini-3.1-pro-preview",
-            GeminiModel::Flash => "gemini-3.1-flash-lite-preview",
+            GeminiModel::Flash3_5 => "gemini-3.5-flash",
+            GeminiModel::FlashLite => "gemini-3.1-flash-lite-preview",
         }
     }
 
@@ -36,12 +36,13 @@ impl GeminiModel {
 
     pub fn available_thinking_levels(&self) -> Vec<ThinkingLevel> {
         match self {
-            GeminiModel::Pro => vec![
+            GeminiModel::Flash3_5 => vec![
+                ThinkingLevel::Minimal,
                 ThinkingLevel::Low,
                 ThinkingLevel::Medium,
                 ThinkingLevel::High,
             ],
-            GeminiModel::Flash => vec![
+            GeminiModel::FlashLite => vec![
                 ThinkingLevel::Minimal,
                 ThinkingLevel::Low,
                 ThinkingLevel::Medium,
@@ -270,6 +271,41 @@ impl ModelProvider {
 
 impl Default for ModelProvider {
     fn default() -> Self {
-        ModelProvider::Gemini(GeminiModel::Flash, Some(ThinkingLevel::Low))
+        ModelProvider::Gemini(GeminiModel::FlashLite, Some(ThinkingLevel::Low))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_gemini_model_deserialization() {
+        // Test deserializing the new gemini-3.5-flash model
+        let model_new: GeminiModel = serde_json::from_str("\"gemini-3.5-flash\"").unwrap();
+        assert_eq!(model_new, GeminiModel::Flash3_5);
+
+        // Test that deserializing the legacy gemini-3.1-pro-preview model now fails
+        let model_alias: Result<GeminiModel, _> = serde_json::from_str("\"gemini-3.1-pro-preview\"");
+        assert!(model_alias.is_err());
+
+        // Test deserializing the flash-lite model
+        let model_lite: GeminiModel = serde_json::from_str("\"gemini-3.1-flash-lite-preview\"").unwrap();
+        assert_eq!(model_lite, GeminiModel::FlashLite);
+    }
+
+    #[test]
+    fn test_gemini_model_api_names() {
+        assert_eq!(GeminiModel::Flash3_5.api_name(), "gemini-3.5-flash");
+        assert_eq!(GeminiModel::FlashLite.api_name(), "gemini-3.1-flash-lite-preview");
+    }
+
+    #[test]
+    fn test_gemini_model_thinking_levels() {
+        let levels_3_5 = GeminiModel::Flash3_5.available_thinking_levels();
+        assert!(levels_3_5.contains(&ThinkingLevel::Minimal));
+        assert!(levels_3_5.contains(&ThinkingLevel::Low));
+        assert!(levels_3_5.contains(&ThinkingLevel::Medium));
+        assert!(levels_3_5.contains(&ThinkingLevel::High));
     }
 }
