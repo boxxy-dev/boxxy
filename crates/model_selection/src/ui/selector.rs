@@ -35,7 +35,10 @@ impl SingleModelSelector {
     ) -> Self {
         let providers: Vec<Box<dyn AiProvider>> = get_providers()
             .into_iter()
-            .filter(|p| !p.requires_api_key() || api_keys.contains_key(p.name()))
+            .filter(|p| {
+                !p.requires_api_key()
+                    || api_keys.get(p.name()).map(|k| !k.is_empty()).unwrap_or(false)
+            })
             .collect();
 
         let main_vbox = gtk::Box::new(gtk::Orientation::Vertical, 10);
@@ -88,8 +91,10 @@ impl SingleModelSelector {
         provider_label.set_halign(gtk::Align::Start);
         provider_label.add_css_class("dim-label");
 
-        let provider_names: Vec<&str> = providers.iter().map(|p| p.name()).collect();
-        let provider_list = gtk::StringList::new(&provider_names);
+        let mut provider_names = vec!["None".to_string()];
+        provider_names.extend(providers.iter().map(|p| p.name().to_string()));
+        let provider_names_refs: Vec<&str> = provider_names.iter().map(|s| s.as_str()).collect();
+        let provider_list = gtk::StringList::new(&provider_names_refs);
         let provider_dropdown = gtk::DropDown::new(Some(provider_list), None::<&gtk::Expression>);
 
         // Model Section
@@ -155,10 +160,10 @@ impl SingleModelSelector {
             inner,
         };
 
-        if let Some(initial_prov) = initial {
-            self_.set_model_provider_internal(Some(initial_prov));
+        if initial.is_some() {
+            self_.set_model_provider_internal(initial);
         } else {
-            self_.on_provider_changed();
+            self_.set_model_provider_internal(None);
         }
 
         let on_change = Rc::new(on_change);
@@ -172,10 +177,15 @@ impl SingleModelSelector {
                 }
 
                 let p_idx = inner.provider_dropdown.selected();
+                if p_idx == 0 {
+                    drop(inner);
+                    on_change(None);
+                    return;
+                }
                 let m_idx = inner.model_dropdown.selected();
                 let t_idx = inner.thinking_dropdown.selected();
 
-                if let Some(prov_def) = inner.providers.get(p_idx as usize) {
+                if let Some(prov_def) = inner.providers.get((p_idx - 1) as usize) {
                     let mut m_name = None;
                     if let Some(item) = inner
                         .model_list
@@ -289,49 +299,57 @@ impl SingleModelSelector {
             }
 
             if let Ok(mut inner) = s_clone2.inner.try_borrow_mut() {
-                let is_ollama = if let Some(p) = inner
-                    .providers
-                    .get(inner.provider_dropdown.selected() as usize)
-                {
-                    p.name() == "Ollama"
+                let p_idx = inner.provider_dropdown.selected();
+                let is_ollama = if p_idx > 0 {
+                    if let Some(p) = inner.providers.get((p_idx - 1) as usize) {
+                        p.name() == "Ollama"
+                    } else {
+                        false
+                    }
                 } else {
                     false
                 };
 
-                if is_ollama && !fetched.is_empty() {
-                    let mut current_model = String::new();
-                    let m_idx = inner.model_dropdown.selected();
-                    if let Some(item) = inner
-                        .model_list
-                        .item(m_idx)
-                        .and_then(|o| o.downcast::<gtk::StringObject>().ok())
-                    {
-                        current_model = item.string().to_string();
-                    }
+                if is_ollama {
                     inner.updating = true;
                     inner.model_list.splice(0, inner.model_list.n_items(), &[]);
 
-                    let mut found_pos = None;
-                    for (i, f) in fetched.iter().enumerate() {
-                        inner.model_list.append(f);
-                        if f == &current_model {
-                            found_pos = Some(i as u32);
-                        }
-                    }
-
-                    if found_pos.is_none() {
-                        if !current_model.is_empty()
-                            && current_model != "Ollama Offline"
-                            && current_model != "Loading..."
+                    if fetched.is_empty() {
+                        inner.model_list.append("Ollama Offline");
+                        inner.model_dropdown.set_selected(0);
+                    } else {
+                        let mut current_model = String::new();
+                        let m_idx = inner.model_dropdown.selected();
+                        if let Some(item) = inner
+                            .model_list
+                            .item(m_idx)
+                            .and_then(|o| o.downcast::<gtk::StringObject>().ok())
                         {
-                            inner.model_list.append(&current_model);
-                            found_pos = Some((fetched.len()) as u32);
-                        } else {
-                            found_pos = Some(0);
+                            current_model = item.string().to_string();
                         }
-                    }
 
-                    inner.model_dropdown.set_selected(found_pos.unwrap());
+                        let mut found_pos = None;
+                        for (i, f) in fetched.iter().enumerate() {
+                            inner.model_list.append(f);
+                            if f == &current_model {
+                                found_pos = Some(i as u32);
+                            }
+                        }
+
+                        if found_pos.is_none() {
+                            if !current_model.is_empty()
+                                && current_model != "Ollama Offline"
+                                && current_model != "Loading..."
+                            {
+                                inner.model_list.append(&current_model);
+                                found_pos = Some((fetched.len()) as u32);
+                            } else {
+                                found_pos = Some(0);
+                            }
+                        }
+
+                        inner.model_dropdown.set_selected(found_pos.unwrap());
+                    }
                     inner.updating = false;
 
                     let cb = inner.on_change_callback.clone();
@@ -349,10 +367,13 @@ impl SingleModelSelector {
     pub fn get_current_provider(&self) -> Option<ModelProvider> {
         let inner = self.inner.borrow();
         let p_idx = inner.provider_dropdown.selected();
+        if p_idx == 0 {
+            return None;
+        }
         let m_idx = inner.model_dropdown.selected();
         let t_idx = inner.thinking_dropdown.selected();
 
-        inner.providers.get(p_idx as usize).map(|prov_def| {
+        inner.providers.get((p_idx - 1) as usize).map(|prov_def| {
             let mut m_name = None;
             if prov_def.name() == "OpenRouter" {
                 m_name = Some(inner.model_entry.text().to_string());
@@ -384,7 +405,13 @@ impl SingleModelSelector {
                 .thinking_list
                 .splice(0, inner.thinking_list.n_items(), &[]);
 
-            if let Some(prov_def) = inner.providers.get(p_idx as usize) {
+            if p_idx == 0 {
+                inner.model_dropdown.set_visible(false);
+                inner.model_entry.set_visible(false);
+                inner.options_vbox.set_visible(false);
+                inner.updating = false;
+                should_update = true;
+            } else if let Some(prov_def) = inner.providers.get((p_idx - 1) as usize) {
                 let is_ollama = prov_def.name() == "Ollama";
                 let is_openrouter = prov_def.name() == "OpenRouter";
 
@@ -443,14 +470,19 @@ impl SingleModelSelector {
                             }
                         }
 
-                        if let Ok(mut inner) = s_clone.inner.try_borrow_mut()
-                            && inner.provider_dropdown.selected() as usize
-                                == inner
-                                    .providers
-                                    .iter()
-                                    .position(|p| p.name() == "Ollama")
-                                    .unwrap_or(999)
-                        {
+                        if let Ok(mut inner) = s_clone.inner.try_borrow_mut() {
+                            let p_idx = inner.provider_dropdown.selected();
+                            let is_still_ollama = if p_idx > 0 {
+                                if let Some(p) = inner.providers.get((p_idx - 1) as usize) {
+                                    p.name() == "Ollama"
+                                } else {
+                                    false
+                                }
+                            } else {
+                                false
+                            };
+
+                            if is_still_ollama {
                             // Still Ollama
                             inner.updating = true;
                             inner.model_list.splice(0, inner.model_list.n_items(), &[]);
@@ -470,6 +502,7 @@ impl SingleModelSelector {
                                 cb();
                             }
                         }
+                    }
                     });
                 }
             }
@@ -484,8 +517,12 @@ impl SingleModelSelector {
                 return false;
             }
             let p_idx = inner.provider_dropdown.selected();
+            if p_idx == 0 {
+                return false;
+            }
+            let prov_idx = (p_idx - 1) as usize;
 
-            let prov_name = inner.providers.get(p_idx as usize).map(|prov| prov.name());
+            let prov_name = inner.providers.get(prov_idx).map(|prov| prov.name());
 
             if let Some(name) = prov_name {
                 if name != "Ollama" {
@@ -495,14 +532,14 @@ impl SingleModelSelector {
                         .thinking_list
                         .splice(0, inner.thinking_list.n_items(), &[]);
 
-                    let levels = inner.providers[p_idx as usize].get_thinking_levels(m_idx);
+                    let levels = inner.providers[prov_idx].get_thinking_levels(m_idx);
                     for level in &levels {
                         inner.thinking_list.append(level);
                     }
                     if inner.thinking_list.n_items() > 0 {
                         inner.thinking_dropdown.set_selected(0);
                     }
-                    let supports = inner.providers[p_idx as usize].supports_thinking(m_idx);
+                    let supports = inner.providers[prov_idx].supports_thinking(m_idx);
                     inner.options_vbox.set_visible(supports);
                     inner.updating = false;
                     should_update = true;
@@ -533,15 +570,23 @@ impl SingleModelSelector {
     }
 
     fn set_model_provider_internal(&self, provider: Option<ModelProvider>) {
-        let provider = match provider {
-            Some(p) => p,
-            None => return,
-        };
+        if provider.is_none() {
+            if let Ok(inner) = self.inner.try_borrow() {
+                inner.provider_dropdown.set_selected(0);
+                inner.model_list.splice(0, inner.model_list.n_items(), &[]);
+                inner.thinking_list.splice(0, inner.thinking_list.n_items(), &[]);
+                inner.model_dropdown.set_visible(false);
+                inner.model_entry.set_visible(false);
+                inner.options_vbox.set_visible(false);
+            }
+            return;
+        }
+        let provider = provider.unwrap();
 
         if let Ok(inner) = self.inner.try_borrow() {
             let prov_name = provider.provider_name();
             if let Some(p_idx) = inner.providers.iter().position(|p| p.name() == prov_name) {
-                inner.provider_dropdown.set_selected(p_idx as u32);
+                inner.provider_dropdown.set_selected((p_idx + 1) as u32);
                 let prov_def = &inner.providers[p_idx];
 
                 let is_ollama = prov_name == "Ollama";
@@ -620,11 +665,13 @@ impl SingleModelSelector {
                         }
 
                         if let Ok(mut inner) = s_clone2.inner.try_borrow_mut() {
-                            let is_ollama = if let Some(p) = inner
-                                .providers
-                                .get(inner.provider_dropdown.selected() as usize)
-                            {
-                                p.name() == "Ollama"
+                            let p_idx = inner.provider_dropdown.selected();
+                            let is_ollama = if p_idx > 0 {
+                                if let Some(p) = inner.providers.get((p_idx - 1) as usize) {
+                                    p.name() == "Ollama"
+                                } else {
+                                    false
+                                }
                             } else {
                                 false
                             };

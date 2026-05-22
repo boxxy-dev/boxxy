@@ -1,4 +1,4 @@
-use crate::config::Settings;
+use crate::config::{ModelConfigState, Settings};
 use adw::prelude::*;
 use gtk4 as gtk;
 use libadwaita as adw;
@@ -40,7 +40,7 @@ pub fn setup_apis_page(
         let settings = settings_rc.clone();
         move || {
             let s = settings.borrow();
-            let is_complete = s.ai_chat_model.is_some() && s.claw_model.is_some();
+            let is_complete = s.is_models_selection_complete();
             let title = if is_complete {
                 "All Models are set"
             } else {
@@ -54,7 +54,20 @@ pub fn setup_apis_page(
                 row.remove_css_class("model-status-warning");
                 row.add_css_class("model-status-success");
             } else {
-                row.set_subtitle("Open Models Selection to set your models.");
+                let subtitle = match (
+                    s.resolve_model_state(&s.ai_chat_model),
+                    s.resolve_model_state(&s.claw_model),
+                ) {
+                    (ModelConfigState::MissingApiKey { provider_name: p }, _)
+                    | (_, ModelConfigState::MissingApiKey { provider_name: p }) => {
+                        format!("{} API key is missing.", p)
+                    }
+                    (ModelConfigState::OllamaOffline, _) | (_, ModelConfigState::OllamaOffline) => {
+                        "Ollama is offline. Check that it is running.".to_string()
+                    }
+                    _ => "Open Models Selection to set your models.".to_string(),
+                };
+                row.set_subtitle(&subtitle);
                 row.remove_css_class("model-status-success");
                 row.add_css_class("model-status-warning");
             }
@@ -64,6 +77,17 @@ pub fn setup_apis_page(
         }
     };
     update_model_status();
+
+    // Listen to SETTINGS_EVENT_BUS for real-time model setting changes (e.g., from the model selector dialog)
+    let settings_rc_bus = settings_rc.clone();
+    let update_status_bus = update_model_status.clone();
+    let mut settings_rx = crate::config::SETTINGS_EVENT_BUS.subscribe();
+    gtk::glib::spawn_future_local(async move {
+        while let Ok(settings) = settings_rx.recv().await {
+            *settings_rc_bus.borrow_mut() = settings;
+            update_status_bus();
+        }
+    });
 
     let providers = boxxy_model_selection::get_providers();
     let mut dynamic_rows = Vec::new();
@@ -103,6 +127,7 @@ pub fn setup_apis_page(
                     if s.api_keys.get(&prov_name) != Some(&new_val) {
                         let is_empty = new_val.is_empty();
                         s.api_keys.insert(prov_name.clone(), new_val);
+                        s.check_and_unset_invalid_models();
                         s.save();
                         settings_to_save = Some(s.clone());
 

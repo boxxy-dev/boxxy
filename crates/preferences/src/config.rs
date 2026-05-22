@@ -282,6 +282,8 @@ You can add your own sensitive paths here. One path per line. Lines starting wit
                 settings.save();
             }
 
+            settings.check_and_unset_invalid_models();
+
             RwLock::new(settings)
         });
     }
@@ -314,6 +316,8 @@ You can add your own sensitive paths here. One path per line. Lines starting wit
                 }
             }
         }
+
+        fresh.check_and_unset_invalid_models();
 
         if let Some(cache) = SETTINGS_CACHE.get() {
             *cache.write().unwrap() = fresh;
@@ -373,6 +377,70 @@ You can add your own sensitive paths here. One path per line. Lines starting wit
         }
         keys
     }
+
+    pub fn check_and_unset_invalid_models(&mut self) {
+        let ai_ready   = matches!(self.resolve_model_state(&self.ai_chat_model),  ModelConfigState::Ready(_));
+        let claw_ready = matches!(self.resolve_model_state(&self.claw_model),     ModelConfigState::Ready(_));
+        let mem_ready  = matches!(self.resolve_model_state(&self.memory_model),   ModelConfigState::Ready(_));
+
+        if !ai_ready   { self.ai_chat_model  = None; }
+        if !claw_ready { self.claw_model     = None; }
+        if !mem_ready  { self.memory_model   = None; }
+    }
+
+    pub fn resolve_model_state(&self, model: &Option<ModelProvider>) -> ModelConfigState {
+        let Some(m) = model else {
+            return ModelConfigState::Unconfigured;
+        };
+
+        if let ModelProvider::Ollama(name) = m {
+            return if name.is_empty() || name == "Loading..." || name == "Ollama Offline" {
+                ModelConfigState::OllamaOffline
+            } else {
+                ModelConfigState::Ready(m.clone())
+            };
+        }
+
+        let provider_name = m.provider_name();
+        let requires_key = boxxy_model_selection::get_providers()
+            .iter()
+            .any(|p| p.name() == provider_name && p.requires_api_key());
+
+        if !requires_key {
+            return ModelConfigState::Ready(m.clone());
+        }
+
+        let has_key = self.api_keys.get(provider_name).map(|k| !k.is_empty()).unwrap_or(false)
+            || Self::get_env_api_key(provider_name).map(|k| !k.is_empty()).unwrap_or(false);
+
+        if has_key {
+            ModelConfigState::Ready(m.clone())
+        } else {
+            ModelConfigState::MissingApiKey {
+                provider_name: provider_name.to_string(),
+            }
+        }
+    }
+
+    pub fn is_models_selection_complete(&self) -> bool {
+        matches!(self.resolve_model_state(&self.ai_chat_model), ModelConfigState::Ready(_))
+            && matches!(self.resolve_model_state(&self.claw_model), ModelConfigState::Ready(_))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ModelConfigState {
+    /// No provider or model has been selected.
+    Unconfigured,
+
+    /// A provider is selected, but the required API key is empty/missing.
+    MissingApiKey { provider_name: String },
+
+    /// Ollama is selected, but the local instance is offline or unreachable.
+    OllamaOffline,
+
+    /// The model is fully resolved, validated, and ready for use.
+    Ready(ModelProvider),
 }
 
 // --- Internal App State ---
