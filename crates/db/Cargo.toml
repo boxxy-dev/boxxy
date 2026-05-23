@@ -13,6 +13,6 @@ anyhow.workspace = true
 log.workspace = true
 sqlx.workspace = true
 tokio.workspace = true
-directories.workspace = true
+boxxy-sys-utils.workspace = true
 serde.workspace = true
 serde_json.workspace = true

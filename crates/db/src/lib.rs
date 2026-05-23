@@ -1,7 +1,6 @@
 #![allow(clippy::missing_errors_doc)]
 #![allow(clippy::missing_panics_doc)]
 use anyhow::{Context, Result};
-use directories::ProjectDirs;
 use sqlx::SqlitePool;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use std::path::PathBuf;
@@ -97,9 +96,7 @@ impl Db {
     }
 
     fn get_db_path() -> Result<PathBuf> {
-        let proj_dirs = ProjectDirs::from("org", "boxxy", "boxxy-terminal")
-            .context("Could not determine project directories")?;
-        let config_dir = proj_dirs.config_dir();
+        let config_dir = boxxy_sys_utils::get_config_dir();
         Ok(config_dir.join("boxxyclaw").join("boxxy.db"))
     }
 

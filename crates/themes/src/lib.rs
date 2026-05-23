@@ -218,8 +218,7 @@ fn write_and_load_scheme(id: &str, xml: &str) -> Option<sourceview5::StyleScheme
 }
 
 fn get_schemes_dir() -> Option<PathBuf> {
-    let home = std::env::var("HOME").ok()?;
-    let dir = PathBuf::from(home).join(".config/boxxy-terminal/styles");
+    let dir = boxxy_sys_utils::get_config_dir().join("styles");
     fs::create_dir_all(&dir).ok()?;
     Some(dir)
 }

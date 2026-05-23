@@ -123,7 +123,9 @@ fn main() -> Result<()> {
 
     // Now start the async runtime ONLY in the final daemon process
     run_async(async move {
+        let resolved_config_dir = boxxy_sys_utils::get_config_dir();
         info!("Boxxy Agent starting (v{})...", env!("CARGO_PKG_VERSION"));
+        info!("Using config directory: {:?}", resolved_config_dir);
 
         if !cli.no_singleton {
             match daemon::singleton::try_claim_or_handoff().await? {

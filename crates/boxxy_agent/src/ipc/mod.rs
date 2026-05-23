@@ -161,6 +161,10 @@ impl AgentInterface {
         env!("CARGO_PKG_VERSION").to_string()
     }
 
+    async fn get_config_dir(&self) -> String {
+        boxxy_sys_utils::get_config_dir().to_string_lossy().into_owned()
+    }
+
     async fn update_credentials(
         &self,
         api_keys: std::collections::HashMap<String, String>,

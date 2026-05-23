@@ -13,7 +13,7 @@ disable-self-update = ["boxxy-sys-utils/disable-self-update"]
 gtk4.workspace = true
 libadwaita.workspace = true
 boxxy-terminal = { path = "../terminal" }
-boxxy-sys-utils = { path = "../sys_utils" }
+boxxy-sys-utils.workspace = true
 boxxy-preferences = { path = "../preferences" }
 boxxy-keybindings = { path = "../keybindings" }
 boxxy-themes = { path = "../themes" }

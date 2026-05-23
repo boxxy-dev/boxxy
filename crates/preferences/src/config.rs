@@ -223,29 +223,25 @@ impl Default for Settings {
 
 impl Settings {
     fn get_path() -> Option<PathBuf> {
-        if let Some(dirs) = directories::ProjectDirs::from("org", "boxxy", "boxxy-terminal") {
-            let config_dir = dirs.config_dir();
-            if !config_dir.exists() {
-                fs::create_dir_all(config_dir).ok()?;
-            }
-            return Some(config_dir.join("settings.json"));
+        let config_dir = boxxy_sys_utils::get_config_dir();
+        if !config_dir.exists() {
+            fs::create_dir_all(&config_dir).ok()?;
         }
-        None
+        Some(config_dir.join("settings.json"))
     }
 
     pub fn ensure_claw_skills() {
-        if let Some(dirs) = directories::ProjectDirs::from("org", "boxxy", "boxxy-terminal") {
-            let config_dir = dirs.config_dir();
-            let boxxyclaw_dir = config_dir.join("boxxyclaw");
+        let config_dir = boxxy_sys_utils::get_config_dir();
+        let boxxyclaw_dir = config_dir.join("boxxyclaw");
 
-            if !boxxyclaw_dir.exists() {
-                let _ = fs::create_dir_all(&boxxyclaw_dir);
-            }
+        if !boxxyclaw_dir.exists() {
+            let _ = fs::create_dir_all(&boxxyclaw_dir);
+        }
 
-            // Generate BLACKLIST.md
-            let blacklist_md = boxxyclaw_dir.join("BLACKLIST.md");
-            if !blacklist_md.exists() {
-                let blacklist_content = "# Sensitive Path Blacklist\n\n\
+        // Generate BLACKLIST.md
+        let blacklist_md = boxxyclaw_dir.join("BLACKLIST.md");
+        if !blacklist_md.exists() {
+            let blacklist_content = "# Sensitive Path Blacklist\n\n\
 This file defines paths that Boxxy-Claw is strictly forbidden from reading or modifying.\n\
 The agent will respect this list for all file operations (reading config files, writing, etc.).\n\
 You can add your own sensitive paths here. One path per line. Lines starting with `#` are ignored.\n\n\
@@ -254,13 +250,12 @@ You can add your own sensitive paths here. One path per line. Lines starting wit
 /root/.ssh\n\
 .ssh/id_rsa\n\
 .ssh/id_ed25519\n";
-                let _ = fs::write(blacklist_md, blacklist_content);
-            }
+            let _ = fs::write(blacklist_md, blacklist_content);
+        }
 
-            let skills_dir = boxxyclaw_dir.join("skills");
-            if !skills_dir.exists() {
-                let _ = fs::create_dir_all(&skills_dir);
-            }
+        let skills_dir = boxxyclaw_dir.join("skills");
+        if !skills_dir.exists() {
+            let _ = fs::create_dir_all(&skills_dir);
         }
     }
 
@@ -467,14 +462,11 @@ impl Default for AppState {
 
 impl AppState {
     fn get_path() -> Option<PathBuf> {
-        if let Some(dirs) = directories::ProjectDirs::from("org", "boxxy", "boxxy-terminal") {
-            let config_dir = dirs.config_dir();
-            if !config_dir.exists() {
-                fs::create_dir_all(config_dir).ok()?;
-            }
-            return Some(config_dir.join("state.json"));
+        let config_dir = boxxy_sys_utils::get_config_dir();
+        if !config_dir.exists() {
+            fs::create_dir_all(&config_dir).ok()?;
         }
-        None
+        Some(config_dir.join("state.json"))
     }
 
     pub fn init() {

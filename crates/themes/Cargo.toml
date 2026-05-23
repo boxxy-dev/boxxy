@@ -7,13 +7,13 @@ license.workspace = true
 name = "boxxy-themes"
 
 [dependencies]
+boxxy-sys-utils.workspace = true
 pango.workspace = true
 gtk4.workspace = true
 gio.workspace = true
 libadwaita.workspace = true
 anyhow.workspace = true
 sourceview5.workspace = true
-directories.workspace = true
 glib.workspace = true
 uuid.workspace = true
 lazy_static.workspace = true

@@ -12,7 +12,7 @@ libadwaita.workspace = true
 boxxy-vte = { path = "../boxxy_vte" }
 boxxy-preferences = { path = "../preferences" }
 boxxy-themes = { path = "../themes" }
-boxxy-sys-utils = { path = "../sys_utils" }
+boxxy-sys-utils.workspace = true
 boxxy-agent = { path = "../boxxy_agent" }
 boxxy-claw = { path = "../boxxy_claw" }
 boxxy-claw-protocol = { path = "../boxxy_claw_protocol" }
@@ -35,4 +35,3 @@ gstreamer.workspace = true
 log.workspace = true
 uuid.workspace = true
 getrandom.workspace = true
-directories.workspace = true

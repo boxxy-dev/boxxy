@@ -1,6 +1,5 @@
 use crate::characters::{CharacterConfig, CharacterInfo};
 use anyhow::{Context, Result};
-use directories::ProjectDirs;
 use serde::Deserialize;
 use serde_json;
 use std::fs;
@@ -20,9 +19,7 @@ struct CharacterToml {
 
 /// Returns the base directory for characters: ~/.config/boxxy-terminal/boxxyclaw/characters/
 pub fn get_characters_dir() -> Result<PathBuf> {
-    let proj_dirs = ProjectDirs::from("org", "boxxy", "boxxy-terminal")
-        .context("Could not determine project directories")?;
-    let config_dir = proj_dirs.config_dir();
+    let config_dir = boxxy_sys_utils::get_config_dir();
     Ok(config_dir.join("boxxyclaw").join("characters"))
 }
 

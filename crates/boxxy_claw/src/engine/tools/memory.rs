@@ -50,29 +50,25 @@ impl Tool for MemoryTool {
         self.approval
             .report_tool_started(Self::NAME.to_string())
             .await;
-        if let Some(dirs) = directories::ProjectDirs::from("org", "boxxy", "boxxy-terminal") {
-            let config_dir = dirs.config_dir();
-            let memory_path = config_dir.join("boxxyclaw").join("CLAW_STATE.md");
+        let config_dir = boxxy_sys_utils::get_config_dir();
+        let memory_path = config_dir.join("boxxyclaw").join("CLAW_STATE.md");
 
-            // Ensure directory exists
-            if let Some(parent) = memory_path.parent() {
-                let _ = std::fs::create_dir_all(parent);
-            }
-
-            let mut file = OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&memory_path)?;
-
-            let timestamp = Local::now().format("%Y-%m-%d %H:%M:%S");
-            writeln!(file, "- [{}] {}", timestamp, args.fact)?;
-
-            Ok(MemoryOutput {
-                success: true,
-                message: format!("Successfully remembered: {}", args.fact),
-            })
-        } else {
-            Err(std::io::Error::other("Could not resolve config directory"))
+        // Ensure directory exists
+        if let Some(parent) = memory_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
         }
+
+        let mut file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&memory_path)?;
+
+        let timestamp = Local::now().format("%Y-%m-%d %H:%M:%S");
+        writeln!(file, "- [{}] {}", timestamp, args.fact)?;
+
+        Ok(MemoryOutput {
+            success: true,
+            message: format!("Successfully remembered: {}", args.fact),
+        })
     }
 }

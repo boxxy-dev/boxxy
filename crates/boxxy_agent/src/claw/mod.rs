@@ -348,19 +348,18 @@ fn load_blacklist() -> Vec<String> {
         ".ssh/id_ed25519".to_string(),
     ];
 
-    if let Some(dirs) = directories::ProjectDirs::from("org", "boxxy", "boxxy-terminal") {
-        let blacklist_path = dirs.config_dir().join("boxxyclaw").join("BLACKLIST.md");
-        if let Ok(content) = std::fs::read_to_string(&blacklist_path) {
-            let mut new_blacklist = Vec::new();
-            for line in content.lines() {
-                let trimmed = line.trim();
-                if !trimmed.is_empty() && !trimmed.starts_with('#') {
-                    new_blacklist.push(trimmed.to_string());
-                }
+    let config_dir = boxxy_sys_utils::get_config_dir();
+    let blacklist_path = config_dir.join("boxxyclaw").join("BLACKLIST.md");
+    if let Ok(content) = std::fs::read_to_string(&blacklist_path) {
+        let mut new_blacklist = Vec::new();
+        for line in content.lines() {
+            let trimmed = line.trim();
+            if !trimmed.is_empty() && !trimmed.starts_with('#') {
+                new_blacklist.push(trimmed.to_string());
             }
-            if !new_blacklist.is_empty() {
-                blacklisted = new_blacklist;
-            }
+        }
+        if !new_blacklist.is_empty() {
+            blacklisted = new_blacklist;
         }
     }
     blacklisted

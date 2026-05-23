@@ -32,14 +32,11 @@ pub struct BookmarksManager;
 
 impl BookmarksManager {
     fn get_base_dir() -> Option<PathBuf> {
-        if let Some(dirs) = directories::ProjectDirs::from("org", "boxxy", "boxxy-terminal") {
-            let config_dir = dirs.config_dir().join("bookmarks");
-            if !config_dir.exists() {
-                let _ = fs::create_dir_all(&config_dir);
-            }
-            return Some(config_dir);
+        let config_dir = boxxy_sys_utils::get_config_dir().join("bookmarks");
+        if !config_dir.exists() {
+            let _ = fs::create_dir_all(&config_dir);
         }
-        None
+        Some(config_dir)
     }
 
     fn get_index_path() -> Option<PathBuf> {
@@ -51,18 +48,15 @@ impl BookmarksManager {
     }
 
     pub fn get_runs_dir() -> Option<PathBuf> {
-        if let Some(dirs) = directories::ProjectDirs::from("org", "boxxy", "boxxy-terminal") {
-            let runs_dir = dirs
-                .config_dir()
-                .join("cache")
-                .join("bookmarks")
-                .join("runs");
-            if !runs_dir.exists() {
-                let _ = fs::create_dir_all(&runs_dir);
-            }
-            return Some(runs_dir);
+        let config_dir = boxxy_sys_utils::get_config_dir();
+        let runs_dir = config_dir
+            .join("cache")
+            .join("bookmarks")
+            .join("runs");
+        if !runs_dir.exists() {
+            let _ = fs::create_dir_all(&runs_dir);
         }
-        None
+        Some(runs_dir)
     }
 
     pub fn clean_runs_dir() {

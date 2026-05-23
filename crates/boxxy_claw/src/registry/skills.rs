@@ -59,69 +59,67 @@ impl SkillRegistry {
 
         // Setup file watcher
         let mut watcher = None;
-        if let Some(dirs) = directories::ProjectDirs::from("org", "boxxy", "boxxy-terminal") {
-            let config_dir = dirs.config_dir();
-            let skills_dir = config_dir.join("boxxyclaw").join("skills");
+        let config_dir = boxxy_sys_utils::get_config_dir();
+        let skills_dir = config_dir.join("boxxyclaw").join("skills");
 
-            if skills_dir.exists() {
-                let skills_clone = skills.clone();
+        if skills_dir.exists() {
+            let skills_clone = skills.clone();
 
-                // The callback runs in a blocking context, so we use a tokio channel to send
-                // events back to the async runtime, or spawn a task.
-                let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+            // The callback runs in a blocking context, so we use a tokio channel to send
+            // events back to the async runtime, or spawn a task.
+            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
 
-                let w = notify::recommended_watcher(move |res: notify::Result<Event>| {
-                    if let Ok(event) = res
-                        && matches!(
-                            event.kind,
-                            EventKind::Modify(_) | EventKind::Create(_) | EventKind::Remove(_)
-                        )
-                    {
-                        let _ = tx.send(());
-                    }
-                });
+            let w = notify::recommended_watcher(move |res: notify::Result<Event>| {
+                if let Ok(event) = res
+                    && matches!(
+                        event.kind,
+                        EventKind::Modify(_) | EventKind::Create(_) | EventKind::Remove(_)
+                    )
+                {
+                    let _ = tx.send(());
+                }
+            });
 
-                match w {
-                    Ok(mut w) => {
-                        if let Err(e) = w.watch(&skills_dir, RecursiveMode::Recursive) {
-                            error!("Failed to watch skills directory: {}", e);
-                        } else {
-                            info!(
-                                "SkillRegistry: Watching {} for changes.",
-                                skills_dir.display()
-                            );
-                            watcher = Some(w);
-
-                            // Spawn an async task to handle debounce and reloading
-                            let db_clone = db.clone();
-                            tokio::spawn(async move {
-                                while rx.recv().await.is_some() {
-                                    // Debounce events
-                                    tokio::time::sleep(std::time::Duration::from_millis(250)).await;
-                                    // Drain any extra events that arrived during the sleep
-                                    while rx.try_recv().is_ok() {}
-
-                                    debug!(
-                                        "SkillRegistry: File change detected, reloading skills."
-                                    );
-                                    let new_skills = Self::load_skills_from_disk();
-                                    *skills_clone.write().await = new_skills.clone();
-
-                                    // Sync to DB
-                                    let _ = Self::sync_to_db(db_clone.clone(), new_skills).await;
-                                    debug!("SkillRegistry: Reload and DB sync complete.");
-                                }
-                            });
-                        }
-                    }
-                    Err(e) => {
-                        log::warn!(
-                            "Failed to initialize skills watcher: {}. \
-                            (If os error 24, your system may have exhausted 'fs.inotify.max_user_instances'.) \
-                            Skills will be loaded once but will not hot-reload.",
-                            e
+            match w {
+                Ok(mut w) => {
+                    if let Err(e) = w.watch(&skills_dir, RecursiveMode::Recursive) {
+                        error!("Failed to watch skills directory: {}", e);
+                    } else {
+                        info!(
+                            "SkillRegistry: Watching {} for changes.",
+                            skills_dir.display()
                         );
+                        watcher = Some(w);
+
+                        // Spawn an async task to handle debounce and reloading
+                        let db_clone = db.clone();
+                        tokio::spawn(async move {
+                            while rx.recv().await.is_some() {
+                                // Debounce events
+                                tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+                                // Drain any extra events that arrived during the sleep
+                                while rx.try_recv().is_ok() {}
+
+                                debug!(
+                                    "SkillRegistry: File change detected, reloading skills."
+                                );
+                                let new_skills = Self::load_skills_from_disk();
+                                *skills_clone.write().await = new_skills.clone();
+
+                                // Sync to DB
+                                let _ = Self::sync_to_db(db_clone.clone(), new_skills).await;
+                                debug!("SkillRegistry: Reload and DB sync complete.");
+                            }
+                        });
                     }
+                }
+                Err(e) => {
+                    log::warn!(
+                        "Failed to initialize skills watcher: {}. \
+                        (If os error 24, your system may have exhausted 'fs.inotify.max_user_instances'.) \
+                        Skills will be loaded once but will not hot-reload.",
+                        e
+                    );
                 }
             }
         }
@@ -189,54 +187,52 @@ impl SkillRegistry {
 
     fn load_skills_from_disk() -> Vec<Skill> {
         let mut skills = Vec::new();
-        if let Some(dirs) = directories::ProjectDirs::from("org", "boxxy", "boxxy-terminal") {
-            let config_dir = dirs.config_dir();
-            let skills_dir = config_dir.join("boxxyclaw").join("skills");
+        let config_dir = boxxy_sys_utils::get_config_dir();
+        let skills_dir = config_dir.join("boxxyclaw").join("skills");
 
-            if let Ok(entries) = std::fs::read_dir(skills_dir) {
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    let mut file_path = None;
-                    if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("md") {
-                        file_path = Some(path);
-                    } else if path.is_dir() {
-                        let skill_md = path.join("SKILL.md");
-                        if skill_md.exists() {
-                            file_path = Some(skill_md);
+        if let Ok(entries) = std::fs::read_dir(skills_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                let mut file_path = None;
+                if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("md") {
+                    file_path = Some(path);
+                } else if path.is_dir() {
+                    let skill_md = path.join("SKILL.md");
+                    if skill_md.exists() {
+                        file_path = Some(skill_md);
+                    }
+                }
+
+                if let Some(md_path) = file_path
+                    && let Ok(content) = std::fs::read_to_string(md_path)
+                {
+                    let mut has_frontmatter = false;
+                    if (content.starts_with("---\n") || content.starts_with("---\r\n"))
+                        && let Some(end_idx) = content[4..].find("\n---")
+                    {
+                        let frontmatter_str = &content[4..4 + end_idx];
+                        let body = &content[4 + end_idx + 4..];
+                        if let Ok(frontmatter) =
+                            serde_yml::from_str::<SkillFrontmatter>(frontmatter_str)
+                        {
+                            skills.push(Skill {
+                                frontmatter,
+                                content: body.trim_start().to_string(),
+                            });
+                            has_frontmatter = true;
                         }
                     }
 
-                    if let Some(md_path) = file_path
-                        && let Ok(content) = std::fs::read_to_string(md_path)
-                    {
-                        let mut has_frontmatter = false;
-                        if (content.starts_with("---\n") || content.starts_with("---\r\n"))
-                            && let Some(end_idx) = content[4..].find("\n---")
-                        {
-                            let frontmatter_str = &content[4..4 + end_idx];
-                            let body = &content[4 + end_idx + 4..];
-                            if let Ok(frontmatter) =
-                                serde_yml::from_str::<SkillFrontmatter>(frontmatter_str)
-                            {
-                                skills.push(Skill {
-                                    frontmatter,
-                                    content: body.trim_start().to_string(),
-                                });
-                                has_frontmatter = true;
-                            }
-                        }
-
-                        if !has_frontmatter {
-                            skills.push(Skill {
-                                frontmatter: SkillFrontmatter {
-                                    name: "legacy-skill".to_string(),
-                                    description: "Legacy skill".to_string(),
-                                    triggers: Vec::new(),
-                                    pinned: false,
-                                },
-                                content,
-                            });
-                        }
+                    if !has_frontmatter {
+                        skills.push(Skill {
+                            frontmatter: SkillFrontmatter {
+                                name: "legacy-skill".to_string(),
+                                description: "Legacy skill".to_string(),
+                                triggers: Vec::new(),
+                                pinned: false,
+                            },
+                            content,
+                        });
                     }
                 }
             }

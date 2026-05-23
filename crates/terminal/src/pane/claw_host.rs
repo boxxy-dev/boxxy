@@ -44,15 +44,8 @@ impl ClawHost for PaneClawHost {
         // Ephemeral execution file: write the expanded script to a
         // bookmark-runs cache dir, make it executable, then inject the
         // path with a leading space so it doesn't pollute shell history.
-        let Some(dirs) = directories::ProjectDirs::from("org", "boxxy", "boxxy-terminal") else {
-            // No project dirs available — fall back to piping the script
-            // directly; the shell will interpret it line by line.
-            self.inject_line(script);
-            return;
-        };
-
-        let runs_dir = dirs
-            .config_dir()
+        let config_dir = boxxy_sys_utils::get_config_dir();
+        let runs_dir = config_dir
             .join("cache")
             .join("bookmarks")
             .join("runs");

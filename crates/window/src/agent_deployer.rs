@@ -19,6 +19,7 @@ pub const WELL_KNOWN_NAME: &str = "dev.boxxy.BoxxyAgent";
 )]
 trait AgentVersion {
     async fn get_version(&self) -> zbus::Result<String>;
+    async fn get_config_dir(&self) -> zbus::Result<String>;
     async fn request_stop(&self) -> zbus::Result<()>;
 }
 
@@ -111,6 +112,13 @@ async fn query_ghost_version() -> Result<String> {
     Ok(ver)
 }
 
+async fn query_ghost_config_dir() -> Result<String> {
+    let conn = Connection::session().await?;
+    let proxy = AgentVersionProxy::new(&conn).await?;
+    let dir = proxy.get_config_dir().await?;
+    Ok(dir)
+}
+
 async fn deploy_agent_binary(dest: &PathBuf) -> Result<()> {
     info!("Deploying agent binary to {}", dest.display());
 
@@ -162,11 +170,31 @@ async fn deploy_agent_binary(dest: &PathBuf) -> Result<()> {
 }
 
 async fn spawn_agent(host_path: &PathBuf) -> Result<()> {
+    let expected_config_dir = boxxy_sys_utils::get_config_dir();
+
     // Check if it's already running.
     match query_ghost_version().await {
         Ok(ver) if ver == AGENT_VERSION => {
-            info!("Agent v{} is already running.", ver);
-            return Ok(());
+            // Check if the configuration directory matches too!
+            match query_ghost_config_dir().await {
+                Ok(dir) if PathBuf::from(&dir) == expected_config_dir => {
+                    info!("Agent v{} with matching config dir is already running.", ver);
+                    return Ok(());
+                }
+                Ok(dir) => {
+                    warn!(
+                        "Ghost config dir ({}) != app config dir ({:?}) — stopping old agent",
+                        dir, expected_config_dir
+                    );
+                    let _ = stop_ghost().await;
+                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                }
+                Err(e) => {
+                    warn!("Failed to query ghost config dir: {} — stopping old agent", e);
+                    let _ = stop_ghost().await;
+                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                }
+            }
         }
         Ok(ver) => {
             warn!(
@@ -188,8 +216,13 @@ async fn spawn_agent(host_path: &PathBuf) -> Result<()> {
         if let Ok(val) = std::env::var("BOXXY_DEBUG_CONTEXT") {
             cmd.args(["--env=BOXXY_DEBUG_CONTEXT=".to_string() + &val]);
         }
-        cmd.args(["--host", &host_path.to_string_lossy(), "--background"])
-            .spawn()
+        cmd.args([
+            format!("--env=BOXXY_CONFIG_DIR={}", expected_config_dir.to_string_lossy()),
+            "--host".to_string(),
+            host_path.to_string_lossy().into_owned(),
+            "--background".to_string(),
+        ]);
+        cmd.spawn()
             .context("Failed to spawn agent on host")?;
     } else {
         info!("Spawning native agent: {}", host_path.display());
@@ -197,6 +230,7 @@ async fn spawn_agent(host_path: &PathBuf) -> Result<()> {
         if let Ok(val) = std::env::var("BOXXY_DEBUG_CONTEXT") {
             cmd.env("BOXXY_DEBUG_CONTEXT", val);
         }
+        cmd.env("BOXXY_CONFIG_DIR", expected_config_dir);
         cmd.arg("--background")
             .spawn()
             .context("Failed to spawn native agent")?;

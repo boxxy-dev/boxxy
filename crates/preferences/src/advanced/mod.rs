@@ -120,17 +120,15 @@ pub fn setup_advanced_page(
     });
 
     open_config_btn.connect_clicked(|_| {
-        if let Some(dirs) = directories::ProjectDirs::from("org", "boxxy", "boxxy-terminal") {
-            let config_dir = dirs.config_dir();
-            if !config_dir.exists() {
-                let _ = fs::create_dir_all(config_dir);
-            }
-            let uri = format!("file://{}", config_dir.display());
-            let _ = gtk::gio::AppInfo::launch_default_for_uri(
-                &uri,
-                None::<&gtk::gio::AppLaunchContext>,
-            );
+        let config_dir = boxxy_sys_utils::get_config_dir();
+        if !config_dir.exists() {
+            let _ = fs::create_dir_all(&config_dir);
         }
+        let uri = format!("file://{}", config_dir.display());
+        let _ = gtk::gio::AppInfo::launch_default_for_uri(
+            &uri,
+            None::<&gtk::gio::AppLaunchContext>,
+        );
     });
 
     let s_rc = settings_rc.clone();
@@ -151,11 +149,9 @@ pub fn setup_advanced_page(
         let reload_cb2 = reload_cb.clone();
         confirm.connect_response(None, move |_, response| {
             if response == "reset" {
-                if let Some(dirs) = directories::ProjectDirs::from("org", "boxxy", "boxxy-terminal")
-                {
-                    let _ = fs::remove_dir_all(dirs.config_dir());
-                    crate::config::Settings::ensure_claw_skills();
-                }
+                let config_dir = boxxy_sys_utils::get_config_dir();
+                let _ = fs::remove_dir_all(&config_dir);
+                crate::config::Settings::ensure_claw_skills();
                 let updated_settings = crate::config::Settings::default();
                 {
                     let mut s = s_rc2.borrow_mut();

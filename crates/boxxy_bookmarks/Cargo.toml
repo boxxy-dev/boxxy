@@ -9,7 +9,6 @@ name = "boxxy-bookmarks"
 [dependencies]
 gtk4.workspace = true
 libadwaita.workspace = true
-directories.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 uuid.workspace = true
@@ -23,3 +22,4 @@ boxxy-themes = { path = "../themes" }
 boxxy-ai-core = { path = "../ai_core" }
 boxxy-model-selection.workspace = true
 boxxy-terminal = { path = "../terminal" }
+boxxy-sys-utils.workspace = true

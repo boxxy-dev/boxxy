@@ -309,8 +309,7 @@ pub fn handle_terminal_event(
                         let registry = boxxy_claw_protocol::characters::CHARACTER_CACHE.load();
                         if let Some(info) = registry.iter().find(|c| c.config.id == *character_id) {
                             if info.has_avatar {
-                                let mut path = gtk4::glib::user_config_dir();
-                                path.push("boxxy-terminal");
+                                let mut path = boxxy_sys_utils::get_config_dir();
                                 path.push("boxxyclaw");
                                 path.push("characters");
                                 path.push(&info.config.name);
@@ -358,8 +357,7 @@ pub fn handle_terminal_event(
                         let registry = boxxy_claw_protocol::characters::CHARACTER_CACHE.load();
                         if let Some(info) = registry.iter().find(|c| c.config.id == *character_id) {
                             if info.has_avatar {
-                                let mut path = gtk4::glib::user_config_dir();
-                                path.push("boxxy-terminal");
+                                let mut path = boxxy_sys_utils::get_config_dir();
                                 path.push("boxxyclaw");
                                 path.push("characters");
                                 path.push(&info.config.name);

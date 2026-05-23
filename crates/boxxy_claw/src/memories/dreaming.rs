@@ -2,7 +2,6 @@ use boxxy_ai_core::{AiCredentials, create_agent};
 use boxxy_db::Db;
 use boxxy_db::store::Store;
 use boxxy_model_selection::ModelProvider;
-use directories::ProjectDirs;
 use log::debug;
 use std::fs::OpenOptions;
 use std::io::Write;
@@ -230,31 +229,29 @@ impl DreamOrchestrator {
             return Ok(());
         }
 
-        if let Some(dirs) = ProjectDirs::from("org", "boxxy", "boxxy-terminal") {
-            let config_dir = dirs.config_dir();
-            let dreams_md_path = config_dir.join("boxxyclaw").join("DREAMS.md");
+        let config_dir = boxxy_sys_utils::get_config_dir();
+        let dreams_md_path = config_dir.join("boxxyclaw").join("DREAMS.md");
 
-            let mut file = OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&dreams_md_path)?;
+        let mut file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&dreams_md_path)?;
 
-            let timestamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
-            writeln!(file, "## 🌙 Dream Cycle - {}", timestamp)?;
+        let timestamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+        writeln!(file, "## 🌙 Dream Cycle - {}", timestamp)?;
 
-            for (key, content, count, score) in promoted {
-                writeln!(
-                    file,
-                    "- 🛡️ Verified: {} -> \"{}\" ({} observations, {:.2} confidence)",
-                    key, content, count, score
-                )?;
-            }
-
-            for pat in patterns {
-                writeln!(file, "- Pattern: {}", pat)?;
-            }
-            writeln!(file)?;
+        for (key, content, count, score) in promoted {
+            writeln!(
+                file,
+                "- 🛡️ Verified: {} -> \"{}\" ({} observations, {:.2} confidence)",
+                key, content, count, score
+            )?;
         }
+
+        for pat in patterns {
+            writeln!(file, "- Pattern: {}", pat)?;
+        }
+        writeln!(file)?;
         Ok(())
     }
 }

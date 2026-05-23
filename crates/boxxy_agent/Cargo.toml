@@ -20,7 +20,6 @@ async-trait = { workspace = true }
 async-channel = { workspace = true }
 anyhow = { workspace = true }
 libc = { workspace = true }
-directories = { workspace = true }
 futures-util = { workspace = true }
 enumflags2 = { workspace = true }
 uuid = { workspace = true }
@@ -36,6 +35,7 @@ boxxy-model-selection = { path = "../model_selection" }
 boxxy-ai-core = { path = "../ai_core" }
 boxxy-claw-protocol = { path = "../boxxy_claw_protocol" }
 boxxy-claw = { path = "../boxxy_claw" }
+boxxy-sys-utils = { workspace = true }
 sqlx = { workspace = true }
 petname = "3.0.0"
 

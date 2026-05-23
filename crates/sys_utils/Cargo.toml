@@ -18,3 +18,8 @@ reqwest       = { workspace = true }
 serde         = { workspace = true }
 log           = { workspace = true }
 parking_lot   = { workspace = true }
+directories   = { workspace = true }
+home          = { workspace = true }
+
+[dev-dependencies]
+serial_test   = "3.2.0"

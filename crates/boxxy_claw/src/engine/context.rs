@@ -17,21 +17,19 @@ pub fn load_session_context(character_id: &str) -> String {
         }
     }
 
-    if let Some(dirs) = directories::ProjectDirs::from("org", "boxxy", "boxxy-terminal") {
-        let config_dir = dirs.config_dir();
-        let boxxyclaw_dir = config_dir.join("boxxyclaw");
+    let config_dir = boxxy_sys_utils::get_config_dir();
+    let boxxyclaw_dir = config_dir.join("boxxyclaw");
 
-        // 2. Load Long-term Memory (CLAW_STATE.md)
-        let memory_md = boxxyclaw_dir.join("CLAW_STATE.md");
-        if let Ok(content) = std::fs::read_to_string(memory_md) {
-            context.push_str("\n--- LONG-TERM MEMORY ---\n");
-            context.push_str(
-                "Below are facts, preferences, and lessons you've learned in past sessions. \
+    // 2. Load Long-term Memory (CLAW_STATE.md)
+    let memory_md = boxxyclaw_dir.join("CLAW_STATE.md");
+    if let Ok(content) = std::fs::read_to_string(memory_md) {
+        context.push_str("\n--- LONG-TERM MEMORY ---\n");
+        context.push_str(
+            "Below are facts, preferences, and lessons you've learned in past sessions. \
             Respect these rules and use this information to be more helpful.\n\n",
-            );
-            context.push_str(&content);
-            context.push('\n');
-        }
+        );
+        context.push_str(&content);
+        context.push('\n');
     }
 
     context

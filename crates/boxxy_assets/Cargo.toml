@@ -6,4 +6,4 @@ edition = "2024"
 [dependencies]
 image.workspace = true
 thiserror.workspace = true
-directories = "6.0.0"
+boxxy-sys-utils.workspace = true
