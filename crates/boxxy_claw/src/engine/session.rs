@@ -687,9 +687,7 @@ impl ClawSession {
                             match result {
                                 Ok(summary) => {
                                     state_lock.context_quality = crate::engine::ContextQuality::Full;
-                                    state_lock.history.push(rig::message::Message::User {
-                                        content: rig::OneOrMany::one(rig::message::UserContent::text(format!("[WHILE_YOU_SLEPT]\n{}", summary))),
-                                    });
+                                    state_lock.history.push(rig::message::Message::user(format!("[WHILE_YOU_SLEPT]\n{}", summary)));
                                 }
                                 Err(e) => {
                                     log::warn!("Dreamer fallback triggered: {}", e);

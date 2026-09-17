@@ -1,6 +1,6 @@
 use crate::engine::ClawEnvironment;
 use crate::engine::session::{ClawSession, SessionState};
-use rig::tool::Tool;
+use rig::tool::PortableTool;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::sync::Arc;
@@ -24,31 +24,31 @@ pub struct SummonHeadlessWorkerTool {
     pub tx_ui: async_channel::Sender<crate::engine::ClawEngineEvent>,
 }
 
-impl Tool for SummonHeadlessWorkerTool {
+impl PortableTool for SummonHeadlessWorkerTool {
     const NAME: &'static str = "summon_headless_worker";
     type Error = std::io::Error;
     type Args = SummonHeadlessArgs;
     type Output = SummonHeadlessOutput;
 
-    async fn definition(&self, _prompt: String) -> rig::completion::ToolDefinition {
-        rig::completion::ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "Spawns a background agent with a specific profile to complete a task. Use this when you want to continue working in your pane while another agent handles a sub-task. The results will be delivered back to you.".to_string(),
-            parameters: json!({
-                "type": "object",
-                "properties": {
-                    "profile": {
-                        "type": "string",
-                        "description": "The personality/skill profile for the worker (e.g. 'rust-expert', 'documentation-writer')."
-                    },
-                    "prompt": {
-                        "type": "string",
-                        "description": "The specific task instructions for the worker."
-                    }
+    fn description(&self) -> String {
+        "Spawns a background agent with a specific profile to complete a task. Use this when you want to continue working in your pane while another agent handles a sub-task. The results will be delivered back to you.".to_string()
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "profile": {
+                    "type": "string",
+                    "description": "The personality/skill profile for the worker (e.g. 'rust-expert', 'documentation-writer')."
                 },
-                "required": ["profile", "prompt"]
-            }),
-        }
+                "prompt": {
+                    "type": "string",
+                    "description": "The specific task instructions for the worker."
+                }
+            },
+            "required": ["profile", "prompt"]
+        })
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {

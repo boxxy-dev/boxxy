@@ -1,7 +1,6 @@
 use crate::ApprovalHandler;
 use boxxy_claw_protocol::ClawEnvironment;
-use rig::completion::ToolDefinition;
-use rig::tool::Tool;
+use rig::tool::PortableTool;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -19,22 +18,22 @@ pub struct GetClipboardTool {
     pub approval: Arc<dyn ApprovalHandler>,
 }
 
-impl Tool for GetClipboardTool {
+impl PortableTool for GetClipboardTool {
     const NAME: &'static str = "get_clipboard";
 
     type Error = std::io::Error;
     type Args = GetClipboardArgs;
     type Output = GetClipboardOutput;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "Read the current contents of the system clipboard. This requires explicit user approval.".to_string(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {}
-            }),
-        }
+    fn description(&self) -> String {
+        "Read the current contents of the system clipboard. This requires explicit user approval.".to_string()
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {}
+        })
     }
 
     async fn call(&self, _args: Self::Args) -> Result<Self::Output, Self::Error> {
@@ -73,30 +72,28 @@ pub struct SetClipboardTool {
     pub approval: Arc<dyn ApprovalHandler>,
 }
 
-impl Tool for SetClipboardTool {
+impl PortableTool for SetClipboardTool {
     const NAME: &'static str = "set_clipboard";
 
     type Error = std::io::Error;
     type Args = SetClipboardArgs;
     type Output = SetClipboardOutput;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description:
-                "Write text to the system clipboard. This requires explicit user approval."
-                    .to_string(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "text": {
-                        "type": "string",
-                        "description": "The text to copy to the clipboard."
-                    }
-                },
-                "required": ["text"]
-            }),
-        }
+    fn description(&self) -> String {
+        "Write text to the system clipboard. This requires explicit user approval.".to_string()
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "text": {
+                    "type": "string",
+                    "description": "The text to copy to the clipboard."
+                }
+            },
+            "required": ["text"]
+        })
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {

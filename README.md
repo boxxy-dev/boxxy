@@ -37,6 +37,25 @@ curl -O https://boxxy-dev.github.io/boxxy-flatpak-remote/boxxy.gpg && \
 
 ---
 
+## Supported Models
+
+| Provider | Model Name | Model ID |
+| :--- | :--- | :--- |
+| **Google Gemini** | Gemini 3.8 Flash | `gemini-3.8-flash` |
+| **Anthropic** | Claude Fable 5.1 | `claude-fable-5-1` |
+| | Claude Sonnet 5 | `claude-sonnet-5` |
+| | Claude Opus 5 | `claude-opus-5` |
+| **OpenAI** | GPT-6 Astra | `gpt-6-astra` |
+| | GPT-5.6 Sol | `gpt-5.6-sol` |
+| **DeepSeek** | DeepSeek-V4.1-Flash | `deepseek-flash` |
+| **Ollama** | Local Models | Any installed model (`ollama run ...`) |
+| **OpenRouter** | OpenRouter Models | Any OpenRouter model ID |
+
+> [!NOTE]
+> Need support for another model? Please [open an issue](https://github.com/boxxy-dev/boxxy/issues) to request it!
+
+---
+
 ## Documentation
 
 Full docs at **[boxxy.dev](https://boxxy.dev)**

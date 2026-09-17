@@ -1,6 +1,5 @@
 use crate::ApprovalHandler;
-use rig::completion::ToolDefinition;
-use rig::tool::Tool;
+use rig::tool::PortableTool;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -21,32 +20,32 @@ pub struct HttpFetchTool {
     pub approval: Arc<dyn ApprovalHandler>,
 }
 
-impl Tool for HttpFetchTool {
+impl PortableTool for HttpFetchTool {
     const NAME: &'static str = "http_fetch";
 
     type Error = std::io::Error;
     type Args = HttpFetchArgs;
     type Output = HttpFetchOutput;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "Fetch the full text content of a URL. Use this ONLY when: (a) the user provides a specific URL to read, or (b) `web_search` returned no useful answer and you must read a specific page in full. Do NOT use this to re-fetch or verify URLs already returned by `web_search` — those results are already summarised. Returns the status code, response body, and headers.".to_string(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "url": {
-                        "type": "string",
-                        "description": "The absolute URL to fetch (must start with http:// or https://)."
-                    },
-                    "method": {
-                        "type": "string",
-                        "description": "The HTTP method to use (e.g. GET, POST). Defaults to GET."
-                    }
+    fn description(&self) -> String {
+        "Fetch the full text content of a URL. Use this ONLY when: (a) the user provides a specific URL to read, or (b) `web_search` returned no useful answer and you must read a specific page in full. Do NOT use this to re-fetch or verify URLs already returned by `web_search` — those results are already summarised. Returns the status code, response body, and headers.".to_string()
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "url": {
+                    "type": "string",
+                    "description": "The absolute URL to fetch (must start with http:// or https://)."
                 },
-                "required": ["url"]
-            }),
-        }
+                "method": {
+                    "type": "string",
+                    "description": "The HTTP method to use (e.g. GET, POST). Defaults to GET."
+                }
+            },
+            "required": ["url"]
+        })
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {

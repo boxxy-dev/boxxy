@@ -1,8 +1,7 @@
 use crate::engine::{AgentStatus, ClawEngineEvent, ClawEvent};
 use crate::registry::workspace::{EventFilter, global_workspace};
 use boxxy_core_toolbox::ApprovalHandler;
-use rig::completion::ToolDefinition;
-use rig::tool::Tool;
+use rig::tool::PortableTool;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -28,39 +27,39 @@ pub struct SubscribeToPaneTool {
     pub approval: Arc<ClawApprovalHandler>,
 }
 
-impl Tool for SubscribeToPaneTool {
+impl PortableTool for SubscribeToPaneTool {
     const NAME: &'static str = "subscribe_to_pane";
 
     type Error = std::io::Error;
     type Args = SubscribeArgs;
     type Output = SubscribeOutput;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "Subscribe to events from another agent's pane. \
-            CRITICAL: Use this tool to passively wait for events (like errors) in other panes instead of actively running 'watch' commands or parsing logs yourself. \
-            When you call this, your agent will enter a 'Suspended' (0 token) state and will be automatically woken up when the event occurs."
-                .to_string(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "agent_name": {
-                        "type": "string",
-                        "description": "The name of the agent to subscribe to (e.g. 'plentiful bream')."
-                    },
-                    "event_type": {
-                        "type": "string",
-                        "description": "Type of event to listen for. Options: 'process_exit', 'output_match'."
-                    },
-                    "regex": {
-                        "type": "string",
-                        "description": "If event_type is 'output_match', the regex pattern to look for in the terminal output (e.g. 'error: could not compile')."
-                    }
+    fn description(&self) -> String {
+        "Subscribe to events from another agent's pane. \
+        CRITICAL: Use this tool to passively wait for events (like errors) in other panes instead of actively running 'watch' commands or parsing logs yourself. \
+        When you call this, your agent will enter a 'Suspended' (0 token) state and will be automatically woken up when the event occurs."
+            .to_string()
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "agent_name": {
+                    "type": "string",
+                    "description": "The name of the agent to subscribe to (e.g. 'plentiful bream')."
                 },
-                "required": ["agent_name", "event_type"]
-            }),
-        }
+                "event_type": {
+                    "type": "string",
+                    "description": "Type of event to listen for. Options: 'process_exit', 'output_match'."
+                },
+                "regex": {
+                    "type": "string",
+                    "description": "If event_type is 'output_match', the regex pattern to look for in the terminal output (e.g. 'error: could not compile')."
+                }
+            },
+            "required": ["agent_name", "event_type"]
+        })
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
@@ -149,30 +148,30 @@ pub struct AcquireLockTool {
     pub approval: Arc<ClawApprovalHandler>,
 }
 
-impl Tool for AcquireLockTool {
+impl PortableTool for AcquireLockTool {
     const NAME: &'static str = "acquire_lock";
 
     type Error = std::io::Error;
     type Args = LockArgs;
     type Output = LockOutput;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "Acquire a global lock on a shared resource (e.g. a file path). \
-            Prevents other agents from modifying the same resource simultaneously."
-                .to_string(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "resource": {
-                        "type": "string",
-                        "description": "The path or identifier of the resource to lock (e.g. 'src/main.rs')."
-                    }
-                },
-                "required": ["resource"]
-            }),
-        }
+    fn description(&self) -> String {
+        "Acquire a global lock on a shared resource (e.g. a file path). \
+        Prevents other agents from modifying the same resource simultaneously."
+            .to_string()
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "resource": {
+                    "type": "string",
+                    "description": "The path or identifier of the resource to lock (e.g. 'src/main.rs')."
+                }
+            },
+            "required": ["resource"]
+        })
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
@@ -237,28 +236,28 @@ pub struct ReleaseLockTool {
     pub approval: Arc<ClawApprovalHandler>,
 }
 
-impl Tool for ReleaseLockTool {
+impl PortableTool for ReleaseLockTool {
     const NAME: &'static str = "release_lock";
 
     type Error = std::io::Error;
     type Args = LockArgs;
     type Output = LockOutput;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "Release a previously acquired lock on a resource.".to_string(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "resource": {
-                        "type": "string",
-                        "description": "The path or identifier of the resource to unlock."
-                    }
-                },
-                "required": ["resource"]
-            }),
-        }
+    fn description(&self) -> String {
+        "Release a previously acquired lock on a resource.".to_string()
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "resource": {
+                    "type": "string",
+                    "description": "The path or identifier of the resource to unlock."
+                }
+            },
+            "required": ["resource"]
+        })
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
@@ -309,34 +308,34 @@ pub struct PublishEventTool {
     pub approval: Arc<ClawApprovalHandler>,
 }
 
-impl Tool for PublishEventTool {
+impl PortableTool for PublishEventTool {
     const NAME: &'static str = "publish_custom_event";
 
     type Error = std::io::Error;
     type Args = PublishArgs;
     type Output = String;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "Publish a custom event to the workspace event bus. \
-            Other agents subscribed to this event name will be notified."
-                .to_string(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "event_name": {
-                        "type": "string",
-                        "description": "The name of the custom event."
-                    },
-                    "payload": {
-                        "type": "string",
-                        "description": "Arbitrary data or message to send with the event."
-                    }
+    fn description(&self) -> String {
+        "Publish a custom event to the workspace event bus. \
+        Other agents subscribed to this event name will be notified."
+            .to_string()
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "event_name": {
+                    "type": "string",
+                    "description": "The name of the custom event."
                 },
-                "required": ["event_name", "payload"]
-            }),
-        }
+                "payload": {
+                    "type": "string",
+                    "description": "Arbitrary data or message to send with the event."
+                }
+            },
+            "required": ["event_name", "payload"]
+        })
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
@@ -376,32 +375,32 @@ pub struct AwaitTasksTool {
     pub approval: Arc<ClawApprovalHandler>,
 }
 
-impl Tool for AwaitTasksTool {
+impl PortableTool for AwaitTasksTool {
     const NAME: &'static str = "await_tasks";
 
     type Error = std::io::Error;
     type Args = AwaitArgs;
     type Output = String;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "Suspend execution and wait for one or more delegated async tasks to complete. \
-            CRITICAL: Use this immediately after calling `delegate_task_async` to wait for parallel tasks. \
-            Do NOT attempt to run the sub-tasks yourself or poll for their status. The engine will wake you up when all tasks finish."
-                .to_string(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "task_ids": {
-                        "type": "array",
-                        "items": { "type": "string" },
-                        "description": "The list of task IDs to wait for (returned from delegate_task_async)."
-                    }
-                },
-                "required": ["task_ids"]
-            }),
-        }
+    fn description(&self) -> String {
+        "Suspend execution and wait for one or more delegated async tasks to complete. \
+        CRITICAL: Use this immediately after calling `delegate_task_async` to wait for parallel tasks. \
+        Do NOT attempt to run the sub-tasks yourself or poll for their status. The engine will wake you up when all tasks finish."
+            .to_string()
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "task_ids": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "The list of task IDs to wait for (returned from delegate_task_async)."
+                }
+            },
+            "required": ["task_ids"]
+        })
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
@@ -447,35 +446,35 @@ pub struct OrchestrateAgentTool {
     pub approval: Arc<ClawApprovalHandler>,
 }
 
-impl Tool for OrchestrateAgentTool {
+impl PortableTool for OrchestrateAgentTool {
     const NAME: &'static str = "orchestrate_agent";
 
     type Error = std::io::Error;
     type Args = OrchestrateArgs;
     type Output = String;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "Send a lifecycle command to another agent. \
-            Use 'suspend' to request a peer to enter sleep mode, or 'cancel' to stop their current task."
-                .to_string(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "agent_name": {
-                        "type": "string",
-                        "description": "The name of the target agent (e.g. 'plentiful bream')."
-                    },
-                    "action": {
-                        "type": "string",
-                        "enum": ["suspend", "cancel"],
-                        "description": "The action to perform on the target agent."
-                    }
+    fn description(&self) -> String {
+        "Send a lifecycle command to another agent. \
+        Use 'suspend' to request a peer to enter sleep mode, or 'cancel' to stop their current task."
+            .to_string()
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "agent_name": {
+                    "type": "string",
+                    "description": "The name of the target agent (e.g. 'plentiful bream')."
                 },
-                "required": ["agent_name", "action"]
-            }),
-        }
+                "action": {
+                    "type": "string",
+                    "enum": ["suspend", "cancel"],
+                    "description": "The action to perform on the target agent."
+                }
+            },
+            "required": ["agent_name", "action"]
+        })
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {

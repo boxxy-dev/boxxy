@@ -5,7 +5,7 @@ The `boxxy-mcp` crate provides a robust, generic Model Context Protocol (MCP) cl
 
 ### Design Philosophy
 - **Strict Modularity:** Boxxy's core UI (`boxxy-preferences`) and agent reasoning (`boxxy-claw`) remain completely decoupled from the underlying MCP SDK (`rmcp`).
-- **Dynamic Ingestion:** Tools are discovered dynamically at runtime. The `DynamicMcpTool` struct implements `rig::tool::ToolDyn`, translating the MCP JSON Schema to Rig's expected format on the fly.
+- **Dynamic Ingestion:** Tools are discovered dynamically at runtime and converted into `rig::tool::DynamicTool` via `to_dynamic_tool()`, translating the MCP JSON Schema to Rig's expected format on the fly.
 - **Namespacing:** All MCP tools injected into an agent are prefixed with `{server_name}__` to prevent naming collisions with Boxxy's native tools (e.g. `github__search_code`).
 
 ### The Lazy Boot Initialization

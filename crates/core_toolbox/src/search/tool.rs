@@ -1,6 +1,5 @@
 use crate::search::{SearchDepth, SearchOptions, SearchProvider};
-use rig::completion::ToolDefinition;
-use rig::tool::Tool;
+use rig::tool::PortableTool;
 use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize)]
@@ -29,37 +28,37 @@ pub struct WebSearchTool {
     pub approval: std::sync::Arc<dyn crate::ApprovalHandler>,
 }
 
-impl Tool for WebSearchTool {
+impl PortableTool for WebSearchTool {
     const NAME: &'static str = "web_search";
 
     type Error = std::io::Error;
     type Args = WebSearchArgs;
     type Output = WebSearchOutput;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "Search the web for up-to-date information, news, or documentation. Use this when the local context is insufficient. If the response contains a non-null `answer` field, treat it as a definitive answer and use it directly — do NOT call `http_fetch` to verify or re-fetch those URLs.".to_string(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "The search query to execute."
-                    },
-                    "search_depth": {
-                        "type": "string",
-                        "enum": ["basic", "advanced"],
-                        "description": "The depth of the search. 'advanced' is slower but more thorough. Defaults to 'basic'."
-                    },
-                    "max_results": {
-                        "type": "integer",
-                        "description": "The maximum number of results to return (1-10). Defaults to 5."
-                    }
+    fn description(&self) -> String {
+        "Search the web for up-to-date information, news, or documentation. Use this when the local context is insufficient. If the response contains a non-null `answer` field, treat it as a definitive answer and use it directly — do NOT call `http_fetch` to verify or re-fetch those URLs.".to_string()
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "The search query to execute."
                 },
-                "required": ["query"]
-            }),
-        }
+                "search_depth": {
+                    "type": "string",
+                    "enum": ["basic", "advanced"],
+                    "description": "The depth of the search. 'advanced' is slower but more thorough. Defaults to 'basic'."
+                },
+                "max_results": {
+                    "type": "integer",
+                    "description": "The maximum number of results to return (1-10). Defaults to 5."
+                }
+            },
+            "required": ["query"]
+        })
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {

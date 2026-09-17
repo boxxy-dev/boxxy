@@ -9,8 +9,7 @@ pub mod workspace;
 use crate::engine::session::SessionState;
 use crate::engine::{ClawEngineEvent, ClawEnvironment};
 use boxxy_core_toolbox::ApprovalHandler;
-use rig::completion::ToolDefinition;
-use rig::tool::Tool;
+use rig::tool::PortableTool;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -302,28 +301,28 @@ pub struct SysShellTool {
     pub approval: Arc<ClawApprovalHandler>,
 }
 
-impl Tool for SysShellTool {
+impl PortableTool for SysShellTool {
     const NAME: &'static str = "sys_shell_exec";
 
     type Error = std::io::Error;
     type Args = SysShellArgs;
     type Output = SysShellOutput;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "Execute non-interactive bash commands on the host system to diagnose or repair issues. DO NOT use interactive commands (like top without -b, or less).".to_string(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "command": {
-                        "type": "string",
-                        "description": "The exact bash command to execute."
-                    }
-                },
-                "required": ["command"]
-            }),
-        }
+    fn description(&self) -> String {
+        "Execute non-interactive bash commands on the host system to diagnose or repair issues. DO NOT use interactive commands (like top without -b, or less).".to_string()
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "command": {
+                    "type": "string",
+                    "description": "The exact bash command to execute."
+                }
+            },
+            "required": ["command"]
+        })
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {

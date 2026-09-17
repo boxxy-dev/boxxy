@@ -1,6 +1,5 @@
 use chrono::Local;
-use rig::completion::ToolDefinition;
-use rig::tool::Tool;
+use rig::tool::PortableTool;
 use serde::{Deserialize, Serialize};
 use std::fs::OpenOptions;
 use std::io::Write;
@@ -21,29 +20,29 @@ pub struct MemoryTool {
     pub approval: std::sync::Arc<dyn boxxy_core_toolbox::ApprovalHandler>,
 }
 
-impl Tool for MemoryTool {
+impl PortableTool for MemoryTool {
     const NAME: &'static str = "remember_fact";
 
     type Error = std::io::Error;
     type Args = MemoryArgs;
     type Output = MemoryOutput;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "Save a persistent fact, user preference, or lesson learned to your long-term memory. \
-            Use this to remember things across sessions, like preferred tools, directory structures, or custom rules.".to_string(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "fact": {
-                        "type": "string",
-                        "description": "The fact or preference to remember (e.g., 'User prefers using dnf over apt' or 'Project X uses a custom build script in ./tools')."
-                    }
-                },
-                "required": ["fact"]
-            }),
-        }
+    fn description(&self) -> String {
+        "Save a persistent fact, user preference, or lesson learned to your long-term memory. \
+        Use this to remember things across sessions, like preferred tools, directory structures, or custom rules.".to_string()
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "fact": {
+                    "type": "string",
+                    "description": "The fact or preference to remember (e.g., 'User prefers using dnf over apt' or 'Project X uses a custom build script in ./tools')."
+                }
+            },
+            "required": ["fact"]
+        })
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {

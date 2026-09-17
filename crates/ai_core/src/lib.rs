@@ -1,8 +1,9 @@
 use boxxy_model_selection::ModelProvider;
-use rig::agent::{HookAction, PromptHook, ToolCallHookAction};
-use rig::client::CompletionClient;
+use rig::agent::hook::{
+    AgentHook, CompletionCall, CompletionCallAction, HookContext, ToolCall, ToolCallAction,
+};
 use rig::message::Message;
-use rig::providers::openai::responses_api::ResponsesCompletionModel;
+use rig::prelude::*;
 use rig::wasm_compat::WasmCompatSend;
 use serde_json::json;
 use std::future::Future;
@@ -12,15 +13,15 @@ pub struct ModelContextHook {
     pub preamble: String,
 }
 
-impl<M: rig::completion::CompletionModel> PromptHook<M> for ModelContextHook {
+impl AgentHook for ModelContextHook {
     fn on_completion_call(
         &self,
-        prompt: &Message,
-        history: &[Message],
-    ) -> impl Future<Output = HookAction> + WasmCompatSend {
+        _ctx: &HookContext,
+        event: CompletionCall<'_>,
+    ) -> impl Future<Output = CompletionCallAction> + WasmCompatSend {
         let preamble = self.preamble.clone();
-        let prompt = prompt.clone();
-        let history = history.to_vec();
+        let prompt = event.prompt.clone();
+        let history = event.history.to_vec();
 
         // Check if model-context debugging is explicitly enabled via dedicated env var
         let is_explicit = std::env::var("BOXXY_DEBUG_CONTEXT")
@@ -37,19 +38,17 @@ impl<M: rig::completion::CompletionModel> PromptHook<M> for ModelContextHook {
                     prompt
                 );
             }
-            HookAction::cont()
+            CompletionCallAction::Continue
         }
     }
 
     fn on_tool_call(
         &self,
-        tool_name: &str,
-        _tool_call_id: Option<String>,
-        _internal_call_id: &str,
-        args: &str,
-    ) -> impl Future<Output = ToolCallHookAction> + WasmCompatSend {
-        let tool_name = tool_name.to_string();
-        let args = args.to_string();
+        _ctx: &HookContext,
+        event: ToolCall<'_>,
+    ) -> impl Future<Output = ToolCallAction> + WasmCompatSend {
+        let tool_name = event.tool_name.to_string();
+        let args = event.args.to_string();
 
         let is_explicit = std::env::var("BOXXY_DEBUG_CONTEXT")
             .map(|v| v == "1")
@@ -64,7 +63,7 @@ impl<M: rig::completion::CompletionModel> PromptHook<M> for ModelContextHook {
                     args
                 );
             }
-            ToolCallHookAction::cont()
+            ToolCallAction::Run
         }
     }
 }
@@ -77,13 +76,7 @@ pub struct BoxxyAgent {
 
 #[derive(Clone)]
 enum BoxxyAgentInner {
-    // We use the concrete CompletionModel type from each provider since Agent is generic over the model.
-    Gemini(rig::agent::Agent<rig::providers::gemini::CompletionModel>),
-    Ollama(rig::agent::Agent<rig::providers::ollama::CompletionModel>),
-    Anthropic(rig::agent::Agent<rig::providers::anthropic::completion::CompletionModel>),
-    OpenAi(rig::agent::Agent<ResponsesCompletionModel>),
-    OpenRouter(rig::agent::Agent<ResponsesCompletionModel>),
-    DeepSeek(rig::agent::Agent<rig::providers::deepseek::CompletionModel>),
+    Ready(rig::agent::Agent),
     Error(String),
 }
 
@@ -101,61 +94,21 @@ impl BoxxyAgent {
 
         let msg = prompt.into();
 
-        let res_result = match &self.inner {
-            BoxxyAgentInner::Gemini(agent) => {
-                agent
-                    .prompt(msg.clone())
-                    .with_history(history)
-                    .with_hook(hook)
-                    .extended_details()
-                    .await
-            }
-            BoxxyAgentInner::Ollama(agent) => {
-                agent
-                    .prompt(msg.clone())
-                    .with_history(history)
-                    .with_hook(hook)
-                    .extended_details()
-                    .await
-            }
-            BoxxyAgentInner::Anthropic(agent) => {
-                agent
-                    .prompt(msg.clone())
-                    .with_history(history)
-                    .with_hook(hook)
-                    .extended_details()
-                    .await
-            }
-            BoxxyAgentInner::OpenAi(agent) => {
-                agent
-                    .prompt(msg.clone())
-                    .with_history(history.clone())
-                    .with_hook(hook)
-                    .extended_details()
-                    .await
-            }
-            BoxxyAgentInner::OpenRouter(agent) => {
-                agent
-                    .prompt(msg.clone())
-                    .with_history(history)
-                    .with_hook(hook)
-                    .extended_details()
-                    .await
-            }
-            BoxxyAgentInner::DeepSeek(agent) => {
-                agent
-                    .prompt(msg.clone())
-                    .with_history(history)
-                    .with_hook(hook)
-                    .extended_details()
-                    .await
-            }
+        let agent = match &self.inner {
+            BoxxyAgentInner::Ready(agent) => agent,
             BoxxyAgentInner::Error(e) => {
                 return Err(rig::completion::PromptError::CompletionError(
                     rig::completion::CompletionError::ProviderError(e.clone()),
                 ));
             }
         };
+
+        let res_result = agent
+            .prompt(msg)
+            .history(history)
+            .add_hook(hook)
+            .extended_details()
+            .await;
 
         let is_explicit = std::env::var("BOXXY_DEBUG_CONTEXT")
             .map(|v| v == "1")
@@ -170,7 +123,7 @@ impl BoxxyAgent {
                         res.output
                     );
                 }
-                Ok((res.output.clone(), Some(res.usage), res.messages))
+                Ok((res.output, Some(res.usage), res.messages))
             }
             Err(e) => {
                 if is_explicit {
@@ -195,55 +148,20 @@ impl BoxxyAgent {
             preamble: self.preamble.clone(),
         };
 
-        let res_result = match &self.inner {
-            BoxxyAgentInner::Gemini(agent) => {
-                agent
-                    .prompt(prompt)
-                    .with_hook(hook)
-                    .extended_details()
-                    .await
-            }
-            BoxxyAgentInner::Ollama(agent) => {
-                agent
-                    .prompt(prompt)
-                    .with_hook(hook)
-                    .extended_details()
-                    .await
-            }
-            BoxxyAgentInner::Anthropic(agent) => {
-                agent
-                    .prompt(prompt)
-                    .with_hook(hook)
-                    .extended_details()
-                    .await
-            }
-            BoxxyAgentInner::OpenAi(agent) => {
-                agent
-                    .prompt(prompt)
-                    .with_hook(hook)
-                    .extended_details()
-                    .await
-            }
-            BoxxyAgentInner::OpenRouter(agent) => {
-                agent
-                    .prompt(prompt)
-                    .with_hook(hook)
-                    .extended_details()
-                    .await
-            }
-            BoxxyAgentInner::DeepSeek(agent) => {
-                agent
-                    .prompt(prompt)
-                    .with_hook(hook)
-                    .extended_details()
-                    .await
-            }
+        let agent = match &self.inner {
+            BoxxyAgentInner::Ready(agent) => agent,
             BoxxyAgentInner::Error(e) => {
                 return Err(rig::completion::PromptError::CompletionError(
                     rig::completion::CompletionError::ProviderError(e.clone()),
                 ));
             }
         };
+
+        let res_result = agent
+            .prompt(prompt)
+            .add_hook(hook)
+            .extended_details()
+            .await;
 
         let is_explicit = std::env::var("BOXXY_DEBUG_CONTEXT")
             .map(|v| v == "1")
@@ -258,7 +176,7 @@ impl BoxxyAgent {
                         res.output
                     );
                 }
-                Ok((res.output.clone(), Some(res.usage), res.messages))
+                Ok((res.output, Some(res.usage), res.messages))
             }
             Err(e) => {
                 if is_explicit {
@@ -329,7 +247,7 @@ pub fn create_agent(
             }
 
             let agent = builder.build();
-            BoxxyAgentInner::Gemini(agent)
+            BoxxyAgentInner::Ready(agent)
         }
         ModelProvider::Ollama(model_name) => {
             let client: rig::providers::ollama::Client = rig::providers::ollama::Client::builder()
@@ -342,7 +260,7 @@ pub fn create_agent(
             let agent = rig::agent::AgentBuilder::new(ollama_model)
                 .preamble(system_prompt)
                 .build();
-            BoxxyAgentInner::Ollama(agent)
+            BoxxyAgentInner::Ready(agent)
         }
         ModelProvider::Anthropic(model, thinking) => {
             let key = creds.api_keys.get("Anthropic").cloned().unwrap_or_default();
@@ -353,7 +271,9 @@ pub fn create_agent(
                 rig::agent::AgentBuilder::new(anthropic_model).preamble(system_prompt);
 
             if let Some(level) = thinking {
-                if *level != boxxy_model_selection::ThinkingLevel::None {
+                if *level != boxxy_model_selection::ThinkingLevel::None
+                    && model.supports_extended_thinking()
+                {
                     builder = builder.additional_params(serde_json::json!({
                         "thinking": {
                             "type": "enabled",
@@ -364,7 +284,7 @@ pub fn create_agent(
             }
 
             let agent = builder.build();
-            BoxxyAgentInner::Anthropic(agent)
+            BoxxyAgentInner::Ready(agent)
         }
         ModelProvider::OpenAi(model, thinking) => {
             let key = creds.api_keys.get("OpenAI").cloned().unwrap_or_default();
@@ -379,7 +299,7 @@ pub fn create_agent(
                 }));
             }
 
-            BoxxyAgentInner::OpenAi(builder.build())
+            BoxxyAgentInner::Ready(builder.build())
         }
         ModelProvider::OpenRouter(model_name) => {
             let key = creds
@@ -397,7 +317,7 @@ pub fn create_agent(
             let agent = rig::agent::AgentBuilder::new(openrouter_model)
                 .preamble(system_prompt)
                 .build();
-            BoxxyAgentInner::OpenRouter(agent)
+            BoxxyAgentInner::Ready(agent)
         }
         ModelProvider::DeepSeek(model) => {
             let key = creds.api_keys.get("DeepSeek").cloned().unwrap_or_default();
@@ -407,7 +327,7 @@ pub fn create_agent(
             let agent = rig::agent::AgentBuilder::new(deepseek_model)
                 .preamble(system_prompt)
                 .build();
-            BoxxyAgentInner::DeepSeek(agent)
+            BoxxyAgentInner::Ready(agent)
         }
     };
 

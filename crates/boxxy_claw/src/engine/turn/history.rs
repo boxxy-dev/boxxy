@@ -16,9 +16,7 @@ pub fn prepare_query_history(history: Vec<Message>, history_len: usize) -> Vec<M
             let is_old = history_len.saturating_sub(i) > 8;
 
             if let Message::User { content } = &mut msg {
-                let mut items: Vec<rig::message::UserContent> =
-                    content.clone().into_iter().collect();
-                for item in &mut items {
+                for item in content.iter_mut() {
                     if let rig::message::UserContent::Text(text) = item {
                         if is_old {
                             // Find the start of the dynamic block and truncate everything after it
@@ -35,9 +33,6 @@ pub fn prepare_query_history(history: Vec<Message>, history_len: usize) -> Vec<M
                             }
                         }
                     }
-                }
-                if let Ok(new_content) = rig::OneOrMany::many(items) {
-                    *content = new_content;
                 }
             }
             msg

@@ -107,7 +107,7 @@ Agents possess full **System & Environment Authority**:
 Headless pure-Rust terminal emulator. Renders via GSK Snapshot and supports Kittygraphics natively. OSC 7/8/133 support. Features native semantic prompt tracking (`Flags::SEMANTIC_*`) embedded directly into the terminal cell grid to provide structured context blocks (`[PROMPT]`, `[COMMAND]`, `[OUTPUT]`).
 
 ### 7. `boxxy-ai-core` (Library Crate)
-Unified AI interface layer. Abstracts multiple providers (Gemini, Anthropic, Ollama) behind a single `BoxxyAgent` interface. Manages `AiCredentials` mapping and provider configuration. System utilities (runtime, Flatpak detection, location context) have been extracted to `boxxy-sys-utils`.
+Unified AI interface layer. Abstracts multiple providers (Gemini, Anthropic, OpenAI, DeepSeek, OpenRouter, Ollama) behind a single `BoxxyAgent` interface. Manages `AiCredentials` mapping and provider configuration. System utilities (runtime, Flatpak detection, location context) have been extracted to `boxxy-sys-utils`.
 
 ### 8. `boxxy-assets` (Library Crate)
 Headless, synchronous asset processing pipeline with no GTK dependencies. CPU-bound; callers wrap entry points in `tokio::spawn_blocking`. Organized as sub-modules per asset type (`image/`, future `audio/`) sharing a common `AssetError`.

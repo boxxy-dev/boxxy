@@ -125,8 +125,8 @@ impl McpClientManager {
         Some(tools)
     }
 
-    pub async fn build_rig_tools(&self) -> Vec<Box<dyn rig::tool::ToolDyn>> {
-        let mut rig_tools: Vec<Box<dyn rig::tool::ToolDyn>> = Vec::new();
+    pub async fn build_rig_tools(&self) -> Vec<rig::tool::DynamicTool> {
+        let mut rig_tools: Vec<rig::tool::DynamicTool> = Vec::new();
         let mut seen_names = std::collections::HashSet::new();
 
         let configs = self.configs.read().await;
@@ -144,20 +144,19 @@ impl McpClientManager {
                             server_name: name.clone(),
                         };
 
-                        use rig::tool::ToolDyn;
-                        let def = dynamic_tool.definition("".to_string()).await;
+                        let tool_name = dynamic_tool.name();
 
-                        if seen_names.contains(&def.name) {
+                        if seen_names.contains(&tool_name) {
                             log::warn!(
                                 "MCP: Skipping duplicate tool name '{}' from server '{}'",
-                                def.name,
+                                tool_name,
                                 name
                             );
                             continue;
                         }
-                        seen_names.insert(def.name);
+                        seen_names.insert(tool_name);
 
-                        rig_tools.push(Box::new(dynamic_tool));
+                        rig_tools.push(dynamic_tool.to_dynamic_tool());
                     }
                 }
             }

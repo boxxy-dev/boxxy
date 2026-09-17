@@ -1,7 +1,6 @@
 use crate::engine::ClawEngineEvent;
 use crate::engine::session::SessionState;
-use rig::completion::ToolDefinition;
-use rig::tool::Tool;
+use rig::tool::PortableTool;
 use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize)]
@@ -26,34 +25,34 @@ pub struct TerminalCommandTool {
     pub pane_id: String,
 }
 
-impl Tool for TerminalCommandTool {
+impl PortableTool for TerminalCommandTool {
     const NAME: &'static str = "terminal_exec";
 
     type Error = std::io::Error;
     type Args = TerminalCommandArgs;
     type Output = TerminalCommandOutput;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "Execute a command in the user's active terminal. This will prompt the user to 'Accept & Run'. Use this for interactive commands (ls, git, cat) where the user needs to see the live output. \
-            CRITICAL: DO NOT use this tool for GUI applications (Chrome, VS Code) or long-running dev servers that would block the terminal. For those, you MUST use the `run_background_command` tool instead. \
-            BUG PREVENTION: After using this tool, NEVER wrap the command or its output in a markdown code block (like ```bash) in your text response. Just explain in plain text.".to_string(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "command": {
-                        "type": "string",
-                        "description": "The command to execute in the terminal."
-                    },
-                    "explanation": {
-                        "type": "string",
-                        "description": "A brief explanation of why this command is being run."
-                    }
+    fn description(&self) -> String {
+        "Execute a command in the user's active terminal. This will prompt the user to 'Accept & Run'. Use this for interactive commands (ls, git, cat) where the user needs to see the live output. \
+        CRITICAL: DO NOT use this tool for GUI applications (Chrome, VS Code) or long-running dev servers that would block the terminal. For those, you MUST use the `run_background_command` tool instead. \
+        BUG PREVENTION: After using this tool, NEVER wrap the command or its output in a markdown code block (like ```bash) in your text response. Just explain in plain text.".to_string()
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "command": {
+                    "type": "string",
+                    "description": "The command to execute in the terminal."
                 },
-                "required": ["command", "explanation"]
-            }),
-        }
+                "explanation": {
+                    "type": "string",
+                    "description": "A brief explanation of why this command is being run."
+                }
+            },
+            "required": ["command", "explanation"]
+        })
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {

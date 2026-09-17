@@ -17,6 +17,7 @@ futures-util = { workspace = true }
 tokio = { workspace = true }
 log.workspace = true
 rig.workspace = true
+rig-memory.workspace = true
 home = { workspace = true }
 notify.workspace = true
 boxxy-ai-core = { path = "../ai_core" }

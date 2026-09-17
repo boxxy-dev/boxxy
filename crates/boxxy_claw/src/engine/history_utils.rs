@@ -38,14 +38,14 @@ mod tests {
 
     fn gemini_config() -> AgentConfig {
         AgentConfig {
-            model: Some(ModelProvider::Gemini(GeminiModel::FlashLite, None)),
+            model: Some(ModelProvider::Gemini(GeminiModel::Flash3_8, None)),
             ..Default::default()
         }
     }
 
     fn anthropic_config() -> AgentConfig {
         AgentConfig {
-            model: Some(ModelProvider::Anthropic(AnthropicModel::ClaudeSonnet, None)),
+            model: Some(ModelProvider::Anthropic(AnthropicModel::ClaudeSonnet5, None)),
             ..Default::default()
         }
     }

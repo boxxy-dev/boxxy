@@ -1,8 +1,7 @@
 use crate::ApprovalHandler;
 use crate::utils::resolve_path;
 use boxxy_claw_protocol::ClawEnvironment;
-use rig::completion::ToolDefinition;
-use rig::tool::Tool;
+use rig::tool::PortableTool;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -26,36 +25,36 @@ pub struct FileReadTool {
     pub approval: Arc<dyn ApprovalHandler>,
 }
 
-impl Tool for FileReadTool {
+impl PortableTool for FileReadTool {
     const NAME: &'static str = "file_read";
 
     type Error = std::io::Error;
     type Args = FileReadArgs;
     type Output = FileReadOutput;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "Read the contents of a file on the host system. Use this to inspect code, configuration, or logs before modifying them.".to_string(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "The absolute or relative path to the file to read."
-                    },
-                    "start_line": {
-                        "type": "integer",
-                        "description": "Optional: The 1-based line number to start reading from (inclusive)."
-                    },
-                    "end_line": {
-                        "type": "integer",
-                        "description": "Optional: The 1-based line number to end reading at (inclusive)."
-                    }
+    fn description(&self) -> String {
+        "Read the contents of a file on the host system. Use this to inspect code, configuration, or logs before modifying them.".to_string()
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "The absolute or relative path to the file to read."
                 },
-                "required": ["path"]
-            }),
-        }
+                "start_line": {
+                    "type": "integer",
+                    "description": "Optional: The 1-based line number to start reading from (inclusive)."
+                },
+                "end_line": {
+                    "type": "integer",
+                    "description": "Optional: The 1-based line number to end reading at (inclusive)."
+                }
+            },
+            "required": ["path"]
+        })
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
@@ -107,27 +106,27 @@ pub struct ListDirectoryTool {
     pub approval: Arc<dyn ApprovalHandler>,
 }
 
-impl Tool for ListDirectoryTool {
+impl PortableTool for ListDirectoryTool {
     const NAME: &'static str = "list_directory";
 
     type Error = std::io::Error;
     type Args = ListDirectoryArgs;
     type Output = ListDirectoryOutput;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "List the contents of a directory on the host system. Use this to discover files and subdirectories.".to_string(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "The directory path to list (default: current directory)."
-                    }
+    fn description(&self) -> String {
+        "List the contents of a directory on the host system. Use this to discover files and subdirectories.".to_string()
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "The directory path to list (default: current directory)."
                 }
-            }),
-        }
+            }
+        })
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
@@ -180,32 +179,32 @@ pub struct FileWriteTool {
     pub approval: Arc<dyn ApprovalHandler>,
 }
 
-impl Tool for FileWriteTool {
+impl PortableTool for FileWriteTool {
     const NAME: &'static str = "file_write";
 
     type Error = std::io::Error;
     type Args = FileWriteArgs;
     type Output = FileWriteOutput;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "Write content to a file on the host system. This will overwrite any existing content. Always prompts the user for approval.".to_string(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "The path to the file to write."
-                    },
-                    "content": {
-                        "type": "string",
-                        "description": "The new content for the file."
-                    }
+    fn description(&self) -> String {
+        "Write content to a file on the host system. This will overwrite any existing content. Always prompts the user for approval.".to_string()
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "The path to the file to write."
                 },
-                "required": ["path", "content"]
-            }),
-        }
+                "content": {
+                    "type": "string",
+                    "description": "The new content for the file."
+                }
+            },
+            "required": ["path", "content"]
+        })
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
@@ -232,7 +231,9 @@ impl Tool for FileWriteTool {
         } else {
             Ok(FileWriteOutput {
                 success: false,
-                error: Some("The user explicitly rejected this file write operation. Do not attempt it again.".to_string()),
+                error: Some(
+                    "The user explicitly rejected this file write. Do not attempt to overwrite or propose this file write again unless explicitly instructed to do so.".to_string()
+                ),
             })
         }
     }
@@ -259,28 +260,28 @@ pub struct FileDeleteTool {
     pub approval: Arc<dyn ApprovalHandler>,
 }
 
-impl Tool for FileDeleteTool {
+impl PortableTool for FileDeleteTool {
     const NAME: &'static str = "file_delete";
 
     type Error = std::io::Error;
     type Args = FileDeleteArgs;
     type Output = FileDeleteOutput;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "Delete a file from the host system. This action is permanent and prompts the user for approval.".to_string(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "The path to the file to delete."
-                    }
-                },
-                "required": ["path"]
-            }),
-        }
+    fn description(&self) -> String {
+        "Delete a file from the host system. This action is permanent and prompts the user for approval.".to_string()
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "The path to the file to delete."
+                }
+            },
+            "required": ["path"]
+        })
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {

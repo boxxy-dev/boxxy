@@ -88,7 +88,14 @@ pub async fn perform_persistence(ctx: PersistenceContext, state: Arc<Mutex<Sessi
     );
 
     let evicted_messages = if state_lock.history.len() >= 15 {
-        state_lock.history.drain(0..10).collect::<Vec<_>>()
+        use rig_memory::{MemoryPolicy, SlidingWindowMemory};
+        let policy = SlidingWindowMemory::last_messages(10);
+        if let Ok((kept, demoted)) = policy.apply_with_demoted(state_lock.history.clone()) {
+            state_lock.history = kept;
+            demoted
+        } else {
+            vec![]
+        }
     } else {
         vec![]
     };

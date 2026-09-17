@@ -83,7 +83,7 @@ impl AiProvider for GeminiProviderImpl {
         let model = am
             .get(model_idx as usize)
             .cloned()
-            .unwrap_or(GeminiModel::FlashLite);
+            .unwrap_or(GeminiModel::Flash3_8);
         let levels = model.available_thinking_levels();
         let thinking = thinking_idx
             .and_then(|idx| levels.get(idx as usize))
@@ -157,7 +157,7 @@ impl AiProvider for AnthropicProviderImpl {
         let model = am
             .get(model_idx as usize)
             .cloned()
-            .unwrap_or(AnthropicModel::ClaudeSonnet);
+            .unwrap_or(AnthropicModel::ClaudeSonnet5);
 
         let thinking = if model.supports_extended_thinking() {
             if let Some(idx) = thinking_idx {
@@ -233,7 +233,7 @@ impl AiProvider for OpenAiProviderImpl {
         let model = am
             .get(model_idx as usize)
             .cloned()
-            .unwrap_or(OpenAiModel::Gpt5_4);
+            .unwrap_or(OpenAiModel::Gpt6Astra);
         let levels = model.available_thinking_levels();
         let thinking = thinking_idx
             .and_then(|idx| levels.get(idx as usize))
@@ -365,7 +365,7 @@ impl AiProvider for DeepSeekProviderImpl {
         let model = am
             .get(model_idx as usize)
             .cloned()
-            .unwrap_or(DeepSeekModel::Flash);
+            .unwrap_or(DeepSeekModel::V4_1Flash);
         ModelProvider::DeepSeek(model)
     }
     fn sync_ui(

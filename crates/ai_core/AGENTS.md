@@ -1,11 +1,11 @@
 # boxxy-ai-core Agents & Architecture
 
 ## Responsibilities
-This crate provides the primary interface for AI interactions using the `rig-core` framework. It abstracts away the differences between Gemini, Anthropic, and Ollama providers, offering a unified agent interface for the rest of the application.
+This crate provides the primary interface for AI interactions using the `rig-core` framework. It abstracts away the differences between Gemini, Anthropic, OpenAI, DeepSeek, OpenRouter, and Ollama providers, offering a unified agent interface for the rest of the application.
 
 ## Debugging & Observability
-This crate provides a specialized `ModelContextHook` using the `rig::agent::PromptHook` trait. It intercepts and logs all model interactions:
-- **`BOXXY_DEBUG_CONTEXT=1`**: A dedicated environment variable that activates detailed logging of the full context (Preamble, History, User Prompt) and final model responses.
+This crate provides a specialized `ModelContextHook` using the `rig::agent::AgentHook` trait. It intercepts and logs all model interactions:
+- **`BOXXY_DEBUG_CONTEXT=1`**: A dedicated environment variable that activates detailed logging of the full context (Preamble, History, User Prompt), tool calls, and final model responses.
 - **Targeted Logs**: All interactions are logged using the `model-context` target at the `info!` level, ensuring they remain available in release builds for production troubleshooting without interfering with standard logs.
 
 ### `AiCredentials`

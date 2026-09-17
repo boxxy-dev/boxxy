@@ -1,7 +1,6 @@
 use crate::engine::{ClawEngineEvent, ScheduledTask, TaskStatus, TaskType};
 use chrono::{Duration, Utc};
-use rig::completion::ToolDefinition;
-use rig::tool::Tool;
+use rig::tool::PortableTool;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -26,27 +25,27 @@ pub struct ScheduleTaskTool {
     pub tx_ui: async_channel::Sender<ClawEngineEvent>,
 }
 
-impl Tool for ScheduleTaskTool {
+impl PortableTool for ScheduleTaskTool {
     const NAME: &'static str = "schedule_task";
 
     type Error = std::io::Error;
     type Args = ScheduleTaskArgs;
     type Output = ScheduleTaskOutput;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "Schedule a task to be executed later. Types: 'notification' (reminder), 'command' (a directive for yourself), 'query' (ask a question).".to_string(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "due_in_seconds": { "type": "integer", "description": "Seconds from now when the task should trigger." },
-                    "task_type": { "type": "string", "enum": ["notification", "command", "query"] },
-                    "payload": { "type": "string", "description": "The message to show (notification) or a prompt/directive for yourself to evaluate when the timer hits zero (command/query)." }
-                },
-                "required": ["due_in_seconds", "task_type", "payload"]
-            }),
-        }
+    fn description(&self) -> String {
+        "Schedule a task to be executed later. Types: 'notification' (reminder), 'command' (a directive for yourself), 'query' (ask a question).".to_string()
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "due_in_seconds": { "type": "integer", "description": "Seconds from now when the task should trigger." },
+                "task_type": { "type": "string", "enum": ["notification", "command", "query"] },
+                "payload": { "type": "string", "description": "The message to show (notification) or a prompt/directive for yourself to evaluate when the timer hits zero (command/query)." }
+            },
+            "required": ["due_in_seconds", "task_type", "payload"]
+        })
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
@@ -131,23 +130,22 @@ pub struct ListTasksTool {
     pub tx_ui: async_channel::Sender<ClawEngineEvent>,
 }
 
-impl Tool for ListTasksTool {
+impl PortableTool for ListTasksTool {
     const NAME: &'static str = "list_my_tasks";
 
     type Error = std::io::Error;
     type Args = ListTasksArgs;
     type Output = ListTasksOutput;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "List all your currently pending scheduled tasks and reminders."
-                .to_string(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {}
-            }),
-        }
+    fn description(&self) -> String {
+        "List all your currently pending scheduled tasks and reminders.".to_string()
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {}
+        })
     }
 
     async fn call(&self, _args: Self::Args) -> Result<Self::Output, Self::Error> {
@@ -190,25 +188,25 @@ pub struct CancelTaskTool {
     pub tx_ui: async_channel::Sender<ClawEngineEvent>,
 }
 
-impl Tool for CancelTaskTool {
+impl PortableTool for CancelTaskTool {
     const NAME: &'static str = "cancel_task";
 
     type Error = std::io::Error;
     type Args = CancelTaskArgs;
     type Output = CancelTaskOutput;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "Cancel a previously scheduled task using its UUID.".to_string(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "task_id": { "type": "string", "description": "The UUID of the task to cancel." }
-                },
-                "required": ["task_id"]
-            }),
-        }
+    fn description(&self) -> String {
+        "Cancel a previously scheduled task using its UUID.".to_string()
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "task_id": { "type": "string", "description": "The UUID of the task to cancel." }
+            },
+            "required": ["task_id"]
+        })
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {

@@ -1,3 +1,4 @@
+use crate::engine::agent_config::AgentConfig;
 use crate::engine::session::SessionState;
 use crate::engine::tools::set_state::SetAgentStateTool;
 use crate::engine::tools::skills::ActivateSkillTool;
@@ -11,6 +12,7 @@ use crate::engine::tools::workspace::{
 use crate::engine::tools::{ClawApprovalHandler, SysShellTool};
 use crate::engine::{ClawEngineEvent, ClawEnvironment};
 use crate::utils::load_prompt_fallback;
+use boxxy_ai_core::{AiCredentials, ModelContextHook};
 use boxxy_core_toolbox::{
     FileDeleteTool, FileReadTool, FileWriteTool, GetClipboardTool, GetSystemInfoTool,
     HttpFetchTool, KillProcessTool, ListDirectoryTool, ListProcessesTool, RunBackgroundCommandTool,
@@ -22,11 +24,8 @@ use rig::client::CompletionClient;
 use rig::message::Message;
 use rig::providers::gemini;
 use rig::providers::ollama;
-use rig::providers::openai::responses_api::ResponsesCompletionModel;
+use rig::tool::server::ToolServer;
 use std::sync::Arc;
-
-use crate::engine::agent_config::AgentConfig;
-use boxxy_ai_core::{AiCredentials, ModelContextHook};
 
 #[derive(Clone)]
 pub struct ClawAgent {
@@ -37,20 +36,12 @@ pub struct ClawAgent {
 
 #[derive(Clone)]
 enum ClawAgentInner {
-    Gemini(Agent<gemini::CompletionModel>, String, String), // Agent, Provider Name, Model Name
-    Ollama(Agent<ollama::CompletionModel>, String, String),
-    Anthropic(
-        Agent<rig::providers::anthropic::completion::CompletionModel>,
-        String,
-        String,
-    ),
-    OpenAi(Agent<ResponsesCompletionModel>, String, String),
-    OpenRouter(Agent<ResponsesCompletionModel>, String, String),
-    DeepSeek(
-        Agent<rig::providers::deepseek::CompletionModel>,
-        String,
-        String,
-    ),
+    Ready {
+        agent: Agent,
+        provider_name: String,
+        model_name: String,
+    },
+    #[allow(dead_code)]
     Error(String),
 }
 
@@ -73,55 +64,12 @@ impl ClawAgent {
 
         let msg = prompt.into();
 
-        let res_result = match &self.inner {
-            ClawAgentInner::Gemini(agent, _, _) => {
-                agent
-                    .prompt(msg.clone())
-                    .with_history(history)
-                    .with_hook(hook)
-                    .extended_details()
-                    .await
-            }
-            ClawAgentInner::Ollama(agent, _, _) => {
-                agent
-                    .prompt(msg.clone())
-                    .with_history(history)
-                    .with_hook(hook)
-                    .extended_details()
-                    .await
-            }
-            ClawAgentInner::Anthropic(agent, _, _) => {
-                agent
-                    .prompt(msg.clone())
-                    .with_history(history)
-                    .with_hook(hook)
-                    .extended_details()
-                    .await
-            }
-            ClawAgentInner::OpenAi(agent, _, _) => {
-                agent
-                    .prompt(msg.clone())
-                    .with_history(history.clone())
-                    .with_hook(hook.clone())
-                    .extended_details()
-                    .await
-            }
-            ClawAgentInner::OpenRouter(agent, _, _) => {
-                agent
-                    .prompt(msg.clone())
-                    .with_history(history)
-                    .with_hook(hook)
-                    .extended_details()
-                    .await
-            }
-            ClawAgentInner::DeepSeek(agent, _, _) => {
-                agent
-                    .prompt(msg.clone())
-                    .with_history(history)
-                    .with_hook(hook)
-                    .extended_details()
-                    .await
-            }
+        let (agent, provider_name, model_name) = match &self.inner {
+            ClawAgentInner::Ready {
+                agent,
+                provider_name,
+                model_name,
+            } => (agent, provider_name.clone(), model_name.clone()),
             ClawAgentInner::Error(e) => {
                 return Err(rig::completion::PromptError::CompletionError(
                     rig::completion::CompletionError::ProviderError(e.clone()),
@@ -129,26 +77,24 @@ impl ClawAgent {
             }
         };
 
+        let res_result = agent
+            .prompt(msg)
+            .history(history)
+            .add_hook(hook)
+            .extended_details()
+            .await;
+
+        let duration = start.elapsed();
+
         match res_result {
             Ok(res) => {
-                let duration = start.elapsed();
-                let (provider_name, model_name) = match &self.inner {
-                    ClawAgentInner::Gemini(_, p, m) => (p.as_str(), m.as_str()),
-                    ClawAgentInner::Ollama(_, p, m) => (p.as_str(), m.as_str()),
-                    ClawAgentInner::Anthropic(_, p, m) => (p.as_str(), m.as_str()),
-                    ClawAgentInner::OpenAi(_, p, m) => (p.as_str(), m.as_str()),
-                    ClawAgentInner::OpenRouter(_, p, m) => (p.as_str(), m.as_str()),
-                    ClawAgentInner::DeepSeek(_, p, m) => (p.as_str(), m.as_str()),
-                    _ => ("unknown", "unknown"),
-                };
-
                 // Track Invocations
-                boxxy_telemetry::track_ai_invocation(provider_name, model_name, "claw").await;
+                boxxy_telemetry::track_ai_invocation(&provider_name, &model_name, "claw").await;
 
                 // Track Latency
                 boxxy_telemetry::track_ai_latency(
-                    model_name,
-                    provider_name,
+                    &model_name,
+                    &provider_name,
                     duration.as_millis() as u64,
                     "claw",
                 )
@@ -156,18 +102,18 @@ impl ClawAgent {
 
                 // Track Tokens
                 boxxy_telemetry::track_ai_tokens(
-                    model_name,
-                    provider_name,
+                    &model_name,
+                    &provider_name,
                     "input",
-                    res.usage.input_tokens as u64,
+                    res.usage.input_tokens,
                     "claw",
                 )
                 .await;
                 boxxy_telemetry::track_ai_tokens(
-                    model_name,
-                    provider_name,
+                    &model_name,
+                    &provider_name,
                     "output",
-                    res.usage.output_tokens as u64,
+                    res.usage.output_tokens,
                     "claw",
                 )
                 .await;
@@ -184,7 +130,7 @@ impl ClawAgent {
                     );
                 }
 
-                Ok((res.output.clone(), Some(res.usage), res.messages))
+                Ok((res.output, Some(res.usage), res.messages))
             }
             Err(e) => {
                 let is_explicit = std::env::var("BOXXY_DEBUG_CONTEXT")
@@ -203,6 +149,7 @@ impl ClawAgent {
         }
     }
 }
+
 #[must_use]
 #[allow(clippy::too_many_arguments)]
 pub async fn create_claw_agent(
@@ -260,196 +207,200 @@ pub async fn create_claw_agent(
         pane_id: pane_id.clone(),
     });
 
-    let mut tools: Vec<Box<dyn rig::tool::ToolDyn>> = vec![
-        Box::new(SysShellTool {
+    let mut tool_server = ToolServer::new()
+        .tool(SysShellTool {
             env: (*env).clone(),
             current_dir: current_dir.to_string(),
             approval: approval_handler.clone(),
-        }),
-        Box::new(crate::memories::MemoryStoreTool {
+        })
+        .tool(crate::memories::MemoryStoreTool {
             db: db.clone(),
             current_dir: current_dir.to_string(),
             approval: approval_handler.clone(),
-        }),
-        Box::new(crate::memories::MemoryDeleteTool {
+        })
+        .tool(crate::memories::MemoryDeleteTool {
             db: db.clone(),
             current_dir: current_dir.to_string(),
             approval: approval_handler.clone(),
-        }),
-        Box::new(crate::engine::tools::scrollback::ReadScrollbackTool {
+        })
+        .tool(crate::engine::tools::scrollback::ReadScrollbackTool {
             tx_ui: tx_ui.clone(),
             state: state.clone(),
-        }),
-        Box::new(ActivateSkillTool {
+        })
+        .tool(ActivateSkillTool {
             approval: approval_handler.clone(),
-        }),
-        Box::new(TerminalCommandTool {
+        })
+        .tool(TerminalCommandTool {
             tx_ui: tx_ui.clone(),
             state: state.clone(),
             db: db.clone(),
             session_id: session_id.clone(),
             pane_id: pane_id.clone(),
-        }),
-        Box::new(ListActiveAgentsTool {
+        })
+        .tool(ListActiveAgentsTool {
             tx_ui: tx_ui.clone(),
             state: state.clone(),
-        }),
-        Box::new(ReadPaneTool {
+        })
+        .tool(ReadPaneTool {
             tx_ui: tx_ui.clone(),
             state: state.clone(),
-        }),
-        Box::new(DelegateTaskTool {
+        })
+        .tool(DelegateTaskTool {
             state: state.clone(),
             tx_ui: tx_ui.clone(),
-        }),
-        Box::new(SpawnAgentTool {
+        })
+        .tool(SpawnAgentTool {
             tx_ui: tx_ui.clone(),
             state: state.clone(),
-        }),
-        Box::new(CloseAgentTool {
+        })
+        .tool(CloseAgentTool {
             tx_ui: tx_ui.clone(),
             state: state.clone(),
-        }),
-        Box::new(AbortAgentTaskTool {
+        })
+        .tool(AbortAgentTaskTool {
             tx_ui: tx_ui.clone(),
             state: state.clone(),
-        }),
-        Box::new(SendKeystrokesTool {
+        })
+        .tool(SendKeystrokesTool {
             tx_ui: tx_ui.clone(),
             state: state.clone(),
-        }),
-        Box::new(ListProcessesTool {
+        })
+        .tool(ListProcessesTool {
             env: (*env).clone(),
             approval: approval_handler.clone(),
-        }),
-        Box::new(ScheduleTaskTool {
+        })
+        .tool(ScheduleTaskTool {
             state: state.clone(),
             tx_ui: tx_ui.clone(),
-        }),
-        Box::new(ListTasksTool {
+        })
+        .tool(ListTasksTool {
             state: state.clone(),
             tx_ui: tx_ui.clone(),
-        }),
-        Box::new(CancelTaskTool {
+        })
+        .tool(CancelTaskTool {
             state: state.clone(),
             tx_ui: tx_ui.clone(),
-        }),
-        Box::new(SetGlobalIntentTool),
-        Box::new(crate::engine::tools::orchestration::SubscribeToPaneTool {
+        })
+        .tool(SetGlobalIntentTool)
+        .tool(crate::engine::tools::orchestration::SubscribeToPaneTool {
             pane_id: pane_id.clone(),
             state: state.clone(),
             tx_ui: tx_ui.clone(),
             approval: approval_handler.clone(),
-        }),
-        Box::new(crate::engine::tools::orchestration::AcquireLockTool {
+        })
+        .tool(crate::engine::tools::orchestration::AcquireLockTool {
             pane_id: pane_id.clone(),
             state: state.clone(),
             tx_ui: tx_ui.clone(),
             approval: approval_handler.clone(),
-        }),
-        Box::new(crate::engine::tools::orchestration::ReleaseLockTool {
+        })
+        .tool(crate::engine::tools::orchestration::ReleaseLockTool {
             pane_id: pane_id.clone(),
             state: state.clone(),
             tx_ui: tx_ui.clone(),
             approval: approval_handler.clone(),
-        }),
-        Box::new(crate::engine::tools::orchestration::PublishEventTool {
+        })
+        .tool(crate::engine::tools::orchestration::PublishEventTool {
             state: state.clone(),
             approval: approval_handler.clone(),
-        }),
-        Box::new(crate::engine::tools::orchestration::AwaitTasksTool {
+        })
+        .tool(crate::engine::tools::orchestration::AwaitTasksTool {
             state: state.clone(),
             tx_ui: tx_ui.clone(),
             approval: approval_handler.clone(),
-        }),
-        Box::new(DelegateTaskAsyncTool {
+        })
+        .tool(DelegateTaskAsyncTool {
             state: state.clone(),
             tx_ui: tx_ui.clone(),
-        }),
-        Box::new(SummonHeadlessWorkerTool {
+        })
+        .tool(SummonHeadlessWorkerTool {
             state: state.clone(),
             env: (*env).clone(),
             tx_ui: tx_ui.clone(),
-        }),
-        Box::new(SetAgentStateTool {
+        })
+        .tool(SetAgentStateTool {
             state: state.clone(),
             tx_ui: tx_ui.clone(),
-        }),
-        Box::new(crate::engine::tools::memory::MemoryTool {
+        })
+        .tool(crate::engine::tools::memory::MemoryTool {
             approval: approval_handler.clone(),
-        }),
-        Box::new(crate::engine::tools::orchestration::OrchestrateAgentTool {
-            approval: approval_handler.clone(),
-        }),
-    ];
+        })
+        .tool(
+            crate::engine::tools::orchestration::OrchestrateAgentTool {
+                approval: approval_handler.clone(),
+            },
+        );
 
     // Conditional Core Toolbox tools
     if config.file_tools_enabled {
-        tools.push(Box::new(FileReadTool {
-            env: (*env).clone(),
-            current_dir: current_dir.to_string(),
-            approval: approval_handler.clone(),
-        }));
-        tools.push(Box::new(FileWriteTool {
-            env: (*env).clone(),
-            current_dir: current_dir.to_string(),
-            approval: approval_handler.clone(),
-        }));
-        tools.push(Box::new(ListDirectoryTool {
-            env: (*env).clone(),
-            current_dir: current_dir.to_string(),
-            approval: approval_handler.clone(),
-        }));
-        tools.push(Box::new(FileDeleteTool {
-            env: (*env).clone(),
-            current_dir: current_dir.to_string(),
-            approval: approval_handler.clone(),
-        }));
+        tool_server = tool_server
+            .tool(FileReadTool {
+                env: (*env).clone(),
+                current_dir: current_dir.to_string(),
+                approval: approval_handler.clone(),
+            })
+            .tool(FileWriteTool {
+                env: (*env).clone(),
+                current_dir: current_dir.to_string(),
+                approval: approval_handler.clone(),
+            })
+            .tool(ListDirectoryTool {
+                env: (*env).clone(),
+                current_dir: current_dir.to_string(),
+                approval: approval_handler.clone(),
+            })
+            .tool(FileDeleteTool {
+                env: (*env).clone(),
+                current_dir: current_dir.to_string(),
+                approval: approval_handler.clone(),
+            });
     }
 
     if config.system_tools_enabled {
-        tools.push(Box::new(GetSystemInfoTool {
+        tool_server = tool_server.tool(GetSystemInfoTool {
             env: (*env).clone(),
             approval: approval_handler.clone(),
-        }));
+        });
     }
 
     if config.dangerous_tools_enabled {
-        tools.push(Box::new(KillProcessTool {
-            env: (*env).clone(),
-            approval: approval_handler.clone(),
-        }));
-        tools.push(Box::new(RunBackgroundCommandTool {
-            env: (*env).clone(),
-            approval: approval_handler.clone(),
-        }));
+        tool_server = tool_server
+            .tool(KillProcessTool {
+                env: (*env).clone(),
+                approval: approval_handler.clone(),
+            })
+            .tool(RunBackgroundCommandTool {
+                env: (*env).clone(),
+                approval: approval_handler.clone(),
+            });
     }
 
     if config.web_tools_enabled {
-        tools.push(Box::new(HttpFetchTool {
+        tool_server = tool_server.tool(HttpFetchTool {
             approval: approval_handler.clone(),
-        }));
+        });
     }
 
     if config.web_search_local_enabled && config.web_search_master_enabled {
         let tavily_key = creds.api_keys.get("Tavily").cloned().unwrap_or_default();
         if !tavily_key.is_empty() {
-            tools.push(Box::new(boxxy_core_toolbox::WebSearchTool {
+            tool_server = tool_server.tool(boxxy_core_toolbox::WebSearchTool {
                 provider: Box::new(boxxy_core_toolbox::TavilyProvider::new(tavily_key)),
                 approval: approval_handler.clone(),
-            }));
+            });
         }
     }
 
     if config.clipboard_tools_enabled {
-        tools.push(Box::new(GetClipboardTool {
-            env: (*env).clone(),
-            approval: approval_handler.clone(),
-        }));
-        tools.push(Box::new(SetClipboardTool {
-            env: (*env).clone(),
-            approval: approval_handler.clone(),
-        }));
+        tool_server = tool_server
+            .tool(GetClipboardTool {
+                env: (*env).clone(),
+                approval: approval_handler.clone(),
+            })
+            .tool(SetClipboardTool {
+                env: (*env).clone(),
+                approval: approval_handler.clone(),
+            });
     }
 
     // --- Inject MCP Tools ---
@@ -460,13 +411,10 @@ pub async fn create_claw_agent(
     };
     // Always sync the latest configs before building tools
     mcp_manager.update_configs(config.mcp_servers.clone()).await;
-    let mut mcp_tools = mcp_manager.build_rig_tools().await;
-    tools.append(&mut mcp_tools);
+    let mcp_tools = mcp_manager.build_rig_tools().await;
+    tool_server = tool_server.dynamic_tools(mcp_tools);
 
-    for tool in &tools {
-        let def = tool.definition("".to_string()).await;
-        log::debug!("Injecting tool into Rig: {}", def.name);
-    }
+    let tool_handle = tool_server.run();
 
     // --- Load Base Prompt ---
     let mut final_preamble =
@@ -518,7 +466,7 @@ pub async fn create_claw_agent(
         final_preamble.push_str(&policy);
     }
 
-    let inner = match provider {
+    let (agent, provider_name, model_name) = match provider {
         ModelProvider::Gemini(model, thinking) => {
             let key = creds.api_keys.get("Gemini").cloned().unwrap_or_default();
             let client = gemini::Client::new(key.trim()).unwrap();
@@ -527,7 +475,7 @@ pub async fn create_claw_agent(
             let mut builder = rig::agent::AgentBuilder::new(gemini_model)
                 .preamble(&final_preamble)
                 .default_max_turns(100)
-                .tools(tools);
+                .tool_server_handle(tool_handle);
 
             if let Some(level) = thinking {
                 if *level != boxxy_model_selection::ThinkingLevel::None {
@@ -541,7 +489,7 @@ pub async fn create_claw_agent(
                 }
             }
 
-            ClawAgentInner::Gemini(
+            (
                 builder.build(),
                 "Gemini".to_string(),
                 model.api_name().to_string(),
@@ -558,9 +506,13 @@ pub async fn create_claw_agent(
             let builder = rig::agent::AgentBuilder::new(ollama_model)
                 .preamble(&final_preamble)
                 .default_max_turns(100)
-                .tools(tools);
+                .tool_server_handle(tool_handle);
 
-            ClawAgentInner::Ollama(builder.build(), "Ollama".to_string(), model_name.clone())
+            (
+                builder.build(),
+                "Ollama".to_string(),
+                model_name.clone(),
+            )
         }
         ModelProvider::Anthropic(model, thinking) => {
             let key = creds.api_keys.get("Anthropic").cloned().unwrap_or_default();
@@ -570,10 +522,12 @@ pub async fn create_claw_agent(
             let mut builder = rig::agent::AgentBuilder::new(anthropic_model)
                 .preamble(&final_preamble)
                 .default_max_turns(100)
-                .tools(tools);
+                .tool_server_handle(tool_handle);
 
             if let Some(level) = thinking {
-                if *level != boxxy_model_selection::ThinkingLevel::None {
+                if *level != boxxy_model_selection::ThinkingLevel::None
+                    && model.supports_extended_thinking()
+                {
                     builder = builder.additional_params(serde_json::json!({
                         "thinking": {
                             "type": "enabled",
@@ -583,7 +537,7 @@ pub async fn create_claw_agent(
                 }
             }
 
-            ClawAgentInner::Anthropic(
+            (
                 builder.build(),
                 "Anthropic".to_string(),
                 model.api_name().to_string(),
@@ -597,7 +551,7 @@ pub async fn create_claw_agent(
             let mut builder = rig::agent::AgentBuilder::new(openai_model)
                 .preamble(&final_preamble)
                 .default_max_turns(100)
-                .tools(tools);
+                .tool_server_handle(tool_handle);
 
             if let Some(level) = thinking {
                 builder = builder.additional_params(serde_json::json!({
@@ -605,7 +559,7 @@ pub async fn create_claw_agent(
                 }));
             }
 
-            ClawAgentInner::OpenAi(
+            (
                 builder.build(),
                 "OpenAI".to_string(),
                 model.api_name().to_string(),
@@ -627,9 +581,9 @@ pub async fn create_claw_agent(
             let builder = rig::agent::AgentBuilder::new(openrouter_model)
                 .preamble(&final_preamble)
                 .default_max_turns(100)
-                .tools(tools);
+                .tool_server_handle(tool_handle);
 
-            ClawAgentInner::OpenRouter(
+            (
                 builder.build(),
                 "OpenRouter".to_string(),
                 model_name.clone(),
@@ -643,14 +597,20 @@ pub async fn create_claw_agent(
             let builder = rig::agent::AgentBuilder::new(deepseek_model)
                 .preamble(&final_preamble)
                 .default_max_turns(100)
-                .tools(tools);
+                .tool_server_handle(tool_handle);
 
-            ClawAgentInner::DeepSeek(
+            (
                 builder.build(),
                 "DeepSeek".to_string(),
                 model.api_name().to_string(),
             )
         }
+    };
+
+    let inner = ClawAgentInner::Ready {
+        agent,
+        provider_name,
+        model_name,
     };
 
     Ok(ClawAgent {

@@ -1,7 +1,6 @@
 use crate::ApprovalHandler;
 use boxxy_claw_protocol::ClawEnvironment;
-use rig::completion::ToolDefinition;
-use rig::tool::Tool;
+use rig::tool::PortableTool;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -60,22 +59,22 @@ pub struct GetSystemInfoTool {
     pub approval: Arc<dyn ApprovalHandler>,
 }
 
-impl Tool for GetSystemInfoTool {
+impl PortableTool for GetSystemInfoTool {
     const NAME: &'static str = "get_system_info";
 
     type Error = std::io::Error;
     type Args = GetSystemInfoArgs;
     type Output = GetSystemInfoOutput;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "Get a summary of system information, including OS, CPU, RAM, and Disk space. Use this to understand the environment you are operating in.".to_string(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {}
-            }),
-        }
+    fn description(&self) -> String {
+        "Get a summary of system information, including OS, CPU, RAM, and Disk space. Use this to understand the environment you are operating in.".to_string()
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {}
+        })
     }
 
     async fn call(&self, _args: Self::Args) -> Result<Self::Output, Self::Error> {
@@ -122,22 +121,22 @@ pub struct ListProcessesTool {
     pub approval: Arc<dyn ApprovalHandler>,
 }
 
-impl Tool for ListProcessesTool {
+impl PortableTool for ListProcessesTool {
     const NAME: &'static str = "list_processes";
 
     type Error = std::io::Error;
     type Args = ListProcessesArgs;
     type Output = ListProcessesOutput;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "List all running processes on the system, including their PID, name, CPU usage, memory usage, and disk I/O.".to_string(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {}
-            }),
-        }
+    fn description(&self) -> String {
+        "List all running processes on the system, including their PID, name, CPU usage, memory usage, and disk I/O.".to_string()
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {}
+        })
     }
 
     async fn call(&self, _args: Self::Args) -> Result<Self::Output, Self::Error> {
@@ -200,27 +199,27 @@ pub struct KillProcessTool {
     pub approval: Arc<dyn ApprovalHandler>,
 }
 
-impl Tool for KillProcessTool {
+impl PortableTool for KillProcessTool {
     const NAME: &'static str = "kill_process";
 
     type Error = std::io::Error;
     type Args = KillProcessArgs;
     type Output = KillProcessOutput;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "Terminate a running process. This will prompt the user for approval. You MUST provide the PID and the name of the process for clarity.".to_string(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "pid": { "type": "number" },
-                    "process_name": { "type": "string" },
-                    "signal": { "type": "number", "description": "The signal to send (e.g. 15 for SIGTERM, 9 for SIGKILL). Defaults to 15." }
-                },
-                "required": ["pid", "process_name"]
-            }),
-        }
+    fn description(&self) -> String {
+        "Terminate a running process. This will prompt the user for approval. You MUST provide the PID and the name of the process for clarity.".to_string()
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "pid": { "type": "number" },
+                "process_name": { "type": "string" },
+                "signal": { "type": "number", "description": "The signal to send (e.g. 15 for SIGTERM, 9 for SIGKILL). Defaults to 15." }
+            },
+            "required": ["pid", "process_name"]
+        })
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {

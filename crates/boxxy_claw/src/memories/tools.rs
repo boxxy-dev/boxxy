@@ -2,8 +2,7 @@ use anyhow::Result;
 use boxxy_core_toolbox::ApprovalHandler;
 use boxxy_db::Db;
 use boxxy_db::store::Store;
-use rig::completion::ToolDefinition;
-use rig::tool::Tool;
+use rig::tool::PortableTool;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -30,46 +29,46 @@ pub struct MemoryStoreTool {
     pub approval: Arc<crate::engine::tools::ClawApprovalHandler>,
 }
 
-impl Tool for MemoryStoreTool {
+impl PortableTool for MemoryStoreTool {
     const NAME: &'static str = "memory_store";
 
     type Args = MemoryStoreArgs;
     type Output = String;
     type Error = MemoryToolError;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "CRITICAL DIRECTIVE: You MUST use this tool immediately if the user explicitly asks you to 'remember', 'save', 'note', or store a fact, preference, path, or any other information. Do not just reply 'I will remember'. \
-            Store a fact, preference, or lesson in long-term memory. \
-            Use a concise snake_case key (e.g., 'favorite_editor', 'os_type'). \
-            If the key already exists, the memory will be updated (overwritten). \
-            If project_path is provided (or if this is project-specific info), it will be scoped to that project. \
-            Defaults to 'global' if no project_path is given."
-                .to_string(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "key": {
-                        "type": "string",
-                        "description": "Unique key for this memory (e.g. 'preferred_shell', 'project_stack')"
-                    },
-                    "content": {
-                        "type": "string",
-                        "description": "The information to remember"
-                    },
-                    "category": {
-                        "type": "string",
-                        "description": "Optional category: 'preference', 'system', 'project', etc."
-                    },
-                    "project_path": {
-                        "type": "string",
-                        "description": "Optional: scope this memory to a specific project directory. If 'global', it applies everywhere."
-                    }
+    fn description(&self) -> String {
+        "CRITICAL DIRECTIVE: You MUST use this tool immediately if the user explicitly asks you to 'remember', 'save', 'note', or store a fact, preference, path, or any other information. Do not just reply 'I will remember'. \
+        Store a fact, preference, or lesson in long-term memory. \
+        Use a concise snake_case key (e.g., 'favorite_editor', 'os_type'). \
+        If the key already exists, the memory will be updated (overwritten). \
+        If project_path is provided (or if this is project-specific info), it will be scoped to that project. \
+        Defaults to 'global' if no project_path is given."
+            .to_string()
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "key": {
+                    "type": "string",
+                    "description": "Unique key for this memory (e.g. 'preferred_shell', 'project_stack')"
                 },
-                "required": ["key", "content"]
-            }),
-        }
+                "content": {
+                    "type": "string",
+                    "description": "The information to remember"
+                },
+                "category": {
+                    "type": "string",
+                    "description": "Optional category: 'preference', 'system', 'project', etc."
+                },
+                "project_path": {
+                    "type": "string",
+                    "description": "Optional: scope this memory to a specific project directory. If 'global', it applies everywhere."
+                }
+            },
+            "required": ["key", "content"]
+        })
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
@@ -128,35 +127,35 @@ pub struct MemoryDeleteTool {
     pub approval: Arc<crate::engine::tools::ClawApprovalHandler>,
 }
 
-impl Tool for MemoryDeleteTool {
+impl PortableTool for MemoryDeleteTool {
     const NAME: &'static str = "memory_delete";
 
     type Args = MemoryDeleteArgs;
     type Output = String;
     type Error = MemoryToolError;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "Delete a specific memory from the long-term database. \
-            Use this to prune transient, incorrect, or outdated data (e.g. old git branches, temporary paths). \
-            If project_path is not provided, it defaults to the current directory."
-                .to_string(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "key": {
-                        "type": "string",
-                        "description": "The unique key of the memory to delete."
-                    },
-                    "project_path": {
-                        "type": "string",
-                        "description": "Optional: the project path scope of the memory. Use 'global' for global memories."
-                    }
+    fn description(&self) -> String {
+        "Delete a specific memory from the long-term database. \
+        Use this to prune transient, incorrect, or outdated data (e.g. old git branches, temporary paths). \
+        If project_path is not provided, it defaults to the current directory."
+            .to_string()
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "key": {
+                    "type": "string",
+                    "description": "The unique key of the memory to delete."
                 },
-                "required": ["key"]
-            }),
-        }
+                "project_path": {
+                    "type": "string",
+                    "description": "Optional: the project path scope of the memory. Use 'global' for global memories."
+                }
+            },
+            "required": ["key"]
+        })
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {

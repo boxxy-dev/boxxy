@@ -174,12 +174,7 @@ pub fn spawn_turn(
         // 5. Prepare History
         let final_history = history::prepare_query_history(history, history_len);
 
-        let mut is_multimodal = false;
-        let mut user_msg = vec![rig::message::Message::User {
-            content: rig::OneOrMany::one(rig::message::UserContent::text(full_prompt.clone())),
-        }];
-
-        if !images_clone.is_empty() {
+        let query_for_chat = if !images_clone.is_empty() {
             let mut contents = vec![rig::message::UserContent::text(full_prompt.clone())];
             for b64 in images_clone {
                 contents.push(rig::message::UserContent::image_base64(
@@ -188,14 +183,7 @@ pub fn spawn_turn(
                     None,
                 ));
             }
-            if let Ok(many) = rig::OneOrMany::many(contents) {
-                user_msg = vec![rig::message::Message::User { content: many }];
-                is_multimodal = true;
-            }
-        }
-
-        let query_for_chat = if is_multimodal {
-            user_msg.into_iter().next().unwrap()
+            rig::message::Message::User { content: contents }
         } else {
             rig::message::Message::user(full_prompt.clone())
         };

@@ -89,13 +89,20 @@ pub enum ClawEvent {
 pub struct UsageWrapper {
     pub input_tokens: u64,
     pub output_tokens: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_tokens: Option<u64>,
 }
 
 impl From<Usage> for UsageWrapper {
     fn from(u: Usage) -> Self {
         Self {
-            input_tokens: u.input_tokens as u64,
-            output_tokens: u.output_tokens as u64,
+            input_tokens: u.input_tokens,
+            output_tokens: u.output_tokens,
+            reasoning_tokens: if u.reasoning_tokens > 0 {
+                Some(u.reasoning_tokens)
+            } else {
+                None
+            },
         }
     }
 }

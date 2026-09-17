@@ -3,30 +3,26 @@ use std::fmt;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum GeminiModel {
-    #[serde(rename = "gemini-3.5-flash")]
-    Flash3_5,
-    #[serde(rename = "gemini-3.1-flash-lite-preview")]
-    FlashLite,
+    #[serde(rename = "gemini-3.8-flash")]
+    Flash3_8,
 }
 
 impl fmt::Display for GeminiModel {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            GeminiModel::Flash3_5 => write!(f, "Gemini 3.5 Flash"),
-            GeminiModel::FlashLite => write!(f, "Gemini 3.1 Flash Lite"),
+            GeminiModel::Flash3_8 => write!(f, "Gemini 3.8 Flash"),
         }
     }
 }
 
 impl GeminiModel {
     pub fn all() -> Vec<GeminiModel> {
-        vec![GeminiModel::Flash3_5, GeminiModel::FlashLite]
+        vec![GeminiModel::Flash3_8]
     }
 
     pub fn api_name(&self) -> &'static str {
         match self {
-            GeminiModel::Flash3_5 => "gemini-3.5-flash",
-            GeminiModel::FlashLite => "gemini-3.1-flash-lite-preview",
+            GeminiModel::Flash3_8 => "gemini-3.8-flash",
         }
     }
 
@@ -35,20 +31,11 @@ impl GeminiModel {
     }
 
     pub fn available_thinking_levels(&self) -> Vec<ThinkingLevel> {
-        match self {
-            GeminiModel::Flash3_5 => vec![
-                ThinkingLevel::Minimal,
-                ThinkingLevel::Low,
-                ThinkingLevel::Medium,
-                ThinkingLevel::High,
-            ],
-            GeminiModel::FlashLite => vec![
-                ThinkingLevel::Minimal,
-                ThinkingLevel::Low,
-                ThinkingLevel::Medium,
-                ThinkingLevel::High,
-            ],
-        }
+        vec![
+            ThinkingLevel::Low,
+            ThinkingLevel::Medium,
+            ThinkingLevel::High,
+        ]
     }
 }
 
@@ -105,20 +92,20 @@ impl ThinkingLevel {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AnthropicModel {
-    #[serde(rename = "claude-opus-4-6")]
-    ClaudeOpus,
-    #[serde(rename = "claude-opus-4-7")]
-    ClaudeOpus47,
-    #[serde(rename = "claude-sonnet-4-6")]
-    ClaudeSonnet,
+    #[serde(rename = "claude-fable-5-1")]
+    ClaudeFable51,
+    #[serde(rename = "claude-sonnet-5")]
+    ClaudeSonnet5,
+    #[serde(rename = "claude-opus-5")]
+    ClaudeOpus5,
 }
 
 impl fmt::Display for AnthropicModel {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            AnthropicModel::ClaudeOpus => write!(f, "Claude Opus 4.6"),
-            AnthropicModel::ClaudeOpus47 => write!(f, "Claude Opus 4.7"),
-            AnthropicModel::ClaudeSonnet => write!(f, "Claude Sonnet 4.6"),
+            AnthropicModel::ClaudeFable51 => write!(f, "Claude Fable 5.1"),
+            AnthropicModel::ClaudeSonnet5 => write!(f, "Claude Sonnet 5"),
+            AnthropicModel::ClaudeOpus5 => write!(f, "Claude Opus 5"),
         }
     }
 }
@@ -126,25 +113,22 @@ impl fmt::Display for AnthropicModel {
 impl AnthropicModel {
     pub fn all() -> Vec<AnthropicModel> {
         vec![
-            AnthropicModel::ClaudeSonnet,
-            AnthropicModel::ClaudeOpus,
-            AnthropicModel::ClaudeOpus47,
+            AnthropicModel::ClaudeFable51,
+            AnthropicModel::ClaudeSonnet5,
+            AnthropicModel::ClaudeOpus5,
         ]
     }
 
     pub fn api_name(&self) -> &'static str {
         match self {
-            AnthropicModel::ClaudeOpus => "claude-opus-4-6",
-            AnthropicModel::ClaudeOpus47 => "claude-opus-4-7",
-            AnthropicModel::ClaudeSonnet => "claude-sonnet-4-6",
+            AnthropicModel::ClaudeFable51 => "claude-fable-5-1",
+            AnthropicModel::ClaudeSonnet5 => "claude-sonnet-5",
+            AnthropicModel::ClaudeOpus5 => "claude-opus-5",
         }
     }
 
     pub fn supports_extended_thinking(&self) -> bool {
-        match self {
-            AnthropicModel::ClaudeOpus47 => false, // Adaptive only, no budget param
-            _ => true,
-        }
+        false // Claude 5 series uses native adaptive thinking
     }
 
     pub fn available_thinking_levels(&self) -> Vec<ThinkingLevel> {
@@ -159,20 +143,17 @@ impl AnthropicModel {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum OpenAiModel {
-    #[serde(rename = "gpt-5.4")]
-    Gpt5_4,
-    #[serde(rename = "gpt-5.4-mini")]
-    Gpt5_4Mini,
-    #[serde(rename = "gpt-5.4-nano")]
-    Gpt5_4Nano,
+    #[serde(rename = "gpt-6-astra")]
+    Gpt6Astra,
+    #[serde(rename = "gpt-5.6-sol")]
+    Gpt5_6Sol,
 }
 
 impl fmt::Display for OpenAiModel {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            OpenAiModel::Gpt5_4 => write!(f, "GPT-5.4"),
-            OpenAiModel::Gpt5_4Mini => write!(f, "GPT-5.4 Mini"),
-            OpenAiModel::Gpt5_4Nano => write!(f, "GPT-5.4 Nano"),
+            OpenAiModel::Gpt6Astra => write!(f, "GPT-6 Astra"),
+            OpenAiModel::Gpt5_6Sol => write!(f, "GPT-5.6 Sol"),
         }
     }
 }
@@ -180,17 +161,15 @@ impl fmt::Display for OpenAiModel {
 impl OpenAiModel {
     pub fn all() -> Vec<OpenAiModel> {
         vec![
-            OpenAiModel::Gpt5_4,
-            OpenAiModel::Gpt5_4Mini,
-            OpenAiModel::Gpt5_4Nano,
+            OpenAiModel::Gpt6Astra,
+            OpenAiModel::Gpt5_6Sol,
         ]
     }
 
     pub fn api_name(&self) -> &'static str {
         match self {
-            OpenAiModel::Gpt5_4 => "gpt-5.4",
-            OpenAiModel::Gpt5_4Mini => "gpt-5.4-mini",
-            OpenAiModel::Gpt5_4Nano => "gpt-5.4-nano",
+            OpenAiModel::Gpt6Astra => "gpt-6-astra",
+            OpenAiModel::Gpt5_6Sol => "gpt-5.6-sol",
         }
     }
 
@@ -207,30 +186,26 @@ impl OpenAiModel {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DeepSeekModel {
-    #[serde(rename = "deepseek-v4-pro")]
-    Pro,
-    #[serde(rename = "deepseek-v4-flash")]
-    Flash,
+    #[serde(rename = "deepseek-flash")]
+    V4_1Flash,
 }
 
 impl fmt::Display for DeepSeekModel {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            DeepSeekModel::Pro => write!(f, "DeepSeek-V4-Pro"),
-            DeepSeekModel::Flash => write!(f, "DeepSeek-V4-Flash"),
+            DeepSeekModel::V4_1Flash => write!(f, "DeepSeek-V4.1-Flash"),
         }
     }
 }
 
 impl DeepSeekModel {
     pub fn all() -> Vec<DeepSeekModel> {
-        vec![DeepSeekModel::Pro, DeepSeekModel::Flash]
+        vec![DeepSeekModel::V4_1Flash]
     }
 
     pub fn api_name(&self) -> &'static str {
         match self {
-            DeepSeekModel::Pro => "deepseek-v4-pro",
-            DeepSeekModel::Flash => "deepseek-v4-flash",
+            DeepSeekModel::V4_1Flash => "deepseek-flash",
         }
     }
 }
@@ -271,7 +246,7 @@ impl ModelProvider {
 
 impl Default for ModelProvider {
     fn default() -> Self {
-        ModelProvider::Gemini(GeminiModel::FlashLite, Some(ThinkingLevel::Low))
+        ModelProvider::Gemini(GeminiModel::Flash3_8, Some(ThinkingLevel::Low))
     }
 }
 
@@ -281,31 +256,42 @@ mod tests {
 
     #[test]
     fn test_gemini_model_deserialization() {
-        // Test deserializing the new gemini-3.5-flash model
-        let model_new: GeminiModel = serde_json::from_str("\"gemini-3.5-flash\"").unwrap();
-        assert_eq!(model_new, GeminiModel::Flash3_5);
-
-        // Test that deserializing the legacy gemini-3.1-pro-preview model now fails
-        let model_alias: Result<GeminiModel, _> = serde_json::from_str("\"gemini-3.1-pro-preview\"");
-        assert!(model_alias.is_err());
-
-        // Test deserializing the flash-lite model
-        let model_lite: GeminiModel = serde_json::from_str("\"gemini-3.1-flash-lite-preview\"").unwrap();
-        assert_eq!(model_lite, GeminiModel::FlashLite);
+        let model_38: GeminiModel = serde_json::from_str("\"gemini-3.8-flash\"").unwrap();
+        assert_eq!(model_38, GeminiModel::Flash3_8);
     }
 
     #[test]
     fn test_gemini_model_api_names() {
-        assert_eq!(GeminiModel::Flash3_5.api_name(), "gemini-3.5-flash");
-        assert_eq!(GeminiModel::FlashLite.api_name(), "gemini-3.1-flash-lite-preview");
+        assert_eq!(GeminiModel::Flash3_8.api_name(), "gemini-3.8-flash");
     }
 
     #[test]
     fn test_gemini_model_thinking_levels() {
-        let levels_3_5 = GeminiModel::Flash3_5.available_thinking_levels();
-        assert!(levels_3_5.contains(&ThinkingLevel::Minimal));
-        assert!(levels_3_5.contains(&ThinkingLevel::Low));
-        assert!(levels_3_5.contains(&ThinkingLevel::Medium));
-        assert!(levels_3_5.contains(&ThinkingLevel::High));
+        let levels_3_8 = GeminiModel::Flash3_8.available_thinking_levels();
+        assert!(!levels_3_8.contains(&ThinkingLevel::Minimal));
+        assert!(levels_3_8.contains(&ThinkingLevel::Low));
+        assert!(levels_3_8.contains(&ThinkingLevel::Medium));
+        assert!(levels_3_8.contains(&ThinkingLevel::High));
+    }
+
+    #[test]
+    fn test_anthropic_models() {
+        assert_eq!(AnthropicModel::ClaudeFable51.api_name(), "claude-fable-5-1");
+        assert_eq!(AnthropicModel::ClaudeSonnet5.api_name(), "claude-sonnet-5");
+        assert_eq!(AnthropicModel::ClaudeOpus5.api_name(), "claude-opus-5");
+        assert!(!AnthropicModel::ClaudeFable51.supports_extended_thinking());
+        assert!(!AnthropicModel::ClaudeSonnet5.supports_extended_thinking());
+        assert!(!AnthropicModel::ClaudeOpus5.supports_extended_thinking());
+    }
+
+    #[test]
+    fn test_openai_models() {
+        assert_eq!(OpenAiModel::Gpt6Astra.api_name(), "gpt-6-astra");
+        assert_eq!(OpenAiModel::Gpt5_6Sol.api_name(), "gpt-5.6-sol");
+    }
+
+    #[test]
+    fn test_deepseek_models() {
+        assert_eq!(DeepSeekModel::V4_1Flash.api_name(), "deepseek-flash");
     }
 }

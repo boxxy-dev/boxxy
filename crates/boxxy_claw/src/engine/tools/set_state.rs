@@ -1,6 +1,5 @@
 use crate::engine::ClawMessage;
-use rig::completion::ToolDefinition;
-use rig::tool::Tool;
+use rig::tool::PortableTool;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -21,29 +20,29 @@ pub struct SetAgentStateTool {
     pub tx_ui: async_channel::Sender<crate::engine::ClawEngineEvent>,
 }
 
-impl Tool for SetAgentStateTool {
+impl PortableTool for SetAgentStateTool {
     const NAME: &'static str = "set_agent_state";
 
     type Error = std::io::Error;
     type Args = SetStateArgs;
     type Output = SetStateOutput;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "Force transition the agent to a different mode/state. The only valid input right now is 'sleep'. Use this when the user explicitly asks you to stop, shut down, go away, or sleep.".to_string(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "state": {
-                        "type": "string",
-                        "description": "The target state (e.g. 'sleep')",
-                        "enum": ["sleep"]
-                    }
-                },
-                "required": ["state"]
-            }),
-        }
+    fn description(&self) -> String {
+        "Force transition the agent to a different mode/state. The only valid input right now is 'sleep'. Use this when the user explicitly asks you to stop, shut down, go away, or sleep.".to_string()
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "state": {
+                    "type": "string",
+                    "description": "The target state (e.g. 'sleep')",
+                    "enum": ["sleep"]
+                }
+            },
+            "required": ["state"]
+        })
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {

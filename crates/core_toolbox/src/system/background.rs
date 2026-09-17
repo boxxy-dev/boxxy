@@ -1,7 +1,6 @@
 use crate::ApprovalHandler;
 use boxxy_claw_protocol::ClawEnvironment;
-use rig::completion::ToolDefinition;
-use rig::tool::Tool;
+use rig::tool::PortableTool;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -24,36 +23,36 @@ pub struct RunBackgroundCommandTool {
     pub approval: Arc<dyn ApprovalHandler>,
 }
 
-impl Tool for RunBackgroundCommandTool {
+impl PortableTool for RunBackgroundCommandTool {
     const NAME: &'static str = "run_background_command";
 
     type Error = std::io::Error;
     type Args = RunBackgroundCommandArgs;
     type Output = RunBackgroundCommandOutput;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "Launch a long-running application, GUI program, dev server, or background script. Crucially, this runs completely detached in the background and DOES NOT block the interactive terminal. You MUST provide the `cwd` to ensure the process starts in the correct directory. It returns the PID of the spawned process.".to_string(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "command": {
-                        "type": "string",
-                        "description": "The exact shell command to launch the background process."
-                    },
-                    "explanation": {
-                        "type": "string",
-                        "description": "A brief, 1-sentence explanation of what is being launched for the user approval dialog."
-                    },
-                    "cwd": {
-                        "type": "string",
-                        "description": "The absolute path of the directory where the command should be executed."
-                    }
+    fn description(&self) -> String {
+        "Launch a long-running application, GUI program, dev server, or background script. Crucially, this runs completely detached in the background and DOES NOT block the interactive terminal. You MUST provide the `cwd` to ensure the process starts in the correct directory. It returns the PID of the spawned process.".to_string()
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "command": {
+                    "type": "string",
+                    "description": "The exact shell command to launch the background process."
                 },
-                "required": ["command", "explanation", "cwd"]
-            }),
-        }
+                "explanation": {
+                    "type": "string",
+                    "description": "A brief, 1-sentence explanation of what is being launched for the user approval dialog."
+                },
+                "cwd": {
+                    "type": "string",
+                    "description": "The absolute path of the directory where the command should be executed."
+                }
+            },
+            "required": ["command", "explanation", "cwd"]
+        })
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {

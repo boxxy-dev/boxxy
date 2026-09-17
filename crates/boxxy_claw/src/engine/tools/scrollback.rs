@@ -1,6 +1,5 @@
 use crate::engine::ClawEngineEvent;
-use rig::completion::ToolDefinition;
-use rig::tool::Tool;
+use rig::tool::PortableTool;
 use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize)]
@@ -19,36 +18,36 @@ pub struct ReadScrollbackTool {
     pub state: std::sync::Arc<tokio::sync::Mutex<crate::engine::session::SessionState>>,
 }
 
-impl Tool for ReadScrollbackTool {
+impl PortableTool for ReadScrollbackTool {
     const NAME: &'static str = "read_scrollback_page";
 
     type Error = std::io::Error;
     type Args = ReadScrollbackArgs;
     type Output = ReadScrollbackOutput;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "Read older lines from your terminal's scrollback history. \
-            By default you only see the last 100 lines. Use this tool if an error or context \
-            you need to analyze happened further up in the terminal history. \
-            Provides structured semantic blocks (PROMPT, COMMAND, OUTPUT)."
-                .to_string(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "max_lines": {
-                        "type": "integer",
-                        "description": "The number of lines to fetch."
-                    },
-                    "offset_lines": {
-                        "type": "integer",
-                        "description": "How many lines back from the bottom to start reading. e.g. 0 is the absolute bottom, 100 reads lines ending 100 lines above the bottom."
-                    }
+    fn description(&self) -> String {
+        "Read older lines from your terminal's scrollback history. \
+        By default you only see the last 100 lines. Use this tool if an error or context \
+        you need to analyze happened further up in the terminal history. \
+        Provides structured semantic blocks (PROMPT, COMMAND, OUTPUT)."
+            .to_string()
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "max_lines": {
+                    "type": "integer",
+                    "description": "The number of lines to fetch."
                 },
-                "required": ["max_lines", "offset_lines"]
-            }),
-        }
+                "offset_lines": {
+                    "type": "integer",
+                    "description": "How many lines back from the bottom to start reading. e.g. 0 is the absolute bottom, 100 reads lines ending 100 lines above the bottom."
+                }
+            },
+            "required": ["max_lines", "offset_lines"]
+        })
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {

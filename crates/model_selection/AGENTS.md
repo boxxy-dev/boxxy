@@ -4,8 +4,8 @@
 Provides UI components and types for selecting AI models and their specific parameters (like "Thinking Level").
 
 ## Responsibility
-- **Modular Data Models:** Defines `ModelProvider`, `GeminiModel`, and `AnthropicModel` in a dedicated `models` module.
-- **Provider Registry Pattern:** Uses the `AiProvider` trait to abstract provider-specific logic (Gemini, Ollama, Anthropic, OpenAI, OpenRouter). Adding a new provider now only requires implementing this trait and registering it in `registry.rs`.
+- **Modular Data Models:** Defines `ModelProvider`, `GeminiModel`, `AnthropicModel`, `OpenAiModel`, and `DeepSeekModel` in a dedicated `models` module.
+- **Provider Registry Pattern:** Uses the `AiProvider` trait to abstract provider-specific logic (Gemini, Ollama, Anthropic, OpenAI, OpenRouter, DeepSeek). Adding a new provider now only requires implementing this trait and registering it in `registry.rs`.
 - **Dynamic Model Discovery:** Automatically fetches available local models from the Ollama API (via `http://localhost:11434/api/tags`) when the Ollama provider is selected.
 - **Dynamic UI:** `SingleModelSelector` and `GlobalModelSelectorDialog` are now data-driven, building their dropdowns and options dynamically from the registry instead of hardcoded logic.
 - **OpenRouter Support:** Uses a free-form `gtk::Entry` to support OpenRouter's massive model catalog rather than hardcoded dropdowns.
