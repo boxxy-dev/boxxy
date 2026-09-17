@@ -33,39 +33,58 @@ jobs:
           image: fedora:rawhide
           options: --platform linux/${{ matrix.arch }} -v ${{ github.workspace }}:/workspace -e GIT_HASH=${{ env.sha_short }}
           run: |
-            set -e
+            set -euo pipefail
+
             dnf install -y \
-              gcc pkgconfig openssl-devel gtk4-devel libadwaita-devel \
+              gcc pkgconfig binutils \
+              gtk4-devel libadwaita-devel \
               gtksourceview5-devel \
               gstreamer1-devel gstreamer1-plugins-base-devel gdk-pixbuf2-devel \
-              glib2-devel sqlite-devel tar gzip git curl
+              glib2-devel sqlite-devel \
+              tar gzip git curl
 
             # Install Rust
             curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-            source $HOME/.cargo/env
+            source "$HOME/.cargo/env"
 
             cd /workspace
-            # Remove --locked to allow environmental lockfile updates
-            cargo build --release
 
-            # Verify no dynamic linkage to host libssl/libcrypto
-            if ldd target/release/boxxy-terminal | grep -E "libssl\.so|libcrypto\.so"; then
-              echo "Error: boxxy-terminal dynamically links to host OpenSSL:"
-              ldd target/release/boxxy-terminal | grep -E "libssl\.so|libcrypto\.so"
-              exit 1
-            fi
-            if ldd target/release/boxxy-agent | grep -E "libssl\.so|libcrypto\.so"; then
-              echo "Error: boxxy-agent dynamically links to host OpenSSL:"
-              ldd target/release/boxxy-agent | grep -E "libssl\.so|libcrypto\.so"
+            # Verify Cargo dependency tree has no native OpenSSL/TLS dependencies
+            if cargo tree --locked | grep -Eq '(^| )openssl(-sys)? v|(^| )native-tls v'; then
+              echo "ERROR: Native OpenSSL/TLS dependency detected in Cargo tree:"
+              cargo tree --locked | grep -E 'openssl(-sys)?|native-tls'
               exit 1
             fi
 
-            # Verify binaries exist before packaging
-            if [ ! -f target/release/boxxy-terminal ] || [ ! -f target/release/boxxy-agent ]; then
-              echo "Error: Binaries not found in target/release/"
-              ls -R target/release/
-              exit 1
-            fi
+            # CI must use the dependency graph committed in Cargo.lock
+            cargo build --release --locked
+
+            # Verify binaries exist first
+            for binary in boxxy-terminal boxxy-agent; do
+              if [ ! -x "target/release/$binary" ]; then
+                echo "Error: target/release/$binary not found"
+                exit 1
+              fi
+            done
+
+            # Check ONLY direct ELF dependencies (DT_NEEDED).
+            # Do not use ldd here, as ldd recursively inspects Fedora's system libraries.
+            for binary in boxxy-terminal boxxy-agent; do
+              echo "Direct dependencies for $binary:"
+              readelf -d "target/release/$binary" | grep NEEDED || true
+
+              if readelf -d "target/release/$binary" \
+                | grep NEEDED \
+                | grep -Eq 'libssl\.so|libcrypto\.so'; then
+                echo "ERROR: $binary directly links against OpenSSL:"
+                readelf -d "target/release/$binary" \
+                  | grep NEEDED \
+                  | grep -E 'libssl\.so|libcrypto\.so'
+                exit 1
+              fi
+            done
+
+            echo "OK: Boxxy binaries have no direct OpenSSL dependency."
 
             PKG_NAME="boxxy-terminal-nightly-linux-${{ matrix.arch }}"
             mkdir -p "${PKG_NAME}/bin"
