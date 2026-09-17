@@ -275,6 +275,12 @@
                                   </object>
                                 </child>
                                 <child>
+                                  <object class="AdwSwitchRow" id="frosted_glass_row">
+                                    <property name="title" translatable="yes">Frosted Glass</property>
+                                    <property name="subtitle" translatable="yes">Blur content behind translucent terminal (requires GNOME 51+ or Wayland blur)</property>
+                                  </object>
+                                </child>
+                                <child>
                                   <object class="AdwSwitchRow" id="colored_tabs_switch">
                                     <property name="title" translatable="yes">New Tab in Random Color</property>
                                     <property name="subtitle" translatable="yes">Assign a random color to new terminal tabs automatically</property>

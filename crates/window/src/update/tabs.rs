@@ -384,12 +384,18 @@ pub fn focus_active_terminal(inner: &mut AppWindowInner) {
             inner.tab_view.add_css_class("non-terminal-tab");
             if let Some(ref toolbar) = toolbar_opt {
                 toolbar.add_css_class("non-terminal-toolbar");
+                if let Ok(tv) = toolbar.clone().downcast::<libadwaita::ToolbarView>() {
+                    tv.set_top_bar_style(libadwaita::ToolbarStyle::Raised);
+                }
             }
         } else {
             inner.content_header.add_css_class("terminal-header");
             inner.tab_view.remove_css_class("non-terminal-tab");
             if let Some(ref toolbar) = toolbar_opt {
                 toolbar.remove_css_class("non-terminal-toolbar");
+                if let Ok(tv) = toolbar.clone().downcast::<libadwaita::ToolbarView>() {
+                    tv.set_top_bar_style(libadwaita::ToolbarStyle::Flat);
+                }
             }
         }
 

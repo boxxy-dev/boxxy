@@ -85,6 +85,7 @@ pub struct TerminalWidget {
     pub is_dimmed: Cell<bool>,
     pub cached_search_regex: RefCell<Option<(String, bool, regex::Regex)>>,
     pub visible_search_matches: RefCell<Vec<crate::engine::selection::SelectionRange>>,
+    pub frosted_glass: Cell<bool>,
 }
 
 impl Default for TerminalWidget {
@@ -135,6 +136,7 @@ impl Default for TerminalWidget {
             is_dimmed: Cell::new(false),
             cached_search_regex: RefCell::new(None),
             visible_search_matches: RefCell::new(Vec::new()),
+            frosted_glass: Cell::new(false),
         }
     }
 }
@@ -1069,7 +1071,13 @@ impl WidgetImpl for TerminalWidget {
             bg_to_paint.set_alpha(dimmed_alpha.min(1.0));
         }
 
-        if bg_to_paint.alpha() > 0.0 {
+        let effective_alpha = bg_to_paint.alpha();
+        if self.frosted_glass.get() {
+            // When frosted glass is active, the window-level FrostedGlassContainer handles
+            // the Wayland blur node, window corner radii, and background tint across both the
+            // headerbar and the terminal. We keep terminal widget background transparent
+            // to prevent double-tinting and sharp rectangular corner clipping.
+        } else if effective_alpha > 0.0 {
             snapshot.append_color(
                 &bg_to_paint,
                 &gtk4::graphene::Rect::new(0.0, 0.0, width, height),

@@ -25,6 +25,7 @@ pub fn setup_appearance_page(
     let theme_row: adw::ActionRow = builder.object("theme_row").unwrap();
     let opacity_row: adw::ActionRow = builder.object("opacity_row").unwrap();
     let opacity_scale: gtk::Scale = builder.object("opacity_scale").unwrap();
+    let frosted_glass_row: adw::SwitchRow = builder.object("frosted_glass_row").unwrap();
     let padding_spin: adw::SpinRow = builder.object("padding_spin").unwrap();
     let line_spacing_spin: adw::SpinRow = builder.object("line_spacing_spin").unwrap();
     let col_spacing_spin: adw::SpinRow = builder.object("col_spacing_spin").unwrap();
@@ -187,6 +188,18 @@ pub fn setup_appearance_page(
         let val = scale.value();
         if (s.opacity - val).abs() > 1e-4 {
             s.opacity = val;
+            s.save();
+            cb(s.clone());
+        }
+    });
+
+    frosted_glass_row.set_active(settings_rc.borrow().frosted_glass);
+    let s_rc = settings_rc.clone();
+    let cb = on_change.clone();
+    frosted_glass_row.connect_active_notify(move |row| {
+        let mut s = s_rc.borrow_mut();
+        if s.frosted_glass != row.is_active() {
+            s.frosted_glass = row.is_active();
             s.save();
             cb(s.clone());
         }
@@ -466,6 +479,7 @@ pub fn setup_appearance_page(
     let chat_width_spin_clone = chat_width_spin.clone();
     let color_scheme_combo_clone = color_scheme_combo.clone();
     let opacity_row_clone = opacity_row.clone();
+    let frosted_glass_row_clone = frosted_glass_row.clone();
     let background_image_row_clone = background_image_row.clone();
 
     let widgets = AppearanceWidgets {
@@ -492,7 +506,11 @@ pub fn setup_appearance_page(
         let t1 = match_row(theme_row_clone.upcast_ref(), "terminal theme");
         let t_op = match_row(
             opacity_row_clone.upcast_ref(),
-            "opacity transparent background",
+            "opacity transparent background tint",
+        );
+        let f_glass = match_row(
+            frosted_glass_row_clone.upcast_ref(),
+            "frosted glass blur mutter wayland translucency",
         );
         let c_tabs = match_row(
             colored_tabs_switch_clone.upcast_ref(),
@@ -536,7 +554,7 @@ pub fn setup_appearance_page(
             "sidebar width px hacky mouse resize overlay split view",
         );
 
-        group_appearance.set_visible(s1 || f1 || t_bg || t1 || t_op || c_tabs);
+        group_appearance.set_visible(s1 || f1 || t_bg || t1 || t_op || f_glass || c_tabs);
         group_terminal.set_visible(t2 || t3 || t4 || t5);
         group_cursor.set_visible(c1 || c3 || c4);
         group_layout.set_visible(pb || l1 || l2 || l3 || l5 || l6);

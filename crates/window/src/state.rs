@@ -181,6 +181,7 @@ pub struct AppWindowInner {
     pub bell_indicator: gtk::Image,
     pub claw_active: bool,
     pub toast_overlay: adw::ToastOverlay,
+    pub frosted_container: crate::widgets::frosted_glass::FrostedGlassContainer,
     pub notifications: Vec<Notification>,
     pub initial_working_dir: Option<String>,
     pub force_close: Rc<Cell<bool>>,

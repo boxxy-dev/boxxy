@@ -204,6 +204,14 @@ impl TerminalWidget {
         self.imp().set_dimmed(dimmed);
     }
 
+    pub fn set_frosted_glass(&self, enabled: bool) {
+        let imp = self.imp();
+        if imp.frosted_glass.get() != enabled {
+            imp.frosted_glass.set(enabled);
+            self.queue_draw();
+        }
+    }
+
     pub fn set_colors(
         &self,
         fg: Option<&gtk4::gdk::RGBA>,

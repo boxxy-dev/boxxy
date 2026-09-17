@@ -207,6 +207,23 @@ pub fn settings_changed(inner: &mut AppWindowInner, settings: Settings) {
         tab.controller.notify_settings_invalidated();
     }
 
+    let bg_rgba = if let Some(ref p) = parsed {
+        let variant = if is_dark { &p.dark } else { &p.light };
+        gtk4::gdk::RGBA::parse(variant.background)
+            .unwrap_or_else(|_| gtk4::gdk::RGBA::new(0.08, 0.08, 0.1, 1.0))
+    } else {
+        gtk4::gdk::RGBA::new(0.08, 0.08, 0.1, 1.0)
+    };
+    inner.frosted_container.set_tint_color(bg_rgba);
+    inner.frosted_container.set_opacity(settings.opacity);
+    inner.frosted_container.set_frosted_glass(settings.frosted_glass);
+
+    if settings.frosted_glass && settings.opacity < 1.0 {
+        inner.window.add_css_class("frosted-glass-active");
+    } else {
+        inner.window.remove_css_class("frosted-glass-active");
+    }
+
     // Re-push credentials so the daemon's in-memory `core.state.api_keys`
     // track any changes the user just made in Settings → APIs.
     // (The engine also falls back to disk, but keeping the IPC state
@@ -238,6 +255,10 @@ pub fn theme_selected(inner: &mut AppWindowInner, palette: boxxy_themes::ParsedP
     let is_dark = libadwaita::StyleManager::default().is_dark();
     let variant = if is_dark { palette.dark } else { palette.light };
 
+    if let Ok(rgba) = gtk4::gdk::RGBA::parse(variant.background) {
+        inner.frosted_container.set_tint_color(rgba);
+    }
+
     for tab in &inner.tabs {
         tab.controller
             .update_settings(inner.current_settings.clone(), Some(variant));
@@ -252,6 +273,7 @@ pub fn sidebar_visible_changed(inner: &mut AppWindowInner, visible: bool) {
     inner.sidebar_visible = visible;
     inner.app_state.sidebar_visible = visible;
     inner.app_state.save();
+    inner.frosted_container.set_has_sidebar(visible);
     if !visible {
         super::tabs::focus_active_terminal(inner);
     }

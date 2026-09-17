@@ -1218,6 +1218,7 @@ impl TerminalPaneComponent {
         let mut needs_cursor_color = true;
         let mut needs_show_grid = true;
         let mut needs_invert_scroll = true;
+        let mut needs_frosted_glass = true;
         if let Some(ref p) = inner.current_settings {
             if p.enable_web_search != settings.enable_web_search {
                 self.msg_bar
@@ -1254,6 +1255,7 @@ impl TerminalPaneComponent {
                 || p.cursor_color != settings.cursor_color;
             needs_show_grid = p.show_vte_grid != settings.show_vte_grid;
             needs_invert_scroll = p.invert_scroll != settings.invert_scroll;
+            needs_frosted_glass = p.frosted_glass != settings.frosted_glass;
         }
 
         self.claw_popover
@@ -1277,6 +1279,10 @@ impl TerminalPaneComponent {
 
         if needs_invert_scroll {
             inner.terminal.set_invert_scroll(settings.invert_scroll);
+        }
+
+        if needs_frosted_glass {
+            inner.terminal.set_frosted_glass(settings.frosted_glass);
         }
 
         if needs_font {

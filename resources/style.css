@@ -419,6 +419,11 @@ window.main-window > contents,
 .main-split-view scrolledwindow,
 .terminal-toolbar,
 .terminal-toolbar > contents,
+.terminal-toolbar > .top-bar,
+.terminal-toolbar > .top-bar.raised,
+.terminal-toolbar > .top-bar headerbar,
+.terminal-header,
+.content-header,
 .terminal-tab-view,
 .terminal-tab-view > contents,
 .terminal-pane,
@@ -454,7 +459,9 @@ boxxyterminalwidget {
 /* Restore opaque background for non-terminal tabs (bookmarks, apps).
    Two-class selector wins over the single-class `.terminal-toolbar` rule above. */
 .terminal-toolbar.non-terminal-toolbar,
-.terminal-toolbar.non-terminal-toolbar > contents {
+.terminal-toolbar.non-terminal-toolbar > contents,
+.terminal-toolbar.non-terminal-toolbar > .top-bar,
+.terminal-toolbar.non-terminal-toolbar > .top-bar.raised {
     background-color: @window_bg_color;
 }
 
@@ -699,3 +706,31 @@ spinrow button.down image {
 row.success .subtitle {
     color: @dim_label_color;
 }
+
+/* Frosted Glass: enable surface transparency so Wayland compositor blur is visible behind the terminal and headerbar */
+window.frosted-glass-active,
+window.frosted-glass-active .main-split-view,
+window.frosted-glass-active .terminal-stack,
+window.frosted-glass-active .terminal-split-container,
+window.frosted-glass-active .terminal-toolbar,
+window.frosted-glass-active .terminal-toolbar > contents,
+window.frosted-glass-active .terminal-toolbar > .top-bar,
+window.frosted-glass-active .terminal-toolbar > .top-bar.raised,
+window.frosted-glass-active .terminal-toolbar headerbar,
+window.frosted-glass-active headerbar.terminal-header,
+window.frosted-glass-active headerbar.terminal-header > windowhandle,
+window.frosted-glass-active headerbar.terminal-header > windowhandle > box,
+window.frosted-glass-active .content-header,
+window.frosted-glass-active .content-header > windowhandle,
+window.frosted-glass-active tabbar,
+window.frosted-glass-active tabbar .box,
+window.frosted-glass-active tabbar tab {
+    background: transparent;
+    background-color: transparent;
+    box-shadow: none;
+}
+
+window.frosted-glass-active tabbar tab:selected {
+    background-color: color-mix(in srgb, currentColor 15%, transparent);
+}
+

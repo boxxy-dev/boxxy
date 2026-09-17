@@ -169,6 +169,10 @@ impl AppWindow {
             .build();
         window.add_css_class("main-window");
 
+        if current_settings.frosted_glass && current_settings.opacity < 1.0 {
+            window.add_css_class("frosted-glass-active");
+        }
+
         app_menu.widget().set_parent(&window);
 
         let tx_cp = tx.clone();
@@ -247,8 +251,31 @@ impl AppWindow {
         let (content_toolbar, content_header, bell_indicator, menu_btn, tab_bar) =
             Self::build_content_area(&tx, &tab_view, &current_settings);
 
+        let frosted_container = crate::widgets::frosted_glass::FrostedGlassContainer::new();
+        frosted_container.set_child(Some(&content_toolbar));
+        frosted_container.set_frosted_glass(current_settings.frosted_glass);
+        frosted_container.set_opacity(current_settings.opacity);
+        frosted_container.set_is_maximized(app_state.is_maximized);
+        frosted_container.set_has_sidebar(app_state.sidebar_visible);
+
+        let palette = boxxy_themes::load_palette(current_settings.theme.as_str());
+        let is_dark = libadwaita::StyleManager::default().is_dark();
+        let bg_rgba = if let Some(p) = palette {
+            let variant = if is_dark { &p.dark } else { &p.light };
+            gtk4::gdk::RGBA::parse(variant.background)
+                .unwrap_or_else(|_| gtk4::gdk::RGBA::new(0.08, 0.08, 0.1, 1.0))
+        } else {
+            gtk4::gdk::RGBA::new(0.08, 0.08, 0.1, 1.0)
+        };
+        frosted_container.set_tint_color(bg_rgba);
+
+        let fc_max = frosted_container.clone();
+        window.connect_notify_local(Some("maximized"), move |win, _| {
+            fc_max.set_is_maximized(win.is_maximized());
+        });
+
         let overlay = gtk::Overlay::new();
-        overlay.set_child(Some(&content_toolbar));
+        overlay.set_child(Some(&frosted_container));
 
         let toast_overlay = adw::ToastOverlay::new();
         toast_overlay.set_child(Some(&split_view));
@@ -326,6 +353,7 @@ impl AppWindow {
             bell_indicator,
             claw_active: false,
             toast_overlay,
+            frosted_container: frosted_container.clone(),
             notifications: Vec::new(),
             initial_working_dir: init.working_dir.clone(),
             force_close,
@@ -591,6 +619,7 @@ impl AppWindow {
 
         let content_toolbar = adw::ToolbarView::new();
         content_toolbar.add_css_class("terminal-toolbar");
+        content_toolbar.set_top_bar_style(adw::ToolbarStyle::Flat);
 
         let content_header = adw::HeaderBar::builder().build();
         content_header.add_css_class("flat");
