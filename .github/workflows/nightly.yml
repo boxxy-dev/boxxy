@@ -31,11 +31,11 @@ jobs:
         uses: addnab/docker-run-action@v3
         with:
           image: fedora:rawhide
-          options: --platform linux/${{ matrix.arch }} -v ${{ github.workspace }}:/workspace -e GIT_HASH=${{ env.sha_short }}
+          options: --platform linux/${{ matrix.arch }} -v ${{ github.workspace }}:/workspace -e GIT_HASH=${{ env.sha_short }} -e OPENSSL_STATIC=1
           run: |
             set -e
             dnf install -y \
-              gcc pkgconfig openssl-devel gtk4-devel libadwaita-devel \
+              gcc pkgconfig openssl-devel openssl-static gtk4-devel libadwaita-devel \
               gtksourceview5-devel \
               gstreamer1-devel gstreamer1-plugins-base-devel gdk-pixbuf2-devel \
               glib2-devel sqlite-devel tar gzip git curl
@@ -47,6 +47,18 @@ jobs:
             cd /workspace
             # Remove --locked to allow environmental lockfile updates
             cargo build --release
+
+            # Verify no dynamic linkage to host libssl/libcrypto
+            if ldd target/release/boxxy-terminal | grep -E "libssl\.so|libcrypto\.so"; then
+              echo "Error: boxxy-terminal dynamically links to host OpenSSL:"
+              ldd target/release/boxxy-terminal | grep -E "libssl\.so|libcrypto\.so"
+              exit 1
+            fi
+            if ldd target/release/boxxy-agent | grep -E "libssl\.so|libcrypto\.so"; then
+              echo "Error: boxxy-agent dynamically links to host OpenSSL:"
+              ldd target/release/boxxy-agent | grep -E "libssl\.so|libcrypto\.so"
+              exit 1
+            fi
 
             # Verify binaries exist before packaging
             if [ ! -f target/release/boxxy-terminal ] || [ ! -f target/release/boxxy-agent ]; then

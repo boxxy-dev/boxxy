@@ -71,7 +71,7 @@ pango = "0.22"
 glib-build-tools = "0.22"
 gtk4 = { version = "0.11", features = ["v4_22"] }
 libadwaita = { version = "0.9", features = ["v1_9"] }
-reqwest = { version = "0.13.3", features = ["json", "stream"] }
+reqwest = { version = "0.13.5", default-features = false, features = ["rustls", "json", "stream"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 sourceview5 = "0.11"
@@ -108,7 +108,7 @@ miniz_oxide = "0.9.1"
 rustix-openpty = "0.2.0"
 rustix = "1.1.4"
 signal-hook = "0.4.4"
-self_update = { version = "0.44.0", features = ["archive-tar", "compression-flate2"] }
+self_update = { version = "0.44.0", default-features = false, features = ["archive-tar", "compression-flate2", "reqwest", "rustls"] }
 tempfile = "3.27.0"
 tar = "0.4.45"
 flate2 = "1.1.9"
