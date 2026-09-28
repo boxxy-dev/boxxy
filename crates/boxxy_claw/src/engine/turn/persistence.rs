@@ -8,6 +8,7 @@ pub struct PersistenceContext {
     pub pane_id: String,
     pub session_id: String,
     pub agent_name: String,
+    pub user_query: String,
     pub full_prompt: String,
     pub response: String,
     pub cwd: String,
@@ -36,13 +37,6 @@ pub async fn perform_persistence(ctx: PersistenceContext, state: Arc<Mutex<Sessi
         .as_ref()
         .map(|m| format!("{:?}", m))
         .unwrap_or_default();
-
-    // Count user messages to know when to generate a permanent LLM title
-    let user_msg_count = state_lock
-        .history
-        .iter()
-        .filter(|m| matches!(m, rig::message::Message::User { .. }))
-        .count();
 
     // Safely extract the Db clone before spawning to prevent race conditions with Deactivate/Evict
     let db_val = {
@@ -116,6 +110,7 @@ pub async fn perform_persistence(ctx: PersistenceContext, state: Arc<Mutex<Sessi
     // Background Tasks: Title, Summarization, Memory Extraction
     let db_clone = ctx.db.clone();
     let session_id_clone = ctx.session_id.clone();
+    let user_query_clone = ctx.user_query.clone();
     let prompt_clone = ctx.full_prompt.clone();
     let response_clone = ctx.response.clone();
     let cwd_clone = ctx.cwd.clone();
@@ -123,8 +118,21 @@ pub async fn perform_persistence(ctx: PersistenceContext, state: Arc<Mutex<Sessi
     let settings_clone = ctx.settings.clone();
 
     tokio::spawn(async move {
-        // 1. Title Generation (first message only)
-        if user_msg_count == 1 {
+        // 1. Title Generation: Generate title if session does not have one yet
+        let needs_title = {
+            let db_guard = db_clone.lock().await;
+            if let Some(db) = &*db_guard {
+                let store = boxxy_db::store::Store::new(db.pool());
+                match store.get_session(&session_id_clone).await {
+                    Ok(Some(s)) => s.title.as_deref().unwrap_or("").trim().is_empty(),
+                    _ => true,
+                }
+            } else {
+                false
+            }
+        };
+
+        if needs_title && !user_query_clone.trim().is_empty() {
             let title_agent = boxxy_ai_core::create_agent(
                 &settings_clone
                     .memory_model
@@ -134,12 +142,24 @@ pub async fn perform_persistence(ctx: PersistenceContext, state: Arc<Mutex<Sessi
                 "You are a conversation title generator. Summarize the user's prompt in 3 to 6 words. MUST BE UNDER 40 CHARACTERS. Output ONLY the raw title, no quotes, no punctuation. Capitalize it like a title.",
             );
 
-            if let Ok(res) = title_agent.prompt(&prompt_clone).await {
-                let title = res.0.trim().to_string();
-                let db_guard = db_clone.lock().await;
-                if let Some(db) = &*db_guard {
-                    let store = boxxy_db::store::Store::new(db.pool());
-                    let _ = store.update_session_title(&session_id_clone, &title).await;
+            if let Ok(res) = title_agent.prompt(&user_query_clone).await {
+                let title = res
+                    .0
+                    .trim()
+                    .trim_matches('"')
+                    .trim_matches('\'')
+                    .to_string();
+                if !title.is_empty() {
+                    let db_guard = db_clone.lock().await;
+                    if let Some(db) = &*db_guard {
+                        let store = boxxy_db::store::Store::new(db.pool());
+                        let _ = store.update_session_title(&session_id_clone, &title).await;
+                        log::info!(
+                            "Generated session title for {}: {}",
+                            session_id_clone,
+                            title
+                        );
+                    }
                 }
             }
         }
@@ -202,4 +222,73 @@ pub async fn perform_persistence(ctx: PersistenceContext, state: Arc<Mutex<Sessi
     });
 
     let _ = ctx.tx_self.send(ClawMessage::TurnFinished).await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_session_needs_title_logic() {
+        let db = Db::new_in_memory().await.unwrap();
+        let store = boxxy_db::store::Store::new(db.pool());
+
+        let session_id = "test_needs_title_session";
+
+        // 1. Initial upsert with empty title
+        store
+            .upsert_session_state(
+                session_id,
+                "dummy-agent",
+                "dummy-char-uuid",
+                "Dummy Agent",
+                "", // empty title initially
+                "[]",
+                "[]",
+                "dummy-agent",
+                "/tmp",
+                "",
+                false,
+                0,
+            )
+            .await
+            .unwrap();
+
+        let s = store.get_session(session_id).await.unwrap().unwrap();
+        let needs_title = s.title.as_deref().unwrap_or("").trim().is_empty();
+        assert!(needs_title, "Session with empty title should need title");
+
+        // 2. Update title
+        store
+            .update_session_title(session_id, "Configuring Fish Shell")
+            .await
+            .unwrap();
+
+        let s_after = store.get_session(session_id).await.unwrap().unwrap();
+        let needs_title_after = s_after.title.as_deref().unwrap_or("").trim().is_empty();
+        assert!(!needs_title_after, "Session with title should not need title");
+        assert_eq!(s_after.title.as_deref(), Some("Configuring Fish Shell"));
+
+        // 3. Ensure subsequent state upsert preserves existing title
+        store
+            .upsert_session_state(
+                session_id,
+                "dummy-agent",
+                "dummy-char-uuid",
+                "Dummy Agent",
+                "", // subsequent turn state doesn't wipe existing title
+                "[]",
+                "[]",
+                "dummy-agent",
+                "/tmp",
+                "",
+                false,
+                100,
+            )
+            .await
+            .unwrap();
+
+        let s_final = store.get_session(session_id).await.unwrap().unwrap();
+        assert_eq!(s_final.title.as_deref(), Some("Configuring Fish Shell"));
+    }
 }

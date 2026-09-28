@@ -224,13 +224,13 @@ pub async fn flush_journal() {
 
         // 3. Only delete from journal if flush succeeded
         if !processed_ids.is_empty() {
-            let placeholders = vec!["?"; processed_ids.len()].join(",");
-            let query_str = format!("DELETE FROM telemetry_journal WHERE id IN ({placeholders})");
-            let mut query = sqlx::query(&query_str);
+            let mut builder = sqlx::QueryBuilder::new("DELETE FROM telemetry_journal WHERE id IN (");
+            let mut separated = builder.separated(", ");
             for id in &processed_ids {
-                query = query.bind(id);
+                separated.push_bind(id);
             }
-            let _ = query.execute(db.pool()).await;
+            separated.push_unseparated(")");
+            let _ = builder.build().execute(db.pool()).await;
             log::debug!(
                 "Telemetry: Successfully exported and cleared {} events.",
                 processed_ids.len()
@@ -400,13 +400,13 @@ mod tests {
 
         // 4. Test parameterized batch deletion
         let ids_to_delete: Vec<i32> = rows.iter().map(|r| r.0).collect();
-        let placeholders = vec!["?"; ids_to_delete.len()].join(",");
-        let query_str = format!("DELETE FROM telemetry_journal WHERE id IN ({placeholders})");
-        let mut query = sqlx::query(&query_str);
+        let mut builder = sqlx::QueryBuilder::new("DELETE FROM telemetry_journal WHERE id IN (");
+        let mut separated = builder.separated(", ");
         for id in &ids_to_delete {
-            query = query.bind(id);
+            separated.push_bind(id);
         }
-        query.execute(db.pool()).await.unwrap();
+        separated.push_unseparated(")");
+        builder.build().execute(db.pool()).await.unwrap();
 
         let remaining: Vec<(i32,)> =
             sqlx::query_as("SELECT id FROM telemetry_journal")

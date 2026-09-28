@@ -1,7 +1,7 @@
 #![allow(clippy::missing_errors_doc)]
 #![allow(clippy::missing_panics_doc)]
 use anyhow::{Context, Result};
-use sqlx::SqlitePool;
+use sqlx::{AssertSqlSafe, SqlitePool};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
@@ -38,7 +38,9 @@ impl Db {
                     .filename(&db_path)
                     .create_if_missing(true)
                     .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
-                    .synchronous(sqlx::sqlite::SqliteSynchronous::Normal);
+                    .synchronous(sqlx::sqlite::SqliteSynchronous::Normal)
+                    .busy_timeout(std::time::Duration::from_secs(10))
+                    .foreign_keys(true);
 
                 let temp_pool = SqlitePoolOptions::new()
                     .max_connections(1)
@@ -74,7 +76,7 @@ impl Db {
                 db.initialize_schema().await?;
 
                 // 4. Set/Update version
-                sqlx::query(&format!("PRAGMA user_version = {CURRENT_SCHEMA_VERSION}"))
+                sqlx::query(AssertSqlSafe(format!("PRAGMA user_version = {CURRENT_SCHEMA_VERSION}")))
                     .execute(&db.pool)
                     .await?;
 
@@ -280,15 +282,20 @@ impl Db {
     }
 
     pub async fn new_in_memory() -> Result<Self> {
+        let options = SqliteConnectOptions::new()
+            .filename(":memory:")
+            .busy_timeout(std::time::Duration::from_secs(5))
+            .foreign_keys(true);
+
         let pool = SqlitePoolOptions::new()
             .max_connections(1)
-            .connect("sqlite::memory:")
+            .connect_with(options)
             .await?;
 
         let db = Self { pool };
         db.initialize_schema().await?;
 
-        sqlx::query(&format!("PRAGMA user_version = {CURRENT_SCHEMA_VERSION}"))
+        sqlx::query(AssertSqlSafe(format!("PRAGMA user_version = {CURRENT_SCHEMA_VERSION}")))
             .execute(&db.pool)
             .await?;
 

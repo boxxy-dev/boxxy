@@ -1,6 +1,6 @@
 use crate::models::{Interaction, Memory, MsgBarHistory, Session, SkillRecord};
 use anyhow::Result;
-use sqlx::SqlitePool;
+use sqlx::{QueryBuilder, SqlitePool};
 
 pub struct Store<'a> {
     pool: &'a SqlitePool,
@@ -298,16 +298,14 @@ impl<'a> Store<'a> {
             return Ok(());
         }
 
-        // SQLite has a limit on parameters, but for dream batches it should be fine.
-        let query = format!(
-            "UPDATE interactions SET processing_state = 'dreamed' WHERE id IN ({})",
-            ids.iter()
-                .map(|id| id.to_string())
-                .collect::<Vec<_>>()
-                .join(",")
-        );
+        let mut builder = QueryBuilder::new("UPDATE interactions SET processing_state = 'dreamed' WHERE id IN (");
+        let mut separated = builder.separated(", ");
+        for id in ids {
+            separated.push_bind(id);
+        }
+        separated.push_unseparated(")");
 
-        sqlx::query(&query).execute(self.pool).await?;
+        builder.build().execute(self.pool).await?;
         Ok(())
     }
 
@@ -365,20 +363,24 @@ impl<'a> Store<'a> {
                 m.last_accessed_at DESC
             LIMIT ?
             "
-        )        .bind(query)
+        )
+        .bind(query)
         .bind(project_path)
         .bind(limit)
         .fetch_all(self.pool)
         .await?;
 
-        // Update last_accessed_at for interactions
-        for interaction in &records {
-            let _ = sqlx::query(
-                "UPDATE interactions SET last_accessed_at = CURRENT_TIMESTAMP WHERE id = ?",
-            )
-            .bind(interaction.id)
-            .execute(self.pool)
-            .await;
+        // Update last_accessed_at for interactions in a single batched statement
+        if !records.is_empty() {
+            let mut builder = QueryBuilder::new(
+                "UPDATE interactions SET last_accessed_at = CURRENT_TIMESTAMP WHERE id IN (",
+            );
+            let mut separated = builder.separated(", ");
+            for interaction in &records {
+                separated.push_bind(interaction.id);
+            }
+            separated.push_unseparated(")");
+            let _ = builder.build().execute(self.pool).await;
         }
 
         Ok(records)
@@ -571,24 +573,20 @@ impl<'a> Store<'a> {
             return Ok(Vec::new());
         }
 
-        // Build the query with IN (?, ?, ...)
-        let placeholders = keys.iter().map(|_| "?").collect::<Vec<_>>().join(",");
-        let query = format!(
+        let mut builder = QueryBuilder::new(
             "SELECT id, key, project_path, content, category, verified, pinned, observation_count, confidence_score, created_at, updated_at, last_accessed_at, access_count \
              FROM memories \
-             WHERE verified = true AND key IN ({}) \
-               AND (project_path = ? OR project_path = 'global') \
-             ORDER BY project_path DESC, key ASC",
-            placeholders
+             WHERE verified = true AND key IN ("
         );
-
-        let mut sql_query = sqlx::query_as::<_, Memory>(&query);
+        let mut separated = builder.separated(", ");
         for key in keys {
-            sql_query = sql_query.bind(key);
+            separated.push_bind(key);
         }
-        sql_query = sql_query.bind(path);
+        separated.push_unseparated(") AND (project_path = ");
+        builder.push_bind(path);
+        builder.push(" OR project_path = 'global') ORDER BY project_path DESC, key ASC");
 
-        let records = sql_query.fetch_all(self.pool).await?;
+        let records = builder.build_query_as::<Memory>().fetch_all(self.pool).await?;
         Ok(records)
     }
 
@@ -634,12 +632,17 @@ impl<'a> Store<'a> {
         .fetch_all(self.pool)
         .await?;
 
-        // Increment access count and update last_accessed_at for found memories
-        for mem in &records {
-            let _ = sqlx::query("UPDATE memories SET access_count = access_count + 1, last_accessed_at = CURRENT_TIMESTAMP WHERE id = ?")
-                .bind(mem.id)
-                .execute(self.pool)
-                .await;
+        // Increment access count and update last_accessed_at for found memories in a single batched statement
+        if !records.is_empty() {
+            let mut builder = QueryBuilder::new(
+                "UPDATE memories SET access_count = access_count + 1, last_accessed_at = CURRENT_TIMESTAMP WHERE id IN (",
+            );
+            let mut separated = builder.separated(", ");
+            for mem in &records {
+                separated.push_bind(mem.id);
+            }
+            separated.push_unseparated(")");
+            let _ = builder.build().execute(self.pool).await;
         }
 
         Ok(records)
@@ -689,14 +692,19 @@ impl<'a> Store<'a> {
         let current_names: std::collections::HashSet<String> =
             skills.iter().map(|s| s.name.clone()).collect();
 
-        // 2. Delete skills that are no longer on disk
-        for name in existing_names {
-            if !current_names.contains(&name) {
-                sqlx::query("DELETE FROM skills WHERE name = ?")
-                    .bind(name)
-                    .execute(&mut *tx)
-                    .await?;
+        // 2. Delete skills that are no longer on disk in a single batch
+        let to_delete: Vec<String> = existing_names
+            .into_iter()
+            .filter(|name| !current_names.contains(name))
+            .collect();
+        if !to_delete.is_empty() {
+            let mut builder = QueryBuilder::new("DELETE FROM skills WHERE name IN (");
+            let mut separated = builder.separated(", ");
+            for name in &to_delete {
+                separated.push_bind(name);
             }
+            separated.push_unseparated(")");
+            builder.build().execute(&mut *tx).await?;
         }
 
         // 3. Upsert all current skills

@@ -113,7 +113,7 @@ tempfile = "3.27.0"
 tar = "0.4.45"
 flate2 = "1.1.9"
 sha2 = "0.11"
-sqlx = { version = "0.8.6", features = ["sqlite", "runtime-tokio-rustls", "macros", "chrono"] }
+sqlx = { version = "0.9.0", features = ["sqlite", "runtime-tokio", "macros", "chrono"] }
 serde_yml = "0.0.12"
 thiserror = "2.0"
 notify = "8.2.0"

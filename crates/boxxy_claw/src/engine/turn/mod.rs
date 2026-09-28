@@ -252,6 +252,7 @@ pub fn spawn_turn(
                     pane_id: pane_id.clone(),
                     session_id: session_id_clone.clone(),
                     agent_name: agent_name.clone(),
+                    user_query: prompt_clone.clone(),
                     full_prompt: full_prompt.clone(),
                     response: response.clone(),
                     cwd: cwd_clone.clone(),
