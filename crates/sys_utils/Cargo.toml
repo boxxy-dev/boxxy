@@ -22,4 +22,4 @@ directories   = { workspace = true }
 home          = { workspace = true }
 
 [dev-dependencies]
-serial_test   = "3.2.0"
+serial_test   = "3.5.0"

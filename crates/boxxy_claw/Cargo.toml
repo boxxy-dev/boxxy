@@ -35,4 +35,4 @@ serde_yml = { workspace = true }
 thiserror = { workspace = true }
 sqlx = { workspace = true }
 uuid = { workspace = true }
-petname = "3.0.0"
+petname = "3.2.0"
