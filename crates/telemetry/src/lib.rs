@@ -1,4 +1,3 @@
-use lazy_static::lazy_static;
 use opentelemetry::KeyValue;
 use opentelemetry::metrics::{Counter, Meter, MeterProvider as _};
 use opentelemetry_otlp::{Protocol, WithExportConfig, WithHttpConfig};
@@ -6,14 +5,12 @@ use opentelemetry_sdk::Resource;
 use opentelemetry_sdk::metrics::{PeriodicReader, SdkMeterProvider, Temporality};
 use serde_json::json;
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::LazyLock;
 use tokio::sync::{Mutex, OnceCell};
 use uuid::Uuid;
 
-lazy_static! {
-    static ref SESSION_ID: String = Uuid::new_v4().to_string();
-    static ref METRICS_STATE: Arc<Mutex<Option<MetricsState>>> = Arc::new(Mutex::new(None));
-}
+static SESSION_ID: LazyLock<String> = LazyLock::new(|| Uuid::new_v4().to_string());
+static METRICS_STATE: LazyLock<Mutex<Option<MetricsState>>> = LazyLock::new(|| Mutex::new(None));
 
 static DB: OnceCell<boxxy_db::Db> = OnceCell::const_new();
 
@@ -59,10 +56,12 @@ pub async fn init() {
         .clone()
         .unwrap_or_else(|| "unknown".to_string());
 
-    let endpoint = "https://qfwhesnmixgmczkdnvsu.supabase.co/functions/v1/telemetry-ingest";
+    let endpoint = std::env::var("BOXXY_TELEMETRY_ENDPOINT").unwrap_or_else(|_| {
+        "https://qfwhesnmixgmczkdnvsu.supabase.co/functions/v1/telemetry-ingest".to_string()
+    });
     let api_key = "sb_publishable_Z-SbIil88PSj3ri24CM7aw_8vzsCFie";
 
-    let exporter = opentelemetry_otlp::MetricExporter::builder()
+    let exporter = match opentelemetry_otlp::MetricExporter::builder()
         .with_http()
         .with_protocol(Protocol::HttpJson)
         .with_endpoint(endpoint)
@@ -72,7 +71,13 @@ pub async fn init() {
         )]))
         .with_temporality(Temporality::Delta)
         .build()
-        .expect("Failed to create OTLP exporter");
+    {
+        Ok(exporter) => exporter,
+        Err(e) => {
+            log::error!("Failed to create OTLP metric exporter: {e}");
+            return;
+        }
+    };
 
     let reader = PeriodicReader::builder(exporter)
         .with_interval(std::time::Duration::from_secs(600)) // 10 minutes
@@ -81,7 +86,10 @@ pub async fn init() {
     let provider = SdkMeterProvider::builder()
         .with_resource(
             Resource::builder_empty()
-                .with_attributes(vec![KeyValue::new("service.name", "boxxy-terminal")])
+                .with_attributes(vec![
+                    KeyValue::new("service.name", "boxxy-terminal"),
+                    KeyValue::new("service.version", env!("CARGO_PKG_VERSION")),
+                ])
                 .build(),
         )
         .with_reader(reader)
@@ -216,15 +224,13 @@ pub async fn flush_journal() {
 
         // 3. Only delete from journal if flush succeeded
         if !processed_ids.is_empty() {
-            let query = format!(
-                "DELETE FROM telemetry_journal WHERE id IN ({})",
-                processed_ids
-                    .iter()
-                    .map(|id| id.to_string())
-                    .collect::<Vec<_>>()
-                    .join(",")
-            );
-            let _ = sqlx::query(&query).execute(db.pool()).await;
+            let placeholders = vec!["?"; processed_ids.len()].join(",");
+            let query_str = format!("DELETE FROM telemetry_journal WHERE id IN ({placeholders})");
+            let mut query = sqlx::query(&query_str);
+            for id in &processed_ids {
+                query = query.bind(id);
+            }
+            let _ = query.execute(db.pool()).await;
             log::debug!(
                 "Telemetry: Successfully exported and cleared {} events.",
                 processed_ids.len()
@@ -362,14 +368,16 @@ mod tests {
     async fn test_telemetry_journal_operations() {
         // Set up in-memory DB
         let db = Db::new_in_memory().await.unwrap();
-        // Force the OnceCell so our test uses the memory DB instead of the real one
         let _ = DB.set(db.clone());
 
-        // 1. Record some events
+        // 1. Record direct events
         record_to_journal("test.metric.1", 42.0, serde_json::json!({"key": "value"})).await;
         record_to_journal("test.metric.2", 1.5, serde_json::json!({"foo": "bar"})).await;
 
-        // 2. Verify they are in the database directly
+        // 2. Track high-level tool event
+        track_tool_use("grep_search").await;
+
+        // 3. Verify they are in the database directly
         let rows: Vec<(i32, String, f64, String)> = sqlx::query_as(
             "SELECT id, metric_name, value, attributes_json FROM telemetry_journal ORDER BY id ASC",
         )
@@ -377,10 +385,34 @@ mod tests {
         .await
         .unwrap();
 
-        assert_eq!(rows.len(), 2);
+        assert_eq!(rows.len(), 3);
         assert_eq!(rows[0].1, "test.metric.1");
         assert_eq!(rows[0].2, 42.0);
         assert_eq!(rows[1].1, "test.metric.2");
         assert_eq!(rows[1].2, 1.5);
+        assert_eq!(rows[2].1, "tool.use");
+        assert_eq!(rows[2].2, 1.0);
+
+        let parsed: serde_json::Value = serde_json::from_str(&rows[2].3).unwrap();
+        assert_eq!(parsed["tool_name"], "grep_search");
+        assert_eq!(parsed["v"], 1);
+        assert!(parsed.get("session_id").is_some());
+
+        // 4. Test parameterized batch deletion
+        let ids_to_delete: Vec<i32> = rows.iter().map(|r| r.0).collect();
+        let placeholders = vec!["?"; ids_to_delete.len()].join(",");
+        let query_str = format!("DELETE FROM telemetry_journal WHERE id IN ({placeholders})");
+        let mut query = sqlx::query(&query_str);
+        for id in &ids_to_delete {
+            query = query.bind(id);
+        }
+        query.execute(db.pool()).await.unwrap();
+
+        let remaining: Vec<(i32,)> =
+            sqlx::query_as("SELECT id FROM telemetry_journal")
+                .fetch_all(db.pool())
+                .await
+                .unwrap();
+        assert!(remaining.is_empty());
     }
 }

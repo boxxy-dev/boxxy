@@ -1,13 +1,14 @@
 # Telemetry Crate (`boxxy-telemetry`)
 
 ## Responsibility
-Provides a privacy-first, industry-standard observability layer for Boxxy Terminal using **OpenTelemetry (OTel) v0.32.0**. It handles the collection, batching, and secure export of anonymous usage statistics to a Supabase backend.
+Provides a privacy-first, industry-standard observability layer for Boxxy Terminal using **OpenTelemetry (OTel) v0.33.0**. It handles the collection, batching, and secure export of anonymous usage statistics to a Supabase backend.
 
 ## Architectural Design
 
 ### 1. Isolation & Efficiency
 - **Heavy Dependency Guard**: All OpenTelemetry SDK and OTLP exporter dependencies are contained within this crate to minimize build times and binary bloat for other crates.
 - **Asynchronous & Non-Blocking**: Telemetry operations never block the GTK UI thread. All networking and batching occur in background threads managed by the OTel SDK.
+- **Native Retries & Resilience**: Leverages OTel 0.33's automatic exponential backoff retries with jitter on transient HTTP codes (429, 502, 503, 504) and respects `Retry-After` headers. Built-in 64 MiB request and 4 MiB response body size guards protect against unbounded allocations.
 - **Delta Temporality**: Uses `Temporality::Delta` to report only new values since the last export, preventing duplicate data and keeping the database lean.
 - **10-Minute Batching**: Metrics are aggregated locally and exported every 600 seconds to minimize battery and bandwidth impact.
 
