@@ -62,7 +62,9 @@ The `TerminalWidget` GObject wrapper.
 ## Threading & Synchronization
 
 - **GTK Main Thread:** Handles rendering (`snapshot`), input events, and UI state. It consumes a `RenderState` snapshot produced by the background thread.
-- **Tokio Background Task:** Runs the `EventLoop`. It reads from the PTY, updates the `Term` state machine, and periodically pushes a new `RenderState` to the UI thread.
+- **Tokio Background Task:** Runs the `EventLoop`. It reads from the PTY, updates the `Term` state machine, and pushes `RenderState` snapshots to the UI thread using a dual-priority scheme (`RenderPriority`):
+  - **`Immediate`:** User-driven interactions (mouse selection, viewport scrolling, search, resize, process exit) publish a snapshot immediately with zero throttle latency.
+  - **`Coalesced`:** High-throughput PTY parser updates are coalesced to an 8ms minimum interval (`MIN_SNAPSHOT_INTERVAL`, ~120 Hz) with an automatic trailing flush timer so bursts of terminal output don't allocate redundant intermediate snapshots between GTK frames.
 - **Lock-Free RCU:** We use Read-Copy-Update (RCU) via `arc-swap`. The background thread creates a new `RenderState` and "swaps" it into a global pointer. The UI thread "loads" the latest pointer without ever waiting for a lock.
 
 ---

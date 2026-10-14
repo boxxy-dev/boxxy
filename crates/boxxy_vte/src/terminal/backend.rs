@@ -427,4 +427,76 @@ mod tests {
 
         assert_eq!(recv_result, Ok(true));
     }
+
+    #[tokio::test]
+    async fn coalesced_pty_output_flushes_trailing_snapshot_and_immediate_selection_bypasses_throttle()
+     {
+        use crate::engine::index::{Column, Line, Point, Side};
+        use crate::engine::selection::{Selection, SelectionType};
+
+        let mut fds = [0i32; 2];
+        assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0);
+        let read_fd = unsafe { OwnedFd::from_raw_fd(fds[0]) };
+        let write_fd = unsafe { OwnedFd::from_raw_fd(fds[1]) };
+
+        let (tx, rx) = async_channel::unbounded::<Event>();
+        let backend = TerminalBackend::from_fd(tx, read_fd);
+
+        // 1. First write publishes immediately (0ms initial latency).
+        unsafe {
+            libc::write(write_fd.as_raw_fd(), b"First\r\n".as_ptr() as *const _, 7);
+        }
+        let _ = tokio::time::timeout(std::time::Duration::from_millis(100), rx.recv())
+            .await
+            .expect("first wakeup timeout");
+        backend.clear_pending_wakeups();
+        assert_eq!(
+            backend
+                .render_state
+                .load()
+                .cell(Point::new(Line(0), Column(0)))
+                .c,
+            'F'
+        );
+
+        // 2. Burst of rapid writes within the 8ms throttle window is coalesced,
+        // and the trailing flush timer guarantees the final text is published.
+        for _ in 0..10 {
+            unsafe {
+                libc::write(write_fd.as_raw_fd(), b"X".as_ptr() as *const _, 1);
+            }
+        }
+        unsafe {
+            libc::write(write_fd.as_raw_fd(), b"Z".as_ptr() as *const _, 1);
+        }
+
+        // Wait slightly longer than MIN_SNAPSHOT_INTERVAL (8ms) for trailing flush.
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        while rx.try_recv().is_ok() {}
+        backend.clear_pending_wakeups();
+        assert_eq!(
+            backend
+                .render_state
+                .load()
+                .cell(Point::new(Line(1), Column(10)))
+                .c,
+            'Z'
+        );
+
+        // 3. Interactive selection (`RenderPriority::Immediate`) updates immediately
+        // without waiting for the throttle window.
+        backend.set_selection(Some(Selection::new(
+            SelectionType::Semantic,
+            Point::new(Line(0), Column(0)),
+            Side::Left,
+        )));
+
+        let _ = tokio::time::timeout(std::time::Duration::from_millis(100), rx.recv())
+            .await
+            .expect("selection wakeup timeout");
+        assert_eq!(
+            backend.render_state.load().selection_text().as_deref(),
+            Some("First")
+        );
+    }
 }

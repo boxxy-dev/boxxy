@@ -28,6 +28,20 @@ pub(crate) const READ_BUFFER_SIZE: usize = 0x10_0000;
 /// Max bytes to read from the PTY while the terminal is locked.
 const MAX_LOCKED_READ: usize = u16::MAX as usize;
 
+/// Minimum interval between coalesced (parser-driven) snapshots (~120 Hz).
+/// Interactive UI events (scrolling, selection, search, resize) bypass this
+/// throttle via `RenderPriority::Immediate`.
+pub(crate) const MIN_SNAPSHOT_INTERVAL: Duration = Duration::from_millis(8);
+
+/// Priority level for publishing a new `RenderState` snapshot to the UI thread.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RenderPriority {
+    /// Immediate publication for user interactions (selection, scroll, search, resize, exit).
+    Immediate,
+    /// Coalesced publication for high-throughput PTY parser output.
+    Coalesced,
+}
+
 /// Messages that may be sent to the `EventLoop`.
 #[derive(Debug)]
 pub enum Msg {
@@ -133,6 +147,8 @@ where
             };
 
             let mut resize_pending: Option<(WindowSize, bool)> = None;
+            let mut last_snapshot_at: Option<tokio::time::Instant> = None;
+            let mut pending_coalesced_render = false;
 
             'event_loop: loop {
                 let sync_timeout = state.parser.sync_timeout().sync_timeout();
@@ -157,6 +173,17 @@ where
                 let resize_sleep_fut = async {
                     if resize_pending.is_some() {
                         tokio::time::sleep(Duration::from_millis(25)).await;
+                    } else {
+                        std::future::pending::<()>().await;
+                    }
+                };
+
+                // Trailing flush timer for coalesced PTY parser updates
+                let coalesce_sleep_fut = async {
+                    if pending_coalesced_render {
+                        if let Some(last) = last_snapshot_at {
+                            tokio::time::sleep_until(last + MIN_SNAPSHOT_INTERVAL).await;
+                        }
                     } else {
                         std::future::pending::<()>().await;
                     }
@@ -299,8 +326,11 @@ where
                         }
 
                         if needs_render {
-                            self.render_state.store(Arc::new(RenderState::new(&self.terminal)));
-                            self.event_proxy.send_event(Event::Wakeup);
+                            self.publish_render_state(
+                                RenderPriority::Immediate,
+                                &mut last_snapshot_at,
+                                &mut pending_coalesced_render,
+                            );
                         }
                     }
 
@@ -309,8 +339,11 @@ where
                             self.pty.on_resize(window_size);
                             if resize_grid {
                                 self.terminal.resize(window_size);
-                                self.render_state.store(Arc::new(RenderState::new(&self.terminal)));
-                                self.event_proxy.send_event(Event::Wakeup);
+                                self.publish_render_state(
+                                    RenderPriority::Immediate,
+                                    &mut last_snapshot_at,
+                                    &mut pending_coalesced_render,
+                                );
                             }
                         }
                     }
@@ -326,14 +359,26 @@ where
                     read_guard = async_pty_reader.readable() => {
                         let mut guard = read_guard.unwrap();
                         match self.pty_read(&mut state, &mut buf, pipe.as_mut()) {
-                            Ok(false) => {
+                            Ok((false, _)) => {
                                 // EOF Reached
                                 guard.clear_ready();
                                 self.event_proxy.send_event(Event::Exit);
                                 self.terminal.exit();
-                                self.render_state.store(Arc::new(RenderState::new(&self.terminal)));
-                                self.event_proxy.send_event(Event::Wakeup);
+                                self.publish_render_state(
+                                    RenderPriority::Immediate,
+                                    &mut last_snapshot_at,
+                                    &mut pending_coalesced_render,
+                                );
                                 break 'event_loop;
+                            }
+                            Ok((true, needs_coalesced_render)) => {
+                                if needs_coalesced_render {
+                                    self.publish_render_state(
+                                        RenderPriority::Coalesced,
+                                        &mut last_snapshot_at,
+                                        &mut pending_coalesced_render,
+                                    );
+                                }
                             }
                             Err(err) => {
                                 #[cfg(target_os = "linux")]
@@ -342,16 +387,28 @@ where
                                     guard.clear_ready();
                                     self.event_proxy.send_event(Event::Exit);
                                     self.terminal.exit();
-                                    self.render_state.store(Arc::new(RenderState::new(&self.terminal)));
-                                    self.event_proxy.send_event(Event::Wakeup);
+                                    self.publish_render_state(
+                                        RenderPriority::Immediate,
+                                        &mut last_snapshot_at,
+                                        &mut pending_coalesced_render,
+                                    );
                                     break 'event_loop;
                                 }
                                 error!("Error reading from PTY in event loop: {err}");
                                 break 'event_loop;
                             }
-                            _ => {}
                         }
                         guard.clear_ready();
+                    }
+
+                    _ = coalesce_sleep_fut => {
+                        if pending_coalesced_render {
+                            self.publish_render_state(
+                                RenderPriority::Immediate,
+                                &mut last_snapshot_at,
+                                &mut pending_coalesced_render,
+                            );
+                        }
                     }
 
                     sig_guard = async {
@@ -369,8 +426,11 @@ where
                                 let _ = self.pty_read(&mut state, &mut buf, pipe.as_mut());
                             }
                             self.terminal.exit();
-                            self.render_state.store(Arc::new(RenderState::new(&self.terminal)));
-                            self.event_proxy.send_event(Event::Wakeup);
+                            self.publish_render_state(
+                                RenderPriority::Immediate,
+                                &mut last_snapshot_at,
+                                &mut pending_coalesced_render,
+                            );
                             break 'event_loop;
                         }
                         guard.clear_ready();
@@ -379,8 +439,11 @@ where
                     _ = sleep_fut => {
                         // Sync timeout reached
                         state.parser.stop_sync(&mut self.terminal);
-                        self.render_state.store(Arc::new(RenderState::new(&self.terminal)));
-                        self.event_proxy.send_event(Event::Wakeup);
+                        self.publish_render_state(
+                            RenderPriority::Immediate,
+                            &mut last_snapshot_at,
+                            &mut pending_coalesced_render,
+                        );
                     }
                 }
             }
@@ -390,12 +453,45 @@ where
     }
 
     #[inline]
+    fn publish_render_state(
+        &mut self,
+        priority: RenderPriority,
+        last_snapshot_at: &mut Option<tokio::time::Instant>,
+        pending_coalesced_render: &mut bool,
+    ) {
+        let now = tokio::time::Instant::now();
+        match priority {
+            RenderPriority::Immediate => {
+                *pending_coalesced_render = false;
+                *last_snapshot_at = Some(now);
+                self.render_state
+                    .store(Arc::new(RenderState::new(&self.terminal)));
+                self.event_proxy.send_event(Event::Wakeup);
+            }
+            RenderPriority::Coalesced => {
+                let elapsed_ok = last_snapshot_at
+                    .map(|last| now.saturating_duration_since(last) >= MIN_SNAPSHOT_INTERVAL)
+                    .unwrap_or(true);
+                if elapsed_ok {
+                    *pending_coalesced_render = false;
+                    *last_snapshot_at = Some(now);
+                    self.render_state
+                        .store(Arc::new(RenderState::new(&self.terminal)));
+                    self.event_proxy.send_event(Event::Wakeup);
+                } else {
+                    *pending_coalesced_render = true;
+                }
+            }
+        }
+    }
+
+    #[inline]
     fn pty_read<X>(
         &mut self,
         state: &mut State,
         buf: &mut [u8],
         mut writer: Option<&mut X>,
-    ) -> io::Result<bool>
+    ) -> io::Result<(bool, bool)>
     where
         X: Write,
     {
@@ -437,13 +533,8 @@ where
             }
         }
 
-        if state.parser.sync_bytes_count() < processed && processed > 0 {
-            self.render_state
-                .store(Arc::new(RenderState::new(&self.terminal)));
-            self.event_proxy.send_event(Event::Wakeup);
-        }
-
-        Ok(!eof)
+        let needs_coalesced_render = state.parser.sync_bytes_count() < processed && processed > 0;
+        Ok((!eof, needs_coalesced_render))
     }
 
     #[inline]
