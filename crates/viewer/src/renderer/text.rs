@@ -2,6 +2,35 @@ use crate::parser::blocks::ContentBlock;
 use crate::renderer::BlockRenderer;
 use gtk4 as gtk;
 use gtk4::prelude::*;
+use gtk4::{gio, glib};
+
+/// Attaches a portal-safe link handler to a `gtk::Label` with `use_markup = true`
+/// so `<a href="...">` links open via `UriLauncher` (HTTP/HTTPS) or `FileLauncher` (local files).
+pub fn connect_label_links(label: &gtk::Label) {
+    label.connect_activate_link(|lbl, uri| {
+        let parent_win = lbl.root().and_then(|r| r.downcast::<gtk::Window>().ok());
+        if uri.starts_with("http://") || uri.starts_with("https://") || uri.starts_with("mailto:") {
+            let launcher = gtk::UriLauncher::new(uri);
+            glib::spawn_future_local(async move {
+                let _ = launcher.launch_future(parent_win.as_ref()).await;
+            });
+            glib::Propagation::Stop
+        } else if uri.starts_with("file://") || uri.starts_with('/') {
+            let file = if uri.starts_with("file://") {
+                gio::File::for_uri(uri)
+            } else {
+                gio::File::for_path(uri)
+            };
+            let launcher = gtk::FileLauncher::new(Some(&file));
+            glib::spawn_future_local(async move {
+                let _ = launcher.launch_future(parent_win.as_ref()).await;
+            });
+            glib::Propagation::Stop
+        } else {
+            glib::Propagation::Proceed
+        }
+    });
+}
 
 pub struct TextRenderer;
 
@@ -28,12 +57,13 @@ impl BlockRenderer for TextRenderer {
                 label.set_use_markup(true);
                 label.set_wrap(true);
                 label.set_wrap_mode(pango::WrapMode::WordChar);
-                label.set_xalign(0.0); // Align left
+                label.set_xalign(0.0);
                 label.set_halign(gtk::Align::Fill);
                 label.set_hexpand(true);
                 label.set_selectable(true);
                 label.set_markup(markup);
-                label.set_margin_bottom(8); // Add some spacing between paragraphs
+                label.set_margin_bottom(8);
+                connect_label_links(&label);
                 label.upcast()
             }
             ContentBlock::Heading { level, markup } => {
@@ -55,26 +85,30 @@ impl BlockRenderer for TextRenderer {
 
                 label.add_css_class(css_class);
 
-                let full_markup = format!("<span size=\"{}\"><b>{}</b></span>", size_tag, markup);
+                let full_markup = format!("<span size=\"{size_tag}\"><b>{markup}</b></span>");
                 label.set_markup(&full_markup);
                 label.set_margin_top(12);
                 label.set_margin_bottom(8);
+                connect_label_links(&label);
 
                 label.upcast()
             }
             ContentBlock::Blockquote(markup) => {
                 let frame = gtk::Frame::new(None);
                 frame.add_css_class("view");
+                frame.add_css_class("viewer-blockquote");
                 frame.set_hexpand(true);
 
                 let label = gtk::Label::new(None);
                 label.set_use_markup(true);
                 label.set_wrap(true);
+                label.set_wrap_mode(pango::WrapMode::WordChar);
                 label.set_xalign(0.0);
                 label.set_halign(gtk::Align::Fill);
                 label.set_hexpand(true);
                 label.set_selectable(true);
                 label.set_markup(markup);
+                connect_label_links(&label);
 
                 label.set_margin_start(12);
                 label.set_margin_end(12);
@@ -100,7 +134,7 @@ impl BlockRenderer for TextRenderer {
                     if let Some(checked) = item.checked {
                         let check = gtk::CheckButton::new();
                         check.set_active(checked);
-                        check.set_sensitive(false); // Read-only in the viewer
+                        check.set_sensitive(false);
                         check.set_valign(gtk::Align::Start);
                         hbox.append(&check);
                     } else {

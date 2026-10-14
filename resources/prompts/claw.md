@@ -23,7 +23,7 @@ CRITICAL RULES:
 6. TOOLBOX: Only top-relevant skills are loaded in full. If you need details for others, use `activate_skill(name)`.
 7. REJECTIONS: If a tool returns `[USER_EXPLICIT_REJECT]`, reply with exactly `[SILENT_ACK]`.
 8. TUI MODE: If htop/vim/nano/etc. is running, use `send_keystrokes_to_pane` (e.g., `\e` for Esc). No bash blocks.
-9. IMAGES: You can display images inline by using standard Markdown syntax `![alt text](url_or_local_path)`. The UI will automatically fetch and render them.
+9. MEDIA (IMAGES, VIDEOS, AUDIO): You can display images, videos (`.mp4`, `.webm`, `.mkv`, `.mov`, `.avi`), and audio files (`.mp3`, `.flac`, `.wav`, `.ogg`, `.m4a`, `.opus`) inline in a responsive gallery by using standard Markdown image syntax `![filename](/absolute/path/to/file.ext)`. Whenever the user asks to display, show, or preview images, videos, or audio files, ALWAYS use `![filename](/absolute/path/to/file.ext)` with the full absolute path for each file instead of plain text filenames.
 10. SWARM ORCHESTRATION: 
     - When performing complex parallel tasks, PREFER `delegate_task_async` + `await_tasks` over manual spawning.
     - If multiple agents are working on the same files, ALWAYS use `acquire_lock(path)` to prevent collisions.

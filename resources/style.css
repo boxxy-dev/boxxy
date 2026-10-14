@@ -734,3 +734,85 @@ window.frosted-glass-active tabbar tab:selected {
     background-color: color-mix(in srgb, currentColor 15%, transparent);
 }
 
+/* --- Smart Viewer: Media Gallery & Image Cards --- */
+flowbox.viewer-gallery > flowboxchild {
+    padding: 0;
+    margin: 0;
+    background: transparent;
+    border: none;
+    outline: none;
+}
+
+.viewer-image-card {
+    border-radius: 10px;
+    border: 1px solid alpha(currentColor, 0.12);
+    background-color: alpha(currentColor, 0.04);
+    transition: border-color 150ms ease, background-color 150ms ease;
+}
+
+.viewer-image-card:hover {
+    border-color: alpha(currentColor, 0.24);
+    background-color: alpha(currentColor, 0.06);
+}
+
+.viewer-image-preview-area {
+    background-color: rgba(0, 0, 0, 0.18);
+}
+
+.viewer-video-play-badge {
+    background-color: rgba(0, 0, 0, 0.58);
+    color: white;
+    border-radius: 9999px;
+    padding: 10px;
+    border: 1px solid rgba(255, 255, 255, 0.25);
+}
+
+.viewer-image-card-footer {
+    padding: 5px 6px 5px 10px;
+    background: transparent;
+    background-color: transparent;
+    border: none;
+}
+
+.viewer-card-menu-btn {
+    min-height: 24px;
+    min-width: 24px;
+    padding: 2px;
+    opacity: 0.65;
+    background: transparent;
+}
+
+.viewer-card-menu-btn:hover {
+    opacity: 1.0;
+}
+
+/* --- Smart Viewer: GFM Tables --- */
+frame.viewer-table-frame {
+    border-radius: 8px;
+    overflow: hidden;
+}
+
+.viewer-table-cell {
+    border-right: 1px solid alpha(currentColor, 0.07);
+    border-bottom: 1px solid alpha(currentColor, 0.07);
+}
+
+.viewer-table-header-cell {
+    background-color: alpha(currentColor, 0.08);
+    border-bottom: 1px solid alpha(currentColor, 0.16);
+}
+
+.viewer-table-row-odd {
+    background-color: alpha(currentColor, 0.03);
+}
+
+.viewer-table-row-even {
+    background-color: transparent;
+}
+
+frame.viewer-blockquote {
+    border-left: 3px solid @accent_bg_color;
+    border-radius: 6px;
+}
+
+

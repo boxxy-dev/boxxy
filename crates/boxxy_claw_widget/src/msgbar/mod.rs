@@ -64,6 +64,7 @@ impl MsgBarComponent {
 
         let entry = gtk::Entry::builder()
             .hexpand(true)
+            .width_chars(4)
             .has_frame(false) // removes borders
             .placeholder_text(
                 "Type your message... (Ctrl+V: attach, @character: direct, /resume: session)",
@@ -76,12 +77,15 @@ impl MsgBarComponent {
 
         let claw_image = gtk::Image::from_icon_name("boxxy-boxxyclaw-symbolic");
 
-        let avatar = adw::Avatar::new(32, None, false);
+        let avatar = adw::Avatar::new(32, None, true);
+        let profile = boxxy_preferences::user_profile::current();
+        boxxy_preferences::user_profile::configure_avatar(&avatar, &profile);
 
         let avatar_stack = gtk::Stack::new();
         avatar_stack.set_transition_type(gtk::StackTransitionType::None);
         avatar_stack.add_named(&claw_image, Some("icon"));
         avatar_stack.add_named(&avatar, Some("avatar"));
+        avatar_stack.set_visible_child_name("avatar");
 
         let claw_toggle = gtk::Button::builder()
             .child(&avatar_stack)
@@ -352,13 +356,19 @@ impl MsgBarComponent {
         }
     }
 
-    /// Update the avatar based on the character UUID.
+    /// Refreshes the input bar's left-hand avatar to show the user's own profile avatar.
+    pub fn refresh_user_avatar(&self) {
+        let profile = boxxy_preferences::user_profile::current();
+        boxxy_preferences::user_profile::configure_avatar(&self.avatar, &profile);
+        self.avatar_stack.set_visible_child_name("avatar");
+    }
+
+    /// Update the placeholder text based on the active character UUID and refresh the user avatar.
     pub fn set_character(&self, character_id: &str) {
         *self.character_id.borrow_mut() = Some(character_id.to_string());
 
         let registry = boxxy_claw_protocol::characters::CHARACTER_CACHE.load();
         if let Some(info) = registry.iter().find(|c| c.config.id == character_id) {
-            // Try to find the inner GtkEntry (which is wrapped in the GtkBox)
             if let Some(entry) = self.widget.last_child() {
                 if let Ok(entry) = entry.downcast::<gtk::Entry>() {
                     let formatted_name = info
@@ -378,25 +388,9 @@ impl MsgBarComponent {
                     entry.set_placeholder_text(Some(&format!("Message {}...", formatted_name)));
                 }
             }
-
-            if info.has_avatar {
-                if let Ok(dir) = boxxy_claw_protocol::character_loader::get_characters_dir() {
-                    let avatar_path = dir.join(&info.config.name).join("AVATAR.png");
-                    if let Ok(texture) = gtk::gdk::Texture::from_filename(&avatar_path) {
-                        self.avatar.set_custom_image(Some(&texture));
-                        self.avatar_stack.set_visible_child_name("avatar");
-                        return;
-                    }
-                }
-            }
         }
 
-        // Fallback to symbolic icon
-        self.avatar.set_custom_image(None::<&gtk::gdk::Texture>);
-        self.avatar_stack.set_visible_child_name("icon");
-        self.claw_image
-            .set_icon_name(Some("boxxy-boxxyclaw-symbolic"));
-        self.claw_image.remove_css_class("avatar-icon");
+        self.refresh_user_avatar();
     }
 
     /// Mark the msgbar as embedded inside another container (the claw
@@ -480,6 +474,7 @@ impl MsgBarComponent {
         let active = status != AgentStatus::Off;
         self.claw_state.set(active);
         self.set_status(status);
+        self.refresh_user_avatar();
 
         self.pin_state.set(pinned);
         self.web_search_state.set(web_search);

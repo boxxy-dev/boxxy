@@ -421,7 +421,7 @@ impl ClawIndicator {
 
         let pc = &self.pill_class;
         self.pill_provider.load_from_string(&format!(
-            ".{pc} .status-label {{ color: {color}; }} .{pc} .claw-spinner {{ color: {color}; }}"
+            ".{pc} .status-label {{ color: inherit; }} .{pc} .claw-spinner {{ color: {color}; }}"
         ));
     }
 
@@ -466,7 +466,7 @@ impl ClawIndicator {
 
         let pc = &self.pill_class;
         self.pill_provider
-            .load_from_string(&format!(".{pc} .status-label {{ color: rgba(255,255,255,0.8); }}"));
+            .load_from_string(&format!(".{pc} .status-label {{ color: inherit; }}"));
     }
 
     pub fn show_lazy_error(&self) {

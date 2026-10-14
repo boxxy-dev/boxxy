@@ -1,3 +1,22 @@
+/// Horizontal alignment for a Markdown table column.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TableAlignment {
+    None,
+    Left,
+    Center,
+    Right,
+}
+
+/// A single item inside a coalesced `ImageGallery`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GalleryItem {
+    pub url: String,
+    pub title: String,
+    pub alt: String,
+    /// Optional Pango-formatted caption extracted from the list item or adjacent paragraph.
+    pub caption: Option<String>,
+}
+
 /// The Abstract Syntax Tree (AST) representing structured content.
 ///
 /// This enum represents a sequence of logical visual blocks.
@@ -20,11 +39,21 @@ pub enum ContentBlock {
     /// A horizontal rule.
     Rule,
 
-    /// An image.
+    /// A single standalone image.
     Image {
         url: String,
         title: String,
         alt: String,
+    },
+
+    /// Multiple images coalesced into a responsive multi-column media gallery.
+    ImageGallery { items: Vec<GalleryItem> },
+
+    /// A GitHub-Flavored Markdown table.
+    Table {
+        alignments: Vec<TableAlignment>,
+        headers: Vec<String>,
+        rows: Vec<Vec<String>>,
     },
 
     /// A fenced code block. `code` is preserved *raw* (unescaped)

@@ -14,6 +14,7 @@ src/
     analyze.rs    — Analyzer<O> trait (extensibility hook; no impl yet)
     pipeline.rs   — Pipeline builder (ordered chain of Transformations)
     avatar.rs     — process_avatar() entry point + AvatarOutput
+    thumbnail.rs  — generate_thumbnail() entry point + ThumbnailSpec / ThumbnailOutput + PNG cache helpers
   user.rs         — get_user_dir() / get_user_avatar_path() helpers
 ```
 
@@ -46,6 +47,13 @@ The primary public entry point. Full validation + processing pipeline:
 7. Encode to PNG bytes.
 
 `AvatarOutput` carries only `png_bytes: Vec<u8>` — ready to write as `AVATAR.png`.
+
+### `generate_thumbnail(input: &[u8], spec: ThumbnailSpec) -> Result<ThumbnailOutput, AssetError>` (`image/thumbnail.rs`)
+On-the-fly thumbnail generator used by `boxxy-viewer`:
+1. Rejects inputs exceeding `MAX_THUMBNAIL_INPUT_BYTES` (50 MB).
+2. Validates header dimensions before full decode (`<= 16,384 px` per axis, `<= 64 MP` total pixels) to guard against decompression bombs while supporting 5K/8K wallpapers and high-res photos.
+3. Downscales images larger than `spec` (`max_width × max_height`) using `FilterType::Triangle` while preserving aspect ratio and original `width × height` metadata (`ThumbnailOutput`).
+4. Also provides `encode_rgba_to_png` and `decode_rgba_from_png` for persistent disk thumbnail caching.
 
 ### `user.rs`
 ```rust

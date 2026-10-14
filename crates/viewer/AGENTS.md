@@ -9,22 +9,26 @@ The term **headless** in this context means that the `viewer` crate is completel
 The crate operates as a pipeline: `Raw String Input` -> `Parser` -> `Abstract Syntax Tree (ContentBlock)` -> `Renderer Traits` -> `gtk::Widget`.
 
 ### 1. Abstract Syntax Tree (`ContentBlock`)
-Instead of treating everything as a single string, the viewer splits input into distinct, logical blocks (`Paragraph`, `Heading`, `List`, `Code`, `Custom`). 
+Instead of treating everything as a single string, the viewer splits input into distinct, logical blocks (`Paragraph`, `Heading`, `Blockquote`, `List`, `Rule`, `Image`, `ImageGallery`, `Table`, `Code`, `Custom`).
+- **Automatic Gallery Coalescing:** The parser post-processes `ContentBlock::List` items that contain images (with optional short filename/caption paragraphs) as well as consecutive standalone `ContentBlock::Image` blocks into `ContentBlock::ImageGallery { items: Vec<GalleryItem> }`.
+- **GFM Table Parsing:** Full support for GitHub-Flavored Markdown tables (`Tag::Table`, `TableHead`, `TableRow`, `TableCell`), including streaming partial tables.
+- **Clickable Hyperlinks:** Converts Markdown links `[text](url)` into Pango `<a href="...">` tags wired to `gtk::UriLauncher` (for web URLs) and `gtk::FileLauncher` (for local files).
 
 ### 2. Extensible Renderers (`BlockRenderer` & `ViewerRegistry`)
-The crate uses a plugin architecture. It provides default renderers for standard Markdown blocks, but allows consuming crates to inject custom renderers via the `ViewerRegistry`.
-- For example, `boxxy-claw` injects a custom renderer to turn `ContentBlock::Custom { schema: "list_processes", .. }` into a rich GTK ListBox with CPU and RAM bars.
+The crate uses a plugin architecture. It provides default renderers (`TextRenderer`, `TableRenderer`, `CodeRenderer`, `ImageRenderer`) for standard Markdown blocks, and allows consuming crates to inject custom renderers via the `ViewerRegistry`.
+- `TableRenderer` (`renderer/table.rs`): Renders GFM tables inside a horizontally scrollable `.viewer-table-frame` card using `gtk::Grid`, alternating row shading, smart prose wrapping on wide cells, and a one-click Copy TSV button.
+- `ImageRenderer` (`renderer/image.rs`): Renders standalone images and responsive 2-column `gtk::FlowBox` galleries (`.viewer-image-card`). Each card features a footer with middle-ellipsized filename/caption, original resolution badge (`width×height`), click-to-open, and an action menu / right-click context menu (`Open`, `Open With…` via `gtk::FileLauncher::set_always_ask(true)`, `Show in Folder`, `Copy Image`, `Copy Path / URL`).
 
 ### 3. The GTK Component (`StructuredViewer`)
 The primary entry point is the `StructuredViewer` struct, which wraps a `gtk::Box`. Consuming components can either replace its content entirely (`set_content`) or stream data into it continuously (`append_markdown_stream`).
 
 ## Key Performance Features
 
-To ensure the UI remains buttery smooth even when a local LLM is generating hundreds of tokens per second, the viewer implements several advanced techniques:
+To ensure the UI remains buttery smooth during high-velocity LLM token streaming and `GtkListView` history scrolling:
 
-- **Zero-Copy Parsing:** Uses `pulldown-cmark` for blazing-fast Markdown parsing that avoids unnecessary string allocations by borrowing slices of the input buffer.
-- **"Active Block" Streaming Strategy:** Rebuilding the entire GTK DOM for every new token causes massive flickering. Instead, `StructuredViewer` only updates the *last* (currently streaming) widget in the DOM. Once the parser signals a block is complete (e.g., closing a ` ``` ` code fence), the widget is "sealed" permanently.
-- **Debounced Rendering (Polling-like updates):** During fast token generation, updating the GTK main thread per token starves the UI. The viewer uses a "push-then-poll" strategy: `append_markdown_stream` buffers incoming text immediately but only queues a DOM update if one isn't already pending. It flushes these updates via a `glib` timeout at a maximum of 60Hz (~16ms), effectively batching high-velocity streams into smooth, frame-synchronized UI updates.
-- **Asynchronous Syntax Highlighting:** Fenced code blocks are syntax-highlighted using `syntect`. Because highlighting a 1,000-line code block would freeze the main UI thread, the code renderer offloads the highlighting to a background thread. It renders plain text immediately, and seamlessly swaps in the colored Pango XML once the background thread finishes.
-- **Off-Thread Hardened Image Pipeline (`renderer/image.rs`):** HTTP and local images are fetched on the shared Tokio runtime via a reusable `LazyLock<reqwest::Client>` with a 10 MB streaming byte cap (`resp.chunk().await`), then decoded off-thread inside `tokio::task::spawn_blocking` (enforcing a 4096×4096 dimension guard) before constructing a `gdk::MemoryTexture` on the GTK thread.
-- **Pango Markup Flattening:** Instead of creating a separate `gtk::Label` for every single **bold** or *italic* word, the parser folds inline styles into a single Pango XML string (e.g., `<b>Text</b>`), guaranteeing exactly *one* GTK widget is created per paragraph.
+- **Diff-Aware Incremental Streaming (`ViewerState::apply_blocks`):** Tracks `rendered_blocks: Vec<(ContentBlock, gtk::Widget)>` and diffs new AST blocks against the existing widget list, preserving unchanged prefix widgets and cleanly replacing coalesced tail blocks (such as two consecutive images merging into an `ImageGallery`).
+- **Two-Tier Thumbnail Cache (`cache.rs`):**
+  - **Tier-1 (Main-Thread `MemoryTexture` LRU):** Stores up to 96 downscaled `gdk::MemoryTexture`s in memory. When scrolling back in `GtkListView`, `connect_bind` hits Tier-1 synchronously in 0 ms, setting the exact `Picture` size and texture before layout measurement—eliminating spinners and scroll-position jumps.
+  - **Tier-2 (Persistent Disk Cache):** Stores pre-scaled thumbnails in `<config_dir>/cache/thumbnails/<sha256>.bxt` keyed by file path/URL, modification time, file size, and target `ThumbnailSpec`, avoiding re-decoding 4K/8K source files across session restores.
+- **Off-Thread Thumbnailing via `boxxy-assets`:** Delegates image validation and downscaling (up to 50 MB / 16384×16384 source images) to `boxxy_assets::image::generate_thumbnail` inside `tokio::task::spawn_blocking`, transferring only the compact downscaled RGBA8 thumbnail buffer (`<= 480×320` or `<= 360×220`) to the GTK thread.
+- **Parsed AST & Syntax Highlighting LRU Caches (`cache.rs`):** Caches parsed `Arc<[ContentBlock]>` ASTs (256 entries) and `syntect` Pango markup strings (128 entries) so `GtkListView` row recycling renders markdown and syntax-highlighted code blocks synchronously in 0 ms on cache hit.

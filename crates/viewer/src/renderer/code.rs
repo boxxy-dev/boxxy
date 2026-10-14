@@ -120,83 +120,95 @@ impl BlockRenderer for CodeRenderer {
             label.set_xalign(0.0);
             label.add_css_class("monospace");
 
-            // Initial plain text content (escaped)
-            label.set_markup(&format!("<tt>{}</tt>", escape_pango(code)));
+            // Fast-path: check the highlight LRU cache synchronously (0ms on GtkListView scroll-back)
+            let is_dark = libadwaita::StyleManager::default().is_dark();
+            if let Some(cached_markup) = crate::cache::get_cached_highlight(lang, code, is_dark) {
+                label.set_markup(&cached_markup);
+            } else {
+                // Initial plain text content (escaped) while background thread highlights
+                label.set_markup(&format!("<tt>{}</tt>", escape_pango(code)));
 
-            // Asynchronous highlighting with atomic generation check for virtualization safety.
-            // This ensures that if the row is recycled before the highlight finishes,
-            // we don't overwrite the new content with the old one.
-            if !code.is_empty() {
-                let code_for_highlight = code.clone();
-                let lang_for_highlight = lang.clone();
-                let is_dark = libadwaita::StyleManager::default().is_dark();
+                // Asynchronous highlighting with atomic generation check for virtualization safety.
+                // This ensures that if the row is recycled before the highlight finishes,
+                // we don't overwrite the new content with the old one.
+                if !code.is_empty() {
+                    let code_for_highlight = code.clone();
+                    let lang_for_highlight = lang.clone();
 
-                // Capture the shared atomic and the current generation ID
-                let (gen_handle, start_gen) =
-                    if let Some(v_ptr) = unsafe { vbox.data::<StructuredViewer>("viewer") } {
-                        let v = unsafe { v_ptr.as_ref() };
-                        (v.generation_handle(), v.generation())
-                    } else {
-                        // Fallback should not happen in practice
-                        (std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)), 0)
-                    };
-
-                let (tx, rx) = async_channel::bounded::<String>(1);
-
-                std::thread::spawn(move || {
-                    let ss = get_syntax_set();
-                    let ts = get_theme_set();
-
-                    let syntax = if !lang_for_highlight.is_empty() && lang_for_highlight != "text" {
-                        ss.find_syntax_by_token(&lang_for_highlight)
-                            .or_else(|| ss.find_syntax_by_extension(&lang_for_highlight))
-                    } else {
-                        None
-                    };
-
-                    let syntax = syntax
-                        .or_else(|| ss.find_syntax_by_first_line(&code_for_highlight))
-                        .unwrap_or_else(|| ss.find_syntax_plain_text());
-
-                    let theme = if is_dark {
-                        &ts.themes["base16-ocean.dark"]
-                    } else {
-                        &ts.themes["base16-ocean.light"]
-                    };
-
-                    let mut h = HighlightLines::new(syntax, theme);
-                    let mut pango_markup = String::with_capacity(code_for_highlight.len() * 2);
-                    pango_markup.push_str("<tt>");
-
-                    for line in LinesWithEndings::from(&code_for_highlight) {
-                        if let Ok(ranges) = h.highlight_line(line, ss) {
-                            for (style, text) in ranges {
-                                let color = style.foreground;
-                                pango_markup.push_str(&format!(
-                                    "<span foreground=\"#{:02x}{:02x}{:02x}\">{}</span>",
-                                    color.r,
-                                    color.g,
-                                    color.b,
-                                    escape_pango(text)
-                                ));
-                            }
+                    // Capture the shared atomic and the current generation ID
+                    let (gen_handle, start_gen) =
+                        if let Some(v_ptr) = unsafe { vbox.data::<StructuredViewer>("viewer") } {
+                            let v = unsafe { v_ptr.as_ref() };
+                            (v.generation_handle(), v.generation())
                         } else {
-                            pango_markup.push_str(&escape_pango(line));
-                        }
-                    }
-                    pango_markup.push_str("</tt>");
-                    let _ = tx.send_blocking(pango_markup);
-                });
+                            // Fallback should not happen in practice
+                            (std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)), 0)
+                        };
 
-                let label_clone = label.clone();
-                gtk::glib::spawn_future_local(async move {
-                    if let Ok(markup) = rx.recv().await {
-                        // Only apply the highlighted markup if the viewer generation still matches.
-                        if gen_handle.load(std::sync::atomic::Ordering::Relaxed) == start_gen {
-                            label_clone.set_markup(&markup);
+                    let (tx, rx) = async_channel::bounded::<String>(1);
+
+                    std::thread::spawn(move || {
+                        let ss = get_syntax_set();
+                        let ts = get_theme_set();
+
+                        let syntax =
+                            if !lang_for_highlight.is_empty() && lang_for_highlight != "text" {
+                                ss.find_syntax_by_token(&lang_for_highlight)
+                                    .or_else(|| ss.find_syntax_by_extension(&lang_for_highlight))
+                            } else {
+                                None
+                            };
+
+                        let syntax = syntax
+                            .or_else(|| ss.find_syntax_by_first_line(&code_for_highlight))
+                            .unwrap_or_else(|| ss.find_syntax_plain_text());
+
+                        let theme = if is_dark {
+                            &ts.themes["base16-ocean.dark"]
+                        } else {
+                            &ts.themes["base16-ocean.light"]
+                        };
+
+                        let mut h = HighlightLines::new(syntax, theme);
+                        let mut pango_markup = String::with_capacity(code_for_highlight.len() * 2);
+                        pango_markup.push_str("<tt>");
+
+                        for line in LinesWithEndings::from(&code_for_highlight) {
+                            if let Ok(ranges) = h.highlight_line(line, ss) {
+                                for (style, text) in ranges {
+                                    let color = style.foreground;
+                                    pango_markup.push_str(&format!(
+                                        "<span foreground=\"#{:02x}{:02x}{:02x}\">{}</span>",
+                                        color.r,
+                                        color.g,
+                                        color.b,
+                                        escape_pango(text)
+                                    ));
+                                }
+                            } else {
+                                pango_markup.push_str(&escape_pango(line));
+                            }
                         }
-                    }
-                });
+                        pango_markup.push_str("</tt>");
+                        crate::cache::insert_cached_highlight(
+                            &lang_for_highlight,
+                            &code_for_highlight,
+                            is_dark,
+                            pango_markup.clone(),
+                        );
+                        let _ = tx.send_blocking(pango_markup);
+                    });
+
+                    let label_clone = label.clone();
+                    gtk::glib::spawn_future_local(async move {
+                        if let Ok(markup) = rx.recv().await {
+                            // Only apply the highlighted markup if the viewer generation still matches.
+                            if gen_handle.load(std::sync::atomic::Ordering::Relaxed) == start_gen {
+                                label_clone.set_markup(&markup);
+                            }
+                        }
+                    });
+                }
             }
 
             let scroll = gtk::ScrolledWindow::builder()

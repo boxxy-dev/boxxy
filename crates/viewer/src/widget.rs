@@ -1,3 +1,4 @@
+use crate::cache::get_or_parse_markdown;
 use crate::parser::blocks::ContentBlock;
 use crate::parser::markdown::parse_markdown;
 use crate::registry::ViewerRegistry;
@@ -14,10 +15,11 @@ pub(crate) struct ViewerState {
     pub(crate) container: gtk::Box,
     pub(crate) registry: Rc<ViewerRegistry>,
 
-    // Main buffer holding all processed text
+    // Main buffer holding all processed text in the current markdown segment
     pub(crate) buffer: RefCell<String>,
-    // The currently streaming, incomplete widget
-    pub(crate) active_widget: RefCell<Option<gtk::Widget>>,
+    // Rendered blocks for the current markdown segment, enabling incremental AST diffing
+    // (including gallery coalescing where adjacent blocks merge).
+    pub(crate) rendered_blocks: RefCell<Vec<(ContentBlock, gtk::Widget)>>,
 
     // Debouncing state
     pub(crate) pending_text: RefCell<String>,
@@ -29,49 +31,54 @@ pub(crate) struct ViewerState {
 }
 
 impl ViewerState {
-    /// Executes the core "Active Block" DOM update strategy
-    fn update_dom(&self) {
-        let blocks = parse_markdown(&self.buffer.borrow());
-
+    /// Diffs `blocks` against `self.rendered_blocks`, preserving unchanged prefix widgets
+    /// and replacing only the modified or newly coalesced tail blocks.
+    fn apply_blocks(&self, blocks: &[ContentBlock], is_streaming: bool) {
         if blocks.is_empty() {
             return;
         }
 
-        // The last block is considered "active" (still being streamed to).
-        // All previous blocks are considered "sealed" (finished).
-        let active_block_index = blocks.len() - 1;
-        let active_block = &blocks[active_block_index];
+        let mut rendered = self.rendered_blocks.borrow_mut();
 
-        // 1. Remove the current active widget from the DOM if it exists.
-        if let Some(widget) = self.active_widget.borrow_mut().take() {
-            self.container.remove(&widget);
+        // Find longest unchanged prefix
+        let mut common_len = 0;
+        let max_common = rendered.len().min(blocks.len());
+        while common_len < max_common && rendered[common_len].0 == blocks[common_len] {
+            common_len += 1;
         }
 
-        // 2. Count sealed blocks currently in the DOM
-        let mut sealed_count = 0;
-        let mut child = self.container.first_child();
-        while child.is_some() {
-            sealed_count += 1;
-            child = child.unwrap().next_sibling();
+        // Remove streaming-active class from the last preserved widget if it was previously active
+        if common_len > 0 {
+            rendered[common_len - 1]
+                .1
+                .remove_css_class("streaming-active");
         }
 
-        // 3. Render any newly sealed blocks that aren't in the DOM yet
-        for i in sealed_count..active_block_index {
-            if let Some(widget) = self.registry.render_block(&blocks[i]) {
-                widget.set_hexpand(true);
-                widget.set_halign(gtk::Align::Fill);
+        // Remove diverged tail widgets from the GTK container
+        for (_, old_widget) in rendered.drain(common_len..) {
+            self.container.remove(&old_widget);
+        }
+
+        // Render and append new/updated blocks
+        let last_idx = blocks.len() - 1;
+        for (i, block) in blocks.iter().enumerate().skip(common_len) {
+            if let Some(widget) = self.registry.render_block(block) {
+                if is_streaming && i == last_idx {
+                    widget.add_css_class("streaming-active");
+                }
+                if widget.halign() == gtk::Align::Fill {
+                    widget.set_hexpand(true);
+                }
                 self.container.append(&widget);
+                rendered.push((block.clone(), widget));
             }
         }
+    }
 
-        // 4. Render the current active block and attach it
-        if let Some(widget) = self.registry.render_block(active_block) {
-            widget.add_css_class("streaming-active");
-            widget.set_hexpand(true);
-            widget.set_halign(gtk::Align::Fill);
-            self.container.append(&widget);
-            *self.active_widget.borrow_mut() = Some(widget);
-        }
+    /// Executes the incremental DOM update for streaming markdown
+    fn update_dom(&self) {
+        let blocks = parse_markdown(&self.buffer.borrow());
+        self.apply_blocks(&blocks, true);
     }
 
     /// Flushes any pending text to the main buffer and forces a DOM update immediately.
@@ -104,7 +111,7 @@ impl StructuredViewer {
                 container,
                 registry,
                 buffer: RefCell::new(String::new()),
-                active_widget: RefCell::new(None),
+                rendered_blocks: RefCell::new(Vec::new()),
                 pending_text: RefCell::new(String::new()),
                 update_queued: Cell::new(false),
                 generation: Arc::new(AtomicU64::new(0)),
@@ -132,11 +139,16 @@ impl StructuredViewer {
         self.state.flush();
     }
 
-    /// Completely replaces the content. Useful for static popovers or resetting.
+    /// Completely replaces the content. Uses the parsed AST LRU cache so `GtkListView`
+    /// row recycling (`connect_bind`) avoids re-parsing static history messages.
     pub fn set_content(&self, raw_text: &str) {
         self.clear();
-        self.append_markdown_stream(raw_text);
-        self.flush(); // Ensure it renders immediately
+        if raw_text.is_empty() {
+            return;
+        }
+        let blocks = get_or_parse_markdown(raw_text);
+        self.state.buffer.borrow_mut().push_str(raw_text);
+        self.state.apply_blocks(&blocks, false);
     }
 
     /// Clears the viewer container and streaming state.
@@ -146,7 +158,7 @@ impl StructuredViewer {
 
         self.state.buffer.borrow_mut().clear();
         self.state.pending_text.borrow_mut().clear();
-        *self.state.active_widget.borrow_mut() = None;
+        self.state.rendered_blocks.borrow_mut().clear();
 
         while let Some(child) = self.state.container.first_child() {
             self.state.container.remove(&child);
@@ -177,13 +189,11 @@ impl StructuredViewer {
         // Force flush any pending markdown first so ordering is preserved
         self.flush();
 
-        // If there's an active markdown block being streamed, we should seal it first
-        if let Some(widget) = self.state.active_widget.borrow_mut().take() {
-            widget.remove_css_class("streaming-active");
+        // Seal the current markdown segment so custom blocks stay in document order
+        if let Some((_, last_widget)) = self.state.rendered_blocks.borrow().last() {
+            last_widget.remove_css_class("streaming-active");
         }
-
-        // Reset the markdown buffer because we are interrupting the text stream
-        // with a custom widget block.
+        self.state.rendered_blocks.borrow_mut().clear();
         self.state.buffer.borrow_mut().clear();
 
         let block = ContentBlock::Custom {

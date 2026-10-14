@@ -1283,6 +1283,7 @@ name = "boxxy-viewer"
 version = "0.0.35"
 dependencies = [
  "async-channel",
+ "boxxy-assets",
  "boxxy-sys-utils",
  "glib",
  "gtk4",
@@ -1290,9 +1291,11 @@ dependencies = [
  "libadwaita",
  "log",
  "pango",
+ "parking_lot",
  "pulldown-cmark",
  "reqwest 0.13.5",
  "serde_json",
+ "sha2 0.11.0",
  "syntect",
  "tokio",
 ]
