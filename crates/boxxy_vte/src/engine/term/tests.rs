@@ -1419,3 +1419,27 @@ fn test_calculate_navigation_sequence() {
         None
     );
 }
+
+#[test]
+fn render_state_update_from_reuses_allocation_and_applies_partial_damage() {
+    let size = TermSize::new(10, 4);
+    let mut term = Term::new(Config::default(), &size, VoidListener);
+
+    let mut state = RenderState::default();
+    state.update_from(&mut term, 1);
+    assert_eq!(state.generation, 1);
+    assert_eq!(state.cells.len(), 40);
+    let initial_ptr = state.cells.as_ptr();
+
+    // Type 'A' and 'B' -> partial damage on line 0
+    term.input('A');
+    term.input('B');
+    state.update_from(&mut term, 2);
+
+    assert_eq!(state.generation, 2);
+    // Underlying Vec<Cell> buffer must be reused in-place without reallocation
+    assert_eq!(state.cells.as_ptr(), initial_ptr);
+    assert_eq!(state.cell(Point::new(Line(0), Column(0))).c, 'A');
+    assert_eq!(state.cell(Point::new(Line(0), Column(1))).c, 'B');
+}
+

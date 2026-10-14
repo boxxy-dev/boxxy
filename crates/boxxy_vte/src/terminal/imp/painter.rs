@@ -62,97 +62,107 @@ impl super::TerminalWidget {
             snapshot.translate(&gtk4::graphene::Point::new(padding, padding));
             let display_offset = state.display_offset;
 
-            // ── Viewport Search Scan ───────────────────────────────────────────
-            // We scan the visible viewport for ALL matches of the search query
-            // so we can highlight them all (Ghostty style).
+            // ── Viewport Search Scan (Cached by Generation & Offset) ───────────
             if let Some(query) = self.search_query.borrow().as_ref() {
-                let case_insensitive = !self.search_case_sensitive.get();
+                let case_sensitive = self.search_case_sensitive.get();
+                let case_insensitive = !case_sensitive;
 
-                // Get or compile regex
-                let mut cached = self.cached_search_regex.borrow_mut();
-                let re = if let Some((q, ci, re)) = cached.as_ref()
-                    && q == query
-                    && *ci == case_insensitive
-                {
-                    Some(re.clone())
-                } else {
-                    match regex::RegexBuilder::new(query)
-                        .case_insensitive(case_insensitive)
-                        .build()
-                    {
-                        Ok(re) => {
-                            *cached = Some((query.clone(), case_insensitive, re.clone()));
-                            Some(re)
-                        }
-                        Err(_) => None,
-                    }
+                let needs_rescan = {
+                    let cache = self.search_viewport_cache.borrow();
+                    cache.generation != state.generation
+                        || cache.display_offset != display_offset
+                        || cache.query != *query
+                        || cache.case_sensitive != case_sensitive
                 };
 
-                if let Some(re) = re {
+                if needs_rescan {
+                    // Get or compile regex
+                    let mut cached = self.cached_search_regex.borrow_mut();
+                    let re = if let Some((q, ci, re)) = cached.as_ref()
+                        && q == query
+                        && *ci == case_insensitive
+                    {
+                        Some(re.clone())
+                    } else {
+                        match regex::RegexBuilder::new(query)
+                            .case_insensitive(case_insensitive)
+                            .build()
+                        {
+                            Ok(re) => {
+                                *cached = Some((query.clone(), case_insensitive, re.clone()));
+                                Some(re)
+                            }
+                            Err(_) => None,
+                        }
+                    };
+                    drop(cached);
+
                     let mut visible_matches = self.visible_search_matches.borrow_mut();
                     visible_matches.clear();
 
-                    // 1. Extract visible text and map byte offsets to Points
-                    let mut visible_text =
-                        String::with_capacity(state.screen_lines * state.columns);
-                    let mut byte_to_point = Vec::with_capacity(state.screen_lines * state.columns);
+                    if let Some(re) = re {
+                        let mut visible_text =
+                            String::with_capacity(state.screen_lines * state.columns);
+                        let mut byte_to_point =
+                            Vec::with_capacity(state.screen_lines * state.columns);
 
-                    for row in 0..state.screen_lines {
-                        for col in 0..state.columns {
-                            let point = Point::new(Line(row as i32 - display_offset), Column(col));
-                            let cell = state.cell(point);
-                            let c = if cell.c == '\0' { ' ' } else { cell.c };
+                        for row in 0..state.screen_lines {
+                            for col in 0..state.columns {
+                                let point =
+                                    Point::new(Line(row as i32 - display_offset), Column(col));
+                                let cell = state.cell(point);
+                                let c = if cell.c == '\0' { ' ' } else { cell.c };
 
-                            let start_byte = visible_text.len();
-                            visible_text.push(c);
-                            let end_byte = visible_text.len();
+                                let start_byte = visible_text.len();
+                                visible_text.push(c);
+                                let end_byte = visible_text.len();
 
-                            for _ in start_byte..end_byte {
-                                byte_to_point.push(point);
+                                for _ in start_byte..end_byte {
+                                    byte_to_point.push(point);
+                                }
                             }
-                        }
-                        let last_cell = state.cell(Point::new(
-                            Line(row as i32 - display_offset),
-                            Column(state.columns - 1),
-                        ));
-                        if !last_cell.flags.contains(Flags::WRAPLINE) {
-                            visible_text.push('\n');
-                            byte_to_point.push(Point::new(
+                            let last_cell = state.cell(Point::new(
                                 Line(row as i32 - display_offset),
                                 Column(state.columns - 1),
                             ));
+                            if !last_cell.flags.contains(Flags::WRAPLINE) {
+                                visible_text.push('\n');
+                                byte_to_point.push(Point::new(
+                                    Line(row as i32 - display_offset),
+                                    Column(state.columns - 1),
+                                ));
+                            }
+                        }
+
+                        for m in re.find_iter(&visible_text) {
+                            if let (Some(&start_point), Some(&end_point)) = (
+                                byte_to_point.get(m.start()),
+                                byte_to_point.get(m.end().saturating_sub(1)),
+                            ) {
+                                visible_matches.push(crate::engine::selection::SelectionRange {
+                                    start: start_point,
+                                    end: end_point,
+                                    is_block: false,
+                                });
+                            }
                         }
                     }
 
-                    // 2. Find all matches in the visible viewport
-                    for m in re.find_iter(&visible_text) {
-                        if let (Some(&start_point), Some(&end_point)) = (
-                            byte_to_point.get(m.start()),
-                            byte_to_point.get(m.end().saturating_sub(1)),
-                        ) {
-                            visible_matches.push(crate::engine::selection::SelectionRange {
-                                start: start_point,
-                                end: end_point,
-                                is_block: false,
-                            });
-                        }
-                    }
+                    let mut cache = self.search_viewport_cache.borrow_mut();
+                    cache.generation = state.generation;
+                    cache.display_offset = display_offset;
+                    cache.query.clone_from(query);
+                    cache.case_sensitive = case_sensitive;
+                    cache.matches.clone_from(&visible_matches);
                 }
             } else {
                 self.visible_search_matches.borrow_mut().clear();
+                self.search_viewport_cache.borrow_mut().query.clear();
             }
 
-            let pango_ctx = self.obj().pango_context();
-            let layout = gtk4::pango::Layout::new(&pango_ctx);
-            if let Some(ref fd) = *self.font_desc.borrow() {
-                layout.set_font_description(Some(fd));
-            } else {
-                let mut font_desc = gtk4::pango::FontDescription::new();
-                font_desc.set_family("Monospace");
-                font_desc.set_size(12 * gtk4::pango::SCALE);
-                layout.set_font_description(Some(&font_desc));
-            }
             let cs = self.get_char_size(&self.obj());
+            let layout = self.get_or_create_layout(&self.obj());
+            layout.set_attributes(None);
             let (char_width, char_height) = (cs.0 as f32, cs.1 as f32);
             let mut offset_y = 0.0_f32;
 

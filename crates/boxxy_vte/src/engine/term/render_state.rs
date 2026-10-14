@@ -13,6 +13,7 @@ use crate::engine::term::{Term, TermMode, color};
 
 #[derive(Clone, Default)]
 pub struct RenderState {
+    pub generation: u64,
     pub cells: Vec<Cell>,
     pub columns: usize,
     pub screen_lines: usize,
@@ -51,6 +52,7 @@ impl RenderState {
         let cl_mode = term.cl_mode.clone();
 
         Self {
+            generation: 0,
             cells,
             columns,
             screen_lines,
@@ -66,6 +68,41 @@ impl RenderState {
             cl_mode,
             mode,
         }
+    }
+
+    /// Updates this `RenderState` in-place from `term`, reusing its `cells`
+    /// heap allocation without allocating a new `Vec<Cell>`.
+    pub fn update_from<T>(&mut self, term: &mut Term<T>, generation: u64) {
+        let grid = term.grid();
+        let columns = grid.columns();
+        let screen_lines = grid.screen_lines();
+        let total_lines = grid.total_lines();
+        let display_offset = grid.display_offset() as i32;
+        let is_alt_screen = term.mode.contains(TermMode::ALT_SCREEN);
+
+        self.cells.clear();
+        self.cells.reserve(columns * screen_lines);
+        for row in 0..screen_lines {
+            let line = Line(row as i32 - display_offset);
+            self.cells.extend_from_slice(&grid[line][..Column(columns)]);
+        }
+
+        term.reset_damage();
+
+        self.generation = generation;
+        self.columns = columns;
+        self.screen_lines = screen_lines;
+        self.total_lines = total_lines;
+        self.display_offset = display_offset;
+        self.cursor_point = term.grid().cursor.point;
+        self.selection_range = term.selection.as_ref().and_then(|s| s.to_range(term));
+        self.kitty_placements.clone_from(&term.kitty_graphics.placements);
+        self.kitty_images.clone_from(&term.kitty_graphics.images);
+        self.cell_width = term.cell_width;
+        self.cell_height = term.cell_height;
+        self.is_alt_screen = is_alt_screen;
+        self.cl_mode.clone_from(&term.cl_mode);
+        self.mode = term.mode;
     }
 
     pub fn cell(&self, point: Point) -> &Cell {

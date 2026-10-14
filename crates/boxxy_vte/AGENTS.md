@@ -65,7 +65,8 @@ The `TerminalWidget` GObject wrapper.
 - **Tokio Background Task:** Runs the `EventLoop`. It reads from the PTY, updates the `Term` state machine, and pushes `RenderState` snapshots to the UI thread using a dual-priority scheme (`RenderPriority`):
   - **`Immediate`:** User-driven interactions (mouse selection, viewport scrolling, search, resize, process exit) publish a snapshot immediately with zero throttle latency.
   - **`Coalesced`:** High-throughput PTY parser updates are coalesced to an 8ms minimum interval (`MIN_SNAPSHOT_INTERVAL`, ~120 Hz) with an automatic trailing flush timer so bursts of terminal output don't allocate redundant intermediate snapshots between GTK frames.
-- **Lock-Free RCU:** We use Read-Copy-Update (RCU) via `arc-swap`. The background thread creates a new `RenderState` and "swaps" it into a global pointer. The UI thread "loads" the latest pointer without ever waiting for a lock.
+- **Lock-Free RCU with Buffer Reuse:** We use Read-Copy-Update (RCU) via `arc-swap`. The background thread retains the swapped-out `Arc<RenderState>` (`spare_render_state`) and reuses its inner `Vec<Cell>` allocation in-place via `Arc::get_mut` whenever the UI thread is not actively reading it, achieving zero heap allocations in steady-state rendering. Each published snapshot carries a monotonic `generation: u64` counter.
+- **Viewport Search & Font Metrics Caching:** `TerminalWidget` caches character glyph metrics (`cached_char_size`) and a reusable `pango::Layout` (invalidated only on font, cell-scale, or DPI scale-factor changes), and caches viewport regex search matches (`SearchViewportCache`) keyed by `(generation, display_offset, query, case_sensitive)` so cursor blinks and hover repaints do not re-run regex scans.
 
 ---
 

@@ -74,6 +74,8 @@ pub struct EventLoop<T: tty::EventedPty, U: EventListener> {
     tx: Option<async_channel::Sender<Msg>>,
     terminal: Term<U>,
     render_state: Arc<ArcSwap<RenderState>>,
+    spare_render_state: Option<Arc<RenderState>>,
+    next_generation: u64,
     event_proxy: U,
     drain_on_exit: bool,
     ref_test: bool,
@@ -88,14 +90,16 @@ where
 {
     /// Create a new event loop.
     pub fn new(
-        terminal: Term<U>,
+        mut terminal: Term<U>,
         event_proxy: U,
         pty: T,
         drain_on_exit: bool,
         ref_test: bool,
     ) -> EventLoopResult<T, U> {
         let (tx, rx) = async_channel::unbounded();
-        let render_state = Arc::new(ArcSwap::from_pointee(RenderState::new(&terminal)));
+        let mut initial_state = RenderState::default();
+        initial_state.update_from(&mut terminal, 1);
+        let render_state = Arc::new(ArcSwap::from_pointee(initial_state));
         Ok((
             EventLoop {
                 pty,
@@ -103,6 +107,8 @@ where
                 rx,
                 terminal,
                 render_state: render_state.clone(),
+                spare_render_state: None,
+                next_generation: 2,
                 event_proxy,
                 drain_on_exit,
                 ref_test,
@@ -453,6 +459,27 @@ where
     }
 
     #[inline]
+    fn swap_updated_render_state(&mut self) {
+        let generation = self.next_generation;
+        self.next_generation = self.next_generation.wrapping_add(1);
+
+        let new_arc = if let Some(mut spare) = self.spare_render_state.take()
+            && let Some(reusable) = Arc::get_mut(&mut spare)
+        {
+            reusable.update_from(&mut self.terminal, generation);
+            spare
+        } else {
+            let mut fresh = RenderState::default();
+            fresh.update_from(&mut self.terminal, generation);
+            Arc::new(fresh)
+        };
+
+        let previous = self.render_state.swap(new_arc);
+        self.spare_render_state = Some(previous);
+        self.event_proxy.send_event(Event::Wakeup);
+    }
+
+    #[inline]
     fn publish_render_state(
         &mut self,
         priority: RenderPriority,
@@ -464,9 +491,7 @@ where
             RenderPriority::Immediate => {
                 *pending_coalesced_render = false;
                 *last_snapshot_at = Some(now);
-                self.render_state
-                    .store(Arc::new(RenderState::new(&self.terminal)));
-                self.event_proxy.send_event(Event::Wakeup);
+                self.swap_updated_render_state();
             }
             RenderPriority::Coalesced => {
                 let elapsed_ok = last_snapshot_at
@@ -475,9 +500,7 @@ where
                 if elapsed_ok {
                     *pending_coalesced_render = false;
                     *last_snapshot_at = Some(now);
-                    self.render_state
-                        .store(Arc::new(RenderState::new(&self.terminal)));
-                    self.event_proxy.send_event(Event::Wakeup);
+                    self.swap_updated_render_state();
                 } else {
                     *pending_coalesced_render = true;
                 }

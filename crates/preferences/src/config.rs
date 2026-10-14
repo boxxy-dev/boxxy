@@ -4,7 +4,9 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::fs;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(not(test))]
+use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, LazyLock, RwLock};
 use tokio::sync::broadcast;
 

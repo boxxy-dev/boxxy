@@ -17,6 +17,15 @@ pub struct MatchRule {
     pub cursor_name: String,
 }
 
+#[derive(Default)]
+pub struct SearchViewportCache {
+    pub generation: u64,
+    pub display_offset: i32,
+    pub query: String,
+    pub case_sensitive: bool,
+    pub matches: Vec<crate::engine::selection::SelectionRange>,
+}
+
 pub type TitleCallback = Box<dyn Fn(String) + 'static>;
 pub type CwdCallback = Box<dyn Fn(String) + 'static>;
 pub type ProgressCallback = Box<dyn Fn(u8, u8) + 'static>;
@@ -75,6 +84,10 @@ pub struct TerminalWidget {
     pub is_dimmed: Cell<bool>,
     pub cached_search_regex: RefCell<Option<(String, bool, regex::Regex)>>,
     pub visible_search_matches: RefCell<Vec<crate::engine::selection::SelectionRange>>,
+    pub search_viewport_cache: RefCell<SearchViewportCache>,
+    pub cached_char_size: Cell<Option<(f64, f64)>>,
+    pub cached_scale_factor: Cell<i32>,
+    pub cached_layout: RefCell<Option<gtk4::pango::Layout>>,
     pub frosted_glass: Cell<bool>,
 }
 
@@ -126,6 +139,10 @@ impl Default for TerminalWidget {
             is_dimmed: Cell::new(false),
             cached_search_regex: RefCell::new(None),
             visible_search_matches: RefCell::new(Vec::new()),
+            search_viewport_cache: RefCell::new(SearchViewportCache::default()),
+            cached_char_size: Cell::new(None),
+            cached_scale_factor: Cell::new(0),
+            cached_layout: RefCell::new(None),
             frosted_glass: Cell::new(false),
         }
     }
@@ -207,7 +224,20 @@ impl ObjectImpl for TerminalWidget {
 }
 
 impl TerminalWidget {
-    pub(crate) fn get_char_size(&self, widget: &super::TerminalWidget) -> (f64, f64) {
+    pub(crate) fn invalidate_font_metrics(&self) {
+        self.cached_char_size.set(None);
+        self.cached_layout.replace(None);
+    }
+
+    pub(crate) fn get_or_create_layout(&self, widget: &super::TerminalWidget) -> gtk4::pango::Layout {
+        let scale = widget.scale_factor();
+        if self.cached_scale_factor.get() != scale {
+            self.cached_scale_factor.set(scale);
+            self.invalidate_font_metrics();
+        }
+        if let Some(layout) = self.cached_layout.borrow().as_ref() {
+            return layout.clone();
+        }
         let pango_ctx = widget.pango_context();
         let layout = gtk4::pango::Layout::new(&pango_ctx);
         if let Some(ref fd) = *self.font_desc.borrow() {
@@ -218,12 +248,29 @@ impl TerminalWidget {
             font_desc.set_size(12 * gtk4::pango::SCALE);
             layout.set_font_description(Some(&font_desc));
         }
+        self.cached_layout.replace(Some(layout.clone()));
+        layout
+    }
+
+    pub(crate) fn get_char_size(&self, widget: &super::TerminalWidget) -> (f64, f64) {
+        let scale = widget.scale_factor();
+        if self.cached_scale_factor.get() != scale {
+            self.cached_scale_factor.set(scale);
+            self.invalidate_font_metrics();
+        }
+        if let Some(cs) = self.cached_char_size.get() {
+            return cs;
+        }
+        let layout = self.get_or_create_layout(widget);
+        layout.set_attributes(None);
         layout.set_text("A");
         let (_, logical) = layout.extents();
-        (
+        let cs = (
             (logical.width() as f64 / gtk4::pango::SCALE as f64) * self.cell_width_scale.get(),
             (logical.height() as f64 / gtk4::pango::SCALE as f64) * self.cell_height_scale.get(),
-        )
+        );
+        self.cached_char_size.set(Some(cs));
+        cs
     }
 
     fn setup_event_loop(&self, receiver: async_channel::Receiver<Event>) {

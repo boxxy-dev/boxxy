@@ -160,12 +160,14 @@ impl TerminalWidget {
     pub fn set_font(&self, font: Option<&gtk4::pango::FontDescription>) {
         let imp = self.imp();
         imp.font_desc.replace(font.cloned());
+        imp.invalidate_font_metrics();
         self.queue_resize();
     }
     pub fn set_cell_height_scale(&self, scale: f64) {
         let imp = self.imp();
         if (imp.cell_height_scale.get() - scale).abs() > f64::EPSILON {
             imp.cell_height_scale.set(scale);
+            imp.invalidate_font_metrics();
             self.queue_resize();
         }
     }
@@ -174,6 +176,7 @@ impl TerminalWidget {
         let imp = self.imp();
         if (imp.cell_width_scale.get() - scale).abs() > f64::EPSILON {
             imp.cell_width_scale.set(scale);
+            imp.invalidate_font_metrics();
             self.queue_resize();
         }
     }
