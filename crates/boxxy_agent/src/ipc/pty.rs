@@ -54,6 +54,10 @@ pub trait AgentPty {
     /// then resumes live reads on `master_fd`.
     async fn reattach(&self, pid: u32) -> zbus::Result<(Vec<u8>, OwnedFd)>;
 
+    /// Returns `(has_exited, exit_code)` for `pid`. Allows late-subscribing or
+    /// reconnecting UI panes to observe exit codes of short-lived processes.
+    async fn get_exit_status(&self, pid: u32) -> zbus::Result<(bool, i32)>;
+
     #[zbus(signal)]
     async fn exited(&self, pid: u32, exit_code: i32) -> zbus::Result<()>;
 

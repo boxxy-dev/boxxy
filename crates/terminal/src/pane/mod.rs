@@ -101,6 +101,16 @@ pub struct TerminalPaneComponent {
 
 impl Drop for PaneInner {
     fn drop(&mut self) {
+        // Close per-pane channels immediately so `spawn_dispatch` (which holds
+        // strong references to `PaneClawHost`, `TerminalOverlay`, and `MsgBarComponent`)
+        // and the UI-to-agent forwarder task exit right away.
+        self.claw_event_tx.close();
+        self.claw_msg_tx.close();
+        self.process_subscriptions.clear();
+        if let Ok(mut sub) = self.claw_subscription.lock() {
+            *sub = None;
+        }
+
         // Release the character assignment in the daemon so the character
         // becomes available for other panes immediately after the tab closes.
         // TODO: when PTY persistence is stable, mirror it for claw sessions —
@@ -177,6 +187,11 @@ pub(super) struct PaneInner {
     pub(super) n_rows: i64,
     pub(super) pid: Option<u32>,
     pub session_id: std::sync::Arc<tokio::sync::Mutex<Option<String>>>,
+    pub(super) claw_event_tx: async_channel::Sender<boxxy_claw_protocol::ClawEngineEvent>,
+    pub(super) claw_msg_tx: async_channel::Sender<boxxy_claw_protocol::ClawMessage>,
+    pub(super) process_subscriptions: Vec<crate::agent_manager::SubscriptionGuard>,
+    pub(super) claw_subscription:
+        std::sync::Arc<std::sync::Mutex<Option<crate::agent_manager::SubscriptionGuard>>>,
     pub(super) claw_indicator: Option<ClawIndicator>,
     pub(super) msg_bar: Rc<MsgBarComponent>,
     pub(super) callback: std::sync::Arc<dyn Fn(PaneOutput) + Send + Sync + 'static>,
@@ -236,7 +251,7 @@ impl TerminalPaneComponent {
             .style_context()
             .add_provider(&provider, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
 
-        let (claw_sender, claw_rx_from_agent) = async_channel::unbounded();
+        let (claw_event_tx, claw_rx_from_agent) = async_channel::unbounded();
         let (tx_to_agent, rx_from_ui) =
             async_channel::unbounded::<boxxy_claw_protocol::ClawMessage>();
         let session_id_arc: std::sync::Arc<tokio::sync::Mutex<Option<String>>> =
@@ -245,7 +260,8 @@ impl TerminalPaneComponent {
 
         // Expose it to inner so claw_host can update it
         let session_id_for_inner = session_id_arc.clone();
-        let claw_sender_clone = claw_sender.clone();
+        let claw_sender_clone = claw_event_tx.clone();
+        let claw_event_tx_for_inner = claw_event_tx;
         // Clone for the first-message path (event forwarding from new session)
         let event_sender_for_first_msg = claw_sender_clone.clone();
 
@@ -370,6 +386,7 @@ impl TerminalPaneComponent {
                             let pending = pending_char_for_msgbar.borrow().clone();
                             let pane_id = id_msg.clone();
                             let session_id_ref = inner_arc.borrow().session_id.clone();
+                            let claw_sub_ref = inner_arc.borrow().claw_subscription.clone();
                             let event_tx = event_sender_for_first_msg.clone();
                             let cwd = inner_arc.borrow().working_dir.clone().unwrap_or_default();
 
@@ -388,19 +405,17 @@ impl TerminalPaneComponent {
                                     pending
                                 };
 
-                                if let Ok((session_id, rx_events)) =
-                                    agent.create_claw_session(pane_id, char_id).await
+                                if let Ok((session_id, sub_guard)) = agent
+                                    .create_claw_session_with_sender(pane_id, char_id, event_tx)
+                                    .await
                                 {
                                     if session_id.is_empty() {
                                         return;
                                     }
+                                    if let Ok(mut guard_slot) = claw_sub_ref.lock() {
+                                        *guard_slot = Some(sub_guard);
+                                    }
                                     *session_id_ref.lock().await = Some(session_id.clone());
-
-                                    tokio::spawn(async move {
-                                        while let Ok(event) = rx_events.recv().await {
-                                            let _ = event_tx.send(event).await;
-                                        }
-                                    });
 
                                     let first_msg = if query.starts_with("/resume ") {
                                         let resume_id =
@@ -616,6 +631,10 @@ impl TerminalPaneComponent {
                 n_rows: 0,
                 pid: None,
                 session_id: session_id_for_inner,
+                claw_event_tx: claw_event_tx_for_inner,
+                claw_msg_tx: claw_sender.clone(),
+                process_subscriptions: Vec::new(),
+                claw_subscription: std::sync::Arc::new(std::sync::Mutex::new(None)),
                 claw_indicator: None,
                 msg_bar: msg_bar.clone(),
                 callback: callback.clone(),
@@ -984,59 +1003,48 @@ impl TerminalPaneComponent {
 
                             inner_rc.borrow().terminal.attach_pty(master_fd);
 
-                            let _inner_weak_exit = Rc::downgrade(&inner_rc);
-                            if let Ok(mut stream) = agent.proxy().receive_exited().await {
-                                let id_for_exit = id.clone();
-                                glib::spawn_future_local(async move {
-                                    use futures_util::StreamExt;
-                                    while let Some(signal) = stream.next().await {
-                                        if let Ok(args) = signal.args()
-                                            && args.pid == pid
-                                        {
-                                            if let Some(inner) = _inner_weak_exit.upgrade() {
-                                                let cb = inner.borrow().callback.clone();
-                                                cb(PaneOutput::Exited(
-                                                    id_for_exit.clone(),
-                                                    args.exit_code,
-                                                ));
-                                            }
-                                            break;
-                                        }
-                                    }
-                                });
-                            }
-
-                            let _inner_weak_fg = Rc::downgrade(&inner_rc);
-                            let claw_tx = claw_sender.clone();
-                            if let Ok(mut stream) =
-                                agent.proxy().receive_foreground_process_changed().await
+                            let (exit_rx, exit_guard) = agent.subscribe_process_exit(pid).await;
+                            let (fg_rx, fg_guard) = agent.subscribe_foreground_process(pid);
                             {
-                                let id_for_fg = id.clone();
-                                glib::spawn_future_local(async move {
-                                    use futures_util::StreamExt;
-                                    while let Some(signal) = stream.next().await {
-                                        if let Ok(args) = signal.args()
-                                            && args.pid == pid
-                                        {
-                                            // Update AI Engine immediately
-                                            let _ = claw_tx
-                                                .send(ClawMessage::ForegroundProcessChanged {
-                                                    process_name: args.process_name.clone(),
-                                                })
-                                                .await;
-
-                                            // Notify UI for overlays/indicators
-                                            if let Some(inner) = _inner_weak_fg.upgrade() {
-                                                let cb = inner.borrow().callback.clone();
-                                                cb(PaneOutput::ForegroundProcessChanged(
-                                                    id_for_fg.clone(),
-                                                    args.process_name,
-                                                ));
-                                            }
-                                        }
-                                    }
-                                });
+                                let mut inner = inner_rc.borrow_mut();
+                                inner.process_subscriptions.push(exit_guard);
+                                inner.process_subscriptions.push(fg_guard);
                             }
+
+                            let inner_weak_exit = Rc::downgrade(&inner_rc);
+                            let id_for_exit = id.clone();
+                            glib::spawn_future_local(async move {
+                                if let Ok(exit_code) = exit_rx.recv().await
+                                    && let Some(inner) = inner_weak_exit.upgrade()
+                                {
+                                    let cb = inner.borrow().callback.clone();
+                                    cb(PaneOutput::Exited(id_for_exit, exit_code));
+                                }
+                            });
+
+                            let inner_weak_fg = Rc::downgrade(&inner_rc);
+                            let claw_tx = claw_sender.clone();
+                            let id_for_fg = id.clone();
+                            glib::spawn_future_local(async move {
+                                while let Ok(process_name) = fg_rx.recv().await {
+                                    let Some(inner) = inner_weak_fg.upgrade() else {
+                                        break;
+                                    };
+                                    // Update AI Engine immediately
+                                    let _ = claw_tx
+                                        .send(ClawMessage::ForegroundProcessChanged {
+                                            process_name: process_name.clone(),
+                                        })
+                                        .await;
+
+                                    // Notify UI for overlays/indicators
+                                    let cb = inner.borrow().callback.clone();
+                                    cb(PaneOutput::ForegroundProcessChanged(
+                                        id_for_fg.clone(),
+                                        process_name,
+                                    ));
+                                }
+                            });
 
                             // CWD tracking is now handled entirely via OSC 7 events
                             // registered in events::setup_terminal_events.

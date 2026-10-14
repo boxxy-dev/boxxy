@@ -57,7 +57,7 @@ pub enum Msg {
 pub struct EventLoop<T: tty::EventedPty, U: EventListener> {
     pty: T,
     rx: async_channel::Receiver<Msg>,
-    tx: async_channel::Sender<Msg>,
+    tx: Option<async_channel::Sender<Msg>>,
     terminal: Term<U>,
     render_state: Arc<ArcSwap<RenderState>>,
     event_proxy: U,
@@ -85,7 +85,7 @@ where
         Ok((
             EventLoop {
                 pty,
-                tx,
+                tx: Some(tx),
                 rx,
                 terminal,
                 render_state: render_state.clone(),
@@ -99,12 +99,20 @@ where
 
     pub fn channel(&self) -> EventLoopSender {
         EventLoopSender {
-            sender: self.tx.clone(),
+            sender: self
+                .tx
+                .as_ref()
+                .expect("channel() called after spawn()")
+                .clone(),
         }
     }
 
     /// Spawn the event loop as a background Tokio task.
     pub fn spawn(mut self) -> tokio::task::JoinHandle<(Self, State)> {
+        // Drop internal sender clone so `self.rx.recv()` observes channel
+        // closure as soon as all external `EventLoopSender`s are dropped.
+        self.tx = None;
+
         tokio::spawn(async move {
             let mut state = State::default();
             let mut buf = vec![0u8; READ_BUFFER_SIZE];
@@ -543,6 +551,10 @@ impl EventLoopSender {
                 EventLoopSendError::Send(async_channel::SendError(m))
             }
         })
+    }
+
+    pub fn close(&self) {
+        self.sender.close();
     }
 }
 

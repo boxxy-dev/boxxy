@@ -257,9 +257,10 @@ impl PtySubsystem {
                         };
                         let _ = PtySubsystem::exited(&emitter, pid, exit_code).await;
                         tracked_pids.write().await.remove(&pid);
-                        // Drop the session record; this also aborts any
-                        // active detached reader task.
-                        pty_registry.remove(pid).await;
+                        // Transition the session record to `Exited` (retaining exit_code
+                        // for `EXITED_TTL` while immediately dropping master_fd and any
+                        // detached reader task).
+                        pty_registry.mark_exited(pid, exit_code).await;
                         break;
                     }
                     _ = interval.tick() => {
@@ -316,6 +317,13 @@ impl PtySubsystem {
             None => Err(fdo::Error::Failed(format!(
                 "No detached session for pid {pid}"
             ))),
+        }
+    }
+
+    async fn get_exit_status(&self, pid: u32) -> fdo::Result<(bool, i32)> {
+        match self.state.pty_registry.get_exit_status(pid).await {
+            Some(code) => Ok((true, code)),
+            None => Ok((false, 0)),
         }
     }
 

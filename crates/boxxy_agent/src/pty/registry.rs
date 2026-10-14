@@ -30,9 +30,19 @@ pub const DETACHED_TTL: std::time::Duration = std::time::Duration::from_secs(4 *
 /// Sweeper tick interval. Coarse on purpose — the TTL is hours.
 pub const SWEEP_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60);
 
+/// Retention window for exited process records so late-subscribing or
+/// reconnecting UI panes can still retrieve a process's exit code.
+pub const EXITED_TTL: std::time::Duration = std::time::Duration::from_secs(60);
+
 /// Read chunk. PTY output is typically bursty (shell prompt, command
 /// output); 16 KB keeps syscall count low without wasting memory.
 const READ_CHUNK: usize = 16 * 1024;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProcessState {
+    Running,
+    Exited { exit_code: i32, exited_at: Instant },
+}
 
 // ---------------------------------------------------------------------------
 // Ring buffer
@@ -94,6 +104,7 @@ pub struct PtySession {
     pub pid: u32,
     /// The pane UUID that owns this PTY, for `list_detached_sessions()`.
     pub pane_id: String,
+    pub state: ProcessState,
     pub persistence_enabled: bool,
     pub viewer_count: u32,
     pub last_activity: Instant,
@@ -114,6 +125,7 @@ impl PtySession {
         Self {
             pid,
             pane_id,
+            state: ProcessState::Running,
             persistence_enabled: false,
             viewer_count: 1, // the spawning UI is already attached
             last_activity: Instant::now(),
@@ -127,7 +139,10 @@ impl PtySession {
     /// AND persistence was requested — i.e. eligible to appear in
     /// `list_detached_sessions()` and to be reattached later.
     pub fn is_detached(&self) -> bool {
-        self.viewer_count == 0 && self.persistence_enabled && self.reader_task.is_some()
+        matches!(self.state, ProcessState::Running)
+            && self.viewer_count == 0
+            && self.persistence_enabled
+            && self.reader_task.is_some()
     }
 }
 
@@ -153,11 +168,58 @@ impl PtyRegistry {
     /// child successfully starts. `master_fd` is the daemon's dup of the
     /// PTY master and is kept idle until `detach()` starts reading it.
     pub async fn register(&self, pid: u32, pane_id: String, master_fd: Option<OwnedFd>) {
+        let now = Instant::now();
         let mut map = self.inner.write().await;
+        map.retain(|_, s| match s.state {
+            ProcessState::Running => true,
+            ProcessState::Exited { exited_at, .. } => {
+                now.saturating_duration_since(exited_at) <= EXITED_TTL
+            }
+        });
         map.insert(pid, PtySession::new(pid, pane_id, master_fd));
     }
 
-    /// Called from the child-waiter task when the shell has exited.
+    /// Transitions a session to `ProcessState::Exited`, immediately releasing
+    /// its master FD and ring buffer while retaining the exit code for
+    /// `EXITED_TTL` so late-subscribing or reconnecting panes can query it.
+    pub async fn mark_exited(&self, pid: u32, exit_code: i32) {
+        let now = Instant::now();
+        let reader_handle = {
+            let mut map = self.inner.write().await;
+            map.retain(|_, s| match s.state {
+                ProcessState::Running => true,
+                ProcessState::Exited { exited_at, .. } => {
+                    now.saturating_duration_since(exited_at) <= EXITED_TTL
+                }
+            });
+            if let Some(s) = map.get_mut(&pid) {
+                s.state = ProcessState::Exited {
+                    exit_code,
+                    exited_at: now,
+                };
+                s.master_fd = None;
+                s.ring_buffer = None;
+                s.reader_task.take()
+            } else {
+                None
+            }
+        };
+        if let Some(handle) = reader_handle {
+            handle.abort();
+        }
+    }
+
+    /// Returns `Some(exit_code)` if the process is known to have exited within
+    /// the retention window, or `None` if it is still running / unknown.
+    pub async fn get_exit_status(&self, pid: u32) -> Option<i32> {
+        let map = self.inner.read().await;
+        match map.get(&pid)?.state {
+            ProcessState::Exited { exit_code, .. } => Some(exit_code),
+            ProcessState::Running => None,
+        }
+    }
+
+    /// Called when explicitly removing a session record from the registry.
     /// Aborts any live reader so its FD drops cleanly.
     pub async fn remove(&self, pid: u32) {
         let session = { self.inner.write().await.remove(&pid) };
@@ -183,6 +245,9 @@ impl PtyRegistry {
     pub async fn reattach(&self, pid: u32) -> Option<(Vec<u8>, OwnedFd)> {
         let mut map = self.inner.write().await;
         let s = map.get_mut(&pid)?;
+        if !matches!(s.state, ProcessState::Running) {
+            return None;
+        }
 
         s.viewer_count = s.viewer_count.saturating_add(1);
         s.last_activity = Instant::now();
@@ -224,6 +289,9 @@ impl PtyRegistry {
             let Some(s) = map.get_mut(&pid) else {
                 return DetachOutcome::Unknown;
             };
+            if !matches!(s.state, ProcessState::Running) {
+                return DetachOutcome::Unknown;
+            }
 
             s.viewer_count = s.viewer_count.saturating_sub(1);
             if s.viewer_count > 0 {
@@ -296,25 +364,29 @@ impl PtyRegistry {
     }
 
     /// Periodic cleanup: SIGTERMs detached sessions idle longer than
-    /// `DETACHED_TTL`. The TTL resets on each read in `run_reader`
-    /// via `last_activity = Instant::now()`.
+    /// `DETACHED_TTL` and prunes exited session records older than `EXITED_TTL`.
     pub async fn sweep_zombies(&self) {
         let now = Instant::now();
-        let to_kill: Vec<u32> = self
-            .inner
-            .read()
-            .await
-            .values()
-            .filter(|s| s.is_detached() && now.duration_since(s.last_activity) > DETACHED_TTL)
-            .map(|s| s.pid)
-            .collect();
+        let to_kill: Vec<u32> = {
+            let mut map = self.inner.write().await;
+            map.retain(|_, s| match s.state {
+                ProcessState::Running => true,
+                ProcessState::Exited { exited_at, .. } => {
+                    now.saturating_duration_since(exited_at) <= EXITED_TTL
+                }
+            });
+            map.values()
+                .filter(|s| s.is_detached() && now.duration_since(s.last_activity) > DETACHED_TTL)
+                .map(|s| s.pid)
+                .collect()
+        };
 
         for pid in to_kill {
             log::info!("pty-registry: SIGTERM zombie detached session pid={}", pid);
             unsafe {
                 libc::kill(-(pid as i32), libc::SIGTERM);
             }
-            // remove() is driven by the child-waiter when SIGCHLD fires.
+            // mark_exited() is driven by the child-waiter when SIGCHLD fires.
         }
     }
 }
@@ -565,5 +637,19 @@ mod tests {
 
         // Cleanup
         unsafe { libc::close(slave_fd) };
+    }
+
+    #[tokio::test]
+    async fn mark_exited_retains_exit_code_and_blocks_detach() {
+        let reg = PtyRegistry::new();
+        reg.register(555, "pane-exit".into(), None).await;
+        assert_eq!(reg.get_exit_status(555).await, None);
+
+        reg.mark_exited(555, 127).await;
+        assert_eq!(reg.get_exit_status(555).await, Some(127));
+        assert_eq!(reg.detach(555).await, DetachOutcome::Unknown);
+
+        reg.remove(555).await;
+        assert_eq!(reg.get_exit_status(555).await, None);
     }
 }

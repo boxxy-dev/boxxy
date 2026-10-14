@@ -28,10 +28,10 @@ Latency-critical terminal I/O. Exposes:
 
 - `create_pty`, `spawn`: open a master PTY, set window size, then `fork/exec` the shell. The daemon `dup()`s the master FD at spawn and keeps it in the session record — idle while a UI is attached, activated when `detach()` is called.
 - `signal_process_group`, `get_foreground_process`, `get_cwd`, `get_running_processes`, `get_environment_variable`, `set_foreground_tracking`: host-side process introspection used by the UI + Claw.
-- `set_persistence(pid, bool)`, `detach(pid)`, `reattach(pid)`, `list_detached_sessions()`: persistent-shells surface (experimental, see below).
+- `set_persistence(pid, bool)`, `detach(pid)`, `reattach(pid)`, `list_detached_sessions()`, `get_exit_status(pid)`: persistent-shells and process exit status surface.
 - Emits `Exited`, `ForegroundProcessChanged` signals that the UI subscribes to.
 
-**`pty::registry::PtyRegistry`** holds one `PtySession` per spawned shell, keyed by PID. Each session tracks `viewer_count`, `persistence_enabled`, the captured master FD, a reader task (only while detached), a 4 MB byte ring buffer (only while detached), and `last_activity`. A 60-second zombie-sweeper task running at `niceness 19` SIGTERMs any detached session idle longer than 4 hours and only runs while in ghost mode.
+**`pty::registry::PtyRegistry`** holds one `PtySession` per spawned shell, keyed by PID. Each session tracks `state` (`ProcessState::Running` or `ProcessState::Exited { exit_code, exited_at }` retained for 60s so late-subscribing or reconnecting panes can query exit codes), `viewer_count`, `persistence_enabled`, the captured master FD, a reader task (only while detached), a 4 MB byte ring buffer (only while detached), and `last_activity`. A 60-second zombie-sweeper task running at `niceness 19` SIGTERMs any detached session idle longer than 4 hours and prunes expired `Exited` records.
 
 ### `claw/` — `dev.boxxy.BoxxyTerminal.Agent.Claw`
 

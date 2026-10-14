@@ -383,3 +383,48 @@ impl TerminalBackend {
         self.write_to_pty(bytes);
     }
 }
+
+impl Drop for TerminalBackend {
+    fn drop(&mut self) {
+        // Explicitly signal the background PTY event loop to exit and close
+        // the message channel so its `master_fd` and `GtkEventProxy` are
+        // dropped immediately—even when `pty_persistence` keeps the child
+        // shell running in the daemon.
+        let _ = self.notifier.0.send(Msg::Shutdown);
+        self.notifier.0.close();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::io::FromRawFd;
+
+    #[tokio::test]
+    async fn dropping_terminal_backend_shuts_down_event_loop_and_closes_event_channel() {
+        let mut fds = [0i32; 2];
+        assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0);
+        let read_fd = unsafe { OwnedFd::from_raw_fd(fds[0]) };
+        // Keep write_fd open so `read_fd` never hits EOF on its own.
+        let _write_fd = unsafe { OwnedFd::from_raw_fd(fds[1]) };
+
+        let (tx, rx) = async_channel::unbounded::<Event>();
+        let backend = TerminalBackend::from_fd(tx, read_fd);
+
+        // Dropping the backend must send `Msg::Shutdown`, terminating the
+        // `EventLoop` task and dropping `GtkEventProxy`, which closes `rx`.
+        drop(backend);
+
+        let recv_result = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            while let Ok(ev) = rx.recv().await {
+                if matches!(ev, Event::Exit) {
+                    break;
+                }
+            }
+            rx.is_closed()
+        })
+        .await;
+
+        assert_eq!(recv_result, Ok(true));
+    }
+}

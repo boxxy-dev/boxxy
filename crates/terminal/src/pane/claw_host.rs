@@ -188,28 +188,24 @@ impl ClawHost for PaneClawHost {
         gtk::glib::spawn_future_local(async move {
             let agent = crate::get_agent().await;
 
-            if let Ok((session_id, rx_events)) = agent
-                .create_claw_session(id.clone(), character_id.clone())
+            if let Ok((session_id, sub_guard)) = agent
+                .create_claw_session_with_sender(id.clone(), character_id.clone(), event_sender)
                 .await
             {
                 if session_id.is_empty() {
                     return; // Exclusivity check failed
                 }
 
-                if let Some(inner) = inner_rc.try_borrow_mut().ok() {
+                if let Ok(inner) = inner_rc.try_borrow_mut() {
+                    if let Ok(mut guard_slot) = inner.claw_subscription.lock() {
+                        *guard_slot = Some(sub_guard);
+                    }
                     let session_arc = inner.session_id.clone();
                     tokio::spawn(async move {
                         let mut lock = session_arc.lock().await;
                         *lock = Some(session_id.clone());
                     });
                 }
-
-                let tx = event_sender.clone();
-                tokio::spawn(async move {
-                    while let Ok(event) = rx_events.recv().await {
-                        let _ = tx.send(event).await;
-                    }
-                });
             } else {
                 log::warn!("Failed to request character id={}", character_id);
             }

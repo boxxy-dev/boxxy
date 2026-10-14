@@ -68,8 +68,6 @@ pub(super) fn setup_claw(
         });
     }
 
-    let claw_popover_self_ref: Rc<RefCell<Option<TerminalOverlay>>> = Rc::new(RefCell::new(None));
-
     // Build the pane-backed host adapter: the drawer's only view into
     // terminal state from here on. All the ad-hoc closures that used to
     // capture `inner`, `claw_sender`, `callback`, and `id` individually
@@ -88,7 +86,6 @@ pub(super) fn setup_claw(
         host.clone(),
         pending_character,
     );
-    *claw_popover_self_ref.borrow_mut() = Some(claw_popover.clone());
     widget.add_overlay(claw_popover.widget());
 
     // Hide the small top-right badge while the drawer is open — the indicator
