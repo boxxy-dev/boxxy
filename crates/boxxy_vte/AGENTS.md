@@ -31,7 +31,7 @@ The crate exposes a single public widget — `TerminalWidget` — that provides 
 
 ### Internalized ANSI Engine
 
-The core terminal logic is located in `src/engine/`. We have fully absorbed and refactored the terminal engine to be:
+The core terminal logic is located in `src/engine/`, with `src/engine/term/` organized into focused modules (`mod.rs`, `render_state.rs`, `modes.rs`, `cursor.rs`, `buffer.rs`, `handler.rs`, `cell.rs`, `color.rs`, `search.rs`, `tests.rs`) and the GTK widget implementation in `src/terminal/imp/` (`mod.rs`, `painter.rs`, `gestures.rs`, `kitty.rs`). We have fully absorbed and refactored the terminal engine to be:
 1. **Asynchronous:** Uses `tokio::io::unix::AsyncFd` for non-blocking PTY I/O.
 2. **Lock-Free:** The UI thread never blocks on the PTY thread. Instead, it reads a cheap, atomic snapshot of the visible grid (`RenderState`) via `arc-swap`.
 3. **Event-Driven CWD:** Natively parses **OSC 7** sequences to provide instantaneous directory tracking that works over SSH and through Flatpak sandboxes.
