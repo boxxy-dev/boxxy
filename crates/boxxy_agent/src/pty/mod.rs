@@ -340,61 +340,7 @@ impl PtySubsystem {
     }
 
     async fn get_running_processes(&self, pid: u32) -> fdo::Result<Vec<(u32, String)>> {
-        let mut all_procs = Vec::new();
-        if let Ok(entries) = std::fs::read_dir("/proc") {
-            for entry in entries.flatten() {
-                if let Ok(file_name) = entry.file_name().into_string() {
-                    if let Ok(p) = file_name.parse::<u32>() {
-                        let stat_path = format!("/proc/{}/stat", p);
-                        if let Ok(stat_content) = std::fs::read_to_string(&stat_path) {
-                            let lp_pos = stat_content.find('(');
-                            let rp_pos = stat_content.rfind(')');
-                            if let (Some(lp), Some(rp)) = (lp_pos, rp_pos) {
-                                if rp > lp {
-                                    let name = stat_content[lp + 1..rp].to_string();
-                                    let rest = &stat_content[rp + 2..];
-                                    let parts: Vec<&str> = rest.split_whitespace().collect();
-                                    if parts.len() > 1 {
-                                        if let Ok(ppid) = parts[1].parse::<u32>() {
-                                            let cmdline_path = format!("/proc/{}/cmdline", p);
-                                            let full_name =
-                                                if let Ok(cmdline) = std::fs::read(&cmdline_path) {
-                                                    let cmd = String::from_utf8_lossy(&cmdline)
-                                                        .replace('\0', " ")
-                                                        .trim()
-                                                        .to_string();
-                                                    if cmd.is_empty() { name } else { cmd }
-                                                } else {
-                                                    name
-                                                };
-                                            all_procs.push((p, ppid, full_name));
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        let mut descendants = Vec::new();
-        let mut to_visit = vec![pid];
-        let mut visited = std::collections::HashSet::new();
-
-        while let Some(current) = to_visit.pop() {
-            if !visited.insert(current) {
-                continue;
-            }
-            for (p, ppid, name) in &all_procs {
-                if *ppid == current {
-                    descendants.push((*p, name.clone()));
-                    to_visit.push(*p);
-                }
-            }
-        }
-
-        Ok(descendants)
+        Ok(collect_descendant_processes(pid))
     }
 
     async fn signal_process_group(&self, pid: u32, signal: i32) -> fdo::Result<()> {
@@ -450,4 +396,164 @@ impl PtySubsystem {
         pid: u32,
         process_name: String,
     ) -> zbus::Result<()>;
+}
+
+fn read_process_display_name(pid: u32) -> Option<String> {
+    let cmdline_path = format!("/proc/{pid}/cmdline");
+    if let Ok(cmdline) = std::fs::read(&cmdline_path) {
+        let cmd = String::from_utf8_lossy(&cmdline)
+            .replace('\0', " ")
+            .trim()
+            .to_string();
+        if !cmd.is_empty() {
+            return Some(cmd);
+        }
+    }
+
+    let stat_path = format!("/proc/{pid}/stat");
+    let stat_content = std::fs::read_to_string(&stat_path).ok()?;
+    let lp = stat_content.find('(')?;
+    let rp = stat_content.rfind(')')?;
+    (rp > lp).then(|| stat_content[lp + 1..rp].to_string())
+}
+
+fn read_direct_children_procfs(pid: u32) -> Option<Vec<u32>> {
+    let primary_path = format!("/proc/{pid}/task/{pid}/children");
+    let mut children = Vec::new();
+
+    let task_dir = format!("/proc/{pid}/task");
+    if let Ok(entries) = std::fs::read_dir(&task_dir) {
+        let mut read_any = false;
+        for entry in entries.flatten() {
+            let children_path = entry.path().join("children");
+            if let Ok(content) = std::fs::read_to_string(&children_path) {
+                read_any = true;
+                for token in content.split_whitespace() {
+                    if let Ok(child_pid) = token.parse::<u32>() {
+                        children.push(child_pid);
+                    }
+                }
+            }
+        }
+        if read_any {
+            return Some(children);
+        }
+    }
+
+    if let Ok(content) = std::fs::read_to_string(&primary_path) {
+        for token in content.split_whitespace() {
+            if let Ok(child_pid) = token.parse::<u32>() {
+                children.push(child_pid);
+            }
+        }
+        return Some(children);
+    }
+
+    None
+}
+
+/// Collects all descendant processes `(pid, display_name)` of `root_pid`.
+///
+/// Uses the direct `/proc/<pid>/task/<tid>/children` kernel interface ($O(k)$
+/// file reads where $k$ is the number of descendant processes), falling back
+/// to a `/proc` parent-PID scan only if `children` is unavailable.
+pub(crate) fn collect_descendant_processes(root_pid: u32) -> Vec<(u32, String)> {
+    // Fast path: traverse `/proc/<pid>/task/*/children` directly.
+    if let Some(initial_children) = read_direct_children_procfs(root_pid) {
+        let mut descendants = Vec::new();
+        let mut to_visit = initial_children;
+        let mut visited = std::collections::HashSet::new();
+        visited.insert(root_pid);
+
+        while let Some(child_pid) = to_visit.pop() {
+            if !visited.insert(child_pid) {
+                continue;
+            }
+            if let Some(name) = read_process_display_name(child_pid) {
+                descendants.push((child_pid, name));
+            }
+            if let Some(grandchildren) = read_direct_children_procfs(child_pid) {
+                to_visit.extend(grandchildren);
+            }
+        }
+        return descendants;
+    }
+
+    // If the root process doesn't exist at all, return empty immediately.
+    if !std::path::Path::new(&format!("/proc/{root_pid}")).exists() {
+        return Vec::new();
+    }
+
+    // Fallback for kernels compiled without CONFIG_PROC_CHILDREN: scan `/proc/*/stat`
+    // for `(pid, ppid)`, and only read `cmdline` for matched descendants.
+    let mut proc_edges = Vec::new();
+    if let Ok(entries) = std::fs::read_dir("/proc") {
+        for entry in entries.flatten() {
+            if let Ok(file_name) = entry.file_name().into_string()
+                && let Ok(p) = file_name.parse::<u32>()
+            {
+                let stat_path = format!("/proc/{p}/stat");
+                if let Ok(stat_content) = std::fs::read_to_string(&stat_path)
+                    && let Some(rp) = stat_content.rfind(')')
+                    && rp + 2 < stat_content.len()
+                {
+                    let rest = &stat_content[rp + 2..];
+                    let mut parts = rest.split_whitespace();
+                    let _state = parts.next();
+                    if let Some(ppid_str) = parts.next()
+                        && let Ok(ppid) = ppid_str.parse::<u32>()
+                    {
+                        proc_edges.push((p, ppid));
+                    }
+                }
+            }
+        }
+    }
+
+    let mut descendants = Vec::new();
+    let mut to_visit = vec![root_pid];
+    let mut visited = std::collections::HashSet::new();
+
+    while let Some(current) = to_visit.pop() {
+        if !visited.insert(current) {
+            continue;
+        }
+        for &(p, ppid) in &proc_edges {
+            if ppid == current {
+                if let Some(name) = read_process_display_name(p) {
+                    descendants.push((p, name));
+                }
+                to_visit.push(p);
+            }
+        }
+    }
+
+    descendants
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn collect_descendant_processes_finds_spawned_child() {
+        let mut child = std::process::Command::new("sleep")
+            .arg("5")
+            .spawn()
+            .expect("spawn sleep");
+        let child_pid = child.id();
+        let my_pid = std::process::id();
+
+        let descendants = collect_descendant_processes(my_pid);
+        assert!(
+            descendants.iter().any(|(pid, name)| *pid == child_pid && name.contains("sleep")),
+            "expected child pid {child_pid} in {descendants:?}"
+        );
+
+        let _ = child.kill();
+        let _ = child.wait();
+
+        let after_exit = collect_descendant_processes(my_pid);
+        assert!(!after_exit.iter().any(|(pid, _)| *pid == child_pid));
+    }
 }

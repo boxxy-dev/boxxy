@@ -183,7 +183,11 @@ pub fn set_tab_title(inner: &mut AppWindowInner, key: usize, title: Option<Strin
     }
 }
 
-pub fn close_tab_request(inner: &mut AppWindowInner, key: usize) {
+pub fn close_tab_request(
+    inner_ref: &std::rc::Rc<std::cell::RefCell<AppWindowInner>>,
+    inner: &mut AppWindowInner,
+    key: usize,
+) {
     let page = (0..inner.tab_view.n_pages())
         .map(|i| inner.tab_view.nth_page(i))
         .find(|p| p.child().as_ptr() as usize == key);
@@ -202,19 +206,106 @@ pub fn close_tab_request(inner: &mut AppWindowInner, key: usize) {
 
     let unpinned_count = inner.tab_view.n_pages() - inner.tab_view.n_pinned_pages();
     if unpinned_count <= 1 && !page.is_pinned() {
+        inner.tab_view.close_page_finish(&page, false);
         inner.window.close();
         return;
     }
 
-    if let Some(pos) = inner
+    let Some(pos) = inner
         .tabs
         .iter()
         .position(|c| c.controller.widget().as_ptr() as usize == key)
-    {
+    else {
+        inner.tab_view.close_page_finish(&page, true);
+        return;
+    };
+
+    if boxxy_preferences::Settings::load().pty_persistence {
         inner.tabs[pos].controller.on_close();
         inner.tabs.remove(pos);
+        inner.tab_view.close_page_finish(&page, true);
+        return;
     }
-    inner.tab_view.close_page_finish(&page, true);
+
+    let pids = inner.tabs[pos].controller.get_pids();
+    let inner_clone = inner_ref.clone();
+    gtk4::glib::spawn_future_local(async move {
+        let agent = boxxy_terminal::get_agent().await;
+        let mut running_apps = Vec::new();
+        for pid in &pids {
+            if let Ok(Ok(mut procs)) = tokio::time::timeout(
+                std::time::Duration::from_millis(500),
+                agent.get_running_processes(*pid),
+            )
+            .await
+            {
+                running_apps.append(&mut procs);
+            }
+        }
+
+        if running_apps.is_empty() {
+            let mut inner = inner_clone.borrow_mut();
+            if let Some(pos) = inner
+                .tabs
+                .iter()
+                .position(|c| c.controller.widget().as_ptr() as usize == key)
+            {
+                inner.tabs[pos].controller.on_close();
+                inner.tabs.remove(pos);
+            }
+            inner.tab_view.close_page_finish(&page, true);
+            return;
+        }
+
+        let dialog = libadwaita::AlertDialog::builder()
+            .heading("Close Tab?")
+            .body("Some processes are still running in this tab.")
+            .build();
+
+        let group = libadwaita::PreferencesGroup::new();
+        for (pid, comm) in running_apps {
+            let row = libadwaita::ActionRow::builder()
+                .title(&comm)
+                .subtitle(format!("Process {}", pid))
+                .build();
+            group.add(&row);
+        }
+
+        let scrolled = gtk4::ScrolledWindow::builder()
+            .hscrollbar_policy(gtk4::PolicyType::Never)
+            .vscrollbar_policy(gtk4::PolicyType::Automatic)
+            .max_content_height(250)
+            .propagate_natural_height(true)
+            .child(&group)
+            .build();
+
+        dialog.set_extra_child(Some(&scrolled));
+        dialog.add_response("cancel", "Cancel");
+        dialog.add_response("close", "Close Tab");
+        dialog.set_response_appearance("close", libadwaita::ResponseAppearance::Destructive);
+        dialog.set_default_response(Some("cancel"));
+        dialog.set_close_response("cancel");
+
+        let window = inner_clone.borrow().window.clone();
+        let response = dialog.choose_future(Some(&window)).await;
+        if response == "close" {
+            for pid in &pids {
+                let _ = agent.signal_process_group(*pid, 15).await;
+            }
+            let mut inner = inner_clone.borrow_mut();
+            if let Some(pos) = inner
+                .tabs
+                .iter()
+                .position(|c| c.controller.widget().as_ptr() as usize == key)
+            {
+                inner.tabs[pos].controller.on_close();
+                inner.tabs.remove(pos);
+            }
+            inner.tab_view.close_page_finish(&page, true);
+        } else {
+            inner_clone.borrow().tab_view.close_page_finish(&page, false);
+        }
+    });
 }
 
 pub fn close_tab(inner: &mut AppWindowInner, id: String) {
