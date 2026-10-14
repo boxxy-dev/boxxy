@@ -24,7 +24,7 @@ Boxxy provides deep, real-time visibility into LLM interactions for developers a
 - **Inline Comments:** Use short, concise inline comments to explain *why* a particular approach was taken, especially for complex async flows, GTK property bindings, or state machine transitions. Avoid over-commenting obvious syntax. Maintain existing comments, updating them only if they become obsolete.
 
 ### 2. Modularity & Scoping
-- **File Length Limit:** Keep source files under **700 lines of code** whenever possible. If a file exceeds this, refactor it into smaller, well-scoped modules.
+- **File Length Guideline (~700 LOC):** Aim to keep source files around **700 lines of code** when natural domain boundaries exist. However, **cohesion and clarity always trump strict line counts** — do NOT artificially split a well-defined, single-responsibility file (e.g., an 800–950 line component or state machine) just to satisfy a line number if doing so fragments related logic or creates a mess. Refactor only when a file genuinely mixes distinct responsibilities.
 - **Structural Integrity:** Use directory-based modules (e.g., `pane/mod.rs`) for complex components. Avoid monolithic `lib.rs` files; use them primarily for module declarations and public API exports.
 
 ### 3. UI & Resource Management

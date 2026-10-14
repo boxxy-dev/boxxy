@@ -208,8 +208,8 @@ pub fn setup_characters_page(
     let chars_dir = boxxy_claw_protocol::character_loader::get_characters_dir().ok();
 
     // Initial fetch from cache
-    let initial_catalog = boxxy_claw_protocol::characters::CHARACTER_CACHE.load();
-    let characters = (**initial_catalog).clone();
+    let initial_catalog = boxxy_claw_protocol::characters::CHARACTER_CACHE.load_full();
+    let characters = (*initial_catalog).clone();
 
     let rows = Rc::new(RefCell::new(Vec::new()));
 
@@ -228,22 +228,27 @@ pub fn setup_characters_page(
     // Initial render
     render_characters(&chars_group, characters, rows.clone(), chars_dir.clone());
 
-    // Setup reactivity: poll the CLAIMS_CACHE and CHARACTER_CACHE
-    let mut last_catalog_json = serde_json::to_string(&*initial_catalog).unwrap_or_default();
+    // Setup reactivity: poll the CLAIMS_CACHE and CHARACTER_CACHE using a weak
+    // reference to `chars_group` so the timer automatically stops and frees the
+    // page widgets when the Preferences dialog is closed.
+    let mut last_catalog = initial_catalog;
     let rows_poll = rows.clone();
-    let chars_group_poll = chars_group.clone();
+    let chars_group_weak = chars_group.downgrade();
     let chars_dir_poll = chars_dir.clone();
 
     glib::timeout_add_local(std::time::Duration::from_millis(500), move || {
-        let claims = boxxy_claw_protocol::characters::CLAIMS_CACHE.load();
-        let catalog = boxxy_claw_protocol::characters::CHARACTER_CACHE.load();
+        let Some(chars_group_poll) = chars_group_weak.upgrade() else {
+            return glib::ControlFlow::Break;
+        };
 
-        let current_json = serde_json::to_string(&*catalog).unwrap_or_default();
-        if current_json != last_catalog_json {
-            last_catalog_json = current_json;
+        let claims = boxxy_claw_protocol::characters::CLAIMS_CACHE.load();
+        let catalog = boxxy_claw_protocol::characters::CHARACTER_CACHE.load_full();
+
+        if !std::sync::Arc::ptr_eq(&catalog, &last_catalog) && *catalog != *last_catalog {
+            last_catalog = catalog.clone();
             render_characters(
                 &chars_group_poll,
-                (**catalog).clone(),
+                (*catalog).clone(),
                 rows_poll.clone(),
                 chars_dir_poll.clone(),
             );

@@ -565,6 +565,7 @@ impl WidgetImpl for TerminalWidget {
     }
 
     fn unrealize(&self) {
+        self.obj().stop_cursor_blink();
         self.im_context
             .borrow()
             .set_client_widget(None::<&gtk4::Widget>);

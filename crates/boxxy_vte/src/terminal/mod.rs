@@ -106,9 +106,12 @@ impl TerminalWidget {
         self.queue_draw();
 
         if imp.cursor_blinking.get() {
-            let obj = self.clone();
+            let obj_weak = self.downgrade();
             let source_id =
                 glib::timeout_add_local(std::time::Duration::from_millis(600), move || {
+                    let Some(obj) = obj_weak.upgrade() else {
+                        return glib::ControlFlow::Break;
+                    };
                     let imp = obj.imp();
                     imp.cursor_visible.set(!imp.cursor_visible.get());
                     obj.queue_draw();
