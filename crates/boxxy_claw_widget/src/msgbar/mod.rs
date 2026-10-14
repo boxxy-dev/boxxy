@@ -200,7 +200,9 @@ impl MsgBarComponent {
         let mut providers: Vec<Box<dyn boxxy_core_widgets::autocomplete::CompletionProvider>> = vec![
             Box::new(autocomplete::AgentCompletionProvider),
             Box::new(autocomplete::CommandCompletionProvider),
-            Box::new(autocomplete::ResumeCompletionProvider),
+            Box::new(autocomplete::ResumeCompletionProvider::new(Some(
+                entry.downgrade(),
+            ))),
         ];
         // Sort by trigger length descending to ensure "/resume " matches before "/"
         providers.sort_by(|a, b| b.trigger().len().cmp(&a.trigger().len()));

@@ -1,4 +1,59 @@
 use boxxy_core_widgets::autocomplete::{CompletionItem, CompletionProvider};
+use gtk4 as gtk;
+use gtk4::prelude::*;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{LazyLock, RwLock};
+use std::time::{Duration, Instant};
+
+const CACHE_TTL: Duration = Duration::from_secs(2);
+
+static RESUME_SESSIONS_CACHE: LazyLock<RwLock<(Option<Instant>, Vec<boxxy_db::models::Session>)>> =
+    LazyLock::new(|| RwLock::new((None, Vec::new())));
+static RESUME_REFRESHING: AtomicBool = AtomicBool::new(false);
+
+/// Triggers an asynchronous background refresh of the `/resume ` session cache
+/// if one is not already in flight. Never blocks the GTK main thread.
+pub fn refresh_resume_sessions_async(entry_weak: Option<gtk::glib::WeakRef<gtk::Entry>>) {
+    if RESUME_REFRESHING
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return;
+    }
+
+    let fetch_fut = async {
+        let mut fetched = None;
+        if let Ok(db) = boxxy_db::Db::new().await {
+            let store = boxxy_db::store::Store::new(db.pool());
+            if let Ok(res) = store.get_recent_active_sessions(10).await {
+                log::debug!(
+                    "ResumeCompletionProvider fetched {} sessions from DB in background.",
+                    res.len()
+                );
+                fetched = Some(res);
+            }
+        }
+        if let Some(sessions) = fetched {
+            let mut cache = RESUME_SESSIONS_CACHE.write().unwrap();
+            *cache = (Some(Instant::now()), sessions);
+        }
+        RESUME_REFRESHING.store(false, Ordering::Release);
+    };
+
+    if let Some(entry_weak) = entry_weak {
+        gtk::glib::spawn_future_local(async move {
+            let handle = boxxy_sys_utils::runtime().spawn(fetch_fut);
+            let _ = handle.await;
+            if let Some(entry) = entry_weak.upgrade()
+                && entry.text().contains("/resume ")
+            {
+                entry.emit_by_name::<()>("changed", &[]);
+            }
+        });
+    } else {
+        boxxy_sys_utils::runtime().spawn(fetch_fut);
+    }
+}
 
 pub struct AgentCompletionProvider;
 
@@ -12,8 +67,8 @@ impl CompletionProvider for AgentCompletionProvider {
         let mut items = Vec::new();
 
         let registry = boxxy_claw_protocol::characters::CHARACTER_CACHE.load();
-
         let claims = boxxy_claw_protocol::characters::CLAIMS_CACHE.load();
+        let chars_dir = boxxy_claw_protocol::character_loader::get_characters_dir().ok();
 
         for info in registry.iter() {
             if info.config.name.to_lowercase().contains(&query_lower)
@@ -35,11 +90,16 @@ impl CompletionProvider for AgentCompletionProvider {
                     ("Available".to_string(), "boxxy-chat-symbolic".to_string())
                 };
 
-                let avatar_path = boxxy_claw_protocol::character_loader::get_characters_dir()
-                    .ok()
-                    .map(|d| d.join(&info.config.name).join("AVATAR.png"))
-                    .filter(|p| p.exists())
-                    .map(|p| p.to_string_lossy().into_owned());
+                let avatar_path = if info.has_avatar {
+                    chars_dir.as_ref().map(|d| {
+                        d.join(&info.config.name)
+                            .join("AVATAR.png")
+                            .to_string_lossy()
+                            .into_owned()
+                    })
+                } else {
+                    None
+                };
 
                 items.push(CompletionItem {
                     display_name: info.config.display_name.clone(),
@@ -66,6 +126,10 @@ impl CompletionProvider for CommandCompletionProvider {
     }
 
     fn get_completions(&self, query: &str) -> Vec<CompletionItem> {
+        // Pre-warm the `/resume ` session cache as soon as the user types `/`
+        // so it is already populated in memory before `/resume ` is completed.
+        refresh_resume_sessions_async(None);
+
         let mut items = Vec::new();
         let query_lower = query.to_lowercase();
 
@@ -121,7 +185,16 @@ fn get_relative_age(updated_at: &str) -> String {
     }
 }
 
-pub struct ResumeCompletionProvider;
+#[derive(Default)]
+pub struct ResumeCompletionProvider {
+    entry_weak: Option<gtk::glib::WeakRef<gtk::Entry>>,
+}
+
+impl ResumeCompletionProvider {
+    pub fn new(entry_weak: Option<gtk::glib::WeakRef<gtk::Entry>>) -> Self {
+        Self { entry_weak }
+    }
+}
 
 impl CompletionProvider for ResumeCompletionProvider {
     fn trigger(&self) -> String {
@@ -129,33 +202,25 @@ impl CompletionProvider for ResumeCompletionProvider {
     }
 
     fn get_completions(&self, query: &str) -> Vec<CompletionItem> {
-        // Query starts after "/resume". If user types "/resume ", query is " ".
-        // We trim it to handle both cases.
         let query_lower = query.trim().to_lowercase();
         let mut items = Vec::new();
 
-        let runtime = boxxy_sys_utils::runtime();
-        let sessions = runtime.block_on(async {
-            if let Ok(db) = boxxy_db::Db::new().await {
-                let store = boxxy_db::store::Store::new(db.pool());
-                let res = store
-                    .get_recent_active_sessions(10)
-                    .await
-                    .unwrap_or_default();
-                log::debug!(
-                    "ResumeCompletionProvider fetched {} sessions from DB.",
-                    res.len()
-                );
-                for s in &res {
-                    log::debug!("  - Session: {} (Title: {:?})", s.id, s.title);
-                }
-                res
-            } else {
-                Vec::new()
-            }
-        });
+        let (needs_refresh, sessions) = {
+            let cache = RESUME_SESSIONS_CACHE.read().unwrap();
+            let stale = cache
+                .0
+                .map(|last| last.elapsed() >= CACHE_TTL)
+                .unwrap_or(true);
+            (stale, cache.1.clone())
+        };
+
+        if needs_refresh {
+            refresh_resume_sessions_async(self.entry_weak.clone());
+        }
 
         let registry = boxxy_claw_protocol::characters::CHARACTER_CACHE.load();
+        let claims = boxxy_claw_protocol::characters::CLAIMS_CACHE.load();
+        let chars_dir = boxxy_claw_protocol::character_loader::get_characters_dir().ok();
 
         for session in sessions {
             let mut title = session
@@ -164,7 +229,6 @@ impl CompletionProvider for ResumeCompletionProvider {
             if title.trim().is_empty() {
                 title = "Untitled Session".to_string();
             }
-            // character_name is the registry key; agent_name is the display name
             let char_name = session.agent_name.clone().unwrap_or_default();
             let msg_count = session.message_count;
 
@@ -178,8 +242,6 @@ impl CompletionProvider for ResumeCompletionProvider {
                 || title.to_lowercase().contains(&query_lower)
                 || char_name.to_lowercase().contains(&query_lower)
             {
-                // Look up the character in the registry for official color + display name.
-                // If not found, fallback to the first character in the registry as requested.
                 let char_info = registry
                     .iter()
                     .find(|c| c.config.name == char_name || c.config.display_name == char_name)
@@ -197,7 +259,6 @@ impl CompletionProvider for ResumeCompletionProvider {
                 let mut display_age = age;
 
                 if let Some(info) = char_info {
-                    let claims = boxxy_claw_protocol::characters::CLAIMS_CACHE.load();
                     let is_taken = claims
                         .iter()
                         .any(|claim| claim.character_id == info.config.id);
@@ -213,15 +274,16 @@ impl CompletionProvider for ResumeCompletionProvider {
                     "boxxy-boxxyclaw-symbolic".to_string()
                 };
 
-                // Prefer the character's avatar PNG over the generic themed icon.
                 let avatar_path = char_info
+                    .filter(|info| info.has_avatar)
                     .and_then(|info| {
-                        boxxy_claw_protocol::character_loader::get_characters_dir()
-                            .ok()
-                            .map(|d| d.join(&info.config.name).join("AVATAR.png"))
-                    })
-                    .filter(|p| p.exists())
-                    .map(|p| p.to_string_lossy().into_owned());
+                        chars_dir.as_ref().map(|d| {
+                            d.join(&info.config.name)
+                                .join("AVATAR.png")
+                                .to_string_lossy()
+                                .into_owned()
+                        })
+                    });
 
                 items.push(CompletionItem {
                     display_name: format!("{title} [{msg_count} msgs]"),

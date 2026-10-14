@@ -16,3 +16,5 @@ async-channel.workspace = true
 log.workspace = true
 reqwest.workspace = true
 tokio.workspace = true
+image.workspace = true
+boxxy-sys-utils = { path = "../sys_utils" }

@@ -1286,8 +1286,10 @@ name = "boxxy-viewer"
 version = "0.0.35"
 dependencies = [
  "async-channel",
+ "boxxy-sys-utils",
  "glib",
  "gtk4",
+ "image",
  "libadwaita",
  "log",
  "pango",
