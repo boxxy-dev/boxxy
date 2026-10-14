@@ -256,7 +256,7 @@ pub fn spawn_turn(
                     full_prompt: full_prompt.clone(),
                     response: response.clone(),
                     cwd: cwd_clone.clone(),
-                    settings: settings.clone(),
+                    settings: (*settings).clone(),
                     db: db.clone(),
                     tx_self: tx_self.clone(),
                 };

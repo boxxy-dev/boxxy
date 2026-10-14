@@ -28,7 +28,7 @@ impl PreferencesComponent {
         on_open_themes: F2,
         on_reload_engine: F3,
     ) -> Self {
-        let settings_rc = Rc::new(RefCell::new(Settings::load()));
+        let settings_rc = Rc::new(RefCell::new((*Settings::load()).clone()));
         let cb_rc = Rc::new(on_settings_changed);
 
         let builder = gtk::Builder::from_resource("/dev/boxxy/BoxxyTerminal/ui/preferences.ui");

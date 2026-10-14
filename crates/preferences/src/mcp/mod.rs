@@ -90,40 +90,36 @@ pub fn setup_mcp_page(
                 let render_ref_inner = render_ref.clone();
 
                 edit_btn.connect_clicked(move |btn| {
-                    if let Some(window) = btn.root().and_then(|r| r.downcast::<gtk::Window>().ok())
-                    {
-                        let s_rc_inner2 = s_rc_inner.clone();
-                        let cb_inner2 = cb_inner.clone();
-                        let old_name_clone = old_name.clone();
-                        let render_ref_inner2 = render_ref_inner.clone();
+                    let s_rc_inner2 = s_rc_inner.clone();
+                    let cb_inner2 = cb_inner.clone();
+                    let old_name_clone = old_name.clone();
+                    let render_ref_inner2 = render_ref_inner.clone();
 
-                        let dialog = mcp_dialog::build_add_mcp_dialog(
-                            &window,
-                            Some(&server_clone),
-                            move |new_config| {
-                                let s_clone = {
-                                    let mut s = s_rc_inner2.borrow_mut();
-                                    if let Some(srv) = s
-                                        .mcp_servers
-                                        .iter_mut()
-                                        .find(|srv| srv.name == old_name_clone)
-                                    {
-                                        *srv = new_config.clone();
-                                    }
-                                    s.clone()
-                                };
-
-                                s_clone.save();
-                                cb_inner2(s_clone);
-
-                                // Re-render the whole list to keep everything in sync
-                                if let Some(render) = render_ref_inner2.borrow().as_ref() {
-                                    render();
+                    let dialog = mcp_dialog::build_add_mcp_dialog(
+                        Some(&server_clone),
+                        move |new_config| {
+                            let s_clone = {
+                                let mut s = s_rc_inner2.borrow_mut();
+                                if let Some(srv) = s
+                                    .mcp_servers
+                                    .iter_mut()
+                                    .find(|srv| srv.name == old_name_clone)
+                                {
+                                    *srv = new_config.clone();
                                 }
-                            },
-                        );
-                        dialog.present();
-                    }
+                                s.clone()
+                            };
+
+                            s_clone.save();
+                            cb_inner2(s_clone);
+
+                            // Re-render the whole list to keep everything in sync
+                            if let Some(render) = render_ref_inner2.borrow().as_ref() {
+                                render();
+                            }
+                        },
+                    );
+                    dialog.present(Some(btn));
                 });
 
                 row.add_suffix(&edit_btn);
@@ -172,37 +168,35 @@ pub fn setup_mcp_page(
     let cb = on_change.clone();
     let render_ref = render_server_list.clone();
     mcp_add_server_row.connect_activated(move |row| {
-        if let Some(window) = row.root().and_then(|r| r.downcast::<gtk::Window>().ok()) {
-            let s_rc_inner = s_rc.clone();
-            let cb_inner = cb.clone();
-            let render_ref_inner = render_ref.clone();
-            let dialog = mcp_dialog::build_add_mcp_dialog(&window, None, move |new_config| {
-                let s_clone = {
-                    let mut s = s_rc_inner.borrow_mut();
+        let s_rc_inner = s_rc.clone();
+        let cb_inner = cb.clone();
+        let render_ref_inner = render_ref.clone();
+        let dialog = mcp_dialog::build_add_mcp_dialog(None, move |new_config| {
+            let s_clone = {
+                let mut s = s_rc_inner.borrow_mut();
 
-                    // Prevent duplicate names
-                    let mut unique_name = new_config.name.clone();
-                    let mut counter = 1;
-                    while s.mcp_servers.iter().any(|srv| srv.name == unique_name) {
-                        unique_name = format!("{} ({})", new_config.name, counter);
-                        counter += 1;
-                    }
-
-                    let mut final_config = new_config.clone();
-                    final_config.name = unique_name;
-
-                    s.mcp_servers.push(final_config);
-                    s.clone()
-                };
-                s_clone.save();
-                cb_inner(s_clone);
-
-                if let Some(render) = render_ref_inner.borrow().as_ref() {
-                    render();
+                // Prevent duplicate names
+                let mut unique_name = new_config.name.clone();
+                let mut counter = 1;
+                while s.mcp_servers.iter().any(|srv| srv.name == unique_name) {
+                    unique_name = format!("{} ({})", new_config.name, counter);
+                    counter += 1;
                 }
-            });
-            dialog.present();
-        }
+
+                let mut final_config = new_config.clone();
+                final_config.name = unique_name;
+
+                s.mcp_servers.push(final_config);
+                s.clone()
+            };
+            s_clone.save();
+            cb_inner(s_clone);
+
+            if let Some(render) = render_ref_inner.borrow().as_ref() {
+                render();
+            }
+        });
+        dialog.present(Some(row));
     });
 
     let mcp_add_server_row_clone = mcp_add_server_row.clone();

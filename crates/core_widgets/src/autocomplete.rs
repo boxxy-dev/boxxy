@@ -269,16 +269,32 @@ impl AutocompleteController {
                 inner_badge_box.set_halign(gtk::Align::Center);
 
                 if let Some(color) = item.badge_color {
+                    static BADGE_COUNTER: std::sync::atomic::AtomicUsize =
+                        std::sync::atomic::AtomicUsize::new(0);
+                    let id = BADGE_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    let class_name = format!("autocomplete-badge-{id}");
                     let provider = gtk::CssProvider::new();
                     let css = format!(
-                        ".autocomplete-badge {{ background-color: {}; color: white; border-radius: 12px; padding: 2px 8px; font-weight: bold; font-size: 0.9em; }}",
-                        color
+                        ".{class_name} {{ background-color: {color}; color: white; border-radius: 12px; padding: 2px 8px; font-weight: bold; font-size: 0.9em; }}"
                     );
                     provider.load_from_string(&css);
-                    inner_badge_box
-                        .style_context()
-                        .add_provider(&provider, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
-                    inner_badge_box.add_css_class("autocomplete-badge");
+                    if let Some(display) = gtk::gdk::Display::default() {
+                        gtk::style_context_add_provider_for_display(
+                            &display,
+                            &provider,
+                            gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+                        );
+                        let provider_cleanup = provider.clone();
+                        inner_badge_box.connect_destroy(move |_| {
+                            if let Some(display) = gtk::gdk::Display::default() {
+                                gtk::style_context_remove_provider_for_display(
+                                    &display,
+                                    &provider_cleanup,
+                                );
+                            }
+                        });
+                    }
+                    inner_badge_box.add_css_class(&class_name);
                 }
 
                 inner_badge_box.append(&badge_label);

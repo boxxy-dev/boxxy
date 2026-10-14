@@ -45,20 +45,25 @@ impl BlockRenderer for CodeRenderer {
             let header = gtk::Box::new(gtk::Orientation::Horizontal, 6);
             header.add_css_class("code-header");
 
-            let css = "
-                .code-header { 
-                    background-color: rgba(255, 255, 255, 0.04); 
-                    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-                    padding: 4px 8px;
+            static CODE_HEADER_CSS_ONCE: std::sync::Once = std::sync::Once::new();
+            CODE_HEADER_CSS_ONCE.call_once(|| {
+                if let Some(display) = gtk::gdk::Display::default() {
+                    let css = "
+                        .code-header {
+                            background-color: rgba(255, 255, 255, 0.04);
+                            border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+                            padding: 4px 8px;
+                        }
+                    ";
+                    let provider = gtk::CssProvider::new();
+                    provider.load_from_string(css);
+                    gtk::style_context_add_provider_for_display(
+                        &display,
+                        &provider,
+                        gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+                    );
                 }
-            ";
-            let provider = gtk::CssProvider::new();
-            #[allow(deprecated)]
-            provider.load_from_string(css);
-            #[allow(deprecated)]
-            header
-                .style_context()
-                .add_provider(&provider, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
+            });
 
             let lang_label = gtk::Label::new(Some(if lang.is_empty() { "text" } else { lang }));
             lang_label.add_css_class("dim-label");

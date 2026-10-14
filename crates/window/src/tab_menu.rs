@@ -144,23 +144,35 @@ impl TabContextMenu {
         let on_set_color = Rc::new(on_set_color);
         let pop_clone_color = popover.clone();
 
-        for (c, hex) in colors {
+        for (idx, (c, hex)) in colors.into_iter().enumerate() {
+            let class_name = format!("tab-color-swatch-{idx}");
             let btn = gtk4::Button::builder()
                 .width_request(22)
                 .height_request(22)
-                .css_classes(["flat"])
+                .css_classes(["flat", class_name.as_str()])
                 .build();
 
             let css = format!(
-                "button {{ background-color: {}; min-width: 22px; min-height: 22px; padding: 0; margin: 2px; border-radius: 6px; border: 2px solid transparent; transition: border-color 0.15s; opacity: 1.0; }} button:hover {{ border-color: rgba(255,255,255,0.5); }}",
-                hex
+                "button.{class_name} {{ background-color: {hex}; min-width: 22px; min-height: 22px; padding: 0; margin: 2px; border-radius: 6px; border: 2px solid transparent; transition: border-color 0.15s; opacity: 1.0; }} button.{class_name}:hover {{ border-color: rgba(255,255,255,0.5); }}"
             );
             let provider = gtk4::CssProvider::new();
             provider.load_from_string(&css);
-
-            #[allow(deprecated)]
-            btn.style_context()
-                .add_provider(&provider, gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION);
+            if let Some(display) = gtk4::gdk::Display::default() {
+                gtk4::style_context_add_provider_for_display(
+                    &display,
+                    &provider,
+                    gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
+                );
+                let provider_cleanup = provider.clone();
+                btn.connect_destroy(move |_| {
+                    if let Some(display) = gtk4::gdk::Display::default() {
+                        gtk4::style_context_remove_provider_for_display(
+                            &display,
+                            &provider_cleanup,
+                        );
+                    }
+                });
+            }
 
             if c == TabColor::Default {
                 btn.set_icon_name("boxxy-edit-clear-symbolic");

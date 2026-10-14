@@ -5,25 +5,24 @@ use libadwaita as adw;
 use std::collections::HashMap;
 
 pub fn build_add_mcp_dialog(
-    parent: &gtk::Window,
     existing_config: Option<&McpServerConfig>,
     on_save: impl Fn(McpServerConfig) + 'static,
-) -> adw::MessageDialog {
+) -> adw::AlertDialog {
     let title = if existing_config.is_some() {
         "Edit MCP Server"
     } else {
         "Add MCP Server"
     };
-    let dialog = adw::MessageDialog::builder()
-        .heading(title)
-        .body("Configure a Model Context Protocol endpoint.")
-        .transient_for(parent)
-        .modal(true)
-        .build();
+    let dialog = adw::AlertDialog::new(
+        Some(title),
+        Some("Configure a Model Context Protocol endpoint."),
+    );
 
     dialog.add_response("cancel", "Cancel");
     dialog.add_response("save", "Save");
     dialog.set_response_appearance("save", adw::ResponseAppearance::Suggested);
+    dialog.set_default_response(Some("save"));
+    dialog.set_close_response("cancel");
 
     // Box to hold the form
     let vbox = gtk::Box::builder()
@@ -166,7 +165,7 @@ pub fn build_add_mcp_dialog(
 
     dialog.set_extra_child(Some(&vbox));
 
-    dialog.connect_response(None, move |d: &adw::MessageDialog, response| {
+    dialog.connect_response(None, move |_d: &adw::AlertDialog, response| {
         if response == "save" {
             let transport = if transport_combo.selected() == 0 {
                 let args_str = args_entry.text().to_string();
@@ -222,7 +221,6 @@ pub fn build_add_mcp_dialog(
 
             on_save(config);
         }
-        d.close();
     });
 
     dialog

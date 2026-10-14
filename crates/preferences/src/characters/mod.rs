@@ -130,18 +130,11 @@ pub fn setup_characters_page(
                                         );
                                         remove_avatar_btn_upload.set_visible(true);
 
-                                        if let Some(pref_win) = btn_clone
-                                            .root()
-                                            .and_downcast::<adw::PreferencesWindow>(
-                                        ) {
-                                            pref_win.add_toast(adw::Toast::new("Avatar updated"));
-                                        }
+                                        add_preferences_toast(&btn_clone, "Avatar updated");
                                     }
                                 }
-                            } else if let Some(pref_win) =
-                                btn_clone.root().and_downcast::<adw::PreferencesWindow>()
-                            {
-                                pref_win.add_toast(adw::Toast::new("Failed to process avatar."));
+                            } else {
+                                add_preferences_toast(&btn_clone, "Failed to process avatar.");
                             }
                         });
                     }
@@ -165,9 +158,7 @@ pub fn setup_characters_page(
                 && e.kind() != std::io::ErrorKind::NotFound
             {
                 log::error!("Failed to remove user avatar: {}", e);
-                if let Some(pref_win) = btn_clone.root().and_downcast::<adw::PreferencesWindow>() {
-                    pref_win.add_toast(adw::Toast::new("Failed to remove avatar."));
-                }
+                add_preferences_toast(&btn_clone, "Failed to remove avatar.");
                 return;
             }
 
@@ -177,13 +168,12 @@ pub fn setup_characters_page(
             );
             remove_avatar_btn_clone.set_visible(false);
 
-            if let Some(pref_win) = btn_clone.root().and_downcast::<adw::PreferencesWindow>() {
-                pref_win.add_toast(adw::Toast::new("Avatar removed"));
-            }
+            add_preferences_toast(&btn_clone, "Avatar removed");
         });
     });
 
-    let color_btn = gtk::ColorButton::new();
+    let color_dialog = gtk::ColorDialog::builder().with_alpha(false).build();
+    let color_btn = gtk::ColorDialogButton::new(Some(color_dialog));
     color_btn.set_valign(gtk::Align::Center);
     user_profile::set_default_color_button(&color_btn, &settings_rc.borrow());
 
@@ -195,7 +185,7 @@ pub fn setup_characters_page(
     let s_rc2 = settings_rc.clone();
     let cb2 = on_change.clone();
     let avatar_color_clone = user_avatar.clone();
-    color_btn.connect_color_set(move |cb_btn| {
+    color_btn.connect_rgba_notify(move |cb_btn| {
         let rgba = cb_btn.rgba();
         let hex = format!(
             "#{:02x}{:02x}{:02x}",
@@ -305,14 +295,13 @@ pub fn setup_characters_page(
             gtk::gio::AppInfo::launch_default_for_uri(&uri, None::<&gtk::gio::AppLaunchContext>);
 
         // Show restart notice
-        if let Some(window) = row
-            .root()
-            .and_then(|r| r.downcast::<adw::PreferencesWindow>().ok())
+        if let Some(overlay) = row
+            .ancestor(adw::ToastOverlay::static_type())
+            .and_downcast::<adw::ToastOverlay>()
         {
             let toast = adw::Toast::new("Restart Boxxy to apply character changes.");
-            // Slight delay since the file manager takes focus away immediately
             toast.set_timeout(3);
-            window.add_toast(toast);
+            overlay.add_toast(toast);
         }
     });
     manage_group.add(&open_row);
@@ -526,22 +515,17 @@ fn render_characters(
                                                 .await
                                                 .is_ok()
                                             {
-                                                if let Some(pref_win) = btn_clone
-                                                    .root()
-                                                    .and_downcast::<adw::PreferencesWindow>(
-                                                ) {
-                                                    pref_win.add_toast(adw::Toast::new(
-                                                        "Avatar updated.",
-                                                    ));
-                                                }
+                                                add_preferences_toast(
+                                                    &btn_clone,
+                                                    "Avatar updated.",
+                                                );
                                             }
                                         }
-                                    } else if let Some(pref_win) =
-                                        btn_clone.root().and_downcast::<adw::PreferencesWindow>()
-                                    {
-                                        pref_win.add_toast(adw::Toast::new(
+                                    } else {
+                                        add_preferences_toast(
+                                            &btn_clone,
                                             "Failed to process avatar.",
-                                        ));
+                                        );
                                     }
                                 });
                             }
@@ -608,18 +592,24 @@ fn show_final_confirmation(parent: &gtk::Button) {
             if let Err(e) = boxxy_claw_protocol::character_loader::reset_to_defaults() {
                 log::error!("Failed to reset characters to defaults: {}", e);
             } else {
-                if let Some(window) = parent_clone
-                    .root()
-                    .and_then(|r| r.downcast::<adw::PreferencesWindow>().ok())
-                {
-                    let toast = adw::Toast::new("Restart Boxxy to apply character changes.");
-                    window.add_toast(toast);
-                }
+                add_preferences_toast(
+                    &parent_clone,
+                    "Restart Boxxy to apply character changes.",
+                );
             }
         }
     });
 
     dialog.present(Some(parent));
+}
+
+fn add_preferences_toast(widget: &impl IsA<gtk::Widget>, message: &str) {
+    if let Some(overlay) = widget
+        .ancestor(adw::ToastOverlay::static_type())
+        .and_downcast::<adw::ToastOverlay>()
+    {
+        overlay.add_toast(adw::Toast::new(message));
+    }
 }
 
 fn make_color_dot(color_hex: &str) -> gtk::Button {
@@ -663,9 +653,19 @@ fn make_color_dot(color_hex: &str) -> gtk::Button {
     );
     let provider = gtk::CssProvider::new();
     provider.load_from_string(&css);
-    #[allow(deprecated)]
-    dot.style_context()
-        .add_provider(&provider, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
+    if let Some(display) = gtk::gdk::Display::default() {
+        gtk::style_context_add_provider_for_display(
+            &display,
+            &provider,
+            gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+        );
+        let provider_cleanup = provider.clone();
+        dot.connect_destroy(move |_| {
+            if let Some(display) = gtk::gdk::Display::default() {
+                gtk::style_context_remove_provider_for_display(&display, &provider_cleanup);
+            }
+        });
+    }
 
     dot
 }

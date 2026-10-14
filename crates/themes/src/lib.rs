@@ -10,11 +10,10 @@ pub mod selector;
 
 use std::collections::HashMap;
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
 
-lazy_static::lazy_static! {
-    static ref TEXTURE_CACHE: Arc<Mutex<HashMap<String, gdk::Texture>>> = Arc::new(Mutex::new(HashMap::new()));
-}
+static TEXTURE_CACHE: LazyLock<Arc<Mutex<HashMap<String, gdk::Texture>>>> =
+    LazyLock::new(|| Arc::new(Mutex::new(HashMap::new())));
 
 pub fn get_texture_from_path(path: &str) -> Option<gdk::Texture> {
     let mut cache = TEXTURE_CACHE.lock().unwrap();

@@ -193,11 +193,11 @@ impl AiSidebarComponent {
             ollama_url,
             api_keys,
             move |ai_provider, claw_provider, memory_provider| {
-                let mut settings = boxxy_preferences::Settings::load();
-                settings.ai_chat_model = ai_provider;
-                settings.claw_model = claw_provider;
-                settings.memory_model = memory_provider;
-                settings.save();
+                boxxy_preferences::Settings::update(|settings| {
+                    settings.ai_chat_model = ai_provider.clone();
+                    settings.claw_model = claw_provider.clone();
+                    settings.memory_model = memory_provider.clone();
+                });
             },
         );
 

@@ -22,16 +22,15 @@ pub static TERMINAL_EVENTS: RwLock<Option<TerminalEvent>> = RwLock::new(None);
 // We need a way to subscribe to events in raw gtk4-rs across the application.
 // We'll use a tokio broadcast channel instead.
 use crate::agent_manager::AgentManager;
+use std::sync::LazyLock;
 use tokio::sync::broadcast;
 
-lazy_static::lazy_static! {
-    pub static ref TERMINAL_EVENT_BUS: broadcast::Sender<TerminalEvent> = {
-        let (tx, _) = broadcast::channel(100);
-        tx
-    };
+pub static TERMINAL_EVENT_BUS: LazyLock<broadcast::Sender<TerminalEvent>> = LazyLock::new(|| {
+    let (tx, _) = broadcast::channel(100);
+    tx
+});
 
-    pub static ref AGENT_MANAGER: tokio::sync::OnceCell<AgentManager> = tokio::sync::OnceCell::new();
-}
+pub static AGENT_MANAGER: tokio::sync::OnceCell<AgentManager> = tokio::sync::OnceCell::const_new();
 
 pub async fn get_agent() -> &'static AgentManager {
     AGENT_MANAGER

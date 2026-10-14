@@ -78,7 +78,6 @@ sourceview5 = "0.11"
 chrono = { version = "0.4", features = ["serde"] }
 async-channel = "2.5.0"
 tokio = { version = "1.53.1", features = ["full"] }
-lazy_static = "1.5.0"
 futures-channel = "0.3.34"
 futures-util = "0.3.34"
 log = { version = "0.4.34", features = ["std", "serde", "release_max_level_info"] }

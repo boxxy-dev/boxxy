@@ -1,9 +1,11 @@
+use arc_swap::ArcSwap;
 use boxxy_model_selection::ModelProvider;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::fs;
 use std::path::PathBuf;
-use std::sync::{LazyLock, OnceLock, RwLock};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, LazyLock, RwLock};
 use tokio::sync::broadcast;
 
 pub static SETTINGS_EVENT_BUS: LazyLock<broadcast::Sender<Settings>> = LazyLock::new(|| {
@@ -11,8 +13,13 @@ pub static SETTINGS_EVENT_BUS: LazyLock<broadcast::Sender<Settings>> = LazyLock:
     tx
 });
 
-static SETTINGS_CACHE: OnceLock<RwLock<Settings>> = OnceLock::new();
-static APP_STATE_CACHE: OnceLock<RwLock<AppState>> = OnceLock::new();
+static SETTINGS_INITIALIZED: AtomicBool = AtomicBool::new(false);
+#[cfg(not(test))]
+static SETTINGS_GENERATION: AtomicU64 = AtomicU64::new(0);
+static SETTINGS_CACHE: LazyLock<ArcSwap<Settings>> =
+    LazyLock::new(|| ArcSwap::from_pointee(Settings::default()));
+static APP_STATE_CACHE: LazyLock<ArcSwap<AppState>> =
+    LazyLock::new(|| ArcSwap::from_pointee(AppState::default()));
 static ENV_API_KEYS: LazyLock<RwLock<std::collections::HashMap<String, String>>> =
     LazyLock::new(|| RwLock::new(std::collections::HashMap::new()));
 
@@ -262,36 +269,63 @@ You can add your own sensitive paths here. One path per line. Lines starting wit
     }
 
     pub fn init() {
-        let _ = SETTINGS_CACHE.get_or_init(|| {
-            let mut settings = Self::default();
-            if let Some(path) = Self::get_path()
-                && let Ok(content) = fs::read_to_string(path)
-            {
-                match serde_json::from_str::<Settings>(&content) {
-                    Ok(s) => settings = s,
-                    Err(e) => log::error!("Failed to load settings: {}", e),
-                }
-            }
-
-            // Generate install_id if missing
-            if settings.install_id.is_none() {
-                settings.install_id = Some(uuid::Uuid::new_v4().to_string());
-                settings.save();
-            }
-
-            settings.check_and_unset_invalid_models();
-
-            RwLock::new(settings)
-        });
-    }
-
-    pub fn load() -> Self {
-        if let Some(cache) = SETTINGS_CACHE.get() {
-            return cache.read().unwrap().clone();
+        if SETTINGS_INITIALIZED.swap(true, Ordering::AcqRel) {
+            return;
         }
 
-        // Fallback for tests or uninitialized state
-        Self::default()
+        let mut settings = Self::default();
+        if let Some(path) = Self::get_path()
+            && let Ok(content) = fs::read_to_string(path)
+        {
+            match serde_json::from_str::<Settings>(&content) {
+                Ok(s) => settings = s,
+                Err(e) => log::error!("Failed to load settings: {}", e),
+            }
+        }
+
+        // Generate install_id if missing
+        let needs_initial_save = if settings.install_id.is_none() {
+            settings.install_id = Some(uuid::Uuid::new_v4().to_string());
+            true
+        } else {
+            false
+        };
+
+        settings.check_and_unset_invalid_models();
+        SETTINGS_CACHE.store(Arc::new(settings.clone()));
+
+        if needs_initial_save {
+            settings.persist_to_disk();
+        }
+    }
+
+    /// Lock-free atomic pointer load of the current `Settings` snapshot.
+    #[must_use]
+    pub fn load() -> Arc<Self> {
+        if !SETTINGS_INITIALIZED.load(Ordering::Acquire) {
+            Self::init();
+        }
+        SETTINGS_CACHE.load_full()
+    }
+
+    /// Atomically mutates the cached `Settings` via RCU (`ArcSwap::rcu`),
+    /// persists the updated snapshot to disk using a generation-stamped atomic
+    /// rename, and broadcasts on `SETTINGS_EVENT_BUS` after the write completes.
+    pub fn update<F: FnMut(&mut Self)>(mut f: F) -> Arc<Self> {
+        if !SETTINGS_INITIALIZED.load(Ordering::Acquire) {
+            Self::init();
+        }
+        let mut updated = None;
+        SETTINGS_CACHE.rcu(|current| {
+            let mut next = (**current).clone();
+            f(&mut next);
+            let arc = Arc::new(next);
+            updated = Some(arc.clone());
+            arc
+        });
+        let new_arc = updated.expect("rcu closure always runs at least once");
+        new_arc.persist_to_disk();
+        new_arc
     }
 
     /// Re-reads `settings.json` from disk and replaces the in-memory cache.
@@ -299,7 +333,7 @@ You can add your own sensitive paths here. One path per line. Lines starting wit
     /// cross-process settings changes (model selection, toggles, etc.)
     /// take effect on the next turn without restarting the daemon.
     pub fn reload() {
-        Self::init(); // cheap if already initialised
+        Self::init();
 
         let mut fresh = Self::default();
         if let Some(path) = Self::get_path()
@@ -315,29 +349,37 @@ You can add your own sensitive paths here. One path per line. Lines starting wit
         }
 
         fresh.check_and_unset_invalid_models();
-
-        if let Some(cache) = SETTINGS_CACHE.get() {
-            *cache.write().unwrap() = fresh;
-        }
+        SETTINGS_CACHE.store(Arc::new(fresh));
     }
 
     pub fn save(&self) {
-        if let Some(cache) = SETTINGS_CACHE.get() {
-            *cache.write().unwrap() = self.clone();
+        SETTINGS_CACHE.store(Arc::new(self.clone()));
+        self.persist_to_disk();
+    }
+
+    fn persist_to_disk(&self) {
+        #[cfg(test)]
+        {
+            let _ = SETTINGS_EVENT_BUS.send(self.clone());
+            return;
         }
 
-        if let Some(path) = Self::get_path() {
-            if let Ok(content) = serde_json::to_string_pretty(self) {
-                // Atomic write: write to .tmp then rename.
-                // This prevents the daemon from reading a partial file and
-                // prevents settings from being wiped if a crash occurs during saving.
-                let mut tmp_path = path.clone();
-                tmp_path.set_extension("json.tmp");
+        #[cfg(not(test))]
+        if let Some(path) = Self::get_path()
+            && let Ok(content) = serde_json::to_string_pretty(self)
+        {
+            let generation = SETTINGS_GENERATION.fetch_add(1, Ordering::Relaxed) + 1;
+            let pid = std::process::id();
+            let tmp_path = path.with_extension(format!("json.{pid}.{generation}.tmp"));
 
-                if fs::write(&tmp_path, content).is_ok() {
-                    let _ = fs::rename(&tmp_path, path);
+            if fs::write(&tmp_path, content).is_ok() {
+                if fs::rename(&tmp_path, &path).is_ok() {
+                    // Only broadcast after the durable atomic rename has completed
+                    // so cross-process listeners (daemon reload) never read a stale file.
+                    let _ = SETTINGS_EVENT_BUS.send(self.clone());
+                } else {
+                    let _ = fs::remove_file(&tmp_path);
                 }
-                let _ = SETTINGS_EVENT_BUS.send(self.clone());
             }
         }
     }
@@ -472,33 +514,46 @@ impl AppState {
     }
 
     pub fn init() {
-        let _ = APP_STATE_CACHE.get_or_init(|| {
-            let mut state = Self::default();
-            if let Some(path) = Self::get_path()
-                && let Ok(content) = fs::read_to_string(path)
-                && let Ok(s) = serde_json::from_str::<AppState>(&content)
-            {
-                state = s;
-            }
-            RwLock::new(state)
-        });
+        let mut state = Self::default();
+        if let Some(path) = Self::get_path()
+            && let Ok(content) = fs::read_to_string(path)
+            && let Ok(s) = serde_json::from_str::<AppState>(&content)
+        {
+            state = s;
+        }
+        APP_STATE_CACHE.store(Arc::new(state));
     }
 
     pub fn load() -> Self {
-        if let Some(cache) = APP_STATE_CACHE.get() {
-            return cache.read().unwrap().clone();
-        }
-        Self::default()
+        (**APP_STATE_CACHE.load()).clone()
     }
 
     pub fn save(&self) {
-        if let Some(cache) = APP_STATE_CACHE.get() {
-            *cache.write().unwrap() = self.clone();
-        }
+        APP_STATE_CACHE.store(Arc::new(self.clone()));
         if let Some(path) = Self::get_path()
             && let Ok(content) = serde_json::to_string_pretty(self)
         {
             let _ = fs::write(path, content);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn settings_update_mutates_cache_atomically() {
+        let initial = Settings::load().font_size;
+        let updated = Settings::update(|s| {
+            s.font_size = initial + 3;
+        });
+        assert_eq!(updated.font_size, initial + 3);
+        assert_eq!(Settings::load().font_size, initial + 3);
+
+        // Restore
+        Settings::update(|s| {
+            s.font_size = initial;
+        });
     }
 }

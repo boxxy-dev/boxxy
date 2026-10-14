@@ -67,7 +67,7 @@ UI-shaped, host-agnostic variants: `None`, `Command(String)`, `Bookmark { filena
 ```
 boxxy-claw-widget
 ├── async-channel
-├── base64, chrono, serde, serde_json, lazy_static, uuid (msgbar transitives)
+├── base64, chrono, serde, serde_json, uuid (msgbar transitives)
 ├── glib, gtk4
 ├── log, tokio
 ├── boxxy-ai-core          (autocomplete fetches live agents)

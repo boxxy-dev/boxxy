@@ -286,9 +286,9 @@ pub fn sidebar_page_changed(inner: &mut AppWindowInner, name: String) {
 
 pub fn sidebar_width_changed(inner: &mut AppWindowInner, width: i32) {
     if inner.current_settings.ai_chat_width != width {
-        let mut settings = boxxy_preferences::Settings::load();
-        settings.ai_chat_width = width;
-        settings.save();
+        boxxy_preferences::Settings::update(|settings| {
+            settings.ai_chat_width = width;
+        });
 
         inner.current_settings.ai_chat_width = width;
     }

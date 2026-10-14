@@ -41,7 +41,7 @@ impl AppWindow {
             }
         });
 
-        let current_settings = Settings::load();
+        let current_settings = (*Settings::load()).clone();
         let app_state = AppState::load();
 
         let style_manager = adw::StyleManager::default();

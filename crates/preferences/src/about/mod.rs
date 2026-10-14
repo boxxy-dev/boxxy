@@ -156,9 +156,9 @@ pub fn populate_about_page(
     telemetry_rows.push(telemetry_row.clone());
 
     telemetry_switch.connect_state_set(move |_, state| {
-        let mut settings = crate::config::Settings::load();
-        settings.enable_telemetry = state;
-        settings.save();
+        crate::config::Settings::update(|settings| {
+            settings.enable_telemetry = state;
+        });
         glib::Propagation::Proceed
     });
 

@@ -176,7 +176,6 @@ impl Drop for PaneInner {
 pub(super) struct PaneInner {
     pub terminal: TerminalWidget,
     pub(super) scrolled_window: gtk::ScrolledWindow,
-    pub(super) _provider: gtk::CssProvider,
     pub(super) working_dir: Option<String>,
     pub id: String,
     pub(super) current_settings: Option<Settings>,
@@ -244,12 +243,6 @@ impl TerminalPaneComponent {
             search_bar_rc,
             progress_bar,
         ) = ui::build_ui();
-
-        let provider = gtk::CssProvider::new();
-        #[allow(deprecated)]
-        terminal
-            .style_context()
-            .add_provider(&provider, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
 
         let (claw_event_tx, claw_rx_from_agent) = async_channel::unbounded();
         let (tx_to_agent, rx_from_ui) =
@@ -620,7 +613,6 @@ impl TerminalPaneComponent {
             let inner = Rc::new(RefCell::new(PaneInner {
                 terminal: terminal.clone(),
                 scrolled_window,
-                _provider: provider,
                 working_dir: init.working_dir,
                 id: id.clone(),
                 current_settings: None,
@@ -914,7 +906,7 @@ impl TerminalPaneComponent {
                 .borrow()
                 .current_settings
                 .clone()
-                .unwrap_or_else(Settings::load);
+                .unwrap_or_else(|| (*Settings::load()).clone());
             let working_dir = inner_rc.borrow().working_dir.clone();
 
             let agent = crate::get_agent().await;

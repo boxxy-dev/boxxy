@@ -122,25 +122,33 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
             window_state::settings_changed(&mut inner, settings);
         }
         AppInput::ZoomIn => {
-            let mut settings = boxxy_preferences::Settings::load();
-            settings.font_size += 1;
-            settings.save();
-            let _ = inner.tx.send_blocking(AppInput::SettingsChanged(settings));
+            let settings = boxxy_preferences::Settings::update(|s| {
+                s.font_size += 1;
+            });
+            let _ = inner
+                .tx
+                .send_blocking(AppInput::SettingsChanged((*settings).clone()));
         }
         AppInput::ZoomOut => {
-            let mut settings = boxxy_preferences::Settings::load();
-            if settings.font_size > 4 {
-                settings.font_size -= 1;
-                settings.save();
-                let _ = inner.tx.send_blocking(AppInput::SettingsChanged(settings));
+            if boxxy_preferences::Settings::load().font_size > 4 {
+                let settings = boxxy_preferences::Settings::update(|s| {
+                    if s.font_size > 4 {
+                        s.font_size -= 1;
+                    }
+                });
+                let _ = inner
+                    .tx
+                    .send_blocking(AppInput::SettingsChanged((*settings).clone()));
             }
         }
         AppInput::ResetZoom => {
-            let mut settings = boxxy_preferences::Settings::load();
-            let default_settings = boxxy_preferences::Settings::default();
-            settings.font_size = default_settings.font_size;
-            settings.save();
-            let _ = inner.tx.send_blocking(AppInput::SettingsChanged(settings));
+            let default_font_size = boxxy_preferences::Settings::default().font_size;
+            let settings = boxxy_preferences::Settings::update(|s| {
+                s.font_size = default_font_size;
+            });
+            let _ = inner
+                .tx
+                .send_blocking(AppInput::SettingsChanged((*settings).clone()));
         }
         AppInput::Copy => {
             if let Some(page) = inner.tab_view.selected_page() {
@@ -346,11 +354,11 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
                 inner.current_settings.ollama_base_url.clone(),
                 inner.current_settings.get_effective_api_keys(),
                 move |ai_provider, claw_provider, memory_provider| {
-                    let mut settings = boxxy_preferences::Settings::load();
-                    settings.ai_chat_model = ai_provider;
-                    settings.claw_model = claw_provider;
-                    settings.memory_model = memory_provider;
-                    settings.save();
+                    boxxy_preferences::Settings::update(|settings| {
+                        settings.ai_chat_model = ai_provider.clone();
+                        settings.claw_model = claw_provider.clone();
+                        settings.memory_model = memory_provider.clone();
+                    });
                 },
             );
             dialog.present(Some(&inner.window));

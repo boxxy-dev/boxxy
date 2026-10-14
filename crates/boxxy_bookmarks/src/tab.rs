@@ -199,16 +199,31 @@ impl BookmarksTabComponent {
             source_view.set_left_margin(8);
             source_view.set_right_margin(8);
 
+            static PREVIEW_TV_COUNTER: std::sync::atomic::AtomicUsize =
+                std::sync::atomic::AtomicUsize::new(0);
+            let tv_id = PREVIEW_TV_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let tv_class = format!("bookmark-preview-tv-{tv_id}");
+            source_view.add_css_class(&tv_class);
+
             let provider = gtk::CssProvider::new();
             let css = format!(
-                "textview {{ font-family: \"{}\"; background-color: @window_bg_color; }}",
+                "textview.{tv_class} {{ font-family: \"{}\"; background-color: @window_bg_color; }}",
                 settings.font_name
             );
             provider.load_from_string(&css);
-            #[allow(deprecated)]
-            source_view
-                .style_context()
-                .add_provider(&provider, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
+            if let Some(display) = gtk::gdk::Display::default() {
+                gtk::style_context_add_provider_for_display(
+                    &display,
+                    &provider,
+                    gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+                );
+                let provider_cleanup = provider.clone();
+                source_view.connect_destroy(move |_| {
+                    if let Some(display) = gtk::gdk::Display::default() {
+                        gtk::style_context_remove_provider_for_display(&display, &provider_cleanup);
+                    }
+                });
+            }
 
             preview_container.append(&source_view);
 

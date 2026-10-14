@@ -1,14 +1,15 @@
 use arc_swap::ArcSwap;
 use serde::{Deserialize, Serialize};
+use std::sync::LazyLock;
 
-lazy_static::lazy_static! {
-    /// A globally accessible, lock-free reactive cache of the character registry.
-    /// This is updated via D-Bus and read synchronously by the UI (e.g. MsgBar autocomplete).
-    pub static ref CHARACTER_CACHE: ArcSwap<Vec<CharacterInfo>> = ArcSwap::from_pointee(Vec::new());
+/// A globally accessible, lock-free reactive cache of the character registry.
+/// This is updated via D-Bus and read synchronously by the UI (e.g. MsgBar autocomplete).
+pub static CHARACTER_CACHE: LazyLock<ArcSwap<Vec<CharacterInfo>>> =
+    LazyLock::new(|| ArcSwap::from_pointee(Vec::new()));
 
-    /// A globally accessible, lock-free reactive cache of current character assignments.
-    pub static ref CLAIMS_CACHE: ArcSwap<Vec<CharacterClaim>> = ArcSwap::from_pointee(Vec::new());
-}
+/// A globally accessible, lock-free reactive cache of current character assignments.
+pub static CLAIMS_CACHE: LazyLock<ArcSwap<Vec<CharacterClaim>>> =
+    LazyLock::new(|| ArcSwap::from_pointee(Vec::new()));
 
 /// What kind of entity holds a character claim. Today the only variant is
 /// `Pane` (a terminal pane). The enum exists so future non-pane holders

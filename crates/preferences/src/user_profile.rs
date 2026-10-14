@@ -3,7 +3,6 @@ use gtk4 as gtk;
 use gtk4::gdk;
 use gtk4::glib;
 use libadwaita as adw;
-use libadwaita::prelude::*;
 use std::path::PathBuf;
 
 pub const DEFAULT_USER_COLOR: &str = "#0461be";
@@ -59,7 +58,7 @@ pub fn configure_avatar(avatar: &adw::Avatar, profile: &EffectiveUserProfile) {
     }
 }
 
-pub fn set_default_color_button(button: &gtk::ColorButton, settings: &Settings) {
+pub fn set_default_color_button(button: &gtk::ColorDialogButton, settings: &Settings) {
     let color = settings
         .user_profile
         .color

@@ -89,6 +89,12 @@ impl BookmarkEditor {
         source_view.set_hexpand(true);
 
         // Set the same font as the terminal via CSS
+        static EDITOR_TV_COUNTER: std::sync::atomic::AtomicUsize =
+            std::sync::atomic::AtomicUsize::new(0);
+        let tv_id = EDITOR_TV_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let tv_class = format!("bookmark-editor-tv-{tv_id}");
+        source_view.add_css_class(&tv_class);
+
         let current_font_size = Rc::new(RefCell::new(settings.font_size as f64));
         let provider = gtk::CssProvider::new();
         let font_name = settings.font_name.clone();
@@ -97,21 +103,30 @@ impl BookmarkEditor {
             let provider = provider.clone();
             let font_name = font_name.clone();
             let current_font_size = current_font_size.clone();
+            let tv_class = tv_class.clone();
             move || {
                 let size = *current_font_size.borrow();
                 let css = format!(
-                    "textview {{ font-family: \"{}\"; font-size: {}pt; }}",
-                    font_name, size
+                    "textview.{tv_class} {{ font-family: \"{font_name}\"; font-size: {size}pt; }}"
                 );
                 provider.load_from_string(&css);
             }
         };
         update_font();
 
-        #[allow(deprecated)]
-        source_view
-            .style_context()
-            .add_provider(&provider, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
+        if let Some(display) = gtk::gdk::Display::default() {
+            gtk::style_context_add_provider_for_display(
+                &display,
+                &provider,
+                gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+            );
+            let provider_cleanup = provider.clone();
+            source_view.connect_destroy(move |_| {
+                if let Some(display) = gtk::gdk::Display::default() {
+                    gtk::style_context_remove_provider_for_display(&display, &provider_cleanup);
+                }
+            });
+        }
 
         // Add Zoom Shortcuts
         let zoom_controller = gtk::ShortcutController::new();
@@ -249,21 +264,27 @@ impl BookmarkEditor {
         ai_text_view.add_css_class("view");
         ai_text_view.add_css_class("bookmarks-ai-input");
 
-        // Apply rounded corners and background to the AI input
-        let ai_css_provider = gtk::CssProvider::new();
-        ai_css_provider.load_from_string(
-            "
-            .bookmarks-ai-input {
-                border-radius: 8px;
-                border: 1px solid alpha(currentColor, 0.1);
-                background-color: alpha(@window_bg_color, 0.5);
+        // Apply rounded corners and background to the AI input once per display
+        static AI_INPUT_CSS_ONCE: std::sync::Once = std::sync::Once::new();
+        AI_INPUT_CSS_ONCE.call_once(|| {
+            if let Some(display) = gtk::gdk::Display::default() {
+                let ai_css_provider = gtk::CssProvider::new();
+                ai_css_provider.load_from_string(
+                    "
+                    .bookmarks-ai-input {
+                        border-radius: 8px;
+                        border: 1px solid alpha(currentColor, 0.1);
+                        background-color: alpha(@window_bg_color, 0.5);
+                    }
+                ",
+                );
+                gtk::style_context_add_provider_for_display(
+                    &display,
+                    &ai_css_provider,
+                    gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+                );
             }
-        ",
-        );
-        #[allow(deprecated)]
-        ai_text_view
-            .style_context()
-            .add_provider(&ai_css_provider, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
+        });
 
         let ai_text_scroll = gtk::ScrolledWindow::builder()
             .hscrollbar_policy(gtk::PolicyType::Never)

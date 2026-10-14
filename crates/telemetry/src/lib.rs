@@ -260,7 +260,10 @@ pub async fn track_event(name: &str, value: f64, attributes: Vec<KeyValue>) {
         state.install_id.clone()
     } else {
         let settings = boxxy_preferences::Settings::load();
-        settings.install_id.unwrap_or_else(|| "unknown".to_string())
+        settings
+            .install_id
+            .clone()
+            .unwrap_or_else(|| "unknown".to_string())
     };
 
     // Prepare attributes for both Journal and OTel

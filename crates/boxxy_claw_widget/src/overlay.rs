@@ -651,11 +651,20 @@ impl TerminalOverlay {
                 class_name, info.config.color, class_name, class_name
             );
             let provider = gtk::CssProvider::new();
-            #[allow(deprecated)]
             provider.load_from_string(&css);
-            #[allow(deprecated)]
-            btn.style_context()
-                .add_provider(&provider, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
+            if let Some(display) = gtk::gdk::Display::default() {
+                gtk::style_context_add_provider_for_display(
+                    &display,
+                    &provider,
+                    gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+                );
+                let provider_cleanup = provider.clone();
+                btn.connect_destroy(move |_| {
+                    if let Some(display) = gtk::gdk::Display::default() {
+                        gtk::style_context_remove_provider_for_display(&display, &provider_cleanup);
+                    }
+                });
+            }
 
             // Clicking only updates the local pre-selection so the checkmark
             // moves immediately. The actual session is created lazily when the

@@ -24,3 +24,4 @@ boxxy-model-selection = { path = "../model_selection" }
 boxxy-mcp = { path = "../boxxy_mcp" }
 boxxy-claw-protocol = { path = "../boxxy_claw_protocol" }
 uuid.workspace = true
+arc-swap.workspace = true

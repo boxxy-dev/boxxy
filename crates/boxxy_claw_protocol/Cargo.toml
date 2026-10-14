@@ -17,6 +17,5 @@ log = { workspace = true }
 tokio = { workspace = true }
 anyhow = { workspace = true }
 arc-swap = { workspace = true }
-lazy_static = { workspace = true }
 async-trait = { workspace = true }
 zvariant = { workspace = true }

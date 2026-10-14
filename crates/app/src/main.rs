@@ -95,7 +95,7 @@ fn main() {
 
         if found_any {
             let settings = boxxy_preferences::Settings::load();
-            let _ = boxxy_preferences::SETTINGS_EVENT_BUS.send(settings.clone());
+            let _ = boxxy_preferences::SETTINGS_EVENT_BUS.send((*settings).clone());
         }
 
         // Always push effective credentials to the daemon, whether env vars
