@@ -1,31 +1,48 @@
+use std::collections::HashMap;
+use std::time::Duration;
+
 use anyhow::{Context, Result};
-use rmcp::service::RunningService;
+use rmcp::service::{ClientCacheConfig, RunningService};
 use rmcp::transport::child_process::TokioChildProcess;
 use rmcp::{RoleClient, serve_client};
-use std::collections::HashMap;
+
+use super::handler::BoxxyClientHandler;
 
 pub async fn build_stdio_client(
+    handler: BoxxyClientHandler,
     command_name: &str,
     args: &[String],
     env: &HashMap<String, String>,
-) -> Result<RunningService<RoleClient, ()>> {
+    timeout_ms: u64,
+) -> Result<RunningService<RoleClient, BoxxyClientHandler>> {
     let mut cmd = rmcp::transport::which_command(command_name)
-        .with_context(|| format!("Executable not found: {}", command_name))?;
+        .with_context(|| format!("Executable not found in PATH: {command_name}"))?;
     cmd.args(args);
     cmd.kill_on_drop(true);
 
     for (k, v) in env {
-        // TODO: Resolve "$KEYCHAIN:" values here
         cmd.env(k, v);
     }
 
-    // `process_wrap::tokio::CommandWrap` implements `From<tokio::process::Command>`
     let transport =
         TokioChildProcess::new(cmd).context("Failed to initialize Stdio MCP transport")?;
 
-    let client = serve_client((), transport)
+    let init_timeout = Duration::from_millis(timeout_ms.max(1_000));
+    let client = tokio::time::timeout(init_timeout, serve_client(handler, transport))
         .await
-        .map_err(|e| anyhow::anyhow!("Failed to serve client: {:?}", e))?;
+        .with_context(|| {
+            format!(
+                "Timed out after {}ms waiting for Stdio MCP server '{command_name}' to initialize",
+                init_timeout.as_millis()
+            )
+        })?
+        .map_err(|e| anyhow::anyhow!("Failed to initialize Stdio MCP client: {e}"))?;
+
+    // Surface transport/server errors directly rather than masking them with stale cached pages.
+    client
+        .peer()
+        .set_response_cache_config(ClientCacheConfig::default().with_serve_stale_on_error(false))
+        .await;
 
     Ok(client)
 }

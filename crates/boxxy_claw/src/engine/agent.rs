@@ -404,7 +404,9 @@ pub async fn create_claw_agent(
     };
     // Always sync the latest configs before building tools
     mcp_manager.update_configs(config.mcp_servers.clone()).await;
-    let mcp_tools = mcp_manager.build_rig_tools().await;
+    let mcp_tools = mcp_manager
+        .build_rig_tools(Some(approval_handler.clone()))
+        .await;
     tool_server = tool_server.dynamic_tools(mcp_tools);
 
     let tool_handle = tool_server.run();

@@ -180,7 +180,7 @@ Also owns the **Character system** types and loader:
 All GTK widgets for the Claw sidebar page (right-hand `ViewStack` tab). Provides `ClawSidebarComponent` (the outer shell: status page, token counter, pending-tasks drawer, "Clear" button) and `create_claw_message_list` (the per-pane virtual list of diagnosis / suggestion / tool-call / process-list / user-message rows). Rows are recycled via `boxxy_core_widgets::ObjectExtSafe` so long histories stay cheap. Strictly display-only — the `add_*_approval_row` helpers format proposals as Diagnosis rows and deliberately ignore their callback args.
 
 ### 15. `boxxy-mcp` (Library Crate)
-Implements the Model Context Protocol (MCP) using `rmcp`. It provides a `McpClientManager` to orchestrate connections via Stdio and HTTP(SSE/Streamable). Features dynamic tool ingestion, bridging JSON Schema Draft 7 to `rig` via `DynamicMcpTool`, and employs a "Lazy Boot" caching strategy to prevent slow startup times when configuring heavy Node.js MCP servers.
+Implements the Model Context Protocol (MCP) using `rmcp 3.5.1` (MCP `2026-07-28` spec with automatic fallback to `2025-11-25`). Provides `McpClientManager` and `BoxxyClientHandler` to orchestrate connections via Stdio and Streamable HTTP (`ClientLifecycleMode::Auto`), with full config diffing, exponential-backoff reconnection, paginated tool discovery (`list_all_tools`), `notifications/tools/list_changed` cache invalidation, and `McpToolObserver` hooks so MCP tool executions surface in the Claw indicator badge, sidebar debug log, and telemetry. Bridges JSON Schema Draft 7 / 2020-12 to `rig` via `DynamicMcpTool`.
 
 ### 16. `boxxy-telemetry` (Library Crate)
 Provides a privacy-first observability layer for tracking agent and system usage.

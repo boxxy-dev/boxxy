@@ -281,6 +281,18 @@ impl ApprovalHandler for ClawApprovalHandler {
     }
 }
 
+#[async_trait::async_trait]
+impl boxxy_mcp::rig_bridge::tool::McpToolObserver for ClawApprovalHandler {
+    async fn on_tool_started(&self, tool_name: String) {
+        self.report_tool_started(tool_name.clone()).await;
+        boxxy_telemetry::track_tool_use(&tool_name).await;
+    }
+
+    async fn on_tool_result(&self, tool_name: String, result: String) {
+        self.report_tool_result(tool_name, result).await;
+    }
+}
+
 #[derive(Deserialize)]
 pub struct SysShellArgs {
     pub command: String,
