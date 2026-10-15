@@ -196,11 +196,11 @@ Boxxy supports three primary distribution channels:
 3. **System Package Managers (Nix, Arch AUR, etc.):** For environments where a system package manager handles updates. Maintainers should compile with the `disable-self-update` Cargo feature (`cargo build --release --features disable-self-update`) to strip out the internal update logic and related dependencies.
 
 ### Auto-Update Protocol (Native Only)
-For native installations, Boxxy implements an **Atomic Swap** update mechanism located in `boxxy_window::updater`:
-- **Detection:** Uses `can_self_update()` to safely disable the internal updater when sandboxed via Flatpak or when explicitly compiled out via the `disable-self-update` feature.
-- **Verification:** Tracks the `published_at` date of the GitHub `nightly` release in `~/.local/boxxy-terminal/.last_update` to avoid redundant prompts.
-- **Persistence:** Downloads and extracts updates silently in the background.
-- **Execution:** Performs an atomic rename of the running `boxxy-terminal` and `boxxy-agent` binaries before spawning the new process and exiting. This bypasses "text file busy" errors and requires no root privileges.
+For native installations, Boxxy implements an **Atomic Swap** update mechanism located in `boxxy_window::updater` (powered by `self_update 1.3`):
+- **Detection & Throttling:** Uses `can_self_update()` to safely disable the internal updater when sandboxed via Flatpak or when explicitly compiled out via the `disable-self-update` feature. Checks are throttled via `self_update::check_interval::UpdateCheckGuard` (`~/.local/boxxy-terminal/.last_update_check`, 1-hour interval) and support `GH_TOKEN`/`GITHUB_TOKEN` + `Error::RateLimited` classification.
+- **Verification:** Queries the `/releases/tags/nightly` endpoint directly, tracks the `published_at` date in `~/.local/boxxy-terminal/.last_update`, and verifies downloaded archives via `self_update::Checksum` (supporting both `.sha256` sums files and GitHub's per-asset `sha256:<hex>` digest).
+- **Persistence:** Streams updates asynchronously via `Download::download_to_async` (capped at 250 MiB via `max_download_size`) and unpacks via `self_update::Extract`.
+- **Execution:** Performs a transactional multi-file swap of `boxxy-terminal` and `boxxy-agent` via `self_update::MoveAll` (rolling back both if either rename fails) before stopping the old daemon, spawning the new process, and exiting. This bypasses "text file busy" errors and requires no root privileges.
 
 ## State Machine & UI Sync Protocol (Claw)
 

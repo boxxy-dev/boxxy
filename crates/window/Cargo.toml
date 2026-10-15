@@ -35,12 +35,15 @@ serde.workspace = true
 log.workspace = true
 reqwest.workspace = true
 self_update.workspace = true
+serde_json.workspace = true
 tempfile.workspace = true
-tar.workspace = true
-flate2.workspace = true
 sha2.workspace = true
 gstreamer.workspace = true
 rand.workspace = true
 zbus = { workspace = true }
 home = { workspace = true }
 ashpd = { workspace = true }
+
+[dev-dependencies]
+tar.workspace = true
+flate2.workspace = true
