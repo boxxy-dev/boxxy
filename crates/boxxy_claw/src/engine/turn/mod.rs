@@ -188,7 +188,6 @@ pub fn spawn_turn(
             rig::message::Message::user(full_prompt.clone())
         };
 
-        let pre_chat_len = final_history.len();
         let start_time = std::time::Instant::now();
         match agent.chat(query_for_chat, final_history).await {
             Ok((response, usage, messages)) => {
@@ -229,11 +228,14 @@ pub fn spawn_turn(
                 {
                     let mut state_lock = state.lock().await;
                     state_lock.persistent_agent = Some(agent.clone());
-                    
+
                     if let Some(msgs) = messages {
+                        // `PromptResponse::messages` in Rig 0.44 contains only the messages
+                        // committed by this run (its prompt + tool calls/results + final assistant turn).
+                        // Since we already pushed the user prompt to `state_lock.history` before the run,
+                        // skip the leading user prompt and append the remaining committed turns.
                         let new_tail: Vec<rig::message::Message> = msgs
                             .into_iter()
-                            .skip(pre_chat_len)
                             .skip_while(|m| matches!(m, rig::message::Message::User { .. }))
                             .collect();
                         state_lock.history.extend(new_tail);
@@ -244,7 +246,7 @@ pub fn spawn_turn(
                     }
 
                     if let Some(usage) = usage {
-                        state_lock.total_tokens += usage.total_tokens as u64;
+                        state_lock.total_tokens += usage.total_tokens.unwrap_or(0);
                     }
                 }
 
@@ -253,7 +255,6 @@ pub fn spawn_turn(
                     session_id: session_id_clone.clone(),
                     agent_name: agent_name.clone(),
                     user_query: prompt_clone.clone(),
-                    full_prompt: full_prompt.clone(),
                     response: response.clone(),
                     cwd: cwd_clone.clone(),
                     settings: (*settings).clone(),

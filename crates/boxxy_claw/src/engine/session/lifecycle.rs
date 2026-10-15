@@ -351,10 +351,20 @@ impl ClawSession {
                     state_lock.pinned = self.pinned;
                     state_lock.total_tokens = self.total_tokens;
 
-                    if let Some(history_json) = session.history_json
-                        && let Ok(history) = serde_json::from_str::<Vec<Message>>(&history_json)
-                    {
-                        state_lock.history = history;
+                    if let Some(history_json) = session.history_json {
+                        match serde_json::from_str::<Vec<Message>>(&history_json) {
+                            Ok(history) => {
+                                state_lock.history = history;
+                            }
+                            Err(e) => {
+                                log::warn!(
+                                    "Session {} history could not be deserialized (likely pre-0.44 format: {}); starting with fresh LLM history while retaining visual logs.",
+                                    session_id,
+                                    e
+                                );
+                                state_lock.history.clear();
+                            }
+                        }
                     }
 
                     if let Some(tasks_json) = session.pending_tasks_json

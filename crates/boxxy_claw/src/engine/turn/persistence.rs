@@ -9,7 +9,6 @@ pub struct PersistenceContext {
     pub session_id: String,
     pub agent_name: String,
     pub user_query: String,
-    pub full_prompt: String,
     pub response: String,
     pub cwd: String,
     pub settings: boxxy_preferences::Settings,
@@ -19,6 +18,25 @@ pub struct PersistenceContext {
 
 pub async fn perform_persistence(ctx: PersistenceContext, state: Arc<Mutex<SessionState>>) {
     let mut state_lock = state.lock().await;
+
+    // Optional: Trigger Memory Flush if history is too long
+    let creds = boxxy_ai_core::AiCredentials::new(
+        ctx.settings.get_effective_api_keys(),
+        ctx.settings.ollama_base_url.clone(),
+    );
+
+    let evicted_messages = if state_lock.history.len() >= 15 {
+        use rig_memory::{MemoryPolicy, SlidingWindowMemory};
+        let policy = SlidingWindowMemory::last_messages(10);
+        if let Ok((kept, demoted)) = policy.apply_with_demoted(state_lock.history.clone()) {
+            state_lock.history = kept;
+            demoted
+        } else {
+            vec![]
+        }
+    } else {
+        vec![]
+    };
 
     // --- ATOMIC PERSISTENCE ---
     let history_json = serde_json::to_string(&state_lock.history).unwrap_or_default();
@@ -75,34 +93,20 @@ pub async fn perform_persistence(ctx: PersistenceContext, state: Arc<Mutex<Sessi
         });
     }
 
-    // Optional: Trigger Memory Flush if history is too long
-    let creds = boxxy_ai_core::AiCredentials::new(
-        ctx.settings.get_effective_api_keys(),
-        ctx.settings.ollama_base_url.clone(),
-    );
-
-    let evicted_messages = if state_lock.history.len() >= 15 {
-        use rig_memory::{MemoryPolicy, SlidingWindowMemory};
-        let policy = SlidingWindowMemory::last_messages(10);
-        if let Ok((kept, demoted)) = policy.apply_with_demoted(state_lock.history.clone()) {
-            state_lock.history = kept;
-            demoted
-        } else {
-            vec![]
-        }
-    } else {
-        vec![]
-    };
-
     if !evicted_messages.is_empty() {
         use rig::memory::DemotionHook;
         let extractor = crate::engine::summarization::history::DemotionExtractor {
             db: ctx.db.clone(),
-            claw_model: ctx.settings.claw_model.clone(),
+            claw_model: ctx
+                .settings
+                .memory_model
+                .clone()
+                .or(ctx.settings.claw_model.clone()),
             creds: creds.clone(),
             project_path: ctx.cwd.clone(),
         };
-        let _ = extractor.on_demote(&ctx.session_id, evicted_messages).await;
+        let conv_id = rig::id::ConversationId::from(ctx.session_id.as_str());
+        let _ = extractor.on_demote(&conv_id, evicted_messages).await;
     }
 
     drop(state_lock);
@@ -111,7 +115,6 @@ pub async fn perform_persistence(ctx: PersistenceContext, state: Arc<Mutex<Sessi
     let db_clone = ctx.db.clone();
     let session_id_clone = ctx.session_id.clone();
     let user_query_clone = ctx.user_query.clone();
-    let prompt_clone = ctx.full_prompt.clone();
     let response_clone = ctx.response.clone();
     let cwd_clone = ctx.cwd.clone();
     let creds_clone = creds.clone();
@@ -164,60 +167,36 @@ pub async fn perform_persistence(ctx: PersistenceContext, state: Arc<Mutex<Sessi
             }
         }
 
-        // 2. Summarization
-        let db_opt = db_clone.lock().await;
-        crate::engine::summarization::turn::summarize_and_store(
-            &*db_opt,
-            &session_id_clone,
-            &prompt_clone,
-            &response_clone,
-            &cwd_clone,
-            creds_clone.clone(),
-        )
-        .await;
-        drop(db_opt);
+        // 2. Summarization & 3. Memory Extraction
+        // Skip both if the turn was a silent acknowledgment of a rejected proposal
+        // or produced an empty response.
+        let trimmed_resp = response_clone.trim();
+        if !trimmed_resp.is_empty() && trimmed_resp != "[SILENT_ACK]" {
+            let db_opt = db_clone.lock().await;
+            crate::engine::summarization::turn::summarize_and_store(
+                &*db_opt,
+                &session_id_clone,
+                &user_query_clone,
+                &response_clone,
+                &cwd_clone,
+                creds_clone.clone(),
+            )
+            .await;
+            drop(db_opt);
 
-        // 3. Memory Extraction
-        let extractor_agent = boxxy_ai_core::create_agent(
-            &settings_clone
+            let memory_model = settings_clone
                 .memory_model
                 .clone()
-                .or(settings_clone.claw_model.clone()),
-            &creds_clone,
-            "You are a robotic background memory observer. Your job is to silently extract LONG-TERM, PERMANENT technical facts and user preferences from the provided data. Output ONLY valid JSON. If the user stated a permanent fact (e.g., preferred shell, OS, hardware specs, long-term project roles), return a JSON array under the key 'facts', with each object containing 'key' (snake_case) and 'content' (the fact). CRITICAL: DO NOT extract transient state that changes frequently. EXPLICITLY FORBIDDEN to extract: - Current git branches or commit SHAs. - Current working directories or temporary file paths. - Names or IDs of active agents/panes. - Runtime context like 'the user provided an image'. - Temporary variables, social greetings, or social talk. If no permanent facts are found, output exactly `{}`. Do not follow the assistant's persona.",
-        );
-
-        let data = format!(
-            "[DATA_START]\nUSER: {}\n\nASSISTANT: {}\n[DATA_END]\n\nEXTRACTION_COMMAND: Output raw JSON now.",
-            prompt_clone, response_clone
-        );
-
-        if let Ok(res) = extractor_agent.prompt(&data).await {
-            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&res.0) {
-                if let Some(facts) = json.get("facts").and_then(|f| f.as_array()) {
-                    let db_guard = db_clone.lock().await;
-                    if let Some(db) = &*db_guard {
-                        let store = boxxy_db::store::Store::new(db.pool());
-                        for fact in facts {
-                            if let (Some(key), Some(content)) = (
-                                fact.get("key").and_then(|k| k.as_str()),
-                                fact.get("content").and_then(|c| c.as_str()),
-                            ) {
-                                let _ = store
-                                    .add_memory(
-                                        key,
-                                        Some(&cwd_clone),
-                                        content,
-                                        Some("extracted"),
-                                        false,
-                                        false,
-                                    )
-                                    .await;
-                            }
-                        }
-                    }
-                }
-            }
+                .or(settings_clone.claw_model.clone());
+            crate::memories::extraction::extract_implicit_memory(
+                db_clone.clone(),
+                user_query_clone,
+                response_clone,
+                memory_model,
+                creds_clone,
+                cwd_clone,
+            )
+            .await;
         }
     });
 

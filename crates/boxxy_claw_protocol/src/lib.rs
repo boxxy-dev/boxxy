@@ -85,24 +85,26 @@ pub enum ClawEvent {
 }
 
 /// Serializable wrapper for rig::completion::Usage
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct UsageWrapper {
     pub input_tokens: u64,
     pub output_tokens: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cached_input_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost_usd: Option<f64>,
 }
 
 impl From<Usage> for UsageWrapper {
     fn from(u: Usage) -> Self {
         Self {
-            input_tokens: u.input_tokens,
-            output_tokens: u.output_tokens,
-            reasoning_tokens: if u.reasoning_tokens > 0 {
-                Some(u.reasoning_tokens)
-            } else {
-                None
-            },
+            input_tokens: u.input_tokens.unwrap_or(0),
+            output_tokens: u.output_tokens.unwrap_or(0),
+            reasoning_tokens: u.reasoning_tokens.filter(|&r| r > 0),
+            cached_input_tokens: u.cached_input_tokens.filter(|&c| c > 0),
+            cost_usd: u.cost.map(|c| c.total),
         }
     }
 }
@@ -438,4 +440,32 @@ pub trait ClawEnvironment: Send + Sync + 'static {
     async fn kill_process(&self, pid: u32, signal: i32) -> anyhow::Result<()>;
     async fn get_clipboard(&self) -> anyhow::Result<String>;
     async fn set_clipboard(&self, text: String) -> anyhow::Result<()>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_usage_wrapper_from_rig_usage() {
+        let usage = Usage::new()
+            .input_tokens(150)
+            .output_tokens(50)
+            .reasoning_tokens(20)
+            .cached_input_tokens(100);
+
+        let wrapper = UsageWrapper::from(usage);
+        assert_eq!(wrapper.input_tokens, 150);
+        assert_eq!(wrapper.output_tokens, 50);
+        assert_eq!(wrapper.reasoning_tokens, Some(20));
+        assert_eq!(wrapper.cached_input_tokens, Some(100));
+        assert_eq!(wrapper.cost_usd, None);
+
+        let empty_usage = Usage::default();
+        let empty_wrapper = UsageWrapper::from(empty_usage);
+        assert_eq!(empty_wrapper.input_tokens, 0);
+        assert_eq!(empty_wrapper.output_tokens, 0);
+        assert_eq!(empty_wrapper.reasoning_tokens, None);
+        assert_eq!(empty_wrapper.cached_input_tokens, None);
+    }
 }

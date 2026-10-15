@@ -14,6 +14,12 @@ pub fn provider_family(model: &Option<boxxy_model_selection::ModelProvider>) -> 
     }
 }
 
+/// Returns the conversation history.
+///
+/// Note: Starting in Rig 0.44, assistant history is item-shaped with origin provenance,
+/// and `rig_core::completion::history::adapt` automatically canonicalizes foreign
+/// provider blocks (stripping incompatible signatures, opaque items, and normalizing
+/// tool call IDs) at request preparation time.
 pub fn maybe_sanitize_history<'a>(
     history: &'a [Message],
     old_config: Option<&AgentConfig>,
@@ -24,8 +30,7 @@ pub fn maybe_sanitize_history<'a>(
         .unwrap_or(false);
 
     if family_changed {
-        // TODO: implement stripping of tool blocks
-        Cow::Owned(history.iter().cloned().collect())
+        Cow::Owned(history.to_vec())
     } else {
         Cow::Borrowed(history)
     }

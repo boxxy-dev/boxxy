@@ -21,8 +21,12 @@ pub async fn summarize_and_store(
         .replace("{{assistant_response}}", assistant_response);
 
     // We use a simple agent call for summarization
+    let model = settings
+        .memory_model
+        .clone()
+        .or(settings.claw_model.clone());
     let agent = boxxy_ai_core::create_agent(
-        &settings.claw_model,
+        &model,
         &creds,
         "You are a robotic memory compactor.",
     );

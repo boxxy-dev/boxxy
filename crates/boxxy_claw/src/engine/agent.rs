@@ -12,18 +12,15 @@ use crate::engine::tools::workspace::{
 use crate::engine::tools::{ClawApprovalHandler, SysShellTool};
 use crate::engine::{ClawEngineEvent, ClawEnvironment};
 use crate::utils::load_prompt_fallback;
-use boxxy_ai_core::{AiCredentials, ModelContextHook};
+use boxxy_ai_core::{AiCredentials, ModelContextHook, build_provider_model};
 use boxxy_core_toolbox::{
     FileDeleteTool, FileReadTool, FileWriteTool, GetClipboardTool, GetSystemInfoTool,
     HttpFetchTool, KillProcessTool, ListDirectoryTool, ListProcessesTool, RunBackgroundCommandTool,
     SetClipboardTool,
 };
-use boxxy_model_selection::ModelProvider;
 use rig::agent::Agent;
-use rig::client::CompletionClient;
+use rig::completion::{CacheRetention, OnUnsupported};
 use rig::message::Message;
-use rig::providers::gemini;
-use rig::providers::ollama;
 use rig::tool::server::ToolServer;
 use std::sync::Arc;
 
@@ -55,7 +52,6 @@ impl ClawAgent {
         prompt: P,
         history: Vec<Message>,
     ) -> Result<(String, Option<rig::completion::Usage>, Option<Vec<Message>>), rig::completion::PromptError> {
-        use rig::completion::Prompt;
         let start = std::time::Instant::now();
 
         let hook = ModelContextHook {
@@ -71,8 +67,8 @@ impl ClawAgent {
                 model_name,
             } => (agent, provider_name.clone(), model_name.clone()),
             ClawAgentInner::Error(e) => {
-                return Err(rig::completion::PromptError::CompletionError(
-                    rig::completion::CompletionError::ProviderError(e.clone()),
+                return Err(rig::completion::PromptError::Provider(
+                    rig::error::ProviderError::Provider(e.clone()),
                 ));
             }
         };
@@ -81,13 +77,13 @@ impl ClawAgent {
             .prompt(msg)
             .history(history)
             .add_hook(hook)
-            .extended_details()
             .await;
 
         let duration = start.elapsed();
 
         match res_result {
             Ok(res) => {
+                let output = res.output();
                 // Track Invocations
                 boxxy_telemetry::track_ai_invocation(&provider_name, &model_name, "claw").await;
 
@@ -105,7 +101,7 @@ impl ClawAgent {
                     &model_name,
                     &provider_name,
                     "input",
-                    res.usage.input_tokens,
+                    res.usage.input_tokens.unwrap_or(0),
                     "claw",
                 )
                 .await;
@@ -113,7 +109,7 @@ impl ClawAgent {
                     &model_name,
                     &provider_name,
                     "output",
-                    res.usage.output_tokens,
+                    res.usage.output_tokens.unwrap_or(0),
                     "claw",
                 )
                 .await;
@@ -126,11 +122,11 @@ impl ClawAgent {
                     log::info!(
                         target: "model-context",
                         "\n=== MODEL RESPONSE ===\n{}\n======================\n",
-                        res.output
+                        output
                     );
                 }
 
-                Ok((res.output, Some(res.usage), res.messages))
+                Ok((output, Some(res.usage), Some(res.messages)))
             }
             Err(e) => {
                 let is_explicit = std::env::var("BOXXY_DEBUG_CONTEXT")
@@ -466,146 +462,20 @@ pub async fn create_claw_agent(
         final_preamble.push_str(&policy);
     }
 
-    let (agent, provider_name, model_name) = match provider {
-        ModelProvider::Gemini(model, thinking) => {
-            let key = creds.api_keys.get("Gemini").cloned().unwrap_or_default();
-            let client = gemini::Client::new(key.trim()).unwrap();
-            let gemini_model = client.completion_model(model.api_name());
+    let (model, provider_name, model_name, reasoning) = build_provider_model(provider, &creds);
 
-            let mut builder = rig::agent::AgentBuilder::new(gemini_model)
-                .preamble(&final_preamble)
-                .default_max_turns(100)
-                .tool_server_handle(tool_handle);
+    let mut builder = rig::agent::AgentBuilder::new(model)
+        .preamble(&final_preamble)
+        .default_max_turns(100)
+        .cache(CacheRetention::Short)
+        .on_unsupported(OnUnsupported::Ignore)
+        .tool_server_handle(tool_handle);
 
-            if let Some(level) = thinking {
-                if *level != boxxy_model_selection::ThinkingLevel::None {
-                    builder = builder.additional_params(serde_json::json!({
-                        "generationConfig": {
-                            "thinkingConfig": {
-                                "thinkingLevel": level.api_name()
-                            }
-                        }
-                    }));
-                }
-            }
+    if let Some(reasoning) = reasoning {
+        builder = builder.reasoning(reasoning);
+    }
 
-            (
-                builder.build(),
-                "Gemini".to_string(),
-                model.api_name().to_string(),
-            )
-        }
-        ModelProvider::Ollama(model_name) => {
-            let client: ollama::Client = ollama::Client::builder()
-                .api_key(rig::client::Nothing)
-                .base_url(creds.ollama_url.as_str())
-                .build()
-                .unwrap();
-            let ollama_model = client.completion_model(model_name.as_str());
-
-            let builder = rig::agent::AgentBuilder::new(ollama_model)
-                .preamble(&final_preamble)
-                .default_max_turns(100)
-                .tool_server_handle(tool_handle);
-
-            (
-                builder.build(),
-                "Ollama".to_string(),
-                model_name.clone(),
-            )
-        }
-        ModelProvider::Anthropic(model, thinking) => {
-            let key = creds.api_keys.get("Anthropic").cloned().unwrap_or_default();
-            let client = rig::providers::anthropic::Client::new(key.trim()).unwrap();
-            let anthropic_model = client.completion_model(model.api_name());
-
-            let mut builder = rig::agent::AgentBuilder::new(anthropic_model)
-                .preamble(&final_preamble)
-                .default_max_turns(100)
-                .tool_server_handle(tool_handle);
-
-            if let Some(level) = thinking {
-                if *level != boxxy_model_selection::ThinkingLevel::None
-                    && model.supports_extended_thinking()
-                {
-                    builder = builder.additional_params(serde_json::json!({
-                        "thinking": {
-                            "type": "enabled",
-                            "budget_tokens": level.anthropic_budget_tokens()
-                        }
-                    }));
-                }
-            }
-
-            (
-                builder.build(),
-                "Anthropic".to_string(),
-                model.api_name().to_string(),
-            )
-        }
-        ModelProvider::OpenAi(model, thinking) => {
-            let key = creds.api_keys.get("OpenAI").cloned().unwrap_or_default();
-            let client = rig::providers::openai::Client::new(key.trim()).unwrap();
-            let openai_model = client.completion_model(model.api_name());
-
-            let mut builder = rig::agent::AgentBuilder::new(openai_model)
-                .preamble(&final_preamble)
-                .default_max_turns(100)
-                .tool_server_handle(tool_handle);
-
-            if let Some(level) = thinking {
-                builder = builder.additional_params(serde_json::json!({
-                    "reasoning": { "effort": level.api_name() }
-                }));
-            }
-
-            (
-                builder.build(),
-                "OpenAI".to_string(),
-                model.api_name().to_string(),
-            )
-        }
-        ModelProvider::OpenRouter(model_name) => {
-            let key = creds
-                .api_keys
-                .get("OpenRouter")
-                .cloned()
-                .unwrap_or_default();
-            let client = rig::providers::openai::Client::builder()
-                .api_key(key.trim())
-                .base_url("https://openrouter.ai/api/v1")
-                .build()
-                .unwrap();
-            let openrouter_model = client.completion_model(model_name.as_str());
-
-            let builder = rig::agent::AgentBuilder::new(openrouter_model)
-                .preamble(&final_preamble)
-                .default_max_turns(100)
-                .tool_server_handle(tool_handle);
-
-            (
-                builder.build(),
-                "OpenRouter".to_string(),
-                model_name.clone(),
-            )
-        }
-        ModelProvider::DeepSeek(model) => {
-            let key = creds.api_keys.get("DeepSeek").cloned().unwrap_or_default();
-            let client = rig::providers::deepseek::Client::new(key.trim()).unwrap();
-            let deepseek_model = client.completion_model(model.api_name());
-
-            let builder = rig::agent::AgentBuilder::new(deepseek_model)
-                .preamble(&final_preamble)
-                .default_max_turns(100)
-                .tool_server_handle(tool_handle);
-
-            (
-                builder.build(),
-                "DeepSeek".to_string(),
-                model.api_name().to_string(),
-            )
-        }
-    };
+    let agent = builder.build();
 
     let inner = ClawAgentInner::Ready {
         agent,

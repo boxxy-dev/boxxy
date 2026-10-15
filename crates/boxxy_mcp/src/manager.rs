@@ -156,7 +156,9 @@ impl McpClientManager {
                         }
                         seen_names.insert(tool_name);
 
-                        rig_tools.push(dynamic_tool.to_dynamic_tool());
+                        if let Some(tool) = dynamic_tool.to_dynamic_tool() {
+                            rig_tools.push(tool);
+                        }
                     }
                 }
             }

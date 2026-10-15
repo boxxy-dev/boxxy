@@ -12,10 +12,9 @@ This crate provides a specialized `ModelContextHook` using the `rig::agent::Agen
 A unified payload struct that carries API keys and base URLs.
 - Uses a `HashMap<String, String>` for API keys to allow dynamic scaling without changing function signatures.
 
-### `create_agent`
-A factory function that instantiates a `BoxxyAgent` based on a `ModelProvider` configuration and `AiCredentials`.
-- Handles provider client initialization.
-- Configures agent preambles (system prompts).
+### `build_provider_model` & `create_agent`
+`build_provider_model` is the shared factory that resolves a `ModelProvider` and `AiCredentials` into a type-erased `rig::DynModel<rig::operation::Completion>` along with portable `rig::completion::Reasoning` options (`Effort` / `Budget` / `Off`).
+`create_agent` instantiates a `BoxxyAgent` with portable `GenerationOptions` (`.reasoning(..)`, `.cache(CacheRetention::Short)`, and `.on_unsupported(OnUnsupported::Ignore)`), ensuring consistent prompt caching and thinking configurations across both the AI Chat sidebar and the Claw reasoning engine.
 
 ## Utilities
 

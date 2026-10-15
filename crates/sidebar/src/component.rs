@@ -400,7 +400,7 @@ impl AiSidebarComponent {
         }
 
         if let Some(usage) = usage {
-            let total = inner.total_tokens_used.get() + usage.total_tokens;
+            let total = inner.total_tokens_used.get() + usage.total_tokens.unwrap_or(0);
             inner.total_tokens_used.set(total);
             inner
                 .usage_label

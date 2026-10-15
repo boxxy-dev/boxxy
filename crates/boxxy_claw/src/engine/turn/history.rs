@@ -6,53 +6,73 @@ use rig::message::Message;
 pub fn prepare_query_history(history: Vec<Message>, history_len: usize) -> Vec<Message> {
     // Context Hygiene 2.0: Aggressively strip ALL transient context from previous turns
     // (Skills, Radar, Memories, and Snapshots) so history grows near-zero tokens per turn.
-    let mut final_history: Vec<Message> = history
-        .into_iter()
-        .enumerate()
-        .map(|(i, mut msg)| {
-            // Rule 1B: Freshness Buffer - only keep the verbatim snapshot for the last 4 turns.
-            // Every user + assistant exchange is 2 messages, so 4 turns = 8 messages.
-            // We strip the dynamic blocks from anything older than the last 8 messages.
-            let is_old = history_len.saturating_sub(i) > 8;
+    // Pop the current user message first — it will be passed as query_for_chat instead.
+    let mut final_history = history;
+    final_history.pop();
 
-            if let Message::User { content } = &mut msg {
-                for item in content.iter_mut() {
-                    if let rig::message::UserContent::Text(text) = item {
-                        if is_old {
-                            // Find the start of the dynamic block and truncate everything after it
-                            if let Some(idx) = text.text.find("\n\n## YOUR IDENTITY") {
-                                text.text.truncate(idx);
-                            } else if let Some(idx) = text.text.find("\n\n## CURRENT TURN CONTEXT")
-                            {
-                                text.text.truncate(idx);
-                            } else if let Some(idx) = text.text.find("\n\n--- GLOBAL RADAR") {
-                                text.text.truncate(idx);
-                            } else if let Some(idx) = text.text.find("\n\nTerminal Snapshot:\n```")
-                            {
-                                text.text.truncate(idx);
-                            }
+    // Count how many User messages precede each index from the end so we keep
+    // the verbatim snapshot only for the last 4 user turns (regardless of how
+    // many tool-call / tool-result messages each turn generated).
+    let total_user_msgs = final_history
+        .iter()
+        .filter(|m| {
+            matches!(m, Message::User { content } if content.iter().any(|c| matches!(c, rig::message::UserContent::Text(_))))
+        })
+        .count();
+
+    let mut seen_user_msgs = 0;
+    for msg in &mut final_history {
+        if let Message::User { content } = msg {
+            let has_text = content
+                .iter()
+                .any(|c| matches!(c, rig::message::UserContent::Text(_)));
+            if has_text {
+                seen_user_msgs += 1;
+            }
+            let is_old = total_user_msgs.saturating_sub(seen_user_msgs) >= 4;
+
+            for item in content.iter_mut() {
+                if let rig::message::UserContent::Text(text) = item {
+                    if is_old {
+                        // Find the start of the dynamic block and truncate everything after it
+                        if let Some(idx) = text.text.find("\n\n## YOUR IDENTITY") {
+                            text.text.truncate(idx);
+                        } else if let Some(idx) = text.text.find("\n\n## CURRENT TURN CONTEXT") {
+                            text.text.truncate(idx);
+                        } else if let Some(idx) = text.text.find("\n\n--- GLOBAL RADAR") {
+                            text.text.truncate(idx);
+                        } else if let Some(idx) = text.text.find("\n\nTerminal Snapshot:\n```") {
+                            text.text.truncate(idx);
                         }
                     }
                 }
             }
-            msg
-        })
-        .collect();
+        }
+    }
+    let _ = history_len;
 
-    // Remove the current user message we just pushed — it will be passed as query_for_chat
-    // instead (or replaced by a multimodal version), so rig doesn't receive it twice.
-    final_history.pop();
+    // If previous turns were interrupted, history may contain consecutive User messages
+    // (no following Assistant). Inject synthetic acknowledgments between any adjacent User
+    // messages and after a trailing User message to maintain strict user/assistant alternation.
+    let mut repaired_history = Vec::with_capacity(final_history.len() + 1);
+    for msg in final_history {
+        if matches!(msg, Message::User { .. })
+            && matches!(repaired_history.last(), Some(Message::User { .. }))
+        {
+            repaired_history.push(Message::assistant(
+                "[Previous task was interrupted by the user]",
+            ));
+        }
+        repaired_history.push(msg);
+    }
 
-    // If the previous turn was also interrupted, history may now end with a bare User message
-    // (no following Assistant). Inject a synthetic acknowledgment to maintain the alternating
-    // user/assistant format required by the Anthropic API.
-    if matches!(final_history.last(), Some(Message::User { .. })) {
-        final_history.push(Message::assistant(
+    if matches!(repaired_history.last(), Some(Message::User { .. })) {
+        repaired_history.push(Message::assistant(
             "[Previous task was interrupted by the user]",
         ));
     }
 
-    final_history
+    repaired_history
 }
 
 #[cfg(test)]
@@ -73,7 +93,7 @@ mod tests {
         let history = vec![user("A"), asst("reply A"), user("current")];
         let result = prepare_query_history(history.clone(), history.len());
         assert_eq!(result.len(), 2);
-        assert!(matches!(result.last(), Some(Message::Assistant { .. })));
+        assert!(matches!(result.last(), Some(Message::Assistant(_))));
     }
 
     #[test]
@@ -83,16 +103,20 @@ mod tests {
         let result = prepare_query_history(history.clone(), history.len());
         assert_eq!(result.len(), 2);
         assert!(matches!(result[0], Message::User { .. }));
-        assert!(matches!(result[1], Message::Assistant { .. }));
+        assert!(matches!(result[1], Message::Assistant(_)));
     }
 
     #[test]
     fn double_interrupt_still_valid() {
-        // [user_A, user_B, user_current] → pop → [user_A, user_B] → inject → [user_A, user_B, asst_synthetic]
+        // [user_A, user_B, user_current] → pop → [user_A, user_B] → inject between & at end
+        // → [user_A, asst_synthetic, user_B, asst_synthetic]
         let history = vec![user("A"), user("B"), user("current")];
         let result = prepare_query_history(history.clone(), history.len());
-        assert_eq!(result.len(), 3);
-        assert!(matches!(result.last(), Some(Message::Assistant { .. })));
+        assert_eq!(result.len(), 4);
+        assert!(matches!(result[0], Message::User { .. }));
+        assert!(matches!(result[1], Message::Assistant(_)));
+        assert!(matches!(result[2], Message::User { .. }));
+        assert!(matches!(result[3], Message::Assistant(_)));
     }
 
     #[test]

@@ -1,4 +1,5 @@
 use super::schema::translate_schema;
+use rig::message::ToolName;
 use rig::tool::{DynamicTool, ToolExecutionError, ToolOutput};
 use rmcp::model::{CallToolRequestParams, Tool as McpToolDefinition};
 use rmcp::{RoleClient, service::RunningService};
@@ -23,11 +24,14 @@ impl DynamicMcpTool {
         if name.chars().next().is_some_and(|c| c.is_ascii_digit()) {
             name = format!("_{}", name);
         }
+        if name.is_empty() {
+            name = "_mcp_tool".to_string();
+        }
         name
     }
 
-    pub fn to_dynamic_tool(&self) -> DynamicTool {
-        let name = self.name();
+    pub fn to_dynamic_tool(&self) -> Option<DynamicTool> {
+        let name = ToolName::new(self.name()).ok()?;
         let schema_map = (*self.mcp_tool.input_schema).clone();
         let schema = serde_json::Value::Object(schema_map);
         let parameters = translate_schema(schema);
@@ -41,11 +45,11 @@ impl DynamicMcpTool {
         let client = self.client.clone();
         let tool_name = self.mcp_tool.name.clone();
 
-        DynamicTool::new(
+        Some(DynamicTool::new(
             name,
             description,
             parameters,
-            move |_context, args| {
+            move |args| {
                 let client = client.clone();
                 let tool_name = tool_name.clone();
                 Box::pin(async move {
@@ -80,6 +84,6 @@ impl DynamicMcpTool {
                     }
                 })
             },
-        )
+        ))
     }
 }

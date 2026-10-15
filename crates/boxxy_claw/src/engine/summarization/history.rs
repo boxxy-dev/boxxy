@@ -18,7 +18,7 @@ pub struct DemotionExtractor {
 impl rig::memory::DemotionHook for DemotionExtractor {
     fn on_demote<'a>(
         &'a self,
-        _session_id: &'a str,
+        _session_id: &'a rig::id::ConversationId,
         messages: Vec<Message>,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), rig::memory::MemoryError>> + Send + 'a>> {
         let db_clone = self.db.clone();
@@ -73,8 +73,8 @@ pub async fn flush_history(
                     }
                 }
             }
-            Message::Assistant { content, .. } => {
-                for c in content.iter() {
+            Message::Assistant(turn) => {
+                for c in turn.content.iter() {
                     if let rig::message::AssistantContent::Text(text) = c {
                         text_to_summarize.push_str(&format!("ASSISTANT: {}\n", text));
                     }
@@ -110,16 +110,9 @@ pub async fn flush_history(
                             fact.get("key").and_then(|k| k.as_str()),
                             fact.get("content").and_then(|c| c.as_str()),
                         ) {
-                            // Implicitly extracted facts are NOT verified by default and NOT pinned
+                            // Implicitly extracted facts are candidates and require reinforcement
                             let _ = store
-                                .add_memory(
-                                    key,
-                                    Some(project_path),
-                                    content,
-                                    Some("extracted"),
-                                    false,
-                                    false,
-                                )
+                                .upsert_dream_candidate(key, Some(project_path), content, 0.5)
                                 .await;
                             debug!(
                                 "Flushed Fact for project {}: {} -> {}",
