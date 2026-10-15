@@ -45,6 +45,57 @@ impl ClawSession {
         (session, tx)
     }
 
+    /// Spawns a background flush of any unflushed messages in `state.history` before
+    /// the session enters Sleep, Deactivate, or Evict.
+    pub(super) async fn flush_unflushed_history(&self, cwd: &str) {
+        let unflushed: Vec<Message> = {
+            let mut state_lock = self.state.lock().await;
+            let items: Vec<Message> = state_lock
+                .history
+                .iter()
+                .skip(state_lock.flushed_watermark)
+                .cloned()
+                .collect();
+            state_lock.flushed_watermark = state_lock.history.len();
+            items
+        };
+
+        if unflushed.is_empty() {
+            return;
+        }
+
+        let db_opt = {
+            let db_guard = self.db.lock().await;
+            db_guard.clone()
+        };
+        let Some(db_val) = db_opt else {
+            return;
+        };
+
+        let db_cell = std::sync::Arc::new(tokio::sync::Mutex::new(Some(db_val)));
+        let settings = boxxy_preferences::Settings::load();
+        let model = settings
+            .memory_model
+            .clone()
+            .or(settings.claw_model.clone());
+        let creds = boxxy_ai_core::AiCredentials::new(
+            settings.get_effective_api_keys(),
+            settings.ollama_base_url.clone(),
+        );
+        let cwd_owned = if cwd.is_empty() {
+            "global".to_string()
+        } else {
+            cwd.to_string()
+        };
+
+        tokio::spawn(async move {
+            let _ = crate::engine::summarization::history::flush_history(
+                db_cell, unflushed, &model, &creds, &cwd_owned,
+            )
+            .await;
+        });
+    }
+
     pub(super) async fn ensure_initialized(&mut self, msg: &ClawMessage, is_initialized: &mut bool) {
         if *is_initialized {
             return;
@@ -202,8 +253,9 @@ impl ClawSession {
             return;
         }
 
-        // Handle entering sleep
-        if req.target_state == crate::engine::AgentStatus::Sleep {
+        // Handle entering sleep: flush any unflushed active history in the background
+        let entering_sleep = req.target_state == crate::engine::AgentStatus::Sleep;
+        if entering_sleep {
             state_lock.sleep_timestamp = Some(chrono::Utc::now().timestamp_millis());
         }
 
@@ -211,6 +263,15 @@ impl ClawSession {
         let agent_name = self.name.clone();
         let character_id = self.character_id.clone();
         drop(state_lock);
+
+        if entering_sleep {
+            let workspace = crate::registry::workspace::global_workspace().await;
+            let cwd = workspace
+                .get_pane_cwd(self.pane_id.clone())
+                .await
+                .unwrap_or_else(|| "global".to_string());
+            self.flush_unflushed_history(&cwd).await;
+        }
 
         let _ = self
             .tx_ui
@@ -354,6 +415,7 @@ impl ClawSession {
                     if let Some(history_json) = session.history_json {
                         match serde_json::from_str::<Vec<Message>>(&history_json) {
                             Ok(history) => {
+                                state_lock.flushed_watermark = history.len();
                                 state_lock.history = history;
                             }
                             Err(e) => {
@@ -363,6 +425,7 @@ impl ClawSession {
                                     e
                                 );
                                 state_lock.history.clear();
+                                state_lock.flushed_watermark = 0;
                             }
                         }
                     }
@@ -490,6 +553,7 @@ impl ClawSession {
         let mut state_lock = self.state.lock().await;
         state_lock.agent_name = name.clone();
         state_lock.history.clear();
+        state_lock.flushed_watermark = 0;
         state_lock.pending_tasks.clear();
         drop(state_lock);
 

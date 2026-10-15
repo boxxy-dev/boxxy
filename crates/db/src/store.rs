@@ -562,29 +562,35 @@ impl<'a> Store<'a> {
         Ok(records)
     }
 
-    /// Unconditionally retrieves key environmental facts regardless of search relevance.
+    /// Unconditionally retrieves core memories: both explicit bootstrap keys (e.g., `os_type`,
+    /// `package_manager`) AND any verified user preferences or manual sync rules (`category IN ('preference', 'manual_sync')`)
+    /// scoped to the current project or `'global'`.
     pub async fn get_bootstrap_memories(
         &self,
         keys: &[&str],
         project_path: Option<&str>,
     ) -> Result<Vec<Memory>> {
         let path = project_path.unwrap_or("global");
-        if keys.is_empty() {
-            return Ok(Vec::new());
-        }
 
         let mut builder = QueryBuilder::new(
             "SELECT id, key, project_path, content, category, verified, pinned, observation_count, confidence_score, created_at, updated_at, last_accessed_at, access_count \
              FROM memories \
-             WHERE verified = true AND key IN ("
+             WHERE verified = true AND pinned = false AND (project_path = "
         );
-        let mut separated = builder.separated(", ");
-        for key in keys {
-            separated.push_bind(key);
-        }
-        separated.push_unseparated(") AND (project_path = ");
         builder.push_bind(path);
-        builder.push(" OR project_path = 'global') ORDER BY project_path DESC, key ASC");
+        builder.push(" OR project_path = 'global') AND (category IN ('preference', 'manual_sync')");
+
+        if !keys.is_empty() {
+            builder.push(" OR key IN (");
+            let mut separated = builder.separated(", ");
+            for key in keys {
+                separated.push_bind(key);
+            }
+            separated.push_unseparated(")");
+        }
+        builder.push(") ORDER BY CASE WHEN project_path = ");
+        builder.push_bind(path);
+        builder.push(" THEN 0 ELSE 1 END, updated_at DESC, key ASC LIMIT 25");
 
         let records = builder.build_query_as::<Memory>().fetch_all(self.pool).await?;
         Ok(records)
@@ -1391,13 +1397,24 @@ mod tests {
         assert_eq!(prov[0].key, "editor");
         assert_eq!(prov[0].verified, Some(false));
 
-        // 8. Bootstrap Retrieval
+        // 8. Bootstrap & User Preference Retrieval
         store
-            .add_memory("os_type", None, "Linux", None, true, false)
+            .add_memory("os_type", None, "Linux", Some("system"), true, false)
             .await
             .unwrap();
         store
-            .add_memory("package_manager", None, "dnf", None, true, false)
+            .add_memory("package_manager", None, "dnf", Some("system"), true, false)
+            .await
+            .unwrap();
+        store
+            .add_memory(
+                "system_update_command",
+                None,
+                "cachy-update",
+                Some("preference"),
+                true,
+                false,
+            )
             .await
             .unwrap();
 
@@ -1405,9 +1422,29 @@ mod tests {
             .get_bootstrap_memories(&["os_type", "package_manager", "missing_key"], None)
             .await
             .unwrap();
-        assert_eq!(bootstrap.len(), 2);
+        assert_eq!(bootstrap.len(), 4); // shell (manual_sync), os_type, package_manager, system_update_command (preference)
         assert!(bootstrap.iter().any(|m| m.key == "os_type"));
         assert!(bootstrap.iter().any(|m| m.key == "package_manager"));
+        assert!(bootstrap.iter().any(|m| m.key == "system_update_command"));
+        assert!(bootstrap.iter().any(|m| m.key == "shell"));
         assert!(!bootstrap.iter().any(|m| m.key == "missing_key"));
+
+        // 9. FTS Search by Key Name (even when content doesn't contain the query word)
+        store
+            .add_memory(
+                "update_cmd",
+                None,
+                "cachy-update",
+                Some("dreamed"),
+                true,
+                false,
+            )
+            .await
+            .unwrap();
+        let key_hits = store.search_memories("\"update\"*", None, 10).await.unwrap();
+        assert!(
+            key_hits.iter().any(|m| m.key == "update_cmd"),
+            "FTS5 should match tokens inside the memory `key` column"
+        );
     }
 }

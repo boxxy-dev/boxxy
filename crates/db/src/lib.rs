@@ -13,7 +13,7 @@ pub mod store;
 static DB: OnceCell<Db> = OnceCell::const_new();
 pub static DATABASE_WAS_RESET: AtomicBool = AtomicBool::new(false);
 
-const CURRENT_SCHEMA_VERSION: i32 = 14;
+const CURRENT_SCHEMA_VERSION: i32 = 15;
 
 #[derive(Clone)]
 pub struct Db {
@@ -87,7 +87,19 @@ impl Db {
         Ok(db.clone())
     }
 
-    async fn apply_migrations(&self, _from_version: i32) -> Result<()> {
+    async fn apply_migrations(&self, from_version: i32) -> Result<()> {
+        if from_version == 14 {
+            log::info!("Migrating memories_fts from v14 to v15 (indexing memory keys) without wiping data.");
+            let migrate_fts = r"
+                DROP TRIGGER IF EXISTS memories_ai;
+                DROP TRIGGER IF EXISTS memories_ad;
+                DROP TRIGGER IF EXISTS memories_au;
+                DROP TABLE IF EXISTS memories_fts;
+            ";
+            sqlx::query(migrate_fts).execute(&self.pool).await?;
+            return Ok(());
+        }
+
         log::warn!("Preview phase: Wiping database to apply schema changes.");
         sqlx::query("PRAGMA writable_schema = 1; DELETE FROM sqlite_master; PRAGMA writable_schema = 0; VACUUM;")
             .execute(&self.pool)
@@ -217,6 +229,7 @@ impl Db {
 
             CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
                 content='memories',
+                key,
                 content,
                 project_path
             );
@@ -224,18 +237,18 @@ impl Db {
             -- Triggers for memories
             DROP TRIGGER IF EXISTS memories_ai;
             CREATE TRIGGER memories_ai AFTER INSERT ON memories BEGIN
-              INSERT INTO memories_fts(rowid, content, project_path) VALUES (new.id, new.content, new.project_path);
+              INSERT INTO memories_fts(rowid, key, content, project_path) VALUES (new.id, new.key, new.content, new.project_path);
             END;
 
             DROP TRIGGER IF EXISTS memories_ad;
             CREATE TRIGGER memories_ad AFTER DELETE ON memories BEGIN
-              INSERT INTO memories_fts(memories_fts, rowid, content, project_path) VALUES('delete', old.id, old.content, old.project_path);
+              INSERT INTO memories_fts(memories_fts, rowid, key, content, project_path) VALUES('delete', old.id, old.key, old.content, old.project_path);
             END;
 
             DROP TRIGGER IF EXISTS memories_au;
             CREATE TRIGGER memories_au AFTER UPDATE ON memories BEGIN
-              INSERT INTO memories_fts(memories_fts, rowid, content, project_path) VALUES('delete', old.id, old.content, old.project_path);
-              INSERT INTO memories_fts(rowid, content, project_path) VALUES (new.id, new.content, new.project_path);
+              INSERT INTO memories_fts(memories_fts, rowid, key, content, project_path) VALUES('delete', old.id, old.key, old.content, old.project_path);
+              INSERT INTO memories_fts(rowid, key, content, project_path) VALUES (new.id, new.key, new.content, new.project_path);
             END;
 
             CREATE VIRTUAL TABLE IF NOT EXISTS skills_fts USING fts5(
@@ -275,6 +288,10 @@ impl Db {
             .await;
 
         let _ = sqlx::query("ALTER TABLE memories ADD COLUMN confidence_score REAL DEFAULT 0.0")
+            .execute(&self.pool)
+            .await;
+
+        let _ = sqlx::query("INSERT INTO memories_fts(memories_fts) VALUES('rebuild')")
             .execute(&self.pool)
             .await;
 

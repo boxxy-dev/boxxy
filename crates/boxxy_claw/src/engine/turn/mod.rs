@@ -53,7 +53,9 @@ pub fn spawn_turn(
 
         // Cleanup R4: Simplified history clear
         if is_new_task {
-            state.lock().await.history.clear();
+            let mut state_lock = state.lock().await;
+            state_lock.history.clear();
+            state_lock.flushed_watermark = 0;
         }
 
         // --- DEADLOCK PREVENTION: Brief DB lock to clone handle ---
@@ -251,11 +253,9 @@ pub fn spawn_turn(
                 }
 
                 let p_ctx = persistence::PersistenceContext {
-                    pane_id: pane_id.clone(),
                     session_id: session_id_clone.clone(),
                     agent_name: agent_name.clone(),
                     user_query: prompt_clone.clone(),
-                    response: response.clone(),
                     cwd: cwd_clone.clone(),
                     settings: (*settings).clone(),
                     db: db.clone(),

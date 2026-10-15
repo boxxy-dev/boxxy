@@ -47,6 +47,22 @@ impl rig::memory::DemotionHook for DemotionExtractor {
     }
 }
 
+/// Strips dynamic context blocks (`## YOUR IDENTITY`, `## CURRENT TURN CONTEXT`, etc.)
+/// from a user message text so background memory flush calls don't waste tokens on snapshots.
+fn clean_user_text_for_flush(raw: &str) -> &str {
+    for marker in [
+        "\n\n## YOUR IDENTITY",
+        "\n\n## CURRENT TURN CONTEXT",
+        "\n\n--- GLOBAL RADAR",
+        "\n\nTerminal Snapshot:\n```",
+    ] {
+        if let Some(idx) = raw.find(marker) {
+            return &raw[..idx];
+        }
+    }
+    raw
+}
+
 pub async fn flush_history(
     db: Arc<Mutex<Option<Db>>>,
     evicted_messages: Vec<Message>,
@@ -69,18 +85,31 @@ pub async fn flush_history(
             Message::User { content } => {
                 for c in content.iter() {
                     if let rig::message::UserContent::Text(text) = c {
-                        text_to_summarize.push_str(&format!("USER: {}\n", text));
+                        let cleaned = clean_user_text_for_flush(&text.text).trim();
+                        if !cleaned.is_empty() && !cleaned.starts_with("[WHILE_YOU_SLEPT]") {
+                            text_to_summarize.push_str(&format!("USER: {}\n", cleaned));
+                        }
                     }
                 }
             }
             Message::Assistant(turn) => {
                 for c in turn.content.iter() {
                     if let rig::message::AssistantContent::Text(text) = c {
-                        text_to_summarize.push_str(&format!("ASSISTANT: {}\n", text));
+                        let trimmed = text.text.trim();
+                        if !trimmed.is_empty()
+                            && trimmed != "[SILENT_ACK]"
+                            && trimmed != "[Previous task was interrupted by the user]"
+                        {
+                            text_to_summarize.push_str(&format!("ASSISTANT: {}\n", trimmed));
+                        }
                     }
                 }
             }
         }
+    }
+
+    if text_to_summarize.trim().is_empty() {
+        return Ok(());
     }
 
     let flush_prompt_template = load_prompt_fallback(
@@ -97,8 +126,15 @@ pub async fn flush_history(
     );
 
     if let Ok(res) = agent.prompt(&flush_prompt).await {
-        // Attempt to parse the JSON response
-        if let Ok(json) = serde_json::from_str::<serde_json::Value>(&res.0) {
+        // Attempt to parse the JSON response (strip optional markdown code fences if present)
+        let raw_json = res
+            .0
+            .trim()
+            .trim_start_matches("```json")
+            .trim_start_matches("```")
+            .trim_end_matches("```")
+            .trim();
+        if let Ok(json) = serde_json::from_str::<serde_json::Value>(raw_json) {
             let db_guard = db.lock().await;
             if let Some(db_val) = db_guard.as_ref() {
                 let store = Store::new(db_val.pool());
@@ -122,18 +158,39 @@ pub async fn flush_history(
                     }
                 }
 
-                // 2. Save Summary as an interaction
+                // 2. Save Summary as an interaction (with 0-token local Jaccard deduplication)
                 if let Some(summary) = json.get("summary").and_then(|s| s.as_str()) {
-                    let _ = store
-                        .add_interaction(
-                            "global",
-                            Some(project_path),
-                            summary,
-                            Some("flush_summary"),
-                            None,
-                        )
-                        .await;
-                    debug!("Flushed Summary for project {}: {}", project_path, summary);
+                    let summary = summary.trim();
+                    if !summary.is_empty() && summary != "NO_TECHNICAL_CHANGE" {
+                        let mut is_dup = false;
+                        if let Ok(recent) = store.get_recent_interactions_by_path(project_path, 5).await {
+                            for r in &recent {
+                                let sim = crate::engine::context::jaccard_similarity(summary, &r.content);
+                                if sim >= 0.70 {
+                                    debug!(
+                                        "Local Jaccard duplicate found (ID: {}, sim: {:.2}). Touching timestamp.",
+                                        r.id, sim
+                                    );
+                                    let _ = store.touch_interaction(r.id).await;
+                                    is_dup = true;
+                                    break;
+                                }
+                            }
+                        }
+
+                        if !is_dup {
+                            let _ = store
+                                .add_interaction(
+                                    "global",
+                                    Some(project_path),
+                                    summary,
+                                    Some("flush_summary"),
+                                    None,
+                                )
+                                .await;
+                            debug!("Flushed Summary for project {}: {}", project_path, summary);
+                        }
+                    }
                 }
 
                 drop(db_guard);
@@ -142,6 +199,23 @@ pub async fn flush_history(
         }
     }
 
-    info!("Memory Flush complete. History truncated.");
+    info!("Memory Flush complete.");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_clean_user_text_for_flush_strips_dynamic_blocks() {
+        let prompt = "what files are in this directory?\n\n## YOUR IDENTITY\nAgent Name: **levi**\n\nTerminal Snapshot:\n```\nls\n```";
+        assert_eq!(
+            clean_user_text_for_flush(prompt),
+            "what files are in this directory?"
+        );
+
+        let plain = "just a normal user prompt";
+        assert_eq!(clean_user_text_for_flush(plain), plain);
+    }
 }

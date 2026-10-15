@@ -11,7 +11,8 @@ Provides a persistent SQLite database for Boxxy-Terminal, serving as the Long-Te
 - **Memory Schema (Long-term Facts)**:
   - **Verified Status**: Employs a threshold-based reinforcement model. Extracted facts are stored as unverified candidates and only auto-promoted to `verified = true` if they cross strict `observation_count` and `confidence_score` thresholds.
   - **Reinforcement Tracking**: The `memories` table includes `observation_count` (frequency of extraction) and `confidence_score` (max LLM certainty) to drive the automated promotion system.
-  - **FTS5 Integration**: All memories are automatically indexed in a virtual FTS5 table (`memories_fts`) with `project_path` scoping for fast semantic retrieval.
+  - **FTS5 Integration**: All memories are automatically indexed in a virtual FTS5 table (`memories_fts`) indexing `key`, `content`, and `project_path` for fast semantic retrieval by both key name and fact content.
+  - **Bootstrap & Preference Recall**: `get_bootstrap_memories` unconditionally retrieves both core system keys (`os_type`, `package_manager`, etc.) and all verified user preferences (`category IN ('preference', 'manual_sync')`) scoped to the active project or `'global'`.
   - **Automatic Pruning**: Supported via `access_count` and `last_accessed_at` tracking, with enhanced hygiene rules for pruning unverified noise.
 - **Interaction Schema (Episodic Memory & Dreaming)**:
   - Tracks raw conversation and command history in the `interactions` table.

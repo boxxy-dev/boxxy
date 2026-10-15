@@ -136,12 +136,14 @@ impl SkillRegistry {
     }
 
     pub async fn search_relevant_skills(&self, query: &str, limit: i64) -> Vec<Skill> {
+        let fts_query = crate::engine::context::build_fts5_query(query);
+        if fts_query.is_empty() {
+            return Vec::new();
+        }
         let db_guard = self.db.lock().await;
         if let Some(db_val) = db_guard.as_ref() {
             let store = Store::new(db_val.pool());
-            // Sanitize query for FTS5
-            let sanitized = query.replace(['"', '\'', '?'], "");
-            if let Ok(records) = store.search_skills(&sanitized, limit).await {
+            if let Ok(records) = store.search_skills(&fts_query, limit).await {
                 // Map records back to Skill structs
                 return records
                     .into_iter()

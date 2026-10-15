@@ -1,8 +1,6 @@
 use log::warn;
 
 const CLAW_MD: &str = include_str!("../../../resources/prompts/claw.md");
-const MEMORY_SUMMARIZER_MD: &str = include_str!("../../../resources/prompts/memory_summarizer.md");
-const MEMORY_EXPANSION_MD: &str = include_str!("../../../resources/prompts/memory_expansion.md");
 const MEMORY_FLUSH_MD: &str = include_str!("../../../resources/prompts/memory_flush.md");
 const BOOKMARK_GENERATOR_MD: &str =
     include_str!("../../../resources/prompts/bookmark_generator.md");
@@ -12,8 +10,6 @@ const PRIVACY_POLICY_MD: &str = include_str!("../../../resources/prompts/privacy
 pub fn load_prompt_fallback(_resource_path: &str, filename: &str) -> String {
     match filename {
         "claw.md" => CLAW_MD.to_string(),
-        "memory_summarizer.md" => MEMORY_SUMMARIZER_MD.to_string(),
-        "memory_expansion.md" => MEMORY_EXPANSION_MD.to_string(),
         "memory_flush.md" => MEMORY_FLUSH_MD.to_string(),
         "bookmark_generator.md" => BOOKMARK_GENERATOR_MD.to_string(),
         "ai_chat.md" => AI_CHAT_MD.to_string(),

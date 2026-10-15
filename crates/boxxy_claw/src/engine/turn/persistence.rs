@@ -4,12 +4,11 @@ use serde_json;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
+#[derive(Clone)]
 pub struct PersistenceContext {
-    pub pane_id: String,
     pub session_id: String,
     pub agent_name: String,
     pub user_query: String,
-    pub response: String,
     pub cwd: String,
     pub settings: boxxy_preferences::Settings,
     pub db: Arc<Mutex<Option<Db>>>,
@@ -29,8 +28,11 @@ pub async fn perform_persistence(ctx: PersistenceContext, state: Arc<Mutex<Sessi
         use rig_memory::{MemoryPolicy, SlidingWindowMemory};
         let policy = SlidingWindowMemory::last_messages(10);
         if let Ok((kept, demoted)) = policy.apply_with_demoted(state_lock.history.clone()) {
+            let demoted_len = demoted.len();
+            let already_flushed = state_lock.flushed_watermark.min(demoted_len);
             state_lock.history = kept;
-            demoted
+            state_lock.flushed_watermark = state_lock.flushed_watermark.saturating_sub(demoted_len);
+            demoted.into_iter().skip(already_flushed).collect()
         } else {
             vec![]
         }
@@ -111,17 +113,17 @@ pub async fn perform_persistence(ctx: PersistenceContext, state: Arc<Mutex<Sessi
 
     drop(state_lock);
 
-    // Background Tasks: Title, Summarization, Memory Extraction
+    // Background Task: Session Title Generation (only runs on Turn 1 when title is empty).
+    // Note: Per-turn LLM summarization and fact extraction are intentionally omitted here
+    // (OpenClaw Batch Model). Episodic summaries and candidate facts are extracted in batches
+    // when messages are evicted via `DemotionHook`, or when the session enters Sleep/Deactivate/Evict.
     let db_clone = ctx.db.clone();
     let session_id_clone = ctx.session_id.clone();
     let user_query_clone = ctx.user_query.clone();
-    let response_clone = ctx.response.clone();
-    let cwd_clone = ctx.cwd.clone();
     let creds_clone = creds.clone();
     let settings_clone = ctx.settings.clone();
 
     tokio::spawn(async move {
-        // 1. Title Generation: Generate title if session does not have one yet
         let needs_title = {
             let db_guard = db_clone.lock().await;
             if let Some(db) = &*db_guard {
@@ -165,38 +167,6 @@ pub async fn perform_persistence(ctx: PersistenceContext, state: Arc<Mutex<Sessi
                     }
                 }
             }
-        }
-
-        // 2. Summarization & 3. Memory Extraction
-        // Skip both if the turn was a silent acknowledgment of a rejected proposal
-        // or produced an empty response.
-        let trimmed_resp = response_clone.trim();
-        if !trimmed_resp.is_empty() && trimmed_resp != "[SILENT_ACK]" {
-            let db_opt = db_clone.lock().await;
-            crate::engine::summarization::turn::summarize_and_store(
-                &*db_opt,
-                &session_id_clone,
-                &user_query_clone,
-                &response_clone,
-                &cwd_clone,
-                creds_clone.clone(),
-            )
-            .await;
-            drop(db_opt);
-
-            let memory_model = settings_clone
-                .memory_model
-                .clone()
-                .or(settings_clone.claw_model.clone());
-            crate::memories::extraction::extract_implicit_memory(
-                db_clone.clone(),
-                user_query_clone,
-                response_clone,
-                memory_model,
-                creds_clone,
-                cwd_clone,
-            )
-            .await;
         }
     });
 

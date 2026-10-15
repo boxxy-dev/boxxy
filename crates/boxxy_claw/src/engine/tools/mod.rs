@@ -1,4 +1,3 @@
-pub mod memory;
 pub mod orchestration;
 pub mod scrollback;
 pub mod skills;

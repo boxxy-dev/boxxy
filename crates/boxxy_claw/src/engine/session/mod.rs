@@ -35,6 +35,8 @@ pub struct SessionState {
     pub pending_delegations:
         std::collections::HashMap<uuid::Uuid, tokio::sync::oneshot::Sender<String>>,
     pub history: Vec<Message>,
+    /// Index in `history` up to which messages have already been flushed to `flush_history`.
+    pub flushed_watermark: usize,
     pub pending_lazy_diagnosis: Option<(String, String, String)>,
     pub persistent_agent: Option<crate::engine::agent::ClawAgent>,
     pub current_claw_model: Option<boxxy_model_selection::ModelProvider>,
@@ -118,6 +120,7 @@ impl ClawSession {
                 pending_scrollbacks: std::collections::HashMap::new(),
                 pending_delegations: std::collections::HashMap::new(),
                 history: Vec::new(),
+                flushed_watermark: 0,
                 pending_lazy_diagnosis: None,
                 persistent_agent: None,
                 current_claw_model: settings.claw_model.clone(),

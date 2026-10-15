@@ -150,11 +150,13 @@ impl ClawSession {
             ClawMessage::Deactivate => {
                 info!("Deactivating Claw Session for pane {}...", self.pane_id);
                 let _ = self.tx_self.send(ClawMessage::Abort).await;
+                self.flush_unflushed_history(&ctx.current_dir).await;
                 ctx.is_initialized = false;
                 *self.db.lock().await = None;
 
                 let mut state_lock = self.state.lock().await;
                 state_lock.history.clear();
+                state_lock.flushed_watermark = 0;
                 state_lock.pending_tasks.clear();
                 drop(state_lock);
 
@@ -164,11 +166,13 @@ impl ClawSession {
             ClawMessage::Evict => {
                 info!("Agent in pane {} was EVICTED.", self.pane_id);
                 let _ = self.tx_self.send(ClawMessage::Abort).await;
+                self.flush_unflushed_history(&ctx.current_dir).await;
                 ctx.is_initialized = false;
                 *self.db.lock().await = None;
 
                 let mut state_lock = self.state.lock().await;
                 state_lock.history.clear();
+                state_lock.flushed_watermark = 0;
                 state_lock.pending_tasks.clear();
                 drop(state_lock);
 

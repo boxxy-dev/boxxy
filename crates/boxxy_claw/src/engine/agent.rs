@@ -318,9 +318,6 @@ pub async fn create_claw_agent(
             state: state.clone(),
             tx_ui: tx_ui.clone(),
         })
-        .tool(crate::engine::tools::memory::MemoryTool {
-            approval: approval_handler.clone(),
-        })
         .tool(
             crate::engine::tools::orchestration::OrchestrateAgentTool {
                 approval: approval_handler.clone(),
