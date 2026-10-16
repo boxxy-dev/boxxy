@@ -184,6 +184,25 @@ pub fn setup_apis_page(
         }
     });
 
+    native_search_switch.set_active(settings_rc.borrow().use_native_search);
+    let s_rc_native_search = settings_rc.clone();
+    let cb_native_search = on_change.clone();
+    native_search_switch.connect_active_notify(move |row| {
+        let mut settings_to_save = None;
+        {
+            let mut s = s_rc_native_search.borrow_mut();
+            if s.use_native_search != row.is_active() {
+                s.use_native_search = row.is_active();
+                s.save();
+                settings_to_save = Some(s.clone());
+            }
+        }
+
+        if let Some(s) = settings_to_save {
+            cb_native_search(s);
+        }
+    });
+
     ollama_base_url_entry.set_text(&settings_rc.borrow().ollama_base_url);
     let s_rc3 = settings_rc.clone();
     let cb3 = on_change.clone();
@@ -237,7 +256,7 @@ pub fn setup_apis_page(
         );
         let search_native = match_row(
             native_search_switch.upcast_ref(),
-            "use native model search engines built in gemini gpt claude not implemented",
+            "use native model search engines built in gemini gpt claude anthropic openai",
         );
 
         let search_visible = search_tavily || search_native;

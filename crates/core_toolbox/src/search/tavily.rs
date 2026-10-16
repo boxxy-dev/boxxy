@@ -9,6 +9,8 @@ pub struct TavilyProvider {
 }
 
 impl TavilyProvider {
+    pub const NAME: &'static str = "Tavily";
+
     pub fn new(api_key: String) -> Self {
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(15))
@@ -47,6 +49,10 @@ struct TavilyResult {
 
 #[async_trait::async_trait]
 impl SearchProvider for TavilyProvider {
+    fn name(&self) -> &'static str {
+        Self::NAME
+    }
+
     async fn search(
         &self,
         query: &str,

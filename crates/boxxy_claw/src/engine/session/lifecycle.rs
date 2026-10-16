@@ -352,17 +352,20 @@ impl ClawSession {
                 .unwrap_or_else(|| "Default".to_string())
         };
 
-        let (old_claw, old_memory) = (
+        let (old_claw, old_memory, old_search) = (
             model_label(&state_lock.current_claw_model),
             model_label(&state_lock.current_memory_model),
+            state_lock.current_search_label.clone(),
         );
 
         boxxy_preferences::Settings::reload();
 
         let after = boxxy_preferences::Settings::load();
-        let (new_claw, new_memory) = (
+        let (new_claw, new_memory, new_search) = (
             model_label(&after.claw_model),
             model_label(&after.memory_model),
+            crate::engine::agent_config::resolve_active_search_label(&after, web_search_enabled)
+                .to_string(),
         );
 
         state_lock.persistent_agent = None;
@@ -390,7 +393,7 @@ impl ClawSession {
                 .await;
         }
 
-        if new_claw == old_claw && new_memory == old_memory {
+        if new_claw == old_claw && new_memory == old_memory && new_search == old_search {
             return;
         }
 
@@ -398,10 +401,14 @@ impl ClawSession {
             let mut state_lock = self.state.lock().await;
             state_lock.current_claw_model = after.claw_model.clone();
             state_lock.current_memory_model = after.memory_model.clone();
+            state_lock.current_search_label = new_search;
         }
 
         let event = ClawEngineEvent::SystemMessage {
-            text: format!("Claw: {new_claw} ● Dreams: {new_memory}"),
+            text: crate::engine::agent_config::format_session_models_banner(
+                &after,
+                web_search_enabled,
+            ),
         };
         crate::engine::persist_visual_event(
             self.db.clone(),
@@ -634,27 +641,26 @@ impl ClawSession {
                     boxxy_telemetry::track_session_resume(session_type).await;
 
                     let settings = boxxy_preferences::Settings::load();
-                    let claw_model_label = settings
-                        .claw_model
-                        .as_ref()
-                        .map(|m| m.format_label())
-                        .unwrap_or_else(|| "Default".to_string());
-                    let memory_model_label = settings
-                        .memory_model
-                        .as_ref()
-                        .map(|m| m.format_label())
-                        .unwrap_or_else(|| "Default".to_string());
+                    let banner = crate::engine::agent_config::format_session_models_banner(
+                        &settings,
+                        web_search_enabled,
+                    );
+                    let search_label =
+                        crate::engine::agent_config::resolve_active_search_label(
+                            &settings,
+                            web_search_enabled,
+                        )
+                        .to_string();
 
                     {
                         let mut state_lock = self.state.lock().await;
                         state_lock.current_claw_model = settings.claw_model.clone();
                         state_lock.current_memory_model = settings.memory_model.clone();
+                        state_lock.current_search_label = search_label;
                     }
 
-                    self.send_ui(ClawEngineEvent::SystemMessage {
-                        text: format!("Claw: {} ● Dreams: {}", claw_model_label, memory_model_label),
-                    })
-                    .await;
+                    self.send_ui(ClawEngineEvent::SystemMessage { text: banner })
+                        .await;
 
                     if let Some(last_cwd) = session.last_cwd {
                         let _ = self
@@ -740,26 +746,22 @@ impl ClawSession {
             .await;
 
         let settings = boxxy_preferences::Settings::load();
-        let claw_model_label = settings
-            .claw_model
-            .as_ref()
-            .map(|m| m.format_label())
-            .unwrap_or_else(|| "Default".to_string());
-        let memory_model_label = settings
-            .memory_model
-            .as_ref()
-            .map(|m| m.format_label())
-            .unwrap_or_else(|| "Default".to_string());
+        let banner = crate::engine::agent_config::format_session_models_banner(
+            &settings,
+            web_search_enabled,
+        );
+        let search_label =
+            crate::engine::agent_config::resolve_active_search_label(&settings, web_search_enabled)
+                .to_string();
 
         {
             let mut state_lock = self.state.lock().await;
             state_lock.current_claw_model = settings.claw_model.clone();
             state_lock.current_memory_model = settings.memory_model.clone();
+            state_lock.current_search_label = search_label;
         }
 
-        let event = ClawEngineEvent::SystemMessage {
-            text: format!("Claw: {} ● Dreams: {}", claw_model_label, memory_model_label),
-        };
+        let event = ClawEngineEvent::SystemMessage { text: banner };
         crate::engine::persist_visual_event(
             self.db.clone(),
             self.session_id.clone(),

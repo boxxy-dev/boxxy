@@ -437,7 +437,7 @@ impl ClawIndicator {
             "kill_process" => "Killing process".to_string(),
             "get_clipboard" => "Reading clipboard".to_string(),
             "set_clipboard" => "Writing clipboard".to_string(),
-            "web_search" => "Searching the web".to_string(),
+            "web_search" | "native_web_search" => "Searching the web".to_string(),
             "http_fetch" => "Fetching URL".to_string(),
             "memory_store" => "Saving memory".to_string(),
             "memory_delete" => "Deleting memory".to_string(),

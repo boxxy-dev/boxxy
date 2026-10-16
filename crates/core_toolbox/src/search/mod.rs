@@ -2,6 +2,8 @@ use serde::{Deserialize, Serialize};
 
 #[async_trait::async_trait]
 pub trait SearchProvider: Send + Sync {
+    fn name(&self) -> &'static str;
+
     async fn search(
         &self,
         query: &str,

@@ -1,5 +1,5 @@
 use crate::commands::CommandRegistry;
-use crate::types::{ChatMessage, ChatMessageObject, Role};
+use crate::types::{ChatMessageObject, Role};
 use boxxy_core_widgets::{ObjectExtSafe, bind_property_async};
 use boxxy_model_selection::{GlobalModelSelectorDialog, ModelProvider};
 use gtk::glib;
@@ -19,7 +19,7 @@ pub(crate) struct AiSidebarInner {
     pub list_store: gtk::gio::ListStore,
     pub input_entry: gtk::Entry,
     pub input_buffer: gtk::EntryBuffer,
-    pub history: Vec<ChatMessage>,
+    pub history: Vec<Message>,
     pub model_provider: Option<ModelProvider>,
     pub is_loading: bool,
     pub generation_task: Option<tokio::task::JoinHandle<()>>,
@@ -336,12 +336,8 @@ impl AiSidebarComponent {
         }
 
         let mut inner = self.inner.borrow_mut();
-        let (prompt, history_to_send) = if inner.history.is_empty() {
-            (content.clone(), vec![])
-        } else {
-            let hist: Vec<Message> = inner.history.iter().map(|m| m.to_rig_message()).collect();
-            (content.clone(), hist)
-        };
+        let prompt = content.clone();
+        let history_to_send = inner.history.clone();
 
         let user_msg = ChatMessageObject::new(Role::User, content.clone());
         inner.list_store.append(&user_msg);
@@ -363,6 +359,7 @@ impl AiSidebarComponent {
             settings.get_effective_api_keys(),
             settings.ollama_base_url.clone(),
         );
+        let enable_native_search = settings.enable_web_search && settings.use_native_search;
 
         let data = gtk::gio::resources_lookup_data(
             "/dev/boxxy/BoxxyTerminal/prompts/ai_chat.md",
@@ -376,7 +373,12 @@ impl AiSidebarComponent {
         let (tx, rx) = tokio::sync::oneshot::channel();
 
         let handle = tokio::spawn(async move {
-            let agent = boxxy_ai_core::create_agent(&provider, &creds, &system_prompt);
+            let agent = boxxy_ai_core::create_agent_with_options(
+                &provider,
+                &creds,
+                &system_prompt,
+                enable_native_search,
+            );
             let res = agent.chat(&prompt, history_to_send).await;
             let _ = tx.send(res);
         });
@@ -386,17 +388,26 @@ impl AiSidebarComponent {
         glib::spawn_future_local(async move {
             if let Ok(res) = rx.await {
                 match res {
-                    Ok((r, usage, _messages)) => comp_clone.receive_response(r, usage),
-                    Err(e) => comp_clone.receive_response(format!("Error: {e}"), None),
+                    Ok((r, usage, messages)) => comp_clone.receive_response(r, usage, messages),
+                    Err(e) => comp_clone.receive_response(format!("Error: {e}"), None, None),
                 }
             }
         });
     }
 
-    fn receive_response(&self, content: String, usage: Option<rig::completion::Usage>) {
+    fn receive_response(
+        &self,
+        content: String,
+        usage: Option<rig::completion::Usage>,
+        messages: Option<Vec<Message>>,
+    ) {
         let mut inner = self.inner.borrow_mut();
         if !inner.is_loading {
             return;
+        }
+
+        if let Some(msgs) = messages {
+            inner.history.extend(msgs);
         }
 
         if let Some(usage) = usage {

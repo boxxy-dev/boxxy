@@ -83,7 +83,9 @@ impl ClawAgent {
 
         match res_result {
             Ok(res) => {
-                let output = res.output();
+                let raw_output = res.output();
+                let output =
+                    boxxy_ai_core::append_citations_to_output(&res.messages, &raw_output);
                 // Track Invocations
                 boxxy_telemetry::track_ai_invocation(&provider_name, &model_name, "claw").await;
 
@@ -374,7 +376,19 @@ pub async fn create_claw_agent(
         });
     }
 
-    if config.web_search_local_enabled && config.web_search_master_enabled {
+    let native_search_params = if config.web_search_local_enabled
+        && config.web_search_master_enabled
+        && config.use_native_search
+    {
+        boxxy_ai_core::native_search_additional_params(provider)
+    } else {
+        None
+    };
+
+    if config.web_search_local_enabled
+        && config.web_search_master_enabled
+        && native_search_params.is_none()
+    {
         let tavily_key = creds.api_keys.get("Tavily").cloned().unwrap_or_default();
         if !tavily_key.is_empty() {
             tool_server = tool_server.tool(boxxy_core_toolbox::WebSearchTool {
@@ -472,6 +486,10 @@ pub async fn create_claw_agent(
 
     if let Some(reasoning) = reasoning {
         builder = builder.reasoning(reasoning);
+    }
+
+    if let Some(params) = native_search_params {
+        builder = builder.additional_params(params);
     }
 
     let agent = builder.build();

@@ -150,15 +150,14 @@ pub fn spawn_turn(
         };
 
         // 4. Resolve Agent (after lock is released to prevent deadlock)
-        let agent = if let Some(agent) = persistent_agent {
-            agent
-        } else {
-            let config = crate::engine::agent_config::AgentConfig::from_env(
-                &settings,
-                web_search_enabled,
-                session_ctx_clone.clone(),
-            );
-            crate::engine::agent::create_claw_agent(
+        let config = crate::engine::agent_config::AgentConfig::from_env(
+            &settings,
+            web_search_enabled,
+            session_ctx_clone.clone(),
+        );
+        let agent = match persistent_agent {
+            Some(agent) if agent.matches_config(&config) => agent,
+            _ => crate::engine::agent::create_claw_agent(
                 &config,
                 &env,
                 &cwd_clone,
@@ -170,7 +169,7 @@ pub fn spawn_turn(
                 mcp_handle,
             )
             .await
-            .expect("Failed to create claw agent")
+            .expect("Failed to create claw agent"),
         };
 
         // 5. Prepare History
@@ -201,6 +200,26 @@ pub fn spawn_turn(
                         is_thinking: false,
                     })
                     .await;
+
+                if let Some(ref msgs) = messages
+                    && let Some(search_summary) =
+                        boxxy_ai_core::extract_native_search_summary(msgs)
+                {
+                    let tool_event = ClawEngineEvent::ToolResult {
+                        agent_name: agent_name.clone(),
+                        character_id: character_id.clone(),
+                        tool_name: "native_web_search".to_string(),
+                        result: search_summary,
+                        usage: None,
+                    };
+                    persist_visual_event(
+                        db.clone(),
+                        session_id_clone.clone(),
+                        pane_id.clone(),
+                        &tool_event,
+                    );
+                    let _ = tx_ui.send(tool_event).await;
+                }
 
                 if duration.as_secs() >= 7 {
                     let mut summary = response.trim().to_string();

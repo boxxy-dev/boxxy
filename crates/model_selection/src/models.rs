@@ -242,6 +242,17 @@ impl ModelProvider {
             ModelProvider::DeepSeek(model) => format!("DeepSeek/{}", model),
         }
     }
+
+    /// Returns `true` if this provider supports built-in server-side web search
+    /// (Gemini Google Search grounding, OpenAI Responses `web_search`, Anthropic `web_search_20250305`).
+    pub fn supports_native_search(&self) -> bool {
+        matches!(
+            self,
+            ModelProvider::Gemini(_, _)
+                | ModelProvider::OpenAi(_, _)
+                | ModelProvider::Anthropic(_, _)
+        )
+    }
 }
 
 impl Default for ModelProvider {
@@ -293,5 +304,27 @@ mod tests {
     #[test]
     fn test_deepseek_models() {
         assert_eq!(DeepSeekModel::V4_1Flash.api_name(), "deepseek-flash");
+    }
+
+    #[test]
+    fn test_supports_native_search() {
+        assert!(
+            ModelProvider::Gemini(GeminiModel::Flash3_8, Some(ThinkingLevel::Low))
+                .supports_native_search()
+        );
+        assert!(
+            ModelProvider::OpenAi(OpenAiModel::Gpt6Astra, Some(ThinkingLevel::Medium))
+                .supports_native_search()
+        );
+        assert!(
+            ModelProvider::Anthropic(AnthropicModel::ClaudeSonnet5, None)
+                .supports_native_search()
+        );
+        assert!(!ModelProvider::Ollama("llama3.2".to_string()).supports_native_search());
+        assert!(
+            !ModelProvider::OpenRouter("anthropic/claude-sonnet-4".to_string())
+                .supports_native_search()
+        );
+        assert!(!ModelProvider::DeepSeek(DeepSeekModel::V4_1Flash).supports_native_search());
     }
 }

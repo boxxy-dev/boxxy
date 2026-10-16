@@ -41,6 +41,7 @@ pub struct SessionState {
     pub persistent_agent: Option<crate::engine::agent::ClawAgent>,
     pub current_claw_model: Option<boxxy_model_selection::ModelProvider>,
     pub current_memory_model: Option<boxxy_model_selection::ModelProvider>,
+    pub current_search_label: String,
     pub last_tools: Option<Vec<String>>,
     pub pending_tasks: Vec<crate::engine::ScheduledTask>,
     pub last_snapshot_hash: Option<u64>,
@@ -104,7 +105,7 @@ impl ClawSession {
                 character_id: String::new(),
                 character_display_name: String::new(),
                 pinned: false,
-                web_search_enabled: settings.enable_web_search,
+                web_search_enabled: settings.enable_web_search && settings.web_search_on_by_default,
                 total_tokens: 0,
                 tracked_pids: Arc::new(tokio::sync::RwLock::new(std::collections::HashSet::new())),
                 api_keys: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
@@ -125,6 +126,11 @@ impl ClawSession {
                 persistent_agent: None,
                 current_claw_model: settings.claw_model.clone(),
                 current_memory_model: settings.memory_model.clone(),
+                current_search_label: crate::engine::agent_config::resolve_active_search_label(
+                    &settings,
+                    settings.enable_web_search && settings.web_search_on_by_default,
+                )
+                .to_string(),
                 last_tools: None,
                 pending_tasks: Vec::new(),
                 last_snapshot_hash: None,

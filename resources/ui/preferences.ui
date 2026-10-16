@@ -447,8 +447,8 @@
                                 <child>
                                   <object class="AdwSwitchRow" id="native_search_switch">
                                     <property name="title" translatable="yes">Use Native Model Search</property>
-                                    <property name="subtitle" translatable="yes">Use built-in search from Gemini, GPT, or Claude (Not implemented yet).</property>
-                                    <property name="sensitive">False</property>
+                                    <property name="subtitle" translatable="yes">Use built-in search from Gemini, GPT, or Claude instead of external search engines.</property>
+                                    <property name="sensitive">True</property>
                                   </object>
                                 </child>
                               </object>
@@ -559,7 +559,7 @@
                                 <child>
                                   <object class="AdwSwitchRow" id="enable_web_search_switch">
                                     <property name="title" translatable="yes">Enable Web Search</property>
-                                    <property name="subtitle" translatable="yes">Allows agents to search the web using providers like Tavily.</property>
+                                    <property name="subtitle" translatable="yes">Allows agents to search the web using native model search or providers like Tavily.</property>
                                   </object>
                                 </child>
                                 <child>

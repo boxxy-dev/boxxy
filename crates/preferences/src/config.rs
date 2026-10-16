@@ -153,6 +153,8 @@ pub struct Settings {
     pub enable_web_tools: bool,
     pub enable_clipboard_tools: bool,
     pub enable_web_search: bool,
+    #[serde(default)]
+    pub use_native_search: bool,
     pub enable_os_context: bool,
     pub enable_progress_bar: bool,
     pub enable_timer_sounds: bool,
@@ -217,6 +219,7 @@ impl Default for Settings {
             enable_web_tools: true,
             enable_clipboard_tools: true,
             enable_web_search: true,
+            use_native_search: false,
             enable_os_context: true,
             enable_progress_bar: true,
             enable_timer_sounds: true,
@@ -557,5 +560,19 @@ mod tests {
         Settings::update(|s| {
             s.font_size = initial;
         });
+    }
+
+    #[test]
+    fn settings_use_native_search_roundtrip_and_default() {
+        // Legacy JSON without `use_native_search` defaults to false
+        let legacy: Settings = serde_json::from_str("{}").unwrap();
+        assert!(!legacy.use_native_search);
+
+        // Explicit true roundtrips cleanly
+        let mut s = Settings::default();
+        s.use_native_search = true;
+        let json = serde_json::to_string(&s).unwrap();
+        let decoded: Settings = serde_json::from_str(&json).unwrap();
+        assert!(decoded.use_native_search);
     }
 }

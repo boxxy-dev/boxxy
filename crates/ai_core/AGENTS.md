@@ -14,7 +14,8 @@ A unified payload struct that carries API keys and base URLs.
 
 ### `build_provider_model` & `create_agent`
 `build_provider_model` is the shared factory that resolves a `ModelProvider` and `AiCredentials` into a type-erased `rig::DynModel<rig::operation::Completion>` along with portable `rig::completion::Reasoning` options (`Effort` / `Budget` / `Off`).
-`create_agent` instantiates a `BoxxyAgent` with portable `GenerationOptions` (`.reasoning(..)`, `.cache(CacheRetention::Short)`, and `.on_unsupported(OnUnsupported::Ignore)`), ensuring consistent prompt caching and thinking configurations across both the AI Chat sidebar and the Claw reasoning engine.
+`create_agent` and `create_agent_with_options` instantiate a `BoxxyAgent` with portable `GenerationOptions` (`.reasoning(..)`, `.cache(CacheRetention::Short)`, and `.on_unsupported(OnUnsupported::Ignore)`), ensuring consistent prompt caching and thinking configurations across both the AI Chat sidebar and the Claw reasoning engine.
+`native_search_additional_params` provides the provider-hosted search payload (`googleSearch` for Gemini, `web_search` for OpenAI Responses, `web_search_20250305` for Anthropic), while `append_citations_to_output` and `extract_native_search_summary` normalize URL citations and server-side search telemetry across providers.
 
 ## Utilities
 

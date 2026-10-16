@@ -104,6 +104,7 @@ mod pending_drain_tests {
             persistent_agent: None,
             current_claw_model: None,
             current_memory_model: None,
+            current_search_label: "Off".to_string(),
             last_tools: None,
             pending_tasks: Vec::new(),
             last_snapshot_hash: None,

@@ -250,6 +250,13 @@ impl ClawSession {
                 if state_lock.web_search_enabled != enabled {
                     state_lock.web_search_enabled = enabled;
                     state_lock.persistent_agent = None;
+                    let settings = boxxy_preferences::Settings::load();
+                    state_lock.current_search_label =
+                        crate::engine::agent_config::resolve_active_search_label(
+                            &settings,
+                            enabled,
+                        )
+                        .to_string();
                     let _ = self
                         .tx_ui
                         .send(ClawEngineEvent::WebSearchStatusChanged(enabled))

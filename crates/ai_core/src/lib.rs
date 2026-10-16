@@ -19,6 +19,192 @@ pub fn map_thinking_level(level: ThinkingLevel) -> Reasoning {
     }
 }
 
+/// Returns the provider-specific `additional_params` JSON payload to enable
+/// built-in server-side web search in `rig-core 0.44.0`, or `None` if the
+/// provider does not support native search.
+///
+/// Each supported wire encoder in `rig-core 0.44.0` merges `additional_params.tools`
+/// alongside standard function tools rather than overwriting them.
+pub fn native_search_additional_params(provider: &ModelProvider) -> Option<serde_json::Value> {
+    match provider {
+        ModelProvider::Gemini(_, _) => Some(serde_json::json!({
+            "tools": [{ "googleSearch": {} }],
+            "toolConfig": {
+                "includeServerSideToolInvocations": true
+            }
+        })),
+        ModelProvider::OpenAi(_, _) => Some(serde_json::json!({
+            "tools": [{ "type": "web_search" }]
+        })),
+        ModelProvider::Anthropic(_, _) => Some(serde_json::json!({
+            "tools": [{ "type": "web_search_20250305", "name": "web_search" }]
+        })),
+        ModelProvider::Ollama(_) | ModelProvider::OpenRouter(_) | ModelProvider::DeepSeek(_) => {
+            None
+        }
+    }
+}
+
+/// Collects unique `(title, url)` pairs from `Text::citations()` across assistant turns in `messages`.
+pub fn collect_url_citations(messages: &[Message]) -> Vec<(Option<String>, String)> {
+    let mut seen_urls = std::collections::HashSet::new();
+    let mut sources = Vec::new();
+
+    for msg in messages {
+        if let Message::Assistant(turn) = msg {
+            for item in turn.content.iter() {
+                if let rig::message::AssistantContent::Text(text) = item {
+                    for citation in text.citations() {
+                        for source in &citation.sources {
+                            if let rig::message::SourceLocation::Url { url } = &source.location
+                                && !url.is_empty()
+                                && seen_urls.insert(url.clone())
+                            {
+                                sources.push((source.title.clone(), url.clone()));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    sources
+}
+
+/// Appends a Markdown `**Sources:**` footer to `output` for any URL citations in `messages`
+/// whose URLs are not already linked inline in `output`.
+pub fn append_citations_to_output(messages: &[Message], output: &str) -> String {
+    let trimmed = output.trim();
+    if trimmed.is_empty() || trimmed == "[SILENT_ACK]" {
+        return output.to_string();
+    }
+
+    let missing_sources: Vec<(Option<String>, String)> = collect_url_citations(messages)
+        .into_iter()
+        .filter(|(_, url)| !output.contains(url.as_str()))
+        .collect();
+
+    if missing_sources.is_empty() {
+        return output.to_string();
+    }
+
+    let mut result = output.to_string();
+    result.push_str("\n\n**Sources:**\n");
+    for (title, url) in missing_sources {
+        let label = title
+            .as_deref()
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+            .unwrap_or(url.as_str());
+        result.push_str(&format!("- [{label}]({url})\n"));
+    }
+    result.trim_end().to_string()
+}
+
+/// Inspects the committed `messages` from a turn for server-side web search items
+/// (`web_search_call` on OpenAI, `server_tool_use` / `web_search_tool_result` on Anthropic,
+/// or URL grounding citations on Gemini/OpenAI/Anthropic) and returns a human-readable
+/// summary when native web search was used.
+pub fn extract_native_search_summary(messages: &[Message]) -> Option<String> {
+    let mut queries = Vec::new();
+    let mut search_invoked = false;
+
+    for msg in messages {
+        if let Message::Assistant(turn) = msg {
+            for item in turn.content.iter() {
+                if let rig::message::AssistantContent::Opaque(opaque) = item {
+                    match opaque.kind() {
+                        Some("web_search_call") => {
+                            search_invoked = true;
+                            if let Some(q) = opaque
+                                .item
+                                .get("action")
+                                .and_then(|a| a.get("query"))
+                                .and_then(|q| q.as_str())
+                                && !q.is_empty()
+                                && !queries.contains(&q.to_string())
+                            {
+                                queries.push(q.to_string());
+                            }
+                        }
+                        Some("server_tool_use")
+                            if opaque.item.get("name").and_then(|n| n.as_str())
+                                == Some("web_search") =>
+                        {
+                            search_invoked = true;
+                            if let Some(q) = opaque
+                                .item
+                                .get("input")
+                                .and_then(|i| i.get("query"))
+                                .and_then(|q| q.as_str())
+                                && !q.is_empty()
+                                && !queries.contains(&q.to_string())
+                            {
+                                queries.push(q.to_string());
+                            }
+                        }
+                        Some("web_search_tool_result") => {
+                            search_invoked = true;
+                        }
+                        _ => {
+                            // Gemini server-side tool invocation part (`toolCall` / `toolResponse`)
+                            if let Some(tool_call) = opaque.item.get("toolCall") {
+                                search_invoked = true;
+                                if let Some(args) = tool_call.get("args") {
+                                    if let Some(q) = args.get("query").and_then(|q| q.as_str())
+                                        && !q.is_empty()
+                                        && !queries.contains(&q.to_string())
+                                    {
+                                        queries.push(q.to_string());
+                                    }
+                                    if let Some(arr) =
+                                        args.get("queries").and_then(|q| q.as_array())
+                                    {
+                                        for q in arr.iter().filter_map(|v| v.as_str()) {
+                                            if !q.is_empty() && !queries.contains(&q.to_string()) {
+                                                queries.push(q.to_string());
+                                            }
+                                        }
+                                    }
+                                }
+                            } else if opaque.item.get("toolResponse").is_some() {
+                                search_invoked = true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let citations = collect_url_citations(messages);
+    if !search_invoked && citations.is_empty() {
+        return None;
+    }
+
+    let mut summary = String::new();
+    if !queries.is_empty() {
+        summary.push_str(&format!("Queries: {}\n", queries.join(", ")));
+    }
+    if !citations.is_empty() {
+        summary.push_str("Sources:\n");
+        for (title, url) in &citations {
+            let label = title
+                .as_deref()
+                .map(str::trim)
+                .filter(|t| !t.is_empty())
+                .unwrap_or(url.as_str());
+            summary.push_str(&format!("- {label}: {url}\n"));
+        }
+    }
+    if summary.is_empty() {
+        summary.push_str("Executed provider-native web search.");
+    }
+
+    Some(summary.trim_end().to_string())
+}
+
 pub fn build_provider_model(
     provider: &ModelProvider,
     creds: &AiCredentials,
@@ -225,7 +411,8 @@ impl BoxxyAgent {
 
         match res_result {
             Ok(res) => {
-                let output = res.output();
+                let raw_output = res.output();
+                let output = append_citations_to_output(&res.messages, &raw_output);
                 if is_explicit {
                     log::info!(
                         target: "model-context",
@@ -320,6 +507,15 @@ pub fn create_agent(
     creds: &AiCredentials,
     system_prompt: &str,
 ) -> BoxxyAgent {
+    create_agent_with_options(provider, creds, system_prompt, false)
+}
+
+pub fn create_agent_with_options(
+    provider: &Option<ModelProvider>,
+    creds: &AiCredentials,
+    system_prompt: &str,
+    enable_native_search: bool,
+) -> BoxxyAgent {
     let provider = match provider {
         Some(p) => p,
         None => {
@@ -342,6 +538,12 @@ pub fn create_agent(
 
     if let Some(reasoning) = reasoning {
         builder = builder.reasoning(reasoning);
+    }
+
+    if enable_native_search
+        && let Some(params) = native_search_additional_params(provider)
+    {
+        builder = builder.additional_params(params);
     }
 
     BoxxyAgent {
@@ -424,5 +626,90 @@ mod tests {
         assert_eq!(provider, "DeepSeek");
         assert_eq!(model, "deepseek-flash");
         assert_eq!(reasoning, None);
+    }
+
+    #[test]
+    fn test_native_search_additional_params() {
+        assert_eq!(
+            native_search_additional_params(&ModelProvider::Gemini(GeminiModel::Flash3_8, None)),
+            Some(serde_json::json!({
+                "tools": [{ "googleSearch": {} }],
+                "toolConfig": {
+                    "includeServerSideToolInvocations": true
+                }
+            }))
+        );
+        assert_eq!(
+            native_search_additional_params(&ModelProvider::OpenAi(OpenAiModel::Gpt6Astra, None)),
+            Some(serde_json::json!({ "tools": [{ "type": "web_search" }] }))
+        );
+        assert_eq!(
+            native_search_additional_params(&ModelProvider::Anthropic(
+                AnthropicModel::ClaudeSonnet5,
+                None
+            )),
+            Some(serde_json::json!({
+                "tools": [{ "type": "web_search_20250305", "name": "web_search" }]
+            }))
+        );
+        assert_eq!(
+            native_search_additional_params(&ModelProvider::Ollama("llama3.2".to_string())),
+            None
+        );
+        assert_eq!(
+            native_search_additional_params(&ModelProvider::OpenRouter(
+                "anthropic/claude-sonnet-4".to_string()
+            )),
+            None
+        );
+        assert_eq!(
+            native_search_additional_params(&ModelProvider::DeepSeek(DeepSeekModel::V4_1Flash)),
+            None
+        );
+    }
+
+    #[test]
+    fn test_citations_and_native_search_summary() {
+        use rig::message::{
+            AssistantContent, AssistantMessage, Citation, Opaque, Source, SourceLocation, Text,
+        };
+
+        let text = Text::new("Rust 2024 is supported.").with_citations([Citation::new([
+            Source::new(SourceLocation::Url {
+                url: "https://example.com/rust-2024".to_string(),
+            })
+            .title("Rust 2024 Edition Guide"),
+        ])]);
+
+        let search_opaque = Opaque {
+            item: serde_json::json!({
+                "type": "web_search_call",
+                "id": "ws_1",
+                "status": "completed",
+                "action": { "type": "search", "query": "rust 2024 edition" }
+            }),
+            replay: true,
+        };
+
+        let turn = AssistantMessage::new(vec![
+            AssistantContent::Opaque(search_opaque),
+            AssistantContent::Text(text),
+        ]);
+        let messages = vec![Message::user("What edition?"), Message::Assistant(turn)];
+
+        let formatted = append_citations_to_output(&messages, "Rust 2024 is supported.");
+        assert!(formatted.contains("**Sources:**"));
+        assert!(
+            formatted.contains("- [Rust 2024 Edition Guide](https://example.com/rust-2024)")
+        );
+
+        // If URL is already inline in the output, don't duplicate it
+        let inline =
+            "Rust 2024 is supported ([guide](https://example.com/rust-2024)).";
+        assert_eq!(append_citations_to_output(&messages, inline), inline);
+
+        let summary = extract_native_search_summary(&messages).expect("should detect search");
+        assert!(summary.contains("Queries: rust 2024 edition"));
+        assert!(summary.contains("https://example.com/rust-2024"));
     }
 }
