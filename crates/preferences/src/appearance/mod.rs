@@ -9,6 +9,7 @@ use std::rc::Rc;
 pub struct AppearanceWidgets {
     pub theme_row: adw::ActionRow,
     pub chat_width_spin: adw::SpinRow,
+    pub font_button: gtk::FontDialogButton,
 }
 
 pub fn setup_appearance_page(
@@ -196,12 +197,27 @@ pub fn setup_appearance_page(
     frosted_glass_row.set_active(settings_rc.borrow().frosted_glass);
     let s_rc = settings_rc.clone();
     let cb = on_change.clone();
+    let opacity_adj_for_frosted = opacity_adj.clone();
     frosted_glass_row.connect_active_notify(move |row| {
         let mut s = s_rc.borrow_mut();
-        if s.frosted_glass != row.is_active() {
-            s.frosted_glass = row.is_active();
+        let active = row.is_active();
+        if s.frosted_glass != active {
+            s.frosted_glass = active;
+            // If the user enables Frosted Glass while Background Tint is at 100% (1.0),
+            // nudge tint down to 80% so the blur is immediately visible with one click.
+            let nudged_opacity = if active && s.opacity >= 0.999 {
+                s.opacity = 0.80;
+                Some(0.80)
+            } else {
+                None
+            };
             s.save();
-            cb(s.clone());
+            let s_clone = s.clone();
+            drop(s);
+            if let Some(new_op) = nudged_opacity {
+                opacity_adj_for_frosted.set_value(new_op);
+            }
+            cb(s_clone);
         }
     });
 
@@ -485,6 +501,7 @@ pub fn setup_appearance_page(
     let widgets = AppearanceWidgets {
         theme_row,
         chat_width_spin,
+        font_button,
     };
 
     let filter = Box::new(move |query: &str| {

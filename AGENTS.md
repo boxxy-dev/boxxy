@@ -51,6 +51,8 @@ Entry point. Initializes GTK/Libadwaita, registers GResources, bootstraps the ma
 ### 2. `boxxy-window` (Library Crate)
 Main UI Orchestrator using a modular MVU pattern. Manages the `AdwApplicationWindow`, tabs, and global state routing via `state.rs`, `ui.rs`, and the `update/` module. Acts as the primary orchestrator for the **Global Workspace Radar**, ensuring peer-to-peer agent discovery and global intent propagation across all windows. It monitors the active terminal pane to reflect its specific Claw mode state. It provides the **Primary Notification Surface** for agent events, emitting rich desktop alerts (character avatars, first-name attribution, and response summaries) for timers and long-running tasks, while intelligently suppressing redundant in-app toasts for task completions already visible in the overlay.
 
+**Frosted Glass:** `widgets/frosted_glass.rs` wraps the whole sidebar/content split view. It filters only the backdrop paste, then paints a flat tint; native Libadwaita window clipping owns corners and CSD offsets. Keep the blur radius at 40 for GTK 4.25's radius-to-sigma conversion. See `DEV/plans/frosted_glass_blur.md` for validation status and compositor diagnostics.
+
 ### 3. `boxxy-terminal` (Library Crate)
 Manages the split-pane terminal environment. Features a deep modular architecture (`pane/`) handling UI, gestures, events, and media previews. Claw UI (drawer, indicator, merged msgbar, event dispatch) does **not** live here — it lives in `boxxy-claw-widget`. The terminal provides `PaneClawHost` as a thin adapter that implements `boxxy_claw_widget::ClawHost` so the drawer can drive the pane without depending on `TerminalWidget` or `PaneInner`.
 

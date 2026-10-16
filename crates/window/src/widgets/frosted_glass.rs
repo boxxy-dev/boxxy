@@ -1,8 +1,8 @@
-use gtk4 as gtk;
 use gtk::gdk;
 use gtk::glib;
 use gtk::prelude::*;
 use gtk::subclass::prelude::*;
+use gtk4 as gtk;
 use std::cell::{Cell, RefCell};
 
 mod imp {
@@ -13,8 +13,6 @@ mod imp {
         pub child: RefCell<Option<gtk::Widget>>,
         pub frosted_glass: Cell<bool>,
         pub opacity: Cell<f64>,
-        pub is_maximized: Cell<bool>,
-        pub has_sidebar: Cell<bool>,
         pub tint_color: RefCell<Option<gdk::RGBA>>,
     }
 
@@ -42,63 +40,37 @@ mod imp {
             let width = self.obj().width() as f32;
             let height = self.obj().height() as f32;
 
-            if self.frosted_glass.get()
-                && self.opacity.get() < 1.0
-                && width > 0.0
-                && height > 0.0
-            {
+            if self.frosted_glass.get() && self.opacity.get() < 1.0 && width > 0.0 && height > 0.0 {
                 let rect = gtk::graphene::Rect::new(0.0, 0.0, width, height);
 
-                // Corner radii matching Libadwaita window radius (12px).
-                // When maximized: 0px.
-                // When unmaximized with sidebar visible: left edge is straight (0px) along the divider.
-                // When unmaximized without sidebar: all 4 corners are rounded (12px).
-                let r = 12.0f32;
-                let is_max = self.is_maximized.get();
-                let (tl, bl) = if is_max || self.has_sidebar.get() {
-                    (0.0, 0.0)
-                } else {
-                    (r, r)
-                };
-                let (tr, br) = if is_max {
-                    (0.0, 0.0)
-                } else {
-                    (r, r)
-                };
-
-                let rounded = gtk::gsk::RoundedRect::new(
-                    rect,
-                    gtk::graphene::Size::new(tl, tl),
-                    gtk::graphene::Size::new(tr, tr),
-                    gtk::graphene::Size::new(br, br),
-                    gtk::graphene::Size::new(bl, bl),
-                );
-
-                // Push rounded clip so GTK 4.24 Wayland blur detector produces a rounded region
-                // and child widgets (headerbar, window controls) cannot draw into square corners.
-                snapshot.push_rounded_clip(&rounded);
-
-                // Wayland ext-background-effect-v1 marker tree:
-                // Copy -> Blur (>= 20.0px) -> Paste -> Color tint
-                snapshot.push_copy();
-                snapshot.push_blur(20.0);
-                snapshot.append_paste(&rect, 0);
+                // AdwApplicationWindow already clips its content to the actual window shape.
+                // Do not add a second, hardcoded rounded clip around the blur marker: the
+                // native clip also accounts for CSD offsets, tiled edges and fullscreen.
 
                 let mut tint = self
                     .tint_color
                     .borrow()
                     .unwrap_or_else(|| gdk::RGBA::new(0.08, 0.08, 0.1, 1.0));
                 tint.set_alpha(self.opacity.get() as f32);
-                snapshot.append_color(&tint, &rect);
 
+                let pad = 60.0f32;
+                let padded_rect =
+                    gtk::graphene::Rect::new(-pad, -pad, width + 2.0 * pad, height + 2.0 * pad);
+
+                snapshot.push_copy();
+                // GTK 4.25 halves this legacy radius to sigma; keep sigma >= 20.
+                snapshot.push_blur(40.0);
+                snapshot.append_paste(&padded_rect, 0);
                 snapshot.pop(); // blur
                 snapshot.pop(); // copy
+
+                // Tint is a flat overlay, not part of the backdrop filter. Blurring it
+                // couples edge alpha to the renderer's intermediate surface bounds.
+                snapshot.append_color(&tint, &rect);
 
                 if let Some(ref child) = *self.child.borrow() {
                     self.obj().snapshot_child(child, snapshot);
                 }
-
-                snapshot.pop(); // rounded_clip
             } else if let Some(ref child) = *self.child.borrow() {
                 self.obj().snapshot_child(child, snapshot);
             }
@@ -153,22 +125,61 @@ impl FrostedGlassContainer {
         }
     }
 
-    pub fn set_is_maximized(&self, maximized: bool) {
-        if self.imp().is_maximized.get() != maximized {
-            self.imp().is_maximized.set(maximized);
-            self.queue_draw();
-        }
-    }
-
-    pub fn set_has_sidebar(&self, has_sidebar: bool) {
-        if self.imp().has_sidebar.get() != has_sidebar {
-            self.imp().has_sidebar.set(has_sidebar);
-            self.queue_draw();
-        }
-    }
-
     pub fn set_tint_color(&self, color: gdk::RGBA) {
         self.imp().tint_color.replace(Some(color));
         self.queue_draw();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[gtk::test]
+    fn backdrop_marker_and_tint_are_separate() {
+        let glass = FrostedGlassContainer::new();
+        glass.set_frosted_glass(true);
+        glass.set_opacity(0.8);
+        glass.allocate(600, 400, -1, None);
+
+        let snapshot = gtk::Snapshot::new();
+        glass.imp().snapshot(&snapshot);
+        let node = snapshot.to_node().unwrap();
+        let layers = node.downcast_ref::<gtk::gsk::ContainerNode>().unwrap();
+        assert_eq!(layers.n_children(), 2);
+
+        // No widget-local rounded clip or blurred color: only the backdrop is filtered.
+        let marker = layers.child(0);
+        let copy = marker.downcast_ref::<gtk::gsk::CopyNode>().unwrap();
+        let filter = copy.child();
+        let blur = filter.downcast_ref::<gtk::gsk::BlurNode>().unwrap();
+        let backdrop = blur.child();
+        let paste = backdrop.downcast_ref::<gtk::gsk::PasteNode>().unwrap();
+        assert_eq!(
+            paste.bounds(),
+            gtk::graphene::Rect::new(-60.0, -60.0, 720.0, 520.0)
+        );
+
+        let tint = layers.child(1);
+        let color = tint.downcast_ref::<gtk::gsk::ColorNode>().unwrap();
+        assert_eq!(
+            color.bounds(),
+            gtk::graphene::Rect::new(0.0, 0.0, 600.0, 400.0)
+        );
+        assert!((color.color().alpha() - 0.8).abs() < 0.001);
+    }
+
+    #[gtk::test]
+    fn inactive_or_opaque_glass_has_no_backdrop_marker() {
+        let glass = FrostedGlassContainer::new();
+        glass.allocate(600, 400, -1, None);
+
+        for (enabled, opacity) in [(false, 0.8), (true, 1.0)] {
+            glass.set_frosted_glass(enabled);
+            glass.set_opacity(opacity);
+            let snapshot = gtk::Snapshot::new();
+            glass.imp().snapshot(&snapshot);
+            assert!(snapshot.to_node().is_none());
+        }
     }
 }

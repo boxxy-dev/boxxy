@@ -238,7 +238,7 @@ impl AppWindow {
         });
         split_view.add_controller(gesture);
 
-        let (sidebar_toolbar, view_stack) = Self::build_sidebar(
+        let (sidebar_overlay, sidebar_toolbar, view_stack) = Self::build_sidebar(
             &tx,
             &ai_chat,
             &claw,
@@ -247,16 +247,19 @@ impl AppWindow {
             &app_state,
             &current_settings,
         );
-        split_view.set_sidebar(Some(&sidebar_toolbar));
+        sidebar_overlay.set_visible(app_state.sidebar_visible);
+        split_view.set_sidebar(Some(&sidebar_overlay));
         let (content_toolbar, content_header, bell_indicator, menu_btn, tab_bar) =
             Self::build_content_area(&tx, &tab_view, &current_settings);
 
+        let overlay = gtk::Overlay::new();
+        overlay.set_child(Some(&content_toolbar));
+        split_view.set_content(Some(&overlay));
+
         let frosted_container = crate::widgets::frosted_glass::FrostedGlassContainer::new();
-        frosted_container.set_child(Some(&content_toolbar));
+        frosted_container.set_child(Some(&split_view));
         frosted_container.set_frosted_glass(current_settings.frosted_glass);
         frosted_container.set_opacity(current_settings.opacity);
-        frosted_container.set_is_maximized(app_state.is_maximized);
-        frosted_container.set_has_sidebar(app_state.sidebar_visible);
 
         let palette = boxxy_themes::load_palette(current_settings.theme.as_str());
         let is_dark = libadwaita::StyleManager::default().is_dark();
@@ -269,18 +272,9 @@ impl AppWindow {
         };
         frosted_container.set_tint_color(bg_rgba);
 
-        let fc_max = frosted_container.clone();
-        window.connect_notify_local(Some("maximized"), move |win, _| {
-            fc_max.set_is_maximized(win.is_maximized());
-        });
-
-        let overlay = gtk::Overlay::new();
-        overlay.set_child(Some(&frosted_container));
-
         let toast_overlay = adw::ToastOverlay::new();
-        toast_overlay.set_child(Some(&split_view));
+        toast_overlay.set_child(Some(&frosted_container));
 
-        split_view.set_content(Some(&overlay));
         window.set_content(Some(&toast_overlay));
 
         let tx_focus2 = tx.clone();
@@ -334,6 +328,7 @@ impl AppWindow {
             tab_bar: tab_bar.clone(),
             content_header,
             split_view,
+            sidebar_overlay,
             sidebar_toolbar,
             menu_btn,
             view_stack,
@@ -483,7 +478,7 @@ impl AppWindow {
         theme_selector: &ThemeSelectorComponent,
         app_state: &AppState,
         current_settings: &Settings,
-    ) -> (adw::ToolbarView, adw::ViewStack) {
+    ) -> (gtk::Overlay, adw::ToolbarView, adw::ViewStack) {
         let sidebar_toolbar = adw::ToolbarView::new();
         sidebar_toolbar.add_css_class("sidebar-toolbar");
         sidebar_toolbar.set_width_request(current_settings.ai_chat_width);
@@ -517,14 +512,25 @@ impl AppWindow {
             .policy(adw::ViewSwitcherPolicy::Narrow)
             .build();
 
-        let sidebar_header = adw::HeaderBar::builder().title_widget(&switcher).build();
+                let sidebar_header = adw::HeaderBar::builder().title_widget(&switcher).build();
         sidebar_header.add_css_class("flat");
         sidebar_header.add_css_class("sidebar-header");
 
-        let sidebar_box = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        let sidebar_content_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        sidebar_content_box.set_hexpand(true);
+        sidebar_content_box.append(&sidebar_header);
+        sidebar_content_box.append(&view_stack);
 
+        sidebar_toolbar.set_content(Some(&sidebar_content_box));
+
+        // TODO(libadwaita): Check if future Libadwaita releases add native interactive drag-resizing
+        // to `AdwOverlaySplitView` / `AdwNavigationSplitView` so we can drop this custom 6px
+        // `GestureDrag` handle overlay. (As of Libadwaita 1.10, only static `min-sidebar-width`,
+        // `max-sidebar-width`, and `sidebar-width-fraction` properties exist.)
         let handle_event_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
         handle_event_box.set_width_request(6);
+        handle_event_box.set_halign(gtk::Align::End);
+        handle_event_box.set_vexpand(true);
         handle_event_box.add_css_class("sidebar-resize-handle");
         handle_event_box.set_cursor_from_name(Some("col-resize"));
 
@@ -591,17 +597,11 @@ impl AppWindow {
         ));
         handle_event_box.add_controller(drag);
 
-        let sidebar_content_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        sidebar_content_box.set_hexpand(true);
-        sidebar_content_box.append(&sidebar_header);
-        sidebar_content_box.append(&view_stack);
+        let sidebar_overlay = gtk::Overlay::new();
+        sidebar_overlay.set_child(Some(&sidebar_toolbar));
+        sidebar_overlay.add_overlay(&handle_event_box);
 
-        sidebar_box.append(&sidebar_content_box);
-        sidebar_box.append(&handle_event_box);
-
-        sidebar_toolbar.set_content(Some(&sidebar_box));
-
-        (sidebar_toolbar, view_stack)
+        (sidebar_overlay, sidebar_toolbar, view_stack)
     }
 
     fn build_content_area(

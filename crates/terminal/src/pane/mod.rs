@@ -1255,7 +1255,9 @@ impl TerminalPaneComponent {
                 || p.cursor_color != settings.cursor_color;
             needs_show_grid = p.show_vte_grid != settings.show_vte_grid;
             needs_invert_scroll = p.invert_scroll != settings.invert_scroll;
-            needs_frosted_glass = p.frosted_glass != settings.frosted_glass;
+            let prev_effective_frosted = p.frosted_glass && p.opacity < 1.0;
+            let next_effective_frosted = settings.frosted_glass && settings.opacity < 1.0;
+            needs_frosted_glass = prev_effective_frosted != next_effective_frosted;
         }
 
         self.claw_popover
@@ -1282,7 +1284,9 @@ impl TerminalPaneComponent {
         }
 
         if needs_frosted_glass {
-            inner.terminal.set_frosted_glass(settings.frosted_glass);
+            inner
+                .terminal
+                .set_frosted_glass(settings.frosted_glass && settings.opacity < 1.0);
         }
 
         if needs_font {

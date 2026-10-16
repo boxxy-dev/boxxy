@@ -273,7 +273,7 @@ pub fn sidebar_visible_changed(inner: &mut AppWindowInner, visible: bool) {
     inner.sidebar_visible = visible;
     inner.app_state.sidebar_visible = visible;
     inner.app_state.save();
-    inner.frosted_container.set_has_sidebar(visible);
+    inner.sidebar_overlay.set_visible(visible);
     if !visible {
         super::tabs::focus_active_terminal(inner);
     }
@@ -296,11 +296,15 @@ pub fn sidebar_width_changed(inner: &mut AppWindowInner, width: i32) {
 
 pub fn toggle_sidebar(inner: &mut AppWindowInner) {
     let is_visible = inner.split_view.shows_sidebar();
+    if !is_visible {
+        inner.sidebar_overlay.set_visible(true);
+    }
     inner.split_view.set_show_sidebar(!is_visible);
 }
 
 pub fn show_themes_sidebar(inner: &mut AppWindowInner) {
     if !inner.sidebar_visible {
+        inner.sidebar_overlay.set_visible(true);
         inner.split_view.set_show_sidebar(true);
     }
     inner.view_stack.set_visible_child_name("themes");
@@ -308,6 +312,7 @@ pub fn show_themes_sidebar(inner: &mut AppWindowInner) {
 
 pub fn show_ai_chat(inner: &mut AppWindowInner) {
     if !inner.sidebar_visible {
+        inner.sidebar_overlay.set_visible(true);
         inner.split_view.set_show_sidebar(true);
     }
     inner.view_stack.set_visible_child_name("assistant");
@@ -316,6 +321,7 @@ pub fn show_ai_chat(inner: &mut AppWindowInner) {
 
 pub fn show_claw_sidebar(inner: &mut AppWindowInner) {
     if !inner.sidebar_visible {
+        inner.sidebar_overlay.set_visible(true);
         inner.split_view.set_show_sidebar(true);
     }
     inner.view_stack.set_visible_child_name("claw");
@@ -323,6 +329,7 @@ pub fn show_claw_sidebar(inner: &mut AppWindowInner) {
 
 pub fn show_bookmarks_sidebar(inner: &mut AppWindowInner) {
     if !inner.sidebar_visible {
+        inner.sidebar_overlay.set_visible(true);
         inner.split_view.set_show_sidebar(true);
     }
     inner.view_stack.set_visible_child_name("bookmarks");

@@ -162,6 +162,7 @@ pub struct AppWindowInner {
     pub tab_bar: adw::TabBar,
     pub content_header: adw::HeaderBar,
     pub split_view: adw::OverlaySplitView,
+    pub sidebar_overlay: gtk::Overlay,
     pub sidebar_toolbar: adw::ToolbarView,
     pub menu_btn: gtk::Button,
     pub view_stack: adw::ViewStack,

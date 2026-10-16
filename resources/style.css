@@ -734,6 +734,16 @@ window.frosted-glass-active tabbar tab:selected {
     background-color: color-mix(in srgb, currentColor 15%, transparent);
 }
 
+window.frosted-glass-active .terminal-split-container paned > separator,
+window.frosted-glass-active .terminal-split-container paned > handle {
+    background-color: alpha(currentColor, 0.15);
+}
+
+window.frosted-glass-active .sidebar-toolbar,
+window.frosted-glass-active .sidebar-toolbar > contents {
+    background-color: alpha(@sidebar_bg_color, 0.92);
+}
+
 /* --- Smart Viewer: Media Gallery & Image Cards --- */
 flowbox.viewer-gallery > flowboxchild {
     padding: 0;
