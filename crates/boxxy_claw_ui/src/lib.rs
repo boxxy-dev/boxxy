@@ -233,6 +233,8 @@ pub fn create_claw_message_list() -> (gtk::ListView, gio::ListStore) {
         cmd_label.set_visible(false);
         vbox.append(&cmd_label);
 
+        hbox.set_safe_data("left_col", left_col);
+        hbox.set_safe_data("header", header);
         hbox.set_safe_data("icon", icon);
         hbox.set_safe_data("avatar", avatar);
         hbox.set_safe_data("title", title);
@@ -247,6 +249,8 @@ pub fn create_claw_message_list() -> (gtk::ListView, gio::ListStore) {
         let list_item = list_item.downcast_ref::<gtk::ListItem>().unwrap();
         let hbox = list_item.child().and_downcast::<gtk::Box>().unwrap();
 
+        let left_col = hbox.get_safe_data::<gtk::Box>("left_col").unwrap();
+        let header = hbox.get_safe_data::<gtk::Box>("header").unwrap();
         let icon = hbox.get_safe_data::<gtk::Image>("icon").unwrap();
         let avatar = hbox.get_safe_data::<adw::Avatar>("avatar").unwrap();
         let title = hbox.get_safe_data::<gtk::Label>("title").unwrap();
@@ -259,6 +263,8 @@ pub fn create_claw_message_list() -> (gtk::ListView, gio::ListStore) {
         };
 
         // Reset per-row state that specific variants may mutate.
+        left_col.set_visible(true);
+        header.set_visible(true);
         icon.set_visible(true);
         avatar.set_visible(false);
         avatar.set_custom_image(None::<&gdk::Texture>);
@@ -269,6 +275,7 @@ pub fn create_claw_message_list() -> (gtk::ListView, gio::ListStore) {
         icon.remove_css_class("warning");
         icon.remove_css_class("error");
         hbox.remove_css_class("system-message");
+        hbox.remove_css_class("dimmed");
         // Strip every per-variant class — rows are recycled across
         // variants, so the new bind picks exactly one below.
         for cls in [
@@ -367,6 +374,8 @@ pub fn create_claw_message_list() -> (gtk::ListView, gio::ListStore) {
 
         match obj.get_row() {
             PersistentClawRow::SystemMessage { content, .. } => {
+                left_col.set_visible(false);
+                header.set_visible(false);
                 icon.set_visible(false);
                 avatar.set_visible(false);
                 pane_lbl.set_visible(false);

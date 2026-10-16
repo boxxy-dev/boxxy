@@ -1,4 +1,4 @@
-use super::blocks::{ContentBlock, GalleryItem, ListItem, TableAlignment};
+use super::blocks::{ContentBlock, GalleryItem, ListItem, TableAlignment, TableCell};
 use pulldown_cmark::{Alignment, CodeBlockKind, Event, Parser, Tag, TagEnd};
 
 /// Escapes text for safe inclusion in Pango markup body text.
@@ -55,11 +55,14 @@ enum ParseContainer {
     Table {
         alignments: Vec<TableAlignment>,
         headers: Vec<String>,
-        rows: Vec<Vec<String>>,
+        rows: Vec<Vec<TableCell>>,
         in_head: bool,
-        current_row: Vec<String>,
+        current_row: Vec<TableCell>,
     },
-    TableCell(String),
+    TableCell {
+        markup: String,
+        images: Vec<GalleryItem>,
+    },
 }
 
 /// Parses a Markdown string into a sequence of `ContentBlock`s, including GFM tables,
@@ -154,7 +157,10 @@ pub fn parse_markdown(input: &str) -> Vec<ContentBlock> {
                         }
                     }
                     Tag::TableCell => {
-                        stack.push(ParseContainer::TableCell(String::new()));
+                        stack.push(ParseContainer::TableCell {
+                            markup: String::new(),
+                            images: Vec::new(),
+                        });
                     }
 
                     // Inline styles & links
@@ -177,11 +183,14 @@ pub fn parse_markdown(input: &str) -> Vec<ContentBlock> {
 
                 match tag {
                     TagEnd::TableCell => {
-                        if let Some(ParseContainer::TableCell(cell_markup)) = stack.pop()
+                        if let Some(ParseContainer::TableCell { markup, images }) = stack.pop()
                             && let Some(ParseContainer::Table { current_row, .. }) =
                                 find_enclosing_table(&mut stack)
                         {
-                            current_row.push(cell_markup.trim().to_string());
+                            current_row.push(TableCell {
+                                markup: markup.trim().to_string(),
+                                images,
+                            });
                         }
                     }
                     TagEnd::TableHead => {
@@ -192,7 +201,10 @@ pub fn parse_markdown(input: &str) -> Vec<ContentBlock> {
                             ..
                         }) = find_enclosing_table(&mut stack)
                         {
-                            *headers = std::mem::take(current_row);
+                            *headers = std::mem::take(current_row)
+                                .into_iter()
+                                .map(|c| c.markup)
+                                .collect();
                             *in_head = false;
                         }
                     }
@@ -249,7 +261,19 @@ pub fn parse_markdown(input: &str) -> Vec<ContentBlock> {
                                     Some(ContentBlock::List { ordered, items })
                                 }
                                 (TagEnd::Image, ParseContainer::Image { url, title, alt }) => {
-                                    Some(ContentBlock::Image { url, title, alt })
+                                    if let Some(ParseContainer::TableCell { images, .. }) =
+                                        find_enclosing_table_cell(&mut stack)
+                                    {
+                                        images.push(GalleryItem {
+                                            url,
+                                            title,
+                                            alt,
+                                            caption: None,
+                                        });
+                                        None
+                                    } else {
+                                        Some(ContentBlock::Image { url, title, alt })
+                                    }
                                 }
                                 (
                                     TagEnd::Table,
@@ -300,12 +324,15 @@ pub fn parse_markdown(input: &str) -> Vec<ContentBlock> {
                     append_text(&mut stack, "</tt>");
                 }
             }
-            Event::SoftBreak | Event::HardBreak => {
+            Event::SoftBreak => {
                 if !is_in_table_cell(&stack) {
                     append_text(&mut stack, "\n");
                 } else {
                     append_text(&mut stack, " ");
                 }
+            }
+            Event::HardBreak => {
+                append_text(&mut stack, "\n");
             }
             Event::Rule => {
                 maybe_close_implicit_paragraph(&mut stack, &mut root_blocks);
@@ -317,7 +344,11 @@ pub fn parse_markdown(input: &str) -> Vec<ContentBlock> {
                 }
             }
             Event::Html(html) | Event::InlineHtml(html) => {
-                append_text(&mut stack, &escape_pango(&html));
+                if is_html_line_break(&html) {
+                    append_text(&mut stack, "\n");
+                } else {
+                    append_text(&mut stack, &escape_pango(&html));
+                }
             }
             _ => {}
         }
@@ -357,13 +388,28 @@ pub fn parse_markdown(input: &str) -> Vec<ContentBlock> {
             }
             ParseContainer::List { ordered, items } => Some(ContentBlock::List { ordered, items }),
             ParseContainer::Image { url, title, alt } => {
-                Some(ContentBlock::Image { url, title, alt })
+                if let Some(ParseContainer::TableCell { images, .. }) =
+                    find_enclosing_table_cell(&mut stack)
+                {
+                    images.push(GalleryItem {
+                        url,
+                        title,
+                        alt,
+                        caption: None,
+                    });
+                    None
+                } else {
+                    Some(ContentBlock::Image { url, title, alt })
+                }
             }
-            ParseContainer::TableCell(cell_markup) => {
+            ParseContainer::TableCell { markup, images } => {
                 if let Some(ParseContainer::Table { current_row, .. }) =
                     find_enclosing_table(&mut stack)
                 {
-                    current_row.push(cell_markup.trim().to_string());
+                    current_row.push(TableCell {
+                        markup: markup.trim().to_string(),
+                        images,
+                    });
                 }
                 None
             }
@@ -376,7 +422,7 @@ pub fn parse_markdown(input: &str) -> Vec<ContentBlock> {
             } => {
                 if !current_row.is_empty() {
                     if in_head && headers.is_empty() {
-                        headers = current_row;
+                        headers = current_row.into_iter().map(|c| c.markup).collect();
                     } else {
                         rows.push(current_row);
                     }
@@ -586,9 +632,10 @@ fn try_consume_image_entry(
                         trailing_caption = Some(p.clone());
                         next += 1;
                     }
-                    let another_image_follows = is_followed_by_image_entry(blocks, next);
+                    let labeled_pair_follows = is_followed_by_labeled_image_entry(blocks, next)
+                        && !markup.trim_end().ends_with('.');
 
-                    if caption_matches_image(markup, url, alt) || another_image_follows {
+                    if caption_matches_image(markup, url, alt) || labeled_pair_follows {
                         let chosen_caption = trailing_caption.or_else(|| Some(markup.clone()));
                         Some((
                             vec![GalleryItem {
@@ -614,13 +661,17 @@ fn is_followed_by_image_entry(blocks: &[ContentBlock], next: usize) -> bool {
     matches!(
         blocks.get(next),
         Some(ContentBlock::Image { .. } | ContentBlock::ImageGallery { .. })
-    ) || (matches!(
+    ) || is_followed_by_labeled_image_entry(blocks, next)
+}
+
+fn is_followed_by_labeled_image_entry(blocks: &[ContentBlock], next: usize) -> bool {
+    matches!(
         blocks.get(next),
         Some(ContentBlock::Heading { .. } | ContentBlock::Paragraph(_))
     ) && matches!(
         blocks.get(next + 1),
         Some(ContentBlock::Image { .. } | ContentBlock::ImageGallery { .. })
-    ))
+    )
 }
 
 fn is_short_image_label(markup: &str) -> bool {
@@ -753,6 +804,20 @@ fn try_extract_media_path_from_markup(markup: &str) -> Option<(String, Option<St
     None
 }
 
+fn is_html_line_break(html: &str) -> bool {
+    let trimmed = html.trim();
+    trimmed.eq_ignore_ascii_case("<br>")
+        || trimmed.eq_ignore_ascii_case("<br/>")
+        || trimmed.eq_ignore_ascii_case("<br />")
+}
+
+fn find_enclosing_table_cell(stack: &mut [ParseContainer]) -> Option<&mut ParseContainer> {
+    stack
+        .iter_mut()
+        .rev()
+        .find(|c| matches!(c, ParseContainer::TableCell { .. }))
+}
+
 fn find_enclosing_table(stack: &mut [ParseContainer]) -> Option<&mut ParseContainer> {
     stack
         .iter_mut()
@@ -830,7 +895,7 @@ fn is_in_table_cell(stack: &[ParseContainer]) -> bool {
     stack
         .iter()
         .rev()
-        .any(|c| matches!(c, ParseContainer::TableCell(_)))
+        .any(|c| matches!(c, ParseContainer::TableCell { .. }))
 }
 
 fn append_text(stack: &mut Vec<ParseContainer>, text: &str) {
@@ -856,7 +921,7 @@ fn append_text(stack: &mut Vec<ParseContainer>, text: &str) {
             | ParseContainer::Heading(_, s)
             | ParseContainer::BlockQuote(s)
             | ParseContainer::CodeBlock(_, s)
-            | ParseContainer::TableCell(s) => s.push_str(text),
+            | ParseContainer::TableCell { markup: s, .. } => s.push_str(text),
             ParseContainer::Image { alt, .. } => alt.push_str(text),
             _ => {}
         }
@@ -1129,5 +1194,68 @@ mod tests {
         } else {
             panic!("Expected ImageGallery, got {:?}", blocks[0]);
         }
+    }
+
+    #[test]
+    fn test_table_with_embedded_images_and_br_tags() {
+        let input = "\
+Querying Flathub index for latest application registrations.
+
+| Application & Description | Screenshot |
+| :--- | :--- |
+| **Omnidict** (`com.ktechpit.omnidict`)<br>Offline multilingual dictionary and thesaurus. | ![Omnidict](https://example.com/omnidict.png) |
+| **DiagNG** (`com.p1security.diagng`)<br/>Qualcomm baseband diagnostic monitor client. | ![DiagNG](https://example.com/diagng.png) |";
+
+        let blocks = parse_markdown(input);
+        assert_eq!(blocks.len(), 2, "Expected [Paragraph, Table], got {blocks:?}");
+        assert_eq!(
+            blocks[0],
+            ContentBlock::Paragraph(
+                "Querying Flathub index for latest application registrations.".to_string()
+            )
+        );
+
+        if let ContentBlock::Table { headers, rows, .. } = &blocks[1] {
+            assert_eq!(headers, &vec!["Application &amp; Description", "Screenshot"]);
+            assert_eq!(rows.len(), 2);
+            assert_eq!(
+                rows[0][0].markup,
+                "<b>Omnidict</b> (<tt>com.ktechpit.omnidict</tt>)\nOffline multilingual dictionary and thesaurus."
+            );
+            assert!(rows[0][0].images.is_empty());
+            assert!(rows[0][1].markup.is_empty());
+            assert_eq!(rows[0][1].images.len(), 1);
+            assert_eq!(rows[0][1].images[0].url, "https://example.com/omnidict.png");
+            assert_eq!(rows[0][1].images[0].alt, "Omnidict");
+
+            assert_eq!(
+                rows[1][0].markup,
+                "<b>DiagNG</b> (<tt>com.p1security.diagng</tt>)\nQualcomm baseband diagnostic monitor client."
+            );
+            assert_eq!(rows[1][1].images.len(), 1);
+            assert_eq!(rows[1][1].images[0].url, "https://example.com/diagng.png");
+            assert_eq!(rows[1][1].images[0].alt, "DiagNG");
+        } else {
+            panic!("Expected Table, got {:?}", blocks[1]);
+        }
+    }
+
+    #[test]
+    fn test_intro_paragraph_not_swallowed_into_gallery() {
+        let input = "\
+Here are the latest screenshots from the build pipeline.
+
+![shot-1](https://example.com/shot-1.png)
+![shot-2](https://example.com/shot-2.png)";
+
+        let blocks = parse_markdown(input);
+        assert_eq!(blocks.len(), 2, "Expected [Paragraph, ImageGallery], got {blocks:?}");
+        assert_eq!(
+            blocks[0],
+            ContentBlock::Paragraph(
+                "Here are the latest screenshots from the build pipeline.".to_string()
+            )
+        );
+        assert!(matches!(blocks[1], ContentBlock::ImageGallery { .. }));
     }
 }

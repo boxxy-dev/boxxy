@@ -7,7 +7,7 @@ pub enum TableAlignment {
     Right,
 }
 
-/// A single item inside a coalesced `ImageGallery`.
+/// A single item inside a coalesced `ImageGallery` or embedded in a `TableCell`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GalleryItem {
     pub url: String,
@@ -15,6 +15,39 @@ pub struct GalleryItem {
     pub alt: String,
     /// Optional Pango-formatted caption extracted from the list item or adjacent paragraph.
     pub caption: Option<String>,
+}
+
+/// A single cell in a Markdown table, supporting Pango text markup and embedded images/media.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct TableCell {
+    /// Pango-formatted text markup in the cell.
+    pub markup: String,
+    /// Images or media items embedded inside the cell (`![alt](url "title")`).
+    pub images: Vec<GalleryItem>,
+}
+
+impl TableCell {
+    #[must_use]
+    pub fn new(markup: String, images: Vec<GalleryItem>) -> Self {
+        Self { markup, images }
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.markup.is_empty() && self.images.is_empty()
+    }
+}
+
+impl PartialEq<&str> for TableCell {
+    fn eq(&self, other: &&str) -> bool {
+        self.images.is_empty() && self.markup == *other
+    }
+}
+
+impl PartialEq<String> for TableCell {
+    fn eq(&self, other: &String) -> bool {
+        self.images.is_empty() && &self.markup == other
+    }
 }
 
 /// The Abstract Syntax Tree (AST) representing structured content.
@@ -53,7 +86,7 @@ pub enum ContentBlock {
     Table {
         alignments: Vec<TableAlignment>,
         headers: Vec<String>,
-        rows: Vec<Vec<String>>,
+        rows: Vec<Vec<TableCell>>,
     },
 
     /// A fenced code block. `code` is preserved *raw* (unescaped)

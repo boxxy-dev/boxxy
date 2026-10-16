@@ -26,6 +26,39 @@ const TWO_COL_BREAKPOINT: i32 = 420;
 const THREE_COL_BREAKPOINT: i32 = 920;
 const CARD_FOOTER_HEIGHT: i32 = 34;
 
+const STANDALONE_MAX_W: i32 = 360;
+const STANDALONE_MAX_H: i32 = 225;
+const STANDALONE_LOADING_W: i32 = 280;
+const STANDALONE_LOADING_H: i32 = 175;
+
+const TABLE_CELL_MAX_W: i32 = 220;
+const TABLE_CELL_MAX_H: i32 = 138;
+const TABLE_CELL_LOADING_W: i32 = 192;
+const TABLE_CELL_LOADING_H: i32 = 120;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CardLayout {
+    Gallery,
+    Standalone,
+    TableCell,
+}
+
+/// Scales `(img_w, img_h)` proportionally to fit within `(max_w, max_h)`,
+/// enforcing sensible minimum card dimensions so the footer never clips.
+fn compute_bounded_card_dims(img_w: i32, img_h: i32, max_w: i32, max_h: i32) -> (i32, i32) {
+    if img_w <= 0 || img_h <= 0 {
+        return (max_w, max_h + CARD_FOOTER_HEIGHT);
+    }
+    let scale = (f64::from(max_w) / f64::from(img_w))
+        .min(f64::from(max_h) / f64::from(img_h))
+        .min(1.0);
+    #[allow(clippy::cast_possible_truncation)]
+    let pw = ((f64::from(img_w) * scale).round() as i32).clamp(140, max_w);
+    #[allow(clippy::cast_possible_truncation)]
+    let ph = ((f64::from(img_h) * scale).round() as i32).clamp(90, max_h);
+    (pw, ph + CARD_FOOTER_HEIGHT)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MediaKind {
     Image,
@@ -136,20 +169,39 @@ mod imp {
                     (140, 420, -1, -1)
                 }
                 gtk::Orientation::Vertical => {
-                    let avail_w = if for_size > 0 { for_size } else { 420 };
-                    let (cols, col_w, card_h) = compute_grid_metrics(avail_w, n_children);
-
-                    let mut c = self.obj().first_child();
-                    while let Some(child) = c {
-                        if child.is_visible() {
-                            let _ = child.measure(gtk::Orientation::Vertical, col_w);
+                    if for_size > 0 {
+                        let (cols, col_w, card_h) = compute_grid_metrics(for_size, n_children);
+                        let mut c = self.obj().first_child();
+                        while let Some(child) = c {
+                            if child.is_visible() {
+                                let _ = child.measure(gtk::Orientation::Vertical, col_w);
+                            }
+                            c = child.next_sibling();
                         }
-                        c = child.next_sibling();
-                    }
+                        let rows = (n_children + cols - 1) / cols;
+                        let total_h = rows * card_h + (rows - 1) * GALLERY_SPACING;
+                        (total_h, total_h, -1, -1)
+                    } else {
+                        // Unconstrained vertical query (used by GtkBox(Horizontal) for minimum height):
+                        // minimum height must correspond to the widest (up to 3-column) layout at minimum
+                        // card height so it is never larger than `measure(Vertical, width)` at wide widths.
+                        let max_cols = n_children.clamp(1, 3);
+                        let min_rows = (n_children + max_cols - 1) / max_cols;
+                        let min_card_h = 110 + CARD_FOOTER_HEIGHT;
+                        let min_h = min_rows * min_card_h + (min_rows - 1) * GALLERY_SPACING;
 
-                    let rows = (n_children + cols - 1) / cols;
-                    let total_h = rows * card_h + (rows - 1) * GALLERY_SPACING;
-                    (total_h, total_h, -1, -1)
+                        let (cols, col_w, card_h) = compute_grid_metrics(420, n_children);
+                        let mut c = self.obj().first_child();
+                        while let Some(child) = c {
+                            if child.is_visible() {
+                                let _ = child.measure(gtk::Orientation::Vertical, col_w);
+                            }
+                            c = child.next_sibling();
+                        }
+                        let rows = (n_children + cols - 1) / cols;
+                        let nat_h = (rows * card_h + (rows - 1) * GALLERY_SPACING).max(min_h);
+                        (min_h, nat_h, -1, -1)
+                    }
                 }
                 _ => (140, 420, -1, -1),
             }
@@ -198,6 +250,72 @@ mod imp {
             }
         }
     }
+    pub struct BoundedCard {
+        pub(super) card_w: Cell<i32>,
+        pub(super) card_h: Cell<i32>,
+    }
+
+    impl Default for BoundedCard {
+        fn default() -> Self {
+            Self {
+                card_w: Cell::new(STANDALONE_LOADING_W),
+                card_h: Cell::new(STANDALONE_LOADING_H + CARD_FOOTER_HEIGHT),
+            }
+        }
+    }
+
+    #[glib::object_subclass]
+    impl ObjectSubclass for BoundedCard {
+        const NAME: &'static str = "BoxxyViewerBoundedCard";
+        type Type = super::BoundedCard;
+        type ParentType = gtk::Widget;
+    }
+
+    impl ObjectImpl for BoundedCard {
+        fn dispose(&self) {
+            while let Some(child) = self.obj().first_child() {
+                child.unparent();
+            }
+        }
+    }
+
+    impl WidgetImpl for BoundedCard {
+        fn request_mode(&self) -> gtk::SizeRequestMode {
+            // ConstantSize prevents GtkPicture from scaling its natural height up to
+            // a wide parent container's full width (which otherwise creates a huge vertical gap).
+            gtk::SizeRequestMode::ConstantSize
+        }
+
+        fn measure(&self, orientation: gtk::Orientation, _for_size: i32) -> (i32, i32, i32, i32) {
+            let w = self.card_w.get().max(120);
+            let h = self.card_h.get().max(64);
+            if let Some(child) = self.obj().first_child() {
+                match orientation {
+                    gtk::Orientation::Horizontal => {
+                        let _ = child.measure(gtk::Orientation::Horizontal, -1);
+                    }
+                    gtk::Orientation::Vertical => {
+                        let _ = child.measure(gtk::Orientation::Vertical, w);
+                    }
+                    _ => {}
+                }
+            }
+            match orientation {
+                gtk::Orientation::Horizontal => (w, w, -1, -1),
+                gtk::Orientation::Vertical => (h, h, -1, -1),
+                _ => (w, w, -1, -1),
+            }
+        }
+
+        fn size_allocate(&self, width: i32, height: i32, baseline: i32) {
+            if let Some(child) = self.obj().first_child() {
+                let target_w = width.min(self.card_w.get().max(120));
+                let target_h = height.min(self.card_h.get().max(64));
+                let _ = child.measure(gtk::Orientation::Vertical, target_w);
+                child.allocate(target_w, target_h, baseline, None);
+            }
+        }
+    }
 }
 
 glib::wrapper! {
@@ -219,6 +337,31 @@ impl GalleryGrid {
 impl Default for GalleryGrid {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+glib::wrapper! {
+    pub struct BoundedCard(ObjectSubclass<imp::BoundedCard>)
+        @extends gtk::Widget,
+        @implements gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget;
+}
+
+impl BoundedCard {
+    pub fn new(w: i32, h: i32, child: &impl IsA<gtk::Widget>) -> Self {
+        let obj: Self = glib::Object::new();
+        obj.imp().card_w.set(w);
+        obj.imp().card_h.set(h);
+        child.set_parent(&obj);
+        obj
+    }
+
+    pub fn set_dimensions(&self, w: i32, h: i32) {
+        let imp = self.imp();
+        if imp.card_w.get() != w || imp.card_h.get() != h {
+            imp.card_w.set(w);
+            imp.card_h.set(h);
+            self.queue_resize();
+        }
     }
 }
 
@@ -559,6 +702,18 @@ fn create_media_badge_overlay(kind: MediaKind) -> Option<gtk::Box> {
     Some(badge)
 }
 
+/// Builds a compact `.viewer-image-card` suitable for embedding inside a Markdown table cell.
+#[must_use]
+pub(crate) fn build_table_image_card(item: &GalleryItem) -> gtk::Widget {
+    build_image_card(
+        &item.url,
+        &item.title,
+        &item.alt,
+        item.caption.as_deref(),
+        CardLayout::TableCell,
+    )
+}
+
 /// Builds a `.viewer-image-card` widget supporting Images, Videos, and Audio with
 /// Tier-1 synchronous cache lookup, click-to-open in default viewer/player, and `Open With…`.
 fn build_image_card(
@@ -566,8 +721,25 @@ fn build_image_card(
     title: &str,
     alt: &str,
     caption: Option<&str>,
-    in_gallery: bool,
+    layout: CardLayout,
 ) -> gtk::Widget {
+    let in_gallery = layout == CardLayout::Gallery;
+    let (max_w, max_h, loading_w, loading_h) = match layout {
+        CardLayout::Gallery => (640, 400, 320, 200),
+        CardLayout::Standalone => (
+            STANDALONE_MAX_W,
+            STANDALONE_MAX_H,
+            STANDALONE_LOADING_W,
+            STANDALONE_LOADING_H,
+        ),
+        CardLayout::TableCell => (
+            TABLE_CELL_MAX_W,
+            TABLE_CELL_MAX_H,
+            TABLE_CELL_LOADING_W,
+            TABLE_CELL_LOADING_H,
+        ),
+    };
+
     let kind = detect_media_kind(url);
     let spec = if in_gallery {
         GALLERY_SPEC
@@ -579,17 +751,10 @@ fn build_image_card(
     card.add_css_class("card");
     card.add_css_class("viewer-image-card");
     card.set_overflow(gtk::Overflow::Hidden);
-
-    if in_gallery {
-        card.set_hexpand(true);
-        card.set_vexpand(true);
-        card.set_halign(gtk::Align::Fill);
-        card.set_valign(gtk::Align::Fill);
-    } else {
-        card.set_hexpand(false);
-        card.set_halign(gtk::Align::Start);
-        card.set_margin_bottom(12);
-    }
+    card.set_hexpand(true);
+    card.set_vexpand(true);
+    card.set_halign(gtk::Align::Fill);
+    card.set_valign(gtk::Align::Fill);
 
     let picture = gtk::Picture::new();
     picture.set_can_shrink(true);
@@ -759,9 +924,6 @@ fn build_image_card(
     };
 
     if let Some(cached) = get_cached_thumbnail(&cache_key) {
-        if !in_gallery {
-            picture.set_size_request(cached.disp_w.min(360), cached.disp_h.min(240));
-        }
         picture.set_paintable(Some(&cached.texture));
         picture.set_visible(true);
         let rich_tooltip = if kind == MediaKind::Image {
@@ -774,8 +936,29 @@ fn build_image_card(
         };
         overlay.set_tooltip_text(Some(&rich_tooltip));
         caption_label.set_tooltip_text(Some(&rich_tooltip));
-        return card.upcast();
+
+        if in_gallery {
+            return card.upcast();
+        }
+        let (cw, ch) = compute_bounded_card_dims(cached.disp_w, cached.disp_h, max_w, max_h);
+        let bounded = BoundedCard::new(cw, ch, &card);
+        bounded.set_halign(gtk::Align::Start);
+        if layout == CardLayout::Standalone {
+            bounded.set_margin_bottom(12);
+        }
+        return bounded.upcast();
     }
+
+    let bounded_opt = if in_gallery {
+        None
+    } else {
+        let bounded = BoundedCard::new(loading_w, loading_h + CARD_FOOTER_HEIGHT, &card);
+        bounded.set_halign(gtk::Align::Start);
+        if layout == CardLayout::Standalone {
+            bounded.set_margin_bottom(12);
+        }
+        Some(bounded)
+    };
 
     // Slow-path (cache miss): show spinner and decode/load off-thread
     picture.set_visible(false);
@@ -795,6 +978,7 @@ fn build_image_card(
     let overlay_clone = overlay.clone();
     let spinner_clone = spinner.clone();
     let caption_label_clone = caption_label.clone();
+    let bounded_clone = bounded_opt.clone();
 
     gtk::glib::spawn_future_local(async move {
         let url_for_task = url_async.clone();
@@ -833,8 +1017,9 @@ fn build_image_card(
                 },
             );
 
-            if !in_gallery {
-                picture_clone.set_size_request(disp_w.min(360), disp_h.min(240));
+            if let Some(ref b) = bounded_clone {
+                let (cw, ch) = compute_bounded_card_dims(disp_w, disp_h, max_w, max_h);
+                b.set_dimensions(cw, ch);
             }
             picture_clone.set_paintable(Some(&texture));
             picture_clone.set_visible(true);
@@ -851,16 +1036,23 @@ fn build_image_card(
         } else if kind != MediaKind::Image {
             // For videos/audio without an extractable cover/frame, keep the clean card
             // with the centered Play/Audio badge instead of collapsing into a text link.
-            if !in_gallery {
-                picture_clone.set_size_request(320, 180);
+            if let Some(ref b) = bounded_clone {
+                b.set_dimensions(loading_w, loading_h + CARD_FOOTER_HEIGHT);
             }
             picture_clone.set_visible(true);
         } else {
+            if let Some(ref b) = bounded_clone {
+                b.set_dimensions(200, 44 + CARD_FOOTER_HEIGHT);
+            }
             fallback_to_link(&overlay_clone, &picture_clone, &url_async, &alt_async);
         }
     });
 
-    card.upcast()
+    if let Some(bounded) = bounded_opt {
+        bounded.upcast()
+    } else {
+        card.upcast()
+    }
 }
 
 fn render_gallery(items: &[GalleryItem]) -> gtk::Widget {
@@ -871,7 +1063,7 @@ fn render_gallery(items: &[GalleryItem]) -> gtk::Widget {
             &item.title,
             &item.alt,
             item.caption.as_deref(),
-            false,
+            CardLayout::Standalone,
         );
     }
 
@@ -888,7 +1080,7 @@ fn render_gallery(items: &[GalleryItem]) -> gtk::Widget {
             &item.title,
             &item.alt,
             item.caption.as_deref(),
-            true,
+            CardLayout::Gallery,
         );
         grid.append(&card);
     }
@@ -913,7 +1105,7 @@ impl BlockRenderer for ImageRenderer {
     ) -> gtk::Widget {
         match block {
             ContentBlock::Image { url, title, alt } => {
-                build_image_card(url, title, alt, None, false)
+                build_image_card(url, title, alt, None, CardLayout::Standalone)
             }
             ContentBlock::ImageGallery { items } => render_gallery(items),
             _ => unreachable!(),
@@ -988,5 +1180,18 @@ mod tests {
         // Very wide (>= 920px): 3 columns
         let (cols_wide, _, _) = compute_grid_metrics(1000, 4);
         assert_eq!(cols_wide, 3);
+    }
+
+    #[test]
+    fn compute_bounded_card_dims_preserves_aspect_ratio() {
+        // 16:9 image (640x360) scaled into 360x225 standalone box -> 360x203 + footer
+        let (cw, ch) = compute_bounded_card_dims(640, 360, STANDALONE_MAX_W, STANDALONE_MAX_H);
+        assert_eq!(cw, 360);
+        assert_eq!(ch, 203 + CARD_FOOTER_HEIGHT);
+
+        // 16:9 image (640x360) scaled into 220x138 table-cell box -> 220x124 + footer
+        let (tcw, tch) = compute_bounded_card_dims(640, 360, TABLE_CELL_MAX_W, TABLE_CELL_MAX_H);
+        assert_eq!(tcw, 220);
+        assert_eq!(tch, 124 + CARD_FOOTER_HEIGHT);
     }
 }
