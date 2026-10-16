@@ -497,7 +497,7 @@ pub fn spawn_dispatch(
                     web_search_enabled,
                     total_tokens: total,
                 } => {
-                    overlay.set_active_agent(name);
+                    overlay.set_active_character(name, character_id);
                     indicator.set_identity(name, character_id);
                     is_pinned.set(*pinned);
                     is_web_search.set(*web_search_enabled);
@@ -507,6 +507,9 @@ pub fn spawn_dispatch(
                     msg_bar.set_character(character_id);
                     msg_bar.update_ui(status, *pinned, *web_search_enabled);
                     total_tokens.set(*total);
+                    if overlay.is_visible() {
+                        overlay.grab_input_focus();
+                    }
                 }
                 ClawEngineEvent::PinStatusChanged(pinned) => {
                     is_pinned.set(*pinned);
@@ -681,6 +684,9 @@ pub fn spawn_dispatch(
                         }
                         overlay_store.remove_all();
                         overlay_store.extend_from_slice(&overlay_items);
+                    }
+                    if !rows.is_empty() && overlay.is_visible() {
+                        overlay.grab_input_focus();
                     }
                 }
                 ClawEngineEvent::TaskCompleted { .. }

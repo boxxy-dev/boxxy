@@ -299,12 +299,11 @@ pub fn setup_characters_page(
         let _ =
             gtk::gio::AppInfo::launch_default_for_uri(&uri, None::<&gtk::gio::AppLaunchContext>);
 
-        // Show restart notice
         if let Some(overlay) = row
             .ancestor(adw::ToastOverlay::static_type())
             .and_downcast::<adw::ToastOverlay>()
         {
-            let toast = adw::Toast::new("Restart Boxxy to apply character changes.");
+            let toast = adw::Toast::new("Changes in the characters folder apply automatically.");
             toast.set_timeout(3);
             overlay.add_toast(toast);
         }
@@ -599,7 +598,7 @@ fn show_final_confirmation(parent: &gtk::Button) {
             } else {
                 add_preferences_toast(
                     &parent_clone,
-                    "Restart Boxxy to apply character changes.",
+                    "Characters reset to defaults.",
                 );
             }
         }

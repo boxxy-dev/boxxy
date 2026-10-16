@@ -16,6 +16,7 @@ impl ClawSession {
         image_attachments: Vec<String>,
     ) {
         ctx.current_dir = cwd.clone();
+        self.ensure_session_persisted(&cwd).await;
         self.send_ui(ClawEngineEvent::UserMessage {
             content: query.clone(),
         })
@@ -78,6 +79,7 @@ impl ClawSession {
         image_attachments: Vec<String>,
     ) {
         ctx.current_dir = cwd.clone();
+        self.ensure_session_persisted(&cwd).await;
         self.send_ui(ClawEngineEvent::UserMessage {
             content: message.clone(),
         })

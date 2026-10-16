@@ -102,6 +102,7 @@ impl<'a> Store<'a> {
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             ON CONFLICT(id) DO UPDATE SET
                 name = excluded.name,
+                character_id = excluded.character_id,
                 character_display_name = excluded.character_display_name,
                 title = CASE WHEN excluded.title != '' THEN excluded.title ELSE sessions.title END,
                 history_json = excluded.history_json,
@@ -319,6 +320,7 @@ impl<'a> Store<'a> {
     }
 
     /// Persists a character reassignment so orphan fallbacks are only resolved once.
+    /// Preserves `updated_at` so relative session age in `/resume` is not altered.
     pub async fn update_session_character(
         &self,
         session_id: &str,
@@ -326,11 +328,73 @@ impl<'a> Store<'a> {
         character_display_name: &str,
     ) -> Result<()> {
         sqlx::query(
-            "UPDATE sessions SET character_id = ?, character_display_name = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            "UPDATE sessions SET character_id = ?, character_display_name = ?, name = ?, agent_name = ? WHERE id = ?",
         )
         .bind(character_id)
         .bind(character_display_name)
+        .bind(character_display_name)
+        .bind(character_display_name)
         .bind(session_id)
+        .execute(self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Migrates all sessions belonging to `old_character_id` to a replacement character.
+    /// Preserves `updated_at` so session ordering and age badges remain intact.
+    pub async fn migrate_character_sessions(
+        &self,
+        old_character_id: &str,
+        new_character_id: &str,
+        new_display_name: &str,
+    ) -> Result<u64> {
+        let res = sqlx::query(
+            "UPDATE sessions SET character_id = ?, character_display_name = ?, name = ?, agent_name = ? WHERE character_id = ?",
+        )
+        .bind(new_character_id)
+        .bind(new_display_name)
+        .bind(new_display_name)
+        .bind(new_display_name)
+        .bind(old_character_id)
+        .execute(self.pool)
+        .await?;
+        Ok(res.rows_affected())
+    }
+
+    /// Returns all distinct `character_id` values currently stored in `sessions`.
+    pub async fn get_distinct_session_character_ids(&self) -> Result<Vec<String>> {
+        let rows: Vec<(String,)> =
+            sqlx::query_as("SELECT DISTINCT character_id FROM sessions")
+                .fetch_all(self.pool)
+                .await?;
+        Ok(rows.into_iter().map(|(id,)| id).collect())
+    }
+
+    /// Ensures a session row exists with its character identity before Turn 1 visual events
+    /// are inserted into `claw_events` (which has a foreign key to `sessions(id)`).
+    pub async fn ensure_session_exists(
+        &self,
+        id: &str,
+        character_id: &str,
+        character_display_name: &str,
+        cwd: &str,
+    ) -> Result<()> {
+        sqlx::query(
+            r"
+            INSERT INTO sessions (id, name, character_id, character_display_name, agent_name, last_cwd)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                character_id = CASE WHEN excluded.character_id != '' THEN excluded.character_id ELSE sessions.character_id END,
+                character_display_name = CASE WHEN excluded.character_display_name != '' THEN excluded.character_display_name ELSE sessions.character_display_name END,
+                agent_name = CASE WHEN excluded.agent_name != '' THEN excluded.agent_name ELSE sessions.agent_name END
+            ",
+        )
+        .bind(id)
+        .bind(character_display_name)
+        .bind(character_id)
+        .bind(character_display_name)
+        .bind(character_display_name)
+        .bind(cwd)
         .execute(self.pool)
         .await?;
         Ok(())
@@ -1311,6 +1375,50 @@ mod tests {
         let after = store.get_session(session_id).await.unwrap().unwrap();
         assert_eq!(after.character_id, "new-uuid-222");
         assert_eq!(after.character_display_name, "New Character");
+        assert_eq!(after.name, "New Character");
+        assert_eq!(after.agent_name.as_deref(), Some("New Character"));
+    }
+
+    #[tokio::test]
+    async fn test_migrate_character_sessions_and_ensure_session_exists() {
+        let db = Db::new_in_memory().await.unwrap();
+        let store = Store::new(db.pool());
+
+        // 1. ensure_session_exists creates a session with character identity
+        store
+            .ensure_session_exists("sess_a", "char-uuid-b", "Character B", "/tmp")
+            .await
+            .unwrap();
+        store
+            .ensure_session_exists("sess_b", "char-uuid-b", "Character B", "/tmp")
+            .await
+            .unwrap();
+        store
+            .ensure_session_exists("sess_c", "char-uuid-c", "Character C", "/tmp")
+            .await
+            .unwrap();
+
+        // Turn 1 claw_event insertion succeeds immediately because the session row exists
+        store
+            .add_claw_event("sess_a", "{\"type\":\"user\"}")
+            .await
+            .unwrap();
+
+        let distinct = store.get_distinct_session_character_ids().await.unwrap();
+        assert!(distinct.contains(&"char-uuid-b".to_string()));
+        assert!(distinct.contains(&"char-uuid-c".to_string()));
+
+        // 2. Migrate all sessions of char-uuid-b to char-uuid-c
+        let migrated = store
+            .migrate_character_sessions("char-uuid-b", "char-uuid-c", "Character C")
+            .await
+            .unwrap();
+        assert_eq!(migrated, 2);
+
+        let s_a = store.get_session("sess_a").await.unwrap().unwrap();
+        assert_eq!(s_a.character_id, "char-uuid-c");
+        assert_eq!(s_a.character_display_name, "Character C");
+        assert_eq!(s_a.agent_name.as_deref(), Some("Character C"));
     }
 
     #[tokio::test]

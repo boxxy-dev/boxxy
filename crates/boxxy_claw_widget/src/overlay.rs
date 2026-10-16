@@ -127,6 +127,7 @@ impl TerminalOverlay {
         let sticky = history_sticky.clone();
         let list_items = history_list.clone();
         let is_auto_items = is_auto_scrolling.clone();
+        let msg_bar_items = msg_bar.clone();
         history_store.connect_items_changed(move |s, _, _, _| {
             let n = s.n_items();
             if n == 0 {
@@ -137,9 +138,13 @@ impl TerminalOverlay {
 
             let lv = list_items.clone();
             let is_auto = is_auto_items.clone();
+            let msg_bar_for_focus = msg_bar_items.clone();
             gtk::glib::idle_add_local_once(move || {
                 is_auto.set(true);
-                lv.scroll_to(n - 1, gtk::ListScrollFlags::FOCUS, None);
+                lv.scroll_to(n - 1, gtk::ListScrollFlags::NONE, None);
+                if msg_bar_for_focus.entry.is_sensitive() && msg_bar_for_focus.widget.is_visible() {
+                    msg_bar_for_focus.entry.grab_focus();
+                }
                 gtk::glib::idle_add_local_once(move || {
                     is_auto.set(false);
                 });
@@ -183,6 +188,7 @@ impl TerminalOverlay {
         let prev_u = prev_upper.clone();
         let is_auto_upper = is_auto_scrolling.clone();
         let list_upper = history_list.clone();
+        let msg_bar_for_upper = msg_bar.clone();
         adj.connect_notify_local(Some("upper"), move |a, _| {
             let new_upper = a.upper();
             let old_upper = prev_u.replace(new_upper);
@@ -197,9 +203,12 @@ impl TerminalOverlay {
                 is_auto_upper.set(true);
                 let n = list_upper.model().map(|m| m.n_items()).unwrap_or(0);
                 if n > 0 {
-                    list_upper.scroll_to(n - 1, gtk::ListScrollFlags::FOCUS, None);
+                    list_upper.scroll_to(n - 1, gtk::ListScrollFlags::NONE, None);
                 }
                 a.set_value(new_upper - a.page_size());
+                if msg_bar_for_upper.entry.is_sensitive() && msg_bar_for_upper.widget.is_visible() {
+                    msg_bar_for_upper.entry.grab_focus();
+                }
                 let is_auto_idle = is_auto_upper.clone();
                 gtk::glib::idle_add_local_once(move || {
                     is_auto_idle.set(false);
@@ -472,6 +481,22 @@ impl TerminalOverlay {
             history_store,
             host,
         };
+
+        // Reactively refresh the character selector whenever the catalog or claims change.
+        let overlay_for_watch = s.clone();
+        let revealer_weak = s.revealer.downgrade();
+        let mut rx_registry = boxxy_claw_protocol::characters::subscribe_registry_changes();
+        gtk::glib::spawn_future_local(async move {
+            while rx_registry.changed().await.is_ok() {
+                let Some(_rev) = revealer_weak.upgrade() else {
+                    break;
+                };
+                if overlay_for_watch.character_selector_box.is_visible() {
+                    overlay_for_watch.refresh_character_selector("");
+                }
+            }
+        });
+
         s
     }
 
@@ -514,6 +539,14 @@ impl TerminalOverlay {
 
     pub fn set_active_agent(&self, agent_name: &str) {
         *self.active_agent.borrow_mut() = agent_name.to_string();
+        self.sync_action_state();
+    }
+
+    pub fn set_active_character(&self, agent_name: &str, character_id: &str) {
+        *self.active_agent.borrow_mut() = agent_name.to_string();
+        if !character_id.is_empty() {
+            *self.selected_character.borrow_mut() = character_id.to_string();
+        }
         self.sync_action_state();
     }
 
@@ -772,6 +805,8 @@ impl TerminalOverlay {
             // Drawer is closed → present the "chat only" shell so the user
             // gets a clean prompt aimed at this pane's agent.
             self.show_chat_only(agent_name);
+        } else {
+            self.refresh_character_selector(agent_name);
         }
 
         // Ensure action buttons are synced (shows "Okay" if no proposal, etc.)
@@ -811,12 +846,17 @@ impl TerminalOverlay {
             let adj = self.history_scroll.vadjustment();
             let list = self.history_list.clone();
             let is_auto = self.is_auto_scrolling.clone();
+            let msg_bar_for_scroll = self.msg_bar.clone();
             gtk::glib::idle_add_local_once(move || {
                 is_auto.set(true);
-                list.scroll_to(n - 1, gtk::ListScrollFlags::FOCUS, None);
+                list.scroll_to(n - 1, gtk::ListScrollFlags::NONE, None);
                 // Also snap the adjustment directly; for realized rows this
                 // is redundant but for unrealized rows it helps the initial jump.
                 adj.set_value(adj.upper() - adj.page_size());
+                if msg_bar_for_scroll.entry.is_sensitive() && msg_bar_for_scroll.widget.is_visible()
+                {
+                    msg_bar_for_scroll.entry.grab_focus();
+                }
                 gtk::glib::idle_add_local_once(move || {
                     is_auto.set(false);
                 });

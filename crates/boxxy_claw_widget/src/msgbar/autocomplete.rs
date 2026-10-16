@@ -7,8 +7,9 @@ use std::time::{Duration, Instant};
 
 const CACHE_TTL: Duration = Duration::from_secs(2);
 
-static RESUME_SESSIONS_CACHE: LazyLock<RwLock<(Option<Instant>, Vec<boxxy_db::models::Session>)>> =
-    LazyLock::new(|| RwLock::new((None, Vec::new())));
+static RESUME_SESSIONS_CACHE: LazyLock<
+    RwLock<(Option<Instant>, u64, Vec<boxxy_db::models::Session>)>,
+> = LazyLock::new(|| RwLock::new((None, 0, Vec::new())));
 static RESUME_REFRESHING: AtomicBool = AtomicBool::new(false);
 
 /// Triggers an asynchronous background refresh of the `/resume ` session cache
@@ -23,6 +24,7 @@ pub fn refresh_resume_sessions_async(entry_weak: Option<gtk::glib::WeakRef<gtk::
 
     let fetch_fut = async {
         let mut fetched = None;
+        let current_rev = *boxxy_claw_protocol::characters::subscribe_registry_changes().borrow();
         if let Ok(db) = boxxy_db::Db::new().await {
             let store = boxxy_db::store::Store::new(db.pool());
             if let Ok(res) = store.get_recent_active_sessions(10).await {
@@ -35,7 +37,7 @@ pub fn refresh_resume_sessions_async(entry_weak: Option<gtk::glib::WeakRef<gtk::
         }
         if let Some(sessions) = fetched {
             let mut cache = RESUME_SESSIONS_CACHE.write().unwrap();
-            *cache = (Some(Instant::now()), sessions);
+            *cache = (Some(Instant::now()), current_rev, sessions);
         }
         RESUME_REFRESHING.store(false, Ordering::Release);
     };
@@ -53,6 +55,40 @@ pub fn refresh_resume_sessions_async(entry_weak: Option<gtk::glib::WeakRef<gtk::
     } else {
         boxxy_sys_utils::runtime().spawn(fetch_fut);
     }
+}
+
+/// Resolves the character UUID for a session being resumed, checking the
+/// in-memory `/resume ` cache first and falling back to SQLite if needed.
+pub async fn resolve_session_character_id(session_id: &str) -> Option<String> {
+    let cached_session = {
+        let cache = RESUME_SESSIONS_CACHE.read().unwrap();
+        cache.2.iter().find(|s| s.id == session_id).cloned()
+    };
+
+    let session = match cached_session {
+        Some(s) => Some(s),
+        None => {
+            if let Ok(db) = boxxy_db::Db::new().await {
+                let store = boxxy_db::store::Store::new(db.pool());
+                store.get_session(session_id).await.ok().flatten()
+            } else {
+                None
+            }
+        }
+    }?;
+
+    let catalog = boxxy_claw_protocol::characters::CHARACTER_CACHE.load();
+    let fallback_names = [
+        session.character_display_name.as_str(),
+        session.agent_name.as_deref().unwrap_or_default(),
+        session.name.as_str(),
+    ];
+    boxxy_claw_protocol::characters::resolve_character(
+        &catalog,
+        &session.character_id,
+        &fallback_names,
+    )
+    .map(|info| info.config.id.clone())
 }
 
 pub struct AgentCompletionProvider;
@@ -205,13 +241,15 @@ impl CompletionProvider for ResumeCompletionProvider {
         let query_lower = query.trim().to_lowercase();
         let mut items = Vec::new();
 
+        let current_rev = *boxxy_claw_protocol::characters::subscribe_registry_changes().borrow();
         let (needs_refresh, sessions) = {
             let cache = RESUME_SESSIONS_CACHE.read().unwrap();
             let stale = cache
                 .0
                 .map(|last| last.elapsed() >= CACHE_TTL)
-                .unwrap_or(true);
-            (stale, cache.1.clone())
+                .unwrap_or(true)
+                || cache.1 != current_rev;
+            (stale, cache.2.clone())
         };
 
         if needs_refresh {
@@ -238,22 +276,35 @@ impl CompletionProvider for ResumeCompletionProvider {
                 "unknown".to_string()
             };
 
+            let fallback_names = [
+                session.character_display_name.as_str(),
+                char_name.as_str(),
+                session.name.as_str(),
+            ];
+            let char_info = boxxy_claw_protocol::characters::resolve_character(
+                &registry,
+                &session.character_id,
+                &fallback_names,
+            );
+
+            let badge_text = char_info
+                .map(|c| c.config.display_name.clone())
+                .unwrap_or_else(|| {
+                    if !session.character_display_name.is_empty() {
+                        session.character_display_name.clone()
+                    } else {
+                        char_name.clone()
+                    }
+                });
+
             if query_lower.is_empty()
                 || title.to_lowercase().contains(&query_lower)
                 || char_name.to_lowercase().contains(&query_lower)
+                || badge_text.to_lowercase().contains(&query_lower)
             {
-                let char_info = registry
-                    .iter()
-                    .find(|c| c.config.name == char_name || c.config.display_name == char_name)
-                    .or_else(|| registry.first());
-
                 let badge_color = char_info
                     .map(|c| c.config.color.clone())
-                    .unwrap_or_else(|| generate_color(&char_name));
-
-                let badge_text = char_info
-                    .map(|c| c.config.display_name.clone())
-                    .unwrap_or_else(|| char_name.clone());
+                    .unwrap_or_else(|| generate_color(&badge_text));
 
                 let mut is_disabled = false;
                 let mut display_age = age;

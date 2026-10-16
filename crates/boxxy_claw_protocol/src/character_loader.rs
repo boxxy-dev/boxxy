@@ -78,7 +78,7 @@ fn has_any_valid_character(base_dir: &std::path::Path) -> bool {
         .map(|entries| {
             entries
                 .filter_map(|e| e.ok())
-                .any(|e| e.path().is_dir() && e.path().join("CHARACTER.toml").exists())
+                .any(|e| e.path().is_dir() && load_character_from_dir(&e.path()).is_ok())
         })
         .unwrap_or(false)
 }
@@ -142,6 +142,21 @@ pub fn load_characters() -> Result<Vec<CharacterInfo>> {
         }
     }
 
+    // Guarantees that even if all existing directories failed to parse or were deleted,
+    // the bundled defaults are restored so at least one character is always available.
+    if characters.is_empty() {
+        extract_bundled_defaults(&base_dir)?;
+        for entry in fs::read_dir(&base_dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            if path.is_dir()
+                && let Ok(info) = load_character_from_dir(&path)
+            {
+                characters.push(info);
+            }
+        }
+    }
+
     // Guard against duplicate UUIDs (e.g., user copied a character directory).
     let mut seen_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
     for character in &mut characters {
@@ -184,7 +199,9 @@ pub fn load_characters() -> Result<Vec<CharacterInfo>> {
                         .iter()
                         .position(|name| name == &b.config.name)
                         .unwrap_or(usize::MAX);
-                    pos_a.cmp(&pos_b)
+                    pos_a
+                        .cmp(&pos_b)
+                        .then_with(|| a.config.name.cmp(&b.config.name))
                 });
             }
         }

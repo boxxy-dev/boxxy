@@ -194,10 +194,11 @@ impl AgentConnection {
                                 && snapshot.revision > last_seen_revision
                             {
                                 last_seen_revision = snapshot.revision;
-                                boxxy_claw_protocol::characters::CLAIMS_CACHE
-                                    .store(Arc::new(snapshot.claims));
-                                boxxy_claw_protocol::characters::CHARACTER_CACHE
-                                    .store(Arc::new(snapshot.catalog));
+                                boxxy_claw_protocol::characters::update_caches(
+                                    snapshot.catalog,
+                                    snapshot.claims,
+                                    snapshot.revision,
+                                );
                             }
                         }
                     }
@@ -209,10 +210,11 @@ impl AgentConnection {
                         >(&snapshot_json)
                     {
                         last_seen_revision = snapshot.revision;
-                        boxxy_claw_protocol::characters::CLAIMS_CACHE
-                            .store(Arc::new(snapshot.claims));
-                        boxxy_claw_protocol::characters::CHARACTER_CACHE
-                            .store(Arc::new(snapshot.catalog));
+                        boxxy_claw_protocol::characters::update_caches(
+                            snapshot.catalog,
+                            snapshot.claims,
+                            snapshot.revision,
+                        );
                     }
                 }
             });
@@ -395,10 +397,11 @@ impl AgentManager {
                 boxxy_claw_protocol::characters::RegistrySnapshot,
             >(&snapshot_json)
         {
-            boxxy_claw_protocol::characters::CLAIMS_CACHE
-                .store(Arc::new(snapshot.claims));
-            boxxy_claw_protocol::characters::CHARACTER_CACHE
-                .store(Arc::new(snapshot.catalog));
+            boxxy_claw_protocol::characters::update_caches(
+                snapshot.catalog,
+                snapshot.claims,
+                snapshot.revision,
+            );
             log::info!("Seeded UI Character and Claims Cache on startup.");
         }
 
@@ -495,6 +498,8 @@ impl AgentManager {
 
     /// Claims a character for `pane_id` and routes its `ClawEngineEvent`s
     /// directly into the provided `event_tx` via `AgentConnection::claw_router`.
+    /// Automatically recovers if the requested character was migrated, removed,
+    /// or already claimed by another holder.
     pub async fn try_claim_character_with_sender(
         &self,
         pane_id: String,
@@ -502,18 +507,60 @@ impl AgentManager {
         character_id: String,
         event_tx: async_channel::Sender<ClawEngineEvent>,
     ) -> Result<(String, SubscriptionGuard)> {
-        let result_json = self
-            .agent_proxy
-            .try_claim_character(pane_id, holder_kind, character_id)
-            .await
-            .context("Failed to try claim character via Agent")?;
+        let mut target_id = character_id;
+        let mut claimed_session_opt = None;
 
-        let result: Result<
-            boxxy_claw_protocol::characters::ClaimedSession,
-            boxxy_claw_protocol::characters::ClaimError,
-        > = serde_json::from_str(&result_json).context("Failed to parse claim result")?;
+        for _attempt in 0..3 {
+            let result_json = self
+                .agent_proxy
+                .try_claim_character(pane_id.clone(), holder_kind, target_id.clone())
+                .await
+                .context("Failed to try claim character via Agent")?;
 
-        let claimed_session = result.map_err(|e| anyhow::anyhow!("Claim failed: {:?}", e))?;
+            let result: Result<
+                boxxy_claw_protocol::characters::ClaimedSession,
+                boxxy_claw_protocol::characters::ClaimError,
+            > = serde_json::from_str(&result_json).context("Failed to parse claim result")?;
+
+            match result {
+                Ok(claimed) => {
+                    claimed_session_opt = Some(claimed);
+                    break;
+                }
+                Err(boxxy_claw_protocol::characters::ClaimError::Migrated { to_id, .. }) => {
+                    target_id = to_id;
+                }
+                Err(
+                    boxxy_claw_protocol::characters::ClaimError::UnknownCharacter { .. }
+                    | boxxy_claw_protocol::characters::ClaimError::AlreadyTaken { .. },
+                ) => {
+                    let catalog = boxxy_claw_protocol::characters::CHARACTER_CACHE.load();
+                    let claims = boxxy_claw_protocol::characters::CLAIMS_CACHE.load();
+                    let fallback = catalog
+                        .iter()
+                        .find(|c| {
+                            c.config.id != target_id
+                                && !claims.iter().any(|claim| {
+                                    claim.character_id == c.config.id
+                                        && claim.holder_id != pane_id
+                                })
+                        })
+                        .or_else(|| catalog.first())
+                        .map(|c| c.config.id.clone());
+
+                    if let Some(next_id) = fallback
+                        && next_id != target_id
+                    {
+                        target_id = next_id;
+                    } else {
+                        break;
+                    }
+                }
+            }
+        }
+
+        let claimed_session =
+            claimed_session_opt.ok_or_else(|| anyhow::anyhow!("Claim failed for {target_id}"))?;
         let session_id = claimed_session.session_id;
 
         let guard = self

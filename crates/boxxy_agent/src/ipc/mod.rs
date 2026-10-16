@@ -363,9 +363,39 @@ impl AgentInterface {
 
     async fn post_claw_message(&self, session_id: String, message_json: String) {
         if let Ok(message) = serde_json::from_str::<ClawMessage>(&message_json) {
-            let manager = self.session_manager.lock().await;
-            if let Some(session) = manager.sessions.get(&session_id) {
-                let _ = session.tx.send(message).await;
+            let pane_info = {
+                let manager = self.session_manager.lock().await;
+                manager
+                    .sessions
+                    .get(&session_id)
+                    .map(|s| (s.pane_id.clone(), s.tx.clone()))
+            };
+
+            if let Some((pane_id, tx)) = pane_info {
+                if let ClawMessage::ResumeSession {
+                    session_id: ref resume_sid,
+                } = message
+                {
+                    let store = boxxy_db::store::Store::new(self.core.db.pool());
+                    if let Ok(Some(db_session)) = store.get_session(resume_sid).await
+                        && let Some((_, display_name)) = self
+                            .core
+                            .registry
+                            .resolve_and_update_holder_character(
+                                &pane_id,
+                                &db_session.character_id,
+                                &db_session.character_display_name,
+                                db_session.agent_name.as_deref(),
+                            )
+                            .await
+                    {
+                        let mut manager = self.session_manager.lock().await;
+                        if let Some(hosted) = manager.sessions.get_mut(&session_id) {
+                            hosted.agent_name = display_name;
+                        }
+                    }
+                }
+                let _ = tx.send(message).await;
             }
         }
     }

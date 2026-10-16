@@ -292,41 +292,48 @@ pub fn create_claw_message_list() -> (gtk::ListView, gio::ListStore) {
                                 default_icon: &str,
                                 icon_class: Option<&str>| {
             let mut name_set = false;
-            if let Some(id) = char_id {
-                let cache = boxxy_claw_protocol::characters::CHARACTER_CACHE.load();
-                if let Some(info) = cache.iter().find(|c| c.config.id == *id) {
-                    let formatted_name = info
-                        .config
-                        .name
-                        .split('-')
-                        .map(|word| {
-                            let mut c = word.chars();
-                            match c.next() {
-                                None => String::new(),
-                                Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
-                            }
-                        })
-                        .collect::<Vec<String>>()
-                        .join(" ");
+            let cache = boxxy_claw_protocol::characters::CHARACTER_CACHE.load();
+            let id_str = char_id.as_deref().unwrap_or_default();
+            let fb_str = fallback_name.as_deref().unwrap_or_default();
+            let fallback_names = [fb_str];
 
-                    title.set_markup(&format!(
-                        "<span foreground=\"{}\"><b>{}</b></span>",
-                        info.config.color, formatted_name
-                    ));
-                    avatar.set_text(Some(&formatted_name));
-                    if info.has_avatar {
-                        if let Ok(dir) = boxxy_claw_protocol::character_loader::get_characters_dir()
-                        {
-                            let avatar_path = dir.join(&info.config.name).join("AVATAR.png");
-                            if let Ok(texture) = gdk::Texture::from_filename(&avatar_path) {
-                                avatar.set_custom_image(Some(&texture));
-                            }
+            if (!id_str.is_empty() || !fb_str.is_empty())
+                && let Some(info) = boxxy_claw_protocol::characters::resolve_character(
+                    &cache,
+                    id_str,
+                    &fallback_names,
+                )
+            {
+                let formatted_name = info
+                    .config
+                    .name
+                    .split('-')
+                    .map(|word| {
+                        let mut c = word.chars();
+                        match c.next() {
+                            None => String::new(),
+                            Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
                         }
+                    })
+                    .collect::<Vec<String>>()
+                    .join(" ");
+
+                title.set_markup(&format!(
+                    "<span foreground=\"{}\"><b>{}</b></span>",
+                    info.config.color, formatted_name
+                ));
+                avatar.set_text(Some(&formatted_name));
+                if info.has_avatar
+                    && let Ok(dir) = boxxy_claw_protocol::character_loader::get_characters_dir()
+                {
+                    let avatar_path = dir.join(&info.config.name).join("AVATAR.png");
+                    if let Ok(texture) = gdk::Texture::from_filename(&avatar_path) {
+                        avatar.set_custom_image(Some(&texture));
                     }
-                    avatar.set_visible(true);
-                    icon.set_visible(false);
-                    name_set = true;
                 }
+                avatar.set_visible(true);
+                icon.set_visible(false);
+                name_set = true;
             }
 
             if !name_set {

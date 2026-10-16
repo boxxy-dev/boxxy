@@ -1,15 +1,60 @@
 use arc_swap::ArcSwap;
 use serde::{Deserialize, Serialize};
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
+use tokio::sync::watch;
 
 /// A globally accessible, lock-free reactive cache of the character registry.
-/// This is updated via D-Bus and read synchronously by the UI (e.g. MsgBar autocomplete).
+/// This is updated via D-Bus (in the UI) and directly by `CharacterRegistry` (in the daemon).
 pub static CHARACTER_CACHE: LazyLock<ArcSwap<Vec<CharacterInfo>>> =
     LazyLock::new(|| ArcSwap::from_pointee(Vec::new()));
 
 /// A globally accessible, lock-free reactive cache of current character assignments.
 pub static CLAIMS_CACHE: LazyLock<ArcSwap<Vec<CharacterClaim>>> =
     LazyLock::new(|| ArcSwap::from_pointee(Vec::new()));
+
+static REGISTRY_REVISION_WATCH: LazyLock<(watch::Sender<u64>, watch::Receiver<u64>)> =
+    LazyLock::new(|| watch::channel(0));
+
+/// Updates both `CHARACTER_CACHE` and `CLAIMS_CACHE` atomically and notifies local subscribers.
+pub fn update_caches(catalog: Vec<CharacterInfo>, claims: Vec<CharacterClaim>, revision: u64) {
+    CLAIMS_CACHE.store(Arc::new(claims));
+    CHARACTER_CACHE.store(Arc::new(catalog));
+    let _ = REGISTRY_REVISION_WATCH.0.send(revision);
+}
+
+/// Subscribes to local cache updates triggered by `update_caches`.
+pub fn subscribe_registry_changes() -> watch::Receiver<u64> {
+    REGISTRY_REVISION_WATCH.1.clone()
+}
+
+/// Resolves a character from `catalog` by matching `character_id` first, then
+/// falling back to case-insensitive matches on `name` or `display_name` in
+/// `fallback_names`, and finally falling back to the first character in `catalog`.
+pub fn resolve_character<'a>(
+    catalog: &'a [CharacterInfo],
+    character_id: &str,
+    fallback_names: &[&str],
+) -> Option<&'a CharacterInfo> {
+    if !character_id.is_empty()
+        && let Some(found) = catalog.iter().find(|c| c.config.id == character_id)
+    {
+        return Some(found);
+    }
+
+    for name in fallback_names {
+        let trimmed = name.trim();
+        if !trimmed.is_empty()
+            && let Some(found) = catalog.iter().find(|c| {
+                c.config.name.eq_ignore_ascii_case(trimmed)
+                    || c.config.display_name.eq_ignore_ascii_case(trimmed)
+            })
+        {
+            return Some(found);
+        }
+    }
+
+    catalog.first()
+}
 
 /// What kind of entity holds a character claim. Today the only variant is
 /// `Pane` (a terminal pane). The enum exists so future non-pane holders
@@ -180,5 +225,54 @@ impl CharacterInfo {
             status: CharacterStatus::Available,
             has_avatar,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_catalog() -> Vec<CharacterInfo> {
+        vec![
+            CharacterInfo::new(
+                CharacterConfig {
+                    id: "uuid-a".to_string(),
+                    name: "levi-kujo".to_string(),
+                    display_name: "levi".to_string(),
+                    color: "#204A87".to_string(),
+                    duties: "Kernel".to_string(),
+                    personality: "Direct".to_string(),
+                },
+                false,
+            ),
+            CharacterInfo::new(
+                CharacterConfig {
+                    id: "uuid-b".to_string(),
+                    name: "kuro".to_string(),
+                    display_name: "kuro".to_string(),
+                    color: "#B31825".to_string(),
+                    duties: "Arch".to_string(),
+                    personality: "Sardonic".to_string(),
+                },
+                false,
+            ),
+        ]
+    }
+
+    #[test]
+    fn test_resolve_character_priority() {
+        let catalog = sample_catalog();
+
+        // 1. Exact UUID match wins even when Character A is first in the list
+        let resolved = resolve_character(&catalog, "uuid-b", &["kuro"]).unwrap();
+        assert_eq!(resolved.config.id, "uuid-b");
+
+        // 2. Fallback by display name / slug when UUID is empty or stale
+        let by_name = resolve_character(&catalog, "missing-uuid", &["Kuro"]).unwrap();
+        assert_eq!(by_name.config.id, "uuid-b");
+
+        // 3. Fallback to first available character when deleted and no name matches
+        let fallback = resolve_character(&catalog, "deleted-uuid", &["deleted-char"]).unwrap();
+        assert_eq!(fallback.config.id, "uuid-a");
     }
 }

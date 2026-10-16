@@ -288,13 +288,63 @@ impl ClawSession {
             .await;
     }
 
+    pub(super) async fn ensure_session_persisted(&self, cwd: &str) {
+        let db_val = {
+            let db_guard = self.db.lock().await;
+            db_guard.clone()
+        };
+        if let Some(db) = db_val {
+            let store = boxxy_db::store::Store::new(db.pool());
+            let _ = store
+                .ensure_session_exists(&self.session_id, &self.character_id, &self.name, cwd)
+                .await;
+        }
+    }
+
     pub(super) async fn handle_settings_invalidated(&mut self) {
         info!(
             "[{}] Settings changed. Next turn will trigger a hot-swap.",
             self.name
         );
 
+        // Check if the character was migrated or renamed during a catalog hot-reload
+        let cached_catalog = boxxy_claw_protocol::characters::CHARACTER_CACHE.load();
+        let catalog: Vec<boxxy_claw_protocol::characters::CharacterInfo> =
+            if cached_catalog.is_empty() {
+                boxxy_claw_protocol::character_loader::load_characters().unwrap_or_default()
+            } else {
+                (**cached_catalog).clone()
+            };
+
+        let claimed_char_id = boxxy_claw_protocol::characters::CLAIMS_CACHE
+            .load()
+            .iter()
+            .find(|c| c.holder_id == self.pane_id)
+            .map(|c| c.character_id.clone());
+
+        let lookup_id = claimed_char_id.as_deref().unwrap_or(&self.character_id);
+        let fallback_names = [self.name.as_str()];
+        let mut character_changed = false;
+
+        if let Some(info) =
+            boxxy_claw_protocol::characters::resolve_character(&catalog, lookup_id, &fallback_names)
+            && (info.config.id != self.character_id || info.config.display_name != self.name)
+        {
+            self.character_id = info.config.id.clone();
+            self.name = info.config.display_name.clone();
+            character_changed = true;
+        }
+
+        // Always reload character duties & personality so edits to CHARACTER.toml apply on next turn
+        self.session_context = load_session_context(&self.character_id);
+
         let mut state_lock = self.state.lock().await;
+        if character_changed {
+            state_lock.character_id = self.character_id.clone();
+            state_lock.character_display_name = self.name.clone();
+            state_lock.agent_name = self.name.clone();
+        }
+        let web_search_enabled = state_lock.web_search_enabled;
 
         let model_label = |m: &Option<_>| -> String {
             m.as_ref()
@@ -316,13 +366,39 @@ impl ClawSession {
         );
 
         state_lock.persistent_agent = None;
+        drop(state_lock);
+
+        if character_changed {
+            let db_guard = self.db.lock().await;
+            if let Some(db) = &*db_guard {
+                let store = boxxy_db::store::Store::new(db.pool());
+                let _ = store
+                    .update_session_character(&self.session_id, &self.character_id, &self.name)
+                    .await;
+            }
+            drop(db_guard);
+
+            let _ = self
+                .tx_ui
+                .send(ClawEngineEvent::Identity {
+                    agent_name: self.name.clone(),
+                    character_id: self.character_id.clone(),
+                    pinned: self.pinned,
+                    web_search_enabled,
+                    total_tokens: self.total_tokens,
+                })
+                .await;
+        }
 
         if new_claw == old_claw && new_memory == old_memory {
             return;
         }
 
-        state_lock.current_claw_model = after.claw_model.clone();
-        state_lock.current_memory_model = after.memory_model.clone();
+        {
+            let mut state_lock = self.state.lock().await;
+            state_lock.current_claw_model = after.claw_model.clone();
+            state_lock.current_memory_model = after.memory_model.clone();
+        }
 
         let event = ClawEngineEvent::SystemMessage {
             text: format!("Claw: {new_claw} ● Dreams: {new_memory}"),
@@ -363,22 +439,32 @@ impl ClawSession {
             match store.get_session(&session_id).await {
                 Ok(Some(session)) => {
                     self.session_id = session_id.clone();
-                    let registry = boxxy_claw_protocol::characters::CHARACTER_CACHE.load();
+                    let cached_registry =
+                        boxxy_claw_protocol::characters::CHARACTER_CACHE.load();
+                    let registry: Vec<boxxy_claw_protocol::characters::CharacterInfo> =
+                        if cached_registry.is_empty() {
+                            boxxy_claw_protocol::character_loader::load_characters()
+                                .unwrap_or_default()
+                        } else {
+                            (**cached_registry).clone()
+                        };
 
-                    let char_info = registry
-                        .iter()
-                        .find(|c| c.config.id == session.character_id)
-                        .or_else(|| {
-                            session.agent_name.as_deref().and_then(|n| {
-                                registry
-                                    .iter()
-                                    .find(|c| c.config.name == n || c.config.display_name == n)
-                            })
-                        })
-                        .or_else(|| registry.first());
+                    let fallback_names = [
+                        session.character_display_name.as_str(),
+                        session.agent_name.as_deref().unwrap_or_default(),
+                        session.name.as_str(),
+                    ];
+                    let char_info = boxxy_claw_protocol::characters::resolve_character(
+                        &registry,
+                        &session.character_id,
+                        &fallback_names,
+                    );
 
                     let is_fallback = char_info
-                        .map(|c| c.config.id != session.character_id)
+                        .map(|c| {
+                            c.config.id != session.character_id
+                                || c.config.display_name != session.character_display_name
+                        })
                         .unwrap_or(false);
 
                     if let Some(info) = char_info {
@@ -386,8 +472,11 @@ impl ClawSession {
                         self.character_id = info.config.id.clone();
                         if is_fallback {
                             info!(
-                                "Character '{}' not found; reassigning session {} to '{}'",
-                                session.character_id, session_id, info.config.display_name
+                                "Character '{}' reassigned for session {} -> '{}' ({})",
+                                session.character_id,
+                                session_id,
+                                info.config.display_name,
+                                info.config.id
                             );
                             let _ = store
                                 .update_session_character(
@@ -397,9 +486,14 @@ impl ClawSession {
                                 )
                                 .await;
                         }
+                    } else if !session.character_display_name.is_empty() {
+                        self.name = session.character_display_name.clone();
                     } else if let Some(n) = session.agent_name.as_deref() {
                         self.name = n.to_string();
                     }
+
+                    // Load the resumed character's duties and personality context
+                    self.session_context = load_session_context(&self.character_id);
 
                     self.pinned = session.pinned;
                     self.total_tokens = session.total_tokens as u64;
@@ -443,10 +537,52 @@ impl ClawSession {
                     let web_search_enabled = state_lock.web_search_enabled;
                     drop(state_lock);
 
+                    self.clear_ui_history().await;
+
                     if let Ok(event_jsons) = store.get_claw_events(&session_id).await {
+                        let resolved_char_id = self.character_id.clone();
+                        let resolved_name = self.name.clone();
                         let rows: Vec<PersistentClawRow> = event_jsons
                             .into_iter()
-                            .filter_map(|json| serde_json::from_str(&json).ok())
+                            .filter_map(|json| serde_json::from_str::<PersistentClawRow>(&json).ok())
+                            .map(|mut row| {
+                                // Ensure rows from deleted/migrated characters display the reassigned character
+                                match &mut row {
+                                    PersistentClawRow::Diagnosis {
+                                        agent_name,
+                                        character_id,
+                                        ..
+                                    }
+                                    | PersistentClawRow::Suggested {
+                                        agent_name,
+                                        character_id,
+                                        ..
+                                    }
+                                    | PersistentClawRow::ToolCall {
+                                        agent_name,
+                                        character_id,
+                                        ..
+                                    }
+                                    | PersistentClawRow::ProcessList {
+                                        agent_name,
+                                        character_id,
+                                        ..
+                                    } => {
+                                        let row_char_exists = character_id
+                                            .as_ref()
+                                            .is_some_and(|id| {
+                                                !id.is_empty()
+                                                    && registry.iter().any(|c| c.config.id == *id)
+                                            });
+                                        if !row_char_exists && !resolved_char_id.is_empty() {
+                                            *character_id = Some(resolved_char_id.clone());
+                                            *agent_name = Some(resolved_name.clone());
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                                row
+                            })
                             .collect();
                         if !rows.is_empty() {
                             let _ = self
@@ -456,6 +592,9 @@ impl ClawSession {
                         }
                     }
 
+                    workspace
+                        .register_pane_tx(self.pane_id.clone(), self.tx_self.clone())
+                        .await;
                     workspace
                         .update_pane_state(
                             self.pane_id.clone(),
