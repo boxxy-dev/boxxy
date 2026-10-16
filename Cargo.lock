@@ -1141,6 +1141,7 @@ dependencies = [
  "gtk4",
  "libadwaita",
  "reqwest 0.13.5",
+ "rig",
  "serde",
  "serde_json",
 ]

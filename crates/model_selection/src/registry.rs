@@ -28,6 +28,11 @@ pub trait AiProvider {
         vec![]
     }
 
+    /// Returns the recommended default index in `get_thinking_levels(model_idx)`.
+    fn default_thinking_idx(&self, _model_idx: u32) -> u32 {
+        0
+    }
+
     /// Whether to show the thinking options for this model.
     fn supports_thinking(&self, _model_idx: u32) -> bool {
         false
@@ -57,10 +62,8 @@ impl AiProvider for GeminiProviderImpl {
     }
     fn supports_thinking(&self, model_idx: u32) -> bool {
         let am = GeminiModel::all();
-        if let Some(m) = am.get(model_idx as usize) {
-            return m.supports_thinking();
-        }
-        false
+        am.get(model_idx as usize)
+            .is_some_and(GeminiModel::supports_thinking)
     }
     fn get_thinking_levels(&self, model_idx: u32) -> Vec<String> {
         let am = GeminiModel::all();
@@ -73,6 +76,18 @@ impl AiProvider for GeminiProviderImpl {
         }
         vec![]
     }
+    fn default_thinking_idx(&self, model_idx: u32) -> u32 {
+        let am = GeminiModel::all();
+        if let Some(m) = am.get(model_idx as usize) {
+            let levels = m.available_thinking_levels();
+            if let Some(def) = m.default_thinking_level()
+                && let Some(pos) = levels.iter().position(|l| *l == def)
+            {
+                return pos as u32;
+            }
+        }
+        0
+    }
     fn create_model_provider(
         &self,
         model_idx: u32,
@@ -83,11 +98,11 @@ impl AiProvider for GeminiProviderImpl {
         let model = am
             .get(model_idx as usize)
             .cloned()
-            .unwrap_or(GeminiModel::Flash3_8);
+            .unwrap_or_else(|| GeminiModel::new("gemini-3.8-flash"));
         let levels = model.available_thinking_levels();
         let thinking = thinking_idx
             .and_then(|idx| levels.get(idx as usize))
-            .cloned();
+            .copied();
         ModelProvider::Gemini(model, thinking)
     }
     fn sync_ui(
@@ -100,10 +115,10 @@ impl AiProvider for GeminiProviderImpl {
     ) {
         if let ModelProvider::Gemini(m, t) = provider {
             let am = GeminiModel::all();
-            if let Some(pos) = am.iter().position(|x| x == m) {
+            if let Some(pos) = am.iter().position(|x| x.api_name() == m.api_name()) {
                 model_dropdown.set_selected(pos as u32);
                 thinking_list.splice(0, thinking_list.n_items(), &[]);
-                let levels = m.available_thinking_levels();
+                let levels = am[pos].available_thinking_levels();
                 for l in &levels {
                     thinking_list.append(&l.to_string());
                 }
@@ -111,6 +126,8 @@ impl AiProvider for GeminiProviderImpl {
                     && let Some(t_pos) = levels.iter().position(|l| l == think)
                 {
                     thinking_dropdown.set_selected(t_pos as u32);
+                } else if !levels.is_empty() {
+                    thinking_dropdown.set_selected(self.default_thinking_idx(pos as u32));
                 }
             }
         }
@@ -130,11 +147,8 @@ impl AiProvider for AnthropicProviderImpl {
     }
     fn supports_thinking(&self, model_idx: u32) -> bool {
         let am = AnthropicModel::all();
-        if let Some(m) = am.get(model_idx as usize) {
-            m.supports_extended_thinking()
-        } else {
-            false
-        }
+        am.get(model_idx as usize)
+            .is_some_and(AnthropicModel::supports_thinking)
     }
     fn get_thinking_levels(&self, model_idx: u32) -> Vec<String> {
         let am = AnthropicModel::all();
@@ -147,6 +161,18 @@ impl AiProvider for AnthropicProviderImpl {
             vec![]
         }
     }
+    fn default_thinking_idx(&self, model_idx: u32) -> u32 {
+        let am = AnthropicModel::all();
+        if let Some(m) = am.get(model_idx as usize) {
+            let levels = m.available_thinking_levels();
+            if let Some(def) = m.default_thinking_level()
+                && let Some(pos) = levels.iter().position(|l| *l == def)
+            {
+                return pos as u32;
+            }
+        }
+        0
+    }
     fn create_model_provider(
         &self,
         model_idx: u32,
@@ -157,17 +183,12 @@ impl AiProvider for AnthropicProviderImpl {
         let model = am
             .get(model_idx as usize)
             .cloned()
-            .unwrap_or(AnthropicModel::ClaudeSonnet5);
+            .unwrap_or_else(|| AnthropicModel::new("claude-sonnet-5-5"));
 
-        let thinking = if model.supports_extended_thinking() {
-            if let Some(idx) = thinking_idx {
-                model.available_thinking_levels().get(idx as usize).cloned()
-            } else {
-                None
-            }
-        } else {
-            None
-        };
+        let levels = model.available_thinking_levels();
+        let thinking = thinking_idx
+            .and_then(|idx| levels.get(idx as usize))
+            .copied();
 
         ModelProvider::Anthropic(model, thinking)
     }
@@ -181,10 +202,10 @@ impl AiProvider for AnthropicProviderImpl {
     ) {
         if let ModelProvider::Anthropic(m, t) = provider {
             let am = AnthropicModel::all();
-            if let Some(pos) = am.iter().position(|x| x == m) {
+            if let Some(pos) = am.iter().position(|x| x.api_name() == m.api_name()) {
                 model_dropdown.set_selected(pos as u32);
                 thinking_list.splice(0, thinking_list.n_items(), &[]);
-                let levels = m.available_thinking_levels();
+                let levels = am[pos].available_thinking_levels();
                 for l in &levels {
                     thinking_list.append(&l.to_string());
                 }
@@ -192,6 +213,8 @@ impl AiProvider for AnthropicProviderImpl {
                     && let Some(t_pos) = levels.iter().position(|l| l == think)
                 {
                     thinking_dropdown.set_selected(t_pos as u32);
+                } else if !levels.is_empty() {
+                    thinking_dropdown.set_selected(self.default_thinking_idx(pos as u32));
                 }
             }
         }
@@ -209,8 +232,10 @@ impl AiProvider for OpenAiProviderImpl {
             .map(|m| m.to_string())
             .collect()
     }
-    fn supports_thinking(&self, _model_idx: u32) -> bool {
-        true
+    fn supports_thinking(&self, model_idx: u32) -> bool {
+        let am = OpenAiModel::all();
+        am.get(model_idx as usize)
+            .is_some_and(OpenAiModel::supports_thinking)
     }
     fn get_thinking_levels(&self, model_idx: u32) -> Vec<String> {
         let am = OpenAiModel::all();
@@ -223,6 +248,18 @@ impl AiProvider for OpenAiProviderImpl {
         }
         vec![]
     }
+    fn default_thinking_idx(&self, model_idx: u32) -> u32 {
+        let am = OpenAiModel::all();
+        if let Some(m) = am.get(model_idx as usize) {
+            let levels = m.available_thinking_levels();
+            if let Some(def) = m.default_thinking_level()
+                && let Some(pos) = levels.iter().position(|l| *l == def)
+            {
+                return pos as u32;
+            }
+        }
+        0
+    }
     fn create_model_provider(
         &self,
         model_idx: u32,
@@ -233,11 +270,11 @@ impl AiProvider for OpenAiProviderImpl {
         let model = am
             .get(model_idx as usize)
             .cloned()
-            .unwrap_or(OpenAiModel::Gpt6Astra);
+            .unwrap_or_else(|| OpenAiModel::new("gpt-6.1-sol"));
         let levels = model.available_thinking_levels();
         let thinking = thinking_idx
             .and_then(|idx| levels.get(idx as usize))
-            .cloned();
+            .copied();
         ModelProvider::OpenAi(model, thinking)
     }
     fn sync_ui(
@@ -250,10 +287,10 @@ impl AiProvider for OpenAiProviderImpl {
     ) {
         if let ModelProvider::OpenAi(m, t) = provider {
             let am = OpenAiModel::all();
-            if let Some(pos) = am.iter().position(|x| x == m) {
+            if let Some(pos) = am.iter().position(|x| x.api_name() == m.api_name()) {
                 model_dropdown.set_selected(pos as u32);
                 thinking_list.splice(0, thinking_list.n_items(), &[]);
-                let levels = m.available_thinking_levels();
+                let levels = am[pos].available_thinking_levels();
                 for l in &levels {
                     thinking_list.append(&l.to_string());
                 }
@@ -261,6 +298,8 @@ impl AiProvider for OpenAiProviderImpl {
                     && let Some(t_pos) = levels.iter().position(|l| l == think)
                 {
                     thinking_dropdown.set_selected(t_pos as u32);
+                } else if !levels.is_empty() {
+                    thinking_dropdown.set_selected(self.default_thinking_idx(pos as u32));
                 }
             }
         }
@@ -365,7 +404,7 @@ impl AiProvider for DeepSeekProviderImpl {
         let model = am
             .get(model_idx as usize)
             .cloned()
-            .unwrap_or(DeepSeekModel::V4_1Flash);
+            .unwrap_or_else(|| DeepSeekModel::new("deepseek-flash"));
         ModelProvider::DeepSeek(model)
     }
     fn sync_ui(
@@ -378,7 +417,7 @@ impl AiProvider for DeepSeekProviderImpl {
     ) {
         if let ModelProvider::DeepSeek(m) = provider {
             let am = DeepSeekModel::all();
-            if let Some(pos) = am.iter().position(|x| x == m) {
+            if let Some(pos) = am.iter().position(|x| x.api_name() == m.api_name()) {
                 model_dropdown.set_selected(pos as u32);
             }
         }

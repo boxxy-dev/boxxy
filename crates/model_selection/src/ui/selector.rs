@@ -441,7 +441,9 @@ impl SingleModelSelector {
                         .set_visible(prov_def.supports_thinking(0));
                     inner.model_dropdown.set_selected(0);
                     if inner.thinking_list.n_items() > 0 {
-                        inner.thinking_dropdown.set_selected(0);
+                        inner
+                            .thinking_dropdown
+                            .set_selected(prov_def.default_thinking_idx(0));
                     }
                     inner.updating = false;
                     should_update = true;
@@ -537,7 +539,8 @@ impl SingleModelSelector {
                         inner.thinking_list.append(level);
                     }
                     if inner.thinking_list.n_items() > 0 {
-                        inner.thinking_dropdown.set_selected(0);
+                        let def_idx = inner.providers[prov_idx].default_thinking_idx(m_idx);
+                        inner.thinking_dropdown.set_selected(def_idx);
                     }
                     let supports = inner.providers[prov_idx].supports_thinking(m_idx);
                     inner.options_vbox.set_visible(supports);

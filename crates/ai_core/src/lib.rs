@@ -291,6 +291,37 @@ pub fn extract_response_context_tokens(res: &rig::agent::PromptResponse) -> u64 
         .unwrap_or_else(|| u.input_tokens.unwrap_or(0) + u.output_tokens.unwrap_or(0))
 }
 
+fn resolve_model_reasoning(
+    provider: &ModelProvider,
+    thinking: Option<ThinkingLevel>,
+) -> Option<Reasoning> {
+    let level = thinking?;
+    let spec = resolve_catalog_spec(provider);
+
+    if level == ThinkingLevel::None {
+        if spec.is_none_or(|s| s.reasoning.can_disable) {
+            return Some(Reasoning::Off);
+        }
+        return None;
+    }
+
+    if let Some(s) = spec {
+        if !s.reasoning.supported {
+            return None;
+        }
+        if s.reasoning.levels.is_empty()
+            && let Some(range) = &s.reasoning.budget
+        {
+            let tokens = level
+                .anthropic_budget_tokens()
+                .clamp(*range.start(), *range.end());
+            return Some(Reasoning::Budget { tokens });
+        }
+    }
+
+    Some(map_thinking_level(level))
+}
+
 pub fn build_provider_model(
     provider: &ModelProvider,
     creds: &AiCredentials,
@@ -305,9 +336,7 @@ pub fn build_provider_model(
             let key = creds.api_keys.get("Gemini").cloned().unwrap_or_default();
             let client = rig::providers::gemini::Gemini::new(key.trim());
             let gemini_model = client.completion(model.api_name());
-            let reasoning = thinking
-                .filter(|&level| level != ThinkingLevel::None)
-                .map(map_thinking_level);
+            let reasoning = resolve_model_reasoning(provider, *thinking);
             (
                 gemini_model.into(),
                 "Gemini".to_string(),
@@ -331,17 +360,7 @@ pub fn build_provider_model(
             let key = creds.api_keys.get("Anthropic").cloned().unwrap_or_default();
             let client = rig::providers::anthropic::Anthropic::new(key.trim());
             let anthropic_model = client.completion(model.api_name());
-            let reasoning = thinking.and_then(|level| {
-                if level == ThinkingLevel::None {
-                    Some(Reasoning::Off)
-                } else if model.supports_extended_thinking() {
-                    Some(Reasoning::Budget {
-                        tokens: level.anthropic_budget_tokens(),
-                    })
-                } else {
-                    Some(map_thinking_level(level))
-                }
-            });
+            let reasoning = resolve_model_reasoning(provider, *thinking);
             (
                 anthropic_model.into(),
                 "Anthropic".to_string(),
@@ -353,7 +372,7 @@ pub fn build_provider_model(
             let key = creds.api_keys.get("OpenAI").cloned().unwrap_or_default();
             let client = rig::providers::openai::OpenAI::new(key.trim());
             let openai_model = client.completion(model.api_name());
-            let reasoning = thinking.map(map_thinking_level);
+            let reasoning = resolve_model_reasoning(provider, *thinking);
             (
                 openai_model.into(),
                 "OpenAI".to_string(),
@@ -693,13 +712,13 @@ mod tests {
         );
         assert_eq!(reasoning_none, None);
 
-        // Anthropic Claude 5 with Medium -> adaptive Effort(Medium)
+        // Anthropic Claude 5.5 with Medium -> adaptive Effort(Medium)
         let (_, provider, model, reasoning) = build_provider_model(
             &ModelProvider::Anthropic(AnthropicModel::ClaudeSonnet5, Some(ThinkingLevel::Medium)),
             &creds,
         );
         assert_eq!(provider, "Anthropic");
-        assert_eq!(model, "claude-sonnet-5");
+        assert_eq!(model, "claude-sonnet-5-5");
         assert_eq!(reasoning, Some(Reasoning::Effort(Effort::Medium)));
 
         // OpenAI with High -> Effort(High)
