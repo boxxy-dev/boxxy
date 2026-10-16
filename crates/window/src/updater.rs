@@ -15,7 +15,7 @@ const REPO_OWNER: &str = "boxxy-dev";
 const REPO_NAME: &str = "boxxy";
 const GITHUB_API_BASE: &str = "https://api.github.com";
 const USER_AGENT_VALUE: &str = concat!("boxxy-terminal/", env!("CARGO_PKG_VERSION"));
-const CHECK_THROTTLE_INTERVAL: Duration = Duration::from_secs(60 * 60); // 1 hour
+const CHECK_THROTTLE_INTERVAL: Duration = Duration::from_secs(60); // 60s burst guard across multi-window opens
 const MAX_UPDATE_ARCHIVE_BYTES: u64 = 250 * 1024 * 1024; // 250 MiB safety cap
 
 #[derive(Debug, Deserialize)]
@@ -76,23 +76,18 @@ impl Updater {
         log::debug!("Checking GitHub for nightly updates...");
 
         let release = Self::fetch_nightly_release(GITHUB_API_BASE).await?;
-        let _ = check_guard.record_check();
 
         let Some(nightly) = release else {
             return Ok(None);
         };
 
-        let release_date = nightly
-            .published_at
-            .as_deref()
-            .unwrap_or(&nightly.created_at);
-
         // Check if we have already installed this specific build date.
+        // Accepts both `published_at` and `created_at` so installs upgraded from the
+        // pre-1.3.0 updater (which wrote `created_at` into `.last_update`) are recognized
+        // as up-to-date and migrated cleanly without prompting to re-download the same build.
         let last_update_path = app_dir.join(".last_update");
-        if last_update_path.exists()
-            && let Ok(last_id) = fs::read_to_string(&last_update_path)
-            && last_id.trim() == release_date.trim()
-        {
+        if Self::is_release_already_installed(&last_update_path, &nightly) {
+            let _ = check_guard.record_check();
             return Ok(None);
         }
 
@@ -103,6 +98,34 @@ impl Updater {
         };
 
         Ok(Self::select_nightly_asset(&nightly, target_arch))
+    }
+
+    fn is_release_already_installed(last_update_path: &Path, nightly: &GithubRelease) -> bool {
+        let Ok(last_id) = fs::read_to_string(last_update_path) else {
+            return false;
+        };
+        let last_trimmed = last_id.trim();
+        if last_trimmed.is_empty() {
+            return false;
+        }
+
+        let release_date = nightly
+            .published_at
+            .as_deref()
+            .unwrap_or(&nightly.created_at)
+            .trim();
+        let created_at = nightly.created_at.trim();
+
+        if last_trimmed == release_date {
+            return true;
+        }
+        if last_trimmed == created_at {
+            // Migrate legacy `.last_update` value (`created_at` from self_update 0.44)
+            // to the canonical `release_date` (`published_at`).
+            let _ = fs::write(last_update_path, release_date);
+            return true;
+        }
+        false
     }
 
     fn select_nightly_asset(
@@ -160,16 +183,34 @@ impl Updater {
             .timeout(Duration::from_secs(15))
             .build()?;
 
+        let token = Self::github_token_from_env();
         let mut req = client
             .get(&url)
             .header(USER_AGENT, USER_AGENT_VALUE)
             .header(ACCEPT, "application/vnd.github+json");
 
-        if let Some(token) = Self::github_token_from_env() {
+        if let Some(ref token) = token {
             req = req.header(AUTHORIZATION, format!("Bearer {token}"));
         }
 
-        let resp = req.send().await?;
+        let mut resp = req.send().await?;
+        if (resp.status() == reqwest::StatusCode::UNAUTHORIZED
+            || resp.status() == reqwest::StatusCode::FORBIDDEN)
+            && token.is_some()
+        {
+            // A stale or mis-scoped GH_TOKEN/GITHUB_TOKEN in the user's shell should not
+            // break update checks against our public repository; retry once without auth.
+            log::debug!(
+                "Authenticated GitHub release check returned {}; retrying unauthenticated.",
+                resp.status()
+            );
+            resp = client
+                .get(&url)
+                .header(USER_AGENT, USER_AGENT_VALUE)
+                .header(ACCEPT, "application/vnd.github+json")
+                .send()
+                .await?;
+        }
         let status = resp.status();
 
         if !status.is_success() {
@@ -247,7 +288,9 @@ impl Updater {
                 .timeout(Duration::from_secs(120))
                 .max_download_size(MAX_UPDATE_ARCHIVE_BYTES);
 
-            if let Some(token) = Self::github_token_from_env() {
+            if url.starts_with("https://api.github.com/")
+                && let Some(token) = Self::github_token_from_env()
+            {
                 download.request_header(AUTHORIZATION, format!("Bearer {token}"));
             }
 
@@ -379,10 +422,14 @@ impl Updater {
 
         // crates/window/src/agent_deployer.rs automatically checks for and
         // spawns the new agent when the new `boxxy-terminal` process starts.
+        // Pass `--gapplication-replace` alongside `--new-window` (paired with
+        // `wait_for_restarting_parent()` in `boxxy-app`) so the new instance
+        // cleanly takes over `dev.boxxy.BoxxyTerminal` on D-Bus and opens its window.
         log::info!("Restarting app...");
-        let _ = Command::new(bin_dir.join("boxxy-terminal"))
-            .arg("--new-window")
-            .spawn();
+        Command::new(bin_dir.join("boxxy-terminal"))
+            .args(["--gapplication-replace", "--new-window"])
+            .spawn()
+            .context("Failed to spawn updated boxxy-terminal binary")?;
 
         std::process::exit(0);
     }
@@ -450,6 +497,10 @@ impl Updater {
             .commit()
             .context("Transactional binary swap failed (rolled back to previous version)")?;
 
+        // Clean up any legacy `.old` backup binaries left behind by pre-1.3.0 installs or `install.sh`
+        let _ = fs::remove_file(bin_dir.join("boxxy-terminal.old"));
+        let _ = fs::remove_file(bin_dir.join("boxxy-agent.old"));
+
         // Best-effort sync of updated desktop entry and icon inside app_dir/share
         let pending_share = inner_folder.join("share");
         if pending_share.exists() {
@@ -492,7 +543,9 @@ impl Updater {
             .timeout(Duration::from_secs(15))
             .max_download_size(64 * 1024);
 
-        if let Some(token) = Self::github_token_from_env() {
+        if url.starts_with("https://api.github.com/")
+            && let Some(token) = Self::github_token_from_env()
+        {
             download.request_header(AUTHORIZATION, format!("Bearer {token}"));
         }
 
@@ -570,9 +623,11 @@ mod tests {
         fs::create_dir_all(&bin_dir).unwrap();
         fs::create_dir_all(&pending_dir).unwrap();
 
-        // Seed existing "old" binaries
+        // Seed existing "old" binaries and legacy `.old` backups
         fs::write(bin_dir.join("boxxy-terminal"), b"old-terminal-bin").unwrap();
         fs::write(bin_dir.join("boxxy-agent"), b"old-agent-bin").unwrap();
+        fs::write(bin_dir.join("boxxy-terminal.old"), b"legacy-backup").unwrap();
+        fs::write(bin_dir.join("boxxy-agent.old"), b"legacy-backup").unwrap();
 
         // Build a synthetic `.tar.gz` archive in memory/tempdir with `./` prefix to exercise
         // self_update 1.3.0's archive extraction.
@@ -620,6 +675,44 @@ mod tests {
             "2026-10-15T00:00:00Z"
         );
         assert!(!pending_dir.exists(), "pending dir should be cleaned up");
+        assert!(
+            !bin_dir.join("boxxy-terminal.old").exists(),
+            "legacy .old backup should be cleaned up"
+        );
+        assert!(
+            !bin_dir.join("boxxy-agent.old").exists(),
+            "legacy .old backup should be cleaned up"
+        );
+    }
+
+    #[test]
+    fn is_release_already_installed_migrates_legacy_created_at_stamp() {
+        let tmp = tempfile::tempdir().unwrap();
+        let last_update_path = tmp.path().join(".last_update");
+        let release = GithubRelease {
+            tag_name: "nightly".to_string(),
+            created_at: "2026-10-16T15:27:41Z".to_string(),
+            published_at: Some("2026-10-16T15:39:20Z".to_string()),
+            assets: vec![],
+        };
+
+        // Pre-1.3.0 installs stored `created_at` in `.last_update`
+        fs::write(&last_update_path, "2026-10-16T15:27:41Z\n").unwrap();
+        assert!(Updater::is_release_already_installed(
+            &last_update_path,
+            &release
+        ));
+        assert_eq!(
+            fs::read_to_string(&last_update_path).unwrap(),
+            "2026-10-16T15:39:20Z"
+        );
+
+        // Older release date should return false
+        fs::write(&last_update_path, "2026-10-14T00:00:00Z\n").unwrap();
+        assert!(!Updater::is_release_already_installed(
+            &last_update_path,
+            &release
+        ));
     }
 
     #[test]

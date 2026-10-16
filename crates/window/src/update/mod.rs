@@ -528,12 +528,14 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
         }
         AppInput::StartUpdateDownload(url, date, checksum_url) => {
             let tx_download = inner.tx.clone();
-            gtk4::glib::spawn_future_local(async move {
+            tokio::spawn(async move {
                 match crate::updater::Updater::download_update(url, date, checksum_url).await {
                     Ok(path) => {
-                        let _ = tx_download.send_blocking(AppInput::UpdateDownloaded(
-                            path.to_string_lossy().to_string(),
-                        ));
+                        let _ = tx_download
+                            .send(AppInput::UpdateDownloaded(
+                                path.to_string_lossy().to_string(),
+                            ))
+                            .await;
                     }
                     Err(e) => {
                         log::error!("Failed to download update: {}", e);
@@ -558,7 +560,9 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
             inner.toast_overlay.add_toast(toast);
         }
         AppInput::ApplyUpdateAndRestart => {
-            let _ = crate::updater::Updater::apply_update_and_restart();
+            if let Err(e) = crate::updater::Updater::apply_update_and_restart() {
+                log::error!("Failed to apply update and restart: {e}");
+            }
         }
         AppInput::GrabFocus => {
             if let Some(page) = inner.tab_view.selected_page() {

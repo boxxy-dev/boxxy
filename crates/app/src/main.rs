@@ -15,6 +15,17 @@ fn main() {
         .filter_module("reqwest", log::LevelFilter::Warn)
         .filter_module("rustls", log::LevelFilter::Warn)
         .init();
+
+    // When spawned by `Updater::apply_update_and_restart()`, the old `boxxy-terminal`
+    // process calls `spawn()` followed immediately by `std::process::exit(0)`. Because
+    // tearing down a GUI process's address space (`exit_mmap`) in the kernel takes several
+    // milliseconds before its D-Bus socket is closed (`exit_files`), reaching `app.run()`
+    // too quickly causes GIO to see `dev.boxxy.BoxxyTerminal` as still owned by the dying
+    // parent, forward `--new-window` to the dying instance, and exit immediately without
+    // opening a window. Waiting for the parent `boxxy-terminal` PID to finish exiting
+    // eliminates this race for both older and newer builds.
+    wait_for_restarting_parent();
+
     // Enter the global tokio runtime context so tokio::spawn works everywhere.
     let _rt_guard = boxxy_sys_utils::runtime().enter();
 
@@ -118,7 +129,10 @@ fn main() {
 
     let app = libadwaita::Application::builder()
         .application_id("dev.boxxy.BoxxyTerminal")
-        .flags(gio::ApplicationFlags::HANDLES_COMMAND_LINE)
+        .flags(
+            gio::ApplicationFlags::HANDLES_COMMAND_LINE
+                | gio::ApplicationFlags::ALLOW_REPLACEMENT,
+        )
         .build();
 
     app.add_main_option(
@@ -178,3 +192,38 @@ fn main() {
 
     std::process::exit(exit_code.into());
 }
+
+#[cfg(unix)]
+fn wait_for_restarting_parent() {
+    let initial_ppid = std::os::unix::process::parent_id();
+    if initial_ppid <= 1 {
+        return;
+    }
+
+    let comm_path = format!("/proc/{initial_ppid}/comm");
+    let parent_comm = std::fs::read_to_string(&comm_path)
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default();
+
+    if parent_comm == "boxxy-terminal" {
+        log::info!(
+            "Detected restarting parent boxxy-terminal (PID {initial_ppid}); waiting for it to exit..."
+        );
+        let proc_dir = std::path::PathBuf::from(format!("/proc/{initial_ppid}"));
+        let start = std::time::Instant::now();
+        while std::os::unix::process::parent_id() == initial_ppid
+            && proc_dir.exists()
+            && start.elapsed() < std::time::Duration::from_secs(5)
+        {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        // Allow the session D-Bus daemon to process the parent's closed socket
+        // and release `dev.boxxy.BoxxyTerminal` before GApplication registers.
+        std::thread::sleep(std::time::Duration::from_millis(150));
+    } else if std::env::args().any(|a| a == "--gapplication-replace") {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+}
+
+#[cfg(not(unix))]
+fn wait_for_restarting_parent() {}
