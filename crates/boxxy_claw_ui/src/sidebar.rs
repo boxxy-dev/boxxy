@@ -11,18 +11,28 @@
 //! token usage, a pending-tasks drawer, and a "Clear" button that
 //! empties the visible list and emits a soft-clear to the engine.
 
-use boxxy_claw_protocol::{ScheduledTask, TaskStatus, TaskType};
+use boxxy_claw_protocol::{
+    ScheduledTask, SessionUsage, TaskStatus, TaskType, format_number_with_commas,
+};
 use gtk4 as gtk;
+use gtk4::glib;
 use gtk4::prelude::*;
 use libadwaita as adw;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 pub struct ClawSidebarComponent {
     widget: gtk::Box,
     status_page: adw::StatusPage,
     scroll: gtk::ScrolledWindow,
-    usage_lbl: gtk::Label,
+    context_box: gtk::Box,
+    tokens_lbl: gtk::Label,
+    percent_lbl: gtk::Label,
+    cost_lbl: gtk::Label,
+    mcp_box: gtk::Box,
+    mcp_rows_box: gtk::Box,
+    last_usage: Rc<Cell<SessionUsage>>,
+    clear_btn: gtk::Button,
     command_panel: gtk::Box,
     current_list: Rc<RefCell<Option<gtk::ListView>>>,
     tasks_expander: gtk::Expander,
@@ -62,26 +72,89 @@ impl ClawSidebarComponent {
         let command_panel = gtk::Box::new(gtk::Orientation::Horizontal, 6);
         command_panel.set_valign(gtk::Align::End);
         command_panel.set_margin_top(4);
+        command_panel.set_margin_start(6);
+        command_panel.set_margin_end(2);
+        command_panel.set_margin_bottom(2);
 
-        let usage_lbl = gtk::Label::builder()
-            .label("Context: 0 tokens")
-            .css_classes(["caption", "dim-label"])
-            .hexpand(true)
-            .halign(gtk::Align::Center)
+        let footer_info_vbox = gtk::Box::new(gtk::Orientation::Vertical, 10);
+        footer_info_vbox.set_hexpand(true);
+        footer_info_vbox.set_halign(gtk::Align::Fill);
+
+        let context_box = gtk::Box::new(gtk::Orientation::Vertical, 2);
+        context_box.set_hexpand(true);
+        context_box.set_halign(gtk::Align::Start);
+        context_box.set_visible(false);
+
+        let context_title_lbl = gtk::Label::builder()
+            .label("Context")
+            .css_classes(["caption", "heading"])
+            .halign(gtk::Align::Start)
+            .xalign(0.0)
+            .build();
+        context_box.append(&context_title_lbl);
+
+        let tokens_lbl = gtk::Label::builder()
+            .label("0 tokens")
+            .css_classes(["caption", "dim-label", "monospace"])
+            .halign(gtk::Align::Start)
+            .xalign(0.0)
+            .build();
+        context_box.append(&tokens_lbl);
+
+        let percent_lbl = gtk::Label::builder()
+            .label("0% used")
+            .css_classes(["caption", "dim-label", "monospace"])
+            .halign(gtk::Align::Start)
+            .xalign(0.0)
             .visible(false)
             .build();
-        command_panel.append(&usage_lbl);
+        context_box.append(&percent_lbl);
+
+        let cost_lbl = gtk::Label::builder()
+            .label("$0.00 spent")
+            .css_classes(["caption", "dim-label", "monospace"])
+            .halign(gtk::Align::Start)
+            .xalign(0.0)
+            .build();
+        context_box.append(&cost_lbl);
+
+        footer_info_vbox.append(&context_box);
+
+        let mcp_box = gtk::Box::new(gtk::Orientation::Vertical, 2);
+        mcp_box.set_hexpand(true);
+        mcp_box.set_halign(gtk::Align::Fill);
+        mcp_box.set_visible(false);
+
+        let mcp_title_lbl = gtk::Label::builder()
+            .label("MCP")
+            .css_classes(["caption", "heading"])
+            .halign(gtk::Align::Start)
+            .xalign(0.0)
+            .build();
+        mcp_box.append(&mcp_title_lbl);
+
+        let mcp_rows_box = gtk::Box::new(gtk::Orientation::Vertical, 2);
+        mcp_rows_box.set_hexpand(true);
+        mcp_rows_box.set_halign(gtk::Align::Fill);
+        mcp_box.append(&mcp_rows_box);
+
+        footer_info_vbox.append(&mcp_box);
+        command_panel.append(&footer_info_vbox);
 
         let clear_btn = gtk::Button::builder()
             .icon_name("boxxy-edit-clear-symbolic")
             .css_classes(["flat", "image-button"])
             .tooltip_text("Clear Screen")
             .halign(gtk::Align::End)
+            .valign(gtk::Align::End)
             .build();
 
         let current_list_clear = current_list.clone();
         let status_page_clone = status_page.clone();
         let scroll_clone = scroll.clone();
+        let clear_btn_for_click = clear_btn.clone();
+        let mcp_box_for_click = mcp_box.clone();
+        let command_panel_for_click = command_panel.clone();
         clear_btn.connect_clicked(move |_| {
             // Drop visible rows. Engine still has the underlying history —
             // soft-clear marks a timestamp in the DB so restored sessions
@@ -98,6 +171,8 @@ impl ClawSidebarComponent {
             }
             status_page_clone.set_visible(true);
             scroll_clone.set_visible(false);
+            clear_btn_for_click.set_visible(false);
+            command_panel_for_click.set_visible(mcp_box_for_click.is_visible());
             on_soft_clear();
         });
         command_panel.append(&clear_btn);
@@ -114,17 +189,84 @@ impl ClawSidebarComponent {
             .build();
         widget.append(&tasks_expander);
 
-        Self {
+        let last_usage = Rc::new(Cell::new(SessionUsage::default()));
+
+        let comp = Self {
             widget,
             status_page,
             scroll,
-            usage_lbl,
+            context_box,
+            tokens_lbl,
+            percent_lbl,
+            cost_lbl,
+            mcp_box,
+            mcp_rows_box,
+            last_usage,
+            clear_btn: clear_btn.clone(),
             command_panel,
             current_list,
             tasks_expander,
             tasks_list,
             on_cancel_task: Rc::new(on_cancel_task),
+        };
+
+        let initial_settings = boxxy_preferences::Settings::load();
+        comp.refresh_mcp_list(&initial_settings);
+        if initial_settings.currency != boxxy_preferences::config::Currency::Usd {
+            let cost_lbl_init = comp.cost_lbl.clone();
+            let last_usage_init = comp.last_usage.clone();
+            let initial_curr = initial_settings.currency;
+            glib::spawn_future_local(async move {
+                boxxy_sys_utils::runtime()
+                    .spawn(boxxy_sys_utils::fetch_exchange_rates())
+                    .await
+                    .ok();
+                let usage = last_usage_init.get();
+                cost_lbl_init.set_label(&format!(
+                    "{} spent",
+                    initial_curr.format_from_usd(usage.cost_usd)
+                ));
+            });
         }
+
+        let mcp_box_sub = comp.mcp_box.clone();
+        let mcp_rows_sub = comp.mcp_rows_box.clone();
+        let cost_lbl_sub = comp.cost_lbl.clone();
+        let last_usage_sub = comp.last_usage.clone();
+        let current_list_sub = comp.current_list.clone();
+        let status_page_sub = comp.status_page.clone();
+        let scroll_sub = comp.scroll.clone();
+        let command_panel_sub = comp.command_panel.clone();
+        let clear_btn_sub = clear_btn.clone();
+        let mut settings_rx = boxxy_preferences::SETTINGS_EVENT_BUS.subscribe();
+        glib::spawn_future_local(async move {
+            while let Ok(settings) = settings_rx.recv().await {
+                populate_mcp_rows(&mcp_box_sub, &mcp_rows_sub, &settings);
+                if settings.currency != boxxy_preferences::config::Currency::Usd {
+                    boxxy_sys_utils::runtime()
+                        .spawn(boxxy_sys_utils::fetch_exchange_rates())
+                        .await
+                        .ok();
+                }
+                let usage = last_usage_sub.get();
+                cost_lbl_sub.set_label(&format!(
+                    "{} spent",
+                    settings.currency.format_from_usd(usage.cost_usd)
+                ));
+                let has_items = current_list_sub
+                    .borrow()
+                    .as_ref()
+                    .and_then(|l| l.model())
+                    .is_some_and(|m| m.n_items() > 0);
+                let has_mcp = mcp_box_sub.is_visible();
+                status_page_sub.set_visible(!has_items);
+                scroll_sub.set_visible(has_items);
+                clear_btn_sub.set_visible(has_items);
+                command_panel_sub.set_visible(has_items || has_mcp);
+            }
+        });
+
+        comp
     }
 
     pub fn set_history_widget(
@@ -188,22 +330,52 @@ impl ClawSidebarComponent {
     }
 
     pub fn refresh_visibility(&self) {
-        if let Some(list) = self.current_list.borrow().as_ref() {
-            let has_items = list.model().map(|m| m.n_items() > 0).unwrap_or(false);
-            self.status_page.set_visible(!has_items);
-            self.scroll.set_visible(has_items);
-            self.command_panel.set_visible(has_items);
+        let has_items = self
+            .current_list
+            .borrow()
+            .as_ref()
+            .and_then(|l| l.model())
+            .is_some_and(|m| m.n_items() > 0);
+        let has_mcp = self.mcp_box.is_visible();
+        self.status_page.set_visible(!has_items);
+        self.scroll.set_visible(has_items);
+        self.clear_btn.set_visible(has_items);
+        self.command_panel.set_visible(has_items || has_mcp);
+    }
+
+    pub fn refresh_mcp_list(&self, settings: &boxxy_preferences::Settings) {
+        populate_mcp_rows(&self.mcp_box, &self.mcp_rows_box, settings);
+        self.refresh_visibility();
+    }
+
+    pub fn set_session_usage(&self, usage: SessionUsage) {
+        self.last_usage.set(usage);
+        let tokens = usage.display_tokens();
+        if tokens > 0 || usage.cost_usd > 0.0 {
+            let currency = boxxy_preferences::Settings::load().currency;
+            self.tokens_lbl
+                .set_label(&format!("{} tokens", format_number_with_commas(tokens)));
+            if let Some(pct) = usage.context_percent() {
+                self.percent_lbl.set_label(&format!("{pct}% used"));
+                self.percent_lbl.set_visible(true);
+            } else {
+                self.percent_lbl.set_visible(false);
+            }
+            self.cost_lbl
+                .set_label(&format!("{} spent", currency.format_from_usd(usage.cost_usd)));
+            self.context_box.set_visible(true);
+        } else {
+            self.context_box.set_visible(false);
         }
     }
 
     pub fn set_token_usage(&self, tokens: u64) {
-        if tokens > 0 {
-            self.usage_lbl
-                .set_label(&format!("Context: {tokens} tokens"));
-            self.usage_lbl.set_visible(true);
-        } else {
-            self.usage_lbl.set_visible(false);
-        }
+        self.set_session_usage(SessionUsage {
+            context_tokens: tokens,
+            context_window: None,
+            total_tokens: tokens,
+            cost_usd: 0.0,
+        });
     }
 
     pub fn update_tasks(&self, tasks: Vec<ScheduledTask>) {
@@ -243,6 +415,60 @@ impl Default for ClawSidebarComponent {
     fn default() -> Self {
         Self::new(|_| {}, || {})
     }
+}
+
+fn populate_mcp_rows(
+    mcp_box: &gtk::Box,
+    mcp_rows_box: &gtk::Box,
+    settings: &boxxy_preferences::Settings,
+) {
+    while let Some(child) = mcp_rows_box.first_child() {
+        mcp_rows_box.remove(&child);
+    }
+
+    let active_servers: Vec<_> = settings
+        .mcp_servers
+        .iter()
+        .filter(|s| s.enabled)
+        .collect();
+
+    if active_servers.is_empty() {
+        mcp_box.set_visible(false);
+        return;
+    }
+
+    for srv in active_servers {
+        let row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        row.set_hexpand(true);
+
+        let dot_lbl = gtk::Label::builder()
+            .label("•")
+            .css_classes(["caption", "success", "monospace"])
+            .halign(gtk::Align::Start)
+            .build();
+        row.append(&dot_lbl);
+
+        let name_lbl = gtk::Label::builder()
+            .label(&srv.name)
+            .css_classes(["caption", "heading", "monospace"])
+            .halign(gtk::Align::Start)
+            .hexpand(true)
+            .xalign(0.0)
+            .ellipsize(gtk::pango::EllipsizeMode::End)
+            .build();
+        row.append(&name_lbl);
+
+        let status_lbl = gtk::Label::builder()
+            .label("Connected")
+            .css_classes(["caption", "dim-label", "monospace"])
+            .halign(gtk::Align::End)
+            .build();
+        row.append(&status_lbl);
+
+        mcp_rows_box.append(&row);
+    }
+
+    mcp_box.set_visible(true);
 }
 
 fn add_task_row<F: Fn(uuid::Uuid) + 'static>(

@@ -1,6 +1,6 @@
 use super::{PaneInner, PendingDiagnosis};
 use crate::PaneOutput;
-use boxxy_claw_protocol::{AgentStatus, ClawEngineEvent, ClawMessage};
+use boxxy_claw_protocol::{AgentStatus, ClawEngineEvent, ClawMessage, SessionUsage};
 use boxxy_claw_widget::{
     ClawIndicator, MsgBarComponent, OverlayMode, TerminalOverlay, spawn_dispatch,
 };
@@ -20,7 +20,7 @@ pub(super) fn setup_claw(
     msg_bar: Rc<MsgBarComponent>,
     callback: std::sync::Arc<dyn Fn(PaneOutput) + Send + Sync + 'static>,
     spawn_intent: Option<String>,
-    total_tokens: Rc<Cell<u64>>,
+    session_usage: Rc<Cell<SessionUsage>>,
     is_pinned: Rc<Cell<bool>>,
     is_web_search: Rc<Cell<bool>>,
     session_status: Rc<RefCell<AgentStatus>>,
@@ -141,7 +141,7 @@ pub(super) fn setup_claw(
         is_pinned,
         is_web_search,
         agent_name,
-        total_tokens,
+        session_usage,
     );
 
     (claw_popover, pending_proactive_diagnosis)

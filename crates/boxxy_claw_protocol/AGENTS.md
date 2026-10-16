@@ -13,7 +13,8 @@ The crate is the only place where a definition appears in *both* the UI process 
 - **`PersistentClawRow`**: the row variants the sidebar renders and the DB stores (`User`, `Diagnosis`, `Suggested`, `ToolCall`, `ProcessList`, `SystemMessage`, `Command`). All agent-originated rows carry a `character_id` to ensure avatars and names survive session restarts. Round-trips through JSON + SQLite losslessly.
 - **`AgentStatus`**: `{Off, Sleep, Waiting, Working, Locking{resource}, Faulted{reason}}` — the live state of an agent, used by the msgbar indicator and the engine FSM.
 - **`ScheduledTask` + `TaskType` + `TaskStatus`**: the scheduled-reminders payload, including the cross-agent task registry shape.
-- **`UsageWrapper`**: serde-safe wrapper for `rig::completion::Usage`. `{input_tokens, output_tokens, reasoning_tokens, cached_input_tokens, cost_usd}` — no `total_tokens` field, sum at the call site.
+- **`UsageWrapper`**: serde-safe wrapper for `rig::completion::Usage`. `{input_tokens, output_tokens, reasoning_tokens, cached_input_tokens, cost_usd, context_tokens, context_window}` — provides `total_tokens()` and `effective_context_tokens()`.
+- **`SessionUsage`**: Copyable session-level context and cost state (`{context_tokens, context_window, total_tokens, cost_usd}`) with `context_percent()` and `record_turn()`, plus formatting helpers `format_number_with_commas` and `format_usd`.
 - **`ClawEnvironment` trait**: the async interface the reasoning engine calls for privileged operations (`exec_shell`, `read_file`, `list_processes`, `get_clipboard`, …). Implemented in-process on the daemon (`boxxy_agent::claw::ClawSubsystem`) and forwarded over D-Bus by `boxxy_terminal::agent_manager::DbusClawEnvironment`.
 - **Character claim types** (`characters.rs`):
   - `HolderKind { Pane }` — what kind of entity holds a character claim. Single variant today; the enum exists so future non-pane holders (headless, voice) can be added without a protocol break.

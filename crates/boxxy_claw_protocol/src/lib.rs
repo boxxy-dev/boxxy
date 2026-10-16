@@ -95,18 +95,122 @@ pub struct UsageWrapper {
     pub cached_input_tokens: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cost_usd: Option<f64>,
+    /// Tokens occupying the model's context window on the final completion call of a turn.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_tokens: Option<u64>,
+    /// Maximum context window of the model that served the turn, if known from the catalog.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_window: Option<u64>,
 }
 
 impl From<Usage> for UsageWrapper {
     fn from(u: Usage) -> Self {
+        let input = u.input_tokens.unwrap_or(0);
+        let output = u.output_tokens.unwrap_or(0);
+        let total = u.total_tokens.unwrap_or(input + output);
         Self {
-            input_tokens: u.input_tokens.unwrap_or(0),
-            output_tokens: u.output_tokens.unwrap_or(0),
+            input_tokens: input,
+            output_tokens: output,
             reasoning_tokens: u.reasoning_tokens.filter(|&r| r > 0),
             cached_input_tokens: u.cached_input_tokens.filter(|&c| c > 0),
             cost_usd: u.cost.map(|c| c.total),
+            context_tokens: (total > 0).then_some(total),
+            context_window: None,
         }
     }
+}
+
+impl UsageWrapper {
+    /// Total tokens across this turn (`input_tokens + output_tokens`).
+    #[must_use]
+    pub const fn total_tokens(&self) -> u64 {
+        self.input_tokens + self.output_tokens
+    }
+
+    /// Context window footprint of the final call in this turn, falling back to `total_tokens()`.
+    #[must_use]
+    pub fn effective_context_tokens(&self) -> u64 {
+        self.context_tokens.unwrap_or_else(|| self.total_tokens())
+    }
+}
+
+/// Live session-level context and cost metrics displayed in the Claw sidebar.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq)]
+pub struct SessionUsage {
+    /// Tokens in the current context window (from the latest completion request).
+    pub context_tokens: u64,
+    /// Maximum context window of the active model, if known from the catalog.
+    pub context_window: Option<u64>,
+    /// Cumulative tokens consumed across all turns in the session.
+    pub total_tokens: u64,
+    /// Cumulative cost in USD across all turns in the session.
+    pub cost_usd: f64,
+}
+
+impl SessionUsage {
+    /// Context window utilization percentage (rounded to nearest integer, matching OpenCode),
+    /// or `None` if the model's context window is unknown.
+    #[must_use]
+    pub fn context_percent(&self) -> Option<u64> {
+        let limit = self.context_window.filter(|&w| w > 0)?;
+        let tokens = self.display_tokens();
+        Some(((tokens as f64 / limit as f64) * 100.0).round() as u64)
+    }
+
+    /// Tokens to display in the Context header (`context_tokens` when non-zero, else `total_tokens`).
+    #[must_use]
+    pub const fn display_tokens(&self) -> u64 {
+        if self.context_tokens > 0 {
+            self.context_tokens
+        } else {
+            self.total_tokens
+        }
+    }
+
+    ///Applies a turn's `UsageWrapper` to this session accumulator.
+    pub fn record_turn(&mut self, usage: &UsageWrapper) {
+        let turn_total = usage.total_tokens();
+        self.total_tokens = self.total_tokens.saturating_add(turn_total);
+        let ctx = usage.effective_context_tokens();
+        if ctx > 0 {
+            self.context_tokens = ctx;
+        }
+        if let Some(window) = usage.context_window {
+            self.context_window = Some(window);
+        }
+        if let Some(cost) = usage.cost_usd
+            && cost.is_finite()
+            && cost > 0.0
+        {
+            self.cost_usd += cost;
+        }
+    }
+}
+
+/// Formats an integer with ASCII comma thousands separators (e.g. `25236` -> `"25,236"`).
+#[must_use]
+pub fn format_number_with_commas(n: u64) -> String {
+    let s = n.to_string();
+    let mut out = String::with_capacity(s.len() + s.len() / 3);
+    for (i, ch) in s.chars().enumerate() {
+        if i > 0 && (s.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(ch);
+    }
+    out
+}
+
+/// Formats a USD amount like OpenCode's `Intl.NumberFormat("en-US", { style: "currency", currency: "USD" })`
+/// (e.g. `0.05` -> `"$0.05"`).
+#[must_use]
+pub fn format_usd(amount: f64) -> String {
+    let safe = if amount.is_finite() && amount > 0.0 {
+        amount
+    } else {
+        0.0
+    };
+    format!("${safe:.2}")
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -265,6 +369,12 @@ pub enum ClawEngineEvent {
         pinned: bool,
         web_search_enabled: bool,
         total_tokens: u64,
+        #[serde(default)]
+        context_tokens: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        context_window: Option<u64>,
+        #[serde(default)]
+        total_cost_usd: f64,
     },
     AgentThinking {
         is_thinking: bool,
@@ -460,6 +570,8 @@ mod tests {
         assert_eq!(wrapper.reasoning_tokens, Some(20));
         assert_eq!(wrapper.cached_input_tokens, Some(100));
         assert_eq!(wrapper.cost_usd, None);
+        assert_eq!(wrapper.context_tokens, Some(200));
+        assert_eq!(wrapper.context_window, None);
 
         let empty_usage = Usage::default();
         let empty_wrapper = UsageWrapper::from(empty_usage);
@@ -467,5 +579,38 @@ mod tests {
         assert_eq!(empty_wrapper.output_tokens, 0);
         assert_eq!(empty_wrapper.reasoning_tokens, None);
         assert_eq!(empty_wrapper.cached_input_tokens, None);
+        assert_eq!(empty_wrapper.context_tokens, None);
+    }
+
+    #[test]
+    fn test_session_usage_and_formatting() {
+        assert_eq!(format_number_with_commas(0), "0");
+        assert_eq!(format_number_with_commas(999), "999");
+        assert_eq!(format_number_with_commas(1_000), "1,000");
+        assert_eq!(format_number_with_commas(25_236), "25,236");
+        assert_eq!(format_number_with_commas(1_048_576), "1,048,576");
+
+        assert_eq!(format_usd(0.0), "$0.00");
+        assert_eq!(format_usd(0.0512), "$0.05");
+        assert_eq!(format_usd(1.2), "$1.20");
+
+        let mut su = SessionUsage::default();
+        assert_eq!(su.context_percent(), None);
+
+        su.record_turn(&UsageWrapper {
+            input_tokens: 20_000,
+            output_tokens: 5_236,
+            reasoning_tokens: None,
+            cached_input_tokens: None,
+            cost_usd: Some(0.05),
+            context_tokens: Some(25_236),
+            context_window: Some(1_048_576),
+        });
+
+        assert_eq!(su.total_tokens, 25_236);
+        assert_eq!(su.context_tokens, 25_236);
+        assert_eq!(su.context_window, Some(1_048_576));
+        assert_eq!(su.context_percent(), Some(2));
+        assert!((su.cost_usd - 0.05).abs() < 1e-9);
     }
 }

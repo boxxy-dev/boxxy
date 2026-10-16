@@ -65,6 +65,104 @@ impl fmt::Display for ImagePreviewTrigger {
     }
 }
 
+// --- Currency ---
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "UPPERCASE")]
+pub enum Currency {
+    #[default]
+    #[serde(alias = "usd")]
+    Usd,
+    #[serde(alias = "eur")]
+    Eur,
+    #[serde(alias = "cny")]
+    Cny,
+    #[serde(alias = "inr")]
+    Inr,
+    #[serde(alias = "brl")]
+    Brl,
+}
+
+impl Currency {
+    #[must_use]
+    pub const fn all() -> &'static [Self] {
+        &[Self::Usd, Self::Eur, Self::Cny, Self::Inr, Self::Brl]
+    }
+
+    #[must_use]
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::Usd => "USD",
+            Self::Eur => "EUR",
+            Self::Cny => "CNY",
+            Self::Inr => "INR",
+            Self::Brl => "BRL",
+        }
+    }
+
+    #[must_use]
+    pub const fn symbol(self) -> &'static str {
+        match self {
+            Self::Usd => "$",
+            Self::Eur => "€",
+            Self::Cny => "¥",
+            Self::Inr => "₹",
+            Self::Brl => "R$",
+        }
+    }
+
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Usd => "US Dollar ($ - USD)",
+            Self::Eur => "Euro (€ - EUR)",
+            Self::Cny => "Chinese Yuan (¥ - CNY)",
+            Self::Inr => "Indian Rupee (₹ - INR)",
+            Self::Brl => "Brazilian Real (R$ - BRL)",
+        }
+    }
+
+    /// Static offline fallback conversion rate from 1.0 USD (sourced from ECB/Frankfurter Oct 2026).
+    #[must_use]
+    pub const fn fallback_rate_from_usd(self) -> f64 {
+        match self {
+            Self::Usd => 1.0,
+            Self::Eur => 0.89222,
+            Self::Cny => 6.691,
+            Self::Inr => 95.06,
+            Self::Brl => 5.057,
+        }
+    }
+
+    /// Returns the live exchange rate from 1.0 USD if cached in `boxxy-sys-utils`,
+    /// falling back to [`Self::fallback_rate_from_usd`].
+    #[must_use]
+    pub fn rate_from_usd(self) -> f64 {
+        if self == Self::Usd {
+            return 1.0;
+        }
+        boxxy_sys_utils::get_exchange_rate(self.code())
+            .unwrap_or_else(|| self.fallback_rate_from_usd())
+    }
+
+    /// Formats a USD amount converted into this currency (e.g. `"$0.05"`, `"€0.05"`, `"R$0.29"`).
+    #[must_use]
+    pub fn format_from_usd(self, usd_amount: f64) -> String {
+        let safe_usd = if usd_amount.is_finite() && usd_amount > 0.0 {
+            usd_amount
+        } else {
+            0.0
+        };
+        let converted = safe_usd * self.rate_from_usd();
+        format!("{}{converted:.2}", self.symbol())
+    }
+}
+
+impl fmt::Display for Currency {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.label())
+    }
+}
+
 // --- Color Scheme ---
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Default)]
 #[serde(rename_all = "lowercase")]
@@ -166,6 +264,8 @@ pub struct Settings {
     /// because the overlay normally shows only the latest turn.
     pub maintain_overlay_history: bool,
     pub enable_tips: bool,
+    #[serde(default)]
+    pub currency: Currency,
     pub claw_msgbar_shortcut: String,
     pub enable_telemetry: bool,
     pub install_id: Option<String>,
@@ -227,6 +327,7 @@ impl Default for Settings {
             colored_tabs: false,
             maintain_overlay_history: true,
             enable_tips: true,
+            currency: Currency::Usd,
             claw_msgbar_shortcut: "<Ctrl>slash".to_string(),
             enable_telemetry: true, // ON by default during Preview
             install_id: None,
@@ -571,8 +672,15 @@ mod tests {
         // Explicit true roundtrips cleanly
         let mut s = Settings::default();
         s.use_native_search = true;
+        s.currency = Currency::Eur;
         let json = serde_json::to_string(&s).unwrap();
         let decoded: Settings = serde_json::from_str(&json).unwrap();
         assert!(decoded.use_native_search);
+        assert_eq!(decoded.currency, Currency::Eur);
+        assert_eq!(Currency::Usd.format_from_usd(0.05), "$0.05");
+        assert_eq!(Currency::Eur.format_from_usd(1.0), "€0.89");
+        assert_eq!(Currency::Cny.format_from_usd(1.0), "¥6.69");
+        assert_eq!(Currency::Inr.format_from_usd(1.0), "₹95.06");
+        assert_eq!(Currency::Brl.format_from_usd(1.0), "R$5.06");
     }
 }

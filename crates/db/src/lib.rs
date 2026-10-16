@@ -132,6 +132,8 @@ impl Db {
                 pinned BOOLEAN DEFAULT false,
                 cleared_at DATETIME,
                 total_tokens BIGINT DEFAULT 0,
+                context_tokens BIGINT DEFAULT 0,
+                total_cost_usd REAL DEFAULT 0.0,
                 last_dream_at DATETIME,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
@@ -288,6 +290,14 @@ impl Db {
             .await;
 
         let _ = sqlx::query("ALTER TABLE memories ADD COLUMN confidence_score REAL DEFAULT 0.0")
+            .execute(&self.pool)
+            .await;
+
+        let _ = sqlx::query("ALTER TABLE sessions ADD COLUMN context_tokens BIGINT DEFAULT 0")
+            .execute(&self.pool)
+            .await;
+
+        let _ = sqlx::query("ALTER TABLE sessions ADD COLUMN total_cost_usd REAL DEFAULT 0.0")
             .execute(&self.pool)
             .await;
 

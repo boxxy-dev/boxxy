@@ -114,7 +114,7 @@ pub fn handle_terminal_event(
                     );
                     inner
                         .claw
-                        .set_token_usage(inner.tabs[pos].controller.get_total_tokens());
+                        .set_session_usage(inner.tabs[pos].controller.get_session_usage());
                 }
             }
             TerminalEventKind::FocusClawSidebar => {
@@ -133,12 +133,12 @@ pub fn handle_terminal_event(
                 inner.view_stack.set_visible_child_name("claw");
             }
             TerminalEventKind::ClawEvent(p_id, claw_event) => {
-                // Update token usage if this is the active tab/pane
-                let total_tokens = inner.tabs[pos].controller.get_total_tokens();
+                // Update session usage if this is the active tab/pane
+                let session_usage = inner.tabs[pos].controller.get_session_usage();
                 if let Some(page) = inner.tab_view.selected_page() {
                     let child = page.child();
                     if inner.tabs[pos].controller.widget() == &child {
-                        inner.claw.set_token_usage(total_tokens);
+                        inner.claw.set_session_usage(session_usage);
                     }
                 }
 

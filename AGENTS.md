@@ -3,7 +3,7 @@
 ## Observability & Debugging
 
 Boxxy provides deep, real-time visibility into LLM interactions for developers and power users:
-- **Cumulative Token Analytics:** Every session tracks input, output, and total tokens, persisted in `boxxy-db` and re-rendered during session resumption.
+- **Cumulative Token & Cost Analytics:** Every session tracks active context window tokens, model context window percentage (`% used`), cumulative tokens, and cumulative USD cost (`$ spent`) via `rig::catalog::Catalog::builtin()`, persisted in `boxxy-db` and re-rendered during session resumption.
 - **Dedicated Context Debugging:** To audit the exact payloads (System Prompt, History, Tools) sent to models, run the application with:
   ```bash
   BOXXY_DEBUG_CONTEXT=1 cargo run

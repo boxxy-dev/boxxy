@@ -51,7 +51,14 @@ impl ClawAgent {
         &self,
         prompt: P,
         history: Vec<Message>,
-    ) -> Result<(String, Option<rig::completion::Usage>, Option<Vec<Message>>), rig::completion::PromptError> {
+    ) -> Result<
+        (
+            String,
+            Option<boxxy_claw_protocol::UsageWrapper>,
+            Option<Vec<Message>>,
+        ),
+        rig::completion::PromptError,
+    > {
         let start = std::time::Instant::now();
 
         let hook = ModelContextHook {
@@ -86,6 +93,11 @@ impl ClawAgent {
                 let raw_output = res.output();
                 let output =
                     boxxy_ai_core::append_citations_to_output(&res.messages, &raw_output);
+                let context_tokens = boxxy_ai_core::extract_response_context_tokens(&res);
+                let context_window = boxxy_ai_core::model_context_window(&self.config.model);
+                let usage =
+                    boxxy_ai_core::enrich_usage_with_catalog_cost(res.usage, &self.config.model);
+
                 // Track Invocations
                 boxxy_telemetry::track_ai_invocation(&provider_name, &model_name, "claw").await;
 
@@ -103,7 +115,7 @@ impl ClawAgent {
                     &model_name,
                     &provider_name,
                     "input",
-                    res.usage.input_tokens.unwrap_or(0),
+                    usage.input_tokens.unwrap_or(0),
                     "claw",
                 )
                 .await;
@@ -111,7 +123,7 @@ impl ClawAgent {
                     &model_name,
                     &provider_name,
                     "output",
-                    res.usage.output_tokens.unwrap_or(0),
+                    usage.output_tokens.unwrap_or(0),
                     "claw",
                 )
                 .await;
@@ -128,7 +140,13 @@ impl ClawAgent {
                     );
                 }
 
-                Ok((output, Some(res.usage), Some(res.messages)))
+                let mut wrapper = boxxy_claw_protocol::UsageWrapper::from(usage);
+                if context_tokens > 0 {
+                    wrapper.context_tokens = Some(context_tokens);
+                }
+                wrapper.context_window = context_window;
+
+                Ok((output, Some(wrapper), Some(res.messages)))
             }
             Err(e) => {
                 let is_explicit = std::env::var("BOXXY_DEBUG_CONTEXT")

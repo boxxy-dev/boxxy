@@ -5,12 +5,19 @@ use tokio::runtime::Runtime;
 
 static RUNTIME: OnceLock<Runtime> = OnceLock::new();
 static LOCATION_CACHE: OnceLock<RwLock<Option<LocationContext>>> = OnceLock::new();
+static EXCHANGE_RATES_CACHE: OnceLock<RwLock< Option<std::collections::HashMap<String, f64>>>> =
+    OnceLock::new();
 
 #[derive(serde::Deserialize, Clone, Debug)]
 pub struct LocationContext {
     pub city: String,
     pub country: String,
     pub timezone: String,
+}
+
+#[derive(serde::Deserialize, Clone, Debug)]
+struct FrankfurterResponse {
+    rates: std::collections::HashMap<String, f64>,
 }
 
 /// Returns the active config root for Boxxy.
@@ -110,6 +117,54 @@ pub async fn fetch_location_context() {
 /// Returns the current location context from cache.
 pub fn get_location_context() -> Option<LocationContext> {
     LOCATION_CACHE.get()?.read().clone()
+}
+
+/// Fetches live USD exchange rates from the ECB/Frankfurter API (`api.frankfurter.dev`)
+/// in the background and caches them in memory for the lifetime of the process.
+///
+/// This is a mechanism-only helper: callers decide the policy (e.g. only invoking
+/// this when the user's selected currency is not USD).
+pub async fn fetch_exchange_rates() {
+    let cache = EXCHANGE_RATES_CACHE.get_or_init(|| RwLock::new(None));
+
+    // Don't re-fetch if already populated during this session.
+    if cache.read().is_some() {
+        return;
+    }
+
+    let Ok(client) = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+    else {
+        return;
+    };
+
+    let url = "https://api.frankfurter.dev/v1/latest?base=USD&symbols=EUR,CNY,INR,BRL";
+    let res = match client.get(url).send().await {
+        Ok(r) => r,
+        Err(e) => {
+            log::warn!("Failed to fetch live exchange rates: {e}");
+            return;
+        }
+    };
+
+    if let Ok(payload) = res.json::<FrankfurterResponse>().await
+        && !payload.rates.is_empty()
+    {
+        *cache.write() = Some(payload.rates);
+    }
+}
+
+/// Returns the cached live exchange rate from `1.0 USD` for the given ISO currency code
+/// (e.g. `"EUR"`, `"CNY"`, `"INR"`, `"BRL"`), or `None` if not yet fetched / offline.
+pub fn get_exchange_rate(code: &str) -> Option<f64> {
+    EXCHANGE_RATES_CACHE
+        .get()?
+        .read()
+        .as_ref()?
+        .get(code)
+        .copied()
+        .filter(|&r| r.is_finite() && r > 0.0)
 }
 
 #[cfg(test)]

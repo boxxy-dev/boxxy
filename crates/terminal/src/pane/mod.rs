@@ -95,7 +95,7 @@ pub struct TerminalPaneComponent {
     is_web_search: Rc<Cell<bool>>,
     agent_name: Rc<RefCell<String>>,
     msg_bar: Rc<MsgBarComponent>,
-    pub total_tokens: Rc<Cell<u64>>,
+    pub session_usage: Rc<Cell<SessionUsage>>,
     msgbar_shortcut: gtk::Shortcut,
 }
 
@@ -297,7 +297,7 @@ impl TerminalPaneComponent {
         let is_web_search = Rc::new(Cell::new(settings.web_search_on_by_default));
         let agent_name = Rc::new(RefCell::new(String::new()));
         let claw_indicator = ClawIndicator::new();
-        let total_tokens = Rc::new(Cell::new(0));
+        let session_usage = Rc::new(Cell::new(SessionUsage::default()));
 
         let (msg_bar, inner) = {
             let tx_msg = claw_sender.clone();
@@ -760,7 +760,7 @@ impl TerminalPaneComponent {
             msg_bar.clone(),
             callback.clone(),
             init.spawn_intent,
-            total_tokens.clone(),
+            session_usage.clone(),
             is_pinned.clone(),
             is_web_search.clone(),
             session_status.clone(),
@@ -838,7 +838,7 @@ impl TerminalPaneComponent {
             is_web_search,
             agent_name,
             msg_bar,
-            total_tokens,
+            session_usage,
             msgbar_shortcut,
         }
     }
@@ -847,8 +847,12 @@ impl TerminalPaneComponent {
         &self.widget
     }
 
+    pub fn get_session_usage(&self) -> SessionUsage {
+        self.session_usage.get()
+    }
+
     pub fn get_total_tokens(&self) -> u64 {
-        self.total_tokens.get()
+        self.session_usage.get().total_tokens
     }
 
     pub fn is_pinned(&self) -> bool {

@@ -1,4 +1,4 @@
-use crate::config::Settings;
+use crate::config::{Currency, Settings};
 use adw::prelude::*;
 use gtk4 as gtk;
 use libadwaita as adw;
@@ -13,6 +13,7 @@ pub fn setup_claw_ui_page(
     let maintain_overlay_history_switch: adw::SwitchRow =
         builder.object("maintain_overlay_history_switch").unwrap();
     let enable_tips_switch: adw::SwitchRow = builder.object("enable_tips_switch").unwrap();
+    let currency_combo: adw::ComboRow = builder.object("currency_combo").unwrap();
     let enable_timer_sounds_switch: adw::SwitchRow =
         builder.object("enable_timer_sounds_switch").unwrap();
     let enable_task_sounds_switch: adw::SwitchRow =
@@ -32,16 +33,54 @@ pub fn setup_claw_ui_page(
     // Guard to prevent re-entrancy panics during synchronous UI updates
     let is_updating = Rc::new(Cell::new(false));
 
+    // Configure searchable currency dropdown
+    let currency_labels: Vec<&str> = Currency::all().iter().map(|c| c.label()).collect();
+    let currency_list = gtk::StringList::new(&currency_labels);
+    let expr = gtk::PropertyExpression::new(
+        gtk::StringObject::static_type(),
+        None::<&gtk::Expression>,
+        "string",
+    );
+    currency_combo.set_expression(Some(&expr));
+    currency_combo.set_enable_search(true);
+    currency_combo.set_search_match_mode(gtk::StringFilterMatchMode::Substring);
+    currency_combo.set_model(Some(&currency_list));
+
     // Initial sync
     {
         let s = settings_rc.borrow();
         maintain_overlay_history_switch.set_active(s.maintain_overlay_history);
         enable_tips_switch.set_active(s.enable_tips);
+        let curr_idx = Currency::all()
+            .iter()
+            .position(|&c| c == s.currency)
+            .unwrap_or(0) as u32;
+        currency_combo.set_selected(curr_idx);
         enable_timer_sounds_switch.set_active(s.enable_timer_sounds);
         enable_task_sounds_switch.set_active(s.enable_task_sounds);
         hide_character_badge_switch.set_active(s.hide_character_badge);
         claw_msgbar_shortcut_entry.set_text(&s.claw_msgbar_shortcut);
     }
+
+    // Currency selection
+    let s_rc = settings_rc.clone();
+    let cb = on_change.clone();
+    let is_up = is_updating.clone();
+    currency_combo.connect_selected_notify(move |row: &adw::ComboRow| {
+        if is_up.get() {
+            return;
+        }
+        let idx = row.selected() as usize;
+        let Some(&currency) = Currency::all().get(idx) else {
+            return;
+        };
+        let mut s = s_rc.borrow_mut();
+        if s.currency != currency {
+            s.currency = currency;
+            s.save();
+            cb(s.clone());
+        }
+    });
 
     // Maintain-overlay-history toggle
     let s_rc = settings_rc.clone();
@@ -180,6 +219,7 @@ pub fn setup_claw_ui_page(
     let group_claw_ui_shortcuts_clone = group_claw_ui_shortcuts.clone();
     let maintain_overlay_history_switch_clone = maintain_overlay_history_switch.clone();
     let enable_tips_switch_clone = enable_tips_switch.clone();
+    let currency_combo_clone = currency_combo.clone();
     let enable_timer_sounds_switch_clone = enable_timer_sounds_switch.clone();
     let enable_task_sounds_switch_clone = enable_task_sounds_switch.clone();
     let hide_character_badge_switch_clone = hide_character_badge_switch.clone();
@@ -216,6 +256,11 @@ pub fn setup_claw_ui_page(
             "tips usage hints rotating help",
         );
 
+        let currency = match_row(
+            currency_combo_clone.upcast_ref(),
+            "cost currency spend usd eur cny inr brl dollar euro yuan rupee real brazil china india",
+        );
+
         let s_accel = match_row(
             claw_msgbar_shortcut_entry_clone.upcast_ref(),
             "shortcut accelerator message bar claw keybinding",
@@ -225,7 +270,7 @@ pub fn setup_claw_ui_page(
             "reset default claw ui shortcut keybinding",
         );
 
-        let behavior_visible = maintain || tips;
+        let behavior_visible = maintain || tips || currency;
         let sounds_visible = timer_sounds || task_sounds;
         let identity_visible = hide_badge;
         let shortcut_visible = s_accel || reset_shortcut;

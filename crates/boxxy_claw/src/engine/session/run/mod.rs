@@ -207,6 +207,8 @@ impl ClawSession {
                 let session_id_for_db = self.session_id.clone();
                 let cwd_for_db = ctx.current_dir.clone();
                 let total_tokens_for_db = state_lock.total_tokens as i64;
+                let context_tokens_for_db = state_lock.context_tokens as i64;
+                let total_cost_for_db = state_lock.total_cost_usd;
                 let settings = boxxy_preferences::Settings::load();
                 let model_id = settings
                     .claw_model
@@ -235,6 +237,8 @@ impl ClawSession {
                                 &model_id,
                                 pinned,
                                 total_tokens_for_db,
+                                context_tokens_for_db,
+                                total_cost_for_db,
                             )
                             .await;
                     }

@@ -30,7 +30,7 @@ The container component representing a single Tab.
 - **Ctrl+/ opens the full drawer** (not a floating bar). The shortcut refreshes the toggle visuals via `msg_bar.update_ui(…)` and calls `claw_popover.show_input_only(&agent_name)` — never hides.
 - **Seamless Background Images**: A single background image spans the entire tab across all transparent terminal splits.
 - **Agent Integration**: Routes terminal context (CWD, snapshots) and real-time foreground process changes (via D-Bus signals) to the Claw agent through the `ClawHost` trait. Tracking is lifecycle-managed so there's zero overhead when Claw is off. Supports **Full State Restoration** on session resumption (visual history, CWD sync, task re-hydration).
-- **Session Observability**: Each pane maintains an internal counter of cumulative token usage. The `dispatch` loop writes to it; `TerminalPaneComponent::get_total_tokens()` reads it; the sidebar renders it.
+- **Session Observability**: Each pane maintains an internal `SessionUsage` state cell (`context_tokens`, `context_window`, `total_tokens`, `cost_usd`). The `dispatch` loop writes to it; `TerminalPaneComponent::get_session_usage()` reads it; the sidebar renders it.
 - **Persistent-Shells Dispatch (Experimental)**: `PaneInner::drop` reads the live `pty_persistence` setting. Off → `signal_process_group(pid, SIGTERM)` kills the shell + its children. On → `set_persistence(pid, true)` + `detach(pid)` hands the shell to the daemon. Read at close-time so toggling takes effect on the very next close.
 - **Eviction Awareness**: The dispatch loop reacts to `ClawEngineEvent::Evicted` by flipping the indicator to grayscale and pushing a system message into the sidebar log.
 - **Modern Hyperlinks**: Native OSC 8 support with robust media previews.

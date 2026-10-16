@@ -127,9 +127,13 @@ impl ClawSession {
         );
 
         if !matches!(msg, ClawMessage::Initialize) {
-            let (web_search_enabled, char_id) = {
+            let (web_search_enabled, char_id, context_window) = {
                 let state_lock = self.state.lock().await;
-                (state_lock.web_search_enabled, state_lock.character_id.clone())
+                (
+                    state_lock.web_search_enabled,
+                    state_lock.character_id.clone(),
+                    boxxy_ai_core::model_context_window(&state_lock.current_claw_model),
+                )
             };
             let _ = self
                 .tx_ui
@@ -139,6 +143,9 @@ impl ClawSession {
                     pinned: self.pinned,
                     web_search_enabled,
                     total_tokens: self.total_tokens,
+                    context_tokens: self.context_tokens,
+                    context_window,
+                    total_cost_usd: self.total_cost_usd,
                 })
                 .await;
         }
@@ -338,13 +345,23 @@ impl ClawSession {
         // Always reload character duties & personality so edits to CHARACTER.toml apply on next turn
         self.session_context = load_session_context(&self.character_id);
 
-        let mut state_lock = self.state.lock().await;
-        if character_changed {
-            state_lock.character_id = self.character_id.clone();
-            state_lock.character_display_name = self.name.clone();
-            state_lock.agent_name = self.name.clone();
-        }
-        let web_search_enabled = state_lock.web_search_enabled;
+        let (total_tokens, context_tokens, total_cost_usd) = {
+            let mut state_lock = self.state.lock().await;
+            if character_changed {
+                state_lock.character_id = self.character_id.clone();
+                state_lock.character_display_name = self.name.clone();
+                state_lock.agent_name = self.name.clone();
+            }
+            self.total_tokens = state_lock.total_tokens;
+            self.context_tokens = state_lock.context_tokens;
+            self.total_cost_usd = state_lock.total_cost_usd;
+            (
+                state_lock.total_tokens,
+                state_lock.context_tokens,
+                state_lock.total_cost_usd,
+            )
+        };
+        let web_search_enabled = self.state.lock().await.web_search_enabled;
 
         let model_label = |m: &Option<_>| -> String {
             m.as_ref()
@@ -352,11 +369,14 @@ impl ClawSession {
                 .unwrap_or_else(|| "Default".to_string())
         };
 
-        let (old_claw, old_memory, old_search) = (
-            model_label(&state_lock.current_claw_model),
-            model_label(&state_lock.current_memory_model),
-            state_lock.current_search_label.clone(),
-        );
+        let (old_claw, old_memory, old_search) = {
+            let state_lock = self.state.lock().await;
+            (
+                model_label(&state_lock.current_claw_model),
+                model_label(&state_lock.current_memory_model),
+                state_lock.current_search_label.clone(),
+            )
+        };
 
         boxxy_preferences::Settings::reload();
 
@@ -367,9 +387,9 @@ impl ClawSession {
             crate::engine::agent_config::resolve_active_search_label(&after, web_search_enabled)
                 .to_string(),
         );
+        let new_context_window = boxxy_ai_core::model_context_window(&after.claw_model);
 
-        state_lock.persistent_agent = None;
-        drop(state_lock);
+        self.state.lock().await.persistent_agent = None;
 
         if character_changed {
             let db_guard = self.db.lock().await;
@@ -388,7 +408,10 @@ impl ClawSession {
                     character_id: self.character_id.clone(),
                     pinned: self.pinned,
                     web_search_enabled,
-                    total_tokens: self.total_tokens,
+                    total_tokens,
+                    context_tokens,
+                    context_window: new_context_window,
+                    total_cost_usd,
                 })
                 .await;
         }
@@ -402,6 +425,22 @@ impl ClawSession {
             state_lock.current_claw_model = after.claw_model.clone();
             state_lock.current_memory_model = after.memory_model.clone();
             state_lock.current_search_label = new_search;
+        }
+
+        if !character_changed && new_claw != old_claw {
+            let _ = self
+                .tx_ui
+                .send(ClawEngineEvent::Identity {
+                    agent_name: self.name.clone(),
+                    character_id: self.character_id.clone(),
+                    pinned: self.pinned,
+                    web_search_enabled,
+                    total_tokens,
+                    context_tokens,
+                    context_window: new_context_window,
+                    total_cost_usd,
+                })
+                .await;
         }
 
         let event = ClawEngineEvent::SystemMessage {
@@ -504,6 +543,12 @@ impl ClawSession {
 
                     self.pinned = session.pinned;
                     self.total_tokens = session.total_tokens as u64;
+                    self.context_tokens = if session.context_tokens > 0 {
+                        session.context_tokens as u64
+                    } else {
+                        self.total_tokens
+                    };
+                    self.total_cost_usd = session.total_cost_usd;
 
                     let mut state_lock = self.state.lock().await;
                     state_lock.session_id = session_id.clone();
@@ -512,6 +557,8 @@ impl ClawSession {
                     state_lock.character_display_name = self.name.clone();
                     state_lock.pinned = self.pinned;
                     state_lock.total_tokens = self.total_tokens;
+                    state_lock.context_tokens = self.context_tokens;
+                    state_lock.total_cost_usd = self.total_cost_usd;
 
                     if let Some(history_json) = session.history_json {
                         match serde_json::from_str::<Vec<Message>>(&history_json) {
@@ -613,6 +660,9 @@ impl ClawSession {
                         )
                         .await;
 
+                    let settings = boxxy_preferences::Settings::load();
+                    let context_window = boxxy_ai_core::model_context_window(&settings.claw_model);
+
                     let _ = self
                         .tx_ui
                         .send(ClawEngineEvent::Identity {
@@ -621,6 +671,9 @@ impl ClawSession {
                             pinned: self.pinned,
                             web_search_enabled,
                             total_tokens: self.total_tokens,
+                            context_tokens: self.context_tokens,
+                            context_window,
+                            total_cost_usd: self.total_cost_usd,
                         })
                         .await;
 
@@ -640,7 +693,6 @@ impl ClawSession {
                     let session_type = if self.pinned { "pinned" } else { "normal" };
                     boxxy_telemetry::track_session_resume(session_type).await;
 
-                    let settings = boxxy_preferences::Settings::load();
                     let banner = crate::engine::agent_config::format_session_models_banner(
                         &settings,
                         web_search_enabled,
@@ -695,11 +747,18 @@ impl ClawSession {
             .await;
         }
 
+        self.total_tokens = 0;
+        self.context_tokens = 0;
+        self.total_cost_usd = 0.0;
+
         let mut state_lock = self.state.lock().await;
         state_lock.agent_name = name.clone();
         state_lock.history.clear();
         state_lock.flushed_watermark = 0;
         state_lock.pending_tasks.clear();
+        state_lock.total_tokens = 0;
+        state_lock.context_tokens = 0;
+        state_lock.total_cost_usd = 0.0;
         drop(state_lock);
 
         let db_guard = self.db.lock().await;
@@ -733,6 +792,8 @@ impl ClawSession {
             )
             .await;
 
+        let settings = boxxy_preferences::Settings::load();
+        let context_window = boxxy_ai_core::model_context_window(&settings.claw_model);
         let web_search_enabled = self.state.lock().await.web_search_enabled;
         let _ = self
             .tx_ui
@@ -742,10 +803,12 @@ impl ClawSession {
                 pinned: false,
                 web_search_enabled,
                 total_tokens: 0,
+                context_tokens: 0,
+                context_window,
+                total_cost_usd: 0.0,
             })
             .await;
 
-        let settings = boxxy_preferences::Settings::load();
         let banner = crate::engine::agent_config::format_session_models_banner(
             &settings,
             web_search_enabled,

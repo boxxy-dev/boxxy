@@ -18,6 +18,10 @@ pub struct Session {
     pub model_id: Option<String>,
     pub pinned: bool,
     pub total_tokens: i64,
+    #[sqlx(default)]
+    pub context_tokens: i64,
+    #[sqlx(default)]
+    pub total_cost_usd: f64,
     pub last_dream_at: Option<String>,
     pub created_at: Option<String>,
     pub updated_at: Option<String>,

@@ -10,6 +10,7 @@ gtk4.workspace = true
 libadwaita.workspace = true
 boxxy-claw-protocol = { path = "../boxxy_claw_protocol" }
 boxxy-preferences = { path = "../preferences" }
+boxxy-sys-utils = { workspace = true }
 boxxy-viewer = { path = "../viewer" }
 boxxy-core-widgets = { path = "../core_widgets" }
 anyhow.workspace = true

@@ -202,6 +202,8 @@ pub fn settings_changed(inner: &mut AppWindowInner, settings: Settings) {
         .as_ref()
         .map(|p| if is_dark { p.dark } else { p.light });
 
+    inner.claw.refresh_mcp_list(&settings);
+
     for tab in &inner.tabs {
         tab.controller.update_settings(settings.clone(), variant);
         tab.controller.notify_settings_invalidated();

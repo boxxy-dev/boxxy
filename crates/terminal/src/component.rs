@@ -1,4 +1,4 @@
-use boxxy_claw_protocol::AgentStatus;
+use boxxy_claw_protocol::{AgentStatus, SessionUsage};
 use boxxy_preferences::Settings;
 use boxxy_themes::Palette;
 use gtk4 as gtk;
@@ -709,6 +709,15 @@ impl TerminalComponent {
             .unwrap()
             .controller
             .claw_history_widget()
+    }
+
+    pub fn get_session_usage(&self) -> SessionUsage {
+        let inner = self.inner.borrow();
+        inner
+            .panes
+            .get(&inner.active_pane_id)
+            .map(|p| p.controller.get_session_usage())
+            .unwrap_or_default()
     }
 
     pub fn get_total_tokens(&self) -> u64 {

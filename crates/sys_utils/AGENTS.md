@@ -9,6 +9,7 @@ Minimal, leaf-level utility crate for system environment detection and global as
 - **Environment detection:** `is_flatpak()`, `can_self_update()`
 - **Global async runtime:** `runtime()`
 - **Location context:** `LocationContext`, `fetch_location_context()`, `get_location_context()`
+- **Live currency exchange rates:** `fetch_exchange_rates()`, `get_exchange_rate(code)` (fetches ECB rates from `https://api.frankfurter.dev/v1/latest?base=USD&symbols=EUR,CNY,INR,BRL` and caches in `EXCHANGE_RATES_CACHE`)
 
 ## Design Constraints
 

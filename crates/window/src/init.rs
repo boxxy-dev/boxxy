@@ -1,4 +1,4 @@
-use boxxy_claw_protocol::AgentStatus;
+use boxxy_claw_protocol::{AgentStatus, SessionUsage};
 use boxxy_terminal::TerminalComponent;
 use libadwaita;
 use std::cell::RefCell;
@@ -63,6 +63,10 @@ impl TerminalController {
 
     pub fn claw_history_widget(&self) -> gtk4::ListView {
         self.controller.claw_history_widget()
+    }
+
+    pub fn get_session_usage(&self) -> SessionUsage {
+        self.controller.get_session_usage()
     }
 
     pub fn get_total_tokens(&self) -> u64 {

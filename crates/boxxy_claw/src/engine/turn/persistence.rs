@@ -51,6 +51,8 @@ pub async fn perform_persistence(ctx: PersistenceContext, state: Arc<Mutex<Sessi
     let cwd_for_db = ctx.cwd.clone();
     let pinned_for_db = state_lock.pinned;
     let total_tokens_for_db = state_lock.total_tokens as i64;
+    let context_tokens_for_db = state_lock.context_tokens as i64;
+    let total_cost_for_db = state_lock.total_cost_usd;
     let model_id = ctx
         .settings
         .claw_model
@@ -90,6 +92,8 @@ pub async fn perform_persistence(ctx: PersistenceContext, state: Arc<Mutex<Sessi
                     &model_copy,
                     pinned_for_db,
                     total_tokens_for_db,
+                    context_tokens_for_db,
+                    total_cost_for_db,
                 )
                 .await;
         });
@@ -199,6 +203,8 @@ mod tests {
                 "",
                 false,
                 0,
+                0,
+                0.0,
             )
             .await
             .unwrap();
@@ -233,6 +239,8 @@ mod tests {
                 "",
                 false,
                 100,
+                80,
+                0.01,
             )
             .await
             .unwrap();

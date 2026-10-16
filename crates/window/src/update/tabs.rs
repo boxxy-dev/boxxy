@@ -516,7 +516,9 @@ pub fn focus_active_terminal(inner: &mut AppWindowInner) {
                 tc.controller.is_pinned(),
                 tc.controller.is_web_search(),
             );
-            inner.claw.set_token_usage(tc.controller.get_total_tokens());
+            inner
+                .claw
+                .set_session_usage(tc.controller.get_session_usage());
         }
     }
     sync_header_title(inner);

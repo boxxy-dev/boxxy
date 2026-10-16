@@ -629,6 +629,13 @@
                                     <property name="subtitle">Display rotating usage hints in the Claw drawer while the agent is thinking.</property>
                                   </object>
                                 </child>
+                                <child>
+                                  <object class="AdwComboRow" id="currency_combo">
+                                    <property name="title" translatable="yes">Cost Currency</property>
+                                    <property name="subtitle" translatable="yes">Currency used to display session spend in the Claw sidebar.</property>
+                                    <property name="enable-search">True</property>
+                                  </object>
+                                </child>
                               </object>
                             </child>
 

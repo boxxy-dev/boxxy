@@ -81,6 +81,7 @@ impl<'a> Store<'a> {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn upsert_session_state(
         &self,
         id: &str,
@@ -95,11 +96,13 @@ impl<'a> Store<'a> {
         model_id: &str,
         pinned: bool,
         total_tokens: i64,
+        context_tokens: i64,
+        total_cost_usd: f64,
     ) -> Result<()> {
         sqlx::query(
             r"
-            INSERT INTO sessions (id, name, character_id, character_display_name, title, history_json, pending_tasks_json, agent_name, last_cwd, model_id, pinned, total_tokens, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            INSERT INTO sessions (id, name, character_id, character_display_name, title, history_json, pending_tasks_json, agent_name, last_cwd, model_id, pinned, total_tokens, context_tokens, total_cost_usd, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             ON CONFLICT(id) DO UPDATE SET
                 name = excluded.name,
                 character_id = excluded.character_id,
@@ -112,6 +115,8 @@ impl<'a> Store<'a> {
                 model_id = excluded.model_id,
                 pinned = excluded.pinned,
                 total_tokens = excluded.total_tokens,
+                context_tokens = excluded.context_tokens,
+                total_cost_usd = excluded.total_cost_usd,
                 updated_at = CURRENT_TIMESTAMP
             ",
         )
@@ -127,6 +132,8 @@ impl<'a> Store<'a> {
         .bind(model_id)
         .bind(pinned)
         .bind(total_tokens)
+        .bind(context_tokens)
+        .bind(total_cost_usd)
         .execute(self.pool)
         .await?;
         Ok(())
@@ -1066,6 +1073,8 @@ mod tests {
                 "model_1",
                 true, // pinned
                 42,
+                21,
+                0.05,
             )
             .await
             .unwrap();
@@ -1079,6 +1088,8 @@ mod tests {
         assert_eq!(updated.title.as_deref(), Some("Updated Title"));
         assert_eq!(updated.pinned, true);
         assert_eq!(updated.total_tokens, 42);
+        assert_eq!(updated.context_tokens, 21);
+        assert!((updated.total_cost_usd - 0.05).abs() < 1e-9);
 
         // UI History / Claw Events
         store
@@ -1357,6 +1368,8 @@ mod tests {
                 "",
                 false,
                 0,
+                0,
+                0.0,
             )
             .await
             .unwrap();

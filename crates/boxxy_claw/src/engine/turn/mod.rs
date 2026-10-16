@@ -7,7 +7,6 @@ use crate::engine::{
     ClawEngineEvent, ClawEnvironment, ClawMessage, dispatcher::extract_command_and_clean,
     persist_visual_event, session::SessionState,
 };
-use boxxy_claw_protocol::UsageWrapper;
 use boxxy_db::Db;
 use log::info;
 use std::sync::Arc;
@@ -266,8 +265,18 @@ pub fn spawn_turn(
                             .push(rig::message::Message::assistant(response.clone()));
                     }
 
-                    if let Some(usage) = usage {
-                        state_lock.total_tokens += usage.total_tokens.unwrap_or(0);
+                    if let Some(ref usage) = usage {
+                        state_lock.total_tokens += usage.total_tokens();
+                        let ctx = usage.effective_context_tokens();
+                        if ctx > 0 {
+                            state_lock.context_tokens = ctx;
+                        }
+                        if let Some(cost) = usage.cost_usd
+                            && cost.is_finite()
+                            && cost > 0.0
+                        {
+                            state_lock.total_cost_usd += cost;
+                        }
                     }
                 }
 
@@ -308,7 +317,7 @@ pub fn spawn_turn(
                         character_id: character_id.clone(),
                         command,
                         diagnosis: clean_diagnosis,
-                        usage: usage.map(UsageWrapper::from),
+                        usage,
                     };
                     state.lock().await.pending_inject_command = true;
                     persist_visual_event(
@@ -323,7 +332,7 @@ pub fn spawn_turn(
                         agent_name: agent_name.clone(),
                         character_id: character_id.clone(),
                         diagnosis: clean_diagnosis,
-                        usage: usage.map(UsageWrapper::from),
+                        usage,
                     };
                     persist_visual_event(
                         db.clone(),

@@ -12,17 +12,18 @@
 
 use crate::msgbar::MsgBarComponent;
 use crate::{ClawHost, ClawIndicator, OverlayMode, TerminalOverlay, state::OverlayState};
-use boxxy_claw_protocol::{AgentStatus, ClawEngineEvent, ClawMessage, UsageWrapper};
+use boxxy_claw_protocol::{AgentStatus, ClawEngineEvent, ClawMessage, SessionUsage, UsageWrapper};
 use gtk4 as gtk;
 use gtk4::gio;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-/// Per-turn token accounting: sum input+output since the protocol
-/// dropped its materialised `total_tokens` field.
+/// Apply a turn's `UsageWrapper` to the pane-held `SessionUsage` cell.
 #[inline]
-fn usage_total(u: &UsageWrapper) -> u64 {
-    u.input_tokens + u.output_tokens
+fn record_usage(cell: &Cell<SessionUsage>, u: &UsageWrapper) {
+    let mut su = cell.get();
+    su.record_turn(u);
+    cell.set(su);
 }
 
 /// Wire a `ClawEngineEvent` receiver into the drawer UI + sidebar log.
@@ -45,7 +46,7 @@ pub fn spawn_dispatch(
     is_pinned: Rc<Cell<bool>>,
     is_web_search: Rc<Cell<bool>>,
     agent_name: Rc<RefCell<String>>,
-    total_tokens: Rc<Cell<u64>>,
+    session_usage: Rc<Cell<SessionUsage>>,
 ) {
     let overlay_store = overlay.history_store();
 
@@ -109,7 +110,7 @@ pub fn spawn_dispatch(
                     usage,
                 } => {
                     if let Some(usage) = usage {
-                        total_tokens.set(total_tokens.get() + usage_total(usage));
+                        record_usage(&session_usage, usage);
                     }
                     boxxy_claw_ui::add_diagnosis_row(
                         &sidebar_store,
@@ -150,7 +151,7 @@ pub fn spawn_dispatch(
                     usage,
                 } => {
                     if let Some(usage) = usage {
-                        total_tokens.set(total_tokens.get() + usage_total(usage));
+                        record_usage(&session_usage, usage);
                     }
                     if !diagnosis.is_empty() {
                         boxxy_claw_ui::add_diagnosis_row(
@@ -206,7 +207,7 @@ pub fn spawn_dispatch(
                     usage,
                 } => {
                     if let Some(usage) = usage {
-                        total_tokens.set(total_tokens.get() + usage_total(usage));
+                        record_usage(&session_usage, usage);
                     }
                     boxxy_claw_ui::add_file_write_approval_row(
                         &sidebar_store,
@@ -250,7 +251,7 @@ pub fn spawn_dispatch(
                     usage,
                 } => {
                     if let Some(usage) = usage {
-                        total_tokens.set(total_tokens.get() + usage_total(usage));
+                        record_usage(&session_usage, usage);
                     }
                     boxxy_claw_ui::add_file_delete_approval_row(
                         &sidebar_store,
@@ -288,7 +289,7 @@ pub fn spawn_dispatch(
                     usage,
                 } => {
                     if let Some(usage) = usage {
-                        total_tokens.set(total_tokens.get() + usage_total(usage));
+                        record_usage(&session_usage, usage);
                     }
                     boxxy_claw_ui::add_kill_process_approval_row(
                         &sidebar_store,
@@ -331,7 +332,7 @@ pub fn spawn_dispatch(
                     usage,
                 } => {
                     if let Some(usage) = usage {
-                        total_tokens.set(total_tokens.get() + usage_total(usage));
+                        record_usage(&session_usage, usage);
                     }
 
                     boxxy_claw_ui::add_approval_row(
@@ -371,7 +372,7 @@ pub fn spawn_dispatch(
                     usage,
                 } => {
                     if let Some(usage) = usage {
-                        total_tokens.set(total_tokens.get() + usage_total(usage));
+                        record_usage(&session_usage, usage);
                     }
                     boxxy_claw_ui::add_clipboard_get_approval_row(
                         &sidebar_store,
@@ -406,7 +407,7 @@ pub fn spawn_dispatch(
                     usage,
                 } => {
                     if let Some(usage) = usage {
-                        total_tokens.set(total_tokens.get() + usage_total(usage));
+                        record_usage(&session_usage, usage);
                     }
                     boxxy_claw_ui::add_clipboard_set_approval_row(
                         &sidebar_store,
@@ -444,7 +445,7 @@ pub fn spawn_dispatch(
                     usage,
                 } => {
                     if let Some(usage) = usage {
-                        total_tokens.set(total_tokens.get() + usage_total(usage));
+                        record_usage(&session_usage, usage);
                     }
                     if !explanation.is_empty() {
                         boxxy_claw_ui::add_diagnosis_row(
@@ -496,6 +497,9 @@ pub fn spawn_dispatch(
                     pinned,
                     web_search_enabled,
                     total_tokens: total,
+                    context_tokens,
+                    context_window,
+                    total_cost_usd,
                 } => {
                     overlay.set_active_character(name, character_id);
                     indicator.set_identity(name, character_id);
@@ -506,7 +510,12 @@ pub fn spawn_dispatch(
                     let status = session_status.borrow().clone();
                     msg_bar.set_character(character_id);
                     msg_bar.update_ui(status, *pinned, *web_search_enabled);
-                    total_tokens.set(*total);
+                    session_usage.set(SessionUsage {
+                        context_tokens: *context_tokens,
+                        context_window: *context_window,
+                        total_tokens: *total,
+                        cost_usd: *total_cost_usd,
+                    });
                     if overlay.is_visible() {
                         overlay.grab_input_focus();
                     }
@@ -599,7 +608,7 @@ pub fn spawn_dispatch(
                     usage,
                 } => {
                     if let Some(usage) = usage {
-                        total_tokens.set(total_tokens.get() + usage_total(usage));
+                        record_usage(&session_usage, usage);
                     }
                     if tool_name == "list_processes" {
                         boxxy_claw_ui::add_process_list_row(

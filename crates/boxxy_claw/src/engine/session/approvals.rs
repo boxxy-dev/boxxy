@@ -85,6 +85,8 @@ mod pending_drain_tests {
             pinned: false,
             web_search_enabled: false,
             total_tokens: 0,
+            context_tokens: 0,
+            total_cost_usd: 0.0,
             tracked_pids: Arc::new(RwLock::new(HashSet::new())),
             api_keys: Arc::new(RwLock::new(HashMap::new())),
             ollama_url: Arc::new(RwLock::new(String::new())),

@@ -205,6 +205,92 @@ pub fn extract_native_search_summary(messages: &[Message]) -> Option<String> {
     Some(summary.trim_end().to_string())
 }
 
+/// Resolves a [`ModelProvider`]'s [`rig::catalog::ModelSpec`] from [`rig::catalog::Catalog::builtin`].
+///
+/// For `OpenRouter(slug)` (e.g. `"anthropic/claude-sonnet-5"`), this first checks the
+/// `"openrouter"` catalog vendor and then falls back to resolving `slug` directly as a
+/// `"vendor/model"` reference so custom OpenRouter slugs inherit the base vendor's
+/// context window and pricing when not listed separately under OpenRouter.
+#[must_use]
+pub fn resolve_catalog_spec(provider: &ModelProvider) -> Option<&'static rig::catalog::ModelSpec> {
+    let catalog = rig::catalog::Catalog::builtin();
+    match provider {
+        ModelProvider::Gemini(model, _) => catalog.resolve(&format!("gcp.gemini/{}", model.api_name())),
+        ModelProvider::Anthropic(model, _) => {
+            catalog.resolve(&format!("anthropic/{}", model.api_name()))
+        }
+        ModelProvider::OpenAi(model, _) => catalog.resolve(&format!("openai/{}", model.api_name())),
+        ModelProvider::DeepSeek(model) => catalog.resolve(&format!("deepseek/{}", model.api_name())),
+        ModelProvider::OpenRouter(slug) => {
+            let trimmed = slug.trim();
+            if trimmed.is_empty() {
+                return None;
+            }
+            catalog
+                .resolve(&format!("openrouter/{trimmed}"))
+                .or_else(|| catalog.resolve(trimmed))
+        }
+        ModelProvider::Ollama(name) => {
+            let trimmed = name.trim();
+            if trimmed.is_empty() {
+                return None;
+            }
+            catalog.resolve(&format!("ollama/{trimmed}"))
+        }
+    }
+}
+
+/// Returns the model's maximum context window in tokens from [`rig::catalog::Catalog::builtin`], if known.
+#[must_use]
+pub fn model_context_window(provider: &Option<ModelProvider>) -> Option<u64> {
+    let p = provider.as_ref()?;
+    resolve_catalog_spec(p)
+        .and_then(|spec| spec.context_window)
+        .map(u64::from)
+}
+
+/// Ensures `usage.cost` is populated when the model's pricing is known in [`rig::catalog::Catalog::builtin`]
+/// (e.g., for OpenRouter models resolved via base-vendor fallback). Local `Ollama` models are never priced.
+pub fn enrich_usage_with_catalog_cost(
+    mut usage: rig::completion::Usage,
+    provider: &Option<ModelProvider>,
+) -> rig::completion::Usage {
+    if usage.cost.is_some() {
+        return usage;
+    }
+    let Some(p) = provider.as_ref() else {
+        return usage;
+    };
+    if matches!(p, ModelProvider::Ollama(_)) {
+        return usage;
+    }
+    if let Some(spec) = resolve_catalog_spec(p)
+        && let Some(pricing) = &spec.pricing
+        && let Some(cost) = pricing.cost(&usage)
+    {
+        usage.cost = Some(cost);
+    }
+    usage
+}
+
+/// Extracts the context window token count from the final completion request of a `PromptResponse`,
+/// falling back to the aggregated `res.usage` when `completion_calls` is empty.
+#[must_use]
+pub fn extract_response_context_tokens(res: &rig::agent::PromptResponse) -> u64 {
+    if let Some(last_call) = res.completion_calls.last() {
+        let u = &last_call.usage;
+        let total = u
+            .total_tokens
+            .unwrap_or_else(|| u.input_tokens.unwrap_or(0) + u.output_tokens.unwrap_or(0));
+        if total > 0 {
+            return total;
+        }
+    }
+    let u = &res.usage;
+    u.total_tokens
+        .unwrap_or_else(|| u.input_tokens.unwrap_or(0) + u.output_tokens.unwrap_or(0))
+}
+
 pub fn build_provider_model(
     provider: &ModelProvider,
     creds: &AiCredentials,
@@ -370,6 +456,7 @@ impl AgentHook for ModelContextHook {
 pub struct BoxxyAgent {
     inner: BoxxyAgentInner,
     preamble: String,
+    provider: Option<ModelProvider>,
 }
 
 #[derive(Clone)]
@@ -420,7 +507,8 @@ impl BoxxyAgent {
                         output
                     );
                 }
-                Ok((output, Some(res.usage), Some(res.messages)))
+                let usage = enrich_usage_with_catalog_cost(res.usage, &self.provider);
+                Ok((output, Some(usage), Some(res.messages)))
             }
             Err(e) => {
                 if is_explicit {
@@ -471,7 +559,8 @@ impl BoxxyAgent {
                         output
                     );
                 }
-                Ok((output, Some(res.usage), Some(res.messages)))
+                let usage = enrich_usage_with_catalog_cost(res.usage, &self.provider);
+                Ok((output, Some(usage), Some(res.messages)))
             }
             Err(e) => {
                 if is_explicit {
@@ -525,6 +614,7 @@ pub fn create_agent_with_options(
                         .to_string(),
                 ),
                 preamble: system_prompt.to_string(),
+                provider: None,
             }
         }
     };
@@ -549,6 +639,7 @@ pub fn create_agent_with_options(
     BoxxyAgent {
         inner: BoxxyAgentInner::Ready(builder.build()),
         preamble: system_prompt.to_string(),
+        provider: Some(provider.clone()),
     }
 }
 
@@ -711,5 +802,39 @@ mod tests {
         let summary = extract_native_search_summary(&messages).expect("should detect search");
         assert!(summary.contains("Queries: rust 2024 edition"));
         assert!(summary.contains("https://example.com/rust-2024"));
+    }
+
+    #[test]
+    fn test_catalog_resolution_and_cost() {
+        let gemini = Some(ModelProvider::Gemini(GeminiModel::Flash3_8, None));
+        assert_eq!(model_context_window(&gemini), Some(1_048_576));
+
+        let anthropic = Some(ModelProvider::Anthropic(AnthropicModel::ClaudeSonnet5, None));
+        assert_eq!(model_context_window(&anthropic), Some(1_000_000));
+
+        let openai = Some(ModelProvider::OpenAi(OpenAiModel::Gpt6Astra, None));
+        assert_eq!(model_context_window(&openai), Some(1_050_000));
+
+        let deepseek = Some(ModelProvider::DeepSeek(DeepSeekModel::V4_1Flash));
+        assert_eq!(model_context_window(&deepseek), Some(1_000_000));
+
+        // OpenRouter with a base vendor/model slug resolves via fallback
+        let openrouter = Some(ModelProvider::OpenRouter(
+            "anthropic/claude-sonnet-5".to_string(),
+        ));
+        assert_eq!(model_context_window(&openrouter), Some(1_000_000));
+
+        let usage = rig::completion::Usage::new()
+            .input_tokens(100_000)
+            .output_tokens(10_000);
+        let priced = enrich_usage_with_catalog_cost(usage, &openrouter);
+        assert!(priced.cost.is_some());
+        // Claude Sonnet 5: $2/1M input ($0.20) + $10/1M output ($0.10) = $0.30
+        assert!((priced.cost.unwrap().total - 0.30).abs() < 1e-6);
+
+        // Local Ollama models are never priced
+        let ollama = Some(ModelProvider::Ollama("llama3.2:latest".to_string()));
+        let ollama_priced = enrich_usage_with_catalog_cost(usage, &ollama);
+        assert!(ollama_priced.cost.is_none());
     }
 }
