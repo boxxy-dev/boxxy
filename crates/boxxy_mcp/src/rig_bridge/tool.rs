@@ -182,11 +182,18 @@ pub fn format_call_tool_result(result: &CallToolResult) -> String {
             }
         }
         (Some(structured), false) if !structured.is_null() => {
+            // If `structured` is FastMCP's single-key `{"result": "<string>"}` wrapper around
+            // the exact same plain text block, return the plain text directly.
+            if let Some(inner_str) = unwrap_single_result_field(structured).and_then(|v| v.as_str())
+                && text_body.trim() == inner_str.trim()
+            {
+                return text_body;
+            }
+
             let structured_str =
                 serde_json::to_string(structured).unwrap_or_else(|_| structured.to_string());
-            // Avoid duplicating output when the server already serialized identical JSON into a text block.
-            if text_body.trim() == structured_str.trim() {
-                text_body
+            if is_redundant_text_representation(&rendered_blocks, &text_body, structured, &structured_str) {
+                structured_str
             } else {
                 serde_json::json!({
                     "content": text_body,
@@ -197,6 +204,68 @@ pub fn format_call_tool_result(result: &CallToolResult) -> String {
         }
         _ => text_body,
     }
+}
+
+fn unwrap_single_result_field(val: &serde_json::Value) -> Option<&serde_json::Value> {
+    let obj = val.as_object()?;
+    if obj.len() == 1 {
+        obj.get("result")
+    } else {
+        None
+    }
+}
+
+/// Checks whether the MCP `content` text blocks are merely a serialized mirror of `structured_content`
+/// (covering standard JSON objects, FastMCP pretty-printed JSON, and FastMCP `{"result": [...]}` list blocks).
+fn is_redundant_text_representation(
+    rendered_blocks: &[String],
+    text_body: &str,
+    structured: &serde_json::Value,
+    structured_str: &str,
+) -> bool {
+    let trimmed = text_body.trim();
+    if trimmed == structured_str.trim() {
+        return true;
+    }
+
+    if looks_like_json(trimmed)
+        && let Ok(parsed) = serde_json::from_str::<serde_json::Value>(trimmed)
+    {
+        if &parsed == structured {
+            return true;
+        }
+        if let Some(inner) = unwrap_single_result_field(structured)
+            && &parsed == inner
+        {
+            return true;
+        }
+    }
+
+    // FastMCP serializes `list[T]` return values as N separate TextContent JSON blocks
+    // alongside `structured_content: {"result": [item_0, item_1, ...]}`.
+    if let Some(serde_json::Value::Array(arr)) = unwrap_single_result_field(structured)
+        && arr.len() == rendered_blocks.len()
+        && !arr.is_empty()
+        && arr.iter().zip(rendered_blocks.iter()).all(|(expected, block_str)| {
+            let b = block_str.trim();
+            looks_like_json(b)
+                && serde_json::from_str::<serde_json::Value>(b)
+                    .ok()
+                    .as_ref()
+                    == Some(expected)
+        })
+    {
+        return true;
+    }
+
+    false
+}
+
+fn looks_like_json(s: &str) -> bool {
+    matches!(
+        s.as_bytes().first(),
+        Some(b'{' | b'[' | b'"' | b't' | b'f' | b'n' | b'-' | b'0'..=b'9')
+    )
 }
 
 fn format_content_block(block: &ContentBlock) -> String {
@@ -319,10 +388,33 @@ mod tests {
 
     #[test]
     fn format_call_tool_result_deduplicates_matching_text_and_structured() {
-        let payload = json!({"status": "ok"});
-        let mut res = CallToolResult::success(vec![ContentBlock::text(payload.to_string())]);
+        let payload = json!({"status": "ok", "items": [1, 2, 3]});
+        // Pretty-printed text block (as emitted by FastMCP) vs compact structured_content
+        let pretty_text = serde_json::to_string_pretty(&payload).unwrap();
+        let mut res = CallToolResult::success(vec![ContentBlock::text(pretty_text)]);
         res.structured_content = Some(payload);
-        assert_eq!(format_call_tool_result(&res), r#"{"status":"ok"}"#);
+        assert_eq!(
+            format_call_tool_result(&res),
+            r#"{"status":"ok","items":[1,2,3]}"#
+        );
+
+        // FastMCP `list[dict]` return shape: N pretty-printed TextContent blocks + `{"result": [...]}`
+        let item1 = json!({"a": 1});
+        let item2 = json!({"b": 2});
+        let mut list_res = CallToolResult::success(vec![
+            ContentBlock::text(serde_json::to_string_pretty(&item1).unwrap()),
+            ContentBlock::text(serde_json::to_string_pretty(&item2).unwrap()),
+        ]);
+        list_res.structured_content = Some(json!({"result": [item1, item2]}));
+        assert_eq!(
+            format_call_tool_result(&list_res),
+            r#"{"result":[{"a":1},{"b":2}]}"#
+        );
+
+        // FastMCP `str` return shape: plain text block + `{"result": "hello"}`
+        let mut str_res = CallToolResult::success(vec![ContentBlock::text("hello world")]);
+        str_res.structured_content = Some(json!({"result": "hello world"}));
+        assert_eq!(format_call_tool_result(&str_res), "hello world");
     }
 
     #[tokio::test]
