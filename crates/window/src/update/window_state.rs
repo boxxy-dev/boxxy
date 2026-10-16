@@ -322,11 +322,17 @@ pub fn show_ai_chat(inner: &mut AppWindowInner) {
 }
 
 pub fn show_claw_sidebar(inner: &mut AppWindowInner) {
-    if !inner.sidebar_visible {
-        inner.sidebar_overlay.set_visible(true);
-        inner.split_view.set_show_sidebar(true);
+    if inner.split_view.shows_sidebar()
+        && inner.view_stack.visible_child_name().as_deref() == Some("claw")
+    {
+        inner.split_view.set_show_sidebar(false);
+    } else {
+        if !inner.sidebar_visible {
+            inner.sidebar_overlay.set_visible(true);
+            inner.split_view.set_show_sidebar(true);
+        }
+        inner.view_stack.set_visible_child_name("claw");
     }
-    inner.view_stack.set_visible_child_name("claw");
 }
 
 pub fn show_bookmarks_sidebar(inner: &mut AppWindowInner) {

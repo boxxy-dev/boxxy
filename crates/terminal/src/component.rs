@@ -701,16 +701,6 @@ impl TerminalComponent {
         }
     }
 
-    pub fn claw_history_widget(&self) -> gtk::ListView {
-        let inner = self.inner.borrow();
-        inner
-            .panes
-            .get(&inner.active_pane_id)
-            .unwrap()
-            .controller
-            .claw_history_widget()
-    }
-
     pub fn get_session_usage(&self) -> SessionUsage {
         let inner = self.inner.borrow();
         inner

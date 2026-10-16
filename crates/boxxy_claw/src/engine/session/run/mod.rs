@@ -380,11 +380,6 @@ impl ClawSession {
                     "Soft-clearing Claw Session visual history for pane {}...",
                     self.pane_id
                 );
-                let db_guard = self.db.lock().await;
-                if let Some(db) = &*db_guard {
-                    let store = boxxy_db::store::Store::new(db.pool());
-                    let _ = store.mark_session_cleared(&self.session_id).await;
-                }
                 self.clear_ui_history().await;
             }
             ClawMessage::CancelTask { task_id } => {

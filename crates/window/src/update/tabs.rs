@@ -510,8 +510,7 @@ pub fn focus_active_terminal(inner: &mut AppWindowInner) {
 
             let _tab_is_sleep = tc.controller.is_sleep();
 
-            inner.claw.set_history_widget(
-                &tc.controller.claw_history_widget(),
+            inner.claw.set_pane_state(
                 &tc.controller.agent_name(),
                 tc.controller.is_pinned(),
                 tc.controller.is_web_search(),

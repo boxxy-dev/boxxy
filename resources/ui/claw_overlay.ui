@@ -184,6 +184,16 @@
                     </child>
                   </object>
                 </child>
+                <child type="end">
+                  <object class="GtkButton" id="clear_history_btn">
+                    <property name="icon-name">boxxy-edit-clear-symbolic</property>
+                    <property name="tooltip-text">Clear History</property>
+                    <property name="halign">end</property>
+                    <style>
+                      <class name="flat"/>
+                    </style>
+                  </object>
+                </child>
               </object>
             </child>
           </object>

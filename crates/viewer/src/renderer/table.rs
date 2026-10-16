@@ -29,6 +29,7 @@ impl BlockRenderer for TableRenderer {
         let frame = gtk::Frame::new(None);
         frame.add_css_class("view");
         frame.add_css_class("viewer-table-frame");
+        frame.set_overflow(gtk::Overflow::Hidden);
         frame.set_margin_bottom(12);
         frame.set_hexpand(true);
 

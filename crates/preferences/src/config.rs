@@ -251,7 +251,6 @@ pub struct Settings {
     pub enable_web_tools: bool,
     pub enable_clipboard_tools: bool,
     pub enable_web_search: bool,
-    #[serde(default)]
     pub use_native_search: bool,
     pub enable_os_context: bool,
     pub enable_progress_bar: bool,
@@ -319,7 +318,7 @@ impl Default for Settings {
             enable_web_tools: true,
             enable_clipboard_tools: true,
             enable_web_search: true,
-            use_native_search: false,
+            use_native_search: true,
             enable_os_context: true,
             enable_progress_bar: true,
             enable_timer_sounds: true,
@@ -665,17 +664,18 @@ mod tests {
 
     #[test]
     fn settings_use_native_search_roundtrip_and_default() {
-        // Legacy JSON without `use_native_search` defaults to false
+        // Legacy JSON without `use_native_search` defaults to true
         let legacy: Settings = serde_json::from_str("{}").unwrap();
-        assert!(!legacy.use_native_search);
+        assert!(legacy.use_native_search);
 
-        // Explicit true roundtrips cleanly
+        // Explicit false and true roundtrip cleanly
         let mut s = Settings::default();
-        s.use_native_search = true;
+        assert!(s.use_native_search);
+        s.use_native_search = false;
         s.currency = Currency::Eur;
         let json = serde_json::to_string(&s).unwrap();
         let decoded: Settings = serde_json::from_str(&json).unwrap();
-        assert!(decoded.use_native_search);
+        assert!(!decoded.use_native_search);
         assert_eq!(decoded.currency, Currency::Eur);
         assert_eq!(Currency::Usd.format_from_usd(0.05), "$0.05");
         assert_eq!(Currency::Eur.format_from_usd(1.0), "€0.89");

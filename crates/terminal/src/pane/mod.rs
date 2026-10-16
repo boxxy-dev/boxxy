@@ -14,7 +14,6 @@ use crate::is_flatpak;
 use crate::{PaneInit, PaneOutput};
 
 use boxxy_claw_protocol::*;
-use boxxy_claw_ui;
 use boxxy_claw_widget::ClawIndicator;
 use boxxy_claw_widget::{OverlayMode, TerminalOverlay};
 
@@ -87,7 +86,6 @@ pub struct TerminalPaneComponent {
 
     pending_sleep_diagnosis: PendingDiagnosis,
     claw_sender: async_channel::Sender<ClawMessage>,
-    pub claw_message_list: gtk::ListView,
 
     pub is_claw_active: Rc<Cell<bool>>,
     pub session_status: Rc<RefCell<AgentStatus>>,
@@ -287,7 +285,6 @@ impl TerminalPaneComponent {
             });
         });
 
-        let (claw_message_list, claw_list_store) = boxxy_claw_ui::create_claw_message_list();
         let claw_rx = claw_rx_from_agent;
         let claw_sender = tx_to_agent;
 
@@ -309,6 +306,10 @@ impl TerminalPaneComponent {
             let id_toggle = id.clone();
             let cb_sleep = callback.clone();
             let id_sleep = id.clone();
+            let cb_pin = callback.clone();
+            let id_pin = id.clone();
+            let cb_web_search = callback.clone();
+            let id_web_search = id.clone();
 
             // We need a weak ref for the msg_bar callbacks, but inner isn't created yet.
             // We'll use a RefCell<Option<Weak<RefCell<PaneInner>>>> that we fill later.
@@ -362,9 +363,6 @@ impl TerminalPaneComponent {
                             .is_some_and(|s| !s.is_empty());
                         if is_resume_cmd {
                             inner_arc.borrow().msg_bar.entry.grab_focus();
-                        } else {
-                            pane.set_focusable(true);
-                            pane.grab_focus();
                         }
 
                         if !is_claw_active_for_msg.get() {
@@ -630,6 +628,10 @@ impl TerminalPaneComponent {
                                 is_web_search_for_pin.get(),
                             );
                         }
+                        cb_pin(PaneOutput::ClawEvent(
+                            id_pin.clone(),
+                            ClawEngineEvent::PinStatusChanged(pinned),
+                        ));
                         let tx = tx_pin_toggle.clone();
                         glib::spawn_future_local(async move {
                             let _ = tx.send(ClawMessage::TogglePin(pinned)).await;
@@ -650,6 +652,10 @@ impl TerminalPaneComponent {
                                 enabled,
                             );
                         }
+                        cb_web_search(PaneOutput::ClawEvent(
+                            id_web_search.clone(),
+                            ClawEngineEvent::WebSearchStatusChanged(enabled),
+                        ));
                         let tx = tx_web_search_toggle.clone();
                         glib::spawn_future_local(async move {
                             let _ = tx.send(ClawMessage::ToggleWebSearch(enabled)).await;
@@ -756,7 +762,6 @@ impl TerminalPaneComponent {
             claw_sender.clone(),
             claw_sender_clone,
             claw_rx,
-            claw_list_store,
             msg_bar.clone(),
             callback.clone(),
             init.spawn_intent,
@@ -831,7 +836,6 @@ impl TerminalPaneComponent {
             claw_indicator,
             pending_sleep_diagnosis,
             claw_sender,
-            claw_message_list,
             is_claw_active,
             session_status,
             is_pinned,
@@ -865,10 +869,6 @@ impl TerminalPaneComponent {
 
     pub fn agent_name(&self) -> String {
         self.agent_name.borrow().clone()
-    }
-
-    pub fn claw_history_widget(&self) -> gtk::ListView {
-        self.claw_message_list.clone()
     }
 
     pub fn send_text(&self, text: &str) {
@@ -1215,10 +1215,7 @@ impl TerminalPaneComponent {
     }
 
     pub fn soft_clear_claw_history(&self) {
-        let tx = self.claw_sender.clone();
-        glib::spawn_future_local(async move {
-            let _ = tx.send(ClawMessage::SoftClearHistory).await;
-        });
+        self.claw_popover.clear_visible_history();
     }
 
     pub fn notify_settings_invalidated(&self) {

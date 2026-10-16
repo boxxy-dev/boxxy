@@ -9,6 +9,7 @@ license.workspace = true
 gtk4.workspace = true
 libadwaita.workspace = true
 boxxy-claw-protocol = { path = "../boxxy_claw_protocol" }
+boxxy-db = { path = "../db" }
 boxxy-preferences = { path = "../preferences" }
 boxxy-sys-utils = { workspace = true }
 boxxy-viewer = { path = "../viewer" }

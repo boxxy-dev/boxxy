@@ -1,5 +1,4 @@
 use gtk4::prelude::*;
-use libadwaita::prelude::*;
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -106,8 +105,7 @@ pub fn handle_terminal_event(
                 if Some(&page) == inner.tab_view.selected_page().as_ref() {
                     inner.claw_active = is_claw_active;
 
-                    inner.claw.set_history_widget(
-                        &inner.tabs[pos].controller.claw_history_widget(),
+                    inner.claw.set_pane_state(
                         &inner.tabs[pos].controller.agent_name(),
                         inner.tabs[pos].controller.is_pinned(),
                         inner.tabs[pos].controller.is_web_search(),
@@ -118,19 +116,7 @@ pub fn handle_terminal_event(
                 }
             }
             TerminalEventKind::FocusClawSidebar => {
-                if !inner.sidebar_visible {
-                    inner.sidebar_visible = true;
-                    inner.app_state.sidebar_visible = true;
-                    inner.app_state.save();
-                    if let Some(split) = inner
-                        .window
-                        .content()
-                        .and_then(|c| c.downcast::<libadwaita::OverlaySplitView>().ok())
-                    {
-                        split.set_show_sidebar(true);
-                    }
-                }
-                inner.view_stack.set_visible_child_name("claw");
+                super::window_state::show_claw_sidebar(inner);
             }
             TerminalEventKind::ClawEvent(p_id, claw_event) => {
                 // Update session usage if this is the active tab/pane
@@ -160,8 +146,7 @@ pub fn handle_terminal_event(
                         let active = inner.tabs[pos].controller.is_claw_active();
                         let _sleep = inner.tabs[pos].controller.is_sleep();
                         inner.claw_active = active;
-                        inner.claw.set_history_widget(
-                            &inner.tabs[pos].controller.claw_history_widget(),
+                        inner.claw.set_pane_state(
                             &agent_name,
                             pinned,
                             web_search_enabled,
@@ -171,8 +156,7 @@ pub fn handle_terminal_event(
                         if let Some(page) = inner.tab_view.selected_page()
                             && inner.tabs[pos].controller.widget() == &page.child() =>
                     {
-                        inner.claw.set_history_widget(
-                            &inner.tabs[pos].controller.claw_history_widget(),
+                        inner.claw.set_pane_state(
                             &inner.tabs[pos].controller.agent_name(),
                             pinned,
                             inner.tabs[pos].controller.is_web_search(),
@@ -182,8 +166,7 @@ pub fn handle_terminal_event(
                         if let Some(page) = inner.tab_view.selected_page()
                             && inner.tabs[pos].controller.widget() == &page.child() =>
                     {
-                        inner.claw.set_history_widget(
-                            &inner.tabs[pos].controller.claw_history_widget(),
+                        inner.claw.set_pane_state(
                             &inner.tabs[pos].controller.agent_name(),
                             inner.tabs[pos].controller.is_pinned(),
                             enabled,

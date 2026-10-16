@@ -799,7 +799,6 @@ flowbox.viewer-gallery > flowboxchild {
 /* --- Smart Viewer: GFM Tables --- */
 frame.viewer-table-frame {
     border-radius: 8px;
-    overflow: hidden;
 }
 
 .viewer-table-cell {

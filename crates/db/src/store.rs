@@ -190,12 +190,10 @@ impl<'a> Store<'a> {
     pub async fn get_claw_events(&self, session_id: &str) -> Result<Vec<String>> {
         let records: Vec<(String,)> = sqlx::query_as(
             r"
-            SELECT e.event_json 
-            FROM claw_events e
-            JOIN sessions s ON e.session_id = s.id
-            WHERE e.session_id = ? 
-              AND (s.cleared_at IS NULL OR e.created_at > s.cleared_at)
-            ORDER BY e.id ASC
+            SELECT event_json 
+            FROM claw_events
+            WHERE session_id = ?
+            ORDER BY id ASC
             ",
         )
         .bind(session_id)
@@ -746,6 +744,13 @@ impl<'a> Store<'a> {
         Ok(records)
     }
 
+    pub async fn count_memories(&self) -> Result<i64> {
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM memories")
+            .fetch_one(self.pool)
+            .await?;
+        Ok(count)
+    }
+
     pub async fn delete_memory(&self, key: &str, project_path: Option<&str>) -> Result<()> {
         let path = project_path.unwrap_or("global");
         sqlx::query("DELETE FROM memories WHERE key = ? AND project_path = ?")
@@ -857,6 +862,7 @@ mod tests {
             .unwrap()
             .expect("Memory should exist");
         assert_eq!(memory.key, key);
+        assert_eq!(store.count_memories().await.unwrap(), 1);
         assert_eq!(memory.project_path, project_path);
         assert_eq!(memory.content, content);
         assert_eq!(memory.category.as_deref(), category);
@@ -1124,11 +1130,8 @@ mod tests {
         assert_eq!(recent[0].id, session_id);
         assert_eq!(recent[0].message_count, 2);
 
-        // Mark cleared
+        // Mark cleared — resuming the session should still return the FULL history
         store.mark_session_cleared(session_id).await.unwrap();
-
-        // Sleep to ensure the timestamp advances before inserting the next event
-        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
 
         // add event after clear
         store
@@ -1136,8 +1139,10 @@ mod tests {
             .await
             .unwrap();
         let events_after = store.get_claw_events(session_id).await.unwrap();
-        assert_eq!(events_after.len(), 1);
-        assert_eq!(events_after[0], "{\"event\": 3}");
+        assert_eq!(events_after.len(), 3);
+        assert_eq!(events_after[0], "{\"event\": 1}");
+        assert_eq!(events_after[1], "{\"event\": 2}");
+        assert_eq!(events_after[2], "{\"event\": 3}");
 
         // Clear all events
         store.clear_claw_events(session_id).await.unwrap();

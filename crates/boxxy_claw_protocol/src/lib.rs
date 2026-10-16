@@ -145,6 +145,9 @@ pub struct SessionUsage {
     pub total_tokens: u64,
     /// Cumulative cost in USD across all turns in the session.
     pub cost_usd: f64,
+    /// Number of tool calls executed in the session.
+    #[serde(default)]
+    pub tools_used: u64,
 }
 
 impl SessionUsage {

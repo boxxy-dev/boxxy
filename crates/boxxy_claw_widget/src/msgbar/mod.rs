@@ -466,6 +466,13 @@ impl MsgBarComponent {
     }
 
     pub fn set_input_sensitive(&self, sensitive: bool) {
+        if !sensitive && (self.entry.has_focus() || self.entry.focus_child().is_some()) {
+            // Move focus out of GtkEntry/GtkText before disabling sensitivity so
+            // GtkText receives a proper focus-out event and doesn't emit a GTK warning.
+            if let Some(root) = self.entry.root() {
+                gtk::prelude::RootExt::set_focus(&root, None::<&gtk::Widget>);
+            }
+        }
         self.entry.set_sensitive(sensitive);
         self.send_btn.set_sensitive(sensitive);
     }

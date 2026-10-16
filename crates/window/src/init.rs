@@ -61,10 +61,6 @@ impl TerminalController {
         self.controller.agent_name()
     }
 
-    pub fn claw_history_widget(&self) -> gtk4::ListView {
-        self.controller.claw_history_widget()
-    }
-
     pub fn get_session_usage(&self) -> SessionUsage {
         self.controller.get_session_usage()
     }

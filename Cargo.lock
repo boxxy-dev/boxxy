@@ -1021,6 +1021,7 @@ dependencies = [
  "anyhow",
  "boxxy-claw-protocol",
  "boxxy-core-widgets",
+ "boxxy-db",
  "boxxy-preferences",
  "boxxy-sys-utils",
  "boxxy-viewer",

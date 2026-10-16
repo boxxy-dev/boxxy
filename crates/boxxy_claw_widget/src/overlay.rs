@@ -27,6 +27,7 @@ pub struct TerminalOverlay {
     history_scroll: gtk::ScrolledWindow,
     history_list: gtk::ListView,
     history_store: gio::ListStore,
+    full_history_store: gio::ListStore,
     diagnosis_viewer: StructuredViewer,
     command_view: gtk::TextView,
     template_entry: gtk::Entry,
@@ -36,6 +37,7 @@ pub struct TerminalOverlay {
     ok_btn: gtk::Button,
     approve_file_btn: gtk::Button,
     inspect_btn: gtk::Button,
+    clear_history_btn: gtk::Button,
     command_frame: gtk::Frame,
     template_box: gtk::Box,
     file_action_box: gtk::Box,
@@ -79,6 +81,7 @@ impl TerminalOverlay {
         let reject_file_btn: gtk::Button = builder.object("reject_file_btn").unwrap();
         let approve_file_btn: gtk::Button = builder.object("approve_file_btn").unwrap();
         let inspect_btn: gtk::Button = builder.object("inspect_btn").unwrap();
+        let clear_history_btn: gtk::Button = builder.object("clear_history_btn").unwrap();
 
         let command_frame: gtk::Frame = builder.object("command_frame").unwrap();
         let template_box: gtk::Box = builder.object("template_box").unwrap();
@@ -116,6 +119,31 @@ impl TerminalOverlay {
         let (history_list, history_store) = boxxy_claw_ui::create_claw_message_list();
         history_scroll.set_child(Some(&history_list));
 
+        let full_history_store = gio::ListStore::new::<boxxy_claw_ui::row_object::ClawRowObject>();
+        let history_store_for_sync = history_store.clone();
+        let diag_viewer_for_sync = diagnosis_viewer.clone();
+        full_history_store.connect_items_changed(move |store, pos, removed, added| {
+            if removed > 0 && added == 0 && store.n_items() == 0 {
+                history_store_for_sync.remove_all();
+                diag_viewer_for_sync.set_content("");
+                return;
+            }
+            if added > 0 {
+                let mut batch = Vec::with_capacity(added as usize);
+                for i in pos..(pos + added) {
+                    if let Some(obj) = store
+                        .item(i)
+                        .and_downcast::<boxxy_claw_ui::row_object::ClawRowObject>()
+                    {
+                        batch.push(obj);
+                    }
+                }
+                if !batch.is_empty() {
+                    history_store_for_sync.extend_from_slice(&batch);
+                }
+            }
+        });
+
         // Improved auto-scroll logic (Fractal-style).
         // 1. On items_changed: arm a "sticky to bottom" flag for 1200ms.
         // 2. On value_changed: if the user scrolls up manually, clear the sticky flag.
@@ -128,6 +156,7 @@ impl TerminalOverlay {
         let list_items = history_list.clone();
         let is_auto_items = is_auto_scrolling.clone();
         let msg_bar_items = msg_bar.clone();
+        let revealer_items = revealer.clone();
         history_store.connect_items_changed(move |s, _, _, _| {
             let n = s.n_items();
             if n == 0 {
@@ -139,10 +168,16 @@ impl TerminalOverlay {
             let lv = list_items.clone();
             let is_auto = is_auto_items.clone();
             let msg_bar_for_focus = msg_bar_items.clone();
+            let rev_for_focus = revealer_items.clone();
             gtk::glib::idle_add_local_once(move || {
                 is_auto.set(true);
                 lv.scroll_to(n - 1, gtk::ListScrollFlags::NONE, None);
-                if msg_bar_for_focus.entry.is_sensitive() && msg_bar_for_focus.widget.is_visible() {
+                if rev_for_focus.reveals_child()
+                    && msg_bar_for_focus.entry.is_sensitive()
+                    && msg_bar_for_focus.widget.is_visible()
+                    && !msg_bar_for_focus.entry.has_focus()
+                    && msg_bar_for_focus.entry.focus_child().is_none()
+                {
                     msg_bar_for_focus.entry.grab_focus();
                 }
                 gtk::glib::idle_add_local_once(move || {
@@ -189,6 +224,7 @@ impl TerminalOverlay {
         let is_auto_upper = is_auto_scrolling.clone();
         let list_upper = history_list.clone();
         let msg_bar_for_upper = msg_bar.clone();
+        let revealer_for_upper = revealer.clone();
         adj.connect_notify_local(Some("upper"), move |a, _| {
             let new_upper = a.upper();
             let old_upper = prev_u.replace(new_upper);
@@ -206,7 +242,12 @@ impl TerminalOverlay {
                     list_upper.scroll_to(n - 1, gtk::ListScrollFlags::NONE, None);
                 }
                 a.set_value(new_upper - a.page_size());
-                if msg_bar_for_upper.entry.is_sensitive() && msg_bar_for_upper.widget.is_visible() {
+                if revealer_for_upper.reveals_child()
+                    && msg_bar_for_upper.entry.is_sensitive()
+                    && msg_bar_for_upper.widget.is_visible()
+                    && !msg_bar_for_upper.entry.has_focus()
+                    && msg_bar_for_upper.entry.focus_child().is_none()
+                {
                     msg_bar_for_upper.entry.grab_focus();
                 }
                 let is_auto_idle = is_auto_upper.clone();
@@ -236,6 +277,9 @@ impl TerminalOverlay {
         revealer.connect_reveal_child_notify(move |rev| {
             let revealed = rev.reveals_child();
             host_vis.set_focusable(!revealed);
+            if !revealed {
+                host_vis.grab_focus();
+            }
             revealer_for_target.set_can_target(revealed);
         });
 
@@ -375,6 +419,14 @@ impl TerminalOverlay {
             host_inspect.focus_sidebar();
         });
 
+        // Clear History — temporarily clear visible history from the main overlay view.
+        let history_store_for_clear = history_store.clone();
+        let diag_viewer_for_clear = diagnosis_viewer.clone();
+        clear_history_btn.connect_clicked(move |_| {
+            history_store_for_clear.remove_all();
+            diag_viewer_for_clear.set_content("");
+        });
+
         // Accept: Command proposals inject the (possibly-edited) buffer
         // text; Bookmark proposals expand placeholders from
         // template_entry and hand the expanded script to the host's
@@ -465,6 +517,7 @@ impl TerminalOverlay {
             ok_btn,
             approve_file_btn,
             inspect_btn,
+            clear_history_btn,
             command_frame,
             template_box,
             file_action_box,
@@ -479,6 +532,7 @@ impl TerminalOverlay {
             selected_character: pending_character,
             history_list,
             history_store,
+            full_history_store,
             host,
         };
 
@@ -500,19 +554,46 @@ impl TerminalOverlay {
         s
     }
 
-    /// Returns the per-pane history store for the overlay. The pane wires
-    /// `ClawEngineEvent` messages into this store (in parallel with the
-    /// sidebar store) when `maintain_overlay_history` is on.
+    /// Returns the per-pane full session history store for the overlay.
+    /// `dispatch` writes every overlay-visible `ClawEngineEvent` into this
+    /// store unconditionally so the full session is retained even when
+    /// `maintain_overlay_history` is temporarily turned off or the visible
+    /// view is cleared.
     pub fn history_store(&self) -> gio::ListStore {
-        self.history_store.clone()
+        self.full_history_store.clone()
+    }
+
+    /// Temporarily clears the visible conversation history from the main overlay
+    /// view without deleting the session's underlying history.
+    pub fn clear_visible_history(&self) {
+        self.history_store.remove_all();
+        self.diagnosis_viewer.set_content("");
     }
 
     /// Toggle between the single-message view (latest diagnosis only) and the
-    /// full scrollable history.
+    /// full scrollable history. Turning `maintain_overlay_history` back on
+    /// restores the full session into the visible store.
     pub fn set_history_mode(&self, enabled: bool) {
-        self.history_enabled.set(enabled);
+        let was_enabled = self.history_enabled.replace(enabled);
         self.single_scroll.set_visible(!enabled);
         self.history_scroll.set_visible(enabled);
+
+        if enabled && !was_enabled {
+            let n = self.full_history_store.n_items();
+            let mut batch = Vec::with_capacity(n as usize);
+            for i in 0..n {
+                if let Some(obj) = self
+                    .full_history_store
+                    .item(i)
+                    .and_downcast::<boxxy_claw_ui::row_object::ClawRowObject>()
+                {
+                    batch.push(obj);
+                }
+            }
+            self.history_store.remove_all();
+            self.history_store.extend_from_slice(&batch);
+            self.scroll_to_latest();
+        }
     }
 
     pub fn history_mode(&self) -> bool {
@@ -847,13 +928,18 @@ impl TerminalOverlay {
             let list = self.history_list.clone();
             let is_auto = self.is_auto_scrolling.clone();
             let msg_bar_for_scroll = self.msg_bar.clone();
+            let rev_for_scroll = self.revealer.clone();
             gtk::glib::idle_add_local_once(move || {
                 is_auto.set(true);
                 list.scroll_to(n - 1, gtk::ListScrollFlags::NONE, None);
                 // Also snap the adjustment directly; for realized rows this
                 // is redundant but for unrealized rows it helps the initial jump.
                 adj.set_value(adj.upper() - adj.page_size());
-                if msg_bar_for_scroll.entry.is_sensitive() && msg_bar_for_scroll.widget.is_visible()
+                if rev_for_scroll.reveals_child()
+                    && msg_bar_for_scroll.entry.is_sensitive()
+                    && msg_bar_for_scroll.widget.is_visible()
+                    && !msg_bar_for_scroll.entry.has_focus()
+                    && msg_bar_for_scroll.entry.focus_child().is_none()
                 {
                     msg_bar_for_scroll.entry.grab_focus();
                 }
@@ -911,6 +997,7 @@ impl TerminalOverlay {
         // 2. Base components based on mode
         self.msg_bar.widget.set_visible(mode == OverlayMode::Claw);
         self.inspect_btn.set_visible(mode == OverlayMode::Claw);
+        self.clear_history_btn.set_visible(mode == OverlayMode::Claw);
 
         // 3. Character Selector Box logic
         // Only visible if in Claw mode, NOT thinking/pending, and no active agent is set yet.
