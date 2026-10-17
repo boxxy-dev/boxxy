@@ -286,6 +286,7 @@ pub fn create_claw_message_list() -> (gtk::ListView, gio::ListStore) {
             "claw-row-process-list",
             "claw-row-tool-call",
             "claw-row-command",
+            "claw-row-file-diff",
         ] {
             hbox.remove_css_class(cls);
         }
@@ -490,6 +491,23 @@ pub fn create_claw_message_list() -> (gtk::ListView, gio::ListStore) {
                 viewer.widget().set_visible(true);
                 cmd_label.set_visible(false);
             }
+            PersistentClawRow::FileDiff {
+                agent_name,
+                character_id,
+                diff,
+                ..
+            } => {
+                set_agent_header(&character_id, &agent_name, "boxxyclaw", Some("accent"));
+                pane_lbl.set_visible(false);
+                hbox.add_css_class("claw-row-file-diff");
+
+                viewer.clear();
+                if let Ok(diff_json) = serde_json::to_string(&diff) {
+                    viewer.append_custom_block("file_diff", &diff_json);
+                }
+                viewer.widget().set_visible(true);
+                cmd_label.set_visible(false);
+            }
         }
     });
 
@@ -624,6 +642,22 @@ pub fn add_approval_row(
     );
 }
 
+pub fn add_file_diff_row(
+    store: &gio::ListStore,
+    pane_id: String,
+    agent_name: Option<String>,
+    character_id: Option<String>,
+    diff: boxxy_claw_protocol::FileDiff,
+) {
+    store.append(&ClawRowObject::new(PersistentClawRow::FileDiff {
+        pane_id,
+        agent_name,
+        character_id,
+        diff,
+        usage: None,
+    }));
+}
+
 pub fn add_file_write_approval_row(
     store: &gio::ListStore,
     pane_id: String,
@@ -634,12 +668,12 @@ pub fn add_file_write_approval_row(
     _on_reply: impl Fn(bool) + 'static,
     _on_text_reply: impl Fn(String) + 'static,
 ) {
-    add_diagnosis_row(
+    add_file_diff_row(
         store,
         pane_id,
         agent_name,
         character_id,
-        &format!("Proposed file write to `{path}`:\n```\n{content}\n```"),
+        boxxy_claw_protocol::FileDiff::fallback_new(path, content),
     );
 }
 

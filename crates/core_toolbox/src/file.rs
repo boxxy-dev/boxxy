@@ -1,6 +1,6 @@
 use crate::ApprovalHandler;
 use crate::utils::resolve_path;
-use boxxy_claw_protocol::ClawEnvironment;
+use boxxy_claw_protocol::{ClawEnvironment, FileDiff};
 use rig::tool::PortableTool;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -245,10 +245,24 @@ impl PortableTool for FileWriteTool {
             .await
             .unwrap_or_else(|| self.current_dir.clone());
         let path = resolve_path(&base_dir, &args.path);
+
+        let existing_res = self.env.read_file(path.clone(), 0, 0).await;
+        let path_for_diff = path.clone();
+        let content_for_diff = args.content.clone();
+        let diff = tokio::task::spawn_blocking(move || match existing_res {
+            Ok(existing) => FileDiff::compute(&path_for_diff, Some(&existing), &content_for_diff),
+            Err(e) if e.to_string().contains("appears to be binary") => {
+                FileDiff::binary(&path_for_diff)
+            }
+            Err(_) => FileDiff::compute(&path_for_diff, None, &content_for_diff),
+        })
+        .await
+        .unwrap_or_else(|_| FileDiff::fallback_new(&path, &args.content));
+
         self.approval.set_thinking(false).await;
         let approved = self
             .approval
-            .propose_file_write(path.clone(), args.content.clone())
+            .propose_file_write(path.clone(), args.content.clone(), diff)
             .await;
         self.approval.set_thinking(true).await;
 
@@ -434,6 +448,7 @@ impl PortableTool for ReplaceInFileTool {
         };
 
         let uses_crlf = original.contains("\r\n");
+        let original_for_diff = original.clone();
         let mut working = original;
         let mut total_replacements = 0;
 
@@ -518,10 +533,18 @@ impl PortableTool for ReplaceInFileTool {
         }
 
         let total_lines = working.lines().count();
+        let path_for_diff = path.clone();
+        let working_for_diff = working.clone();
+        let diff = tokio::task::spawn_blocking(move || {
+            FileDiff::compute(&path_for_diff, Some(&original_for_diff), &working_for_diff)
+        })
+        .await
+        .unwrap_or_else(|_| FileDiff::fallback_new(&path, &working));
+
         self.approval.set_thinking(false).await;
         let approved = self
             .approval
-            .propose_file_write(path.clone(), working.clone())
+            .propose_file_write(path.clone(), working.clone(), diff)
             .await;
         self.approval.set_thinking(true).await;
 
@@ -694,8 +717,12 @@ mod tests {
         ) -> anyhow::Result<String> {
             *self.last_read_path.lock().unwrap() = Some(path.clone());
             let content = self.file_content.lock().unwrap().clone();
-            if start_line == 0 && end_line == 0 && !content.is_empty() {
-                Ok(content)
+            if start_line == 0 && end_line == 0 {
+                if content.is_empty() {
+                    Err(anyhow::anyhow!("No such file or directory"))
+                } else {
+                    Ok(content)
+                }
             } else {
                 Ok(format!("read:{path}:{start_line}-{end_line}"))
             }
@@ -735,7 +762,12 @@ mod tests {
 
     #[async_trait::async_trait]
     impl ApprovalHandler for MockApproval {
-        async fn propose_file_write(&self, _path: String, _content: String) -> bool {
+        async fn propose_file_write(
+            &self,
+            _path: String,
+            _content: String,
+            _diff: FileDiff,
+        ) -> bool {
             self.approve
         }
         async fn propose_file_delete(&self, _path: String) -> bool {
@@ -917,6 +949,79 @@ mod tests {
             env.written_content.lock().unwrap().as_deref(),
             Some("fn a() {\r\n    let x = 10;\r\n    let y = 20;\r\n}\r\n")
         );
+    }
+
+    #[tokio::test]
+    async fn file_write_computes_created_and_modified_diffs() {
+        struct DiffCapturingApproval {
+            diffs: Mutex<Vec<FileDiff>>,
+        }
+
+        #[async_trait::async_trait]
+        impl ApprovalHandler for DiffCapturingApproval {
+            async fn propose_file_write(
+                &self,
+                _path: String,
+                _content: String,
+                diff: FileDiff,
+            ) -> bool {
+                self.diffs.lock().unwrap().push(diff);
+                true
+            }
+            async fn propose_file_delete(&self, _: String) -> bool {
+                true
+            }
+            async fn propose_background_command(&self, _: String, _: String) -> bool {
+                true
+            }
+            async fn propose_kill_process(&self, _: u32, _: String) -> bool {
+                true
+            }
+            async fn propose_get_clipboard(&self) -> bool {
+                true
+            }
+            async fn propose_set_clipboard(&self, _: String) -> bool {
+                true
+            }
+            async fn report_tool_result(&self, _: String, _: String) {}
+            async fn report_tool_started(&self, _: String) {}
+            async fn set_thinking(&self, _: bool) {}
+        }
+
+        let env = Arc::new(MockEnv::new());
+        let approval = Arc::new(DiffCapturingApproval {
+            diffs: Mutex::new(Vec::new()),
+        });
+        let tool = FileWriteTool {
+            env: env.clone(),
+            current_dir: "/workspace".to_string(),
+            approval: approval.clone(),
+        };
+
+        // 1. New file (MockEnv has empty file_content -> returns NotFound)
+        tool.call(FileWriteArgs {
+            path: "src/new_mod.rs".to_string(),
+            content: "pub fn hello() {}\n".to_string(),
+        })
+        .await
+        .unwrap();
+
+        // 2. Existing file (MockEnv has existing content -> returns Modified diff)
+        *env.file_content.lock().unwrap() = "pub fn hello() {\n    old();\n}\n".to_string();
+        tool.call(FileWriteArgs {
+            path: "src/new_mod.rs".to_string(),
+            content: "pub fn hello() {\n    new();\n}\n".to_string(),
+        })
+        .await
+        .unwrap();
+
+        let captured = approval.diffs.lock().unwrap();
+        assert_eq!(captured.len(), 2);
+        assert_eq!(captured[0].kind, boxxy_claw_protocol::DiffKind::Created);
+        assert_eq!(captured[0].stats.added_lines, 1);
+        assert_eq!(captured[1].kind, boxxy_claw_protocol::DiffKind::Modified);
+        assert_eq!(captured[1].stats.added_lines, 1);
+        assert_eq!(captured[1].stats.removed_lines, 1);
     }
 
     #[tokio::test]

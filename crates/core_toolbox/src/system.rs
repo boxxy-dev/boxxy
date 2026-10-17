@@ -391,7 +391,12 @@ mod tests {
 
     #[async_trait::async_trait]
     impl ApprovalHandler for NoopApproval {
-        async fn propose_file_write(&self, _: String, _: String) -> bool {
+        async fn propose_file_write(
+            &self,
+            _: String,
+            _: String,
+            _: crate::FileDiff,
+        ) -> bool {
             true
         }
         async fn propose_file_delete(&self, _: String) -> bool {

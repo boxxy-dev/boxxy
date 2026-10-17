@@ -9,6 +9,7 @@ gtk4.workspace = true
 libadwaita.workspace = true
 glib.workspace = true
 pango.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 pulldown-cmark.workspace = true
 syntect.workspace = true

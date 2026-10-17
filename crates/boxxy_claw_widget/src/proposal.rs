@@ -16,6 +16,7 @@ pub enum Proposal {
     FileWrite {
         path: String,
         content: String,
+        diff: Option<boxxy_claw_protocol::FileDiff>,
     },
     FileDelete {
         path: String,

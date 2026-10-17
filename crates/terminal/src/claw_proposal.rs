@@ -22,7 +22,11 @@ impl From<TerminalProposal> for Proposal {
                 script,
                 placeholders,
             },
-            TerminalProposal::FileWrite(path, content) => Proposal::FileWrite { path, content },
+            TerminalProposal::FileWrite(path, content) => Proposal::FileWrite {
+                path,
+                content,
+                diff: None,
+            },
             TerminalProposal::FileDelete(path) => Proposal::FileDelete { path },
             TerminalProposal::KillProcess(pid, name) => Proposal::KillProcess { pid, name },
             TerminalProposal::GetClipboard => Proposal::GetClipboard,

@@ -18,6 +18,7 @@ impl ViewerRegistry {
         registry.register(Box::new(crate::renderer::table::TableRenderer));
         registry.register(Box::new(crate::renderer::code::CodeRenderer));
         registry.register(Box::new(crate::renderer::image::ImageRenderer));
+        registry.register(Box::new(crate::renderer::diff::DiffRenderer));
 
         registry
     }

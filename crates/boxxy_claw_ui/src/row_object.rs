@@ -7,7 +7,6 @@ use std::cell::RefCell;
 mod imp {
     use super::*;
     use gtk4::glib;
-    use gtk4::subclass::prelude::*;
 
     #[derive(Default)]
     pub struct ClawRowObject {
@@ -44,6 +43,7 @@ mod imp {
                         PersistentClawRow::ToolCall { result, .. } => result.to_value(),
                         PersistentClawRow::Command { command, .. } => command.to_value(),
                         PersistentClawRow::SystemMessage { content, .. } => content.to_value(),
+                        PersistentClawRow::FileDiff { diff, .. } => diff.path.to_value(),
                     }
                 }
                 _ => unimplemented!(),

@@ -835,6 +835,18 @@ impl TerminalOverlay {
                 self.template_entry
                     .set_placeholder_text(Some(&placeholders.join(", ")));
             }
+            Proposal::FileWrite {
+                path,
+                content,
+                diff,
+            } => {
+                let resolved_diff = diff
+                    .unwrap_or_else(|| boxxy_claw_protocol::FileDiff::fallback_new(&path, &content));
+                if let Ok(diff_json) = serde_json::to_string(&resolved_diff) {
+                    self.diagnosis_viewer
+                        .append_custom_block("file_diff", &diff_json);
+                }
+            }
             _ => {}
         }
 
@@ -1050,8 +1062,17 @@ impl TerminalOverlay {
                         self.file_action_box.set_visible(true);
                         self.action_box.set_visible(false);
                     }
-                    Proposal::FileWrite { .. }
-                    | Proposal::FileDelete { .. }
+                    Proposal::FileWrite { ref diff, .. } => {
+                        let label = match diff.as_ref().map(|d| d.kind) {
+                            Some(boxxy_claw_protocol::DiffKind::Created) => "Approve & Create",
+                            Some(boxxy_claw_protocol::DiffKind::Modified) => "Approve & Apply",
+                            _ => "Approve & Write",
+                        };
+                        self.approve_file_btn.set_label(label);
+                        self.file_action_box.set_visible(true);
+                        self.action_box.set_visible(false);
+                    }
+                    Proposal::FileDelete { .. }
                     | Proposal::KillProcess { .. }
                     | Proposal::GetClipboard
                     | Proposal::SetClipboard(_) => {
@@ -1061,13 +1082,8 @@ impl TerminalOverlay {
                                 Proposal::FileDelete { .. } | Proposal::KillProcess { .. }
                             ) {
                                 "Approve & Delete"
-                            } else if matches!(
-                                proposal,
-                                Proposal::GetClipboard | Proposal::SetClipboard(_)
-                            ) {
-                                "Approve"
                             } else {
-                                "Approve & Write"
+                                "Approve"
                             },
                         );
                         self.file_action_box.set_visible(true);

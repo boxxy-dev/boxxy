@@ -1,4 +1,5 @@
 pub mod code;
+pub mod diff;
 pub mod image;
 pub mod table;
 pub mod text;

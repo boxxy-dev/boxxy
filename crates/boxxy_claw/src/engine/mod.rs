@@ -89,15 +89,21 @@ impl PersistentClawRowExt {
                 character_id,
                 path,
                 content,
+                diff,
                 usage,
                 ..
-            } => Some(PersistentClawRow::Diagnosis {
-                pane_id,
-                agent_name: Some(agent_name.clone()),
-                character_id: Some(character_id.clone()),
-                content: format!("Proposed file write to `{path}`:\n```\n{content}\n```"),
-                usage: usage.clone(),
-            }),
+            } => {
+                let resolved_diff = diff
+                    .clone()
+                    .unwrap_or_else(|| boxxy_claw_protocol::FileDiff::fallback_new(path, content));
+                Some(PersistentClawRow::FileDiff {
+                    pane_id,
+                    agent_name: Some(agent_name.clone()),
+                    character_id: Some(character_id.clone()),
+                    diff: resolved_diff,
+                    usage: usage.clone(),
+                })
+            }
             ClawEngineEvent::ProposeFileDelete {
                 agent_name,
                 character_id,

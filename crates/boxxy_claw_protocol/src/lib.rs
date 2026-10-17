@@ -1,5 +1,11 @@
 pub mod character_loader;
 pub mod characters;
+pub mod diff;
+
+pub use diff::{
+    DiffCell, DiffHunk, DiffKind, DiffLineKind, DiffPairRow, DiffSpan, DiffStats, FileDiff,
+    MAX_DIFF_RENDER_ROWS,
+};
 
 use chrono::{DateTime, Utc};
 use rig::completion::Usage;
@@ -260,6 +266,13 @@ pub enum PersistentClawRow {
         pane_id: String,
         content: String,
     },
+    FileDiff {
+        pane_id: String,
+        agent_name: Option<String>,
+        character_id: Option<String>,
+        diff: FileDiff,
+        usage: Option<UsageWrapper>,
+    },
 }
 
 impl PersistentClawRow {
@@ -269,7 +282,8 @@ impl PersistentClawRow {
             | Self::Diagnosis { .. }
             | Self::Suggested { .. }
             | Self::SystemMessage { .. }
-            | Self::Command { .. } => true,
+            | Self::Command { .. }
+            | Self::FileDiff { .. } => true,
             Self::ToolCall { .. } | Self::ProcessList { .. } => false,
         }
     }
@@ -415,6 +429,8 @@ pub enum ClawEngineEvent {
         character_id: String,
         path: String,
         content: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        diff: Option<FileDiff>,
         usage: Option<UsageWrapper>,
     },
     ProposeFileDelete {

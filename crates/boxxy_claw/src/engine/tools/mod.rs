@@ -41,7 +41,12 @@ impl ClawApprovalHandler {
 
 #[async_trait::async_trait]
 impl ApprovalHandler for ClawApprovalHandler {
-    async fn propose_file_write(&self, path: String, content: String) -> bool {
+    async fn propose_file_write(
+        &self,
+        path: String,
+        content: String,
+        diff: boxxy_claw_protocol::FileDiff,
+    ) -> bool {
         let (tx, rx) = tokio::sync::oneshot::channel();
         let (agent_name, character_id) = {
             let state = self.state.lock().await;
@@ -58,6 +63,7 @@ impl ApprovalHandler for ClawApprovalHandler {
             character_id,
             path,
             content,
+            diff: Some(diff),
             usage: None,
         };
 

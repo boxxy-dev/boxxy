@@ -6,6 +6,7 @@ pub mod system;
 pub mod utils;
 pub mod workspace_search;
 
+pub use boxxy_claw_protocol::FileDiff;
 pub use clipboard::{GetClipboardTool, SetClipboardTool};
 pub use file::{
     FileDeleteTool, FileReadTool, FileWriteTool, ListDirectoryTool, ReplaceInFileTool,
@@ -19,8 +20,8 @@ pub use workspace_search::{GlobSearchTool, GrepSearchTool};
 /// Implemented by boxxy-claw to bridge with the UI.
 #[async_trait::async_trait]
 pub trait ApprovalHandler: Send + Sync {
-    /// Propose writing a file to the host system.
-    async fn propose_file_write(&self, path: String, content: String) -> bool;
+    /// Propose writing or editing a file on the host system, supplying a pre-computed `FileDiff`.
+    async fn propose_file_write(&self, path: String, content: String, diff: FileDiff) -> bool;
     /// Propose deleting a file from the host system.
     async fn propose_file_delete(&self, path: String) -> bool;
     /// Propose running a command in the background.

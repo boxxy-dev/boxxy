@@ -19,3 +19,4 @@ anyhow = { workspace = true }
 arc-swap = { workspace = true }
 async-trait = { workspace = true }
 zvariant = { workspace = true }
+similar = { workspace = true }

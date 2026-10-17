@@ -164,6 +164,7 @@ pub fn spawn_dispatch(
                 ClawEngineEvent::ProposeFileWrite {
                     path,
                     content,
+                    diff,
                     agent_name,
                     character_id,
                     usage,
@@ -171,26 +172,25 @@ pub fn spawn_dispatch(
                     if let Some(usage) = usage {
                         record_usage(&session_usage, usage);
                     }
-                    boxxy_claw_ui::add_file_write_approval_row(
+                    let resolved_diff = diff
+                        .clone()
+                        .unwrap_or_else(|| boxxy_claw_protocol::FileDiff::fallback_new(path, content));
+                    boxxy_claw_ui::add_file_diff_row(
                         &overlay_store,
                         id.clone(),
                         Some(agent_name.clone()),
                         Some(character_id.clone()),
-                        path,
-                        content,
-                        |_| {},
-                        |_| {},
+                        resolved_diff.clone(),
                     );
                     overlay.show(
                         OverlayMode::Claw,
                         agent_name,
                         Some("Propose File Edit"),
-                        &format!(
-                            "Path: `{path}`\n\nI need to write or edit this file to complete the task."
-                        ),
+                        "",
                         crate::Proposal::FileWrite {
                             path: path.clone(),
                             content: content.clone(),
+                            diff: Some(resolved_diff),
                         },
                     );
                 }
