@@ -193,3 +193,45 @@ async fn test_multiple_subscribers() {
         Ok(ClawMessage::SubscriptionEvent { .. })
     ));
 }
+
+#[tokio::test]
+async fn test_resilient_peer_name_resolution() {
+    let registry = WorkspaceRegistry::new();
+    let pane_id = "pane-uuid-1234".to_string();
+    let (tx, _rx) = async_channel::unbounded::<ClawMessage>();
+
+    registry.register_pane_tx(pane_id.clone(), tx).await;
+    registry
+        .update_pane_state(
+            pane_id.clone(),
+            None,
+            Some("plentiful-bream".to_string()),
+            "/tmp".to_string(),
+            None,
+            None,
+        )
+        .await;
+
+    // Exact hyphenated petname
+    assert_eq!(
+        registry.resolve_pane_id_by_name("plentiful-bream").await,
+        Some(pane_id.clone())
+    );
+    // Space-separated petname with mixed casing
+    assert_eq!(
+        registry.resolve_pane_id_by_name("Plentiful Bream").await,
+        Some(pane_id.clone())
+    );
+    // Leading @ mention and underscores
+    assert_eq!(
+        registry.resolve_pane_id_by_name("@plentiful_bream").await,
+        Some(pane_id.clone())
+    );
+    // Direct pane ID lookup
+    assert_eq!(
+        registry.resolve_pane_id_by_name("pane-uuid-1234").await,
+        Some(pane_id.clone())
+    );
+    // Channel lookup uses the same resilient resolution
+    assert!(registry.get_pane_tx_by_name("Plentiful Bream").await.is_some());
+}

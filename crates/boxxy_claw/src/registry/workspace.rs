@@ -222,12 +222,8 @@ impl WorkspaceRegistry {
         &self,
         name: &str,
     ) -> Option<async_channel::Sender<crate::engine::ClawMessage>> {
-        let panes = self.panes.read().await;
-        let name_lower = name.to_lowercase();
-        panes
-            .values()
-            .find(|p| p.name.to_lowercase() == name_lower)
-            .and_then(|p| p.tx.clone())
+        let id = self.resolve_pane_id_by_name(name).await?;
+        self.get_pane_tx_by_id(&id).await
     }
 
     pub async fn get_pane_tx_by_id(
@@ -360,12 +356,53 @@ impl WorkspaceRegistry {
     }
 
     pub async fn resolve_pane_id_by_name(&self, name: &str) -> Option<String> {
+        let trimmed = name.trim().trim_start_matches('@').trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+        let query_norm = normalize_agent_key(trimmed);
         let panes = self.panes.read().await;
-        let name_lower = name.to_lowercase();
-        panes
+
+        // 1. Exact ID or case-insensitive name match
+        if let Some(pane) = panes
             .values()
-            .find(|p| p.name.to_lowercase() == name_lower)
-            .map(|p| p.id.clone())
+            .find(|p| p.id.eq_ignore_ascii_case(trimmed) || p.name.eq_ignore_ascii_case(trimmed))
+        {
+            return Some(pane.id.clone());
+        }
+
+        // 2. Normalized name match (e.g. "red-pony" == "Red Pony" == "red_pony")
+        if !query_norm.is_empty()
+            && let Some(pane) = panes
+                .values()
+                .find(|p| normalize_agent_key(&p.name) == query_norm)
+        {
+            return Some(pane.id.clone());
+        }
+
+        // 3. Fallback to CLAIMS_CACHE + CHARACTER_CACHE (petname, character display name, character ID)
+        let claims = boxxy_claw_protocol::characters::CLAIMS_CACHE.load();
+        let catalog = boxxy_claw_protocol::characters::CHARACTER_CACHE.load();
+
+        for claim in claims.iter() {
+            if !panes.contains_key(&claim.holder_id) {
+                continue;
+            }
+            if claim.holder_id.eq_ignore_ascii_case(trimmed)
+                || claim.character_id.eq_ignore_ascii_case(trimmed)
+                || normalize_agent_key(&claim.petname) == query_norm
+            {
+                return Some(claim.holder_id.clone());
+            }
+            if let Some(char_info) = catalog.iter().find(|c| c.config.id == claim.character_id)
+                && (normalize_agent_key(&char_info.config.display_name) == query_norm
+                    || normalize_agent_key(&char_info.config.name) == query_norm)
+            {
+                return Some(claim.holder_id.clone());
+            }
+        }
+
+        None
     }
 
     pub async fn get_global_radar(&self, current_pane_id: String) -> String {
@@ -450,4 +487,14 @@ impl WorkspaceRegistry {
         let mut global_intent = self.global_intent.write().await;
         *global_intent = Some(intent);
     }
+}
+
+fn normalize_agent_key(s: &str) -> String {
+    s.trim()
+        .trim_start_matches('@')
+        .to_lowercase()
+        .replace(['-', '_'], " ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
 }

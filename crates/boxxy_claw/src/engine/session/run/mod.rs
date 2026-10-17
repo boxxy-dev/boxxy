@@ -58,12 +58,18 @@ impl ClawSession {
             ClawMessage::TurnFinished => {
                 ctx.current_turn = None;
 
-                let req = crate::engine::TransitionRequest {
-                    target_state: crate::engine::AgentStatus::Waiting,
-                    source: crate::engine::TriggerSource::System,
-                };
-                self.handle_transition(req, &mut ctx.current_turn, &mut ctx.urgent_backlog)
-                    .await;
+                // Preserve Sleep status if a tool in the turn (`subscribe_to_pane`, `await_tasks`)
+                // already suspended the agent to wait for external events or delegated tasks.
+                let is_sleeping =
+                    self.state.lock().await.status == crate::engine::AgentStatus::Sleep;
+                if !is_sleeping {
+                    let req = crate::engine::TransitionRequest {
+                        target_state: crate::engine::AgentStatus::Waiting,
+                        source: crate::engine::TriggerSource::System,
+                    };
+                    self.handle_transition(req, &mut ctx.current_turn, &mut ctx.urgent_backlog)
+                        .await;
+                }
 
                 if let Some(next_msg) = ctx.urgent_backlog.pop_front() {
                     let _ = self.tx_self.send(next_msg).await;

@@ -22,6 +22,7 @@ pub struct SummonHeadlessWorkerTool {
     pub state: Arc<Mutex<SessionState>>,
     pub env: Arc<dyn ClawEnvironment>,
     pub tx_ui: async_channel::Sender<crate::engine::ClawEngineEvent>,
+    pub approval: Arc<crate::engine::tools::ClawApprovalHandler>,
 }
 
 impl PortableTool for SummonHeadlessWorkerTool {
@@ -52,10 +53,10 @@ impl PortableTool for SummonHeadlessWorkerTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        boxxy_telemetry::track_tool_use(Self::NAME).await;
+        self.approval.begin_tool(Self::NAME).await;
         let task_id = uuid::Uuid::new_v4();
 
-        let (my_pane_id, my_session_id, my_name, character_id, reply_rx) = {
+        let (my_pane_id, my_session_id, my_name, reply_rx) = {
             let mut state = self.state.lock().await;
             let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
             state.pending_delegations.insert(task_id, reply_tx);
@@ -63,19 +64,9 @@ impl PortableTool for SummonHeadlessWorkerTool {
                 state.pane_id.clone(),
                 uuid::Uuid::parse_str(&state.session_id).unwrap_or_default(),
                 state.agent_name.clone(),
-                state.character_id.clone(),
                 reply_rx,
             )
         };
-
-        let _ = self
-            .tx_ui
-            .send(crate::engine::ClawEngineEvent::ToolCallStarted {
-                agent_name: my_name.clone(),
-                character_id,
-                tool_name: Self::NAME.to_string(),
-            })
-            .await;
 
         // Create and spawn the headless session
         let (session, tx_child) =
@@ -115,12 +106,14 @@ impl PortableTool for SummonHeadlessWorkerTool {
             });
         }
 
-        Ok(SummonHeadlessOutput {
+        let out = SummonHeadlessOutput {
             task_id: task_id.to_string(),
             message: format!(
                 "Successfully summoned headless worker '{}' (Task ID: {}). Use `await_tasks` to wait for its completion.",
                 child_name, task_id
             ),
-        })
+        };
+        self.approval.finish_tool(Self::NAME, &out).await;
+        Ok(out)
     }
 }

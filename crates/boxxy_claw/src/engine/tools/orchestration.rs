@@ -66,6 +66,7 @@ impl PortableTool for SubscribeToPaneTool {
         self.approval
             .report_tool_started(Self::NAME.to_string())
             .await;
+        boxxy_telemetry::track_tool_use(Self::NAME).await;
         let workspace = global_workspace().await;
         let target_pane_id = workspace.resolve_pane_id_by_name(&args.agent_name).await;
 
@@ -95,24 +96,22 @@ impl PortableTool for SubscribeToPaneTool {
 
         workspace.subscribe(self.pane_id.clone(), filter).await;
 
-        // Auto-suspend when subscribing
-        {
+        // Auto-suspend when subscribing (single lock acquisition — prevents deadlock)
+        let (agent_name, character_id) = {
             let mut state = self.state.lock().await;
             state.status = AgentStatus::Sleep;
-            let (agent_name, character_id) = {
-                let state = self.state.lock().await;
-                (state.agent_name.clone(), state.character_id.clone())
-            };
+            state.sleep_timestamp = Some(chrono::Utc::now().timestamp_millis());
+            (state.agent_name.clone(), state.character_id.clone())
+        };
 
-            let _ = self
-                .tx_ui
-                .send(ClawEngineEvent::SessionStateChanged {
-                    agent_name,
-                    character_id,
-                    status: AgentStatus::Sleep,
-                })
-                .await;
-        }
+        let _ = self
+            .tx_ui
+            .send(ClawEngineEvent::SessionStateChanged {
+                agent_name,
+                character_id,
+                status: AgentStatus::Sleep,
+            })
+            .await;
 
         let res = SubscribeOutput {
             message: format!(
@@ -178,6 +177,7 @@ impl PortableTool for AcquireLockTool {
         self.approval
             .report_tool_started(Self::NAME.to_string())
             .await;
+        boxxy_telemetry::track_tool_use(Self::NAME).await;
         let workspace = global_workspace().await;
         match workspace
             .acquire_lock(self.pane_id.clone(), args.resource.clone())
@@ -264,6 +264,7 @@ impl PortableTool for ReleaseLockTool {
         self.approval
             .report_tool_started(Self::NAME.to_string())
             .await;
+        boxxy_telemetry::track_tool_use(Self::NAME).await;
         let workspace = global_workspace().await;
         workspace
             .release_lock(self.pane_id.clone(), args.resource.clone())
@@ -342,6 +343,7 @@ impl PortableTool for PublishEventTool {
         self.approval
             .report_tool_started(Self::NAME.to_string())
             .await;
+        boxxy_telemetry::track_tool_use(Self::NAME).await;
         let agent_name = {
             let state = self.state.lock().await;
             state.agent_name.clone()
@@ -407,14 +409,19 @@ impl PortableTool for AwaitTasksTool {
         self.approval
             .report_tool_started(Self::NAME.to_string())
             .await;
-        let mut state = self.state.lock().await;
-        state.status = AgentStatus::Sleep;
+        boxxy_telemetry::track_tool_use(Self::NAME).await;
         let (agent_name, character_id) = {
-            let state_lock = self.state.lock().await;
-            (
-                state_lock.agent_name.clone(),
-                state_lock.character_id.clone(),
-            )
+            let mut state = self.state.lock().await;
+            for id_str in &args.task_ids {
+                if let Ok(uuid) = uuid::Uuid::parse_str(id_str)
+                    && !state.awaiting_tasks.contains(&uuid)
+                {
+                    state.awaiting_tasks.push(uuid);
+                }
+            }
+            state.status = AgentStatus::Sleep;
+            state.sleep_timestamp = Some(chrono::Utc::now().timestamp_millis());
+            (state.agent_name.clone(), state.character_id.clone())
         };
 
         let _ = self
@@ -481,6 +488,7 @@ impl PortableTool for OrchestrateAgentTool {
         self.approval
             .report_tool_started(Self::NAME.to_string())
             .await;
+        boxxy_telemetry::track_tool_use(Self::NAME).await;
         let workspace = global_workspace().await;
         if let Some(tx) = workspace.get_pane_tx_by_name(&args.agent_name).await {
             let msg = match args.action.as_str() {
@@ -514,5 +522,86 @@ impl PortableTool for OrchestrateAgentTool {
                 .await;
             Ok(res)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::engine::session::ClawSession;
+
+    #[tokio::test]
+    async fn subscribe_and_await_tasks_do_not_deadlock_and_update_sleep_state() {
+        let (session, _tx, rx_ui) = ClawSession::new("pane_leader".to_string());
+        let state = session.state.clone();
+        let tx_ui = session.tx_ui.clone();
+        let approval = Arc::new(ClawApprovalHandler {
+            tx_ui: tx_ui.clone(),
+            state: state.clone(),
+            db: Arc::new(Mutex::new(None)),
+            session_id: session.session_id.clone(),
+            pane_id: "pane_leader".to_string(),
+        });
+
+        let workspace = global_workspace().await;
+        workspace
+            .update_pane_state(
+                "pane_worker".to_string(),
+                None,
+                Some("red-pony".to_string()),
+                "/tmp".to_string(),
+                None,
+                None,
+            )
+            .await;
+
+        let sub_tool = SubscribeToPaneTool {
+            pane_id: "pane_leader".to_string(),
+            state: state.clone(),
+            tx_ui: tx_ui.clone(),
+            approval: approval.clone(),
+        };
+
+        let sub_res = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            sub_tool.call(SubscribeArgs {
+                agent_name: "red-pony".to_string(),
+                event_type: "process_exit".to_string(),
+                regex: None,
+            }),
+        )
+        .await
+        .expect("SubscribeToPaneTool should not deadlock")
+        .unwrap();
+
+        assert!(sub_res.message.contains("Successfully subscribed"));
+        assert_eq!(state.lock().await.status, AgentStatus::Sleep);
+
+        // Reset status to Working and test AwaitTasksTool
+        state.lock().await.status = AgentStatus::Working;
+        let t1 = uuid::Uuid::new_v4();
+        let t2 = uuid::Uuid::new_v4();
+
+        let await_tool = AwaitTasksTool {
+            state: state.clone(),
+            tx_ui,
+            approval,
+        };
+
+        let await_res = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            await_tool.call(AwaitArgs {
+                task_ids: vec![t1.to_string(), t2.to_string()],
+            }),
+        )
+        .await
+        .expect("AwaitTasksTool should not deadlock")
+        .unwrap();
+
+        assert!(await_res.contains("Suspending to await 2 tasks"));
+        let state_guard = state.lock().await;
+        assert_eq!(state_guard.status, AgentStatus::Sleep);
+        assert_eq!(state_guard.awaiting_tasks, vec![t1, t2]);
+        assert!(rx_ui.try_recv().is_ok());
     }
 }

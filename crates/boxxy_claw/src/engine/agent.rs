@@ -15,8 +15,8 @@ use crate::utils::load_prompt_fallback;
 use boxxy_ai_core::{AiCredentials, ModelContextHook, build_provider_model};
 use boxxy_core_toolbox::{
     FileDeleteTool, FileReadTool, FileWriteTool, GetClipboardTool, GetSystemInfoTool,
-    HttpFetchTool, KillProcessTool, ListDirectoryTool, ListProcessesTool, RunBackgroundCommandTool,
-    SetClipboardTool,
+    GlobSearchTool, GrepSearchTool, HttpFetchTool, KillProcessTool, ListDirectoryTool,
+    ListProcessesTool, ReplaceInFileTool, RunBackgroundCommandTool, SetClipboardTool,
 };
 use rig::agent::Agent;
 use rig::completion::{CacheRetention, OnUnsupported};
@@ -242,6 +242,7 @@ pub async fn create_claw_agent(
         .tool(crate::engine::tools::scrollback::ReadScrollbackTool {
             tx_ui: tx_ui.clone(),
             state: state.clone(),
+            approval: approval_handler.clone(),
         })
         .tool(ActivateSkillTool {
             approval: approval_handler.clone(),
@@ -256,30 +257,37 @@ pub async fn create_claw_agent(
         .tool(ListActiveAgentsTool {
             tx_ui: tx_ui.clone(),
             state: state.clone(),
+            approval: approval_handler.clone(),
         })
         .tool(ReadPaneTool {
             tx_ui: tx_ui.clone(),
             state: state.clone(),
+            approval: approval_handler.clone(),
         })
         .tool(DelegateTaskTool {
             state: state.clone(),
             tx_ui: tx_ui.clone(),
+            approval: approval_handler.clone(),
         })
         .tool(SpawnAgentTool {
             tx_ui: tx_ui.clone(),
             state: state.clone(),
+            approval: approval_handler.clone(),
         })
         .tool(CloseAgentTool {
             tx_ui: tx_ui.clone(),
             state: state.clone(),
+            approval: approval_handler.clone(),
         })
         .tool(AbortAgentTaskTool {
             tx_ui: tx_ui.clone(),
             state: state.clone(),
+            approval: approval_handler.clone(),
         })
         .tool(SendKeystrokesTool {
             tx_ui: tx_ui.clone(),
             state: state.clone(),
+            approval: approval_handler.clone(),
         })
         .tool(ListProcessesTool {
             env: (*env).clone(),
@@ -288,16 +296,21 @@ pub async fn create_claw_agent(
         .tool(ScheduleTaskTool {
             state: state.clone(),
             tx_ui: tx_ui.clone(),
+            approval: approval_handler.clone(),
         })
         .tool(ListTasksTool {
             state: state.clone(),
             tx_ui: tx_ui.clone(),
+            approval: approval_handler.clone(),
         })
         .tool(CancelTaskTool {
             state: state.clone(),
             tx_ui: tx_ui.clone(),
+            approval: approval_handler.clone(),
         })
-        .tool(SetGlobalIntentTool)
+        .tool(SetGlobalIntentTool {
+            approval: approval_handler.clone(),
+        })
         .tool(crate::engine::tools::orchestration::SubscribeToPaneTool {
             pane_id: pane_id.clone(),
             state: state.clone(),
@@ -328,15 +341,18 @@ pub async fn create_claw_agent(
         .tool(DelegateTaskAsyncTool {
             state: state.clone(),
             tx_ui: tx_ui.clone(),
+            approval: approval_handler.clone(),
         })
         .tool(SummonHeadlessWorkerTool {
             state: state.clone(),
             env: (*env).clone(),
             tx_ui: tx_ui.clone(),
+            approval: approval_handler.clone(),
         })
         .tool(SetAgentStateTool {
             state: state.clone(),
             tx_ui: tx_ui.clone(),
+            approval: approval_handler.clone(),
         })
         .tool(
             crate::engine::tools::orchestration::OrchestrateAgentTool {
@@ -357,8 +373,21 @@ pub async fn create_claw_agent(
                 current_dir: current_dir.to_string(),
                 approval: approval_handler.clone(),
             })
+            .tool(ReplaceInFileTool {
+                env: (*env).clone(),
+                current_dir: current_dir.to_string(),
+                approval: approval_handler.clone(),
+            })
             .tool(ListDirectoryTool {
                 env: (*env).clone(),
+                current_dir: current_dir.to_string(),
+                approval: approval_handler.clone(),
+            })
+            .tool(GlobSearchTool {
+                current_dir: current_dir.to_string(),
+                approval: approval_handler.clone(),
+            })
+            .tool(GrepSearchTool {
                 current_dir: current_dir.to_string(),
                 approval: approval_handler.clone(),
             })

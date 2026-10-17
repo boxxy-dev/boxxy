@@ -23,6 +23,10 @@ impl SessionState {
             let _ = reply.send(false);
             fulfilled = true;
         }
+        if let Some(reply) = self.pending_background_reply.take() {
+            let _ = reply.send(false);
+            fulfilled = true;
+        }
         if let Some(reply) = self.pending_get_clipboard_reply.take() {
             let _ = reply.send(false);
             fulfilled = true;
@@ -82,6 +86,7 @@ mod pending_drain_tests {
             agent_name: "test".to_string(),
             character_id: "test".to_string(),
             character_display_name: "test".to_string(),
+            current_dir: String::new(),
             pinned: false,
             web_search_enabled: false,
             total_tokens: 0,
@@ -149,5 +154,16 @@ mod pending_drain_tests {
         state.drain_pending_cancel();
         assert!(!state.pending_inject_command);
         assert!(state.pending_file_reply.is_none());
+    }
+
+    #[tokio::test]
+    async fn drain_with_interruption_drains_background_command_reply() {
+        let mut state = make_state();
+        let (tx, mut rx) = tokio::sync::oneshot::channel::<bool>();
+        state.pending_background_reply = Some(tx);
+        assert!(state.drain_pending_with_interruption("hold on, wrong port"));
+        assert!(state.pending_background_reply.is_none());
+        assert_eq!(rx.try_recv(), Ok(false));
+        assert_eq!(state.history.len(), 1);
     }
 }

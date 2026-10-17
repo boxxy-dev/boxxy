@@ -23,6 +23,7 @@ pub struct ScheduleTaskOutput {
 pub struct ScheduleTaskTool {
     pub state: Arc<Mutex<crate::engine::session::SessionState>>,
     pub tx_ui: async_channel::Sender<ClawEngineEvent>,
+    pub approval: Arc<crate::engine::tools::ClawApprovalHandler>,
 }
 
 impl PortableTool for ScheduleTaskTool {
@@ -49,21 +50,7 @@ impl PortableTool for ScheduleTaskTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        boxxy_telemetry::track_tool_use(Self::NAME).await;
-
-        let (agent_name, character_id) = {
-            let state = self.state.lock().await;
-            (state.agent_name.clone(), state.character_id.clone())
-        };
-
-        let _ = self
-            .tx_ui
-            .send(ClawEngineEvent::ToolCallStarted {
-                agent_name: agent_name.clone(),
-                character_id: character_id.clone(),
-                tool_name: Self::NAME.to_string(),
-            })
-            .await;
+        self.approval.begin_tool(Self::NAME).await;
 
         let task_type = match args.task_type.as_str() {
             "notification" => TaskType::Notification,
@@ -106,14 +93,16 @@ impl PortableTool for ScheduleTaskTool {
         let workspace = crate::registry::workspace::global_workspace().await;
         workspace.update_pane_tasks(pane_id, tasks).await;
 
-        Ok(ScheduleTaskOutput {
+        let out = ScheduleTaskOutput {
             success: true,
             task_id: id.to_string(),
             message: format!(
                 "Task scheduled for {} seconds from now.",
                 args.due_in_seconds
             ),
-        })
+        };
+        self.approval.finish_tool(Self::NAME, &out).await;
+        Ok(out)
     }
 }
 
@@ -128,6 +117,7 @@ pub struct ListTasksOutput {
 pub struct ListTasksTool {
     pub state: Arc<Mutex<crate::engine::session::SessionState>>,
     pub tx_ui: async_channel::Sender<ClawEngineEvent>,
+    pub approval: Arc<crate::engine::tools::ClawApprovalHandler>,
 }
 
 impl PortableTool for ListTasksTool {
@@ -149,26 +139,11 @@ impl PortableTool for ListTasksTool {
     }
 
     async fn call(&self, _args: Self::Args) -> Result<Self::Output, Self::Error> {
-        boxxy_telemetry::track_tool_use(Self::NAME).await;
-        let (agent_name, character_id, tasks) = {
-            let state = self.state.lock().await;
-            (
-                state.agent_name.clone(),
-                state.character_id.clone(),
-                state.pending_tasks.clone(),
-            )
-        };
-
-        let _ = self
-            .tx_ui
-            .send(ClawEngineEvent::ToolCallStarted {
-                agent_name,
-                character_id,
-                tool_name: Self::NAME.to_string(),
-            })
-            .await;
-
-        Ok(ListTasksOutput { tasks })
+        self.approval.begin_tool(Self::NAME).await;
+        let tasks = self.state.lock().await.pending_tasks.clone();
+        let out = ListTasksOutput { tasks };
+        self.approval.finish_tool(Self::NAME, &out).await;
+        Ok(out)
     }
 }
 
@@ -186,6 +161,7 @@ pub struct CancelTaskOutput {
 pub struct CancelTaskTool {
     pub state: Arc<Mutex<crate::engine::session::SessionState>>,
     pub tx_ui: async_channel::Sender<ClawEngineEvent>,
+    pub approval: Arc<crate::engine::tools::ClawApprovalHandler>,
 }
 
 impl PortableTool for CancelTaskTool {
@@ -210,21 +186,7 @@ impl PortableTool for CancelTaskTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        boxxy_telemetry::track_tool_use(Self::NAME).await;
-
-        let (agent_name, character_id) = {
-            let state = self.state.lock().await;
-            (state.agent_name.clone(), state.character_id.clone())
-        };
-
-        let _ = self
-            .tx_ui
-            .send(ClawEngineEvent::ToolCallStarted {
-                agent_name: agent_name.clone(),
-                character_id: character_id.clone(),
-                tool_name: Self::NAME.to_string(),
-            })
-            .await;
+        self.approval.begin_tool(Self::NAME).await;
 
         let id = Uuid::parse_str(&args.task_id)
             .map_err(|e| std::io::Error::other(format!("Invalid UUID: {e}")))?;
@@ -242,7 +204,7 @@ impl PortableTool for CancelTaskTool {
             )
         };
 
-        if found {
+        let out = if found {
             let _ = self
                 .tx_ui
                 .send(ClawEngineEvent::TaskStatusChanged {
@@ -255,15 +217,17 @@ impl PortableTool for CancelTaskTool {
             let workspace = crate::registry::workspace::global_workspace().await;
             workspace.update_pane_tasks(pane_id, tasks).await;
 
-            Ok(CancelTaskOutput {
+            CancelTaskOutput {
                 success: true,
                 message: "Task cancelled successfully.".to_string(),
-            })
+            }
         } else {
-            Ok(CancelTaskOutput {
+            CancelTaskOutput {
                 success: false,
                 message: "Task not found.".to_string(),
-            })
-        }
+            }
+        };
+        self.approval.finish_tool(Self::NAME, &out).await;
+        Ok(out)
     }
 }

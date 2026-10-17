@@ -19,3 +19,8 @@ async-trait = { workspace = true }
 tokio = { workspace = true }
 thiserror = { workspace = true }
 directories = { workspace = true }
+regex = { workspace = true }
+boxxy-sys-utils = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

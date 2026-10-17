@@ -4,12 +4,16 @@ pub mod network;
 pub mod search;
 pub mod system;
 pub mod utils;
+pub mod workspace_search;
 
 pub use clipboard::{GetClipboardTool, SetClipboardTool};
-pub use file::{FileDeleteTool, FileReadTool, FileWriteTool, ListDirectoryTool};
+pub use file::{
+    FileDeleteTool, FileReadTool, FileWriteTool, ListDirectoryTool, ReplaceInFileTool,
+};
 pub use network::HttpFetchTool;
 pub use search::{TavilyProvider, WebSearchTool};
 pub use system::{GetSystemInfoTool, KillProcessTool, ListProcessesTool, RunBackgroundCommandTool};
+pub use workspace_search::{GlobSearchTool, GrepSearchTool};
 
 /// Trait for handling user approvals for sensitive tools.
 /// Implemented by boxxy-claw to bridge with the UI.
@@ -33,4 +37,8 @@ pub trait ApprovalHandler: Send + Sync {
     async fn report_tool_started(&self, tool_name: String);
     /// Update the agent's thinking status in the UI.
     async fn set_thinking(&self, thinking: bool);
+    /// Return the live working directory for the current session/pane, if available.
+    async fn current_dir(&self) -> Option<String> {
+        None
+    }
 }

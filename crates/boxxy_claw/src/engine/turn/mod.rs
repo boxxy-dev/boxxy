@@ -100,6 +100,7 @@ pub fn spawn_turn(
             character_id,
         ) = {
             let mut state_lock = state.lock().await;
+            state_lock.current_dir = cwd_clone.clone();
 
             // 3. Process Snapshot
             let final_snapshot_text =

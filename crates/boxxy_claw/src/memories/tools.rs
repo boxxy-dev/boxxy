@@ -74,6 +74,12 @@ impl PortableTool for MemoryStoreTool {
         self.approval
             .report_tool_started(Self::NAME.to_string())
             .await;
+        boxxy_telemetry::track_tool_use(Self::NAME).await;
+        let live_cwd = self
+            .approval
+            .current_dir()
+            .await
+            .unwrap_or_else(|| self.current_dir.clone());
         let db_guard = self.db.lock().await;
         if let Some(db) = db_guard.as_ref() {
             let store = Store::new(db.pool());
@@ -81,8 +87,8 @@ impl PortableTool for MemoryStoreTool {
             // or explicitly set category == "project".
             let project_path = match args.project_path.as_deref().map(str::trim) {
                 Some("") | Some("global") | None => {
-                    if args.category.as_deref() == Some("project") && !self.current_dir.is_empty() {
-                        Some(self.current_dir.as_str())
+                    if args.category.as_deref() == Some("project") && !live_cwd.is_empty() {
+                        Some(live_cwd.as_str())
                     } else {
                         Some("global")
                     }
@@ -172,6 +178,12 @@ impl PortableTool for MemoryDeleteTool {
         self.approval
             .report_tool_started(Self::NAME.to_string())
             .await;
+        boxxy_telemetry::track_tool_use(Self::NAME).await;
+        let live_cwd = self
+            .approval
+            .current_dir()
+            .await
+            .unwrap_or_else(|| self.current_dir.clone());
         let db_guard = self.db.lock().await;
         if let Some(db) = db_guard.as_ref() {
             let store = Store::new(db.pool());
@@ -185,7 +197,7 @@ impl PortableTool for MemoryDeleteTool {
             let res = if let Some(scope) = project_path {
                 store.delete_memory(&args.key, Some(scope)).await
             } else {
-                let _ = store.delete_memory(&args.key, Some(&self.current_dir)).await;
+                let _ = store.delete_memory(&args.key, Some(&live_cwd)).await;
                 store.delete_memory(&args.key, Some("global")).await
             };
 

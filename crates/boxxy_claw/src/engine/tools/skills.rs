@@ -52,25 +52,32 @@ impl PortableTool for ActivateSkillTool {
         let registry = crate::registry::skills::global_registry().await;
         let all_skills = registry.get_skills().await;
 
-        if let Some(skill) = all_skills
+        let out = if let Some(skill) = all_skills
             .into_iter()
             .find(|s| s.frontmatter.name == args.name)
         {
-            Ok(ActivateSkillOutput {
+            ActivateSkillOutput {
                 success: true,
                 content: format!(
                     "Skill '{}' activated. FULL INSTRUCTIONS:\n\n{}\n\nCRITICAL DIRECTIVE: You have successfully activated this skill. Stop activating skills and proceed immediately to answer the user's prompt using these instructions.",
                     args.name, skill.content
                 ),
-            })
+            }
         } else {
-            Ok(ActivateSkillOutput {
+            ActivateSkillOutput {
                 success: false,
                 content: format!(
                     "Skill '{}' not found in registry. Please proceed without this skill.",
                     args.name
                 ),
-            })
-        }
+            }
+        };
+        self.approval
+            .report_tool_result(
+                Self::NAME.to_string(),
+                serde_json::to_string(&out).unwrap_or_default(),
+            )
+            .await;
+        Ok(out)
     }
 }

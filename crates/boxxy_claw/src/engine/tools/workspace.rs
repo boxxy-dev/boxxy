@@ -20,6 +20,7 @@ pub struct SpawnAgentOutput {
 pub struct SpawnAgentTool {
     pub tx_ui: async_channel::Sender<ClawEngineEvent>,
     pub state: std::sync::Arc<tokio::sync::Mutex<crate::engine::session::SessionState>>,
+    pub approval: std::sync::Arc<crate::engine::tools::ClawApprovalHandler>,
 }
 
 impl PortableTool for SpawnAgentTool {
@@ -53,30 +54,20 @@ impl PortableTool for SpawnAgentTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        boxxy_telemetry::track_tool_use(Self::NAME).await;
-        let (my_name, character_id) = {
-            let state = self.state.lock().await;
-            (state.agent_name.clone(), state.character_id.clone())
-        };
-
-        let _ = self
-            .tx_ui
-            .send(ClawEngineEvent::ToolCallStarted {
-                agent_name: my_name.clone(),
-                character_id: character_id.clone(),
-                tool_name: Self::NAME.to_string(),
-            })
-            .await;
+        self.approval.begin_tool(Self::NAME).await;
+        let my_name = self.state.lock().await.agent_name.clone();
 
         let loc = match args.location.to_lowercase().as_str() {
             "vertical" => SpawnLocation::VerticalSplit,
             "horizontal" => SpawnLocation::HorizontalSplit,
             "tab" => SpawnLocation::NewTab,
             _ => {
-                return Ok(SpawnAgentOutput {
+                let out = SpawnAgentOutput {
                     message: "Error: location must be 'vertical', 'horizontal', or 'tab'."
                         .to_string(),
-                });
+                };
+                self.approval.finish_tool(Self::NAME, &out).await;
+                return Ok(out);
             }
         };
 
@@ -94,9 +85,11 @@ impl PortableTool for SpawnAgentTool {
             )));
         }
 
-        Ok(SpawnAgentOutput {
+        let out = SpawnAgentOutput {
             message: "Successfully requested to spawn a new agent. It will take a few seconds to boot up and appear on your Workspace Radar.".to_string(),
-        })
+        };
+        self.approval.finish_tool(Self::NAME, &out).await;
+        Ok(out)
     }
 }
 
@@ -113,6 +106,7 @@ pub struct CloseAgentOutput {
 pub struct CloseAgentTool {
     pub tx_ui: async_channel::Sender<ClawEngineEvent>,
     pub state: std::sync::Arc<tokio::sync::Mutex<crate::engine::session::SessionState>>,
+    pub approval: std::sync::Arc<crate::engine::tools::ClawApprovalHandler>,
 }
 
 impl PortableTool for CloseAgentTool {
@@ -133,7 +127,7 @@ impl PortableTool for CloseAgentTool {
             "properties": {
                 "agent_name": {
                     "type": "string",
-                    "description": "The exact name of the agent to close."
+                    "description": "The name (petname, character name, or pane ID) of the agent to close."
                 }
             },
             "required": ["agent_name"]
@@ -141,20 +135,7 @@ impl PortableTool for CloseAgentTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        boxxy_telemetry::track_tool_use(Self::NAME).await;
-        let (agent_name, character_id) = {
-            let state = self.state.lock().await;
-            (state.agent_name.clone(), state.character_id.clone())
-        };
-
-        let _ = self
-            .tx_ui
-            .send(ClawEngineEvent::ToolCallStarted {
-                agent_name,
-                character_id,
-                tool_name: Self::NAME.to_string(),
-            })
-            .await;
+        self.approval.begin_tool(Self::NAME).await;
 
         if let Err(e) = self
             .tx_ui
@@ -168,12 +149,14 @@ impl PortableTool for CloseAgentTool {
             )));
         }
 
-        Ok(CloseAgentOutput {
+        let out = CloseAgentOutput {
             message: format!(
                 "Successfully requested to close agent '{}'.",
                 args.agent_name
             ),
-        })
+        };
+        self.approval.finish_tool(Self::NAME, &out).await;
+        Ok(out)
     }
 }
 
@@ -190,6 +173,7 @@ pub struct ReadPaneOutput {
 pub struct ReadPaneTool {
     pub tx_ui: async_channel::Sender<ClawEngineEvent>,
     pub state: std::sync::Arc<tokio::sync::Mutex<crate::engine::session::SessionState>>,
+    pub approval: std::sync::Arc<crate::engine::tools::ClawApprovalHandler>,
 }
 
 impl PortableTool for ReadPaneTool {
@@ -210,7 +194,7 @@ impl PortableTool for ReadPaneTool {
             "properties": {
                 "agent_name": {
                     "type": "string",
-                    "description": "The name of the agent to read (e.g. 'Red Pony')."
+                    "description": "The name (petname, character name, or pane ID) of the agent to read (e.g. 'red-pony')."
                 }
             },
             "required": ["agent_name"]
@@ -218,38 +202,26 @@ impl PortableTool for ReadPaneTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        boxxy_telemetry::track_tool_use(Self::NAME).await;
-
-        let (agent_name, character_id) = {
-            let state = self.state.lock().await;
-            (state.agent_name.clone(), state.character_id.clone())
-        };
-
-        let _ = self
-            .tx_ui
-            .send(ClawEngineEvent::ToolCallStarted {
-                agent_name: agent_name.clone(),
-                character_id,
-                tool_name: Self::NAME.to_string(),
-            })
-            .await;
+        self.approval.begin_tool(Self::NAME).await;
 
         let workspace = global_workspace().await;
-        if let Some(pane_id) = workspace.resolve_pane_id_by_name(&args.agent_name).await {
+        let out = if let Some(pane_id) = workspace.resolve_pane_id_by_name(&args.agent_name).await {
             match workspace.get_pane_snapshot(pane_id).await {
-                Some(content) => Ok(ReadPaneOutput { content }),
-                None => Ok(ReadPaneOutput {
+                Some(content) => ReadPaneOutput { content },
+                None => ReadPaneOutput {
                     content: format!("Agent '{}' has no active snapshot.", args.agent_name),
-                }),
+                },
             }
         } else {
-            Ok(ReadPaneOutput {
+            ReadPaneOutput {
                 content: format!(
                     "Agent '{}' not found in workspace registry.",
                     args.agent_name
                 ),
-            })
-        }
+            }
+        };
+        self.approval.finish_tool(Self::NAME, &out).await;
+        Ok(out)
     }
 }
 
@@ -273,6 +245,7 @@ pub struct AgentInfo {
 pub struct ListActiveAgentsTool {
     pub tx_ui: async_channel::Sender<ClawEngineEvent>,
     pub state: std::sync::Arc<tokio::sync::Mutex<crate::engine::session::SessionState>>,
+    pub approval: std::sync::Arc<crate::engine::tools::ClawApprovalHandler>,
 }
 
 impl PortableTool for ListActiveAgentsTool {
@@ -283,8 +256,8 @@ impl PortableTool for ListActiveAgentsTool {
     type Output = ListAgentsOutput;
 
     fn description(&self) -> String {
-        "Proactively list all active agents in the current workspace across the entire application. \
-        Use this to discover other agents, their current directories, and their names for coordination."
+        "Refresh the list of all active agents across the workspace. \
+        NOTE: Active peers are ALREADY injected into your `GLOBAL RADAR` every turn — only call this tool if you just spawned a new agent and need to check if it has booted."
             .to_string()
     }
 
@@ -296,24 +269,13 @@ impl PortableTool for ListActiveAgentsTool {
     }
 
     async fn call(&self, _args: Self::Args) -> Result<Self::Output, Self::Error> {
-        let (agent_name, character_id) = {
-            let state = self.state.lock().await;
-            (state.agent_name.clone(), state.character_id.clone())
-        };
-
-        let _ = self
-            .tx_ui
-            .send(ClawEngineEvent::ToolCallStarted {
-                agent_name: agent_name.clone(),
-                character_id,
-                tool_name: Self::NAME.to_string(),
-            })
-            .await;
+        self.approval.begin_tool(Self::NAME).await;
 
         let workspace = global_workspace().await;
         let agents = workspace.get_all_agents().await;
-
-        Ok(ListAgentsOutput { agents })
+        let out = ListAgentsOutput { agents };
+        self.approval.finish_tool(Self::NAME, &out).await;
+        Ok(out)
     }
 }
 
@@ -322,7 +284,9 @@ pub struct SetIntentArgs {
     pub intent: String,
 }
 
-pub struct SetGlobalIntentTool;
+pub struct SetGlobalIntentTool {
+    pub approval: std::sync::Arc<crate::engine::tools::ClawApprovalHandler>,
+}
 
 impl PortableTool for SetGlobalIntentTool {
     const NAME: &'static str = "set_global_intent";
@@ -352,10 +316,12 @@ impl PortableTool for SetGlobalIntentTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        boxxy_telemetry::track_tool_use(Self::NAME).await;
+        self.approval.begin_tool(Self::NAME).await;
         let workspace = global_workspace().await;
         workspace.set_global_intent(args.intent.clone()).await;
-        Ok(format!("Global workspace intent updated: {}", args.intent))
+        let out = format!("Global workspace intent updated: {}", args.intent);
+        self.approval.finish_tool(Self::NAME, &out).await;
+        Ok(out)
     }
 }
 
@@ -372,6 +338,7 @@ pub struct AbortAgentOutput {
 pub struct AbortAgentTaskTool {
     pub tx_ui: async_channel::Sender<ClawEngineEvent>,
     pub state: std::sync::Arc<tokio::sync::Mutex<crate::engine::session::SessionState>>,
+    pub approval: std::sync::Arc<crate::engine::tools::ClawApprovalHandler>,
 }
 
 impl PortableTool for AbortAgentTaskTool {
@@ -393,7 +360,7 @@ impl PortableTool for AbortAgentTaskTool {
             "properties": {
                 "agent_name": {
                     "type": "string",
-                    "description": "The exact name of the agent to abort."
+                    "description": "The name (petname, character name, or pane ID) of the agent to abort."
                 }
             },
             "required": ["agent_name"]
@@ -401,34 +368,23 @@ impl PortableTool for AbortAgentTaskTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        boxxy_telemetry::track_tool_use(Self::NAME).await;
-        let (agent_name, character_id) = {
-            let state = self.state.lock().await;
-            (state.agent_name.clone(), state.character_id.clone())
-        };
-
-        let _ = self
-            .tx_ui
-            .send(ClawEngineEvent::ToolCallStarted {
-                agent_name: agent_name.clone(),
-                character_id,
-                tool_name: Self::NAME.to_string(),
-            })
-            .await;
+        self.approval.begin_tool(Self::NAME).await;
 
         let workspace = global_workspace().await;
-        if let Some(tx) = workspace.get_pane_tx_by_name(&args.agent_name).await {
+        let out = if let Some(tx) = workspace.get_pane_tx_by_name(&args.agent_name).await {
             let _ = tx.send(crate::engine::ClawMessage::Abort).await;
-            Ok(AbortAgentOutput {
+            AbortAgentOutput {
                 message: format!(
                     "Successfully sent ABORT signal to agent '{}'.",
                     args.agent_name
                 ),
-            })
+            }
         } else {
-            Ok(AbortAgentOutput {
+            AbortAgentOutput {
                 message: format!("Agent '{}' not found.", args.agent_name),
-            })
-        }
+            }
+        };
+        self.approval.finish_tool(Self::NAME, &out).await;
+        Ok(out)
     }
 }

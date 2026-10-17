@@ -18,6 +18,7 @@ pub struct SetStateOutput {
 pub struct SetAgentStateTool {
     pub state: Arc<Mutex<crate::engine::session::SessionState>>,
     pub tx_ui: async_channel::Sender<crate::engine::ClawEngineEvent>,
+    pub approval: Arc<crate::engine::tools::ClawApprovalHandler>,
 }
 
 impl PortableTool for SetAgentStateTool {
@@ -46,23 +47,9 @@ impl PortableTool for SetAgentStateTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        boxxy_telemetry::track_tool_use(Self::NAME).await;
+        self.approval.begin_tool(Self::NAME).await;
 
-        let (agent_name, character_id) = {
-            let state = self.state.lock().await;
-            (state.agent_name.clone(), state.character_id.clone())
-        };
-
-        let _ = self
-            .tx_ui
-            .send(crate::engine::ClawEngineEvent::ToolCallStarted {
-                agent_name,
-                character_id,
-                tool_name: Self::NAME.to_string(),
-            })
-            .await;
-
-        if args.state.to_lowercase() == "sleep" {
+        let out = if args.state.to_lowercase() == "sleep" {
             log::debug!("Executing set_agent_state('sleep') tool...");
             let tx_self = {
                 let state = self.state.lock().await;
@@ -84,15 +71,17 @@ impl PortableTool for SetAgentStateTool {
                 log::debug!("Successfully sent TransitionRequest to Sleep.");
             }
 
-            Ok(SetStateOutput {
+            SetStateOutput {
                 success: true,
                 message: "Transitioning to Sleep mode...".to_string(),
-            })
+            }
         } else {
-            Ok(SetStateOutput {
+            SetStateOutput {
                 success: false,
                 message: format!("Invalid state: {}", args.state),
-            })
-        }
+            }
+        };
+        self.approval.finish_tool(Self::NAME, &out).await;
+        Ok(out)
     }
 }

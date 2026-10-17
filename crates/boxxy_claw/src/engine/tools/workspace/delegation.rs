@@ -17,6 +17,7 @@ pub struct DelegateTaskOutput {
 pub struct DelegateTaskTool {
     pub state: std::sync::Arc<tokio::sync::Mutex<crate::engine::session::SessionState>>,
     pub tx_ui: async_channel::Sender<ClawEngineEvent>,
+    pub approval: std::sync::Arc<crate::engine::tools::ClawApprovalHandler>,
 }
 
 impl PortableTool for DelegateTaskTool {
@@ -26,9 +27,9 @@ impl PortableTool for DelegateTaskTool {
     type Output = DelegateTaskOutput;
 
     fn description(&self) -> String {
-        "Delegate a complex task or ask a question to another agent in the workspace. \
+        "Delegate a complex task or ask a question to another agent in the workspace and wait synchronously for its reply. \
         The target agent will autonomously analyze its pane, run commands if needed (prompting the user), \
-        and return its final response back to you. Use this to orchestrate multi-pane workflows (e.g. 'restart the backend server'). \
+        and return its final response back to you. For fanning out multiple parallel tasks, prefer `delegate_task_async` + `await_tasks`. \
         CRITICAL WARNING: DO NOT use this tool if the target agent's Status says it is running an interactive TUI application like 'vim', 'nano', or 'htop'. \
         Stateless agents cannot control TUIs via text delegation. If you need to control a TUI in another pane, you MUST use the `send_keystrokes_to_pane` tool instead.".to_string()
     }
@@ -39,7 +40,7 @@ impl PortableTool for DelegateTaskTool {
             "properties": {
                 "agent_name": {
                     "type": "string",
-                    "description": "The name of the agent to delegate to (e.g. 'Red Pony')."
+                    "description": "The name (petname, character name, or pane ID) of the agent to delegate to (e.g. 'red-pony')."
                 },
                 "prompt": {
                     "type": "string",
@@ -51,37 +52,26 @@ impl PortableTool for DelegateTaskTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        boxxy_telemetry::track_tool_use(Self::NAME).await;
+        self.approval.begin_tool(Self::NAME).await;
         let workspace = global_workspace().await;
         let request_id = uuid::Uuid::new_v4();
 
-        let (my_name, character_id, reply_rx) = {
+        let (my_name, reply_rx) = {
             let mut state = self.state.lock().await;
             let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
             state.pending_delegations.insert(request_id, reply_tx);
-            (
-                state.agent_name.clone(),
-                state.character_id.clone(),
-                reply_rx,
-            )
+            (state.agent_name.clone(), reply_rx)
         };
 
-        let _ = self
-            .tx_ui
-            .send(ClawEngineEvent::ToolCallStarted {
-                agent_name: my_name.clone(),
-                character_id: character_id.clone(),
-                tool_name: Self::NAME.to_string(),
-            })
-            .await;
-
         if args.agent_name.to_lowercase() == my_name.to_lowercase() {
-            return Ok(DelegateTaskOutput {
+            let out = DelegateTaskOutput {
                 response: "Error: You cannot delegate a task to yourself.".to_string(),
-            });
+            };
+            self.approval.finish_tool(Self::NAME, &out).await;
+            return Ok(out);
         }
 
-        if let Some(tx) = workspace.get_pane_tx_by_name(&args.agent_name).await {
+        let out = if let Some(tx) = workspace.get_pane_tx_by_name(&args.agent_name).await {
             let req = crate::engine::ClawMessage::DelegatedTask {
                 source_agent_name: my_name,
                 prompt: args.prompt,
@@ -89,25 +79,27 @@ impl PortableTool for DelegateTaskTool {
             };
 
             if let Err(e) = tx.send(req).await {
-                return Ok(DelegateTaskOutput {
+                DelegateTaskOutput {
                     response: format!("Failed to send task to agent: {}", e),
-                });
-            }
-
-            match reply_rx.await {
-                Ok(response) => Ok(DelegateTaskOutput { response }),
-                Err(_) => Ok(DelegateTaskOutput {
-                    response: "Agent failed to respond or was terminated.".to_string(),
-                }),
+                }
+            } else {
+                match reply_rx.await {
+                    Ok(response) => DelegateTaskOutput { response },
+                    Err(_) => DelegateTaskOutput {
+                        response: "Agent failed to respond or was terminated.".to_string(),
+                    },
+                }
             }
         } else {
-            Ok(DelegateTaskOutput {
+            DelegateTaskOutput {
                 response: format!(
                     "Agent '{}' not found in workspace registry.",
                     args.agent_name
                 ),
-            })
-        }
+            }
+        };
+        self.approval.finish_tool(Self::NAME, &out).await;
+        Ok(out)
     }
 }
 
@@ -126,6 +118,7 @@ pub struct DelegateTaskAsyncOutput {
 pub struct DelegateTaskAsyncTool {
     pub state: std::sync::Arc<tokio::sync::Mutex<crate::engine::session::SessionState>>,
     pub tx_ui: async_channel::Sender<ClawEngineEvent>,
+    pub approval: std::sync::Arc<crate::engine::tools::ClawApprovalHandler>,
 }
 
 impl PortableTool for DelegateTaskAsyncTool {
@@ -147,7 +140,7 @@ impl PortableTool for DelegateTaskAsyncTool {
             "properties": {
                 "agent_name": {
                     "type": "string",
-                    "description": "The exact mnemonic name of the target agent (e.g. 'plentiful bream'). Check the Global Radar for names."
+                    "description": "The name (petname, character name, or pane ID) of the target agent (e.g. 'plentiful-bream'). Check the Global Radar for names."
                 },
                 "prompt": {
                     "type": "string",
@@ -159,31 +152,18 @@ impl PortableTool for DelegateTaskAsyncTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        boxxy_telemetry::track_tool_use(Self::NAME).await;
+        self.approval.begin_tool(Self::NAME).await;
         let workspace = global_workspace().await;
         let request_id = uuid::Uuid::new_v4();
 
-        let (my_name, character_id, reply_rx) = {
+        let (my_name, reply_rx) = {
             let mut state = self.state.lock().await;
             let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
             state.pending_delegations.insert(request_id, reply_tx);
-            (
-                state.agent_name.clone(),
-                state.character_id.clone(),
-                reply_rx,
-            )
+            (state.agent_name.clone(), reply_rx)
         };
 
-        let _ = self
-            .tx_ui
-            .send(ClawEngineEvent::ToolCallStarted {
-                agent_name: my_name.clone(),
-                character_id: character_id.clone(),
-                tool_name: Self::NAME.to_string(),
-            })
-            .await;
-
-        if let Some(tx) = workspace.get_pane_tx_by_name(&args.agent_name).await {
+        let out = if let Some(tx) = workspace.get_pane_tx_by_name(&args.agent_name).await {
             let req = crate::engine::ClawMessage::DelegatedTask {
                 source_agent_name: my_name.clone(),
                 prompt: args.prompt,
@@ -191,41 +171,43 @@ impl PortableTool for DelegateTaskAsyncTool {
             };
 
             if let Err(e) = tx.send(req).await {
-                return Ok(DelegateTaskAsyncOutput {
+                DelegateTaskAsyncOutput {
                     task_id: "".to_string(),
                     message: format!("Failed to send task to agent: {}", e),
-                });
-            }
-
-            // Spawn a task to wait for the reply and then publish it back to the EventBus
-            let tx_self = {
-                let workspace = global_workspace().await;
-                workspace.get_pane_tx_by_name(&my_name).await
-            };
-
-            tokio::spawn(async move {
-                if let Ok(result) = reply_rx.await {
-                    if let Some(tx) = tx_self {
-                        let _ = tx
-                            .send(crate::engine::ClawMessage::TaskCompletedEvent {
-                                task_id: request_id,
-                                result,
-                            })
-                            .await;
-                    }
                 }
-            });
+            } else {
+                // Spawn a task to wait for the reply and then publish it back to the EventBus
+                let tx_self = {
+                    let workspace = global_workspace().await;
+                    workspace.get_pane_tx_by_name(&my_name).await
+                };
 
-            Ok(DelegateTaskAsyncOutput {
-                task_id: request_id.to_string(),
-                message: format!("Task delegated successfully. Task ID: {}", request_id),
-            })
+                tokio::spawn(async move {
+                    if let Ok(result) = reply_rx.await {
+                        if let Some(tx) = tx_self {
+                            let _ = tx
+                                .send(crate::engine::ClawMessage::TaskCompletedEvent {
+                                    task_id: request_id,
+                                    result,
+                                })
+                                .await;
+                        }
+                    }
+                });
+
+                DelegateTaskAsyncOutput {
+                    task_id: request_id.to_string(),
+                    message: format!("Task delegated successfully. Task ID: {}", request_id),
+                }
+            }
         } else {
-            Ok(DelegateTaskAsyncOutput {
+            DelegateTaskAsyncOutput {
                 task_id: "".to_string(),
                 message: format!("Agent '{}' not found.", args.agent_name),
-            })
-        }
+            }
+        };
+        self.approval.finish_tool(Self::NAME, &out).await;
+        Ok(out)
     }
 }
 
@@ -244,6 +226,7 @@ pub struct SendKeystrokesOutput {
 pub struct SendKeystrokesTool {
     pub tx_ui: async_channel::Sender<ClawEngineEvent>,
     pub state: std::sync::Arc<tokio::sync::Mutex<crate::engine::session::SessionState>>,
+    pub approval: std::sync::Arc<crate::engine::tools::ClawApprovalHandler>,
 }
 
 impl PortableTool for SendKeystrokesTool {
@@ -254,7 +237,7 @@ impl PortableTool for SendKeystrokesTool {
     type Output = SendKeystrokesOutput;
 
     fn description(&self) -> String {
-        "Send raw keystrokes directly into another agent's terminal pane. \
+        "Send raw keystrokes directly into another agent's (or your own) terminal pane. \
         Crucial for controlling interactive applications like vim, nano, htop, or terminating stuck processes. \
         To send special keys, use escape sequences: '\\e' or '\\u001b' for Escape, '\\r' or '\\n' for Enter, '\\x03' for Ctrl+C (SIGINT), '\\x04' for Ctrl+D. \
         DO NOT output these sequences in a ```bash block. ONLY pass them via this tool."
@@ -267,7 +250,7 @@ impl PortableTool for SendKeystrokesTool {
             "properties": {
                 "agent_name": {
                     "type": "string",
-                    "description": "The exact name of the agent to send keystrokes to."
+                    "description": "The name (petname, character name, or pane ID) of the agent to send keystrokes to."
                 },
                 "keys": {
                     "type": "string",
@@ -279,21 +262,7 @@ impl PortableTool for SendKeystrokesTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        boxxy_telemetry::track_tool_use(Self::NAME).await;
-
-        let (agent_name, character_id) = {
-            let state = self.state.lock().await;
-            (state.agent_name.clone(), state.character_id.clone())
-        };
-
-        let _ = self
-            .tx_ui
-            .send(ClawEngineEvent::ToolCallStarted {
-                agent_name: agent_name.clone(),
-                character_id,
-                tool_name: Self::NAME.to_string(),
-            })
-            .await;
+        self.approval.begin_tool(Self::NAME).await;
 
         log::debug!(
             "SendKeystrokesTool called with target '{}' and keys: {:?}",
@@ -315,10 +284,12 @@ impl PortableTool for SendKeystrokesTool {
             )));
         }
 
-        Ok(SendKeystrokesOutput {
+        let out = SendKeystrokesOutput {
             success: true,
             message: format!("Keystrokes sent to agent '{}'.", args.agent_name),
-        })
+        };
+        self.approval.finish_tool(Self::NAME, &out).await;
+        Ok(out)
     }
 }
 

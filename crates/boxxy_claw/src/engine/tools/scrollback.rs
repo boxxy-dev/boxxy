@@ -16,6 +16,7 @@ pub struct ReadScrollbackOutput {
 pub struct ReadScrollbackTool {
     pub tx_ui: async_channel::Sender<ClawEngineEvent>,
     pub state: std::sync::Arc<tokio::sync::Mutex<crate::engine::session::SessionState>>,
+    pub approval: std::sync::Arc<crate::engine::tools::ClawApprovalHandler>,
 }
 
 impl PortableTool for ReadScrollbackTool {
@@ -27,8 +28,7 @@ impl PortableTool for ReadScrollbackTool {
 
     fn description(&self) -> String {
         "Read older lines from your terminal's scrollback history. \
-        By default you only see the last 100 lines. Use this tool if an error or context \
-        you need to analyze happened further up in the terminal history. \
+        IMPORTANT: The last ~100 lines are ALREADY provided in your `Terminal Snapshot` — do NOT call this tool with `offset_lines: 0` unless you need lines further back (`offset_lines >= 100`). \
         Provides structured semantic blocks (PROMPT, COMMAND, OUTPUT)."
             .to_string()
     }
@@ -39,11 +39,11 @@ impl PortableTool for ReadScrollbackTool {
             "properties": {
                 "max_lines": {
                     "type": "integer",
-                    "description": "The number of lines to fetch."
+                    "description": "The number of lines to fetch (e.g. 100)."
                 },
                 "offset_lines": {
                     "type": "integer",
-                    "description": "How many lines back from the bottom to start reading. e.g. 0 is the absolute bottom, 100 reads lines ending 100 lines above the bottom."
+                    "description": "How many lines back from the bottom to start reading (use >= 100 since the bottom 100 lines are already in Terminal Snapshot)."
                 }
             },
             "required": ["max_lines", "offset_lines"]
@@ -51,7 +51,7 @@ impl PortableTool for ReadScrollbackTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        boxxy_telemetry::track_tool_use(Self::NAME).await;
+        self.approval.begin_tool(Self::NAME).await;
         let request_id = uuid::Uuid::new_v4();
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
 
@@ -60,15 +60,6 @@ impl PortableTool for ReadScrollbackTool {
             state.pending_scrollbacks.insert(request_id, reply_tx);
             (state.agent_name.clone(), state.character_id.clone())
         };
-
-        let _ = self
-            .tx_ui
-            .send(ClawEngineEvent::ToolCallStarted {
-                agent_name: agent_name.clone(),
-                character_id: character_id.clone(),
-                tool_name: Self::NAME.to_string(),
-            })
-            .await;
 
         let req = ClawEngineEvent::RequestScrollback {
             agent_name,
@@ -85,7 +76,11 @@ impl PortableTool for ReadScrollbackTool {
         }
 
         match reply_rx.await {
-            Ok(text) => Ok(ReadScrollbackOutput { text }),
+            Ok(text) => {
+                let out = ReadScrollbackOutput { text };
+                self.approval.finish_tool(Self::NAME, &out).await;
+                Ok(out)
+            }
             Err(e) => Err(std::io::Error::other(format!(
                 "Failed to receive scrollback: {e}"
             ))),
