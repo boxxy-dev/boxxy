@@ -52,6 +52,7 @@ pub struct PaneInit {
     pub working_dir: Option<String>,
     pub spawn_intent: Option<String>,
     pub reattach_pid: Option<u32>,
+    pub layout_tag: Option<String>,
 }
 
 #[derive(Debug, Clone)]

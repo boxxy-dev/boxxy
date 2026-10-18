@@ -638,7 +638,14 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
             inner.claw.set_maintenance_status(&status, on_battery);
         }
         AppInput::ReattachDetachedSession(pid, cwd) => {
-            tabs::new_tab_reattach(&mut inner, pid, cwd);
+            let _ = tabs::new_tab_reattach(&mut inner, pid, cwd);
+            let tx = inner.tx.clone();
+            gtk4::glib::spawn_future_local(async move {
+                let _ = tx.send(AppInput::RefreshDetachedSessions).await;
+            });
+        }
+        AppInput::ReattachDetachedBatch(sessions) => {
+            tabs::reattach_sessions_grouped(&mut inner, sessions);
             let tx = inner.tx.clone();
             gtk4::glib::spawn_future_local(async move {
                 let _ = tx.send(AppInput::RefreshDetachedSessions).await;
@@ -857,13 +864,12 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
                 let _ = dialog.choose_future(Some(&window)).await;
                 match chosen.get() {
                     "restore-all" => {
-                        if let Ok(remaining) = agent.list_detached_sessions_detailed().await {
-                            for s in remaining {
-                                let cwd_opt = (!s.cwd.is_empty()).then_some(s.cwd);
-                                let _ = tx
-                                    .send(AppInput::ReattachDetachedSession(s.pid, cwd_opt))
-                                    .await;
-                            }
+                        if let Ok(remaining) = agent.list_detached_sessions_detailed().await
+                            && !remaining.is_empty()
+                        {
+                            let _ = tx
+                                .send(AppInput::ReattachDetachedBatch(remaining))
+                                .await;
                         }
                     }
                     "terminate-all" => {

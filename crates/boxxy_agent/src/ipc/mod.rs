@@ -546,21 +546,28 @@ impl AgentInterface {
         pid: u32,
     ) {
         let list = crate::pty::query_detached_sessions_detailed(&self.core.state.pty_registry).await;
-        let targets: Vec<_> = if pid == 0 {
-            list
-        } else {
-            list.into_iter().filter(|s| s.pid == pid).collect()
-        };
+        if list.is_empty() {
+            return;
+        }
 
         if self.core.ghost.is_ghost() {
             let mut pending = self.core.state.pending_restores.write().await;
-            for t in targets {
-                if !pending.contains(&t.pid) {
-                    pending.push(t.pid);
+            if pid == 0 {
+                // 0 sentinel signals "restore all grouped by split layout"
+                if !pending.contains(&0) {
+                    pending.push(0);
+                }
+            } else {
+                for t in list.into_iter().filter(|s| s.pid == pid) {
+                    if !pending.contains(&t.pid) {
+                        pending.push(t.pid);
+                    }
                 }
             }
+        } else if pid == 0 {
+            let _ = Self::restore_detached_requested(&emitter, 0, String::new()).await;
         } else {
-            for t in targets {
+            for t in list.into_iter().filter(|s| s.pid == pid) {
                 let _ = Self::restore_detached_requested(&emitter, t.pid, t.cwd).await;
             }
         }
@@ -573,6 +580,9 @@ impl AgentInterface {
         };
         if queued.is_empty() {
             return Vec::new();
+        }
+        if queued.contains(&0) {
+            return vec![(0, String::new())];
         }
         let list = crate::pty::query_detached_sessions_detailed(&self.core.state.pty_registry).await;
         list.into_iter()

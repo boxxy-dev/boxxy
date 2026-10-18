@@ -69,11 +69,62 @@ pub fn new_tab(inner: &mut AppWindowInner) {
 }
 
 pub fn new_tab_with_intent(inner: &mut AppWindowInner, intent: Option<String>) {
-    new_tab_internal(inner, intent, None, None);
+    let _ = new_tab_internal(inner, intent, None, None);
 }
 
-pub fn new_tab_reattach(inner: &mut AppWindowInner, pid: u32, working_dir: Option<String>) {
-    new_tab_internal(inner, None, working_dir, Some(pid));
+pub fn new_tab_reattach(
+    inner: &mut AppWindowInner,
+    pid: u32,
+    working_dir: Option<String>,
+) -> TerminalComponent {
+    new_tab_internal(inner, None, working_dir, Some(pid))
+}
+
+/// Restores a batch of detached sessions, grouping sessions that originated from
+/// splits within the same tab (`{tab_id}::{idx}::{v|h}`) back into a single tab's
+/// split layout while opening unrelated tabs separately.
+pub fn reattach_sessions_grouped(
+    inner: &mut AppWindowInner,
+    sessions: Vec<boxxy_terminal::DetachedSessionInfo>,
+) {
+    let mut groups: Vec<(
+        String,
+        Vec<(usize, bool, boxxy_terminal::DetachedSessionInfo)>,
+    )> = Vec::new();
+
+    for s in sessions {
+        let (tab_key, idx, is_vertical) = parse_layout_tag(&s.pane_id);
+        if let Some((_, list)) = groups.iter_mut().find(|(k, _)| k == tab_key) {
+            list.push((idx, is_vertical, s));
+        } else {
+            groups.push((tab_key.to_string(), vec![(idx, is_vertical, s)]));
+        }
+    }
+
+    for (_, mut list) in groups {
+        list.sort_by_key(|(idx, _, _)| *idx);
+        let mut iter = list.into_iter();
+        let Some((_, _, first)) = iter.next() else {
+            continue;
+        };
+        let first_cwd = (!first.cwd.is_empty()).then_some(first.cwd);
+        let controller = new_tab_reattach(inner, first.pid, first_cwd);
+        for (_, is_vertical, next) in iter {
+            let next_cwd = (!next.cwd.is_empty()).then_some(next.cwd);
+            controller.split_reattach(is_vertical, next.pid, next_cwd);
+        }
+    }
+}
+
+fn parse_layout_tag(tag: &str) -> (&str, usize, bool) {
+    let mut parts = tag.split("::");
+    let tab_id = parts.next().unwrap_or(tag);
+    let idx = parts
+        .next()
+        .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or(0);
+    let is_vertical = parts.next() != Some("h");
+    (tab_id, idx, is_vertical)
 }
 
 fn new_tab_internal(
@@ -81,7 +132,7 @@ fn new_tab_internal(
     intent: Option<String>,
     explicit_working_dir: Option<String>,
     reattach_pid: Option<u32>,
-) {
+) -> TerminalComponent {
     let id = uuid::Uuid::new_v4().to_string();
 
     let working_dir = explicit_working_dir.or_else(|| {
@@ -148,7 +199,7 @@ fn new_tab_internal(
     }
 
     let tc = crate::init::TerminalController {
-        controller,
+        controller: controller.clone(),
         id,
         cwd: None,
         tab_color,
@@ -162,6 +213,8 @@ fn new_tab_internal(
     gtk4::glib::timeout_add_local_once(std::time::Duration::from_millis(50), move || {
         let _ = tx.send_blocking(crate::state::AppInput::SyncTabColors);
     });
+
+    controller
 }
 
 pub fn set_tab_color(inner: &mut AppWindowInner, key: usize, color: crate::state::TabColor) {

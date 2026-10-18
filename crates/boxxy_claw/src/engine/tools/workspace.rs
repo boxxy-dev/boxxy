@@ -471,18 +471,33 @@ impl PortableTool for RestoreBackgroundShellTool {
         }
 
         let mut restored_labels = Vec::with_capacity(matched.len());
-        for (pid, _pane_id, _idle, cwd, fg_proc, _waiting) in matched {
-            let label = if fg_proc.is_empty() {
-                format!("PID {pid}")
-            } else {
-                format!("{fg_proc} (PID {pid})")
-            };
-            let cwd_opt = (!cwd.is_empty()).then_some(cwd);
+        if query == "all" {
+            for (pid, _pane_id, _idle, _cwd, fg_proc, _waiting) in &matched {
+                let label = if fg_proc.is_empty() {
+                    format!("PID {pid}")
+                } else {
+                    format!("{fg_proc} (PID {pid})")
+                };
+                restored_labels.push(label);
+            }
             let _ = self
                 .tx_ui
-                .send(ClawEngineEvent::RequestReattachShell { pid, cwd: cwd_opt })
+                .send(ClawEngineEvent::RequestReattachShell { pid: 0, cwd: None })
                 .await;
-            restored_labels.push(label);
+        } else {
+            for (pid, _pane_id, _idle, cwd, fg_proc, _waiting) in matched {
+                let label = if fg_proc.is_empty() {
+                    format!("PID {pid}")
+                } else {
+                    format!("{fg_proc} (PID {pid})")
+                };
+                let cwd_opt = (!cwd.is_empty()).then_some(cwd);
+                let _ = self
+                    .tx_ui
+                    .send(ClawEngineEvent::RequestReattachShell { pid, cwd: cwd_opt })
+                    .await;
+                restored_labels.push(label);
+            }
         }
 
         let out = RestoreBackgroundShellOutput {

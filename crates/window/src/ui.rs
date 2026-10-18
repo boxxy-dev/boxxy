@@ -457,11 +457,21 @@ impl AppWindow {
                 if let Ok(pending_restores) = agent.take_pending_restores().await
                     && !pending_restores.is_empty()
                 {
-                    for (pid, cwd) in pending_restores {
-                        let cwd_opt = (!cwd.is_empty()).then_some(cwd);
-                        let _ = tx_startup
-                            .send(AppInput::ReattachDetachedSession(pid, cwd_opt))
-                            .await;
+                    if pending_restores.iter().any(|(pid, _)| *pid == 0) {
+                        if let Ok(all_detached) = agent.list_detached_sessions_detailed().await
+                            && !all_detached.is_empty()
+                        {
+                            let _ = tx_startup
+                                .send(AppInput::ReattachDetachedBatch(all_detached))
+                                .await;
+                        }
+                    } else {
+                        for (pid, cwd) in pending_restores {
+                            let cwd_opt = (!cwd.is_empty()).then_some(cwd);
+                            let _ = tx_startup
+                                .send(AppInput::ReattachDetachedSession(pid, cwd_opt))
+                                .await;
+                        }
                     }
                 }
                 if let Ok(detached) = agent.list_detached_sessions_detailed().await {

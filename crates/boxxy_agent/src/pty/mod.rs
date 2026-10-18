@@ -458,6 +458,11 @@ impl PtySubsystem {
         Ok(())
     }
 
+    async fn set_pane_id(&self, pid: u32, pane_id: String) -> fdo::Result<()> {
+        self.state.pty_registry.set_pane_id(pid, pane_id).await;
+        Ok(())
+    }
+
     /// Decrements the viewer count. If the last viewer detached:
     ///   * persistence off → SIGTERM the process group (returns 0).
     ///   * persistence on  → daemon starts buffering via its stored

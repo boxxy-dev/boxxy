@@ -157,6 +157,7 @@ pub enum AppInput {
     RefreshDetachedSessions,
     UpdateDetachedSessionsBadge(Vec<boxxy_terminal::DetachedSessionInfo>),
     ReattachDetachedSession(u32, Option<String>),
+    ReattachDetachedBatch(Vec<boxxy_terminal::DetachedSessionInfo>),
     RefreshMaintenanceStatus(String, bool),
 }
 

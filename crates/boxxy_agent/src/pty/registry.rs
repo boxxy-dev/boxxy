@@ -356,6 +356,12 @@ impl PtyRegistry {
         }
     }
 
+    pub async fn set_pane_id(&self, pid: u32, pane_id: String) {
+        if let Some(s) = self.inner.write().await.get_mut(&pid) {
+            s.pane_id = pane_id;
+        }
+    }
+
     /// Called by `client_tracker` when a UI process disconnects or crashes.
     /// Automatically detaches (or SIGTERMs if persistence is off) every still-attached
     /// PTY session owned by `owner_bus_name`.

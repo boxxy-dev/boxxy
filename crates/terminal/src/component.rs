@@ -99,6 +99,7 @@ impl TerminalComponent {
                 working_dir: init.working_dir.clone(),
                 spawn_intent: init.spawn_intent.clone(),
                 reattach_pid: init.reattach_pid,
+                layout_tag: Some(format!("{}::0::root", init.id)),
             },
             move |output: PaneOutput| {
                 let _ = tx.send(output);
@@ -871,14 +872,29 @@ impl TerminalComponent {
     }
 
     pub fn split_vertical(&self, intent: Option<String>) {
-        self.split(true, intent);
+        self.split_internal(true, intent, None, None);
     }
 
     pub fn split_horizontal(&self, intent: Option<String>) {
-        self.split(false, intent);
+        self.split_internal(false, intent, None, None);
     }
 
-    fn split(&self, is_vertical: bool, intent: Option<String>) {
+    pub fn split_reattach(
+        &self,
+        is_vertical: bool,
+        reattach_pid: u32,
+        working_dir: Option<String>,
+    ) {
+        self.split_internal(is_vertical, None, Some(reattach_pid), working_dir);
+    }
+
+    fn split_internal(
+        &self,
+        is_vertical: bool,
+        intent: Option<String>,
+        reattach_pid: Option<u32>,
+        working_dir_override: Option<String>,
+    ) {
         if self.inner.borrow().is_maximized {
             self.toggle_maximize();
         }
@@ -892,6 +908,9 @@ impl TerminalComponent {
         };
 
         let new_id = uuid::Uuid::new_v4().to_string();
+        let split_idx = inner.panes.len();
+        let split_dir_code = if is_vertical { "v" } else { "h" };
+        let layout_tag = format!("{}::{}::{}", inner.id, split_idx, split_dir_code);
 
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<PaneOutput>();
         let c = self.clone();
@@ -904,9 +923,10 @@ impl TerminalComponent {
         let new_controller = TerminalPaneComponent::new(
             PaneInit {
                 id: new_id.clone(),
-                working_dir: inner.working_dir.clone(),
+                working_dir: working_dir_override.or_else(|| inner.working_dir.clone()),
                 spawn_intent: intent,
-                reattach_pid: None,
+                reattach_pid,
+                layout_tag: Some(layout_tag),
             },
             move |msg: PaneOutput| {
                 let _ = tx.send(msg);
@@ -933,11 +953,14 @@ impl TerminalComponent {
         let paned = gtk::Paned::new(orientation);
         paned.set_hexpand(true);
         paned.set_vexpand(true);
-        paned.set_position(if is_vertical {
+        let initial_pos = if is_vertical {
             active_wrapper.width() / 2
         } else {
             active_wrapper.height() / 2
-        });
+        };
+        if initial_pos > 0 {
+            paned.set_position(initial_pos);
+        }
 
         if let Some(parent) = active_wrapper.parent() {
             if let Some(p_paned) = parent.downcast_ref::<gtk::Paned>() {

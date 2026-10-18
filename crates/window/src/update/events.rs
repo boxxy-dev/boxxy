@@ -20,10 +20,22 @@ pub fn handle_terminal_event(
                 ));
             }
             TerminalEventKind::RestoreDetached(pid, cwd) => {
-                let cwd_opt = (!cwd.is_empty()).then_some(cwd);
-                let _ = inner
-                    .tx
-                    .send_blocking(AppInput::ReattachDetachedSession(pid, cwd_opt));
+                if pid == 0 {
+                    let tx = inner.tx.clone();
+                    gtk4::glib::spawn_future_local(async move {
+                        let agent = boxxy_terminal::get_agent().await;
+                        if let Ok(remaining) = agent.list_detached_sessions_detailed().await
+                            && !remaining.is_empty()
+                        {
+                            let _ = tx.send(AppInput::ReattachDetachedBatch(remaining)).await;
+                        }
+                    });
+                } else {
+                    let cwd_opt = (!cwd.is_empty()).then_some(cwd);
+                    let _ = inner
+                        .tx
+                        .send_blocking(AppInput::ReattachDetachedSession(pid, cwd_opt));
+                }
             }
             _ => {}
         }
@@ -214,9 +226,22 @@ pub fn handle_terminal_event(
                         }
                     },
                     ClawEngineEvent::RequestReattachShell { pid, cwd } => {
-                        let _ = inner
-                            .tx
-                            .send_blocking(AppInput::ReattachDetachedSession(pid, cwd));
+                        if pid == 0 {
+                            let tx = inner.tx.clone();
+                            gtk4::glib::spawn_future_local(async move {
+                                let agent = boxxy_terminal::get_agent().await;
+                                if let Ok(remaining) = agent.list_detached_sessions_detailed().await
+                                    && !remaining.is_empty()
+                                {
+                                    let _ =
+                                        tx.send(AppInput::ReattachDetachedBatch(remaining)).await;
+                                }
+                            });
+                        } else {
+                            let _ = inner
+                                .tx
+                                .send_blocking(AppInput::ReattachDetachedSession(pid, cwd));
+                        }
                     }
                     ClawEngineEvent::RequestCloseAgent { target_agent_name } => {
                         let inner_clone = _inner_ref.clone();

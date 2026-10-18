@@ -183,6 +183,7 @@ pub(super) struct PaneInner {
     pub(super) working_dir: Option<String>,
     pub(super) last_title: Option<String>,
     pub id: String,
+    pub(super) layout_tag: String,
     pub(super) current_settings: Option<Settings>,
     pub(super) hide_scrollbars: bool,
     pub(super) is_dimmed: bool,
@@ -729,6 +730,7 @@ impl TerminalPaneComponent {
                 working_dir: init.working_dir,
                 last_title: None,
                 id: id.clone(),
+                layout_tag: init.layout_tag.unwrap_or_else(|| id.clone()),
                 current_settings: None,
                 hide_scrollbars: false,
                 is_dimmed: false,
@@ -1017,7 +1019,10 @@ impl TerminalPaneComponent {
         let is_claw_active_spawn = self.is_claw_active.get();
 
         glib::spawn_future_local(async move {
-            let reattach_pid = inner_rc.borrow_mut().reattach_pid.take();
+            let (reattach_pid, layout_tag) = {
+                let mut inner = inner_rc.borrow_mut();
+                (inner.reattach_pid.take(), inner.layout_tag.clone())
+            };
             let settings = inner_rc
                 .borrow()
                 .current_settings
@@ -1035,6 +1040,7 @@ impl TerminalPaneComponent {
                             let mut inner = inner_rc.borrow_mut();
                             inner.pid = Some(pid);
                         }
+                        let _ = agent.set_pane_id(pid, layout_tag).await;
 
                         let has_osc_title = replay_bytes
                             .windows(4)
@@ -1187,7 +1193,7 @@ impl TerminalPaneComponent {
                         env,
                         cols,
                         rows,
-                        pane_id: id.clone(),
+                        pane_id: layout_tag,
                     };
 
                     use std::os::unix::io::{AsRawFd, FromRawFd};

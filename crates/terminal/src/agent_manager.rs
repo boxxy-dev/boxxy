@@ -704,6 +704,13 @@ impl AgentManager {
             .context("Agent set_persistence failed")
     }
 
+    pub async fn set_pane_id(&self, pid: u32, pane_id: String) -> Result<()> {
+        self.proxy
+            .set_pane_id(pid, pane_id)
+            .await
+            .context("Agent set_pane_id failed")
+    }
+
     /// Returns the raw `DetachOutcome` code: 0=Terminated, 1=Detached,
     /// 2=StillViewed, 3=DetachedUnbuffered, u32::MAX=Unknown.
     pub async fn detach(&self, pid: u32) -> Result<u32> {

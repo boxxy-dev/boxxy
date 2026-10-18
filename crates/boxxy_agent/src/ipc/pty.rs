@@ -44,6 +44,7 @@ pub trait AgentPty {
     /// the daemon takes over the master FD and buffers output into a
     /// 4 MB ring buffer. Defaults to `false` when a session is spawned.
     async fn set_persistence(&self, pid: u32, enabled: bool) -> zbus::Result<()>;
+    async fn set_pane_id(&self, pid: u32, pane_id: String) -> zbus::Result<()>;
 
     /// Decrements the session's viewer count. On the last viewer:
     ///   * persistence off → SIGTERM the process group (returns 0).
