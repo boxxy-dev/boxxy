@@ -30,6 +30,7 @@ pub struct ClawSidebarComponent {
     badges_box: gtk::Box,
     claw_model_lbl: gtk::Label,
     dreams_model_lbl: gtk::Label,
+    dream_status_lbl: gtk::Label,
     search_lbl: gtk::Label,
     context_box: gtk::Box,
     tokens_lbl: gtk::Label,
@@ -197,6 +198,9 @@ impl ClawSidebarComponent {
         let (dreams_row, dreams_model_lbl) = make_kv_row("Dreams", "Default");
         models_box.append(&dreams_row);
 
+        let (dream_status_row, dream_status_lbl) = make_kv_row("Dream Cycle", "Idle");
+        models_box.append(&dream_status_row);
+
         let (search_row, search_lbl) = make_kv_row("Search", "Off");
         models_box.append(&search_row);
 
@@ -263,6 +267,7 @@ impl ClawSidebarComponent {
             badges_box,
             claw_model_lbl,
             dreams_model_lbl,
+            dream_status_lbl,
             search_lbl,
             context_box,
             tokens_lbl,
@@ -453,6 +458,18 @@ impl ClawSidebarComponent {
         self.refresh_models_info(settings);
         populate_mcp_rows(&self.mcp_box, &self.mcp_rows_box, settings);
         self.refresh_visibility();
+    }
+
+    pub fn set_maintenance_status(&self, status: &str, on_battery: bool) {
+        let formatted = match status {
+            "disabled" => "Disabled",
+            "paused_on_battery" => "Paused (Battery)",
+            "paused_ui_attached" if on_battery => "Standby (Battery)",
+            "paused_ui_attached" => "Standby (UI Open)",
+            "running" => "Consolidating…",
+            _ => "Idle",
+        };
+        self.dream_status_lbl.set_label(formatted);
     }
 
     pub fn set_session_usage(&self, usage: SessionUsage) {

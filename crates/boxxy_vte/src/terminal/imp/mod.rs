@@ -448,8 +448,19 @@ impl TerminalWidget {
     }
 
     pub(crate) fn attach_pty(&self, master_fd: std::os::unix::io::OwnedFd) {
+        self.attach_pty_with_replay(master_fd, Vec::new());
+    }
+
+    pub(crate) fn attach_pty_with_replay(
+        &self,
+        master_fd: std::os::unix::io::OwnedFd,
+        replay_bytes: Vec<u8>,
+    ) {
         let (sender, receiver) = async_channel::unbounded::<Event>();
         let backend = TerminalBackend::from_fd(sender, master_fd);
+        if !replay_bytes.is_empty() {
+            backend.replay_output(replay_bytes);
+        }
         self.backend.replace(Some(backend));
         let (w, h) = (self.obj().width(), self.obj().height());
         if w > 0 && h > 0 {
@@ -509,6 +520,14 @@ impl TerminalWidget {
             .as_ref()
             .map(|b| b.has_selection())
             .unwrap_or(false)
+    }
+
+    pub(crate) fn export_ansi_snapshot(&self) -> Vec<u8> {
+        let backend_ref = self.backend.borrow();
+        let Some(backend) = backend_ref.as_ref() else {
+            return Vec::new();
+        };
+        backend.render_state.load().export_ansi_snapshot()
     }
 
     pub(crate) fn paste_clipboard(&self) {

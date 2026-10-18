@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use boxxy_agent::daemon;
 use boxxy_agent::ipc::AgentProxy;
+use boxxy_agent::ipc::maintenance::AgentMaintenanceProxy;
 use boxxy_agent::ipc::pty::AgentPtyProxy;
 use clap::{Parser, Subcommand};
 use log::info;
@@ -36,6 +37,8 @@ enum Commands {
     /// List PTY sessions the daemon has kept alive after the UI closed
     /// (persistence must be enabled in Preferences → Advanced).
     ListSessions,
+    /// Show daemon status, power state, Dream Cycle state, and active sessions.
+    Status,
 }
 
 fn main() -> Result<()> {
@@ -73,15 +76,63 @@ fn main() -> Result<()> {
                 return run_async(async {
                     let conn = Connection::session().await?;
                     let proxy = AgentPtyProxy::new(&conn).await?;
-                    let sessions = proxy.list_detached_sessions().await?;
+                    let sessions = proxy.list_detached_sessions_detailed().await?;
                     if sessions.is_empty() {
                         println!("No detached PTY sessions.");
                     } else {
-                        println!("{:>8}  {:>8}  {}", "PID", "IDLE_S", "PANE_ID");
-                        for (pid, pane_id, idle_secs) in sessions {
-                            println!("{:>8}  {:>8}  {}", pid, idle_secs, pane_id);
+                        println!(
+                            "{:>8}  {:>8}  {:<16}  {:<10}  {:<30}  {}",
+                            "PID", "IDLE_S", "PROCESS", "STATE", "CWD", "PANE_ID"
+                        );
+                        for s in sessions {
+                            let proc_label = if s.foreground_process.is_empty() {
+                                "(shell)".to_string()
+                            } else {
+                                s.foreground_process
+                            };
+                            let state_label = if s.waiting_for_input {
+                                "INPUT_WAIT"
+                            } else {
+                                "DETACHED"
+                            };
+                            println!(
+                                "{:>8}  {:>8}  {:<16}  {:<10}  {:<30}  {}",
+                                s.pid, s.idle_secs, proc_label, state_label, s.cwd, s.pane_id
+                            );
                         }
                     }
+                    Ok(())
+                });
+            }
+            Commands::Status => {
+                return run_async(async {
+                    let conn = Connection::session().await?;
+                    let agent_proxy = AgentProxy::new(&conn).await?;
+                    let maint_proxy = AgentMaintenanceProxy::new(&conn).await?;
+                    let pty_proxy = AgentPtyProxy::new(&conn).await?;
+
+                    let version = agent_proxy.get_version().await.unwrap_or_default();
+                    let config_dir = agent_proxy.get_config_dir().await.unwrap_or_default();
+                    let maint_status = maint_proxy
+                        .get_maintenance_status()
+                        .await
+                        .unwrap_or_else(|_| "unknown".to_string());
+                    let on_battery = maint_proxy.is_on_battery().await.unwrap_or(false);
+                    let claw_sessions = agent_proxy.list_claw_sessions().await.unwrap_or_default();
+                    let detached_ptys = pty_proxy
+                        .list_detached_sessions_detailed()
+                        .await
+                        .unwrap_or_default();
+
+                    println!("Boxxy Agent v{version}");
+                    println!("  Config Dir:        {config_dir}");
+                    println!(
+                        "  Power Source:      {}",
+                        if on_battery { "Battery" } else { "AC" }
+                    );
+                    println!("  Dream Cycle:       {maint_status}");
+                    println!("  Active Claw Panes: {}", claw_sessions.len());
+                    println!("  Detached Shells:   {}", detached_ptys.len());
                     Ok(())
                 });
             }

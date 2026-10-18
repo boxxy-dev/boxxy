@@ -155,6 +155,167 @@ impl RenderState {
         if res.is_empty() { None } else { Some(res) }
     }
 
+    /// Serializes the visible terminal viewport (including cell colors, SGR flags,
+    /// alt-screen mode, and cursor position) into an ANSI byte stream so a detached
+    /// session can restore its pre-detach screen on reattach even if the running
+    /// process emits 0 new bytes while in the background.
+    pub fn export_ansi_snapshot(&self) -> Vec<u8> {
+        use crate::engine::ansi::{Color, NamedColor};
+        use std::fmt::Write;
+
+        if self.cells.is_empty() || self.columns == 0 || self.screen_lines == 0 {
+            return Vec::new();
+        }
+
+        let style_mask = Flags::from_bits_truncate(
+            Flags::BOLD.bits()
+                | Flags::DIM.bits()
+                | Flags::ITALIC.bits()
+                | Flags::UNDERLINE.bits()
+                | Flags::INVERSE.bits()
+                | Flags::STRIKEOUT.bits(),
+        );
+
+        let cursor_row = (self.cursor_point.line.0 + self.display_offset)
+            .clamp(0, self.screen_lines as i32 - 1) as usize;
+        let cursor_col = self.cursor_point.column.0.min(self.columns.saturating_sub(1));
+
+        // Find the last row that has any visible content (or the cursor row).
+        let mut last_row = cursor_row;
+        for r in (0..self.screen_lines).rev() {
+            let row_slice = &self.cells[r * self.columns..(r + 1) * self.columns];
+            if row_slice.iter().any(|c| !c.is_empty()) {
+                last_row = last_row.max(r);
+                break;
+            }
+        }
+
+        let mut out = String::with_capacity(self.columns * (last_row + 1));
+        if self.is_alt_screen {
+            out.push_str("\x1b[?1049h\x1b[H");
+        }
+
+        let default_fg = Color::Named(NamedColor::Foreground);
+        let default_bg = Color::Named(NamedColor::Background);
+
+        for r in 0..=last_row {
+            let row_slice = &self.cells[r * self.columns..(r + 1) * self.columns];
+            let mut last_col = row_slice
+                .iter()
+                .rposition(|c| !c.is_empty())
+                .map(|idx| idx + 1)
+                .unwrap_or(0);
+            if r == cursor_row {
+                last_col = last_col.max(cursor_col);
+            }
+
+            let mut cur_fg = default_fg;
+            let mut cur_bg = default_bg;
+            let mut cur_flags = Flags::empty();
+
+            for cell in row_slice.iter().take(last_col) {
+                if cell
+                    .flags
+                    .intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER)
+                {
+                    continue;
+                }
+
+                let cell_flags = cell.flags & style_mask;
+                if cell.fg != cur_fg || cell.bg != cur_bg || cell_flags != cur_flags {
+                    cur_fg = cell.fg;
+                    cur_bg = cell.bg;
+                    cur_flags = cell_flags;
+
+                    out.push_str("\x1b[0");
+                    if cur_flags.contains(Flags::BOLD) {
+                        out.push_str(";1");
+                    }
+                    if cur_flags.contains(Flags::DIM) {
+                        out.push_str(";2");
+                    }
+                    if cur_flags.contains(Flags::ITALIC) {
+                        out.push_str(";3");
+                    }
+                    if cur_flags.contains(Flags::UNDERLINE) {
+                        out.push_str(";4");
+                    }
+                    if cur_flags.contains(Flags::INVERSE) {
+                        out.push_str(";7");
+                    }
+                    if cur_flags.contains(Flags::STRIKEOUT) {
+                        out.push_str(";9");
+                    }
+
+                    match cur_fg {
+                        Color::Named(NamedColor::Foreground) => {}
+                        Color::Named(NamedColor::BrightForeground) => out.push_str(";1"),
+                        Color::Named(NamedColor::DimForeground) => out.push_str(";2"),
+                        Color::Named(n) => {
+                            let idx = n as u16;
+                            if idx < 8 {
+                                let _ = write!(out, ";{}", 30 + idx);
+                            } else if idx < 16 {
+                                let _ = write!(out, ";{}", 90 + (idx - 8));
+                            }
+                        }
+                        Color::Indexed(idx) => {
+                            let _ = write!(out, ";38;5;{idx}");
+                        }
+                        Color::Spec(rgb) => {
+                            let _ = write!(out, ";38;2;{};{};{}", rgb.r, rgb.g, rgb.b);
+                        }
+                    }
+
+                    match cur_bg {
+                        Color::Named(NamedColor::Background) => {}
+                        Color::Named(n) => {
+                            let idx = n as u16;
+                            if idx < 8 {
+                                let _ = write!(out, ";{}", 40 + idx);
+                            } else if idx < 16 {
+                                let _ = write!(out, ";{}", 100 + (idx - 8));
+                            }
+                        }
+                        Color::Indexed(idx) => {
+                            let _ = write!(out, ";48;5;{idx}");
+                        }
+                        Color::Spec(rgb) => {
+                            let _ = write!(out, ";48;2;{};{};{}", rgb.r, rgb.g, rgb.b);
+                        }
+                    }
+
+                    out.push('m');
+                }
+
+                let ch = if cell.c == '\0' { ' ' } else { cell.c };
+                out.push(ch);
+            }
+
+            if cur_fg != default_fg || cur_bg != default_bg || !cur_flags.is_empty() {
+                out.push_str("\x1b[0m");
+            }
+
+            if r < last_row {
+                out.push_str("\r\n");
+            }
+        }
+
+        if self.is_alt_screen {
+            let _ = write!(out, "\x1b[{};{}H", cursor_row + 1, cursor_col + 1);
+        } else {
+            let rows_up = last_row.saturating_sub(cursor_row);
+            if rows_up > 0 {
+                let _ = write!(out, "\x1b[{rows_up}A");
+            }
+            out.push('\r');
+            if cursor_col > 0 {
+                let _ = write!(out, "\x1b[{cursor_col}C");
+            }
+        }
+        out.into_bytes()
+    }
+
     pub fn calculate_character_delta(&self, start: Point, end: Point) -> isize {
         let mut char_delta = 0isize;
         let cur_line = start.line.0;

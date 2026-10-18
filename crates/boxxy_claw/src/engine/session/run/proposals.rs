@@ -22,25 +22,7 @@ impl ClawSession {
 
         let mut state_lock = self.state.lock().await;
         state_lock.status = crate::engine::AgentStatus::Waiting;
-
-        if let Some(reply) = state_lock.pending_terminal_reply.take() {
-            let _ = reply.send(Err("[ABORT]".to_string()));
-        }
-        if let Some(reply) = state_lock.pending_file_reply.take() {
-            let _ = reply.send(false);
-        }
-        if let Some(reply) = state_lock.pending_file_delete_reply.take() {
-            let _ = reply.send(false);
-        }
-        if let Some(reply) = state_lock.pending_kill_process_reply.take() {
-            let _ = reply.send(false);
-        }
-        if let Some(reply) = state_lock.pending_get_clipboard_reply.take() {
-            let _ = reply.send(false);
-        }
-        if let Some(reply) = state_lock.pending_set_clipboard_reply.take() {
-            let _ = reply.send(false);
-        }
+        state_lock.drain_pending_cancel();
     }
 
     pub(super) async fn handle_cancel_pending(&mut self) {

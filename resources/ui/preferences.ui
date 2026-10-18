@@ -745,8 +745,8 @@
                                 </child>
                                 <child>
                                   <object class="AdwSwitchRow" id="pty_persistence_switch">
-                                    <property name="title" translatable="yes">Persistent Shells (Experimental)</property>
-                                    <property name="subtitle" translatable="yes">Keeps shells alive after closing the window. Detached sessions are currently only visible via the "boxxy-agent list-sessions" command — there is no reopen or reattach UI yet. Recommended only for testing.</property>
+                                    <property name="title" translatable="yes">Always Keep Running Processes in Background</property>
+                                    <property name="subtitle" translatable="yes">Automatically move running processes to the background when closing a tab or window without showing the confirmation dialog.</property>
                                   </object>
                                 </child>
                               </object>

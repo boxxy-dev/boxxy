@@ -249,8 +249,15 @@ impl AppWindow {
         );
         sidebar_overlay.set_visible(app_state.sidebar_visible);
         split_view.set_sidebar(Some(&sidebar_overlay));
-        let (content_toolbar, content_header, bell_indicator, menu_btn, tab_bar) =
-            Self::build_content_area(&tx, &tab_view, &current_settings);
+        let (
+            content_toolbar,
+            content_header,
+            bell_indicator,
+            menu_btn,
+            detached_btn,
+            detached_count_lbl,
+            tab_bar,
+        ) = Self::build_content_area(&tx, &tab_view, &current_settings);
 
         let overlay = gtk::Overlay::new();
         overlay.set_child(Some(&content_toolbar));
@@ -331,6 +338,8 @@ impl AppWindow {
             sidebar_overlay,
             sidebar_toolbar,
             menu_btn,
+            detached_btn,
+            detached_count_lbl,
             view_stack,
             next_id: 1,
             sidebar_visible: app_state.sidebar_visible,
@@ -430,6 +439,73 @@ impl AppWindow {
 
         if !is_drag_window && inner_ref.borrow().tabs.is_empty() {
             crate::update::update(&inner_ref, AppInput::NewTab);
+        }
+
+        // Query initial maintenance status, show startup toast if background shells
+        // are waiting, and keep the HeaderBar badge synced with the daemon.
+        if !is_drag_window {
+            let tx_startup = tx.clone();
+            let toast_overlay_startup = inner_ref.borrow().toast_overlay.clone();
+            let window_weak = window.downgrade();
+            gtk::glib::spawn_future_local(async move {
+                let agent = boxxy_terminal::get_agent().await;
+                if let Ok((status, on_battery)) = agent.get_maintenance_status().await {
+                    let _ = tx_startup
+                        .send(AppInput::RefreshMaintenanceStatus(status, on_battery))
+                        .await;
+                }
+                if let Ok(pending_restores) = agent.take_pending_restores().await
+                    && !pending_restores.is_empty()
+                {
+                    for (pid, cwd) in pending_restores {
+                        let cwd_opt = (!cwd.is_empty()).then_some(cwd);
+                        let _ = tx_startup
+                            .send(AppInput::ReattachDetachedSession(pid, cwd_opt))
+                            .await;
+                    }
+                }
+                if let Ok(detached) = agent.list_detached_sessions_detailed().await {
+                    if !detached.is_empty() {
+                        let waiting_count =
+                            detached.iter().filter(|s| s.waiting_for_input).count();
+                        let label = if detached.len() == 1 {
+                            if waiting_count > 0 {
+                                "1 background shell waiting for input".to_string()
+                            } else {
+                                "1 background shell is still running".to_string()
+                            }
+                        } else if waiting_count > 0 {
+                            format!(
+                                "{} background shells running ({} waiting for input)",
+                                detached.len(),
+                                waiting_count
+                            )
+                        } else {
+                            format!("{} background shells are still running", detached.len())
+                        };
+
+                        let toast = adw::Toast::new(&label);
+                        toast.set_timeout(0);
+                        toast.set_button_label(Some("Review"));
+                        let tx_btn = tx_startup.clone();
+                        toast.connect_button_clicked(move |_| {
+                            let _ = tx_btn.send_blocking(AppInput::ShowDetachedSessions);
+                        });
+                        toast_overlay_startup.add_toast(toast);
+                    }
+                    let _ = tx_startup
+                        .send(AppInput::UpdateDetachedSessionsBadge(detached))
+                        .await;
+                }
+
+                loop {
+                    gtk::glib::timeout_future(std::time::Duration::from_secs(3)).await;
+                    if window_weak.upgrade().is_none() {
+                        break;
+                    }
+                    let _ = tx_startup.send(AppInput::RefreshDetachedSessions).await;
+                }
+            });
         }
 
         // Background update check
@@ -617,6 +693,8 @@ impl AppWindow {
         adw::HeaderBar,
         gtk::Image,
         gtk::Button,
+        gtk::Button,
+        gtk::Label,
         adw::TabBar,
     ) {
         tab_view.add_css_class("terminal-tab-view");
@@ -658,6 +736,28 @@ impl AppWindow {
         });
         content_header.pack_end(&menu_btn);
 
+        // Flat HeaderBar Background Shells button (opens the unified Background Shells dialog)
+        let badge_content = gtk::Box::new(gtk::Orientation::Horizontal, 5);
+        let badge_icon = gtk::Image::from_icon_name("utilities-terminal-symbolic");
+        let detached_count_lbl = gtk::Label::builder()
+            .label("0")
+            .css_classes(["caption", "monospace", "heading"])
+            .build();
+        badge_content.append(&badge_icon);
+        badge_content.append(&detached_count_lbl);
+
+        let detached_btn = gtk::Button::builder()
+            .child(&badge_content)
+            .css_classes(["flat"])
+            .tooltip_text("Background Shells")
+            .visible(false)
+            .build();
+        let tx_detached_btn = tx.clone();
+        detached_btn.connect_clicked(move |_| {
+            let _ = tx_detached_btn.send_blocking(AppInput::ShowDetachedSessions);
+        });
+        content_header.pack_end(&detached_btn);
+
         let bell_indicator = gtk::Image::builder()
             .icon_name("boxxy-visual-bell-symbolic")
             .visible(false)
@@ -681,6 +781,8 @@ impl AppWindow {
             content_header,
             bell_indicator,
             menu_btn,
+            detached_btn,
+            detached_count_lbl,
             tab_bar,
         )
     }

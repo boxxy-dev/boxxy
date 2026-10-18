@@ -126,25 +126,31 @@ impl Drop for PaneInner {
         });
 
         let Some(pid) = self.pid else { return };
+        if self.already_handled_close {
+            return;
+        }
 
         // Read the live setting here rather than snapshotting it at
         // spawn time — that way toggling persistence in Preferences
         // takes effect on the very next pane close, not just on panes
-        // opened after the toggle.
-        let persist = Settings::load().pty_persistence;
+        // opened after the toggle. Explicitly closing a single split or
+        // idle tab sets `force_terminate_on_close = true` so it doesn't
+        // linger in the background.
+        let persist = Settings::load().pty_persistence && !self.force_terminate_on_close;
 
         if persist {
             log::info!(
                 "PaneInner dropping (pid={}): pty_persistence on → detaching into daemon",
                 pid
             );
+            let snapshot = self.export_snapshot_with_title();
             glib::spawn_future_local(async move {
                 let agent = crate::get_agent().await;
                 // Set the flag then detach. Order matters: detach()
                 // only keeps the shell alive if persistence is already
                 // on at decision time.
                 let _ = agent.set_persistence(pid, true).await;
-                match agent.detach(pid).await {
+                match agent.detach_with_snapshot(pid, snapshot).await {
                     Ok(1) => log::info!("pid={} detached into background", pid),
                     Ok(0) => log::info!(
                         "pid={} terminated (unexpectedly — persistence may be off on daemon)",
@@ -159,12 +165,12 @@ impl Drop for PaneInner {
                 }
             });
         } else {
-            // Non-persistent path: SIGTERM the process group so shells
-            // and their children (mpv, etc.) are cleaned up even if they
-            // ignore SIGHUP.
+            // Non-persistent path: disable persistence on the daemon and
+            // SIGTERM the process group so shells and their children are cleaned up.
             log::info!("PaneInner dropping (pid={}): killing process group", pid);
             glib::spawn_future_local(async move {
                 let agent = crate::get_agent().await;
+                let _ = agent.set_persistence(pid, false).await;
                 let _ = agent.signal_process_group(pid, 15).await;
             });
         }
@@ -175,6 +181,7 @@ pub(super) struct PaneInner {
     pub terminal: TerminalWidget,
     pub(super) scrolled_window: gtk::ScrolledWindow,
     pub(super) working_dir: Option<String>,
+    pub(super) last_title: Option<String>,
     pub id: String,
     pub(super) current_settings: Option<Settings>,
     pub(super) hide_scrollbars: bool,
@@ -183,6 +190,9 @@ pub(super) struct PaneInner {
     pub(super) n_columns: i64,
     pub(super) n_rows: i64,
     pub(super) pid: Option<u32>,
+    pub(super) reattach_pid: Option<u32>,
+    pub(super) force_terminate_on_close: bool,
+    pub(super) already_handled_close: bool,
     pub session_id: std::sync::Arc<tokio::sync::Mutex<Option<String>>>,
     pub(super) claw_event_tx: async_channel::Sender<boxxy_claw_protocol::ClawEngineEvent>,
     pub(super) claw_msg_tx: async_channel::Sender<boxxy_claw_protocol::ClawMessage>,
@@ -194,6 +204,19 @@ pub(super) struct PaneInner {
     pub(super) callback: std::sync::Arc<dyn Fn(PaneOutput) + Send + Sync + 'static>,
 }
 
+impl PaneInner {
+    fn export_snapshot_with_title(&self) -> Vec<u8> {
+        let mut snap = Vec::new();
+        if let Some(ref title) = self.last_title
+            && !title.is_empty()
+        {
+            snap.extend_from_slice(format!("\x1b]0;{title}\x07").as_bytes());
+        }
+        snap.extend_from_slice(&self.terminal.export_ansi_snapshot());
+        snap
+    }
+}
+
 impl std::fmt::Debug for TerminalPaneComponent {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TerminalPaneComponent").finish()
@@ -201,6 +224,40 @@ impl std::fmt::Debug for TerminalPaneComponent {
 }
 
 impl TerminalPaneComponent {
+    pub fn set_force_terminate_on_close(&self, force: bool) {
+        self.inner.borrow_mut().force_terminate_on_close = force;
+    }
+
+    pub async fn detach_on_close_sync(&self) {
+        let (pid, snapshot) = {
+            let mut inner = self.inner.borrow_mut();
+            inner.already_handled_close = true;
+            let snap = inner.export_snapshot_with_title();
+            (inner.pid, snap)
+        };
+        self.end_session_sync().await;
+        if let Some(pid) = pid {
+            let agent = crate::get_agent().await;
+            let _ = agent.set_persistence(pid, true).await;
+            let _ = agent.detach_with_snapshot(pid, snapshot).await;
+        }
+    }
+
+    pub async fn terminate_on_close_sync(&self) {
+        let pid = {
+            let mut inner = self.inner.borrow_mut();
+            inner.already_handled_close = true;
+            inner.force_terminate_on_close = true;
+            inner.pid
+        };
+        self.end_session_sync().await;
+        if let Some(pid) = pid {
+            let agent = crate::get_agent().await;
+            let _ = agent.set_persistence(pid, false).await;
+            let _ = agent.signal_process_group(pid, 15).await;
+        }
+    }
+
     /// Explicitly release the Claw session in the daemon. Called from the
     /// tab-close path where we have a synchronous handle on the pane.
     /// Do NOT rely solely on PaneInner::drop for this — GTK closures hold
@@ -670,6 +727,7 @@ impl TerminalPaneComponent {
                 terminal: terminal.clone(),
                 scrolled_window,
                 working_dir: init.working_dir,
+                last_title: None,
                 id: id.clone(),
                 current_settings: None,
                 hide_scrollbars: false,
@@ -678,6 +736,9 @@ impl TerminalPaneComponent {
                 n_columns: 0,
                 n_rows: 0,
                 pid: None,
+                reattach_pid: init.reattach_pid,
+                force_terminate_on_close: false,
+                already_handled_close: false,
                 session_id: session_id_for_inner,
                 claw_event_tx: claw_event_tx_for_inner,
                 claw_msg_tx: claw_sender.clone(),
@@ -956,6 +1017,7 @@ impl TerminalPaneComponent {
         let is_claw_active_spawn = self.is_claw_active.get();
 
         glib::spawn_future_local(async move {
+            let reattach_pid = inner_rc.borrow_mut().reattach_pid.take();
             let settings = inner_rc
                 .borrow()
                 .current_settings
@@ -964,6 +1026,100 @@ impl TerminalPaneComponent {
             let working_dir = inner_rc.borrow().working_dir.clone();
 
             let agent = crate::get_agent().await;
+
+            // Reattach path: restore buffered output and attach existing PTY master FD.
+            if let Some(pid) = reattach_pid {
+                match agent.reattach(pid).await {
+                    Ok((replay_bytes, master_fd)) => {
+                        {
+                            let mut inner = inner_rc.borrow_mut();
+                            inner.pid = Some(pid);
+                        }
+
+                        let has_osc_title = replay_bytes
+                            .windows(4)
+                            .any(|w| w == b"\x1b]0;" || w == b"\x1b]2;");
+
+                        inner_rc
+                            .borrow()
+                            .terminal
+                            .attach_pty_with_replay(master_fd, replay_bytes);
+
+                        if let Ok(cwd) = agent.get_cwd(pid).await
+                            && !cwd.is_empty()
+                        {
+                            inner_rc.borrow_mut().working_dir = Some(cwd.clone());
+                            let cb = inner_rc.borrow().callback.clone();
+                            cb(PaneOutput::DirectoryChanged(id.clone(), cwd.clone()));
+
+                            if !has_osc_title {
+                                let pretty_cwd = if let Ok(home) = std::env::var("HOME")
+                                    && !home.is_empty()
+                                    && cwd.starts_with(&home)
+                                {
+                                    format!("~{}", &cwd[home.len()..])
+                                } else {
+                                    cwd
+                                };
+                                inner_rc.borrow_mut().last_title = Some(pretty_cwd.clone());
+                                cb(PaneOutput::TitleChanged(id.clone(), pretty_cwd));
+                            }
+                        }
+
+                        let (exit_rx, exit_guard) = agent.subscribe_process_exit(pid).await;
+                        let (fg_rx, fg_guard) = agent.subscribe_foreground_process(pid);
+                        {
+                            let mut inner = inner_rc.borrow_mut();
+                            inner.process_subscriptions.push(exit_guard);
+                            inner.process_subscriptions.push(fg_guard);
+                        }
+
+                        let inner_weak_exit = Rc::downgrade(&inner_rc);
+                        let id_for_exit = id.clone();
+                        glib::spawn_future_local(async move {
+                            if let Ok(exit_code) = exit_rx.recv().await
+                                && let Some(inner) = inner_weak_exit.upgrade()
+                            {
+                                let cb = inner.borrow().callback.clone();
+                                cb(PaneOutput::Exited(id_for_exit, exit_code));
+                            }
+                        });
+
+                        let inner_weak_fg = Rc::downgrade(&inner_rc);
+                        let claw_tx = claw_sender.clone();
+                        let id_for_fg = id.clone();
+                        glib::spawn_future_local(async move {
+                            while let Ok(process_name) = fg_rx.recv().await {
+                                let Some(inner) = inner_weak_fg.upgrade() else {
+                                    break;
+                                };
+                                let _ = claw_tx
+                                    .send(ClawMessage::ForegroundProcessChanged {
+                                        process_name: process_name.clone(),
+                                    })
+                                    .await;
+                                let cb = inner.borrow().callback.clone();
+                                cb(PaneOutput::ForegroundProcessChanged(
+                                    id_for_fg.clone(),
+                                    process_name,
+                                ));
+                            }
+                        });
+
+                        if is_claw_active_spawn {
+                            let _ = agent.set_foreground_tracking(pid, true).await;
+                        }
+                        return;
+                    }
+                    Err(e) => {
+                        log::warn!(
+                            "Failed to reattach to detached pid={}: {:#}; spawning fresh shell",
+                            pid,
+                            e
+                        );
+                    }
+                }
+            }
 
             let shell = match agent.get_preferred_shell().await {
                 Ok(s) => s,

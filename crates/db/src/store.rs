@@ -292,7 +292,7 @@ impl<'a> Store<'a> {
 
     pub async fn get_undreamed_interactions(&self) -> Result<Vec<Interaction>> {
         let records = sqlx::query_as::<_, Interaction>(
-            "SELECT * FROM interactions WHERE processing_state = 'seeded' OR processing_state = 'raw' ORDER BY created_at ASC"
+            "SELECT * FROM interactions WHERE processing_state = 'seeded' OR processing_state = 'raw' ORDER BY created_at ASC LIMIT 100"
         )
         .fetch_all(self.pool)
         .await?;

@@ -3,6 +3,7 @@ pub struct TerminalInit {
     pub id: String,
     pub working_dir: Option<String>,
     pub spawn_intent: Option<String>,
+    pub reattach_pid: Option<u32>,
 }
 
 #[derive(Debug, Clone)]
@@ -38,6 +39,7 @@ pub enum TerminalEventKind {
     PaneFocused(String),
     ForegroundProcessChanged(String),
     Notification(String),
+    RestoreDetached(u32, String),
     ClawStateChanged(bool, bool),
     ZoomIn,
     ZoomOut,
@@ -49,6 +51,7 @@ pub struct PaneInit {
     pub id: String,
     pub working_dir: Option<String>,
     pub spawn_intent: Option<String>,
+    pub reattach_pid: Option<u32>,
 }
 
 #[derive(Debug, Clone)]

@@ -13,6 +13,16 @@ pub struct SpawnOptions {
     pub pane_id: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Type, PartialEq, Eq)]
+pub struct DetachedSessionInfo {
+    pub pid: u32,
+    pub pane_id: String,
+    pub idle_secs: u64,
+    pub cwd: String,
+    pub foreground_process: String,
+    pub waiting_for_input: bool,
+}
+
 #[proxy(
     interface = "dev.boxxy.BoxxyTerminal.Agent.Pty",
     default_service = "dev.boxxy.BoxxyAgent",
@@ -43,10 +53,19 @@ pub trait AgentPty {
     /// since `spawn()`; it was idle until now.
     async fn detach(&self, pid: u32) -> zbus::Result<u32>;
 
+    /// Detaches `pid` while seeding the daemon's 4 MB ring buffer with `initial_snapshot`
+    /// (the pre-detach ANSI viewport snapshot from `boxxy-vte`) so line-oriented CLI
+    /// tools paused on a prompt restore their full visible screen on reattach.
+    async fn detach_with_snapshot(&self, pid: u32, initial_snapshot: Vec<u8>) -> zbus::Result<u32>;
+
     /// Returns `(pid, pane_id, idle_secs)` for every detached session
     /// the daemon is currently hosting — powers a future "Detached
     /// Sessions" UI view and the `boxxy-agent list-sessions` CLI.
     async fn list_detached_sessions(&self) -> zbus::Result<Vec<(u32, String, u64)>>;
+
+    /// Returns rich metadata `(pid, pane_id, idle_secs, cwd, foreground_process, waiting_for_input)`
+    /// for every detached session the daemon is currently hosting.
+    async fn list_detached_sessions_detailed(&self) -> zbus::Result<Vec<DetachedSessionInfo>>;
 
     /// Reclaims a detached session. Returns `(replay_bytes, master_fd)`:
     /// the UI feeds `replay_bytes` into its terminal to restore scrollback,

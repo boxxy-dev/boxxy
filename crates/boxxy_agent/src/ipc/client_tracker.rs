@@ -1,4 +1,6 @@
 use crate::claw::CharacterRegistry;
+use crate::ipc::ClawSessionManager;
+use crate::pty::registry::PtyRegistry;
 use boxxy_claw::registry::workspace::WorkspaceRegistry;
 use futures_util::StreamExt;
 use std::collections::HashSet;
@@ -25,6 +27,8 @@ pub async fn register_client(bus_name: String) {
 pub async fn spawn_owner_tracker(
     conn: &Connection,
     registry: Arc<CharacterRegistry>,
+    pty_registry: PtyRegistry,
+    session_manager: Arc<Mutex<ClawSessionManager>>,
     workspace: Arc<WorkspaceRegistry>,
     client_count_tx: watch::Sender<usize>,
 ) -> anyhow::Result<()> {
@@ -44,11 +48,13 @@ pub async fn spawn_owner_tracker(
                 continue;
             }
 
+            let bus_name = args.name.as_str();
+
             // Check if it was a registered UI client
             let was_client = {
                 let clients_mutex = get_active_clients().await;
                 let mut clients = clients_mutex.lock().await;
-                clients.remove(args.name.as_str())
+                clients.remove(bus_name)
             };
 
             if was_client {
@@ -57,20 +63,41 @@ pub async fn spawn_owner_tracker(
                 let _ = client_count_tx.send(new_count);
                 log::info!(
                     "Client {} disconnected. Total clients: {}",
-                    args.name,
+                    bus_name,
                     new_count
                 );
             }
 
+            // Automatically detach (or SIGTERM if persistence is off) any PTY sessions
+            // still attached to this disconnected client. This guarantees crash-resilient
+            // PTY persistence even if the UI exited before async Drop futures ran.
+            let pty_outcomes = pty_registry.release_owner(bus_name).await;
+            for (pid, outcome) in pty_outcomes {
+                log::info!(
+                    "Client {} disconnect released PTY pid={} -> {:?}",
+                    bus_name,
+                    pid,
+                    outcome
+                );
+            }
+
             // Fast path: skip lock acquisition if we don't own anything.
-            if !registry.has_owner(args.name.as_str()).await {
+            if !registry.has_owner(bus_name).await {
                 continue;
             }
 
-            log::info!("Client {} releasing all owned claims", args.name);
-            let released_claims = registry.release_owner(args.name.as_str()).await;
+            log::info!("Client {} releasing all owned claims", bus_name);
+            let released_claims = registry.release_owner(bus_name).await;
 
-            // Cascade swarm cleanup for each released pane claim.
+            // Cascade swarm and session actor cleanup for each released pane claim.
+            {
+                let mut mgr = session_manager.lock().await;
+                for claim in &released_claims {
+                    if claim.holder_kind == boxxy_claw_protocol::characters::HolderKind::Pane {
+                        mgr.shutdown_pane(&claim.holder_id);
+                    }
+                }
+            }
             for claim in released_claims {
                 if claim.holder_kind == boxxy_claw_protocol::characters::HolderKind::Pane {
                     log::debug!("Cascading swarm cleanup for pane {}", claim.holder_id);

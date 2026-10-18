@@ -487,6 +487,10 @@ pub enum ClawEngineEvent {
     RequestCloseAgent {
         target_agent_name: String,
     },
+    RequestReattachShell {
+        pid: u32,
+        cwd: Option<String>,
+    },
     /// Request scrollback content from the UI (via Correlation ID)
     RequestScrollback {
         agent_name: String,
@@ -569,6 +573,14 @@ pub trait ClawEnvironment: Send + Sync + 'static {
     async fn kill_process(&self, pid: u32, signal: i32) -> anyhow::Result<()>;
     async fn get_clipboard(&self) -> anyhow::Result<String>;
     async fn set_clipboard(&self, text: String) -> anyhow::Result<()>;
+
+    /// Returns `(pid, pane_id, idle_secs, cwd, foreground_process, waiting_for_input)`
+    /// for all detached background PTY shells kept alive in the daemon.
+    async fn list_detached_shells(
+        &self,
+    ) -> anyhow::Result<Vec<(u32, String, u64, String, String, bool)>> {
+        Ok(Vec::new())
+    }
 }
 
 #[cfg(test)]

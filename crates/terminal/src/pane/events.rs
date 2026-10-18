@@ -69,7 +69,9 @@ pub(super) fn wire_terminal_events(
 
     let cb_clone = callback.clone();
     let id_clone = id.clone();
+    let inner_for_title = inner.clone();
     terminal.on_title_changed(move |title| {
+        inner_for_title.borrow_mut().last_title = Some(title.clone());
         cb_clone(PaneOutput::TitleChanged(id_clone.clone(), title));
     });
 

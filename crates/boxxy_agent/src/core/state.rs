@@ -13,6 +13,9 @@ pub struct AgentState {
     /// `crate::pty::registry` for the full lifecycle. Already
     /// cheap-cloneable via an internal `Arc`; don't double-wrap.
     pub pty_registry: PtyRegistry,
+    /// PIDs requested for restoration by an external desktop companion while
+    /// no Boxxy UI window was open. Drained by the first window that connects.
+    pub pending_restores: Arc<RwLock<Vec<u32>>>,
 }
 
 impl Default for AgentState {
@@ -22,6 +25,7 @@ impl Default for AgentState {
             api_keys: Arc::new(RwLock::new(HashMap::new())),
             ollama_url: Arc::new(RwLock::new(String::new())),
             pty_registry: PtyRegistry::new(),
+            pending_restores: Arc::new(RwLock::new(Vec::new())),
         }
     }
 }

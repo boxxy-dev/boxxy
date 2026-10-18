@@ -465,6 +465,7 @@ pub fn spawn_dispatch(
                 }
                 ClawEngineEvent::RequestSpawnAgent { .. }
                 | ClawEngineEvent::RequestCloseAgent { .. }
+                | ClawEngineEvent::RequestReattachShell { .. }
                 | ClawEngineEvent::InjectKeystrokes { .. } => {
                     // Handled upstream by the window orchestrator via
                     // forward_event — no widget side-effect here.

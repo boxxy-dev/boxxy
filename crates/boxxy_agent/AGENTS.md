@@ -11,9 +11,10 @@ A single instance serves all open UI windows. It is launched by the UI on demand
 The `boxxy-agent` binary accepts subcommands in addition to starting the daemon:
 
 - `boxxy-agent` / `boxxy-agent start`: claims the session-bus name and runs the daemon loop.
-- `boxxy-agent stop`: talks to a running daemon over D-Bus and requests a clean exit.
-- `boxxy-agent restart`: tells a running daemon to `exec()` its own binary, picking up a newer version on disk without downtime.
-- `boxxy-agent list-sessions`: prints every detached PTY session the daemon is hosting (`PID`, idle seconds, pane UUID). Useful while the "Detached Sessions" UI view isn't built yet.
+- `boxxy-agent stop`: talks to a running daemon over D-Bus, flushes telemetry, and requests a clean exit.
+- `boxxy-agent restart`: tells a running daemon to `exec()` its own binary in-place (stripping `--background` and ` (deleted)`), picking up a newer version on disk without changing PID or sending `SIGHUP` to child shells.
+- `boxxy-agent list-sessions`: prints every detached PTY session the daemon is hosting (`PID`, idle seconds, foreground process, input-wait state via `/proc/<fg_pid>/wchan`, CWD, and pane UUID).
+- `boxxy-agent status`: prints daemon version, config directory, power source (AC/Battery), Dream Cycle state, active Claw pane count, and detached PTY count.
 - `--background`: daemonizes (double-fork + setsid) before starting the runtime. Called by the UI-side `agent_deployer` when it needs a host-detached process.
 
 The binary also extracts itself from the Flatpak GResource bundle on first launch and writes the host-side copy into `~/.local/boxxy-terminal/boxxy-agent` so it can run outside the sandbox.
@@ -28,10 +29,10 @@ Latency-critical terminal I/O. Exposes:
 
 - `create_pty`, `spawn`: open a master PTY, set window size, then `fork/exec` the shell. The daemon `dup()`s the master FD at spawn and keeps it in the session record — idle while a UI is attached, activated when `detach()` is called.
 - `signal_process_group`, `get_foreground_process`, `get_cwd`, `get_running_processes`, `get_environment_variable`, `set_foreground_tracking`: host-side process introspection used by the UI + Claw.
-- `set_persistence(pid, bool)`, `detach(pid)`, `reattach(pid)`, `list_detached_sessions()`, `get_exit_status(pid)`: persistent-shells and process exit status surface.
+- `set_persistence(pid, bool)`, `detach(pid)`, `reattach(pid)`, `list_detached_sessions()`, `list_detached_sessions_detailed()`, `get_exit_status(pid)`: persistent-shells and process exit status surface.
 - Emits `Exited`, `ForegroundProcessChanged` signals that the UI subscribes to.
 
-**`pty::registry::PtyRegistry`** holds one `PtySession` per spawned shell, keyed by PID. Each session tracks `state` (`ProcessState::Running` or `ProcessState::Exited { exit_code, exited_at }` retained for 60s so late-subscribing or reconnecting panes can query exit codes), `viewer_count`, `persistence_enabled`, the captured master FD, a reader task (only while detached), a 4 MB byte ring buffer (only while detached), and `last_activity`. A 60-second zombie-sweeper task running at `niceness 19` SIGTERMs any detached session idle longer than 4 hours and prunes expired `Exited` records.
+**`pty::registry::PtyRegistry`** holds one `PtySession` per spawned shell, keyed by PID. Each session tracks `owner_bus_name` (the D-Bus client currently attached), `initial_cwd`, `state` (`ProcessState::Running` or `ProcessState::Exited { exit_code, exited_at }` retained for 60s so late-subscribing or reconnecting panes can query exit codes), `viewer_count`, `persistence_enabled`, the captured master FD, a reader task (only while detached), a 4 MB byte ring buffer with UTF-8 / line-aligned eviction and SGR reset on overflow (only while detached), and `last_activity`. Detach is **process-aware** (`shell_has_active_process`): idle interactive shells with no running foreground or child processes are terminated on detach rather than kept alive as empty background shells. When a UI client disconnects or crashes, `client_tracker` calls `pty_registry.release_owner(bus_name)` to automatically detach busy shells (or `SIGTERM` idle/non-persistent shells) owned by that client. A 60-second zombie-sweeper task SIGTERMs any detached session idle longer than 4 hours and prunes expired `Exited` records.
 
 ### `claw/` — `dev.boxxy.BoxxyTerminal.Agent.Claw`
 
@@ -39,7 +40,7 @@ Host-side implementation of `ClawEnvironment`: shell execution, file I/O with pa
 
 **`claw::CharacterRegistry`** is the volatile in-memory registry of all live character claims, keyed by `holder_id`. It is the daemon's single source of truth for who holds which character. Claims are never written to disk; they live only for the duration of the daemon process. Key methods: `try_claim(holder_id, holder_kind, character_id, owner_bus_name)` (atomic check-then-set under write lock), `release_holder(holder_id)`, `release_owner(owner_bus_name) -> Vec<CharacterClaim>` (bulk release on client disconnect), `snapshot()`, `subscribe()` (broadcast channel for push updates). The registry also handles orphan character migration at load time: sessions referencing a deleted character UUID are silently mapped to the first catalog entry.
 
-**`claw::notifier`** wraps `org.freedesktop.Notifications` with a tiny zbus proxy so `ClawEngineEvent::PushGlobalNotification` and `TaskCompleted` turn into real desktop toasts — so background AI work that finishes while the UI is detached still reaches the user.
+**`claw::notifier`** wraps `org.freedesktop.Notifications` with a tiny zbus proxy so `ClawEngineEvent::PushGlobalNotification`, `TaskCompleted`, and `LongTaskCompleted` turn into real desktop toasts when in Ghost Mode (`ghost.is_ghost()`) — so background AI work that finishes while the UI is detached still reaches the user without duplicating `boxxy-window`'s `gio::Notification` when a window is open.
 
 ### `ipc/` — `dev.boxxy.BoxxyTerminal.Agent`
 
@@ -57,7 +58,7 @@ Top-level orchestration interface. Hosts `ClawSession` actors and owns the chara
 
 **Other**: `update_credentials` (UI → daemon API-key sync), `notify_settings_invalidated` (daemon reloads `settings.json`), `request_reload` / `request_stop`.
 
-**`ipc/client_tracker.rs`** — `spawn_owner_tracker` subscribes to `org.freedesktop.DBus.NameOwnerChanged`, filters for unique bus names (`:…`) being released (`new_owner` is empty), fast-path `has_owner` check before acquiring the registry lock, then calls `release_owner` and cascades `WorkspaceRegistry::release_all_locks` + `unregister_pane` for each released Pane claim.
+**`ipc/client_tracker.rs`** — `spawn_owner_tracker` subscribes to `org.freedesktop.DBus.NameOwnerChanged`, filters for unique bus names (`:…`) being released (`new_owner` is empty), auto-detaches (or terminates) any PTYs owned by that client via `pty_registry.release_owner`, and for character claims calls `release_owner`, shuts down the corresponding `ClawSession` actors via `ClawSessionManager::shutdown_pane` (flushing unflushed history to SQLite), and cascades `WorkspaceRegistry::release_all_locks` + `unregister_pane` for each released Pane claim.
 
 ### `maintenance/` — `dev.boxxy.BoxxyTerminal.Agent.Maintenance`
 

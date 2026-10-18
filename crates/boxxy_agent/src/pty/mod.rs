@@ -1,7 +1,7 @@
 pub mod registry;
 
 use crate::core::state::AgentState;
-use crate::ipc::pty::SpawnOptions;
+use crate::ipc::pty::{DetachedSessionInfo, SpawnOptions};
 use nix::fcntl::OFlag;
 use nix::pty::{PtyMaster, grantpt, posix_openpt, ptsname, unlockpt};
 use nix::unistd::{User, getuid};
@@ -73,6 +73,162 @@ impl PtySubsystem {
 
         Ok("".to_string())
     }
+
+    /// Inspects the foreground process group of `shell_pid` and checks whether
+    /// any process in that foreground group is blocked on a TTY read (`wchan` in
+    /// `n_tty_read` / `tty_read`). Never flags the shell prompt itself.
+    fn inspect_foreground_state(shell_pid: u32) -> (String, bool) {
+        let stat_path = format!("/proc/{shell_pid}/stat");
+        let Ok(stat_content) = std::fs::read_to_string(&stat_path) else {
+            return (String::new(), false);
+        };
+
+        let rp_pos = stat_content.rfind(')').unwrap_or(0);
+        if rp_pos == 0 || rp_pos + 2 >= stat_content.len() {
+            return (String::new(), false);
+        }
+
+        let rest = &stat_content[rp_pos + 2..];
+        let parts: Vec<&str> = rest.split_whitespace().collect();
+        if parts.len() < 6 {
+            return (String::new(), false);
+        }
+
+        let pgrp: u32 = parts[2].parse().unwrap_or(0);
+        let tpgid: u32 = parts[5].parse().unwrap_or(0);
+
+        // If tpgid == pgrp, the shell itself owns the foreground (idle at prompt).
+        if tpgid == 0 || tpgid == pgrp {
+            return (String::new(), false);
+        }
+
+        let mut fg_name = String::new();
+        let tpgid_stat_path = format!("/proc/{tpgid}/stat");
+        if let Ok(tpgid_stat) = std::fs::read_to_string(&tpgid_stat_path)
+            && let (Some(lp), Some(rp)) = (tpgid_stat.find('('), tpgid_stat.rfind(')'))
+            && rp > lp
+        {
+            fg_name = tpgid_stat[lp + 1..rp].to_string();
+        }
+
+        if fg_name.is_empty() {
+            return (String::new(), false);
+        }
+
+        let mut pids_to_check = vec![tpgid];
+        if let Some(children) = read_direct_children_procfs(tpgid) {
+            pids_to_check.extend(children);
+        }
+
+        let waiting_on_tty = pids_to_check.into_iter().any(is_pid_wchan_tty_read);
+        (fg_name, waiting_on_tty)
+    }
+}
+
+pub(crate) async fn query_detached_sessions_detailed(
+    pty_registry: &registry::PtyRegistry,
+) -> Vec<DetachedSessionInfo> {
+    let detached = pty_registry.list_detached_with_cwd().await;
+    let mut out = Vec::with_capacity(detached.len());
+    for (pid, pane_id, idle_secs, initial_cwd) in detached {
+        // If a detached shell has no active foreground/child process anymore
+        // (it returned to an idle shell prompt), reap it instead of prompting
+        // the user to restore an empty interactive shell.
+        if !shell_has_active_process(pid) {
+            log::info!(
+                "pty-registry: reaping idle detached shell pid={} (no active child processes)",
+                pid
+            );
+            pty_registry.set_persistence(pid, false).await;
+            unsafe {
+                libc::kill(-(pid as i32), libc::SIGTERM);
+            }
+            continue;
+        }
+
+        let live_cwd = std::fs::read_link(format!("/proc/{pid}/cwd"))
+            .ok()
+            .map(|p| p.to_string_lossy().to_string())
+            .filter(|s| !s.is_empty())
+            .unwrap_or(initial_cwd);
+        let (mut fg_proc, wchan_tty) = PtySubsystem::inspect_foreground_state(pid);
+        if fg_proc.is_empty()
+            && let Some((_, child_name)) = collect_descendant_processes(pid).into_iter().next()
+        {
+            fg_proc = child_name;
+        }
+        let waiting_for_input = wchan_tty && idle_secs >= 2;
+        out.push(DetachedSessionInfo {
+            pid,
+            pane_id,
+            idle_secs,
+            cwd: live_cwd,
+            foreground_process: fg_proc,
+            waiting_for_input,
+        });
+    }
+    out
+}
+
+/// Returns `true` if `shell_pid` is currently running a foreground command
+/// (`tpgid != pgrp`), has at least one descendant child process, or was
+/// launched as a non-interactive command (e.g. `sh -c ...` or `exec <cmd>`).
+/// Returns `true` if `/proc/<shell_pid>` does not exist (synthetic PIDs in unit tests).
+pub(crate) fn shell_has_active_process(shell_pid: u32) -> bool {
+    let proc_path = format!("/proc/{shell_pid}");
+    if !std::path::Path::new(&proc_path).exists() {
+        return true;
+    }
+
+    // If the root process was spawned with `-c` (non-interactive command script)
+    // or exec'd into a non-shell binary (e.g. `top`, `nvim`), treat it as active.
+    if let Ok(cmdline) = std::fs::read(format!("/proc/{shell_pid}/cmdline")) {
+        let args: Vec<&[u8]> = cmdline
+            .split(|&b| b == 0)
+            .filter(|s| !s.is_empty())
+            .collect();
+        if args.iter().skip(1).any(|&arg| arg == b"-c") {
+            return true;
+        }
+    }
+    if let Ok(comm) = std::fs::read_to_string(format!("/proc/{shell_pid}/comm")) {
+        let name = comm.trim();
+        let is_shell = matches!(
+            name,
+            "sh" | "bash"
+                | "zsh"
+                | "fish"
+                | "dash"
+                | "nu"
+                | "ksh"
+                | "tcsh"
+                | "csh"
+                | "elvish"
+                | "xonsh"
+        );
+        if !name.is_empty() && !is_shell {
+            return true;
+        }
+    }
+
+    let has_fg = PtySubsystem::get_foreground_process_internal(shell_pid)
+        .map(|s| !s.is_empty())
+        .unwrap_or(false);
+    if has_fg {
+        return true;
+    }
+    !collect_descendant_processes(shell_pid).is_empty()
+}
+
+fn is_pid_wchan_tty_read(pid: u32) -> bool {
+    let wchan_path = format!("/proc/{pid}/wchan");
+    if let Ok(wchan) = std::fs::read_to_string(&wchan_path) {
+        let trimmed = wchan.trim();
+        if matches!(trimmed, "n_tty_read" | "tty_read") {
+            return true;
+        }
+    }
+    false
 }
 
 #[interface(name = "dev.boxxy.BoxxyTerminal.Agent.Pty")]
@@ -113,9 +269,14 @@ impl PtySubsystem {
     async fn spawn(
         &self,
         #[zbus(signal_emitter)] emitter: SignalEmitter<'_>,
+        #[zbus(header)] header: zbus::message::Header<'_>,
         pty_master: OwnedFd,
         options: SpawnOptions,
     ) -> fdo::Result<u32> {
+        let owner_bus_name = header
+            .sender()
+            .map(|s| s.as_str().to_string())
+            .unwrap_or_default();
         let std_fd: std::os::unix::io::OwnedFd = pty_master.into();
 
         // Dup the master *before* consuming it into PtyMaster. This dup
@@ -235,9 +396,17 @@ impl PtySubsystem {
         // Register the PTY session so detach/reattach/list-detached can
         // find it later. viewer_count starts at 1 (the spawning UI).
         // The daemon's FD dup sits idle until detach activates it.
+        let default_persist = boxxy_preferences::Settings::load().pty_persistence;
         self.state
             .pty_registry
-            .register(pid, options.pane_id.clone(), registry_fd)
+            .register_with_owner(
+                pid,
+                options.pane_id.clone(),
+                owner_bus_name,
+                options.cwd.clone(),
+                default_persist,
+                registry_fd,
+            )
             .await;
 
         let emitter = emitter.to_owned();
@@ -307,13 +476,56 @@ impl PtySubsystem {
         })
     }
 
+    async fn detach_with_snapshot(&self, pid: u32, initial_snapshot: Vec<u8>) -> fdo::Result<u32> {
+        let outcome = self
+            .state
+            .pty_registry
+            .detach_with_snapshot(pid, &initial_snapshot)
+            .await;
+        Ok(match outcome {
+            registry::DetachOutcome::Detached => 1,
+            registry::DetachOutcome::Terminated => 0,
+            registry::DetachOutcome::StillViewed => 2,
+            registry::DetachOutcome::DetachedUnbuffered => 3,
+            registry::DetachOutcome::Unknown => u32::MAX,
+        })
+    }
+
     async fn list_detached_sessions(&self) -> fdo::Result<Vec<(u32, String, u64)>> {
         Ok(self.state.pty_registry.list_detached().await)
     }
 
-    async fn reattach(&self, pid: u32) -> fdo::Result<(Vec<u8>, OwnedFd)> {
+    async fn list_detached_sessions_detailed(&self) -> fdo::Result<Vec<DetachedSessionInfo>> {
+        Ok(query_detached_sessions_detailed(&self.state.pty_registry).await)
+    }
+
+    async fn reattach(
+        &self,
+        #[zbus(header)] header: zbus::message::Header<'_>,
+        pid: u32,
+    ) -> fdo::Result<(Vec<u8>, OwnedFd)> {
+        let owner_bus_name = header
+            .sender()
+            .map(|s| s.as_str().to_string())
+            .unwrap_or_default();
         match self.state.pty_registry.reattach(pid).await {
-            Some((bytes, fd)) => Ok((bytes, OwnedFd::from(fd))),
+            Some((bytes, fd)) => {
+                self.state.pty_registry.set_owner(pid, owner_bus_name).await;
+                // Nudge TIOCSWINSZ (+1 col then restore) so the kernel unconditionally
+                // delivers SIGWINCH to the foreground process group, forcing idle shell
+                // prompts (zle/readline/fish) and TUIs (nvim/htop) to redraw on reattach.
+                unsafe {
+                    let raw = fd.as_raw_fd();
+                    let mut ws: libc::winsize = std::mem::zeroed();
+                    if libc::ioctl(raw, libc::TIOCGWINSZ, &mut ws) == 0 && ws.ws_col > 0 {
+                        let mut nudged = ws;
+                        nudged.ws_col = ws.ws_col.saturating_add(1);
+                        let _ = libc::ioctl(raw, libc::TIOCSWINSZ, &nudged);
+                        let _ = libc::ioctl(raw, libc::TIOCSWINSZ, &ws);
+                    }
+                }
+                Ok((bytes, OwnedFd::from(fd)))
+            }
             None => Err(fdo::Error::Failed(format!(
                 "No detached session for pid {pid}"
             ))),
@@ -555,5 +767,34 @@ mod tests {
 
         let after_exit = collect_descendant_processes(my_pid);
         assert!(!after_exit.iter().any(|(pid, _)| *pid == child_pid));
+    }
+
+    #[tokio::test]
+    async fn idle_shell_without_children_terminates_on_detach_even_with_persistence_on() {
+        // Spawn a real interactive-style shell process that has NO child processes
+        // and is simply waiting on stdin.
+        let mut idle_proc = std::process::Command::new("/bin/sh")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("spawn /bin/sh");
+        let pid = idle_proc.id();
+
+        assert!(
+            !shell_has_active_process(pid),
+            "idle /bin/sh with no children and no separate tpgid should be detected as idle"
+        );
+
+        let reg = registry::PtyRegistry::new();
+        reg.register(pid, "pane-idle-test".into(), None).await;
+        reg.set_persistence(pid, true).await;
+
+        let outcome = reg.detach(pid).await;
+        assert_eq!(outcome, registry::DetachOutcome::Terminated);
+        assert!(reg.list_detached().await.is_empty());
+
+        let _ = idle_proc.kill();
+        let _ = idle_proc.wait();
     }
 }

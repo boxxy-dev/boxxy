@@ -98,6 +98,7 @@ impl TerminalComponent {
                 id: initial_pane_id.clone(),
                 working_dir: init.working_dir.clone(),
                 spawn_intent: init.spawn_intent.clone(),
+                reattach_pid: init.reattach_pid,
             },
             move |output: PaneOutput| {
                 let _ = tx.send(output);
@@ -752,6 +753,16 @@ impl TerminalComponent {
         }
     }
 
+    /// Marks all panes in this tab to terminate their PTY process group on close
+    /// even if `pty_persistence` is enabled (used when explicitly closing an idle tab).
+    pub fn terminate_on_close(&self) {
+        let inner = self.inner.borrow();
+        for pane in inner.panes.values() {
+            pane.controller.set_force_terminate_on_close(true);
+            pane.controller.end_session();
+        }
+    }
+
     pub async fn on_close_sync(&self) {
         let panes: Vec<_> = {
             let inner = self.inner.borrow();
@@ -759,6 +770,26 @@ impl TerminalComponent {
         };
         for controller in panes {
             controller.end_session_sync().await;
+        }
+    }
+
+    pub async fn detach_on_close_sync(&self) {
+        let panes: Vec<_> = {
+            let inner = self.inner.borrow();
+            inner.panes.values().map(|p| p.controller.clone()).collect()
+        };
+        for controller in panes {
+            controller.detach_on_close_sync().await;
+        }
+    }
+
+    pub async fn terminate_on_close_sync(&self) {
+        let panes: Vec<_> = {
+            let inner = self.inner.borrow();
+            inner.panes.values().map(|p| p.controller.clone()).collect()
+        };
+        for controller in panes {
+            controller.terminate_on_close_sync().await;
         }
     }
 
@@ -875,6 +906,7 @@ impl TerminalComponent {
                 id: new_id.clone(),
                 working_dir: inner.working_dir.clone(),
                 spawn_intent: intent,
+                reattach_pid: None,
             },
             move |msg: PaneOutput| {
                 let _ = tx.send(msg);
@@ -960,6 +992,8 @@ impl TerminalComponent {
 
         let active_id = inner.active_pane_id.clone();
         if let Some(active_data) = inner.panes.remove(&active_id) {
+            active_data.controller.set_force_terminate_on_close(true);
+            active_data.controller.end_session();
             let active_wrapper = &active_data.wrapper;
 
             if let Some(parent) = active_wrapper.parent()

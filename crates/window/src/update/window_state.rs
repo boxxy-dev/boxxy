@@ -22,22 +22,6 @@ pub fn handle_close_request(inner_ref: &Rc<RefCell<AppWindowInner>>, inner: &mut
         pids.extend(tab.controller.get_pids());
     }
 
-    // Persistent-shells short-circuit: if the user has opted into
-    // "survive UI close", there's nothing to confirm. Shells detach via
-    // `PaneInner::drop`, AI tasks keep running in the daemon and notify
-    // on completion. The prompt exists only to warn that *work will be
-    // lost*; with persistence on, no work is.
-    //
-    // Uses the `inner: &mut AppWindowInner` parameter directly instead
-    // of re-borrowing `inner_ref`: the caller already holds a mutable
-    // borrow on the same RefCell, so any `inner_ref.borrow()` here
-    // panics with "RefCell already mutably borrowed".
-    if Settings::load().pty_persistence {
-        inner.force_close.set(true);
-        inner.window.close();
-        return;
-    }
-
     let inner_clone = inner_ref.clone();
     gtk4::glib::spawn_future_local(async move {
         let agent = boxxy_terminal::get_agent().await;
@@ -68,10 +52,6 @@ pub fn handle_close_request(inner_ref: &Rc<RefCell<AppWindowInner>>, inner: &mut
         let pending_tasks = workspace.get_all_pending_tasks().await;
 
         if running_apps.is_empty() && pending_tasks.is_empty() {
-            for pid in &pids {
-                let _ = agent.signal_process_group(*pid, 15).await;
-            }
-
             let tabs: Vec<_> = inner_clone
                 .borrow()
                 .tabs
@@ -79,7 +59,26 @@ pub fn handle_close_request(inner_ref: &Rc<RefCell<AppWindowInner>>, inner: &mut
                 .map(|t| t.controller.clone())
                 .collect();
             for tab in tabs {
-                tab.on_close_sync().await;
+                tab.terminate_on_close_sync().await;
+            }
+
+            inner_clone.borrow().force_close.set(true);
+            inner_clone.borrow().window.close();
+            return;
+        }
+
+        // If "Always Keep Running Processes in Background" (`pty_persistence`) is on,
+        // detach all tabs (the daemon automatically terminates idle shells and keeps
+        // busy shells alive) and close without showing the confirmation dialog.
+        if Settings::load().pty_persistence {
+            let tabs: Vec<_> = inner_clone
+                .borrow()
+                .tabs
+                .iter()
+                .map(|t| t.controller.clone())
+                .collect();
+            for tab in tabs {
+                tab.detach_on_close_sync().await;
             }
 
             inner_clone.borrow().force_close.set(true);
@@ -122,21 +121,71 @@ pub fn handle_close_request(inner_ref: &Rc<RefCell<AppWindowInner>>, inner: &mut
             .child(&group)
             .build();
 
-        dialog.set_extra_child(Some(&scrolled));
+        let extra_vbox = gtk4::Box::new(gtk4::Orientation::Vertical, 16);
+        extra_vbox.set_width_request(440);
+        extra_vbox.append(&scrolled);
 
-        dialog.add_response("cancel", "Cancel");
-        dialog.add_response("close", "Close All");
-        dialog.set_response_appearance("close", libadwaita::ResponseAppearance::Destructive);
-        dialog.set_default_response(Some("cancel"));
-        dialog.set_close_response("cancel");
+        let actions_row = gtk4::Box::new(gtk4::Orientation::Horizontal, 10);
+        actions_row.set_homogeneous(true);
+
+        let cancel_btn = gtk4::Button::builder()
+            .label("Cancel")
+            .height_request(38)
+            .build();
+        let terminate_btn = gtk4::Button::builder()
+            .label("Terminate All")
+            .css_classes(["destructive-action"])
+            .height_request(38)
+            .build();
+        let bg_btn = gtk4::Button::builder()
+            .label("Run in Background")
+            .css_classes(["suggested-action"])
+            .height_request(38)
+            .build();
+
+        let chosen = std::rc::Rc::new(std::cell::Cell::new("cancel"));
+        {
+            let c = chosen.clone();
+            let d = dialog.downgrade();
+            cancel_btn.connect_clicked(move |_| {
+                c.set("cancel");
+                if let Some(dlg) = d.upgrade() {
+                    dlg.close();
+                }
+            });
+        }
+        {
+            let c = chosen.clone();
+            let d = dialog.downgrade();
+            terminate_btn.connect_clicked(move |_| {
+                c.set("close");
+                if let Some(dlg) = d.upgrade() {
+                    dlg.close();
+                }
+            });
+        }
+        {
+            let c = chosen.clone();
+            let d = dialog.downgrade();
+            bg_btn.connect_clicked(move |_| {
+                c.set("background");
+                if let Some(dlg) = d.upgrade() {
+                    dlg.close();
+                }
+            });
+        }
+
+        actions_row.append(&cancel_btn);
+        actions_row.append(&terminate_btn);
+        actions_row.append(&bg_btn);
+        extra_vbox.append(&actions_row);
+
+        dialog.set_extra_child(Some(&extra_vbox));
 
         let window = inner_clone.borrow().window.clone();
-        let response = dialog.choose_future(Some(&window)).await;
-        if response == "close" {
-            for pid in &pids {
-                let _ = agent.signal_process_group(*pid, 15).await;
-            }
-
+        let _ = dialog.choose_future(Some(&window)).await;
+        let response = chosen.get();
+        if response == "background" {
             let tabs: Vec<_> = inner_clone
                 .borrow()
                 .tabs
@@ -144,7 +193,20 @@ pub fn handle_close_request(inner_ref: &Rc<RefCell<AppWindowInner>>, inner: &mut
                 .map(|t| t.controller.clone())
                 .collect();
             for tab in tabs {
-                tab.on_close_sync().await;
+                tab.detach_on_close_sync().await;
+            }
+
+            inner_clone.borrow().force_close.set(true);
+            inner_clone.borrow().window.close();
+        } else if response == "close" {
+            let tabs: Vec<_> = inner_clone
+                .borrow()
+                .tabs
+                .iter()
+                .map(|t| t.controller.clone())
+                .collect();
+            for tab in tabs {
+                tab.terminate_on_close_sync().await;
             }
 
             inner_clone.borrow().force_close.set(true);
@@ -282,8 +344,24 @@ pub fn sidebar_visible_changed(inner: &mut AppWindowInner, visible: bool) {
 }
 
 pub fn sidebar_page_changed(inner: &mut AppWindowInner, name: String) {
+    if name == "claw" {
+        refresh_claw_maintenance_status(inner.tx.clone());
+    }
     inner.app_state.active_sidebar_page = name;
     inner.app_state.save();
+}
+
+fn refresh_claw_maintenance_status(tx: async_channel::Sender< crate::state::AppInput>) {
+    gtk4::glib::spawn_future_local(async move {
+        let agent = boxxy_terminal::get_agent().await;
+        if let Ok((status, on_battery)) = agent.get_maintenance_status().await {
+            let _ = tx
+                .send(crate::state::AppInput::RefreshMaintenanceStatus(
+                    status, on_battery,
+                ))
+                .await;
+        }
+    });
 }
 
 pub fn sidebar_width_changed(inner: &mut AppWindowInner, width: i32) {
@@ -332,6 +410,7 @@ pub fn show_claw_sidebar(inner: &mut AppWindowInner) {
             inner.split_view.set_show_sidebar(true);
         }
         inner.view_stack.set_visible_child_name("claw");
+        refresh_claw_maintenance_status(inner.tx.clone());
     }
 }
 

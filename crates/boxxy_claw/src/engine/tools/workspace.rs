@@ -388,3 +388,110 @@ impl PortableTool for AbortAgentTaskTool {
         Ok(out)
     }
 }
+
+#[derive(Deserialize)]
+pub struct RestoreBackgroundShellArgs {
+    pub target: String,
+}
+
+#[derive(Serialize)]
+pub struct RestoreBackgroundShellOutput {
+    pub message: String,
+}
+
+pub struct RestoreBackgroundShellTool {
+    pub env: std::sync::Arc<dyn crate::engine::ClawEnvironment>,
+    pub tx_ui: async_channel::Sender<ClawEngineEvent>,
+    pub approval: std::sync::Arc<crate::engine::tools::ClawApprovalHandler>,
+}
+
+impl PortableTool for RestoreBackgroundShellTool {
+    const NAME: &'static str = "restore_background_shell";
+
+    type Error = std::io::Error;
+    type Args = RestoreBackgroundShellArgs;
+    type Output = RestoreBackgroundShellOutput;
+
+    fn description(&self) -> String {
+        "Restore (reattach) one or all detached background shells into a live terminal tab in the Boxxy window. \
+        Pass a process name (e.g. 'top', 'cachy-update'), a PID (e.g. '111172'), or 'all' to restore every detached background shell."
+            .to_string()
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "target": {
+                    "type": "string",
+                    "description": "The process name (e.g. 'top'), PID (e.g. '111172'), or 'all' to restore all detached background shells."
+                }
+            },
+            "required": ["target"]
+        })
+    }
+
+    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        self.approval.begin_tool(Self::NAME).await;
+        let query = args.target.trim().to_lowercase();
+
+        let shells = self
+            .env
+            .list_detached_shells()
+            .await
+            .unwrap_or_default();
+
+        if shells.is_empty() {
+            let out = RestoreBackgroundShellOutput {
+                message: "There are currently no detached background shells to restore."
+                    .to_string(),
+            };
+            self.approval.finish_tool(Self::NAME, &out).await;
+            return Ok(out);
+        }
+
+        let matched: Vec<_> = shells
+            .into_iter()
+            .filter(|(pid, _pane_id, _idle, _cwd, fg_proc, _waiting)| {
+                query == "all"
+                    || pid.to_string() == query
+                    || fg_proc.to_lowercase().contains(&query)
+            })
+            .collect();
+
+        if matched.is_empty() {
+            let out = RestoreBackgroundShellOutput {
+                message: format!(
+                    "No detached background shell matched '{}'.",
+                    args.target
+                ),
+            };
+            self.approval.finish_tool(Self::NAME, &out).await;
+            return Ok(out);
+        }
+
+        let mut restored_labels = Vec::with_capacity(matched.len());
+        for (pid, _pane_id, _idle, cwd, fg_proc, _waiting) in matched {
+            let label = if fg_proc.is_empty() {
+                format!("PID {pid}")
+            } else {
+                format!("{fg_proc} (PID {pid})")
+            };
+            let cwd_opt = (!cwd.is_empty()).then_some(cwd);
+            let _ = self
+                .tx_ui
+                .send(ClawEngineEvent::RequestReattachShell { pid, cwd: cwd_opt })
+                .await;
+            restored_labels.push(label);
+        }
+
+        let out = RestoreBackgroundShellOutput {
+            message: format!(
+                "Restored background shell(s) into new terminal tab(s): {}.",
+                restored_labels.join(", ")
+            ),
+        };
+        self.approval.finish_tool(Self::NAME, &out).await;
+        Ok(out)
+    }
+}

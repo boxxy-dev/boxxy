@@ -7,7 +7,8 @@ use crate::engine::tools::tasks::{CancelTaskTool, ListTasksTool, ScheduleTaskToo
 use crate::engine::tools::terminal::TerminalCommandTool;
 use crate::engine::tools::workspace::{
     AbortAgentTaskTool, CloseAgentTool, DelegateTaskAsyncTool, DelegateTaskTool,
-    ListActiveAgentsTool, ReadPaneTool, SendKeystrokesTool, SetGlobalIntentTool, SpawnAgentTool,
+    ListActiveAgentsTool, ReadPaneTool, RestoreBackgroundShellTool, SendKeystrokesTool,
+    SetGlobalIntentTool, SpawnAgentTool,
 };
 use crate::engine::tools::{ClawApprovalHandler, SysShellTool};
 use crate::engine::{ClawEngineEvent, ClawEnvironment};
@@ -277,6 +278,11 @@ pub async fn create_claw_agent(
         .tool(CloseAgentTool {
             tx_ui: tx_ui.clone(),
             state: state.clone(),
+            approval: approval_handler.clone(),
+        })
+        .tool(RestoreBackgroundShellTool {
+            env: (*env).clone(),
+            tx_ui: tx_ui.clone(),
             approval: approval_handler.clone(),
         })
         .tool(AbortAgentTaskTool {

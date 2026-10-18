@@ -60,15 +60,18 @@ impl DaemonCore {
         });
 
         // Start D-Bus services on a fresh session-bus connection.
-        let conn = crate::ipc::start_services(core.clone(), client_tx.clone()).await?;
+        let (conn, session_manager) =
+            crate::ipc::start_services(core.clone(), client_tx.clone()).await?;
         info!("D-Bus services registered");
 
         // Spawn the client owner tracker. This handles automatic cleanup of
-        // character assignments and swarm locks when a UI process disconnects.
+        // character assignments, PTY sessions, and swarm locks when a UI process disconnects.
         let workspace = boxxy_claw::registry::workspace::global_workspace().await;
         crate::ipc::client_tracker::spawn_owner_tracker(
             &conn,
             registry.clone(),
+            core.state.pty_registry.clone(),
+            session_manager,
             workspace.clone(),
             client_tx.clone(),
         )
@@ -98,15 +101,11 @@ impl DaemonCore {
             }
         });
 
-        // Zombie-guard sweeper: runs at niceness 19 and only sweeps
-        // while in ghost mode — the TTL is 4 h, so a one-session delay
-        // doesn't matter.
+        // Zombie-guard sweeper: sweeps while in ghost mode (and prunes expired
+        // Exited records) — the detached TTL is 4 h, so a 60s tick is plenty.
         let pty_registry = core.state.pty_registry.clone();
         let ghost_for_sweep = ghost.clone();
         tokio::spawn(async move {
-            if let Err(e) = priority::set_current_thread_nice(priority::MAINTENANCE_NICE) {
-                log::warn!("sweeper: set_current_thread_nice failed: {}", e);
-            }
             let mut tick = tokio::time::interval(crate::pty::registry::SWEEP_INTERVAL);
             loop {
                 tick.tick().await;

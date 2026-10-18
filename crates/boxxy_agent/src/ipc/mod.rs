@@ -15,7 +15,7 @@ use zbus::{Connection, connection::Builder, object_server::SignalEmitter};
 pub async fn start_services(
     core: Arc<DaemonCore>,
     client_count_tx: watch::Sender<usize>,
-) -> Result<Connection> {
+) -> Result<(Connection, Arc<Mutex<ClawSessionManager>>)> {
     let claw_subsystem = Arc::new(crate::claw::ClawSubsystem::new(core.state.clone()));
     let session_manager = Arc::new(Mutex::new(ClawSessionManager::new(claw_subsystem.clone())));
 
@@ -26,7 +26,7 @@ pub async fn start_services(
             AgentInterface {
                 core: core.clone(),
                 client_count_tx: client_count_tx.clone(),
-                session_manager,
+                session_manager: session_manager.clone(),
             },
         )
         .serve_at(
@@ -69,7 +69,29 @@ pub async fn start_services(
         }
     });
 
-    Ok(conn)
+    // Spawn a background task to broadcast detached PTY session changes to all D-Bus
+    // clients (GNOME Shell extension, Waybar, KDE widgets, and Boxxy windows).
+    let mut rx_pty = core.state.pty_registry.subscribe();
+    let pty_reg_for_signals = core.state.pty_registry.clone();
+    let conn_for_pty_signals = conn.clone();
+    tokio::spawn(async move {
+        while rx_pty.recv().await.is_ok() {
+            let list = crate::pty::query_detached_sessions_detailed(&pty_reg_for_signals).await;
+            if let Ok(json) = serde_json::to_string(&list) {
+                let _ = conn_for_pty_signals
+                    .emit_signal(
+                        Option::<zbus::names::BusName>::None,
+                        "/dev/boxxy/Agent",
+                        "dev.boxxy.BoxxyTerminal.Agent",
+                        "DetachedSessionsChanged",
+                        &(json,),
+                    )
+                    .await;
+            }
+        }
+    });
+
+    Ok((conn, session_manager))
 }
 
 /// Bookkeeping for one hosted `ClawSession`. We keep the pane id and agent
@@ -80,7 +102,7 @@ struct HostedSession {
     tx: async_channel::Sender<ClawMessage>,
 }
 
-struct ClawSessionManager {
+pub struct ClawSessionManager {
     sessions: HashMap<String, HostedSession>,
     env: Arc<crate::claw::ClawSubsystem>,
 }
@@ -98,6 +120,23 @@ impl ClawSessionManager {
     /// unboundedly over the daemon's lifetime.
     fn prune_dead(&mut self) {
         self.sessions.retain(|_, s| !s.tx.is_closed());
+    }
+
+    /// Shuts down all hosted `ClawSession` actors belonging to `pane_id`.
+    /// Sends `ClawMessage::Deactivate` (aborting any in-flight turn, draining
+    /// pending approvals, and flushing unflushed history to SQLite) and closes
+    /// the channel so the actor loop and D-Bus forwarder task exit cleanly.
+    pub fn shutdown_pane(&mut self, pane_id: &str) {
+        self.prune_dead();
+        let to_close: Vec<HostedSession> = self
+            .sessions
+            .extract_if(|_, s| s.pane_id == pane_id)
+            .map(|(_, s)| s)
+            .collect();
+        for session in to_close {
+            let _ = session.tx.try_send(ClawMessage::Deactivate);
+            session.tx.close();
+        }
     }
 }
 
@@ -140,11 +179,32 @@ pub trait Agent {
     /// Requests that the UI raises the window and focuses the specified pane.
     async fn request_focus_pane(&self, pane_id: String) -> zbus::Result<()>;
 
+    /// Returns a JSON array of `DetachedSessionInfo` objects for all detached
+    /// background shells. Used by desktop companion extensions (GNOME Shell, KDE, Waybar).
+    async fn get_detached_sessions(&self) -> zbus::Result<String>;
+
+    /// Requests that a detached background shell (`pid`, or `0` for all) be restored
+    /// into a live Boxxy Terminal tab. If no Boxxy window is open, queues the PID so
+    /// the next window launched automatically restores it.
+    async fn request_restore_detached(&self, pid: u32) -> zbus::Result<()>;
+
+    /// Drains any PIDs queued via `request_restore_detached` while no UI window was open.
+    async fn take_pending_restores(&self) -> zbus::Result<Vec<(u32, String)>>;
+
+    /// Terminates a detached background shell (`pid`, or `0` for all).
+    async fn terminate_detached_session(&self, pid: u32) -> zbus::Result<()>;
+
     #[zbus(signal)]
     async fn claw_event(&self, session_id: String, event_json: String) -> zbus::Result<()>;
 
     #[zbus(signal)]
     async fn claims_changed(&self, snapshot_json: String) -> zbus::Result<()>;
+
+    #[zbus(signal)]
+    async fn detached_sessions_changed(&self, sessions_json: String) -> zbus::Result<()>;
+
+    #[zbus(signal)]
+    async fn restore_detached_requested(&self, pid: u32, cwd: String) -> zbus::Result<()>;
 
     #[zbus(signal)]
     async fn desktop_notification(&self, title: String, message: String) -> zbus::Result<()>;
@@ -190,6 +250,12 @@ impl AgentInterface {
     async fn notify_settings_invalidated(&self) {
         log::debug!("Settings invalidated signal received from UI. Reloading cache.");
         boxxy_preferences::Settings::reload();
+        let persist = boxxy_preferences::Settings::load().pty_persistence;
+        self.core
+            .state
+            .pty_registry
+            .sync_default_persistence(persist)
+            .await;
     }
 
     #[zbus(signal)]
@@ -269,6 +335,8 @@ impl AgentInterface {
     }
 
     async fn release_holder(&self, holder_id: String) {
+        self.session_manager.lock().await.shutdown_pane(&holder_id);
+
         if let Some(claim) = self.core.registry.release_holder(&holder_id).await {
             log::info!(
                 "Released holder {} (kind {:?})",
@@ -343,22 +411,40 @@ impl AgentInterface {
     async fn request_reload(&self) {
         log::info!("Self-reload requested. Executing new binary...");
 
-        let exe = std::env::current_exe().unwrap_or_default();
-        let args: Vec<String> = std::env::args().collect();
+        let exe_raw = std::env::current_exe()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned();
+        // If the binary on disk was atomically swapped via rename(), Linux's
+        // `/proc/self/exe` symlink appends `" (deleted)"`. Strip that suffix so
+        // `execvp` launches the newly installed binary at the canonical path.
+        let exe_clean = exe_raw
+            .strip_suffix(" (deleted)")
+            .unwrap_or(&exe_raw)
+            .to_string();
+
+        // Filter out `--background` so the reloaded process replaces the current
+        // daemon PID in-place instead of calling `daemonize()` (fork + exit) a
+        // second time, which would trigger PR_SET_PDEATHSIG (SIGHUP) on child PTYs.
+        let args: Vec<String> = std::env::args()
+            .filter(|a| a != "--background")
+            .collect();
 
         tokio::spawn(async move {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-            let c_exe = std::ffi::CString::new(exe.to_string_lossy().to_string()).unwrap();
-            let c_args: Vec<std::ffi::CString> = args
-                .iter()
-                .map(|s| std::ffi::CString::new(s.as_str()).unwrap())
-                .collect();
-            let _ = nix::unistd::execvp(&c_exe, &c_args);
+            if let Ok(c_exe) = std::ffi::CString::new(exe_clean) {
+                let c_args: Vec<std::ffi::CString> = args
+                    .iter()
+                    .filter_map(|s| std::ffi::CString::new(s.as_str()).ok())
+                    .collect();
+                let _ = nix::unistd::execvp(&c_exe, &c_args);
+            }
         });
     }
 
     async fn request_stop(&self) {
-        log::info!("Stop requested. Exiting...");
+        log::info!("Stop requested. Flushing telemetry and exiting...");
+        boxxy_telemetry::flush_journal().await;
         std::process::exit(0);
     }
 
@@ -435,23 +521,123 @@ impl AgentInterface {
         session_id: String,
         event_json: String,
     ) -> zbus::Result<()>;
+
+    #[zbus(signal)]
+    pub async fn detached_sessions_changed(
+        emitter: &SignalEmitter<'_>,
+        sessions_json: String,
+    ) -> zbus::Result<()>;
+
+    #[zbus(signal)]
+    pub async fn restore_detached_requested(
+        emitter: &SignalEmitter<'_>,
+        pid: u32,
+        cwd: String,
+    ) -> zbus::Result<()>;
+
+    async fn get_detached_sessions(&self) -> String {
+        let list = crate::pty::query_detached_sessions_detailed(&self.core.state.pty_registry).await;
+        serde_json::to_string(&list).unwrap_or_else(|_| "[]".to_string())
+    }
+
+    async fn request_restore_detached(
+        &self,
+        #[zbus(signal_emitter)] emitter: zbus::object_server::SignalEmitter<'_>,
+        pid: u32,
+    ) {
+        let list = crate::pty::query_detached_sessions_detailed(&self.core.state.pty_registry).await;
+        let targets: Vec<_> = if pid == 0 {
+            list
+        } else {
+            list.into_iter().filter(|s| s.pid == pid).collect()
+        };
+
+        if self.core.ghost.is_ghost() {
+            let mut pending = self.core.state.pending_restores.write().await;
+            for t in targets {
+                if !pending.contains(&t.pid) {
+                    pending.push(t.pid);
+                }
+            }
+        } else {
+            for t in targets {
+                let _ = Self::restore_detached_requested(&emitter, t.pid, t.cwd).await;
+            }
+        }
+    }
+
+    async fn take_pending_restores(&self) -> Vec<(u32, String)> {
+        let queued: Vec<u32> = {
+            let mut pending = self.core.state.pending_restores.write().await;
+            std::mem::take(&mut *pending)
+        };
+        if queued.is_empty() {
+            return Vec::new();
+        }
+        let list = crate::pty::query_detached_sessions_detailed(&self.core.state.pty_registry).await;
+        list.into_iter()
+            .filter(|s| queued.contains(&s.pid))
+            .map(|s| (s.pid, s.cwd))
+            .collect()
+    }
+
+    async fn terminate_detached_session(&self, pid: u32) {
+        let list = crate::pty::query_detached_sessions_detailed(&self.core.state.pty_registry).await;
+        let targets: Vec<u32> = if pid == 0 {
+            list.into_iter().map(|s| s.pid).collect()
+        } else {
+            list.into_iter()
+                .filter(|s| s.pid == pid)
+                .map(|s| s.pid)
+                .collect()
+        };
+
+        for target_pid in targets {
+            self.core
+                .state
+                .pty_registry
+                .set_persistence(target_pid, false)
+                .await;
+            unsafe {
+                libc::kill(-(target_pid as i32), libc::SIGTERM);
+            }
+        }
+        self.core.state.pty_registry.notify_changed();
+    }
 }
 
-/// Converts select `ClawEngineEvent`s into host desktop notifications.
+/// Converts select `ClawEngineEvent`s into host desktop notifications when in Ghost Mode.
 ///
-/// We intentionally do NOT gate on "UI is detached". The notifications daemon
-/// on most desktop environments suppresses toasts when the emitting app is
-/// focused, so this is already the right behaviour; and when a background
-/// task completes while the user is *looking* at another window, the toast
-/// is still the signal they need.
+/// When at least one UI window is attached (`!ghost.is_ghost()`), `boxxy-window`
+/// handles `TaskCompleted`, `LongTaskCompleted`, and `PushGlobalNotification` via
+/// `gio::Notification` (with character avatars and focus-suppression). When no UI is
+/// attached (`ghost.is_ghost()`), the daemon emits desktop notifications directly over
+/// `org.freedesktop.Notifications` so background reminders and long tasks are never lost.
 async fn maybe_send_desktop_notification(
     conn: &Connection,
-    _agent_name: &str,
+    ghost: &crate::daemon::lifecycle::GhostMode,
+    agent_name: &str,
     event: &ClawEngineEvent,
 ) {
+    if !ghost.is_ghost() {
+        return;
+    }
+
+    let first_name = agent_name.split_whitespace().next().unwrap_or(agent_name);
     match event {
         ClawEngineEvent::PushGlobalNotification { title, message } => {
             notifier::send(conn, title, message).await;
+        }
+        ClawEngineEvent::TaskCompleted { message, .. } => {
+            let title = format!("{first_name} sends a reminder");
+            let body = message
+                .clone()
+                .unwrap_or_else(|| format!("{first_name} has finished a timer."));
+            notifier::send(conn, &title, &body).await;
+        }
+        ClawEngineEvent::LongTaskCompleted { message, .. } => {
+            let title = format!("{first_name} completed a task");
+            notifier::send(conn, &title, message).await;
         }
         _ => {}
     }
@@ -540,11 +726,13 @@ impl AgentInterface {
                 let session_id_clone = session_id.clone();
                 let emitter = emitter.to_owned();
                 let conn_clone = conn.clone();
+                let ghost_clone = self.core.ghost.clone();
                 let character_display_name_clone = character_display_name.clone();
                 tokio::spawn(async move {
                     while let Ok(event) = rx_ui.recv().await {
                         maybe_send_desktop_notification(
                             &conn_clone,
+                            &ghost_clone,
                             &character_display_name_clone,
                             &event,
                         )

@@ -71,9 +71,34 @@ pub fn spawn_turn(
         let (active_skills_text, _available_skills_text) =
             skills::build_skills_context(&prompt_clone, &pane_id).await;
 
-        // 2. Fetch Global Workspace Radar
+        // 2. Fetch Global Workspace Radar + Detached Background Shells
         let workspace = crate::registry::workspace::global_workspace().await;
-        let radar = workspace.get_global_radar(pane_id.clone()).await;
+        let mut radar = workspace.get_global_radar(pane_id.clone()).await;
+        if let Ok(detached) = env.list_detached_shells().await
+            && !detached.is_empty()
+        {
+            radar.push_str("\n\n--- DETACHED BACKGROUND SHELLS ---\n");
+            radar.push_str(
+                "The following terminal sessions are running in the background (detached in boxxy-agent). You can restore any of them into a new tab using `restore_background_shell`:\n",
+            );
+            for (pid, _pane_id, idle_secs, shell_cwd, fg_proc, waiting_for_input) in detached {
+                let proc_label = if fg_proc.is_empty() {
+                    "shell".to_string()
+                } else {
+                    fg_proc
+                };
+                let wait_note = if waiting_for_input {
+                    " [WAITING FOR USER INPUT]"
+                } else {
+                    ""
+                };
+                radar.push_str(&format!(
+                    "- PID {}: `{}` in `{}` (idle {}s){}\n",
+                    pid, proc_label, shell_cwd, idle_secs, wait_note
+                ));
+            }
+            radar.push_str("----------------------------------");
+        }
 
         let mut tui_warning = String::new();
         let all_agents = workspace.get_all_agents().await;

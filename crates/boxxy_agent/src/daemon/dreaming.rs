@@ -3,13 +3,13 @@
 //! Wraps `boxxy_claw::memories::DreamOrchestrator` (which owns the
 //! three-phase LLM consolidation) and adds the daemon-side safety
 //! envelope:
-//!   * niceness 19 so CPU is never contended with the foreground shell,
 //!   * pause while on battery so we don't drain power for consolidation,
 //!   * pause while a UI is attached (ghost mode) so token spend happens
 //!     when the user isn't actively interacting,
 //!   * honour the `enable_auto_dreaming` setting,
 //!   * an initial 10-second warm-up so the UI renders before we start
-//!     grinding.
+//!     grinding,
+//!   * exponential backoff on consecutive LLM failures.
 //!
 //! A record of what's happening at any given moment is exposed via
 //! `DreamStatus` so `MaintenanceSubsystem::get_maintenance_status()`
@@ -21,7 +21,6 @@ use tokio::sync::{Mutex, RwLock};
 
 use super::lifecycle::GhostMode;
 use super::power::PowerMonitor;
-use super::priority::{MAINTENANCE_NICE, set_current_thread_nice};
 
 /// One of these snapshots what the daemon is currently doing with its
 /// spare cycles. `MaintenanceSubsystem` just formats this into a string.
@@ -97,19 +96,14 @@ pub fn spawn_with_status(power: PowerMonitor, ghost: GhostMode, status: DreamSta
         // Initial warm-up: give GTK + window-mapping 10 s of quiet.
         tokio::time::sleep(Duration::from_secs(10)).await;
 
-        // Nice down *this* Tokio worker thread. Any task that lands on
-        // this thread next will inherit the niceness, which is fine —
-        // we want background work deprioritised anyway.
-        if let Err(e) = set_current_thread_nice(MAINTENANCE_NICE) {
-            log::warn!("dreaming: set_current_thread_nice failed: {}", e);
-        }
-
         // Poll-then-run loop. `tokio::time::interval` ticks on a fixed
         // cadence; we just check whether conditions are right.
         let mut tick = tokio::time::interval(Duration::from_secs(60));
         // First tick fires immediately — skip it so we respect the 10 s
         // warm-up we just did.
         tick.tick().await;
+
+        let mut consecutive_failures: u32 = 0;
 
         loop {
             tick.tick().await;
@@ -131,14 +125,27 @@ pub fn spawn_with_status(power: PowerMonitor, ghost: GhostMode, status: DreamSta
             }
 
             status_task.set(DreamStatus::Running).await;
-            if let Err(e) = run_one_cycle(&settings).await {
-                log::warn!("dreaming: cycle failed: {:?}", e);
+            match run_one_cycle(&settings).await {
+                Ok(()) => {
+                    consecutive_failures = 0;
+                    status_task.set(DreamStatus::Idle).await;
+                    // Don't re-run immediately; give the kernel/LLM budget a
+                    // break even if nothing else changes.
+                    tokio::time::sleep(Duration::from_secs(15 * 60)).await;
+                }
+                Err(e) => {
+                    consecutive_failures = consecutive_failures.saturating_add(1);
+                    let backoff_secs = (60u64 << consecutive_failures.min(4)).min(15 * 60);
+                    log::warn!(
+                        "dreaming: cycle failed (attempt {}, backing off {}s): {:?}",
+                        consecutive_failures,
+                        backoff_secs,
+                        e
+                    );
+                    status_task.set(DreamStatus::Idle).await;
+                    tokio::time::sleep(Duration::from_secs(backoff_secs)).await;
+                }
             }
-            status_task.set(DreamStatus::Idle).await;
-
-            // Don't re-run immediately; give the kernel/LLM budget a
-            // break even if nothing else changes.
-            tokio::time::sleep(Duration::from_secs(15 * 60)).await;
         }
     });
 }
@@ -155,8 +162,12 @@ async fn run_one_cycle(settings: &boxxy_preferences::Settings) -> anyhow::Result
     creds.api_keys = settings.get_effective_api_keys();
     creds.ollama_url = settings.ollama_base_url.clone();
 
-    let orchestrator =
-        boxxy_claw::memories::DreamOrchestrator::new(db_arc, creds, settings.memory_model.clone());
+    let model = settings
+        .memory_model
+        .clone()
+        .or_else(|| settings.claw_model.clone());
+
+    let orchestrator = boxxy_claw::memories::DreamOrchestrator::new(db_arc, creds, model);
     orchestrator.run_cycle().await
 }
 

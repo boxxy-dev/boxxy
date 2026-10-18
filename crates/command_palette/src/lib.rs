@@ -93,6 +93,12 @@ impl CommandPaletteComponent {
                 shortcut: Some("<Primary><Shift>T".to_string()),
             },
             CommandItem {
+                title: "Detached Shells".to_string(),
+                action: "win.detached-sessions".to_string(),
+                parameter: None,
+                shortcut: None,
+            },
+            CommandItem {
                 title: "AI Chat".to_string(),
                 action: "win.ai-chat".to_string(),
                 parameter: None,

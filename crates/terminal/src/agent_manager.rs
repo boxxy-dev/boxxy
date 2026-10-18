@@ -1,7 +1,8 @@
 use anyhow::{Context, Result};
 use boxxy_agent::ipc::AgentProxy;
 use boxxy_agent::ipc::claw::AgentClawProxy;
-use boxxy_agent::ipc::pty::{AgentPtyProxy, SpawnOptions};
+use boxxy_agent::ipc::maintenance::AgentMaintenanceProxy;
+use boxxy_agent::ipc::pty::{AgentPtyProxy, DetachedSessionInfo, SpawnOptions};
 use boxxy_claw_protocol::{ClawEngineEvent, ClawEnvironment, ClawMessage};
 use futures_util::StreamExt;
 use std::collections::HashMap;
@@ -245,6 +246,30 @@ impl AgentConnection {
             });
         }
 
+        // 2b. External Companion Restore Request Supervisor
+        {
+            let proxy = agent_proxy.clone();
+            tokio::spawn(async move {
+                loop {
+                    if let Ok(mut stream) = proxy.receive_restore_detached_requested().await {
+                        while let Some(msg) = stream.next().await {
+                            if let Ok(args) = msg.args() {
+                                let event = crate::TerminalEvent {
+                                    id: String::new(),
+                                    kind: crate::TerminalEventKind::RestoreDetached(
+                                        args.pid,
+                                        args.cwd.to_string(),
+                                    ),
+                                };
+                                let _ = crate::TERMINAL_EVENT_BUS.send(event);
+                            }
+                        }
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+                }
+            });
+        }
+
         // 3. Claw Session Event Multiplexer
         {
             let proxy = agent_proxy;
@@ -324,6 +349,7 @@ pub struct AgentManager {
     agent_proxy: AgentProxy<'static>,
     proxy: AgentPtyProxy<'static>,
     claw_proxy: AgentClawProxy<'static>,
+    maintenance_proxy: AgentMaintenanceProxy<'static>,
     connection: AgentConnection,
     /// Notification produced during init (e.g. DB reset). Stored here instead
     /// of sent to TERMINAL_EVENT_BUS immediately, because the bus is a
@@ -366,6 +392,10 @@ impl AgentManager {
             .await
             .context("Failed to create AgentClawProxy on Session Bus")?;
 
+        let maintenance_proxy = AgentMaintenanceProxy::new(&conn)
+            .await
+            .context("Failed to create AgentMaintenanceProxy on Session Bus")?;
+
         let connection = AgentConnection::spawn_supervisors(agent_proxy.clone(), proxy.clone());
 
         let startup_token_json = agent_proxy.claim_startup_token().await.unwrap_or_default();
@@ -400,6 +430,7 @@ impl AgentManager {
             agent_proxy,
             proxy,
             claw_proxy,
+            maintenance_proxy,
             connection,
             startup_notification: Arc::new(Mutex::new(startup_notification)),
         })
@@ -679,6 +710,13 @@ impl AgentManager {
         self.proxy.detach(pid).await.context("Agent detach failed")
     }
 
+    pub async fn detach_with_snapshot(&self, pid: u32, initial_snapshot: Vec<u8>) -> Result<u32> {
+        self.proxy
+            .detach_with_snapshot(pid, initial_snapshot)
+            .await
+            .context("Agent detach_with_snapshot failed")
+    }
+
     pub async fn list_detached_sessions(&self) -> Result<Vec<(u32, String, u64)>> {
         self.proxy
             .list_detached_sessions()
@@ -686,11 +724,40 @@ impl AgentManager {
             .context("Agent list_detached_sessions failed")
     }
 
+    pub async fn list_detached_sessions_detailed(&self) -> Result<Vec<DetachedSessionInfo>> {
+        self.proxy
+            .list_detached_sessions_detailed()
+            .await
+            .context("Agent list_detached_sessions_detailed failed")
+    }
+
     pub async fn reattach(&self, pid: u32) -> Result<(Vec<u8>, OwnedFd)> {
         self.proxy
             .reattach(pid)
             .await
             .context("Agent reattach failed")
+    }
+
+    pub async fn take_pending_restores(&self) -> Result<Vec<(u32, String)>> {
+        self.agent_proxy
+            .take_pending_restores()
+            .await
+            .context("Agent take_pending_restores failed")
+    }
+
+    /// Queries the daemon's Maintenance interface for `(dream_status_label, is_on_battery)`.
+    pub async fn get_maintenance_status(&self) -> Result<(String, bool)> {
+        let status = self
+            .maintenance_proxy
+            .get_maintenance_status()
+            .await
+            .context("Agent get_maintenance_status failed")?;
+        let on_battery = self
+            .maintenance_proxy
+            .is_on_battery()
+            .await
+            .unwrap_or(false);
+        Ok((status, on_battery))
     }
 }
 

@@ -87,10 +87,16 @@ impl ClawSession {
         } else {
             cwd.to_string()
         };
+        let session_id_owned = self.session_id.clone();
 
         tokio::spawn(async move {
             let _ = crate::engine::summarization::history::flush_history(
-                db_cell, unflushed, &model, &creds, &cwd_owned,
+                db_cell,
+                &session_id_owned,
+                unflushed,
+                &model,
+                &creds,
+                &cwd_owned,
             )
             .await;
         });

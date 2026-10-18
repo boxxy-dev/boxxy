@@ -215,6 +215,8 @@ impl ClawSession {
         matches!(
             msg,
             ClawMessage::CancelPending
+                | ClawMessage::Deactivate
+                | ClawMessage::Evict
                 | ClawMessage::SleepToggle(_)
                 | ClawMessage::Abort
                 | ClawMessage::TurnFinished

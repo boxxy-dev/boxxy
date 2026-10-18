@@ -32,6 +32,15 @@ impl TerminalWidget {
         self.imp().attach_pty(master_fd.into());
     }
 
+    pub fn attach_pty_with_replay(
+        &self,
+        master_fd: impl Into<std::os::unix::io::OwnedFd>,
+        replay_bytes: Vec<u8>,
+    ) {
+        self.imp()
+            .attach_pty_with_replay(master_fd.into(), replay_bytes);
+    }
+
     pub fn copy_clipboard(&self) {
         self.imp().copy_clipboard();
     }
@@ -42,6 +51,10 @@ impl TerminalWidget {
 
     pub fn has_selection(&self) -> bool {
         self.imp().has_selection()
+    }
+
+    pub fn export_ansi_snapshot(&self) -> Vec<u8> {
+        self.imp().export_ansi_snapshot()
     }
 
     pub fn select_all(&self) {

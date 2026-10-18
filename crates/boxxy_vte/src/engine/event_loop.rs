@@ -48,6 +48,10 @@ pub enum Msg {
     /// Data that should be written to the PTY.
     Input(Cow<'static, [u8]>),
 
+    /// Buffered PTY output captured by the daemon while detached, replayed
+    /// directly into the VTE state machine on reattach.
+    ReplayOutput(Vec<u8>),
+
     /// Indicates that the `EventLoop` should shut down.
     Shutdown,
 
@@ -219,6 +223,10 @@ where
                             Ok(Msg::Input(input)) => {
                                 log::trace!("EventLoop: received Msg::Input, len={}", input.len());
                                 state.write_list.push_back(input);
+                            },
+                            Ok(Msg::ReplayOutput(bytes)) => {
+                                state.parser.advance(&mut self.terminal, &bytes);
+                                needs_render = true;
                             },
                             Ok(Msg::Resize(window_size, resize_grid)) => {
                                 // Coalesce resize

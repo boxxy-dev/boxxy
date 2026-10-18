@@ -211,10 +211,18 @@ impl TerminalBackend {
     }
 
     pub fn from_fd(sender: async_channel::Sender<Event>, master_fd: OwnedFd) -> Self {
-        let dim_size = MySize {
-            cols: 80,
-            lines: 24,
+        let mut ws: libc::winsize = unsafe { std::mem::zeroed() };
+        let (cols, lines) = unsafe {
+            if libc::ioctl(master_fd.as_raw_fd(), libc::TIOCGWINSZ, &mut ws) == 0
+                && ws.ws_col > 0
+                && ws.ws_row > 0
+            {
+                (ws.ws_col as usize, ws.ws_row as usize)
+            } else {
+                (80, 24)
+            }
         };
+        let dim_size = MySize { cols, lines };
 
         // Ensure non-blocking
         set_nonblocking(master_fd.as_raw_fd());
@@ -259,6 +267,14 @@ impl TerminalBackend {
             return;
         }
         let _ = self.notifier.0.send(Msg::Input(bytes.into()));
+    }
+
+    /// Feed buffered output captured while detached directly into the VTE parser.
+    pub fn replay_output(&self, bytes: Vec<u8>) {
+        if bytes.is_empty() {
+            return;
+        }
+        let _ = self.notifier.0.send(Msg::ReplayOutput(bytes));
     }
 
     pub fn clear_pending_wakeups(&self) {

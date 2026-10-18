@@ -69,29 +69,45 @@ pub fn new_tab(inner: &mut AppWindowInner) {
 }
 
 pub fn new_tab_with_intent(inner: &mut AppWindowInner, intent: Option<String>) {
+    new_tab_internal(inner, intent, None, None);
+}
+
+pub fn new_tab_reattach(inner: &mut AppWindowInner, pid: u32, working_dir: Option<String>) {
+    new_tab_internal(inner, None, working_dir, Some(pid));
+}
+
+fn new_tab_internal(
+    inner: &mut AppWindowInner,
+    intent: Option<String>,
+    explicit_working_dir: Option<String>,
+    reattach_pid: Option<u32>,
+) {
     let id = uuid::Uuid::new_v4().to_string();
 
-    let working_dir = if inner.current_settings.preserve_working_dir {
-        inner
-            .tab_view
-            .selected_page()
-            .and_then(|page| {
-                let child = page.child();
-                inner
-                    .tabs
-                    .iter()
-                    .find(|c| c.controller.widget() == &child)
-                    .and_then(|tc| tc.cwd.clone())
-            })
-            .or(inner.initial_working_dir.take())
-    } else {
-        None
-    };
+    let working_dir = explicit_working_dir.or_else(|| {
+        if inner.current_settings.preserve_working_dir {
+            inner
+                .tab_view
+                .selected_page()
+                .and_then(|page| {
+                    let child = page.child();
+                    inner
+                        .tabs
+                        .iter()
+                        .find(|c| c.controller.widget() == &child)
+                        .and_then(|tc| tc.cwd.clone())
+                })
+                .or(inner.initial_working_dir.take())
+        } else {
+            None
+        }
+    });
 
     let controller = TerminalComponent::new(TerminalInit {
         id: id.clone(),
         working_dir,
         spawn_intent: intent,
+        reattach_pid,
     });
 
     let parsed = load_palette(inner.current_settings.theme.as_str());
@@ -220,13 +236,6 @@ pub fn close_tab_request(
         return;
     };
 
-    if boxxy_preferences::Settings::load().pty_persistence {
-        inner.tabs[pos].controller.on_close();
-        inner.tabs.remove(pos);
-        inner.tab_view.close_page_finish(&page, true);
-        return;
-    }
-
     let pids = inner.tabs[pos].controller.get_pids();
     let inner_clone = inner_ref.clone();
     gtk4::glib::spawn_future_local(async move {
@@ -243,17 +252,42 @@ pub fn close_tab_request(
             }
         }
 
+        // If the tab only has an idle shell prompt (no running child commands),
+        // terminate the idle shell cleanly even when `pty_persistence` is on so
+        // explicitly closed tabs don't accumulate empty shells in the background.
         if running_apps.is_empty() {
-            let mut inner = inner_clone.borrow_mut();
-            if let Some(pos) = inner
-                .tabs
-                .iter()
-                .position(|c| c.controller.widget().as_ptr() as usize == key)
-            {
-                inner.tabs[pos].controller.on_close();
-                inner.tabs.remove(pos);
+            let controller_opt = {
+                let mut inner = inner_clone.borrow_mut();
+                inner
+                    .tabs
+                    .iter()
+                    .position(|c| c.controller.widget().as_ptr() as usize == key)
+                    .map(|pos| inner.tabs.remove(pos).controller)
+            };
+            if let Some(controller) = controller_opt {
+                controller.terminate_on_close_sync().await;
             }
-            inner.tab_view.close_page_finish(&page, true);
+            inner_clone.borrow().tab_view.close_page_finish(&page, true);
+            return;
+        }
+
+        // If child processes ARE running and "Always Keep Running Processes in Background"
+        // (`pty_persistence`) is on, detach the busy shell into the background without nagging.
+        if boxxy_preferences::Settings::load().pty_persistence {
+            let (controller_opt, tx) = {
+                let mut inner = inner_clone.borrow_mut();
+                let ctrl = inner
+                    .tabs
+                    .iter()
+                    .position(|c| c.controller.widget().as_ptr() as usize == key)
+                    .map(|pos| inner.tabs.remove(pos).controller);
+                (ctrl, inner.tx.clone())
+            };
+            if let Some(controller) = controller_opt {
+                controller.detach_on_close_sync().await;
+            }
+            inner_clone.borrow().tab_view.close_page_finish(&page, true);
+            let _ = tx.send(crate::state::AppInput::RefreshDetachedSessions).await;
             return;
         }
 
@@ -279,29 +313,98 @@ pub fn close_tab_request(
             .child(&group)
             .build();
 
-        dialog.set_extra_child(Some(&scrolled));
-        dialog.add_response("cancel", "Cancel");
-        dialog.add_response("close", "Close Tab");
-        dialog.set_response_appearance("close", libadwaita::ResponseAppearance::Destructive);
-        dialog.set_default_response(Some("cancel"));
-        dialog.set_close_response("cancel");
+        let extra_vbox = gtk4::Box::new(gtk4::Orientation::Vertical, 16);
+        extra_vbox.set_width_request(440);
+        extra_vbox.append(&scrolled);
+
+        let actions_row = gtk4::Box::new(gtk4::Orientation::Horizontal, 10);
+        actions_row.set_homogeneous(true);
+
+        let cancel_btn = gtk4::Button::builder()
+            .label("Cancel")
+            .height_request(38)
+            .build();
+        let terminate_btn = gtk4::Button::builder()
+            .label("Terminate")
+            .css_classes(["destructive-action"])
+            .height_request(38)
+            .build();
+        let bg_btn = gtk4::Button::builder()
+            .label("Run in Background")
+            .css_classes(["suggested-action"])
+            .height_request(38)
+            .build();
+
+        let chosen = std::rc::Rc::new(std::cell::Cell::new("cancel"));
+        {
+            let c = chosen.clone();
+            let d = dialog.downgrade();
+            cancel_btn.connect_clicked(move |_| {
+                c.set("cancel");
+                if let Some(dlg) = d.upgrade() {
+                    dlg.close();
+                }
+            });
+        }
+        {
+            let c = chosen.clone();
+            let d = dialog.downgrade();
+            terminate_btn.connect_clicked(move |_| {
+                c.set("close");
+                if let Some(dlg) = d.upgrade() {
+                    dlg.close();
+                }
+            });
+        }
+        {
+            let c = chosen.clone();
+            let d = dialog.downgrade();
+            bg_btn.connect_clicked(move |_| {
+                c.set("background");
+                if let Some(dlg) = d.upgrade() {
+                    dlg.close();
+                }
+            });
+        }
+
+        actions_row.append(&cancel_btn);
+        actions_row.append(&terminate_btn);
+        actions_row.append(&bg_btn);
+        extra_vbox.append(&actions_row);
+
+        dialog.set_extra_child(Some(&extra_vbox));
 
         let window = inner_clone.borrow().window.clone();
-        let response = dialog.choose_future(Some(&window)).await;
-        if response == "close" {
-            for pid in &pids {
-                let _ = agent.signal_process_group(*pid, 15).await;
+        let _ = dialog.choose_future(Some(&window)).await;
+        let response = chosen.get();
+        if response == "background" {
+            let (controller_opt, tx) = {
+                let mut inner = inner_clone.borrow_mut();
+                let ctrl = inner
+                    .tabs
+                    .iter()
+                    .position(|c| c.controller.widget().as_ptr() as usize == key)
+                    .map(|pos| inner.tabs.remove(pos).controller);
+                (ctrl, inner.tx.clone())
+            };
+            if let Some(controller) = controller_opt {
+                controller.detach_on_close_sync().await;
             }
-            let mut inner = inner_clone.borrow_mut();
-            if let Some(pos) = inner
-                .tabs
-                .iter()
-                .position(|c| c.controller.widget().as_ptr() as usize == key)
-            {
-                inner.tabs[pos].controller.on_close();
-                inner.tabs.remove(pos);
+            inner_clone.borrow().tab_view.close_page_finish(&page, true);
+            let _ = tx.send(crate::state::AppInput::RefreshDetachedSessions).await;
+        } else if response == "close" {
+            let controller_opt = {
+                let mut inner = inner_clone.borrow_mut();
+                inner
+                    .tabs
+                    .iter()
+                    .position(|c| c.controller.widget().as_ptr() as usize == key)
+                    .map(|pos| inner.tabs.remove(pos).controller)
+            };
+            if let Some(controller) = controller_opt {
+                controller.terminate_on_close_sync().await;
             }
-            inner.tab_view.close_page_finish(&page, true);
+            inner_clone.borrow().tab_view.close_page_finish(&page, true);
         } else {
             inner_clone.borrow().tab_view.close_page_finish(&page, false);
         }

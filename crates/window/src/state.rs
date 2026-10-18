@@ -153,6 +153,11 @@ pub enum AppInput {
     GrabFocus,
     CancelTask(uuid::Uuid, Option<String>), // (task_id, pane_id)
     ClearClawHistory(Option<String>),       // (pane_id)
+    ShowDetachedSessions,
+    RefreshDetachedSessions,
+    UpdateDetachedSessionsBadge(Vec<boxxy_terminal::DetachedSessionInfo>),
+    ReattachDetachedSession(u32, Option<String>),
+    RefreshMaintenanceStatus(String, bool),
 }
 
 pub struct AppWindowInner {
@@ -165,6 +170,8 @@ pub struct AppWindowInner {
     pub sidebar_overlay: gtk::Overlay,
     pub sidebar_toolbar: adw::ToolbarView,
     pub menu_btn: gtk::Button,
+    pub detached_btn: gtk::Button,
+    pub detached_count_lbl: gtk::Label,
     pub view_stack: adw::ViewStack,
     pub next_id: usize,
     pub sidebar_visible: bool,

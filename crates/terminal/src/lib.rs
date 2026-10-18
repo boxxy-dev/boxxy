@@ -12,6 +12,7 @@ pub mod search_bar;
 // The widget crate now owns `ClawHost` + `Proposal`; we re-export them
 // at the terminal crate root so existing `crate::ClawHost` /
 // `crate::Proposal` references stay valid.
+pub use boxxy_agent::ipc::pty::DetachedSessionInfo;
 pub use boxxy_claw_widget::{ClawHost, Proposal};
 pub use component::{Direction, TerminalComponent};
 pub use events::*;

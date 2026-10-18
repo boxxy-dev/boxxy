@@ -13,13 +13,19 @@ pub fn handle_terminal_event(
 ) {
     // Global events (no pane id) — handle before the per-pane match.
     if event.id.is_empty() {
-        if let TerminalEventKind::Notification(message) = event.kind {
-            let _ =
-                inner
+        match event.kind {
+            TerminalEventKind::Notification(message) => {
+                let _ = inner.tx.send_blocking(AppInput::ShowToast(
+                    crate::state::ToastRequest::ephemeral(message),
+                ));
+            }
+            TerminalEventKind::RestoreDetached(pid, cwd) => {
+                let cwd_opt = (!cwd.is_empty()).then_some(cwd);
+                let _ = inner
                     .tx
-                    .send_blocking(AppInput::ShowToast(crate::state::ToastRequest::ephemeral(
-                        message,
-                    )));
+                    .send_blocking(AppInput::ReattachDetachedSession(pid, cwd_opt));
+            }
+            _ => {}
         }
         return;
     }
@@ -207,6 +213,11 @@ pub fn handle_terminal_event(
                             inner.tabs[pos].controller.split_horizontal(intent);
                         }
                     },
+                    ClawEngineEvent::RequestReattachShell { pid, cwd } => {
+                        let _ = inner
+                            .tx
+                            .send_blocking(AppInput::ReattachDetachedSession(pid, cwd));
+                    }
                     ClawEngineEvent::RequestCloseAgent { target_agent_name } => {
                         let inner_clone = _inner_ref.clone();
                         let target_name = target_agent_name.clone();
@@ -397,6 +408,7 @@ pub fn handle_terminal_event(
             TerminalEventKind::ResetZoom => {
                 let _ = inner.tx.send_blocking(AppInput::ResetZoom);
             }
+            TerminalEventKind::RestoreDetached(_, _) => {}
         }
     }
 }

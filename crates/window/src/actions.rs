@@ -24,6 +24,7 @@ pub fn setup_actions(window: &libadwaita::ApplicationWindow, sender: Sender<AppI
     add_action!("claw", AppInput::ShowClawSidebar);
     add_action!("new-window", AppInput::NewWindow);
     add_action!("new-tab", AppInput::NewTab);
+    add_action!("detached-sessions", AppInput::ShowDetachedSessions);
     add_action!("close-tab", AppInput::CloseActiveTab);
     add_action!("toggle-sidebar", AppInput::ToggleSidebar);
     add_action!("preferences", AppInput::OpenPreferences);

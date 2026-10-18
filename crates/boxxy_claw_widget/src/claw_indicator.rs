@@ -453,6 +453,7 @@ impl ClawIndicator {
             "cancel_task" => "Cancelling task".to_string(),
             "spawn_agent" => "Spawning agent".to_string(),
             "close_agent" => "Closing agent".to_string(),
+            "restore_background_shell" => "Restoring background shell".to_string(),
             "read_pane_buffer" => "Reading peer pane".to_string(),
             "list_active_agents" => "Checking active agents".to_string(),
             "set_global_intent" => "Updating global intent".to_string(),

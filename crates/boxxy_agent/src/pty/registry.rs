@@ -54,6 +54,7 @@ pub enum ProcessState {
 pub struct RingBuffer {
     cap: usize,
     data: VecDeque<u8>,
+    evicted_any: bool,
 }
 
 impl RingBuffer {
@@ -61,11 +62,14 @@ impl RingBuffer {
         Self {
             cap,
             data: VecDeque::with_capacity(cap),
+            evicted_any: false,
         }
     }
 
     /// Appends `bytes`, evicting from the front if it would exceed capacity.
-    /// O(n) worst case but bounded by `cap`.
+    /// When eviction occurs, aligns the leading edge to a valid UTF-8 boundary
+    /// (and to the next newline for buffers >= 64 bytes) so replaying into VTE
+    /// never starts mid-codepoint or mid-CSI escape sequence.
     pub fn push(&mut self, bytes: &[u8]) {
         if bytes.len() >= self.cap {
             // Fast path: the new write alone is bigger than the buffer.
@@ -73,19 +77,58 @@ impl RingBuffer {
             self.data.clear();
             let start = bytes.len() - self.cap;
             self.data.extend(&bytes[start..]);
+            self.evicted_any = true;
+            self.align_front_boundary();
             return;
         }
         let overflow = (self.data.len() + bytes.len()).saturating_sub(self.cap);
         if overflow > 0 {
             self.data.drain(..overflow);
+            self.evicted_any = true;
         }
         self.data.extend(bytes);
+        if overflow > 0 {
+            self.align_front_boundary();
+        }
+    }
+
+    fn align_front_boundary(&mut self) {
+        // 1. Always strip leading UTF-8 continuation bytes (`0b10xx_xxxx`).
+        let mut utf8_skip = 0;
+        for &b in self.data.iter().take(4) {
+            if (b & 0b1100_0000) == 0b1000_0000 {
+                utf8_skip += 1;
+            } else {
+                break;
+            }
+        }
+        if utf8_skip > 0 && utf8_skip < self.data.len() {
+            self.data.drain(..utf8_skip);
+        }
+
+        // 2. For real terminal buffers (cap >= 64), if there is a newline within the
+        //    first 256 bytes (and at least half the buffer remains), advance past it
+        //    so replay starts on a clean line rather than mid-escape sequence.
+        if self.cap >= 64 {
+            let max_scan = 256.min(self.data.len() / 2);
+            if let Some(nl_pos) = self.data.iter().take(max_scan).position(|&b| b == b'\n') {
+                self.data.drain(..=nl_pos);
+            }
+        }
     }
 
     /// Returns a contiguous copy, oldest byte first.
+    /// For real terminal buffers (`cap >= 64`) that have evicted leading output,
+    /// prepends `\x1b[0m` so prior SGR attributes don't bleed into the tail.
     pub fn snapshot(&self) -> Vec<u8> {
         let (a, b) = self.data.as_slices();
-        let mut out = Vec::with_capacity(a.len() + b.len());
+        let prefix: &[u8] = if self.evicted_any && self.cap >= 64 && !self.data.is_empty() {
+            b"\x1b[0m"
+        } else {
+            b""
+        };
+        let mut out = Vec::with_capacity(prefix.len() + a.len() + b.len());
+        out.extend_from_slice(prefix);
         out.extend_from_slice(a);
         out.extend_from_slice(b);
         out
@@ -104,6 +147,11 @@ pub struct PtySession {
     pub pid: u32,
     /// The pane UUID that owns this PTY, for `list_detached_sessions()`.
     pub pane_id: String,
+    /// Unique D-Bus name (`:1.xxx`) of the UI client currently attached to this PTY.
+    /// Used by `client_tracker` to automatically detach (or SIGTERM) on UI exit/crash.
+    pub owner_bus_name: String,
+    /// Initial working directory supplied at spawn time (fallback if `/proc/<pid>/cwd` fails).
+    pub initial_cwd: String,
     pub state: ProcessState,
     pub persistence_enabled: bool,
     pub viewer_count: u32,
@@ -121,12 +169,21 @@ pub struct PtySession {
 }
 
 impl PtySession {
-    fn new(pid: u32, pane_id: String, master_fd: Option<OwnedFd>) -> Self {
+    fn new(
+        pid: u32,
+        pane_id: String,
+        owner_bus_name: String,
+        initial_cwd: String,
+        persistence_enabled: bool,
+        master_fd: Option<OwnedFd>,
+    ) -> Self {
         Self {
             pid,
             pane_id,
+            owner_bus_name,
+            initial_cwd,
             state: ProcessState::Running,
-            persistence_enabled: false,
+            persistence_enabled,
             viewer_count: 1, // the spawning UI is already attached
             last_activity: Instant::now(),
             ring_buffer: None,
@@ -154,9 +211,20 @@ impl PtySession {
 /// spawned via `PtySubsystem::spawn`. Cloned into `AgentState` so every
 /// D-Bus handler and the zombie sweeper can reach it without threading
 /// a reference through each call.
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct PtyRegistry {
     inner: Arc<RwLock<HashMap<u32, PtySession>>>,
+    changed_tx: tokio::sync::broadcast::Sender<()>,
+}
+
+impl Default for PtyRegistry {
+    fn default() -> Self {
+        let (changed_tx, _) = tokio::sync::broadcast::channel(32);
+        Self {
+            inner: Arc::new(RwLock::new(HashMap::new())),
+            changed_tx,
+        }
+    }
 }
 
 impl PtyRegistry {
@@ -164,10 +232,31 @@ impl PtyRegistry {
         Self::default()
     }
 
+    pub fn subscribe(&self) -> tokio::sync::broadcast::Receiver<()> {
+        self.changed_tx.subscribe()
+    }
+
+    pub fn notify_changed(&self) {
+        let _ = self.changed_tx.send(());
+    }
+
     /// Inserts a fresh session record. Called from `spawn()` after the
     /// child successfully starts. `master_fd` is the daemon's dup of the
     /// PTY master and is kept idle until `detach()` starts reading it.
     pub async fn register(&self, pid: u32, pane_id: String, master_fd: Option<OwnedFd>) {
+        self.register_with_owner(pid, pane_id, String::new(), String::new(), false, master_fd)
+            .await;
+    }
+
+    pub async fn register_with_owner(
+        &self,
+        pid: u32,
+        pane_id: String,
+        owner_bus_name: String,
+        initial_cwd: String,
+        persistence_enabled: bool,
+        master_fd: Option<OwnedFd>,
+    ) {
         let now = Instant::now();
         let mut map = self.inner.write().await;
         map.retain(|_, s| match s.state {
@@ -176,7 +265,17 @@ impl PtyRegistry {
                 now.saturating_duration_since(exited_at) <= EXITED_TTL
             }
         });
-        map.insert(pid, PtySession::new(pid, pane_id, master_fd));
+        map.insert(
+            pid,
+            PtySession::new(
+                pid,
+                pane_id,
+                owner_bus_name,
+                initial_cwd,
+                persistence_enabled,
+                master_fd,
+            ),
+        );
     }
 
     /// Transitions a session to `ProcessState::Exited`, immediately releasing
@@ -207,6 +306,7 @@ impl PtyRegistry {
         if let Some(handle) = reader_handle {
             handle.abort();
         }
+        self.notify_changed();
     }
 
     /// Returns `Some(exit_code)` if the process is known to have exited within
@@ -228,6 +328,7 @@ impl PtyRegistry {
                 handle.abort();
             }
             // `master_fd` drops here, closing the daemon's copy.
+            self.notify_changed();
         }
     }
 
@@ -235,6 +336,54 @@ impl PtyRegistry {
         if let Some(s) = self.inner.write().await.get_mut(&pid) {
             s.persistence_enabled = enabled;
         }
+    }
+
+    /// Updates `persistence_enabled` on all currently attached, running PTY sessions
+    /// so toggling `Persistent Shells` in Preferences takes effect immediately in the
+    /// daemon even if the UI later exits or crashes before per-pane drop futures run.
+    pub async fn sync_default_persistence(&self, enabled: bool) {
+        let mut map = self.inner.write().await;
+        for s in map.values_mut() {
+            if matches!(s.state, ProcessState::Running) && s.viewer_count > 0 {
+                s.persistence_enabled = enabled;
+            }
+        }
+    }
+
+    pub async fn set_owner(&self, pid: u32, owner_bus_name: String) {
+        if let Some(s) = self.inner.write().await.get_mut(&pid) {
+            s.owner_bus_name = owner_bus_name;
+        }
+    }
+
+    /// Called by `client_tracker` when a UI process disconnects or crashes.
+    /// Automatically detaches (or SIGTERMs if persistence is off) every still-attached
+    /// PTY session owned by `owner_bus_name`.
+    pub async fn release_owner(&self, owner_bus_name: &str) -> Vec<(u32, DetachOutcome)> {
+        if owner_bus_name.is_empty() {
+            return Vec::new();
+        }
+        let pids: Vec<u32> = {
+            let mut map = self.inner.write().await;
+            let mut found = Vec::new();
+            for s in map.values_mut() {
+                if matches!(s.state, ProcessState::Running)
+                    && s.viewer_count > 0
+                    && s.owner_bus_name == owner_bus_name
+                {
+                    s.owner_bus_name.clear();
+                    found.push(s.pid);
+                }
+            }
+            found
+        };
+
+        let mut outcomes = Vec::with_capacity(pids.len());
+        for pid in pids {
+            let outcome = self.detach(pid).await;
+            outcomes.push((pid, outcome));
+        }
+        outcomes
     }
 
     /// Increments the viewer count. If the session was detached,
@@ -273,6 +422,8 @@ impl PtyRegistry {
             return None;
         }
         let fresh = unsafe { OwnedFd::from_raw_fd(dup_raw) };
+        drop(map);
+        self.notify_changed();
         Some((buffer, fresh))
     }
 
@@ -284,6 +435,11 @@ impl PtyRegistry {
     /// Returns `DetachOutcome::Terminated` or `DetachOutcome::Detached`
     /// so callers (and telemetry) can observe the decision.
     pub async fn detach(&self, pid: u32) -> DetachOutcome {
+        self.detach_with_snapshot(pid, &[]).await
+    }
+
+    pub async fn detach_with_snapshot(&self, pid: u32, initial_snapshot: &[u8]) -> DetachOutcome {
+        let has_active_work = super::shell_has_active_process(pid);
         let (start_reader, should_kill) = {
             let mut map = self.inner.write().await;
             let Some(s) = map.get_mut(&pid) else {
@@ -298,10 +454,18 @@ impl PtyRegistry {
                 return DetachOutcome::StillViewed;
             }
 
-            if !s.persistence_enabled {
+            if !s.persistence_enabled || !has_active_work {
+                // Either persistence is disabled, or the shell is sitting idle
+                // at a prompt with no running child processes — terminate it
+                // cleanly instead of keeping an empty shell alive in the daemon.
+                s.persistence_enabled = false;
                 (false, true)
             } else if s.master_fd.is_some() {
-                s.ring_buffer = Some(RingBuffer::new(RING_BUFFER_CAPACITY));
+                let mut rb = RingBuffer::new(RING_BUFFER_CAPACITY);
+                if !initial_snapshot.is_empty() {
+                    rb.push(initial_snapshot);
+                }
+                s.ring_buffer = Some(rb);
                 s.last_activity = Instant::now();
                 (true, false)
             } else {
@@ -325,6 +489,7 @@ impl PtyRegistry {
             if let Some(s) = self.inner.write().await.get_mut(&pid) {
                 s.reader_task = Some(handle);
             }
+            self.notify_changed();
             return DetachOutcome::Detached;
         }
 
@@ -358,6 +523,25 @@ impl PtyRegistry {
                     s.pid,
                     s.pane_id.clone(),
                     now.saturating_duration_since(s.last_activity).as_secs(),
+                )
+            })
+            .collect()
+    }
+
+    /// Returns `(pid, pane_id, idle_secs, initial_cwd)` for all detached sessions.
+    pub async fn list_detached_with_cwd(&self) -> Vec<(u32, String, u64, String)> {
+        let now = Instant::now();
+        self.inner
+            .read()
+            .await
+            .values()
+            .filter(|s| s.is_detached())
+            .map(|s| {
+                (
+                    s.pid,
+                    s.pane_id.clone(),
+                    now.saturating_duration_since(s.last_activity).as_secs(),
+                    s.initial_cwd.clone(),
                 )
             })
             .collect()
@@ -653,5 +837,51 @@ mod tests {
 
         reg.remove(555).await;
         assert_eq!(reg.get_exit_status(555).await, None);
+    }
+
+    #[test]
+    fn ring_buffer_eviction_never_splits_multibyte_utf8() {
+        // "🦀" is 4 bytes: [0xF0, 0x9F, 0xA6, 0x80]
+        let mut rb = RingBuffer::new(6);
+        rb.push("🦀ab".as_bytes());
+        // Pushing 2 more bytes ("cd") causes 2 bytes of "🦀" to be evicted,
+        // leaving 2 orphaned UTF-8 continuation bytes at the front unless aligned.
+        rb.push(b"cd");
+        let snap = rb.snapshot();
+        assert!(
+            std::str::from_utf8(&snap).is_ok(),
+            "snapshot must be valid UTF-8, got {snap:?}"
+        );
+        assert_eq!(&snap, b"abcd");
+    }
+
+    #[tokio::test]
+    async fn release_owner_auto_detaches_on_client_disconnect() {
+        use nix::fcntl::OFlag;
+        use nix::pty::{grantpt, posix_openpt, unlockpt};
+        use std::os::fd::{FromRawFd, IntoRawFd};
+
+        let master = posix_openpt(OFlag::O_RDWR | OFlag::O_NOCTTY | OFlag::O_NONBLOCK)
+            .expect("posix_openpt");
+        grantpt(&master).expect("grantpt");
+        unlockpt(&master).expect("unlockpt");
+        let master_owned = unsafe { OwnedFd::from_raw_fd(master.into_raw_fd()) };
+
+        let reg = PtyRegistry::new();
+        reg.register_with_owner(
+            4242,
+            "pane-crash-test".into(),
+            ":1.99".into(),
+            "/tmp".into(),
+            true,
+            Some(master_owned),
+        )
+        .await;
+
+        let outcomes = reg.release_owner(":1.99").await;
+        assert_eq!(outcomes, vec![(4242, DetachOutcome::Detached)]);
+        assert_eq!(reg.list_detached().await.len(), 1);
+
+        reg.remove(4242).await;
     }
 }

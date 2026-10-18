@@ -325,6 +325,25 @@ impl ClawEnvironment for ClawSubsystem {
         clipboard.set_text(text)?;
         Ok(())
     }
+
+    async fn list_detached_shells(
+        &self,
+    ) -> anyhow::Result<Vec<(u32, String, u64, String, String, bool)>> {
+        let list = crate::pty::query_detached_sessions_detailed(&self.state.pty_registry).await;
+        Ok(list
+            .into_iter()
+            .map(|s| {
+                (
+                    s.pid,
+                    s.pane_id,
+                    s.idle_secs,
+                    s.cwd,
+                    s.foreground_process,
+                    s.waiting_for_input,
+                )
+            })
+            .collect())
+    }
 }
 
 #[interface(name = "dev.boxxy.BoxxyTerminal.Agent.Claw")]
