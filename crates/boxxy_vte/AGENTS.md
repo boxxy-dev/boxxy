@@ -53,7 +53,7 @@ The `TerminalWidget` GObject wrapper.
 | `on_title_changed(f)` | Fired on OSC 0/2 title events. |
 | `on_bell(f)` / `on_exit(f)` | Fired on terminal bell and child process exit. |
 | `on_context_menu(f)` | Register a callback fired when the terminal decides a right-click belongs to the terminal (not the running app). Receives `(x, y)` in widget coordinates. |
-| `copy_clipboard()` | Synchronously copies the current selection to the clipboard via `RenderState::selection_text()`. |
+| `copy_clipboard()` | Copies the full current selection (including off-screen scrollback history) to the clipboard via `RenderState::selection_text()` and `Msg::CopySelection`. |
 | `paste_clipboard()` / `paste_primary()` | Paste from clipboard/primary selection with automatic bracketed-paste wrapping (`\x1b[200~...\x1b[201~`) when the app has enabled `BRACKETED_PASTE` mode. |
 | `is_mouse_mode()` | Returns `true` if the running app has enabled any mouse-reporting mode (1000/1002/1003). |
 

@@ -337,6 +337,31 @@ impl TerminalBackend {
         let _ = self.notifier.0.send(Msg::UpdateSelectionExt(point, side));
     }
 
+    pub fn update_selection_viewport(
+        &self,
+        row: usize,
+        col: crate::engine::index::Column,
+        side: crate::engine::index::Side,
+    ) {
+        let _ = self
+            .notifier
+            .0
+            .send(Msg::UpdateSelectionViewport(row, col, side));
+    }
+
+    pub fn scroll_and_update_selection(
+        &self,
+        scroll: crate::engine::grid::Scroll,
+        row: usize,
+        col: crate::engine::index::Column,
+        side: crate::engine::index::Side,
+    ) {
+        let _ = self
+            .notifier
+            .0
+            .send(Msg::ScrollAndSelect(scroll, row, col, side));
+    }
+
     pub fn clear_selection(&self) {
         let _ = self.notifier.0.send(Msg::ClearSelection);
     }
@@ -514,5 +539,83 @@ mod tests {
             backend.render_state.load().selection_text().as_deref(),
             Some("First")
         );
+    }
+
+    #[tokio::test]
+    async fn scroll_and_select_captures_full_offscreen_history_selection() {
+        use crate::engine::grid::Scroll;
+        use crate::engine::index::{Column, Line, Point, Side};
+        use crate::engine::selection::{Selection, SelectionType};
+
+        let mut fds = [0i32; 2];
+        assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0);
+        let read_fd = unsafe { OwnedFd::from_raw_fd(fds[0]) };
+        let write_fd = unsafe { OwnedFd::from_raw_fd(fds[1]) };
+
+        let (tx, rx) = async_channel::unbounded::<Event>();
+        let backend = TerminalBackend::from_fd(tx, read_fd);
+
+        // Emit 40 lines into a 24-line terminal so lines 0..16 scroll into history.
+        let mut payload = String::new();
+        for i in 0..40 {
+            payload.push_str(&format!("line-{i:02}\r\n"));
+        }
+        unsafe {
+            libc::write(
+                write_fd.as_raw_fd(),
+                payload.as_ptr() as *const _,
+                payload.len(),
+            );
+        }
+
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        while rx.try_recv().is_ok() {}
+        backend.clear_pending_wakeups();
+
+        let state = backend.render_state.load();
+        assert!(
+            state.total_lines > state.screen_lines,
+            "expected scrollback history"
+        );
+
+        // Start selection at the bottom visible line (line-39, above the final trailing newline).
+        let bottom_content_line = Line(state.screen_lines as i32 - 2);
+        backend.set_selection(Some(Selection::new(
+            SelectionType::Simple,
+            Point::new(bottom_content_line, Column(7)),
+            Side::Right,
+        )));
+        let _ = tokio::time::timeout(std::time::Duration::from_millis(100), rx.recv())
+            .await
+            .expect("initial selection wakeup");
+        backend.clear_pending_wakeups();
+
+        // Simulate edge auto-scrolling / wheel-scrolling all the way to the top of history
+        // while keeping the drag cursor at the top-left of the viewport (row 0, col 0).
+        let history_lines = (state.total_lines - state.screen_lines) as i32;
+        backend.scroll_and_update_selection(
+            Scroll::Delta(history_lines),
+            0,
+            Column(0),
+            Side::Left,
+        );
+
+        let _ = tokio::time::timeout(std::time::Duration::from_millis(100), rx.recv())
+            .await
+            .expect("scroll_and_select wakeup");
+        backend.clear_pending_wakeups();
+
+        let full_text = backend
+            .render_state
+            .load()
+            .selection_text()
+            .expect("expected non-empty selection text");
+
+        // Every single line from line-00 (in history) through line-39 (now off-screen below
+        // the scrolled viewport) must be present in `selection_text()`.
+        let copied_lines: Vec<&str> = full_text.lines().collect();
+        assert_eq!(copied_lines.len(), 40);
+        assert_eq!(copied_lines.first().copied(), Some("line-00"));
+        assert_eq!(copied_lines.last().copied(), Some("line-39"));
     }
 }

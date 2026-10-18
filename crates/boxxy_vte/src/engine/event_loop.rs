@@ -62,6 +62,8 @@ pub enum Msg {
     Scroll(Scroll),
     UpdateSelection(Option<Selection>),
     UpdateSelectionExt(Point, Side),
+    UpdateSelectionViewport(usize, Column, Side),
+    ScrollAndSelect(Scroll, usize, Column, Side),
     ClearSelection,
     CopySelection(ClipboardType),
     Search(String, Direction, bool),
@@ -270,12 +272,22 @@ where
                                     needs_render = true;
                                 }
                             },
+                            Ok(Msg::UpdateSelectionViewport(row, col, side)) => {
+                                needs_render = self.update_selection_at_viewport(row, col, side);
+                            },
+                            Ok(Msg::ScrollAndSelect(scroll, row, col, side)) => {
+                                if !self.terminal.mode().contains(crate::engine::term::TermMode::ALT_SCREEN) {
+                                    self.terminal.scroll_display(scroll);
+                                    self.update_selection_at_viewport(row, col, side);
+                                    needs_render = true;
+                                }
+                            },
                             Ok(Msg::ClearSelection) => {
                                 self.terminal.selection = None;
                                 needs_render = true;
                             },
                             Ok(Msg::CopySelection(clipboard_type)) => {
-                                if let Some(text) = self.terminal.selection_to_string() {
+                                if let Some(text) = self.terminal.selection_to_string().filter(|s| !s.is_empty()) {
                                     self.event_proxy.send_event(Event::ClipboardStore(clipboard_type, text));
                                 } else {
                                     log::debug!("EventLoop: Copy requested but selection is empty");
@@ -468,6 +480,24 @@ where
             drop(async_signals);
             (self, state)
         })
+    }
+
+    #[inline]
+    fn update_selection_at_viewport(&mut self, row: usize, col: Column, side: Side) -> bool {
+        use crate::engine::grid::Dimensions;
+        let display_offset = self.terminal.grid().display_offset() as i32;
+        let clamped_row = row.min(self.terminal.screen_lines().saturating_sub(1)) as i32;
+        let clamped_col = Column(col.0.min(self.terminal.columns().saturating_sub(1)));
+        if let Some(ref mut selection) = self.terminal.selection {
+            let point = Point::new(
+                crate::engine::index::Line(clamped_row - display_offset),
+                clamped_col,
+            );
+            selection.update(point, side);
+            true
+        } else {
+            false
+        }
     }
 
     #[inline]

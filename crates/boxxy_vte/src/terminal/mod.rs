@@ -60,9 +60,13 @@ impl TerminalWidget {
     pub fn select_all(&self) {
         if let Some(backend) = self.imp().backend.borrow().as_ref() {
             let state = backend.render_state.load();
-            let (cols, lines) = (state.columns, state.screen_lines);
+            let (cols, lines, total) = (state.columns, state.screen_lines, state.total_lines);
+            if cols == 0 || lines == 0 {
+                return;
+            }
+            let history_size = total.saturating_sub(lines) as i32;
             let start = crate::engine::index::Point::new(
-                crate::engine::index::Line(0),
+                crate::engine::index::Line(-history_size),
                 crate::engine::index::Column(0),
             );
             let end = crate::engine::index::Point::new(
@@ -77,6 +81,7 @@ impl TerminalWidget {
             );
             sel.update(end, crate::engine::index::Side::Right);
             backend.set_selection(Some(sel));
+            backend.copy_selection(crate::engine::term::ClipboardType::Selection);
             self.queue_draw();
         }
     }
@@ -319,12 +324,17 @@ impl TerminalWidget {
 
         let char_size = imp.get_char_size(self);
         let padding = imp.padding.get() as f64;
-        let col = ((x - padding) / char_size.0).floor() as usize;
-        let row = ((y - padding) / char_size.1).floor() as usize;
+        let col = ((x - padding) / char_size.0).floor() as isize;
+        let row = ((y - padding) / char_size.1).floor() as isize;
 
-        if row >= state.screen_lines || col >= state.columns {
+        if row < 0
+            || col < 0
+            || (row as usize) >= state.screen_lines
+            || (col as usize) >= state.columns
+        {
             return None;
         }
+        let (col, row) = (col as usize, row as usize);
 
         let display_offset = state.display_offset;
         let point = Point::new(Line(row as i32 - display_offset), Column(col));
@@ -353,12 +363,17 @@ impl TerminalWidget {
 
         let char_size = imp.get_char_size(self);
         let padding = imp.padding.get() as f64;
-        let col = ((x - padding) / char_size.0).floor() as usize;
-        let row = ((y - padding) / char_size.1).floor() as usize;
+        let col = ((x - padding) / char_size.0).floor() as isize;
+        let row = ((y - padding) / char_size.1).floor() as isize;
 
-        if row >= state.screen_lines || col >= state.columns {
+        if row < 0
+            || col < 0
+            || (row as usize) >= state.screen_lines
+            || (col as usize) >= state.columns
+        {
             return (None, 0, None);
         }
+        let (col, row) = (col as usize, row as usize);
 
         let display_offset = state.display_offset;
         let grid_line = Line(row as i32 - display_offset);

@@ -265,13 +265,17 @@ impl super::TerminalWidget {
                 padding,
             );
             let hovered_uri = self.mouse_pos.get().and_then(|(mx, my)| {
-                let hov_col = ((mx - padding as f64) / cs.0).floor() as usize;
-                let hov_row = ((my - padding as f64) / cs.1).floor() as usize;
-                if hov_row < state.screen_lines && hov_col < state.columns {
+                let hov_col = ((mx - padding as f64) / cs.0).floor() as isize;
+                let hov_row = ((my - padding as f64) / cs.1).floor() as isize;
+                if hov_row >= 0
+                    && (hov_row as usize) < state.screen_lines
+                    && hov_col >= 0
+                    && (hov_col as usize) < state.columns
+                {
                     state
                         .cell(Point::new(
                             Line(hov_row as i32 - display_offset),
-                            Column(hov_col),
+                            Column(hov_col as usize),
                         ))
                         .hyperlink()
                         .map(|h| h.uri().to_string())
@@ -279,6 +283,10 @@ impl super::TerminalWidget {
                     None
                 }
             });
+
+            let visible_matches = self.visible_search_matches.borrow();
+            let selection_color = gtk4::gdk::RGBA::new(0.2, 0.4, 0.6, 0.5);
+            let link_underline_color = gtk4::gdk::RGBA::new(0.35, 0.75, 1.0, 1.0);
 
             for row in 0..state.screen_lines as i32 {
                 // 1. Background pass
@@ -365,41 +373,38 @@ impl super::TerminalWidget {
                 }
 
                 // 1.5 Search Highlight background pass
-                {
-                    let visible_matches = self.visible_search_matches.borrow();
-                    if !visible_matches.is_empty() {
-                        let yellow = gtk4::gdk::RGBA::new(0.961, 0.761, 0.067, 1.0); // #F5C211
-                        let orange = gtk4::gdk::RGBA::new(1.0, 0.471, 0.0, 1.0); // #FF7800
+                if !visible_matches.is_empty() {
+                    let yellow = gtk4::gdk::RGBA::new(0.961, 0.761, 0.067, 1.0); // #F5C211
+                    let orange = gtk4::gdk::RGBA::new(1.0, 0.471, 0.0, 1.0); // #FF7800
 
-                        for m in visible_matches.iter() {
-                            let grid_row = Line(row - display_offset);
-                            if grid_row >= m.start.line && grid_row <= m.end.line {
-                                let start_col = if grid_row == m.start.line {
-                                    m.start.column.0
-                                } else {
-                                    0
-                                };
-                                let end_col = if grid_row == m.end.line {
-                                    m.end.column.0
-                                } else {
-                                    state.columns - 1
-                                };
+                    for m in visible_matches.iter() {
+                        let grid_row = Line(row - display_offset);
+                        if grid_row >= m.start.line && grid_row <= m.end.line {
+                            let start_col = if grid_row == m.start.line {
+                                m.start.column.0
+                            } else {
+                                0
+                            };
+                            let end_col = if grid_row == m.end.line {
+                                m.end.column.0
+                            } else {
+                                state.columns - 1
+                            };
 
-                                let is_active = selection_range
-                                    .map(|r| r.start == m.start && r.end == m.end)
-                                    .unwrap_or(false);
-                                let color = if is_active { &orange } else { &yellow };
+                            let is_active = selection_range
+                                .map(|r| r.start == m.start && r.end == m.end)
+                                .unwrap_or(false);
+                            let color = if is_active { &orange } else { &yellow };
 
-                                snapshot.append_color(
-                                    color,
-                                    &gtk4::graphene::Rect::new(
-                                        start_col as f32 * char_width,
-                                        row as f32 * char_height,
-                                        (end_col as i32 - start_col as i32 + 1) as f32 * char_width,
-                                        char_height,
-                                    ),
-                                );
-                            }
+                            snapshot.append_color(
+                                color,
+                                &gtk4::graphene::Rect::new(
+                                    start_col as f32 * char_width,
+                                    row as f32 * char_height,
+                                    (end_col as i32 - start_col as i32 + 1) as f32 * char_width,
+                                    char_height,
+                                ),
+                            );
                         }
                     }
                 }
@@ -454,11 +459,10 @@ impl super::TerminalWidget {
                     };
 
                     // Search Highlight text color override
-                    if !self.visible_search_matches.borrow().is_empty() {
-                        let visible_matches = self.visible_search_matches.borrow();
-                        if visible_matches.iter().any(|m| m.contains(point)) {
-                            fg = gtk4::gdk::RGBA::new(0.118, 0.118, 0.180, 1.0);
-                        }
+                    if !visible_matches.is_empty()
+                        && visible_matches.iter().any(|m| m.contains(point))
+                    {
+                        fg = gtk4::gdk::RGBA::new(0.118, 0.118, 0.180, 1.0);
                     }
 
                     if dim_factor < 1.0 {
@@ -624,62 +628,105 @@ impl super::TerminalWidget {
                         snapshot.restore();
                     }
                 }
-                for col in 0..state.columns {
-                    let point = Point::new(Line(row - display_offset), Column(col));
-                    if let Some(ref range) = selection_range
-                        && range.contains(point)
-                    {
-                        let is_search_match = !self.visible_search_matches.borrow().is_empty()
-                            && self
-                                .visible_search_matches
-                                .borrow()
-                                .iter()
-                                .any(|m| m.contains(point));
-
-                        if !is_search_match {
-                            snapshot.append_color(
-                                &gtk4::gdk::RGBA::new(0.2, 0.4, 0.6, 0.5),
-                                &gtk4::graphene::Rect::new(
-                                    col as f32 * char_width,
-                                    row as f32 * char_height,
-                                    char_width,
-                                    char_height,
-                                ),
-                            );
+                // 3. Selection & hover underline pass (batched into contiguous spans per row)
+                let grid_line = Line(row - display_offset);
+                if let Some(ref range) = selection_range
+                    && grid_line >= range.start.line
+                    && grid_line <= range.end.line
+                {
+                    let mut sel_span_start: Option<usize> = None;
+                    for col in 0..state.columns {
+                        let point = Point::new(grid_line, Column(col));
+                        let selected = range.contains(point)
+                            && (visible_matches.is_empty()
+                                || !visible_matches.iter().any(|m| m.contains(point)));
+                        match (sel_span_start, selected) {
+                            (None, true) => sel_span_start = Some(col),
+                            (Some(s), false) => {
+                                snapshot.append_color(
+                                    &selection_color,
+                                    &gtk4::graphene::Rect::new(
+                                        s as f32 * char_width,
+                                        row as f32 * char_height,
+                                        (col - s) as f32 * char_width,
+                                        char_height,
+                                    ),
+                                );
+                                sel_span_start = None;
+                            }
+                            _ => {}
                         }
                     }
-                    if let Some(cell_uri) =
-                        state.cell(point).hyperlink().map(|h| h.uri().to_string())
-                        && hovered_uri.as_deref() == Some(cell_uri.as_str())
-                    {
+                    if let Some(s) = sel_span_start {
                         snapshot.append_color(
-                            &gtk4::gdk::RGBA::new(0.35, 0.75, 1.0, 1.0),
+                            &selection_color,
                             &gtk4::graphene::Rect::new(
-                                col as f32 * char_width,
+                                s as f32 * char_width,
+                                row as f32 * char_height,
+                                (state.columns - s) as f32 * char_width,
+                                char_height,
+                            ),
+                        );
+                    }
+                }
+
+                if let Some(ref hov_uri) = hovered_uri {
+                    let mut link_span_start: Option<usize> = None;
+                    for col in 0..state.columns {
+                        let point = Point::new(grid_line, Column(col));
+                        let matches_uri = state
+                            .cell(point)
+                            .hyperlink()
+                            .is_some_and(|h| h.uri() == hov_uri);
+                        match (link_span_start, matches_uri) {
+                            (None, true) => link_span_start = Some(col),
+                            (Some(s), false) => {
+                                snapshot.append_color(
+                                    &link_underline_color,
+                                    &gtk4::graphene::Rect::new(
+                                        s as f32 * char_width,
+                                        row as f32 * char_height + char_height - 1.5,
+                                        (col - s) as f32 * char_width,
+                                        1.5,
+                                    ),
+                                );
+                                link_span_start = None;
+                            }
+                            _ => {}
+                        }
+                    }
+                    if let Some(s) = link_span_start {
+                        snapshot.append_color(
+                            &link_underline_color,
+                            &gtk4::graphene::Rect::new(
+                                s as f32 * char_width,
                                 row as f32 * char_height + char_height - 1.5,
-                                char_width,
+                                (state.columns - s) as f32 * char_width,
                                 1.5,
                             ),
                         );
                     }
+                }
 
-                    if let Some((r, start_c, end_c)) = self.hovered_regex_match.get()
-                        && r == row as usize
-                        && col >= start_c
-                        && col < end_c
-                    {
+                if let Some((r, start_c, end_c)) = self.hovered_regex_match.get()
+                    && r == row as usize
+                    && end_c > start_c
+                {
+                    let clamped_end = end_c.min(state.columns);
+                    if clamped_end > start_c {
                         snapshot.append_color(
-                            &gtk4::gdk::RGBA::new(0.35, 0.75, 1.0, 1.0),
+                            &link_underline_color,
                             &gtk4::graphene::Rect::new(
-                                col as f32 * char_width,
+                                start_c as f32 * char_width,
                                 row as f32 * char_height + char_height - 1.5,
-                                char_width,
+                                (clamped_end - start_c) as f32 * char_width,
                                 1.5,
                             ),
                         );
                     }
                 }
             }
+            drop(visible_matches);
             if self.show_grid.get() {
                 let grid_color = gtk4::gdk::RGBA::new(1.0, 1.0, 1.0, 0.05);
                 for r in 0..=state.screen_lines as i32 {

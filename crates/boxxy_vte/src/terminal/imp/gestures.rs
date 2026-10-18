@@ -5,7 +5,212 @@ use gtk4::glib;
 use gtk4::prelude::*;
 use gtk4::subclass::prelude::*;
 
+const AUTOSCROLL_INTERVAL_MS: u64 = 25;
+const AUTOSCROLL_MAX_LINES_PER_TICK: i32 = 12;
+
 impl super::TerminalWidget {
+    /// Convert widget pixel coordinates `(x, y)` into clamped `(col, row)` grid indices.
+    #[inline]
+    pub(super) fn pixel_to_cell(
+        &self,
+        widget: &crate::terminal::TerminalWidget,
+        x: f64,
+        y: f64,
+        cols: usize,
+        lines: usize,
+    ) -> (usize, usize) {
+        let (char_w, char_h) = self.get_char_size(widget);
+        let padding = self.padding.get() as f64;
+        let max_col = cols.saturating_sub(1);
+        let max_row = lines.saturating_sub(1);
+        let col = if char_w > 0.0 {
+            (((x - padding) / char_w).floor() as isize).clamp(0, max_col as isize) as usize
+        } else {
+            0
+        };
+        let row = if char_h > 0.0 {
+            (((y - padding) / char_h).floor() as isize).clamp(0, max_row as isize) as usize
+        } else {
+            0
+        };
+        (col, row)
+    }
+
+    /// Convert widget pixel coordinates `(x, y)` into a viewport selection endpoint
+    /// `(row, Column, Side)`, snapping to the start of the top line when dragged
+    /// above the viewport or to the end of the bottom line when dragged below.
+    #[inline]
+    pub(super) fn pixel_to_selection_point(
+        &self,
+        widget: &crate::terminal::TerminalWidget,
+        x: f64,
+        y: f64,
+        cols: usize,
+        lines: usize,
+    ) -> (usize, Column, Side) {
+        let cols = cols.max(1);
+        let lines = lines.max(1);
+        let (char_w, char_h) = self.get_char_size(widget);
+        let padding = self.padding.get() as f64;
+
+        if char_w <= 0.0 || char_h <= 0.0 {
+            return (0, Column(0), Side::Left);
+        }
+
+        let raw_row = ((y - padding) / char_h).floor() as isize;
+        if raw_row < 0 {
+            return (0, Column(0), Side::Left);
+        }
+        if raw_row >= lines as isize {
+            return (lines - 1, Column(cols - 1), Side::Right);
+        }
+
+        let row = raw_row as usize;
+        let cell_x = (x - padding) / char_w;
+        if cell_x < 0.0 {
+            (row, Column(0), Side::Left)
+        } else if cell_x >= cols as f64 {
+            (row, Column(cols - 1), Side::Right)
+        } else {
+            let col = (cell_x.floor() as usize).min(cols - 1);
+            let side = if (cell_x - cell_x.floor()) > 0.5 {
+                Side::Right
+            } else {
+                Side::Left
+            };
+            (row, Column(col), side)
+        }
+    }
+
+    /// Compute the vertical scroll delta (positive = up into history, negative = down)
+    /// when the pointer is pushed into or beyond the top/bottom terminal edges during selection.
+    pub(super) fn calculate_autoscroll_delta(
+        &self,
+        widget: &crate::terminal::TerminalWidget,
+        y: f64,
+    ) -> i32 {
+        let height = widget.height() as f64;
+        let padding = self.padding.get() as f64;
+        let (_, char_height) = self.get_char_size(widget);
+        if char_height <= 0.0 || height <= 0.0 {
+            return 0;
+        }
+
+        let edge_band = (padding + char_height).max(20.0);
+        let top_zone = edge_band;
+        let bottom_zone = (height - edge_band).max(top_zone);
+        let start_y = self.drag_start_pos.get().map(|(_, sy)| sy).unwrap_or(y);
+
+        if y < top_zone {
+            let dragged_up = start_y >= top_zone
+                || (start_y - y) > char_height * 0.35
+                || y <= padding.max(4.0);
+            if dragged_up {
+                let dist = top_zone - y;
+                return ((dist / (char_height * 0.65)).ceil() as i32)
+                    .clamp(1, AUTOSCROLL_MAX_LINES_PER_TICK);
+            }
+        } else if y > bottom_zone {
+            let dragged_down = start_y <= bottom_zone
+                || (y - start_y) > char_height * 0.35
+                || y >= height - padding.max(4.0);
+            if dragged_down {
+                let dist = y - bottom_zone;
+                let speed = ((dist / (char_height * 0.65)).ceil() as i32)
+                    .clamp(1, AUTOSCROLL_MAX_LINES_PER_TICK);
+                return -speed;
+            }
+        }
+
+        0
+    }
+
+    pub(super) fn start_autoscroll(&self, widget: &crate::terminal::TerminalWidget) {
+        if self.autoscroll_source_id.borrow().is_some() {
+            return;
+        }
+
+        let obj_weak = widget.downgrade();
+        let source_id = glib::timeout_add_local(
+            std::time::Duration::from_millis(AUTOSCROLL_INTERVAL_MS),
+            move || {
+                let Some(obj) = obj_weak.upgrade() else {
+                    return glib::ControlFlow::Break;
+                };
+                let imp = obj.imp();
+                if !imp.mouse_pressed.get() {
+                    imp.autoscroll_source_id.replace(None);
+                    return glib::ControlFlow::Break;
+                }
+
+                let Some((mx, my)) = imp.mouse_pos.get() else {
+                    imp.autoscroll_source_id.replace(None);
+                    return glib::ControlFlow::Break;
+                };
+
+                let delta = imp.calculate_autoscroll_delta(&obj, my);
+                if delta == 0 {
+                    imp.autoscroll_source_id.replace(None);
+                    return glib::ControlFlow::Break;
+                }
+
+                if let Some(backend) = imp.backend.borrow().as_ref() {
+                    let state = backend.render_state.load();
+                    if state.is_alt_screen {
+                        imp.autoscroll_source_id.replace(None);
+                        return glib::ControlFlow::Break;
+                    }
+
+                    let (row, col, side) = imp.pixel_to_selection_point(
+                        &obj,
+                        mx,
+                        my,
+                        state.columns,
+                        state.screen_lines,
+                    );
+                    imp.last_selection_point.set(Some((row, col, side)));
+
+                    let max_offset = state.total_lines.saturating_sub(state.screen_lines) as i32;
+                    let can_scroll = (delta > 0 && state.display_offset < max_offset)
+                        || (delta < 0 && state.display_offset > 0);
+
+                    if can_scroll {
+                        backend.scroll_and_update_selection(Scroll::Delta(delta), row, col, side);
+                        obj.queue_draw();
+                        obj.update_scroll_adjustment();
+                    } else {
+                        backend.update_selection_viewport(row, col, side);
+                        obj.queue_draw();
+                    }
+                }
+
+                glib::ControlFlow::Continue
+            },
+        );
+        self.autoscroll_source_id.replace(Some(source_id));
+    }
+
+    pub(super) fn stop_autoscroll(&self) {
+        if let Some(source_id) = self.autoscroll_source_id.borrow_mut().take() {
+            source_id.remove();
+        }
+    }
+
+    pub(super) fn finish_selection_drag(&self) {
+        self.stop_autoscroll();
+        self.drag_start_pos.set(None);
+        self.last_selection_point.set(None);
+        if !self.mouse_pressed.replace(false) {
+            return;
+        }
+        if let Some(backend) = self.backend.borrow().as_ref()
+            && backend.has_selection()
+        {
+            backend.copy_selection(crate::engine::term::ClipboardType::Selection);
+            backend.copy_selection(crate::engine::term::ClipboardType::Clipboard);
+        }
+    }
+
     pub(super) fn setup_controllers(&self) {
         let obj = self.obj();
 
@@ -111,7 +316,22 @@ impl super::TerminalWidget {
                     };
                     if let Some(op) = scroll_op {
                         if let Some(backend) = imp.backend.borrow().as_ref() {
-                            backend.scroll_display(op);
+                            if imp.mouse_pressed.get()
+                                && let Some((mx, my)) = imp.mouse_pos.get()
+                            {
+                                let state = backend.render_state.load();
+                                let (row, col, side) = imp.pixel_to_selection_point(
+                                    &obj,
+                                    mx,
+                                    my,
+                                    state.columns,
+                                    state.screen_lines,
+                                );
+                                imp.last_selection_point.set(Some((row, col, side)));
+                                backend.scroll_and_update_selection(op, row, col, side);
+                            } else {
+                                backend.scroll_display(op);
+                            }
                         }
                         return glib::Propagation::Stop;
                     }
@@ -169,10 +389,13 @@ impl super::TerminalWidget {
                         && !modifiers.contains(gtk4::gdk::ModifierType::SHIFT_MASK)
                         && let Some((mx, my)) = imp.mouse_pos.get()
                     {
-                        let char_size = imp.get_char_size(&obj);
-                        let padding = imp.padding.get() as f64;
-                        let cell_x = ((mx - padding) / char_size.0).floor() as usize;
-                        let cell_y = ((my - padding) / char_size.1).floor() as usize;
+                        let (cell_x, cell_y) = imp.pixel_to_cell(
+                            &obj,
+                            mx,
+                            my,
+                            state.columns,
+                            state.screen_lines,
+                        );
                         let button = if dy > 0.0 { 65 } else { 64 };
                         if let Some(seq) = format_mouse_report(
                             button, true, false, cell_x, cell_y, modifiers, state.mode,
@@ -206,7 +429,22 @@ impl super::TerminalWidget {
                     if imp.invert_scroll.get() {
                         adj_dy = -adj_dy;
                     }
-                    backend.scroll_display(Scroll::Delta((adj_dy * 3.0) as i32));
+                    let scroll_delta = Scroll::Delta((adj_dy * 3.0) as i32);
+                    if imp.mouse_pressed.get()
+                        && let Some((mx, my)) = imp.mouse_pos.get()
+                    {
+                        let (row, col, side) = imp.pixel_to_selection_point(
+                            &obj,
+                            mx,
+                            my,
+                            state.columns,
+                            state.screen_lines,
+                        );
+                        imp.last_selection_point.set(Some((row, col, side)));
+                        backend.scroll_and_update_selection(scroll_delta, row, col, side);
+                    } else {
+                        backend.scroll_display(scroll_delta);
+                    }
                     obj.queue_draw();
                     obj.update_scroll_adjustment();
                     return glib::Propagation::Stop;
@@ -232,17 +470,16 @@ impl super::TerminalWidget {
                 if let Some(backend) = imp.backend.borrow().as_ref() {
                     let state = backend.render_state.load();
                     let modifiers = gesture.current_event_state();
-                    let char_size = imp.get_char_size(&obj);
-                    let padding = imp.padding.get() as f64;
-                    let cell_x = (x - padding) / char_size.0;
-                    let col = cell_x.floor() as usize;
-                    let side = if (cell_x - cell_x.floor()) > 0.5 {
-                        Side::Right
-                    } else {
-                        Side::Left
-                    };
-                    let row = ((y - padding) / char_size.1).floor() as usize;
-                    let point = Point::new(Line(row as i32 - state.display_offset), Column(col));
+                    let (col, row) =
+                        imp.pixel_to_cell(&obj, x, y, state.columns, state.screen_lines);
+                    let (sel_row, sel_col, side) = imp.pixel_to_selection_point(
+                        &obj,
+                        x,
+                        y,
+                        state.columns,
+                        state.screen_lines,
+                    );
+                    let point = Point::new(Line(sel_row as i32 - state.display_offset), sel_col);
 
                     let is_shift = modifiers.contains(gtk4::gdk::ModifierType::SHIFT_MASK);
                     let app_owns_mouse = state
@@ -251,6 +488,7 @@ impl super::TerminalWidget {
                         && !is_shift;
 
                     if app_owns_mouse {
+                        imp.stop_autoscroll();
                         if backend.has_selection() {
                             backend.set_selection(None);
                             obj.queue_draw();
@@ -287,6 +525,17 @@ impl super::TerminalWidget {
                     }
 
                     if gesture.current_button() == 1 {
+                        imp.mouse_pos.set(Some((x, y)));
+                        imp.drag_start_pos.set(Some((x, y)));
+                        imp.last_selection_point.set(Some((sel_row, sel_col, side)));
+
+                        if n_press == 1 && is_shift && backend.has_selection() {
+                            imp.mouse_pressed.set(true);
+                            backend.update_selection_viewport(sel_row, sel_col, side);
+                            obj.queue_draw();
+                            return;
+                        }
+
                         if n_press == 1
                             && let Some(seq) = state.calculate_navigation_sequence(point)
                         {
@@ -301,7 +550,9 @@ impl super::TerminalWidget {
                             return;
                         }
                         imp.mouse_pressed.set(true);
+                        let is_alt = modifiers.contains(gtk4::gdk::ModifierType::ALT_MASK);
                         let st = match n_press {
+                            1 if is_alt => SelectionType::Block,
                             1 => SelectionType::Simple,
                             2 => SelectionType::Semantic,
                             _ => SelectionType::Lines,
@@ -319,19 +570,18 @@ impl super::TerminalWidget {
             obj,
             move |gesture, _, x, y| {
                 let imp = obj.imp();
-                imp.mouse_pressed.set(false);
                 if let Some(backend) = imp.backend.borrow().as_ref() {
                     let state = backend.render_state.load();
                     let modifiers = gesture.current_event_state();
-                    let char_size = imp.get_char_size(&obj);
-                    let padding = imp.padding.get() as f64;
-                    let col = ((x - padding) / char_size.0).floor() as usize;
-                    let row = ((y - padding) / char_size.1).floor() as usize;
+                    let (col, row) =
+                        imp.pixel_to_cell(&obj, x, y, state.columns, state.screen_lines);
                     if state
                         .mode
                         .intersects(crate::engine::term::TermMode::MOUSE_MODE)
                         && !modifiers.contains(gtk4::gdk::ModifierType::SHIFT_MASK)
                     {
+                        imp.stop_autoscroll();
+                        imp.mouse_pressed.set(false);
                         let button = match gesture.current_button() {
                             1 => 0,
                             2 => 1,
@@ -359,12 +609,12 @@ impl super::TerminalWidget {
                         }
                         return;
                     }
-                    if backend.has_selection() {
-                        backend.copy_selection(crate::engine::term::ClipboardType::Selection);
-                        backend.copy_selection(crate::engine::term::ClipboardType::Clipboard);
-                    } else if state
-                        .mode
-                        .contains(crate::engine::term::TermMode::CLICK_REPORT)
+                    let had_selection = backend.has_selection();
+                    imp.finish_selection_drag();
+                    if !had_selection
+                        && state
+                            .mode
+                            .contains(crate::engine::term::TermMode::CLICK_REPORT)
                         && !modifiers.contains(gtk4::gdk::ModifierType::SHIFT_MASK)
                         && gesture.current_button() == 1
                     {
@@ -380,7 +630,18 @@ impl super::TerminalWidget {
                             .ok();
                         backend.set_selection(None);
                     }
+                } else {
+                    imp.finish_selection_drag();
                 }
+            }
+        ));
+        click_gesture.connect_end(glib::clone!(
+            #[weak]
+            obj,
+            move |_, _| {
+                // Ensure drags that end or are released outside the widget
+                // allocation stop auto-scrolling and finalize clipboard copy.
+                obj.imp().finish_selection_drag();
             }
         ));
         obj.add_controller(click_gesture);
@@ -391,19 +652,28 @@ impl super::TerminalWidget {
             obj,
             move |ctrl, x, y| {
                 let imp = obj.imp();
+                let modifiers = ctrl.current_event_state();
+                if imp.mouse_pressed.get() {
+                    let any_button_held = modifiers.intersects(
+                        gtk4::gdk::ModifierType::BUTTON1_MASK
+                            | gtk4::gdk::ModifierType::BUTTON2_MASK
+                            | gtk4::gdk::ModifierType::BUTTON3_MASK,
+                    );
+                    if !any_button_held {
+                        imp.finish_selection_drag();
+                    }
+                }
+
                 if let Some(backend) = imp.backend.borrow().as_ref() {
                     let state = backend.render_state.load();
-                    let modifiers = ctrl.current_event_state();
                     if state
                         .mode
                         .intersects(crate::engine::term::TermMode::MOUSE_MODE)
                         && !modifiers.contains(gtk4::gdk::ModifierType::SHIFT_MASK)
                     {
                         imp.mouse_pos.set(Some((x, y)));
-                        let char_size = imp.get_char_size(&obj);
-                        let padding = imp.padding.get() as f64;
-                        let col = ((x - padding) / char_size.0).floor() as usize;
-                        let row = ((y - padding) / char_size.1).floor() as usize;
+                        let (col, row) =
+                            imp.pixel_to_cell(&obj, x, y, state.columns, state.screen_lines);
                         let is_drag = imp.mouse_pressed.get();
                         let button = if is_drag { 0 } else { 35 };
                         if let Some(seq) = format_mouse_report(
@@ -424,24 +694,26 @@ impl super::TerminalWidget {
                     imp.mouse_pos.set(Some((x, y)));
                     if let Some(backend) = imp.backend.borrow().as_ref() {
                         let state = backend.render_state.load();
-                        let char_size = imp.get_char_size(&obj);
-                        let padding = imp.padding.get() as f64;
-                        let cell_x = (x - padding) / char_size.0;
-                        let col = cell_x.floor() as usize;
-                        let side = if (cell_x - cell_x.floor()) > 0.5 {
-                            Side::Right
+                        let sel_pt = imp.pixel_to_selection_point(
+                            &obj,
+                            x,
+                            y,
+                            state.columns,
+                            state.screen_lines,
+                        );
+                        if imp.last_selection_point.get() != Some(sel_pt) {
+                            imp.last_selection_point.set(Some(sel_pt));
+                            backend.update_selection_viewport(sel_pt.0, sel_pt.1, sel_pt.2);
+                            obj.queue_draw();
+                        }
+                        if !state.is_alt_screen && imp.calculate_autoscroll_delta(&obj, y) != 0 {
+                            imp.start_autoscroll(&obj);
                         } else {
-                            Side::Left
-                        };
-                        let row = ((y - padding) / char_size.1).floor() as usize;
-                        let point =
-                            Point::new(Line(row as i32 - state.display_offset), Column(col));
-                        backend.update_selection(point, side);
-                        obj.queue_draw();
+                            imp.stop_autoscroll();
+                        }
                     }
                 } else {
-                    let state = ctrl.current_event_state();
-                    let is_ctrl = state.contains(gtk4::gdk::ModifierType::CONTROL_MASK);
+                    let is_ctrl = modifiers.contains(gtk4::gdk::ModifierType::CONTROL_MASK);
 
                     let is_osclink = obj.check_hyperlink_at(x, y).is_some();
                     let (regex_text, _, regex_bounds) = obj.check_match_at(x, y);
@@ -473,8 +745,11 @@ impl super::TerminalWidget {
             obj,
             move |_| {
                 obj.set_cursor(None);
-                obj.imp().mouse_pos.set(None);
-                obj.imp().hovered_regex_match.set(None);
+                let imp = obj.imp();
+                if !imp.mouse_pressed.get() {
+                    imp.mouse_pos.set(None);
+                }
+                imp.hovered_regex_match.set(None);
                 obj.queue_draw();
             }
         ));

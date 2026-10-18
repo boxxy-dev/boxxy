@@ -21,6 +21,7 @@ pub struct RenderState {
     pub display_offset: i32,
     pub cursor_point: Point,
     pub selection_range: Option<SelectionRange>,
+    pub selection_text: Option<String>,
     pub kitty_placements: Vec<crate::engine::kitty::Placement>,
     pub kitty_images: HashMap<u32, Arc<crate::engine::kitty::KittyImage>>,
     pub cell_width: u16,
@@ -47,6 +48,7 @@ impl RenderState {
         }
 
         let selection_range = term.selection.as_ref().and_then(|s| s.to_range(term));
+        let selection_text = term.selection_to_string().filter(|s| !s.is_empty());
         let is_alt_screen = term.mode.contains(TermMode::ALT_SCREEN);
         let mode = term.mode;
         let cl_mode = term.cl_mode.clone();
@@ -60,6 +62,7 @@ impl RenderState {
             display_offset,
             cursor_point: grid.cursor.point,
             selection_range,
+            selection_text,
             kitty_placements: term.kitty_graphics.placements.clone(),
             kitty_images: term.kitty_graphics.images.clone(),
             cell_width: term.cell_width,
@@ -96,6 +99,7 @@ impl RenderState {
         self.display_offset = display_offset;
         self.cursor_point = term.grid().cursor.point;
         self.selection_range = term.selection.as_ref().and_then(|s| s.to_range(term));
+        self.selection_text = term.selection_to_string().filter(|s| !s.is_empty());
         self.kitty_placements.clone_from(&term.kitty_graphics.placements);
         self.kitty_images.clone_from(&term.kitty_graphics.images);
         self.cell_width = term.cell_width;
@@ -110,45 +114,95 @@ impl RenderState {
         &self.cells[(row as usize) * self.columns + point.column.0]
     }
 
-    /// Extract the selected text directly from the render-state cell grid.
+    /// Return the selected text from this render snapshot.
     ///
-    /// This runs on the GTK thread without any async round-trip to the event
-    /// loop.  It only covers the cells currently in the visible buffer, which
-    /// is sufficient for alt-screen apps (Fresh, vim, …) and normal selections
-    /// that haven't scrolled into history.
+    /// When `RenderState` is produced by `Term` (`new` / `update_from`),
+    /// `self.selection_text` is pre-populated via `Term::selection_to_string()`,
+    /// which covers the full scrollback history as well as the visible screen.
+    /// If `self.selection_text` was not populated (e.g. a manually constructed
+    /// `RenderState`), falls back to extracting from `self.cells` only when the
+    /// entire selection range lies within the visible viewport.
     pub fn selection_text(&self) -> Option<String> {
+        if self.selection_text.is_some() {
+            return self.selection_text.clone();
+        }
+
         let range = self.selection_range?;
+        if self.columns == 0 || self.screen_lines == 0 {
+            return None;
+        }
+
+        // If the selection extends outside the visible viewport, `self.cells`
+        // does not contain the off-screen lines; return `None` so callers fall
+        // back to querying `Term` on the event loop.
+        let start_row = range.start.line.0 + self.display_offset;
+        let end_row = range.end.line.0 + self.display_offset;
+        if start_row < 0 || end_row >= self.screen_lines as i32 {
+            return None;
+        }
+
         let mut res = String::new();
 
         for line_idx in range.start.line.0..=range.end.line.0 {
-            let row = line_idx + self.display_offset;
-            if row < 0 || row as usize >= self.screen_lines {
-                continue;
-            }
-            let row = row as usize;
+            let row = (line_idx + self.display_offset) as usize;
+            let row_slice = &self.cells[row * self.columns..(row + 1) * self.columns];
 
-            let start_col = if line_idx == range.start.line.0 {
+            let mut start_col = if range.is_block || line_idx == range.start.line.0 {
                 range.start.column.0
             } else {
                 0
             };
-            let end_col = if line_idx == range.end.line.0 {
+            let end_col = if range.is_block || line_idx == range.end.line.0 {
                 range.end.column.0
             } else {
                 self.columns.saturating_sub(1)
             };
 
+            if start_col < row_slice.len()
+                && row_slice[start_col].flags.contains(Flags::WIDE_CHAR_SPACER)
+                && start_col > 0
+            {
+                start_col -= 1;
+            }
+
+            let row_len = row_slice
+                .iter()
+                .rposition(|c| !c.is_empty())
+                .map_or(0, |i| i + 1)
+                .min(end_col + 1);
+
             let mut line_str = String::new();
-            for col in start_col..=end_col {
-                if col < self.columns {
-                    let ch = self.cells[row * self.columns + col].c;
-                    line_str.push(if ch == '\0' { ' ' } else { ch });
+            for cell in row_slice
+                .iter()
+                .take(row_len)
+                .skip(start_col.min(row_len))
+            {
+                if !cell
+                    .flags
+                    .intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER)
+                {
+                    line_str.push(if cell.c == '\0' { ' ' } else { cell.c });
+                    for c in cell.zerowidth().into_iter().flatten() {
+                        line_str.push(*c);
+                    }
                 }
             }
 
-            res += line_str.trim_end();
-            if line_idx != range.end.line.0 {
-                res += "\n";
+            if range.is_block {
+                res.push_str(line_str.trim_end());
+                if line_idx != range.end.line.0 {
+                    res.push('\n');
+                }
+            } else {
+                res.push_str(&line_str);
+                let is_wrapped = row_len > 0
+                    && row_slice[row_len - 1].flags.contains(Flags::WRAPLINE);
+                if line_idx != range.end.line.0
+                    && end_col >= self.columns.saturating_sub(1)
+                    && !is_wrapped
+                {
+                    res.push('\n');
+                }
             }
         }
 
