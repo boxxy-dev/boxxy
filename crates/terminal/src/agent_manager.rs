@@ -8,8 +8,7 @@ use std::collections::HashMap;
 use std::hash::Hash;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use zbus::Connection;
-use zbus::zvariant::OwnedFd;
+use zbus::{Connection, OwnedFd};
 
 static NEXT_SUBSCRIPTION_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -344,11 +343,7 @@ impl AgentManager {
         let mut attempts = 0;
         let max_attempts = 30; // 3 seconds total
         let agent_proxy = loop {
-            match AgentProxy::builder(&conn)
-                .destination("dev.boxxy.BoxxyAgent")?
-                .build()
-                .await
-            {
+            match AgentProxy::new(&conn).await {
                 Ok(proxy) => break proxy,
                 Err(e) => {
                     attempts += 1;
@@ -363,15 +358,11 @@ impl AgentManager {
             }
         };
 
-        let proxy = AgentPtyProxy::builder(&conn)
-            .destination("dev.boxxy.BoxxyAgent")?
-            .build()
+        let proxy = AgentPtyProxy::new(&conn)
             .await
             .context("Failed to create AgentPtyProxy on Session Bus")?;
 
-        let claw_proxy = AgentClawProxy::builder(&conn)
-            .destination("dev.boxxy.BoxxyAgent")?
-            .build()
+        let claw_proxy = AgentClawProxy::new(&conn)
             .await
             .context("Failed to create AgentClawProxy on Session Bus")?;
 

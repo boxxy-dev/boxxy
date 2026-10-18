@@ -214,9 +214,9 @@ impl SkillRegistry {
                     {
                         let frontmatter_str = &content[4..4 + end_idx];
                         let body = &content[4 + end_idx + 4..];
-                        if let Ok(frontmatter) =
-                            serde_yml::from_str::<SkillFrontmatter>(frontmatter_str)
-                        {
+                        #[allow(deprecated)]
+                        let parsed = serde_yml::from_str::<SkillFrontmatter>(frontmatter_str);
+                        if let Ok(frontmatter) = parsed {
                             skills.push(Skill {
                                 frontmatter,
                                 content: body.trim_start().to_string(),

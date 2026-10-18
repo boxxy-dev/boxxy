@@ -1,8 +1,30 @@
 use base64::Engine;
-use base64::engine::general_purpose::STANDARD as Base64;
 use log::error;
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
+
+#[inline]
+fn decode_kitty_base64(input: &[u8]) -> Result<Vec<u8>, base64::DecodeError> {
+    #[cfg(any(
+        target_arch = "x86_64",
+        all(target_arch = "aarch64", target_feature = "neon")
+    ))]
+    {
+        static ENGINE: OnceLock<base64::engine::Simd> = OnceLock::new();
+        ENGINE
+            .get_or_init(|| {
+                base64::engine::Simd::standard(base64::engine::general_purpose::PAD_INDIFFERENT)
+            })
+            .decode(input)
+    }
+    #[cfg(not(any(
+        target_arch = "x86_64",
+        all(target_arch = "aarch64", target_feature = "neon")
+    )))]
+    {
+        base64::engine::general_purpose::STANDARD_PAD_INDIFFERENT.decode(input)
+    }
+}
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum Action {
@@ -382,26 +404,16 @@ impl KittyGraphics {
         let mut raw_data = Vec::new();
         if !self.pending_data.is_empty() {
             // Kitty protocol may send base64 data with whitespace (like newlines) or missing padding.
-            // We need to sanitize it before decoding.
-            let mut sanitized: Vec<u8> = self
-                .pending_data
-                .iter()
-                .copied()
-                .filter(|&b| !b.is_ascii_whitespace())
-                .collect();
+            // Strip ASCII whitespace in-place and decode with PAD_INDIFFERENT + runtime SIMD.
+            self.pending_data.retain(|b| !b.is_ascii_whitespace());
 
-            // Add padding if missing
-            while !sanitized.len().is_multiple_of(4) {
-                sanitized.push(b'=');
-            }
-
-            match Base64.decode(&sanitized) {
+            match decode_kitty_base64(&self.pending_data) {
                 Ok(d) => raw_data = d,
                 Err(e) => {
                     log::debug!(
                         "KittyGraphics: Failed to decode base64: {} (sanitized len: {})",
                         e,
-                        sanitized.len()
+                        self.pending_data.len()
                     );
                     self.pending_data.clear();
 
@@ -891,5 +903,21 @@ mod tests {
         assert_eq!(kg.images.len(), 1);
         assert!(kg.images.get(&1).is_none());
         assert!(kg.images.get(&2).is_some());
+    }
+
+    #[test]
+    fn test_decode_kitty_base64_padded_unpadded_and_simd_bulk() {
+        // Short padded and unpadded payloads
+        assert_eq!(decode_kitty_base64(b"aGVsbG8=").unwrap(), b"hello");
+        assert_eq!(decode_kitty_base64(b"aGVsbG8").unwrap(), b"hello");
+
+        // Large payload (> 64 bytes) exercising the runtime SIMD bulk decode path
+        let expected: Vec<u8> = (0u8..=255).collect();
+        let encoded_no_pad =
+            base64::engine::general_purpose::STANDARD_NO_PAD.encode(&expected);
+        assert_eq!(
+            decode_kitty_base64(encoded_no_pad.as_bytes()).unwrap(),
+            expected
+        );
     }
 }

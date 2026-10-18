@@ -6,10 +6,10 @@ use nix::fcntl::OFlag;
 use nix::pty::{PtyMaster, grantpt, posix_openpt, ptsname, unlockpt};
 use nix::unistd::{User, getuid};
 use std::os::unix::io::{AsRawFd, FromRawFd, IntoRawFd};
+use zbus::OwnedFd;
 use zbus::fdo;
 use zbus::interface;
 use zbus::object_server::SignalEmitter;
-use zbus::zvariant::OwnedFd;
 
 fn is_leaked_multiplexer_prefix(key: &str) -> bool {
     key.starts_with("TMUX")

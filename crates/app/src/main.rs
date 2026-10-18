@@ -6,7 +6,6 @@ use libadwaita::prelude::*;
 fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
         .filter_module("zbus", log::LevelFilter::Warn)
-        .filter_module("zvariant", log::LevelFilter::Warn)
         .filter_module("tracing", log::LevelFilter::Warn)
         .filter_module("sqlx", log::LevelFilter::Warn)
         .filter_module("rig", log::LevelFilter::Warn)

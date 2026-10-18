@@ -28,8 +28,8 @@ impl TerminalWidget {
         self.imp().spawn(working_dir, command);
     }
 
-    pub fn attach_pty(&self, master_fd: zbus::zvariant::OwnedFd) {
-        self.imp().attach_pty(master_fd);
+    pub fn attach_pty(&self, master_fd: impl Into<std::os::unix::io::OwnedFd>) {
+        self.imp().attach_pty(master_fd.into());
     }
 
     pub fn copy_clipboard(&self) {

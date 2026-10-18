@@ -2,8 +2,8 @@ use zbus::proxy;
 
 #[proxy(
     interface = "dev.boxxy.BoxxyTerminal.Agent.Claw",
-    default_path = "/dev/boxxy/BoxxyTerminal/Agent/Claw",
-    gen_blocking = false
+    default_service = "dev.boxxy.BoxxyAgent",
+    default_path = "/dev/boxxy/BoxxyTerminal/Agent/Claw"
 )]
 pub trait AgentClaw {
     async fn exec_shell(&self, command: String) -> zbus::Result<(i32, String, String)>;

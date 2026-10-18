@@ -1,6 +1,7 @@
+use crate::ipc::AgentProxy;
 use anyhow::Result;
 use log::{info, warn};
-use zbus::{Connection, proxy};
+use zbus::Connection;
 
 pub const WELL_KNOWN_NAME: &str = "dev.boxxy.BoxxyAgent";
 pub const AGENT_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -15,17 +16,6 @@ pub enum ClaimResult {
     Upgraded,
 }
 
-/// Proxy pointing at the running Ghost's version interface.
-#[proxy(
-    interface = "dev.boxxy.BoxxyTerminal.Agent",
-    default_service = "dev.boxxy.BoxxyAgent",
-    default_path = "/dev/boxxy/Agent"
-)]
-trait AgentVersion {
-    async fn get_version(&self) -> zbus::Result<String>;
-    async fn request_reload(&self) -> zbus::Result<()>;
-}
-
 pub async fn try_claim_or_handoff() -> Result<ClaimResult> {
     let conn = Connection::session().await?;
 
@@ -33,8 +23,8 @@ pub async fn try_claim_or_handoff() -> Result<ClaimResult> {
     use zbus::fdo::DBusProxy;
     let dbus = DBusProxy::new(&conn).await?;
 
-    let flags = zbus::fdo::RequestNameFlags::DoNotQueue.into();
-    let name: zbus::names::WellKnownName = WELL_KNOWN_NAME.try_into()?;
+    let flags = zbus::fdo::RequestNameFlags::DO_NOT_QUEUE;
+    let name: zbus::names::WellKnownName<'_> = WELL_KNOWN_NAME.try_into()?;
     let reply = dbus.request_name(name, flags).await?;
 
     use zbus::fdo::RequestNameReply::*;
@@ -43,7 +33,7 @@ pub async fn try_claim_or_handoff() -> Result<ClaimResult> {
 
         Exists | AlreadyOwner | InQueue => {
             // Ghost is running — do a version check.
-            match AgentVersionProxy::new(&conn).await {
+            match AgentProxy::new(&conn).await {
                 Ok(proxy) => {
                     let running_ver = proxy.get_version().await.unwrap_or_default();
                     if running_ver == AGENT_VERSION {

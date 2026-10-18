@@ -1,6 +1,5 @@
 use serde::{Deserialize, Serialize};
-use zbus::proxy;
-use zbus::zvariant::{OwnedFd, Type};
+use zbus::{OwnedFd, Type, proxy};
 
 #[derive(Debug, Serialize, Deserialize, Type)]
 pub struct SpawnOptions {
@@ -16,8 +15,8 @@ pub struct SpawnOptions {
 
 #[proxy(
     interface = "dev.boxxy.BoxxyTerminal.Agent.Pty",
-    default_path = "/dev/boxxy/BoxxyTerminal/Agent/Pty",
-    gen_blocking = false
+    default_service = "dev.boxxy.BoxxyAgent",
+    default_path = "/dev/boxxy/BoxxyTerminal/Agent/Pty"
 )]
 pub trait AgentPty {
     async fn get_preferred_shell(&self) -> zbus::Result<String>;

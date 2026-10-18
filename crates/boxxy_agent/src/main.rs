@@ -1,8 +1,10 @@
 use anyhow::{Context, Result};
 use boxxy_agent::daemon;
+use boxxy_agent::ipc::AgentProxy;
+use boxxy_agent::ipc::pty::AgentPtyProxy;
 use clap::{Parser, Subcommand};
 use log::info;
-use zbus::{Connection, proxy};
+use zbus::Connection;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -36,31 +38,9 @@ enum Commands {
     ListSessions,
 }
 
-/// Proxy for talking to the running daemon.
-#[proxy(
-    interface = "dev.boxxy.BoxxyTerminal.Agent",
-    default_service = "dev.boxxy.BoxxyAgent",
-    default_path = "/dev/boxxy/Agent"
-)]
-trait AgentControl {
-    async fn request_reload(&self) -> zbus::Result<()>;
-    async fn request_stop(&self) -> zbus::Result<()>;
-}
-
-/// Proxy for the PTY subsystem, used by `list-sessions`.
-#[proxy(
-    interface = "dev.boxxy.BoxxyTerminal.Agent.Pty",
-    default_service = "dev.boxxy.BoxxyAgent",
-    default_path = "/dev/boxxy/BoxxyTerminal/Agent/Pty"
-)]
-trait AgentPtyControl {
-    async fn list_detached_sessions(&self) -> zbus::Result<Vec<(u32, String, u64)>>;
-}
-
 fn main() -> Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
         .filter_module("zbus", log::LevelFilter::Warn)
-        .filter_module("zvariant", log::LevelFilter::Warn)
         .filter_module("tracing", log::LevelFilter::Warn)
         .filter_module("sqlx", log::LevelFilter::Warn)
         .filter_module("rig", log::LevelFilter::Warn)
@@ -74,7 +54,7 @@ fn main() -> Result<()> {
             Commands::Stop => {
                 return run_async(async {
                     let conn = Connection::session().await?;
-                    let proxy = AgentControlProxy::new(&conn).await?;
+                    let proxy = AgentProxy::new(&conn).await?;
                     info!("Requesting daemon stop...");
                     proxy.request_stop().await?;
                     Ok(())
@@ -83,7 +63,7 @@ fn main() -> Result<()> {
             Commands::Restart => {
                 return run_async(async {
                     let conn = Connection::session().await?;
-                    let proxy = AgentControlProxy::new(&conn).await?;
+                    let proxy = AgentProxy::new(&conn).await?;
                     info!("Requesting daemon restart...");
                     proxy.request_reload().await?;
                     Ok(())
@@ -92,7 +72,7 @@ fn main() -> Result<()> {
             Commands::ListSessions => {
                 return run_async(async {
                     let conn = Connection::session().await?;
-                    let proxy = AgentPtyControlProxy::new(&conn).await?;
+                    let proxy = AgentPtyProxy::new(&conn).await?;
                     let sessions = proxy.list_detached_sessions().await?;
                     if sessions.is_empty() {
                         println!("No detached PTY sessions.");

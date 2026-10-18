@@ -447,9 +447,9 @@ impl TerminalWidget {
         }
     }
 
-    pub(crate) fn attach_pty(&self, master_fd: zbus::zvariant::OwnedFd) {
+    pub(crate) fn attach_pty(&self, master_fd: std::os::unix::io::OwnedFd) {
         let (sender, receiver) = async_channel::unbounded::<Event>();
-        let backend = TerminalBackend::from_fd(sender, master_fd.into());
+        let backend = TerminalBackend::from_fd(sender, master_fd);
         self.backend.replace(Some(backend));
         let (w, h) = (self.obj().width(), self.obj().height());
         if w > 0 && h > 0 {

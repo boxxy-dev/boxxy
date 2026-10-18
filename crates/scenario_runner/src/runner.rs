@@ -3,7 +3,6 @@ use anyhow::{Result, anyhow};
 use boxxy_agent::claw::ClawSubsystem;
 use boxxy_agent::core::state::AgentState;
 use boxxy_agent::ipc::claw::AgentClawProxy;
-use boxxy_agent::maintenance::MaintenanceSubsystem;
 use boxxy_agent::pty::PtySubsystem;
 use boxxy_claw::engine::ClawSession;
 use boxxy_claw::registry::workspace::global_workspace;
@@ -11,8 +10,8 @@ use boxxy_claw_protocol::*;
 use boxxy_terminal::agent_manager::DbusClawEnvironment;
 use futures_util;
 use std::collections::HashMap;
+use std::os::unix::net::UnixStream;
 use tempfile::TempDir;
-use tokio::net::UnixStream;
 use zbus::Guid;
 use zbus::connection::Builder;
 
@@ -52,19 +51,19 @@ impl ScenarioRunner {
         let (p0, p1) = UnixStream::pair()?;
 
         // Initialize both ends of the Unix socket pair simultaneously to avoid SASL handshake issues.
-        // In zbus 5.x, .p2p() on both sides is required to handle the SASL null byte error.
+        // In zbus, .p2p() on both sides is required to handle the SASL null byte error.
         let (server_conn, client_conn) = futures_util::try_join!(
             Builder::unix_stream(p0)
-                .server(Guid::generate())?
+                .server(Guid::generate())
                 .p2p()
                 .serve_at(
                     "/dev/boxxy/BoxxyTerminal/Agent/Pty",
                     PtySubsystem::new(AgentState::new())
-                )?
+                )
                 .serve_at(
                     "/dev/boxxy/BoxxyTerminal/Agent/Claw",
                     ClawSubsystem::new(AgentState::new())
-                )?
+                )
                 .build(),
             Builder::unix_stream(p1).p2p().build()
         )
@@ -79,7 +78,7 @@ impl ScenarioRunner {
 
         // Use a valid bus name for the destination to avoid "Invalid bus name" error.
         let proxy = AgentClawProxy::builder(&client_conn)
-            .destination("dev.boxxy.Agent")?
+            .destination("dev.boxxy.Agent")
             .build()
             .await?;
 

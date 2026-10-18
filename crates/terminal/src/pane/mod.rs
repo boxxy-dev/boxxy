@@ -1037,7 +1037,7 @@ impl TerminalPaneComponent {
                     use std::os::unix::io::{AsRawFd, FromRawFd};
                     let master_fd_for_agent = unsafe {
                         let raw = libc::dup(master_fd.as_raw_fd());
-                        zbus::zvariant::OwnedFd::from(std::os::unix::io::OwnedFd::from_raw_fd(raw))
+                        zbus::OwnedFd::from(std::os::unix::io::OwnedFd::from_raw_fd(raw))
                     };
 
                     match agent.spawn_process(master_fd_for_agent, options).await {

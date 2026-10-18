@@ -10,7 +10,6 @@ default = ["serde"]
 serde = ["dep:serde", "bitflags/serde"]
 
 [dependencies]
-zbus = { workspace = true }
 gtk4 = { workspace = true }
 gio = { workspace = true }
 glib = { workspace = true }

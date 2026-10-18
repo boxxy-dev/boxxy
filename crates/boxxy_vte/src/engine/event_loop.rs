@@ -138,13 +138,15 @@ where
             let mut buf = vec![0u8; READ_BUFFER_SIZE];
 
             let pty_fd = self.pty.reader().as_raw_fd();
-            let async_pty_reader =
-                AsyncFd::new(pty_fd).expect("Failed to create AsyncFd for PTY reader");
+            // SAFETY: `self.pty` owns `pty_fd` and `child_event_fd`, and both
+            // `AsyncFd` registrations are explicitly dropped before `self` is returned.
+            let async_pty_reader = unsafe {
+                AsyncFd::register(pty_fd).expect("Failed to register AsyncFd for PTY reader")
+            };
 
-            let async_signals = self
-                .pty
-                .child_event_fd()
-                .map(|fd| AsyncFd::new(fd).expect("Failed to create AsyncFd for signals"));
+            let async_signals = self.pty.child_event_fd().map(|fd| unsafe {
+                AsyncFd::register(fd).expect("Failed to register AsyncFd for signals")
+            });
 
             let mut pipe = if self.ref_test {
                 Some(File::create("./boxxy.recording").expect("create boxxy recording"))
@@ -454,6 +456,8 @@ where
                 }
             }
 
+            drop(async_pty_reader);
+            drop(async_signals);
             (self, state)
         })
     }

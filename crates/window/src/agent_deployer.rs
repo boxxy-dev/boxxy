@@ -240,7 +240,7 @@ async fn spawn_agent(host_path: &PathBuf) -> Result<()> {
 
 async fn stop_ghost() -> Result<()> {
     let conn = Connection::session().await?;
-    let _proxy = AgentVersionProxy::new(&conn).await?;
-    let _ = _proxy.request_stop().await;
+    let proxy = AgentVersionProxy::new(&conn).await?;
+    let _ = proxy.request_stop().await;
     Ok(())
 }

@@ -19,8 +19,8 @@ pub async fn start_services(
     let claw_subsystem = Arc::new(crate::claw::ClawSubsystem::new(core.state.clone()));
     let session_manager = Arc::new(Mutex::new(ClawSessionManager::new(claw_subsystem.clone())));
 
-    let conn = Builder::session()?
-        .name("dev.boxxy.BoxxyAgent")?
+    let conn = Builder::session()
+        .name("dev.boxxy.BoxxyAgent")
         .serve_at(
             "/dev/boxxy/Agent",
             AgentInterface {
@@ -28,15 +28,15 @@ pub async fn start_services(
                 client_count_tx: client_count_tx.clone(),
                 session_manager,
             },
-        )?
+        )
         .serve_at(
             "/dev/boxxy/BoxxyTerminal/Agent/Pty",
             crate::pty::PtySubsystem::new(core.state.clone()),
-        )?
+        )
         .serve_at(
             "/dev/boxxy/BoxxyTerminal/Agent/Claw",
             crate::claw::ClawSubsystem::new(core.state.clone()),
-        )?
+        )
         .serve_at(
             "/dev/boxxy/BoxxyTerminal/Agent/Maintenance",
             crate::maintenance::MaintenanceSubsystem::new(
@@ -44,7 +44,7 @@ pub async fn start_services(
                 core.dream_status.clone(),
                 core.power.clone(),
             ),
-        )?
+        )
         .build()
         .await?;
 
@@ -108,6 +108,7 @@ impl ClawSessionManager {
 )]
 pub trait Agent {
     async fn get_version(&self) -> zbus::Result<String>;
+    async fn get_config_dir(&self) -> zbus::Result<String>;
     async fn update_credentials(
         &self,
         api_keys: std::collections::HashMap<String, String>,
@@ -445,7 +446,7 @@ impl AgentInterface {
 /// is still the signal they need.
 async fn maybe_send_desktop_notification(
     conn: &Connection,
-    agent_name: &str,
+    _agent_name: &str,
     event: &ClawEngineEvent,
 ) {
     match event {
@@ -561,5 +562,263 @@ impl AgentInterface {
             }
             Err(e) => Err(e),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::claw::ClawSubsystem;
+    use crate::core::state::AgentState;
+    use crate::daemon::dreaming::{DreamStatus, DreamStatusCell};
+    use crate::daemon::power;
+    use crate::ipc::claw::AgentClawProxy;
+    use crate::ipc::maintenance::AgentMaintenanceProxy;
+    use crate::ipc::pty::AgentPtyProxy;
+    use crate::maintenance::MaintenanceSubsystem;
+    use crate::pty::PtySubsystem;
+    use std::os::unix::io::AsRawFd;
+    use std::os::unix::net::UnixStream;
+    use zbus::Guid;
+
+    #[tokio::test]
+    async fn p2p_subsystems_roundtrip() {
+        let (p0, p1) = UnixStream::pair().expect("unix stream pair");
+        let state = AgentState::new();
+        let dream_status = DreamStatusCell::new(DreamStatus::Idle);
+        let power_monitor = power::ac_only();
+
+        let (server_conn, client_conn) = futures_util::try_join!(
+            Builder::unix_stream(p0)
+                .server(Guid::generate())
+                .p2p()
+                .serve_at(
+                    "/dev/boxxy/BoxxyTerminal/Agent/Pty",
+                    PtySubsystem::new(state.clone()),
+                )
+                .serve_at(
+                    "/dev/boxxy/BoxxyTerminal/Agent/Claw",
+                    ClawSubsystem::new(state.clone()),
+                )
+                .serve_at(
+                    "/dev/boxxy/BoxxyTerminal/Agent/Maintenance",
+                    MaintenanceSubsystem::new(state, dream_status, power_monitor),
+                )
+                .build(),
+            Builder::unix_stream(p1).p2p().build(),
+        )
+        .expect("p2p connections should build");
+
+        let _server_task = tokio::spawn(async move {
+            let _keep = server_conn;
+            std::future::pending::<()>().await;
+        });
+
+        let pty_proxy = AgentPtyProxy::new(&client_conn).await.expect("pty proxy");
+        let master_fd = pty_proxy.create_pty().await.expect("create_pty over p2p");
+        assert!(master_fd.as_raw_fd() >= 0);
+
+        let maint_proxy = AgentMaintenanceProxy::new(&client_conn)
+            .await
+            .expect("maintenance proxy");
+        assert_eq!(
+            maint_proxy
+                .get_maintenance_status()
+                .await
+                .expect("maintenance status"),
+            "idle"
+        );
+        assert!(!maint_proxy.is_on_battery().await.expect("is_on_battery"));
+
+        let claw_proxy = AgentClawProxy::new(&client_conn).await.expect("claw proxy");
+        let (code, stdout, _stderr) = claw_proxy
+            .exec_shell("printf boxxy_zbus6".to_string())
+            .await
+            .expect("exec_shell over p2p");
+        assert_eq!(code, 0);
+        assert_eq!(stdout, "boxxy_zbus6");
+
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let file_path = tmp.path().join("zbus6_test.txt");
+        let file_path_str = file_path.to_string_lossy().into_owned();
+        claw_proxy
+            .write_file(file_path_str.clone(), "line1\nline2\n".to_string())
+            .await
+            .expect("write_file over p2p");
+        let content = claw_proxy
+            .read_file(file_path_str.clone(), 1, 10)
+            .await
+            .expect("read_file over p2p");
+        assert!(content.contains("line1"));
+        claw_proxy
+            .delete_file(file_path_str)
+            .await
+            .expect("delete_file over p2p");
+    }
+
+    #[tokio::test]
+    async fn p2p_pty_spawn_and_exited_signal_stream() {
+        use crate::ipc::pty::SpawnOptions;
+        use futures_util::StreamExt;
+        use std::os::unix::io::FromRawFd;
+
+        let (p0, p1) = UnixStream::pair().expect("unix stream pair");
+        let state = AgentState::new();
+
+        let (server_conn, client_conn) = futures_util::try_join!(
+            Builder::unix_stream(p0)
+                .server(Guid::generate())
+                .p2p()
+                .serve_at(
+                    "/dev/boxxy/BoxxyTerminal/Agent/Pty",
+                    PtySubsystem::new(state),
+                )
+                .build(),
+            Builder::unix_stream(p1).p2p().build(),
+        )
+        .expect("p2p connections should build");
+
+        let _server_task = tokio::spawn(async move {
+            let _keep = server_conn;
+            std::future::pending::<()>().await;
+        });
+
+        let pty_proxy = AgentPtyProxy::new(&client_conn).await.expect("pty proxy");
+        let mut exited_stream = pty_proxy
+            .receive_exited()
+            .await
+            .expect("subscribe exited signal");
+
+        let master_fd = pty_proxy.create_pty().await.expect("create_pty");
+        let dup_raw = unsafe { libc::dup(master_fd.as_raw_fd()) };
+        assert!(dup_raw >= 0);
+        let fd_for_spawn =
+            zbus::OwnedFd::from(unsafe { std::os::unix::io::OwnedFd::from_raw_fd(dup_raw) });
+
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let options = SpawnOptions {
+            cwd: tmp.path().to_string_lossy().into_owned(),
+            argv: vec![
+                "/bin/sh".to_string(),
+                "-c".to_string(),
+                "exit 42".to_string(),
+            ],
+            env: vec![("TERM".to_string(), "xterm-256color".to_string())],
+            cols: 80,
+            rows: 24,
+            pane_id: "pane-signal-test".to_string(),
+        };
+
+        let pid = pty_proxy
+            .spawn(fd_for_spawn, options)
+            .await
+            .expect("spawn over p2p");
+
+        let signal = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            exited_stream.next(),
+        )
+        .await
+        .expect("timed out waiting for Exited signal")
+        .expect("stream ended unexpectedly");
+
+        let args = signal.args().expect("signal args");
+        assert_eq!(args.pid, pid);
+        assert_eq!(args.exit_code, 42);
+
+        let (has_exited, recorded_code) = pty_proxy
+            .get_exit_status(pid)
+            .await
+            .expect("get_exit_status");
+        assert!(has_exited);
+        assert_eq!(recorded_code, 42);
+    }
+
+    #[tokio::test]
+    async fn p2p_pty_detach_and_reattach_fd_roundtrip() {
+        use crate::ipc::pty::SpawnOptions;
+        use std::os::unix::io::FromRawFd;
+
+        let (p0, p1) = UnixStream::pair().expect("unix stream pair");
+        let state = AgentState::new();
+
+        let (server_conn, client_conn) = futures_util::try_join!(
+            Builder::unix_stream(p0)
+                .server(Guid::generate())
+                .p2p()
+                .serve_at(
+                    "/dev/boxxy/BoxxyTerminal/Agent/Pty",
+                    PtySubsystem::new(state),
+                )
+                .build(),
+            Builder::unix_stream(p1).p2p().build(),
+        )
+        .expect("p2p connections should build");
+
+        let _server_task = tokio::spawn(async move {
+            let _keep = server_conn;
+            std::future::pending::<()>().await;
+        });
+
+        let pty_proxy = AgentPtyProxy::new(&client_conn).await.expect("pty proxy");
+        let master_fd = pty_proxy.create_pty().await.expect("create_pty");
+        let dup_raw = unsafe { libc::dup(master_fd.as_raw_fd()) };
+        let fd_for_spawn =
+            zbus::OwnedFd::from(unsafe { std::os::unix::io::OwnedFd::from_raw_fd(dup_raw) });
+        // Drop the client's original master_fd so only the daemon holds it once detached
+        drop(master_fd);
+
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let options = SpawnOptions {
+            cwd: tmp.path().to_string_lossy().into_owned(),
+            argv: vec![
+                "/bin/sh".to_string(),
+                "-c".to_string(),
+                "printf 'zbus6_persist_ok'; sleep 10".to_string(),
+            ],
+            env: vec![],
+            cols: 80,
+            rows: 24,
+            pane_id: "pane-persist-test".to_string(),
+        };
+
+        let pid = pty_proxy
+            .spawn(fd_for_spawn, options)
+            .await
+            .expect("spawn over p2p");
+
+        pty_proxy
+            .set_persistence(pid, true)
+            .await
+            .expect("set_persistence");
+        let outcome = pty_proxy.detach(pid).await.expect("detach");
+        assert_eq!(outcome, 1, "expected DetachOutcome::Detached (1)");
+
+        let detached = pty_proxy
+            .list_detached_sessions()
+            .await
+            .expect("list_detached_sessions");
+        assert!(
+            detached
+                .iter()
+                .any(|(p, pane, _)| *p == pid && pane == "pane-persist-test")
+        );
+
+        // Wait briefly for the detached reader to capture the shell output into the ring buffer
+        for _ in 0..20 {
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+
+        let (replay_bytes, reattached_fd) = pty_proxy.reattach(pid).await.expect("reattach");
+        assert!(reattached_fd.as_raw_fd() >= 0);
+        assert!(
+            String::from_utf8_lossy(&replay_bytes).contains("zbus6_persist_ok"),
+            "unexpected replay buffer: {:?}",
+            String::from_utf8_lossy(&replay_bytes)
+        );
+
+        let _ = pty_proxy
+            .signal_process_group(pid, libc::SIGKILL)
+            .await;
     }
 }

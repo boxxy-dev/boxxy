@@ -12,8 +12,7 @@
 use anyhow::Result;
 use std::collections::HashMap;
 use tokio::sync::watch;
-use zbus::Connection;
-use zbus::zvariant::OwnedValue;
+use zbus::{Connection, OwnedVariant};
 
 #[zbus::proxy(
     interface = "org.freedesktop.UPower",
@@ -35,7 +34,7 @@ trait Properties {
     fn properties_changed(
         &self,
         interface_name: String,
-        changed_properties: HashMap<String, OwnedValue>,
+        changed_properties: HashMap<String, OwnedVariant>,
         invalidated_properties: Vec<String>,
     ) -> zbus::Result<()>;
 }

@@ -7,8 +7,7 @@
 //! method call.
 
 use std::collections::HashMap;
-use zbus::Connection;
-use zbus::zvariant::Value;
+use zbus::{Connection, Variant};
 
 const APP_NAME: &str = "Boxxy";
 const APP_ICON: &str = "dev.boxxy.BoxxyTerminal";
@@ -32,7 +31,7 @@ trait FreedesktopNotifications {
         summary: &str,
         body: &str,
         actions: Vec<&str>,
-        hints: HashMap<&str, Value<'_>>,
+        hints: HashMap<&str, Variant<'_>>,
         expire_timeout: i32,
     ) -> zbus::Result<u32>;
 }

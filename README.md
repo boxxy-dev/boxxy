@@ -11,7 +11,7 @@ Boxxy is a full terminal emulator with an agentic AI layer — **BoxxyClaw** —
 ## Install
 Boxxy is currently in Preview. 
 
-**Native Nightly** (Requires GTK 4.22, libAdwaita 1.9)
+**Native Nightly** (Requires GTK 4.24, libAdwaita 1.10)
 ```bash
 curl -sSf https://raw.githubusercontent.com/boxxy-dev/boxxy/main/scripts/install.sh | sh
 ```
@@ -37,22 +37,18 @@ curl -O https://boxxy-dev.github.io/boxxy-flatpak-remote/boxxy.gpg && \
 
 ---
 
-## Supported Models
+## Supported Providers
 
-| Provider | Model Name | Model ID |
-| :--- | :--- | :--- |
-| **Google Gemini** | Gemini 3.8 Flash | `gemini-3.8-flash` |
-| **Anthropic** | Claude Fable 5.1 | `claude-fable-5-1` |
-| | Claude Sonnet 5 | `claude-sonnet-5` |
-| | Claude Opus 5 | `claude-opus-5` |
-| **OpenAI** | GPT-6 Astra | `gpt-6-astra` |
-| | GPT-5.6 Sol | `gpt-5.6-sol` |
-| **DeepSeek** | DeepSeek-V4.1-Flash | `deepseek-flash` |
-| **Ollama** | Local Models | Any installed model (`ollama run ...`) |
-| **OpenRouter** | OpenRouter Models | Any OpenRouter model ID |
+| Provider | Support |
+| :--- | :--- |
+| **Google Gemini** | Full Gemini model catalog (with configurable thinking levels & native Google Search) |
+| **Anthropic** | Full Claude model catalog (with configurable thinking levels & native web search) |
+| **OpenAI** | Full OpenAI model catalog (with configurable reasoning effort & native web search) |
+| **DeepSeek** | Full DeepSeek model catalog |
+| **Ollama** | Any locally installed model (`ollama run ...`) |
+| **OpenRouter** | Any OpenRouter model ID |
 
-> [!NOTE]
-> Need support for another model? Please [open an issue](https://github.com/boxxy-dev/boxxy/issues) to request it!
+> Need support for another provider? Please [open an issue](https://github.com/boxxy-dev/boxxy/issues) to request it!
 
 ---
 

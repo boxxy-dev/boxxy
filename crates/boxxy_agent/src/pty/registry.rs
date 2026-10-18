@@ -440,10 +440,12 @@ async fn run_reader(registry: PtyRegistry, pid: u32) {
     }
 
     let owned = unsafe { OwnedFd::from_raw_fd(raw) };
-    let async_fd = match AsyncFd::new(owned) {
+    // SAFETY: `owned` is an `OwnedFd` whose descriptor stays open and unchanged
+    // for the entire lifetime of `async_fd`.
+    let async_fd = match unsafe { AsyncFd::register(owned) } {
         Ok(f) => f,
         Err(e) => {
-            log::warn!("run_reader(pid={}): AsyncFd::new failed: {}", pid, e);
+            log::warn!("run_reader(pid={}): AsyncFd::register failed: {}", pid, e);
             return;
         }
     };

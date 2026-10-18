@@ -6,6 +6,7 @@ Minimal, leaf-level utility crate for system environment detection and global as
 
 ## Core Utilities
 
+- **Config root resolution:** `get_config_dir()` (infallible resolver consulting `$BOXXY_CONFIG_DIR` if absolute, then `ProjectDirs`, then `$HOME/.config/boxxy-terminal`)
 - **Environment detection:** `is_flatpak()`, `can_self_update()`
 - **Global async runtime:** `runtime()`
 - **Location context:** `LocationContext`, `fetch_location_context()`, `get_location_context()`
