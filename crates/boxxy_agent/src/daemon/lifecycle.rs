@@ -27,6 +27,10 @@ impl GhostMode {
         *self.rx.borrow()
     }
 
+    pub fn is_closed(&self) -> bool {
+        self.rx.is_closed()
+    }
+
     pub fn subscribe(&self) -> watch::Receiver<bool> {
         self.rx.clone()
     }
@@ -103,6 +107,8 @@ mod tests {
 
     #[test]
     fn ui_attached_helper_is_not_ghost() {
-        assert!(!ui_attached().is_ghost());
+        let gm = ui_attached();
+        assert!(!gm.is_ghost());
+        assert!(gm.is_closed());
     }
 }

@@ -52,15 +52,19 @@ impl BookmarksSidebarComponent {
         let c = comp.clone();
         let mut rx = BOOKMARKS_EVENT_BUS.subscribe();
         glib::spawn_future_local(async move {
-            while let Ok(event) = rx.recv().await {
-                match event {
-                    BookmarkEvent::Added(_)
-                    | BookmarkEvent::Removed(_)
-                    | BookmarkEvent::Reloaded
-                    | BookmarkEvent::Reordered(_)
-                    | BookmarkEvent::Updated(_) => {
+            loop {
+                match rx.recv().await {
+                    Ok(
+                        BookmarkEvent::Added(_)
+                        | BookmarkEvent::Removed(_)
+                        | BookmarkEvent::Reloaded
+                        | BookmarkEvent::Reordered(_)
+                        | BookmarkEvent::Updated(_),
+                    )
+                    | Err(crate::manager::BroadcastRecvError::Lagged(_)) => {
                         c.load_bookmarks();
                     }
+                    Err(crate::manager::BroadcastRecvError::Closed) => break,
                 }
             }
         });

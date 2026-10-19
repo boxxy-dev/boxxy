@@ -182,6 +182,9 @@ fn main() -> Result<()> {
 fn run_async<F: std::future::Future<Output = Result<()>>>(f: F) -> Result<()> {
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
+        .max_io_events_per_tick(256)
+        .max_io_events_per_busy_tick(64)
+        .thread_name("boxxy-agent-worker")
         .build()
         .context("Failed to build Tokio runtime")?;
     rt.block_on(f)

@@ -208,11 +208,11 @@ where
                 let write_fut = async {
                     if needs_write {
                         // The PTY reader and writer use the same underlying FD in our implementation.
-                        // We use the same AsyncFd instance for writable readiness.
-                        let mut guard = async_pty_reader.writable().await.unwrap();
-                        guard.clear_ready();
+                        // Return the readiness guard so we only clear edge-triggered EPOLLOUT
+                        // readiness if `pty_write` actually observes `WouldBlock`.
+                        async_pty_reader.writable().await
                     } else {
-                        std::future::pending::<()>().await;
+                        std::future::pending().await
                     }
                 };
 
@@ -376,18 +376,28 @@ where
                         }
                     }
 
-                    _ = write_fut => {
-                        // Write to PTY
-                        if let Err(err) = self.pty_write(&mut state) {
-                            error!("Error writing to PTY in event loop: {err}");
+                    write_guard = write_fut => {
+                        let Ok(mut guard) = write_guard else {
                             break 'event_loop;
+                        };
+                        // Write to PTY; only clear edge-triggered writable readiness
+                        // if the kernel PTY buffer filled (`WouldBlock`).
+                        match self.pty_write(&mut state) {
+                            Ok(true) => guard.clear_ready(),
+                            Ok(false) => {}
+                            Err(err) => {
+                                error!("Error writing to PTY in event loop: {err}");
+                                break 'event_loop;
+                            }
                         }
                     }
 
                     read_guard = async_pty_reader.readable() => {
-                        let mut guard = read_guard.unwrap();
+                        let Ok(mut guard) = read_guard else {
+                            break 'event_loop;
+                        };
                         match self.pty_read(&mut state, &mut buf, pipe.as_mut()) {
-                            Ok((false, _)) => {
+                            Ok((false, _, _)) => {
                                 // EOF Reached
                                 guard.clear_ready();
                                 self.event_proxy.send_event(Event::Exit);
@@ -399,13 +409,19 @@ where
                                 );
                                 break 'event_loop;
                             }
-                            Ok((true, needs_coalesced_render)) => {
+                            Ok((true, needs_coalesced_render, would_block)) => {
                                 if needs_coalesced_render {
                                     self.publish_render_state(
                                         RenderPriority::Coalesced,
                                         &mut last_snapshot_at,
                                         &mut pending_coalesced_render,
                                     );
+                                }
+                                // Only clear edge-triggered readable readiness if we actually
+                                // drained until WouldBlock; if we paused at MAX_LOCKED_READ to
+                                // yield to UI messages, keep readiness armed for the next turn.
+                                if would_block {
+                                    guard.clear_ready();
                                 }
                             }
                             Err(err) => {
@@ -426,7 +442,6 @@ where
                                 break 'event_loop;
                             }
                         }
-                        guard.clear_ready();
                     }
 
                     _ = coalesce_sleep_fut => {
@@ -556,13 +571,14 @@ where
         state: &mut State,
         buf: &mut [u8],
         mut writer: Option<&mut X>,
-    ) -> io::Result<(bool, bool)>
+    ) -> io::Result<(bool, bool, bool)>
     where
         X: Write,
     {
         let mut unprocessed = 0;
         let mut processed = 0;
         let mut eof = false;
+        let mut would_block = false;
 
         loop {
             // Read from the PTY.
@@ -573,7 +589,13 @@ where
                 }
                 Ok(got) => unprocessed += got,
                 Err(err) => match err.kind() {
-                    ErrorKind::Interrupted | ErrorKind::WouldBlock => {
+                    ErrorKind::Interrupted => {
+                        if unprocessed == 0 {
+                            continue;
+                        }
+                    }
+                    ErrorKind::WouldBlock => {
+                        would_block = true;
                         if unprocessed == 0 {
                             break;
                         }
@@ -593,17 +615,19 @@ where
             processed += unprocessed;
             unprocessed = 0;
 
-            if processed >= MAX_LOCKED_READ {
+            if would_block || processed >= MAX_LOCKED_READ {
                 break;
             }
         }
 
         let needs_coalesced_render = state.parser.sync_bytes_count() < processed && processed > 0;
-        Ok((!eof, needs_coalesced_render))
+        Ok((!eof, needs_coalesced_render, would_block))
     }
 
+    /// Writes queued input buffers to the PTY.
+    /// Returns `Ok(true)` if the write loop stopped due to `ErrorKind::WouldBlock`.
     #[inline]
-    fn pty_write(&mut self, state: &mut State) -> io::Result<()> {
+    fn pty_write(&mut self, state: &mut State) -> io::Result<bool> {
         state.ensure_next();
 
         'write_many: while let Some(mut current) = state.take_current() {
@@ -620,7 +644,7 @@ where
                 match self.pty.writer().write(current.remaining_bytes()) {
                     Ok(0) => {
                         state.set_current(Some(current));
-                        break 'write_many;
+                        return Ok(true);
                     }
                     Ok(n) => {
                         log::trace!(
@@ -634,18 +658,22 @@ where
                             break 'write_one;
                         }
                     }
-                    Err(err) => {
-                        state.set_current(Some(current));
-                        match err.kind() {
-                            ErrorKind::Interrupted | ErrorKind::WouldBlock => break 'write_many,
-                            _ => return Err(err),
+                    Err(err) => match err.kind() {
+                        ErrorKind::Interrupted => continue 'write_one,
+                        ErrorKind::WouldBlock => {
+                            state.set_current(Some(current));
+                            return Ok(true);
                         }
-                    }
+                        _ => {
+                            state.set_current(Some(current));
+                            return Err(err);
+                        }
+                    },
                 }
             }
         }
 
-        Ok(())
+        Ok(false)
     }
 }
 

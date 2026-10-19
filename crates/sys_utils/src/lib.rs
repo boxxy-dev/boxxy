@@ -6,6 +6,7 @@ use std::time::Duration;
 use tokio::runtime::Runtime;
 
 static RUNTIME: OnceLock<Runtime> = OnceLock::new();
+static HTTP_CLIENT: OnceLock<Option<reqwest::Client>> = OnceLock::new();
 static LOCATION_CACHE: OnceLock<RwLock<Option<LocationContext>>> = OnceLock::new();
 static EXCHANGE_RATES_CACHE: OnceLock<RwLock<Option<HashMap<String, f64>>>> = OnceLock::new();
 
@@ -61,11 +62,25 @@ pub fn get_config_dir() -> PathBuf {
 /// to keep them off the GTK UI thread.
 pub fn runtime() -> &'static Runtime {
     RUNTIME.get_or_init(|| {
+        // Bound I/O events per tick to 256 (matching the per-worker local queue
+        // capacity) and cap busy ticks at 64 (Tokio 1.54+) so bursts of PTY/D-Bus
+        // readiness do not overflow a busy worker's local queue into the global
+        // injection queue.
         tokio::runtime::Builder::new_multi_thread()
             .enable_all()
+            .max_io_events_per_tick(256)
+            .max_io_events_per_busy_tick(64)
+            .thread_name("boxxy-worker")
             .build()
             .expect("Failed to create Tokio runtime")
     })
+}
+
+/// Returns the 0-based index of the current Tokio worker thread if called
+/// from within a runtime worker thread (stabilized in Tokio 1.54).
+#[must_use]
+pub fn current_worker_index() -> Option<usize> {
+    tokio::runtime::worker_index()
 }
 
 /// Returns true if the application is running inside a Flatpak sandbox.
@@ -87,17 +102,19 @@ pub fn can_self_update() -> bool {
     }
 }
 
-fn build_http_client() -> Option<reqwest::Client> {
-    match reqwest::Client::builder()
-        .timeout(Duration::from_secs(5))
-        .build()
-    {
-        Ok(client) => Some(client),
-        Err(e) => {
-            log::warn!("Failed to build HTTP client: {e}");
-            None
-        }
-    }
+fn shared_http_client() -> Option<&'static reqwest::Client> {
+    HTTP_CLIENT
+        .get_or_init(|| match reqwest::Client::builder()
+            .timeout(Duration::from_secs(5))
+            .build()
+        {
+            Ok(client) => Some(client),
+            Err(e) => {
+                log::warn!("Failed to build HTTP client: {e}");
+                None
+            }
+        })
+        .as_ref()
 }
 
 /// Fetches the current location context in the background.
@@ -109,7 +126,7 @@ pub async fn fetch_location_context() {
         return;
     }
 
-    let Some(client) = build_http_client() else {
+    let Some(client) = shared_http_client() else {
         return;
     };
 
@@ -147,7 +164,7 @@ pub async fn fetch_exchange_rates() {
         return;
     }
 
-    let Some(client) = build_http_client() else {
+    let Some(client) = shared_http_client() else {
         return;
     };
 
@@ -336,5 +353,24 @@ mod tests {
         assert_eq!(get_exchange_rate("INF"), None);
 
         *cache.write() = prev;
+    }
+
+    #[test]
+    fn test_runtime_and_worker_index() {
+        assert_eq!(
+            current_worker_index(),
+            None,
+            "current_worker_index must be None outside a Tokio worker thread"
+        );
+        let idx = runtime().block_on(async {
+            runtime()
+                .spawn(async { current_worker_index() })
+                .await
+                .expect("spawned task")
+        });
+        assert!(
+            idx.is_some(),
+            "current_worker_index must be Some(_) inside a multi-thread runtime worker"
+        );
     }
 }

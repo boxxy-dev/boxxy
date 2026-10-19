@@ -313,7 +313,14 @@ impl ClawSidebarComponent {
         let last_usage_sub = comp.last_usage.clone();
         let mut settings_rx = boxxy_preferences::SETTINGS_EVENT_BUS.subscribe();
         glib::spawn_future_local(async move {
-            while let Ok(settings) = settings_rx.recv().await {
+            loop {
+                let settings = match settings_rx.recv().await {
+                    Ok(s) => s,
+                    Err(boxxy_preferences::config::BroadcastRecvError::Lagged(_)) => {
+                        (*boxxy_preferences::Settings::load()).clone()
+                    }
+                    Err(boxxy_preferences::config::BroadcastRecvError::Closed) => break,
+                };
                 populate_models_info(
                     &claw_model_sub,
                     &dreams_model_sub,

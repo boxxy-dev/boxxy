@@ -34,13 +34,17 @@ pub(super) fn setup_claw(
     // Provide the initial intent if one was passed in
     if let Some(intent) = spawn_intent {
         let tx = claw_sender.clone();
-        let inner_clone = inner.clone();
+        let inner_weak = Rc::downgrade(inner);
 
         // Wait for PID to ensure PTY is ready
         gtk::glib::spawn_future_local(async move {
             let mut check_count = 0;
             loop {
-                let has_pid = inner_clone.borrow().pid.is_some();
+                let Some(inner_rc) = inner_weak.upgrade() else {
+                    return;
+                };
+                let has_pid = inner_rc.borrow().pid.is_some();
+                drop(inner_rc);
                 if has_pid {
                     break;
                 }
@@ -52,8 +56,12 @@ pub(super) fn setup_claw(
                 tokio::time::sleep(std::time::Duration::from_millis(100)).await;
             }
 
-            let pane = inner_clone.borrow().terminal.clone();
-            let cwd = inner_clone.borrow().working_dir.clone().unwrap_or_default();
+            let Some(inner_rc) = inner_weak.upgrade() else {
+                return;
+            };
+            let pane = inner_rc.borrow().terminal.clone();
+            let cwd = inner_rc.borrow().working_dir.clone().unwrap_or_default();
+            drop(inner_rc);
             if let Some(snapshot) = pane.get_text_snapshot(100, 0).await {
                 let _ = tx
                     .send(ClawMessage::UserMessage {

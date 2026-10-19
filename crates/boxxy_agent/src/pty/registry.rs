@@ -55,6 +55,7 @@ pub struct RingBuffer {
     cap: usize,
     data: VecDeque<u8>,
     evicted_any: bool,
+    in_alt_screen: bool,
 }
 
 impl RingBuffer {
@@ -63,6 +64,28 @@ impl RingBuffer {
             cap,
             data: VecDeque::with_capacity(cap),
             evicted_any: false,
+            in_alt_screen: false,
+        }
+    }
+
+    fn update_alt_screen_state(&mut self, bytes: &[u8]) {
+        let mut i = 0;
+        while i + 5 <= bytes.len() {
+            if bytes[i] == 0x1b && bytes[i + 1] == b'[' && bytes[i + 2] == b'?' {
+                let tail = &bytes[i + 3..];
+                if tail.starts_with(b"1049h")
+                    || tail.starts_with(b"1047h")
+                    || tail.starts_with(b"47h")
+                {
+                    self.in_alt_screen = true;
+                } else if tail.starts_with(b"1049l")
+                    || tail.starts_with(b"1047l")
+                    || tail.starts_with(b"47l")
+                {
+                    self.in_alt_screen = false;
+                }
+            }
+            i += 1;
         }
     }
 
@@ -71,6 +94,7 @@ impl RingBuffer {
     /// (and to the next newline for buffers >= 64 bytes) so replaying into VTE
     /// never starts mid-codepoint or mid-CSI escape sequence.
     pub fn push(&mut self, bytes: &[u8]) {
+        self.update_alt_screen_state(bytes);
         if bytes.len() >= self.cap {
             // Fast path: the new write alone is bigger than the buffer.
             // Keep only the trailing `cap` bytes.
@@ -123,7 +147,11 @@ impl RingBuffer {
     pub fn snapshot(&self) -> Vec<u8> {
         let (a, b) = self.data.as_slices();
         let prefix: &[u8] = if self.evicted_any && self.cap >= 64 && !self.data.is_empty() {
-            b"\x1b[0m"
+            if self.in_alt_screen {
+                b"\x1b[?1049h\x1b[0m"
+            } else {
+                b"\x1b[0m"
+            }
         } else {
             b""
         };
@@ -649,11 +677,16 @@ async fn run_reader(registry: PtyRegistry, pid: u32) {
 
         let read_res = ready.try_io(|inner| {
             let fd = inner.get_ref().as_raw_fd();
-            let n = unsafe { libc::read(fd, buf.as_mut_ptr() as *mut _, buf.len()) };
-            if n < 0 {
-                Err(std::io::Error::last_os_error())
-            } else {
-                Ok(n as usize)
+            loop {
+                let n = unsafe { libc::read(fd, buf.as_mut_ptr() as *mut _, buf.len()) };
+                if n < 0 {
+                    let err = std::io::Error::last_os_error();
+                    if err.kind() == std::io::ErrorKind::Interrupted {
+                        continue;
+                    }
+                    return Err(err);
+                }
+                return Ok(n as usize);
             }
         });
 

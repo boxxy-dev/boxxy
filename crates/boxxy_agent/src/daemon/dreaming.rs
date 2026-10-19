@@ -91,63 +91,78 @@ impl Default for DreamStatus {
 ///      minutes before considering another one.
 pub fn spawn_with_status(power: PowerMonitor, ghost: GhostMode, status: DreamStatusCell) {
     let status_task = status;
+    let handle = tokio::runtime::Handle::current();
 
-    tokio::spawn(async move {
-        // Initial warm-up: give GTK + window-mapping 10 s of quiet.
-        tokio::time::sleep(Duration::from_secs(10)).await;
-
-        // Poll-then-run loop. `tokio::time::interval` ticks on a fixed
-        // cadence; we just check whether conditions are right.
-        let mut tick = tokio::time::interval(Duration::from_secs(60));
-        // First tick fires immediately — skip it so we respect the 10 s
-        // warm-up we just did.
-        tick.tick().await;
-
-        let mut consecutive_failures: u32 = 0;
-
-        loop {
-            tick.tick().await;
-
-            let settings = boxxy_preferences::Settings::load();
-            if !settings.enable_auto_dreaming {
-                status_task.set(DreamStatus::Disabled).await;
-                continue;
-            }
-            if power.is_on_battery() {
-                status_task.set(DreamStatus::PausedOnBattery).await;
-                continue;
-            }
-            if !ghost.is_ghost() {
-                // UI is attached; let the user type without a
-                // background LLM call stealing tokens.
-                status_task.set(DreamStatus::PausedUIAttached).await;
-                continue;
+    // Run the dreaming loop on a dedicated OS thread niced down to
+    // `MAINTENANCE_NICE` (19). Using `Handle::block_on` keeps the root future
+    // pinned to this low-priority thread so we never nice down the shared
+    // `boxxy-agent-worker` threads that serve latency-critical PTYs and D-Bus.
+    let _ = std::thread::Builder::new()
+        .name("boxxy-dream".to_string())
+        .spawn(move || {
+            if let Err(e) =
+                super::priority::set_current_thread_nice(super::priority::MAINTENANCE_NICE)
+            {
+                log::warn!("dreaming: failed to set thread nice level: {e}");
             }
 
-            status_task.set(DreamStatus::Running).await;
-            match run_one_cycle(&settings).await {
-                Ok(()) => {
-                    consecutive_failures = 0;
-                    status_task.set(DreamStatus::Idle).await;
-                    // Don't re-run immediately; give the kernel/LLM budget a
-                    // break even if nothing else changes.
-                    tokio::time::sleep(Duration::from_secs(15 * 60)).await;
+            handle.block_on(async move {
+                // Initial warm-up: give GTK + window-mapping 10 s of quiet.
+                tokio::time::sleep(Duration::from_secs(10)).await;
+
+                // Poll-then-run loop. `tokio::time::interval` ticks on a fixed
+                // cadence; we just check whether conditions are right.
+                let mut tick = tokio::time::interval(Duration::from_secs(60));
+                // First tick fires immediately — skip it so we respect the 10 s
+                // warm-up we just did.
+                tick.tick().await;
+
+                let mut consecutive_failures: u32 = 0;
+
+                loop {
+                    tick.tick().await;
+
+                    let settings = boxxy_preferences::Settings::load();
+                    if !settings.enable_auto_dreaming {
+                        status_task.set(DreamStatus::Disabled).await;
+                        continue;
+                    }
+                    if power.is_on_battery() {
+                        status_task.set(DreamStatus::PausedOnBattery).await;
+                        continue;
+                    }
+                    if !ghost.is_ghost() {
+                        // UI is attached; let the user type without a
+                        // background LLM call stealing tokens.
+                        status_task.set(DreamStatus::PausedUIAttached).await;
+                        continue;
+                    }
+
+                    status_task.set(DreamStatus::Running).await;
+                    match run_one_cycle(&settings).await {
+                        Ok(()) => {
+                            consecutive_failures = 0;
+                            status_task.set(DreamStatus::Idle).await;
+                            // Don't re-run immediately; give the kernel/LLM budget a
+                            // break even if nothing else changes.
+                            tokio::time::sleep(Duration::from_secs(15 * 60)).await;
+                        }
+                        Err(e) => {
+                            consecutive_failures = consecutive_failures.saturating_add(1);
+                            let backoff_secs = (60u64 << consecutive_failures.min(4)).min(15 * 60);
+                            log::warn!(
+                                "dreaming: cycle failed (attempt {}, backing off {}s): {:?}",
+                                consecutive_failures,
+                                backoff_secs,
+                                e
+                            );
+                            status_task.set(DreamStatus::Idle).await;
+                            tokio::time::sleep(Duration::from_secs(backoff_secs)).await;
+                        }
+                    }
                 }
-                Err(e) => {
-                    consecutive_failures = consecutive_failures.saturating_add(1);
-                    let backoff_secs = (60u64 << consecutive_failures.min(4)).min(15 * 60);
-                    log::warn!(
-                        "dreaming: cycle failed (attempt {}, backing off {}s): {:?}",
-                        consecutive_failures,
-                        backoff_secs,
-                        e
-                    );
-                    status_task.set(DreamStatus::Idle).await;
-                    tokio::time::sleep(Duration::from_secs(backoff_secs)).await;
-                }
-            }
-        }
-    });
+            });
+        });
 }
 
 async fn run_one_cycle(settings: &boxxy_preferences::Settings) -> anyhow::Result<()> {

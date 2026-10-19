@@ -23,31 +23,39 @@ pub(super) fn setup_gestures(
 
     let action_group = gio::SimpleActionGroup::new();
     let copy_action = gio::SimpleAction::new("copy", None);
-    let term_copy = terminal.clone();
+    let term_copy = terminal.downgrade();
     copy_action.connect_activate(move |_, _| {
-        term_copy.copy_clipboard();
+        if let Some(term) = term_copy.upgrade() {
+            term.copy_clipboard();
+        }
     });
     action_group.add_action(&copy_action);
 
     let paste_action = gio::SimpleAction::new("paste", None);
-    let term_paste = terminal.clone();
+    let term_paste = terminal.downgrade();
     paste_action.connect_activate(move |_, _| {
-        term_paste.paste_clipboard();
+        if let Some(term) = term_paste.upgrade() {
+            term.paste_clipboard();
+        }
     });
     action_group.add_action(&paste_action);
 
     let select_all_action = gio::SimpleAction::new("select-all", None);
-    let term_select = terminal.clone();
+    let term_select = terminal.downgrade();
     select_all_action.connect_activate(move |_, _| {
-        term_select.select_all();
+        if let Some(term) = term_select.upgrade() {
+            term.select_all();
+        }
     });
     action_group.add_action(&select_all_action);
 
     let copy_path_action = gio::SimpleAction::new("copy-path", Some(glib::VariantTy::STRING));
-    let term_copy_path = terminal.clone();
+    let term_copy_path = terminal.downgrade();
     copy_path_action.connect_activate(move |_, param: Option<&glib::Variant>| {
-        if let Some(path) = param.and_then(|v| v.get::<String>()) {
-            term_copy_path.display().clipboard().set_text(&path);
+        if let Some(path) = param.and_then(|v| v.get::<String>())
+            && let Some(term) = term_copy_path.upgrade()
+        {
+            term.display().clipboard().set_text(&path);
         }
     });
     action_group.add_action(&copy_path_action);
@@ -85,10 +93,12 @@ pub(super) fn setup_gestures(
     middle_gesture.set_button(gdk::BUTTON_MIDDLE);
     middle_gesture.set_propagation_phase(gtk::PropagationPhase::Capture);
 
-    let term_for_middle_click = terminal.clone();
+    let term_for_middle_click = terminal.downgrade();
     middle_gesture.connect_pressed(move |gesture: &gtk::GestureClick, _n_press, _x, _y| {
         gesture.set_state(gtk::EventSequenceState::Claimed);
-        term_for_middle_click.paste_primary();
+        if let Some(term) = term_for_middle_click.upgrade() {
+            term.paste_primary();
+        }
     });
     terminal.add_controller(middle_gesture);
 
@@ -96,9 +106,12 @@ pub(super) fn setup_gestures(
     // decision (inside boxxy-vte's click_gesture).  When the engine decides
     // the terminal owns the right-click (no mouse-reporting mode active, or
     // Shift is held), it calls this callback instead of forwarding to the PTY.
-    let term_for_menu = terminal.clone();
+    let term_for_menu = terminal.downgrade();
     let app_menu_clone = app_menu.clone();
     terminal.on_context_menu(move |x, y| {
+        let Some(term_for_menu) = term_for_menu.upgrade() else {
+            return;
+        };
         let mut path_to_copy = None;
 
         if let Some(hyperlink) = term_for_menu.check_hyperlink_at(x, y) {
@@ -156,7 +169,7 @@ pub(super) fn setup_gestures(
     terminal.set_allow_hyperlink(true);
 
     let scroll_ctrl = gtk::EventControllerScroll::new(gtk::EventControllerScrollFlags::VERTICAL);
-    let term_scroll = terminal.clone();
+    let term_scroll = terminal.downgrade();
     let cb_scroll = callback.clone();
     scroll_ctrl.connect_scroll(move |scroll_ctrl, _, y| {
         let state = scroll_ctrl.current_event_state();
@@ -174,7 +187,9 @@ pub(super) fn setup_gestures(
         }
 
         // Otherwise, if mouse mode is active, the TUI might want the scroll event.
-        if term_scroll.is_mouse_mode() {
+        if let Some(term) = term_scroll.upgrade()
+            && term.is_mouse_mode()
+        {
             return gtk::glib::Propagation::Proceed;
         }
 

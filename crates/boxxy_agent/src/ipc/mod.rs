@@ -52,9 +52,20 @@ pub async fn start_services(
     // This centralizes emission so that API calls (try_claim), background cleanup
     // (owner_tracker), and startup seeding all use the same path.
     let mut rx_registry = core.registry.subscribe();
+    let reg_for_signals = core.registry.clone();
     let conn_for_signals = conn.clone();
     tokio::spawn(async move {
-        while let Ok(snapshot) = rx_registry.recv().await {
+        loop {
+            let snapshot = match rx_registry.recv().await {
+                Ok(snapshot) => snapshot,
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                    log::warn!(
+                        "ClaimsChanged broadcaster lagged by {skipped} updates; emitting latest snapshot"
+                    );
+                    reg_for_signals.snapshot().await
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            };
             if let Ok(snapshot_json) = serde_json::to_string(&snapshot) {
                 let _ = conn_for_signals
                     .emit_signal(
@@ -75,7 +86,16 @@ pub async fn start_services(
     let pty_reg_for_signals = core.state.pty_registry.clone();
     let conn_for_pty_signals = conn.clone();
     tokio::spawn(async move {
-        while rx_pty.recv().await.is_ok() {
+        loop {
+            match rx_pty.recv().await {
+                Ok(()) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            }
+            // Coalesce burst notifications that queued up while querying /proc or emitting
+            while matches!(
+                rx_pty.try_recv(),
+                Ok(()) | Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_))
+            ) {}
             let list = crate::pty::query_detached_sessions_detailed(&pty_reg_for_signals).await;
             if let Ok(json) = serde_json::to_string(&list) {
                 let _ = conn_for_pty_signals

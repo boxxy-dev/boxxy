@@ -4,6 +4,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::{LazyLock, OnceLock, RwLock};
 use tokio::sync::broadcast;
+pub use tokio::sync::broadcast::error::RecvError as BroadcastRecvError;
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

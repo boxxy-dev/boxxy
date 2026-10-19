@@ -130,10 +130,17 @@ async fn deploy_agent_binary(dest: &PathBuf) -> Result<()> {
     // Create the destination directory on the host if it doesn't exist.
     let parent = dest.parent().context("no parent dir")?;
 
-    Command::new("flatpak-spawn")
+    let mkdir_status = Command::new("flatpak-spawn")
         .args(["--host", "mkdir", "-p", &parent.to_string_lossy()])
         .status()
         .await?;
+    if !mkdir_status.success() {
+        anyhow::bail!(
+            "Failed to create host directory {} (exit: {})",
+            parent.display(),
+            mkdir_status
+        );
+    }
 
     // Write via flatpak-spawn --host to escape the sandbox.
     let tmp = dest.with_extension("tmp");
@@ -144,18 +151,35 @@ async fn deploy_agent_binary(dest: &PathBuf) -> Result<()> {
         .spawn()?;
 
     if let Some(mut stdin) = child.stdin.take() {
-        let mut file = tokio::fs::File::open(&src_path).await?;
-        tokio::io::copy(&mut file, &mut stdin).await?;
+        use tokio::io::AsyncWriteExt;
+        let file = tokio::fs::File::open(&src_path).await?;
+        let mut reader = tokio::io::BufReader::with_capacity(64 * 1024, file);
+        tokio::io::copy_buf(&mut reader, &mut stdin).await?;
+        stdin.shutdown().await?;
     }
 
-    child.wait().await?;
+    let tee_status = child.wait().await?;
+    if !tee_status.success() {
+        anyhow::bail!(
+            "Failed to write temporary agent binary {} (exit: {})",
+            tmp.display(),
+            tee_status
+        );
+    }
 
-    Command::new("flatpak-spawn")
+    let chmod_status = Command::new("flatpak-spawn")
         .args(["--host", "chmod", "+x", &tmp.to_string_lossy()])
         .status()
         .await?;
+    if !chmod_status.success() {
+        anyhow::bail!(
+            "Failed to chmod agent binary {} (exit: {})",
+            tmp.display(),
+            chmod_status
+        );
+    }
 
-    Command::new("flatpak-spawn")
+    let mv_status = Command::new("flatpak-spawn")
         .args([
             "--host",
             "mv",
@@ -165,6 +189,13 @@ async fn deploy_agent_binary(dest: &PathBuf) -> Result<()> {
         ])
         .status()
         .await?;
+    if !mv_status.success() {
+        anyhow::bail!(
+            "Failed to move agent binary into {} (exit: {})",
+            dest.display(),
+            mv_status
+        );
+    }
 
     Ok(())
 }

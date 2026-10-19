@@ -143,7 +143,11 @@ impl AppWindow {
         let cp_sync = command_palette.clone();
         let mut bookmarks_rx = BOOKMARKS_EVENT_BUS.subscribe();
         glib::spawn_future_local(async move {
-            while let Ok(_) = bookmarks_rx.recv().await {
+            loop {
+                match bookmarks_rx.recv().await {
+                    Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                }
                 let bookmarks = BookmarksManager::list();
                 let commands = bookmarks
                     .into_iter()
@@ -296,10 +300,18 @@ impl AppWindow {
         let mut event_rx = boxxy_terminal::TERMINAL_EVENT_BUS.subscribe();
         let tx_event = tx.clone();
         boxxy_sys_utils::runtime().spawn(async move {
-            while let Ok(event) = event_rx.recv().await {
-                let _ = tx_event
-                    .send(AppInput::HandleTerminalEvent(Some(event)))
-                    .await;
+            loop {
+                match event_rx.recv().await {
+                    Ok(event) => {
+                        let _ = tx_event
+                            .send(AppInput::HandleTerminalEvent(Some(event)))
+                            .await;
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                        log::warn!("TERMINAL_EVENT_BUS lagged by {skipped} events; continuing");
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                }
             }
         });
 
@@ -323,7 +335,14 @@ impl AppWindow {
         let mut settings_rx = boxxy_preferences::SETTINGS_EVENT_BUS.subscribe();
         let tx_settings = tx.clone();
         boxxy_sys_utils::runtime().spawn(async move {
-            while let Ok(settings) = settings_rx.recv().await {
+            loop {
+                let settings = match settings_rx.recv().await {
+                    Ok(s) => s,
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                        (*boxxy_preferences::Settings::load()).clone()
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                };
                 let _ = tx_settings.send_blocking(AppInput::SettingsChanged(settings));
             }
         });

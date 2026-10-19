@@ -642,6 +642,7 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
             let tx = inner.tx.clone();
             gtk4::glib::spawn_future_local(async move {
                 let _ = tx.send(AppInput::RefreshDetachedSessions).await;
+                let _ = tx.send(AppInput::FocusActiveTerminal).await;
             });
         }
         AppInput::ReattachDetachedBatch(sessions) => {
@@ -649,6 +650,7 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
             let tx = inner.tx.clone();
             gtk4::glib::spawn_future_local(async move {
                 let _ = tx.send(AppInput::RefreshDetachedSessions).await;
+                let _ = tx.send(AppInput::FocusActiveTerminal).await;
             });
         }
         AppInput::RefreshDetachedSessions => {
@@ -709,6 +711,7 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
                     .body("Detached terminal sessions kept alive by the Boxxy daemon.")
                     .build();
 
+                let remaining_rows = std::rc::Rc::new(std::cell::Cell::new(sessions.len()));
                 let group = adw::PreferencesGroup::new();
                 for s in &sessions {
                     let proc_name = if s.foreground_process.is_empty() {
@@ -758,10 +761,19 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
                     let cwd_opt = (!s.cwd.is_empty()).then(|| s.cwd.clone());
                     let tx_reattach = tx.clone();
                     let row_weak_reattach = row.downgrade();
+                    let dialog_weak_reattach = dialog.downgrade();
+                    let rem_reattach = remaining_rows.clone();
                     reattach_btn.connect_clicked(move |btn| {
                         btn.set_sensitive(false);
                         if let Some(r) = row_weak_reattach.upgrade() {
                             r.set_visible(false);
+                        }
+                        let left = rem_reattach.get().saturating_sub(1);
+                        rem_reattach.set(left);
+                        if left == 0
+                            && let Some(dlg) = dialog_weak_reattach.upgrade()
+                        {
+                            dlg.close();
                         }
                         let _ = tx_reattach.send_blocking(AppInput::ReattachDetachedSession(
                             pid,
@@ -771,10 +783,19 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
 
                     let tx_kill = tx.clone();
                     let row_weak_kill = row.downgrade();
+                    let dialog_weak_kill = dialog.downgrade();
+                    let rem_kill = remaining_rows.clone();
                     kill_btn.connect_clicked(move |btn| {
                         btn.set_sensitive(false);
                         if let Some(r) = row_weak_kill.upgrade() {
                             r.set_visible(false);
+                        }
+                        let left = rem_kill.get().saturating_sub(1);
+                        rem_kill.set(left);
+                        if left == 0
+                            && let Some(dlg) = dialog_weak_kill.upgrade()
+                        {
+                            dlg.close();
                         }
                         let tx_after_kill = tx_kill.clone();
                         gtk4::glib::spawn_future_local(async move {
@@ -884,6 +905,7 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
                     _ => {}
                 }
                 let _ = tx.send(AppInput::RefreshDetachedSessions).await;
+                let _ = tx.send(AppInput::FocusActiveTerminal).await;
             });
         }
     }

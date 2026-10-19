@@ -41,6 +41,13 @@ impl TerminalWidget {
             .attach_pty_with_replay(master_fd.into(), replay_bytes);
     }
 
+    /// Immediately shuts down the background PTY `EventLoop` task and closes
+    /// this widget's `master_fd` handle so a closed or detached pane never
+    /// continues reading from the PTY.
+    pub fn detach_pty(&self) {
+        self.imp().detach_pty();
+    }
+
     pub fn copy_clipboard(&self) {
         self.imp().copy_clipboard();
     }

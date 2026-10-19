@@ -9,6 +9,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, LazyLock, RwLock};
 use tokio::sync::broadcast;
+pub use tokio::sync::broadcast::error::RecvError as BroadcastRecvError;
 
 pub static SETTINGS_EVENT_BUS: LazyLock<broadcast::Sender<Settings>> = LazyLock::new(|| {
     let (tx, _) = broadcast::channel(16);

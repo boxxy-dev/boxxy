@@ -54,6 +54,10 @@ impl PowerMonitor {
         *self.rx.borrow()
     }
 
+    pub fn is_closed(&self) -> bool {
+        self.rx.is_closed()
+    }
+
     pub fn subscribe(&self) -> watch::Receiver<bool> {
         self.rx.clone()
     }
@@ -119,6 +123,9 @@ pub async fn start(conn: &Connection, tx: watch::Sender<bool>) -> Result<()> {
         };
 
         while let Some(signal) = stream.next().await {
+            if tx.is_closed() {
+                break;
+            }
             let args = match signal.args() {
                 Ok(a) => a,
                 Err(_) => continue,
@@ -128,11 +135,11 @@ pub async fn start(conn: &Connection, tx: watch::Sender<bool>) -> Result<()> {
             }
             // Re-read authoritatively; the changed-props map may or may
             // not include `OnBattery`, and the property is cheap to fetch.
-            if let Ok(b) = upower_for_task.on_battery().await {
-                if *tx.borrow() != b {
-                    log::info!("power: transition on_battery={}", b);
-                    let _ = tx.send(b);
-                }
+            if let Ok(b) = upower_for_task.on_battery().await
+                && *tx.borrow() != b
+            {
+                log::info!("power: transition on_battery={}", b);
+                let _ = tx.send(b);
             }
         }
     });
@@ -146,7 +153,9 @@ mod tests {
 
     #[test]
     fn ac_only_reports_not_on_battery() {
-        assert!(!ac_only().is_on_battery());
+        let m = ac_only();
+        assert!(!m.is_on_battery());
+        assert!(m.is_closed());
     }
 
     #[tokio::test]

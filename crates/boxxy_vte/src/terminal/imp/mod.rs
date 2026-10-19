@@ -454,6 +454,10 @@ impl TerminalWidget {
         }
     }
 
+    pub(crate) fn detach_pty(&self) {
+        self.backend.replace(None);
+    }
+
     pub(crate) fn attach_pty(&self, master_fd: std::os::unix::io::OwnedFd) {
         self.attach_pty_with_replay(master_fd, Vec::new());
     }
@@ -463,11 +467,9 @@ impl TerminalWidget {
         master_fd: std::os::unix::io::OwnedFd,
         replay_bytes: Vec<u8>,
     ) {
+        self.detach_pty();
         let (sender, receiver) = async_channel::unbounded::<Event>();
-        let backend = TerminalBackend::from_fd(sender, master_fd);
-        if !replay_bytes.is_empty() {
-            backend.replay_output(replay_bytes);
-        }
+        let backend = TerminalBackend::from_fd_with_replay(sender, master_fd, replay_bytes);
         self.backend.replace(Some(backend));
         let (w, h) = (self.obj().width(), self.obj().height());
         if w > 0 && h > 0 {
@@ -581,9 +583,13 @@ impl WidgetImpl for TerminalWidget {
 
     fn realize(&self) {
         self.parent_realize();
-        self.im_context
-            .borrow()
-            .set_client_widget(Some(&*self.obj()));
+        let im = self.im_context.borrow();
+        im.set_client_widget(Some(&*self.obj()));
+        if self.obj().has_focus() {
+            im.focus_in();
+            drop(im);
+            self.obj().start_cursor_blink();
+        }
     }
 
     fn unrealize(&self) {

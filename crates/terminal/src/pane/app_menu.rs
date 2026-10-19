@@ -143,6 +143,7 @@ impl AppMenuComponent {
         });
     }
 
+    #[allow(dead_code)]
     pub fn hide(&self) {
         self.popover.popdown();
     }

@@ -1,5 +1,4 @@
 use boxxy_preferences::config::SETTINGS_EVENT_BUS;
-use gtk::prelude::*;
 use gtk4 as gtk;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -83,7 +82,14 @@ impl TipsCycle {
         let mut rx = SETTINGS_EVENT_BUS.subscribe();
         let cycle_clone = cycle.clone();
         gtk::glib::spawn_future_local(async move {
-            while let Ok(settings) = rx.recv().await {
+            loop {
+                let settings = match rx.recv().await {
+                    Ok(s) => s,
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                        (*boxxy_preferences::Settings::load()).clone()
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                };
                 cycle_clone.set_enabled(settings.enable_tips);
             }
         });

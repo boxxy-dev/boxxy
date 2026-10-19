@@ -8,7 +8,7 @@ Minimal, leaf-level utility crate for system environment detection and global as
 
 - **Config root resolution:** `get_config_dir()` (infallible resolver consulting `$BOXXY_CONFIG_DIR` if absolute, then `ProjectDirs`, then `$HOME/.config/boxxy-terminal`)
 - **Environment detection:** `is_flatpak()`, `can_self_update()`
-- **Global async runtime:** `runtime()`
+- **Global async runtime:** `runtime()`, `current_worker_index()` (tuned with `max_io_events_per_tick(256)` and `max_io_events_per_busy_tick(64)`)
 - **Location context:** `LocationContext`, `fetch_location_context()`, `get_location_context()`
 - **Live currency exchange rates:** `fetch_exchange_rates()`, `get_exchange_rate(code)` (fetches ECB rates from `https://api.frankfurter.dev/v1/latest?base=USD&symbols=EUR,CNY,INR,BRL` and caches in `EXCHANGE_RATES_CACHE`)
 

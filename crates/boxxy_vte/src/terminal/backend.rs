@@ -36,41 +36,45 @@ pub struct ProxyAgentPty {
 
 impl Read for ProxyAgentPty {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        let n = unsafe {
-            libc::read(
-                self.master_fd.as_raw_fd(),
-                buf.as_mut_ptr() as *mut libc::c_void,
-                buf.len(),
-            )
-        };
-        if n < 0 {
-            let err = std::io::Error::last_os_error();
-            if err.kind() == std::io::ErrorKind::WouldBlock {
+        loop {
+            let n = unsafe {
+                libc::read(
+                    self.master_fd.as_raw_fd(),
+                    buf.as_mut_ptr() as *mut libc::c_void,
+                    buf.len(),
+                )
+            };
+            if n < 0 {
+                let err = std::io::Error::last_os_error();
+                if err.kind() == std::io::ErrorKind::Interrupted {
+                    continue;
+                }
                 return Err(err);
             }
-            return Err(err);
+            return Ok(n as usize);
         }
-        Ok(n as usize)
     }
 }
 
 impl Write for ProxyAgentPty {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        let n = unsafe {
-            libc::write(
-                self.master_fd.as_raw_fd(),
-                buf.as_ptr() as *const libc::c_void,
-                buf.len(),
-            )
-        };
-        if n < 0 {
-            let err = std::io::Error::last_os_error();
-            if err.kind() == std::io::ErrorKind::WouldBlock {
+        loop {
+            let n = unsafe {
+                libc::write(
+                    self.master_fd.as_raw_fd(),
+                    buf.as_ptr() as *const libc::c_void,
+                    buf.len(),
+                )
+            };
+            if n < 0 {
+                let err = std::io::Error::last_os_error();
+                if err.kind() == std::io::ErrorKind::Interrupted {
+                    continue;
+                }
                 return Err(err);
             }
-            return Err(err);
+            return Ok(n as usize);
         }
-        Ok(n as usize)
     }
     fn flush(&mut self) -> std::io::Result<()> {
         Ok(())
@@ -211,6 +215,14 @@ impl TerminalBackend {
     }
 
     pub fn from_fd(sender: async_channel::Sender<Event>, master_fd: OwnedFd) -> Self {
+        Self::from_fd_with_replay(sender, master_fd, Vec::new())
+    }
+
+    pub fn from_fd_with_replay(
+        sender: async_channel::Sender<Event>,
+        master_fd: OwnedFd,
+        replay_bytes: Vec<u8>,
+    ) -> Self {
         let mut ws: libc::winsize = unsafe { std::mem::zeroed() };
         let (cols, lines) = unsafe {
             if libc::ioctl(master_fd.as_raw_fd(), libc::TIOCGWINSZ, &mut ws) == 0
@@ -250,6 +262,12 @@ impl TerminalBackend {
         let (event_loop, render_state) = EventLoop::new(term, proxy, pty, false, false).unwrap();
 
         let notifier = Notifier(event_loop.channel());
+        // Enqueue replay bytes BEFORE spawning the event loop task so they are
+        // guaranteed to be parsed into the VTE state machine prior to any live
+        // bytes read from `master_fd`.
+        if !replay_bytes.is_empty() {
+            let _ = notifier.0.send(Msg::ReplayOutput(replay_bytes));
+        }
 
         event_loop.spawn();
 

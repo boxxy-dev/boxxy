@@ -1,5 +1,4 @@
 use gtk::glib;
-use gtk::prelude::*;
 use gtk4 as gtk;
 
 /// A utility to bind a GObject property to a UI element asynchronously.

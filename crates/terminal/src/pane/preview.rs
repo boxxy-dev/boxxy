@@ -12,16 +12,23 @@ pub(super) fn setup_preview(terminal: &TerminalWidget, inner: &Rc<RefCell<PaneIn
     let preview = ImagePreviewPopover::new();
     preview.popover().set_parent(terminal);
 
+    let preview_popover = preview.popover().clone();
+    terminal.connect_destroy(move |_| {
+        preview_popover.unparent();
+    });
+
     let primary_gesture = gtk::GestureClick::new();
     primary_gesture.set_button(gdk::BUTTON_PRIMARY);
     primary_gesture.set_propagation_phase(gtk::PropagationPhase::Capture);
 
-    let term_for_primary_click = terminal.clone();
+    let term_for_primary_click = terminal.downgrade();
     let preview_clone_click = preview.clone();
     let inner_for_primary = Rc::downgrade(inner);
 
     primary_gesture.connect_pressed(move |gesture: &gtk::GestureClick, _n_press, x, y| {
-        let Some(inner) = inner_for_primary.upgrade() else {
+        let (Some(inner), Some(term_for_primary_click)) =
+            (inner_for_primary.upgrade(), term_for_primary_click.upgrade())
+        else {
             return;
         };
         let state = gesture.current_event_state();
@@ -84,12 +91,14 @@ pub(super) fn setup_preview(terminal: &TerminalWidget, inner: &Rc<RefCell<PaneIn
     terminal.add_controller(primary_gesture);
 
     let motion_ctrl = gtk::EventControllerMotion::new();
-    let term_for_motion = terminal.clone();
+    let term_for_motion = terminal.downgrade();
     let preview_clone_motion = preview.clone();
     let inner_for_motion = Rc::downgrade(inner);
 
     motion_ctrl.connect_motion(move |_, x, y| {
-        let Some(inner) = inner_for_motion.upgrade() else {
+        let (Some(inner), Some(term_for_motion)) =
+            (inner_for_motion.upgrade(), term_for_motion.upgrade())
+        else {
             return;
         };
         let trigger = inner

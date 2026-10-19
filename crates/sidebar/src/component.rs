@@ -238,7 +238,14 @@ impl AiSidebarComponent {
         let comp_clone = comp.clone();
         let mut settings_rx = boxxy_preferences::SETTINGS_EVENT_BUS.subscribe();
         glib::spawn_future_local(async move {
-            while let Ok(settings) = settings_rx.recv().await {
+            loop {
+                let settings = match settings_rx.recv().await {
+                    Ok(s) => s,
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                        (*boxxy_preferences::Settings::load()).clone()
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                };
                 let ai_model = settings.ai_chat_model.clone();
                 let claw_model = settings.claw_model.clone();
                 let mut inner = comp_clone.inner.borrow_mut();

@@ -1016,7 +1016,11 @@ impl TerminalComponent {
         let active_id = inner.active_pane_id.clone();
         if let Some(active_data) = inner.panes.remove(&active_id) {
             active_data.controller.set_force_terminate_on_close(true);
-            active_data.controller.end_session();
+            active_data.controller.terminal().detach_pty();
+            let ctrl_for_close = active_data.controller.clone();
+            gtk::glib::spawn_future_local(async move {
+                ctrl_for_close.terminate_on_close_sync().await;
+            });
             let active_wrapper = &active_data.wrapper;
 
             if let Some(parent) = active_wrapper.parent()

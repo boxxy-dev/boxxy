@@ -83,7 +83,14 @@ pub fn setup_apis_page(
     let update_status_bus = update_model_status.clone();
     let mut settings_rx = crate::config::SETTINGS_EVENT_BUS.subscribe();
     gtk::glib::spawn_future_local(async move {
-        while let Ok(settings) = settings_rx.recv().await {
+        loop {
+            let settings = match settings_rx.recv().await {
+                Ok(s) => s,
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                    (*crate::config::Settings::load()).clone()
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            };
             *settings_rc_bus.borrow_mut() = settings;
             update_status_bus();
         }

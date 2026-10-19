@@ -125,8 +125,12 @@ impl Drop for PaneInner {
             }
         });
 
-        let Some(pid) = self.pid else { return };
+        let Some(pid) = self.pid else {
+            self.terminal.detach_pty();
+            return;
+        };
         if self.already_handled_close {
+            self.terminal.detach_pty();
             return;
         }
 
@@ -144,6 +148,7 @@ impl Drop for PaneInner {
                 pid
             );
             let snapshot = self.export_snapshot_with_title();
+            self.terminal.detach_pty();
             glib::spawn_future_local(async move {
                 let agent = crate::get_agent().await;
                 // Set the flag then detach. Order matters: detach()
@@ -168,6 +173,7 @@ impl Drop for PaneInner {
             // Non-persistent path: disable persistence on the daemon and
             // SIGTERM the process group so shells and their children are cleaned up.
             log::info!("PaneInner dropping (pid={}): killing process group", pid);
+            self.terminal.detach_pty();
             glib::spawn_future_local(async move {
                 let agent = crate::get_agent().await;
                 let _ = agent.set_persistence(pid, false).await;
@@ -233,7 +239,11 @@ impl TerminalPaneComponent {
         let (pid, snapshot) = {
             let mut inner = self.inner.borrow_mut();
             inner.already_handled_close = true;
+            inner.process_subscriptions.clear();
             let snap = inner.export_snapshot_with_title();
+            // Shut down this pane's EventLoop and close its master_fd BEFORE
+            // handing the session to the daemon's background reader.
+            inner.terminal.detach_pty();
             (inner.pid, snap)
         };
         self.end_session_sync().await;
@@ -249,6 +259,8 @@ impl TerminalPaneComponent {
             let mut inner = self.inner.borrow_mut();
             inner.already_handled_close = true;
             inner.force_terminate_on_close = true;
+            inner.process_subscriptions.clear();
+            inner.terminal.detach_pty();
             inner.pid
         };
         self.end_session_sync().await;

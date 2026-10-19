@@ -17,9 +17,12 @@ pub(super) fn wire_terminal_events(
     id: String,
 ) {
     let pb_clone = progress_bar.clone();
-    let inner_for_pb = inner.clone();
+    let inner_for_pb = Rc::downgrade(inner);
     terminal.on_progress_changed(move |state, progress| {
-        let enable_pb = inner_for_pb
+        let Some(inner_rc) = inner_for_pb.upgrade() else {
+            return;
+        };
+        let enable_pb = inner_rc
             .borrow()
             .current_settings
             .as_ref()
@@ -69,9 +72,11 @@ pub(super) fn wire_terminal_events(
 
     let cb_clone = callback.clone();
     let id_clone = id.clone();
-    let inner_for_title = inner.clone();
+    let inner_for_title = Rc::downgrade(inner);
     terminal.on_title_changed(move |title| {
-        inner_for_title.borrow_mut().last_title = Some(title.clone());
+        if let Some(inner_rc) = inner_for_title.upgrade() {
+            inner_rc.borrow_mut().last_title = Some(title.clone());
+        }
         cb_clone(PaneOutput::TitleChanged(id_clone.clone(), title));
     });
 
@@ -89,9 +94,11 @@ pub(super) fn wire_terminal_events(
 
     let cb_clone = callback.clone();
     let id_clone = id.clone();
-    let inner_for_cwd = inner.clone();
+    let inner_for_cwd = Rc::downgrade(inner);
     terminal.on_cwd_changed(move |dir| {
-        inner_for_cwd.borrow_mut().working_dir = Some(dir.clone());
+        if let Some(inner_rc) = inner_for_cwd.upgrade() {
+            inner_rc.borrow_mut().working_dir = Some(dir.clone());
+        }
         cb_clone(PaneOutput::DirectoryChanged(id_clone.clone(), dir));
     });
 
@@ -114,16 +121,19 @@ pub(super) fn wire_terminal_events(
     });
 
     let tx_osc_clone = claw_sender.clone();
-    let inner_for_osc = inner.clone();
+    let inner_for_osc = Rc::downgrade(inner);
     let active_clone_for_osc = is_claw_active.clone();
     terminal.on_osc_133_d(move |exit_code| {
         if !active_clone_for_osc.get() {
             return;
         }
         if let Some(code) = exit_code {
+            let Some(inner_rc) = inner_for_osc.upgrade() else {
+                return;
+            };
             let tx = tx_osc_clone.clone();
-            let pane = inner_for_osc.borrow().terminal.clone();
-            let cwd = inner_for_osc
+            let pane = inner_rc.borrow().terminal.clone();
+            let cwd = inner_rc
                 .borrow()
                 .working_dir
                 .clone()
