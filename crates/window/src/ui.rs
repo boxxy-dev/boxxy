@@ -294,7 +294,6 @@ impl AppWindow {
             let _ = tx_focus2.send_blocking(AppInput::FocusActiveTerminal);
         });
 
-        setup_actions(&window, tx.clone());
         boxxy_keybindings::bind_shortcuts(app);
 
         let mut event_rx = boxxy_terminal::TERMINAL_EVENT_BUS.subscribe();
@@ -384,6 +383,7 @@ impl AppWindow {
         };
 
         let inner_ref = Rc::new(RefCell::new(inner));
+        setup_actions(&window, &inner_ref, tx.clone());
 
         let tv_weak = inner_ref.borrow().tab_view.downgrade();
         let tx_move = tx.clone();

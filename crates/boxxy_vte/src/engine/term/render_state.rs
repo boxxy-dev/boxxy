@@ -48,7 +48,9 @@ impl RenderState {
         }
 
         let selection_range = term.selection.as_ref().and_then(|s| s.to_range(term));
-        let selection_text = term.selection_to_string().filter(|s| !s.is_empty());
+        let selection_text = term
+            .selection_to_string()
+            .filter(|s| !s.trim_matches(['\n', '\r']).is_empty());
         let is_alt_screen = term.mode.contains(TermMode::ALT_SCREEN);
         let mode = term.mode;
         let cl_mode = term.cl_mode.clone();
@@ -99,7 +101,9 @@ impl RenderState {
         self.display_offset = display_offset;
         self.cursor_point = term.grid().cursor.point;
         self.selection_range = term.selection.as_ref().and_then(|s| s.to_range(term));
-        self.selection_text = term.selection_to_string().filter(|s| !s.is_empty());
+        self.selection_text = term
+            .selection_to_string()
+            .filter(|s| !s.trim_matches(['\n', '\r']).is_empty());
         self.kitty_placements.clone_from(&term.kitty_graphics.placements);
         self.kitty_images.clone_from(&term.kitty_graphics.images);
         self.cell_width = term.cell_width;
@@ -206,7 +210,11 @@ impl RenderState {
             }
         }
 
-        if res.is_empty() { None } else { Some(res) }
+        if res.trim_matches(['\n', '\r']).is_empty() {
+            None
+        } else {
+            Some(res)
+        }
     }
 
     /// Serializes the visible terminal viewport (including cell colors, SGR flags,

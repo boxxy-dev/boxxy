@@ -68,6 +68,7 @@ pub struct TerminalWidget {
     pub next_match_tag: Cell<i32>,
     pub mouse_pos: Cell<Option<(f64, f64)>>,
     pub drag_start_pos: Cell<Option<(f64, f64)>>,
+    pub selection_dragged: Cell<bool>,
     pub last_selection_point:
         Cell<Option<(usize, crate::engine::index::Column, crate::engine::index::Side)>>,
     pub autoscroll_source_id: RefCell<Option<glib::SourceId>>,
@@ -126,6 +127,7 @@ impl Default for TerminalWidget {
             match_rules: RefCell::new(Vec::new()),
             mouse_pos: Cell::new(None),
             drag_start_pos: Cell::new(None),
+            selection_dragged: Cell::new(false),
             last_selection_point: Cell::new(None),
             autoscroll_source_id: RefCell::new(None),
             hovered_regex_match: Cell::new(None),
@@ -515,8 +517,11 @@ impl TerminalWidget {
         let state = backend.render_state.load();
         if let Some(text) = state.selection_text() {
             self.obj().clipboard().set_text(&text);
+            return;
         }
-        backend.copy_selection(crate::engine::term::ClipboardType::Clipboard);
+        if state.selection_range.is_some() {
+            backend.copy_selection(crate::engine::term::ClipboardType::Clipboard);
+        }
     }
 
     pub(crate) fn has_selection(&self) -> bool {

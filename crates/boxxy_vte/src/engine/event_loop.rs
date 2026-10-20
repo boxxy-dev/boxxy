@@ -287,7 +287,11 @@ where
                                 needs_render = true;
                             },
                             Ok(Msg::CopySelection(clipboard_type)) => {
-                                if let Some(text) = self.terminal.selection_to_string().filter(|s| !s.is_empty()) {
+                                if let Some(text) = self
+                                    .terminal
+                                    .selection_to_string()
+                                    .filter(|s| !s.trim_matches(['\n', '\r']).is_empty())
+                                {
                                     self.event_proxy.send_event(Event::ClipboardStore(clipboard_type, text));
                                 } else {
                                     log::debug!("EventLoop: Copy requested but selection is empty");

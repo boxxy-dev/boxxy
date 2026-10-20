@@ -636,4 +636,35 @@ mod tests {
         assert_eq!(copied_lines.first().copied(), Some("line-00"));
         assert_eq!(copied_lines.last().copied(), Some("line-39"));
     }
+
+    #[tokio::test]
+    async fn empty_rows_selection_does_not_produce_newline_only_clipboard_text() {
+        use crate::engine::index::{Column, Line, Point, Side};
+        use crate::engine::selection::{Selection, SelectionType};
+
+        let mut fds = [0i32; 2];
+        assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0);
+        let read_fd = unsafe { OwnedFd::from_raw_fd(fds[0]) };
+        let _write_fd = unsafe { OwnedFd::from_raw_fd(fds[1]) };
+
+        let (tx, rx) = async_channel::unbounded::<Event>();
+        let backend = TerminalBackend::from_fd(tx, read_fd);
+
+        let mut sel = Selection::new(
+            SelectionType::Simple,
+            Point::new(Line(5), Column(0)),
+            Side::Left,
+        );
+        sel.update(Point::new(Line(8), Column(10)), Side::Right);
+        backend.set_selection(Some(sel));
+
+        let _ = tokio::time::timeout(std::time::Duration::from_millis(100), rx.recv())
+            .await
+            .expect("selection wakeup");
+
+        assert!(
+            backend.render_state.load().selection_text().is_none(),
+            "selecting across blank rows must not yield a newline-only clipboard string"
+        );
+    }
 }

@@ -168,6 +168,7 @@ impl super::TerminalWidget {
                         state.columns,
                         state.screen_lines,
                     );
+                    imp.selection_dragged.set(true);
                     imp.last_selection_point.set(Some((row, col, side)));
 
                     let max_offset = state.total_lines.saturating_sub(state.screen_lines) as i32;
@@ -200,12 +201,20 @@ impl super::TerminalWidget {
         self.stop_autoscroll();
         self.drag_start_pos.set(None);
         self.last_selection_point.set(None);
-        if !self.mouse_pressed.replace(false) {
+        let was_dragged = self.selection_dragged.replace(false);
+        if !self.mouse_pressed.replace(false) || !was_dragged {
             return;
         }
-        if let Some(backend) = self.backend.borrow().as_ref()
-            && backend.has_selection()
-        {
+        let backend_ref = self.backend.borrow();
+        let Some(backend) = backend_ref.as_ref() else {
+            return;
+        };
+        let state = backend.render_state.load();
+        if let Some(text) = state.selection_text() {
+            let widget = self.obj();
+            widget.display().primary_clipboard().set_text(&text);
+            widget.clipboard().set_text(&text);
+        } else if state.selection_range.is_some() {
             backend.copy_selection(crate::engine::term::ClipboardType::Selection);
             backend.copy_selection(crate::engine::term::ClipboardType::Clipboard);
         }
@@ -327,6 +336,7 @@ impl super::TerminalWidget {
                                     state.columns,
                                     state.screen_lines,
                                 );
+                                imp.selection_dragged.set(true);
                                 imp.last_selection_point.set(Some((row, col, side)));
                                 backend.scroll_and_update_selection(op, row, col, side);
                             } else {
@@ -440,6 +450,7 @@ impl super::TerminalWidget {
                             state.columns,
                             state.screen_lines,
                         );
+                        imp.selection_dragged.set(true);
                         imp.last_selection_point.set(Some((row, col, side)));
                         backend.scroll_and_update_selection(scroll_delta, row, col, side);
                     } else {
@@ -531,6 +542,7 @@ impl super::TerminalWidget {
 
                         if n_press == 1 && is_shift && backend.has_selection() {
                             imp.mouse_pressed.set(true);
+                            imp.selection_dragged.set(true);
                             backend.update_selection_viewport(sel_row, sel_col, side);
                             obj.queue_draw();
                             return;
@@ -550,6 +562,7 @@ impl super::TerminalWidget {
                             return;
                         }
                         imp.mouse_pressed.set(true);
+                        imp.selection_dragged.set(n_press >= 2);
                         let is_alt = modifiers.contains(gtk4::gdk::ModifierType::ALT_MASK);
                         let st = match n_press {
                             1 if is_alt => SelectionType::Block,
@@ -581,6 +594,9 @@ impl super::TerminalWidget {
                         && !modifiers.contains(gtk4::gdk::ModifierType::SHIFT_MASK)
                     {
                         imp.stop_autoscroll();
+                        imp.drag_start_pos.set(None);
+                        imp.last_selection_point.set(None);
+                        imp.selection_dragged.set(false);
                         imp.mouse_pressed.set(false);
                         let button = match gesture.current_button() {
                             1 => 0,
@@ -692,6 +708,16 @@ impl super::TerminalWidget {
                 }
                 if imp.mouse_pressed.get() {
                     imp.mouse_pos.set(Some((x, y)));
+                    if !imp.selection_dragged.get() {
+                        let moved_enough = imp
+                            .drag_start_pos
+                            .get()
+                            .is_none_or(|(sx, sy)| (x - sx).hypot(y - sy) >= 3.0);
+                        if !moved_enough {
+                            return;
+                        }
+                        imp.selection_dragged.set(true);
+                    }
                     if let Some(backend) = imp.backend.borrow().as_ref() {
                         let state = backend.render_state.load();
                         let sel_pt = imp.pixel_to_selection_point(
