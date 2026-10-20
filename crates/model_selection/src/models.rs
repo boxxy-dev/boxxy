@@ -458,6 +458,17 @@ impl ModelProvider {
         }
     }
 
+    pub fn api_model_name(&self) -> &str {
+        match self {
+            ModelProvider::Gemini(model, _) => model.api_name(),
+            ModelProvider::Ollama(model) => model.as_str(),
+            ModelProvider::Anthropic(model, _) => model.api_name(),
+            ModelProvider::OpenAi(model, _) => model.api_name(),
+            ModelProvider::OpenRouter(model) => model.as_str(),
+            ModelProvider::DeepSeek(model) => model.api_name(),
+        }
+    }
+
     pub fn format_label(&self) -> String {
         match self {
             ModelProvider::Gemini(model, _) => format!("Google/{}", model),

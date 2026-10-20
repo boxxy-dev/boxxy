@@ -63,17 +63,42 @@ impl Db {
                 let db = Self { pool };
 
                 // 3. Handle Migrations
-                if version.0 != CURRENT_SCHEMA_VERSION && version.0 != 0 {
-                    log::info!(
-                        "Database version mismatch (found {}, expected {}). Applying migrations.",
-                        version.0,
-                        CURRENT_SCHEMA_VERSION
-                    );
+                let preserved_journal: Vec<(String, f64, String, String)> =
+                    if version.0 != CURRENT_SCHEMA_VERSION && version.0 != 0 {
+                        log::info!(
+                            "Database version mismatch (found {}, expected {}). Applying migrations.",
+                            version.0,
+                            CURRENT_SCHEMA_VERSION
+                        );
 
-                    db.apply_migrations(version.0).await?;
-                }
+                        let rows = sqlx::query_as(
+                            "SELECT metric_name, value, attributes_json, created_at FROM telemetry_journal ORDER BY id ASC LIMIT 1000",
+                        )
+                        .fetch_all(&db.pool)
+                        .await
+                        .unwrap_or_default();
+
+                        db.apply_migrations(version.0).await?;
+                        rows
+                    } else {
+                        Vec::new()
+                    };
 
                 db.initialize_schema().await?;
+
+                if !preserved_journal.is_empty() && DATABASE_WAS_RESET.load(std::sync::atomic::Ordering::SeqCst) {
+                    for (metric_name, value, attributes_json, created_at) in preserved_journal {
+                        let _ = sqlx::query(
+                            "INSERT INTO telemetry_journal (metric_name, value, attributes_json, created_at) VALUES (?, ?, ?, ?)",
+                        )
+                        .bind(metric_name)
+                        .bind(value)
+                        .bind(attributes_json)
+                        .bind(created_at)
+                        .execute(&db.pool)
+                        .await;
+                    }
+                }
 
                 // 4. Set/Update version
                 sqlx::query(AssertSqlSafe(format!("PRAGMA user_version = {CURRENT_SCHEMA_VERSION}")))

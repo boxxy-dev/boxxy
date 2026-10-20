@@ -403,6 +403,9 @@ impl AgentManager {
             boxxy_claw_protocol::characters::StartupToken,
         >(&startup_token_json)
         {
+            if !token.telemetry_session_id.is_empty() {
+                boxxy_telemetry::set_session_id(&token.telemetry_session_id);
+            }
             if token.db_was_reset {
                 Some("Database reset: Conversation history was cleared for a schema update. This only happens during the Preview.".to_string())
             } else {

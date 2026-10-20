@@ -270,7 +270,13 @@ impl AgentInterface {
     async fn notify_settings_invalidated(&self) {
         log::debug!("Settings invalidated signal received from UI. Reloading cache.");
         boxxy_preferences::Settings::reload();
-        let persist = boxxy_preferences::Settings::load().pty_persistence;
+        let settings = boxxy_preferences::Settings::load();
+        if !settings.enable_telemetry {
+            tokio::spawn(async {
+                boxxy_telemetry::disable_and_purge().await;
+            });
+        }
+        let persist = settings.pty_persistence;
         self.core
             .state
             .pty_registry
@@ -302,6 +308,11 @@ impl AgentInterface {
         crate::ipc::client_tracker::register_client(owner_bus_name).await;
 
         let current = *self.client_count_tx.borrow();
+        let telemetry_session_id = if current == 0 {
+            boxxy_telemetry::rotate_session_id()
+        } else {
+            boxxy_telemetry::session_id()
+        };
         let _ = self.client_count_tx.send(current + 1);
         log::info!("Client connected. Total clients: {}", current + 1);
 
@@ -313,6 +324,7 @@ impl AgentInterface {
             daemon_version: env!("CARGO_PKG_VERSION").to_string(),
             db_was_reset,
             initial_revision: snapshot.revision,
+            telemetry_session_id,
         };
         serde_json::to_string(&token).unwrap_or_default()
     }
@@ -429,7 +441,8 @@ impl AgentInterface {
     }
 
     async fn request_reload(&self) {
-        log::info!("Self-reload requested. Executing new binary...");
+        log::info!("Self-reload requested. Flushing telemetry and executing new binary...");
+        boxxy_telemetry::flush_journal().await;
 
         let exe_raw = std::env::current_exe()
             .unwrap_or_default()

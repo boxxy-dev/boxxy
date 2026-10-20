@@ -33,38 +33,6 @@ fn main() {
     boxxy_preferences::Settings::init();
     boxxy_preferences::AppState::init();
 
-    // Initialize Telemetry DB so we can write local events instantly
-    tokio::spawn(async {
-        boxxy_telemetry::init_db().await;
-
-        // Track app.launch
-        use sysinfo::System;
-        let is_flatpak = std::env::var("FLATPAK_ID").is_ok();
-        let os = if is_flatpak {
-            // Inside the Flatpak sandbox, /etc/os-release belongs to the GNOME Platform
-            // runtime, not the host. /run/host/os-release always has the real host OS.
-            std::fs::read_to_string("/run/host/os-release")
-                .ok()
-                .and_then(|content| {
-                    content
-                        .lines()
-                        .find(|l| l.starts_with("NAME="))
-                        .map(|l| l.trim_start_matches("NAME=").trim_matches('"').to_string())
-                })
-                .unwrap_or_else(|| System::name().unwrap_or_else(|| "Unknown".to_string()))
-        } else {
-            System::name().unwrap_or_else(|| "Unknown".to_string())
-        };
-        let arch = System::cpu_arch();
-        let version = env!("CARGO_PKG_VERSION");
-        let pkg_type = if is_flatpak { "flatpak" } else { "native" };
-        let shell = std::env::var("SHELL").unwrap_or_else(|_| "unknown".to_string());
-        let desktop =
-            std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_else(|_| "unknown".to_string());
-
-        boxxy_telemetry::track_launch(&os, &arch, pkg_type, version, &shell, &desktop).await;
-    });
-
     // Ensure all default files are generated immediately on first run
     // in the background, without blocking the UI thread.
     tokio::spawn(async {
@@ -81,6 +49,50 @@ fn main() {
 
         // Fetch API keys from host environment in the background
         let agent = boxxy_terminal::get_agent().await;
+
+        // Track app.launch after `get_agent()` has synchronized the shared `session_id`
+        // with `boxxy-agent` and allows querying the real host shell (even inside Flatpak).
+        boxxy_telemetry::init_db().await;
+        {
+            use sysinfo::System;
+            let is_flatpak = std::env::var("FLATPAK_ID").is_ok();
+            let os = if is_flatpak {
+                // Inside the Flatpak sandbox, /etc/os-release belongs to the GNOME Platform
+                // runtime, not the host. /run/host/os-release or /run/host/etc/os-release has the host OS.
+                std::fs::read_to_string("/run/host/os-release")
+                    .or_else(|_| std::fs::read_to_string("/run/host/etc/os-release"))
+                    .ok()
+                    .and_then(|content| {
+                        content
+                            .lines()
+                            .find(|l| l.starts_with("NAME="))
+                            .map(|l| {
+                                l.trim_start_matches("NAME=")
+                                    .trim_matches(['"', '\''])
+                                    .trim()
+                                    .to_string()
+                            })
+                    })
+                    .unwrap_or_else(|| System::name().unwrap_or_else(|| "Unknown".to_string()))
+            } else {
+                System::name().unwrap_or_else(|| "Unknown".to_string())
+            };
+            let arch = System::cpu_arch();
+            let version = env!("CARGO_PKG_VERSION");
+            let pkg_type = if is_flatpak { "flatpak" } else { "native" };
+            let shell = agent
+                .proxy()
+                .get_preferred_shell()
+                .await
+                .ok()
+                .filter(|s| !s.trim().is_empty())
+                .unwrap_or_else(|| std::env::var("SHELL").unwrap_or_else(|_| "unknown".to_string()));
+            let desktop =
+                std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_else(|_| "unknown".to_string());
+
+            boxxy_telemetry::track_launch(&os, &arch, pkg_type, version, &shell, &desktop).await;
+        }
+
         let keys_to_check = [
             ("GEMINI_API_KEY", "Gemini"),
             ("ANTHROPIC_API_KEY", "Anthropic"),

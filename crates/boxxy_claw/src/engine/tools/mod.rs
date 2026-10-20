@@ -310,8 +310,8 @@ impl ApprovalHandler for ClawApprovalHandler {
 #[async_trait::async_trait]
 impl boxxy_mcp::rig_bridge::tool::McpToolObserver for ClawApprovalHandler {
     async fn on_tool_started(&self, tool_name: String) {
-        self.report_tool_started(tool_name.clone()).await;
-        boxxy_telemetry::track_tool_use(&tool_name).await;
+        self.report_tool_started(tool_name).await;
+        boxxy_telemetry::track_tool_use(boxxy_telemetry::EXTERNAL_MCP_TOOL_NAME).await;
     }
 
     async fn on_tool_result(&self, tool_name: String, result: String) {

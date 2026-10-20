@@ -16,6 +16,7 @@ boxxy-sys-utils.workspace = true
 boxxy-agent = { path = "../boxxy_agent" }
 boxxy-claw = { path = "../boxxy_claw" }
 boxxy-claw-protocol = { path = "../boxxy_claw_protocol" }
+boxxy-telemetry.workspace = true
 boxxy-claw-ui = { path = "../boxxy_claw_ui" }
 boxxy-claw-widget = { path = "../boxxy_claw_widget" }
 boxxy-viewer = { path = "../viewer" }

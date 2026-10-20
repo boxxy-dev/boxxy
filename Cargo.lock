@@ -1094,6 +1094,7 @@ dependencies = [
  "boxxy-core-widgets",
  "boxxy-model-selection",
  "boxxy-preferences",
+ "boxxy-telemetry",
  "boxxy-viewer",
  "gtk4",
  "libadwaita",
@@ -1123,6 +1124,7 @@ dependencies = [
 name = "boxxy-telemetry"
 version = "0.0.35"
 dependencies = [
+ "arc-swap",
  "async-trait",
  "boxxy-db",
  "boxxy-preferences",
@@ -1135,6 +1137,7 @@ dependencies = [
  "reqwest 0.13.5",
  "serde",
  "serde_json",
+ "serial_test",
  "sqlx",
  "tokio",
  "uuid",
@@ -1155,6 +1158,7 @@ dependencies = [
  "boxxy-claw-widget",
  "boxxy-preferences",
  "boxxy-sys-utils",
+ "boxxy-telemetry",
  "boxxy-themes",
  "boxxy-viewer",
  "boxxy-vte",

@@ -230,6 +230,7 @@ pub fn spawn_turn(
                     && let Some(search_summary) =
                         boxxy_ai_core::extract_native_search_summary(msgs)
                 {
+                    boxxy_telemetry::track_tool_use("native_web_search").await;
                     let tool_event = ClawEngineEvent::ToolResult {
                         agent_name: agent_name.clone(),
                         character_id: character_id.clone(),

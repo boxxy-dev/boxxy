@@ -66,6 +66,11 @@ pub async fn spawn_owner_tracker(
                     bus_name,
                     new_count
                 );
+                // Flush telemetry immediately when a user quits the app so sessions
+                // shorter than the 30-minute periodic interval are not lost.
+                tokio::spawn(async {
+                    boxxy_telemetry::flush_journal().await;
+                });
             }
 
             // Automatically detach (or SIGTERM if persistence is off) any PTY sessions

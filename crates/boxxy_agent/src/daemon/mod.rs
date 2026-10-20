@@ -95,10 +95,33 @@ impl DaemonCore {
             boxxy_telemetry::init().await;
 
             let mut tick = tokio::time::interval(std::time::Duration::from_secs(30 * 60));
+            // Consume the immediate first tick so periodic flushes occur every 30 minutes
+            // (and immediately when a UI client disconnects).
+            tick.tick().await;
             loop {
                 tick.tick().await;
                 boxxy_telemetry::flush_journal().await;
             }
+        });
+
+        // Graceful shutdown on SIGTERM / SIGINT: flush telemetry before exiting.
+        #[cfg(unix)]
+        tokio::spawn(async move {
+            use tokio::signal::unix::{SignalKind, signal};
+            let mut sigterm = match signal(SignalKind::terminate()) {
+                Ok(s) => s,
+                Err(_) => return,
+            };
+            let mut sigint = match signal(SignalKind::interrupt()) {
+                Ok(s) => s,
+                Err(_) => return,
+            };
+            tokio::select! {
+                _ = sigterm.recv() => log::info!("SIGTERM received; flushing telemetry before exit..."),
+                _ = sigint.recv() => log::info!("SIGINT received; flushing telemetry before exit..."),
+            }
+            boxxy_telemetry::flush_journal().await;
+            std::process::exit(0);
         });
 
         // Zombie-guard sweeper: sweeps while in ghost mode (and prunes expired

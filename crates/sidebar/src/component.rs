@@ -380,6 +380,7 @@ impl AiSidebarComponent {
         let (tx, rx) = tokio::sync::oneshot::channel();
 
         let handle = tokio::spawn(async move {
+            let start = std::time::Instant::now();
             let agent = boxxy_ai_core::create_agent_with_options(
                 &provider,
                 &creds,
@@ -387,6 +388,34 @@ impl AiSidebarComponent {
                 enable_native_search,
             );
             let res = agent.chat(&prompt, history_to_send).await;
+            if let (Some(prov), Ok((_, Some(usage), _))) = (&provider, &res) {
+                let provider_name = prov.provider_name();
+                let model_name = prov.api_model_name();
+                boxxy_telemetry::track_ai_invocation(provider_name, model_name, "ai_chat").await;
+                boxxy_telemetry::track_ai_latency(
+                    model_name,
+                    provider_name,
+                    start.elapsed().as_millis() as u64,
+                    "ai_chat",
+                )
+                .await;
+                boxxy_telemetry::track_ai_tokens(
+                    model_name,
+                    provider_name,
+                    "input",
+                    usage.input_tokens.unwrap_or(0),
+                    "ai_chat",
+                )
+                .await;
+                boxxy_telemetry::track_ai_tokens(
+                    model_name,
+                    provider_name,
+                    "output",
+                    usage.output_tokens.unwrap_or(0),
+                    "ai_chat",
+                )
+                .await;
+            }
             let _ = tx.send(res);
         });
 

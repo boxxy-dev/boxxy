@@ -16,6 +16,7 @@ tokio.workspace = true
 rig.workspace = true
 boxxy-model-selection.workspace = true
 boxxy-preferences = { path = "../preferences" }
+boxxy-telemetry.workspace = true
 boxxy-viewer = { path = "../viewer" }
 uuid.workspace = true
 boxxy-core-widgets.workspace = true

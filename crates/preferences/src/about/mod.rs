@@ -150,7 +150,7 @@ pub fn populate_about_page(
 
     let telemetry_row = adw::ActionRow::builder()
         .title("Anonymous Usage Data")
-        .subtitle("No PII, paths, or prompt text are ever collected. (Requires restart)")
+        .subtitle("No PII, paths, or prompt text are ever collected.")
         .build();
     telemetry_row.add_suffix(&telemetry_switch);
     telemetry_rows.push(telemetry_row.clone());
