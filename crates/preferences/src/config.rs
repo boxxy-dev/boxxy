@@ -187,6 +187,9 @@ impl fmt::Display for ColorScheme {
 pub const DEFAULT_FILE_REGEX: &str =
     r#"(?:https?://[^\s"'<>]+|/[\w.@:/-]+|~[\w.@:/-]+|\.{1,2}/[\w.@:/-]+)"#;
 
+pub const NAUTILUS_EXTENSION_SCRIPT: &str =
+    include_str!("../../../resources/nautilus/open_with_boxxy.py");
+
 // --- User Profile ---
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
 pub struct UserProfile {
@@ -233,6 +236,7 @@ pub struct Settings {
     /// session can reattach and see the tail. Default `false`.
     #[serde(default)]
     pub pty_persistence: bool,
+    pub nautilus_integration: bool,
     pub show_vte_grid: bool,
     pub custom_regex: String,
     pub image_preview_trigger: ImagePreviewTrigger,
@@ -301,6 +305,7 @@ impl Default for Settings {
             ollama_base_url: "http://localhost:11434".to_string(),
             login_shell: true,
             pty_persistence: false,
+            nautilus_integration: true,
             show_vte_grid: false,
             custom_regex: DEFAULT_FILE_REGEX.to_string(),
             image_preview_trigger: ImagePreviewTrigger::Click,
@@ -371,6 +376,44 @@ You can add your own sensitive paths here. One path per line. Lines starting wit
         let skills_dir = boxxyclaw_dir.join("skills");
         if !skills_dir.exists() {
             let _ = fs::create_dir_all(&skills_dir);
+        }
+
+        Self::sync_nautilus_extension(Self::load().nautilus_integration);
+    }
+
+    pub fn get_nautilus_extension_path() -> Option<PathBuf> {
+        if let Ok(val) = std::env::var("BOXXY_CONFIG_DIR") {
+            let trimmed = val.trim();
+            if !trimmed.is_empty() && PathBuf::from(trimmed).is_absolute() {
+                return Some(
+                    boxxy_sys_utils::get_config_dir()
+                        .join("nautilus-python/extensions/open_with_boxxy.py"),
+                );
+            }
+        }
+
+        let home = std::env::var_os("HOME").map(PathBuf::from)?;
+        Some(home.join(".local/share/nautilus-python/extensions/open_with_boxxy.py"))
+    }
+
+    pub fn sync_nautilus_extension(enabled: bool) {
+        let Some(ext_path) = Self::get_nautilus_extension_path() else {
+            return;
+        };
+
+        if enabled {
+            if let Some(parent) = ext_path.parent() {
+                let _ = fs::create_dir_all(parent);
+            }
+            let needs_write = match fs::read_to_string(&ext_path) {
+                Ok(existing) => existing != NAUTILUS_EXTENSION_SCRIPT,
+                Err(_) => true,
+            };
+            if needs_write {
+                let _ = fs::write(&ext_path, NAUTILUS_EXTENSION_SCRIPT);
+            }
+        } else if ext_path.exists() {
+            let _ = fs::remove_file(&ext_path);
         }
     }
 
@@ -665,9 +708,10 @@ mod tests {
 
     #[test]
     fn settings_use_native_search_roundtrip_and_default() {
-        // Legacy JSON without `use_native_search` defaults to true
+        // Legacy JSON without `use_native_search` or `nautilus_integration` defaults to true
         let legacy: Settings = serde_json::from_str("{}").unwrap();
         assert!(legacy.use_native_search);
+        assert!(legacy.nautilus_integration);
 
         // Explicit false and true roundtrip cleanly
         let mut s = Settings::default();

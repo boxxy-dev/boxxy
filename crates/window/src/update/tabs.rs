@@ -68,6 +68,10 @@ pub fn new_tab(inner: &mut AppWindowInner) {
     new_tab_with_intent(inner, None);
 }
 
+pub fn new_tab_in_dir(inner: &mut AppWindowInner, working_dir: Option<String>) {
+    let _ = new_tab_internal(inner, None, working_dir, None);
+}
+
 pub fn new_tab_with_intent(inner: &mut AppWindowInner, intent: Option<String>) {
     let _ = new_tab_internal(inner, intent, None, None);
 }
@@ -135,12 +139,11 @@ fn new_tab_internal(
 ) -> TerminalComponent {
     let id = uuid::Uuid::new_v4().to_string();
 
-    let working_dir = explicit_working_dir.or_else(|| {
-        if inner.current_settings.preserve_working_dir {
-            inner
-                .tab_view
-                .selected_page()
-                .and_then(|page| {
+    let working_dir = explicit_working_dir
+        .or_else(|| inner.initial_working_dir.take())
+        .or_else(|| {
+            if inner.current_settings.preserve_working_dir {
+                inner.tab_view.selected_page().and_then(|page| {
                     let child = page.child();
                     inner
                         .tabs
@@ -148,11 +151,10 @@ fn new_tab_internal(
                         .find(|c| c.controller.widget() == &child)
                         .and_then(|tc| tc.cwd.clone())
                 })
-                .or(inner.initial_working_dir.take())
-        } else {
-            None
-        }
-    });
+            } else {
+                None
+            }
+        });
 
     let controller = TerminalComponent::new(TerminalInit {
         id: id.clone(),

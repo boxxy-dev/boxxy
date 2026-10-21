@@ -749,6 +749,12 @@
                                     <property name="subtitle" translatable="yes">Automatically move running processes to the background when closing a tab or window without showing the confirmation dialog.</property>
                                   </object>
                                 </child>
+                                <child>
+                                  <object class="AdwSwitchRow" id="nautilus_integration_switch">
+                                    <property name="title" translatable="yes">Nautilus Integration</property>
+                                    <property name="subtitle" translatable="yes">Add "Open With Boxxy" to the right-click context menu in Files (requires nautilus-python).</property>
+                                  </object>
+                                </child>
                               </object>
                             </child>
                             <child>

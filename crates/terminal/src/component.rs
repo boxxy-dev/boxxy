@@ -63,6 +63,7 @@ impl TerminalComponent {
         background_picture.set_can_shrink(true);
         background_picture.set_hexpand(true);
         background_picture.set_vexpand(true);
+        background_picture.set_visible(false);
         overlay.set_child(Some(&background_picture));
 
         let stack = gtk::Stack::new();
@@ -800,7 +801,7 @@ impl TerminalComponent {
         // 1. Background Image
         let needs_bg_update = match &inner.current_settings {
             Some(curr) => curr.background_image_path != settings.background_image_path,
-            None => true,
+            None => settings.background_image_path.is_some(),
         };
 
         if needs_bg_update {

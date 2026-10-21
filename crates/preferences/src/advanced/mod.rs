@@ -18,6 +18,8 @@ pub fn setup_advanced_page(
     let custom_command_entry: adw::EntryRow = builder.object("custom_command_entry").unwrap();
     let show_vte_grid_switch: adw::SwitchRow = builder.object("show_vte_grid_switch").unwrap();
     let pty_persistence_switch: adw::SwitchRow = builder.object("pty_persistence_switch").unwrap();
+    let nautilus_integration_switch: adw::SwitchRow =
+        builder.object("nautilus_integration_switch").unwrap();
     let custom_regex_entry: adw::EntryRow = builder.object("custom_regex_entry").unwrap();
     let reset_regex_btn: gtk::Button = builder.object("reset_regex_btn").unwrap();
     let open_config_btn: gtk::Button = builder.object("open_config_btn").unwrap();
@@ -90,6 +92,22 @@ pub fn setup_advanced_page(
         if s.pty_persistence != row.is_active() {
             s.pty_persistence = row.is_active();
             s.save();
+            cb(s.clone());
+        }
+    });
+
+    nautilus_integration_switch.set_active(settings_rc.borrow().nautilus_integration);
+    let s_rc = settings_rc.clone();
+    let cb = on_change.clone();
+    nautilus_integration_switch.connect_active_notify(move |row| {
+        let active = row.is_active();
+        let mut s = s_rc.borrow_mut();
+        if s.nautilus_integration != active {
+            s.nautilus_integration = active;
+            s.save();
+            boxxy_sys_utils::runtime().spawn_blocking(move || {
+                Settings::sync_nautilus_extension(active);
+            });
             cb(s.clone());
         }
     });
@@ -170,6 +188,7 @@ pub fn setup_advanced_page(
     let custom_command_entry_clone = custom_command_entry.clone();
     let show_vte_grid_switch_clone = show_vte_grid_switch.clone();
     let pty_persistence_switch_clone = pty_persistence_switch.clone();
+    let nautilus_integration_switch_clone = nautilus_integration_switch.clone();
     let custom_regex_entry_clone = custom_regex_entry.clone();
     let row_reset_regex_clone = row_reset_regex.clone();
     let row_open_config_clone = row_open_config.clone();
@@ -202,6 +221,10 @@ pub fn setup_advanced_page(
             pty_persistence_switch_clone.upcast_ref(),
             "persistent shells detach background buffer",
         );
+        let ad2d = match_row(
+            nautilus_integration_switch_clone.upcast_ref(),
+            "nautilus integration files context menu open with boxxy",
+        );
         let ad3 = match_row(
             custom_regex_entry_clone.upcast_ref(),
             "file path regex ctrl+click freezes",
@@ -216,7 +239,7 @@ pub fn setup_advanced_page(
             "reset everything delete all configuration destructive",
         );
 
-        group_shell.set_visible(ad1 || ad2 || ad2a || ad2b || ad2c);
+        group_shell.set_visible(ad1 || ad2 || ad2a || ad2b || ad2c || ad2d);
         group_terminal_interaction.set_visible(ad3 || ad4);
         group_config.set_visible(ad5 || ad6);
 

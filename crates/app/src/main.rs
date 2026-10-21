@@ -154,24 +154,90 @@ fn main() {
         "Open a new window",
         None,
     );
+    app.add_main_option(
+        "tab",
+        glib::Char::from(b't'),
+        glib::OptionFlags::NONE,
+        glib::OptionArg::None,
+        "Open a new tab in the active window",
+        None,
+    );
+    app.add_main_option(
+        "working-directory",
+        glib::Char::from(b'd'),
+        glib::OptionFlags::NONE,
+        glib::OptionArg::String,
+        "Set the terminal's working directory",
+        Some("DIR"),
+    );
 
     app.connect_command_line(|app, cmdline| {
         let options = cmdline.options_dict();
         let new_window = options.contains("new-window");
+        let new_tab = options.contains("tab");
+
+        // Resolve working directory from `--working-directory` (`-d`) or first positional argument.
+        let explicit_dir = options
+            .lookup::<String>("working-directory")
+            .ok()
+            .flatten()
+            .filter(|s| !s.trim().is_empty())
+            .or_else(|| {
+                cmdline
+                    .arguments()
+                    .into_iter()
+                    .skip(1)
+                    .find(|arg| !arg.to_string_lossy().starts_with('-'))
+                    .map(|arg| arg.to_string_lossy().into_owned())
+            })
+            .and_then(|raw| {
+                let file = cmdline.create_file_for_arg(&raw);
+                file.path().map(|p| {
+                    if p.is_file() {
+                        p.parent()
+                            .unwrap_or(&p)
+                            .to_string_lossy()
+                            .into_owned()
+                    } else {
+                        p.to_string_lossy().into_owned()
+                    }
+                })
+            });
 
         let has_window = app.active_window().is_some();
 
-        if new_window && has_window {
-            // A secondary instance passed --new-window.
-            // Tell the primary instance's existing window to open another one.
+        if !has_window {
+            // First launch, or no active windows. Create the first window in the requested directory.
+            AppWindow::new(
+                app,
+                AppInit {
+                    incoming_tab_view: None,
+                    working_dir: explicit_dir,
+                },
+            );
+        } else if new_tab {
+            // Open a new tab in the active window (optionally in `explicit_dir`) and focus it.
             if let Some(window) = app.active_window() {
+                let dir_arg = explicit_dir.unwrap_or_default().to_variant();
+                let _ = window.activate_action("win.new-tab-dir", Some(&dir_arg));
+                window.present();
+            }
+        } else if new_window || explicit_dir.is_some() {
+            // Open a new window. If `explicit_dir` was provided, spawn directly in that directory;
+            // otherwise let `win.new-window` preserve the active tab's CWD if configured.
+            if explicit_dir.is_some() {
+                AppWindow::new(
+                    app,
+                    AppInit {
+                        incoming_tab_view: None,
+                        working_dir: explicit_dir,
+                    },
+                );
+            } else if let Some(window) = app.active_window() {
                 let _ = window.activate_action("win.new-window", None);
             }
-        } else if !has_window {
-            // First launch, or no active windows. Just activate normally to create the first window.
-            app.activate();
         } else {
-            // Subsequent launch with no special flags. Just present the existing window.
+            // Subsequent launch with no special flags or directory. Just present the existing window.
             if let Some(window) = app.active_window() {
                 window.present();
             }
@@ -180,19 +246,15 @@ fn main() {
         0.into()
     });
 
+    let inspector_action = gio::SimpleAction::new("inspector", None);
+    inspector_action.connect_activate(move |_, _| {
+        gtk4::Window::set_interactive_debugging(true);
+    });
+    app.add_action(&inspector_action);
+
     app.connect_activate(|app| {
         let app_init = AppInit::new();
         AppWindow::new(app, app_init);
-
-        // Dream Cycle runs on the daemon side so niceness, battery, and
-        // ghost-mode gating all live on the host. See
-        // `boxxy_agent::daemon::dreaming::spawn_with_status`.
-
-        let inspector_action = gio::SimpleAction::new("inspector", None);
-        inspector_action.connect_activate(move |_, _| {
-            gtk4::Window::set_interactive_debugging(true);
-        });
-        app.add_action(&inspector_action);
     });
 
     app.connect_shutdown(|_| {
