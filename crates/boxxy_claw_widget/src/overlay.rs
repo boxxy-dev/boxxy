@@ -104,9 +104,18 @@ impl TerminalOverlay {
         // (not inside it) so the bar can render as a single rounded field
         // and the send icon floats alongside without a background.
         let msgbar_slot: gtk::Box = builder.object("msgbar_slot").unwrap();
+        let msgbar_vbox = gtk::Box::new(gtk::Orientation::Vertical, 6);
+        msgbar_vbox.set_hexpand(true);
+        msgbar_vbox.append(msg_bar.attachment_mgr.widget());
+
+        let msgbar_hbox = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        msgbar_hbox.set_hexpand(true);
         msg_bar.widget.set_hexpand(true);
-        msgbar_slot.append(&msg_bar.widget);
-        msgbar_slot.append(&msg_bar.send_btn);
+        msgbar_hbox.append(&msg_bar.widget);
+        msgbar_hbox.append(&msg_bar.send_btn);
+        msgbar_vbox.append(&msgbar_hbox);
+
+        msgbar_slot.append(&msgbar_vbox);
         msg_bar.set_embedded(true);
 
         // Build the virtualized history list (Claude-Code-style scrollable log).
@@ -806,7 +815,7 @@ impl TerminalOverlay {
         self.refresh_character_selector(title);
 
         self.diagnosis_viewer.set_content(diagnosis);
-        self.msg_bar.entry.set_text("");
+        self.msg_bar.set_text("");
         self.template_entry.set_text("");
 
         *self.current_mode.borrow_mut() = mode;
@@ -884,7 +893,7 @@ impl TerminalOverlay {
         self.refresh_character_selector(agent_name);
 
         self.diagnosis_viewer.set_content("");
-        self.msg_bar.entry.set_text("");
+        self.msg_bar.set_text("");
         self.template_entry.set_text("");
         *self.current_mode.borrow_mut() = OverlayMode::Claw;
 

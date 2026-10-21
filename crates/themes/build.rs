@@ -282,7 +282,10 @@ window.frosted-glass-active .terminal-header tabbar tab:selected {{
     color: {fg};
 }}
 
-.boxxy-msgbar entry {{
+.boxxy-msgbar entry,
+.boxxy-msgbar textview,
+.boxxy-msgbar textview text,
+.boxxy-msgbar .msgbar-placeholder {{
     color: {fg};
 }}
 

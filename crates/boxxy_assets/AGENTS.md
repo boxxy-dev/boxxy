@@ -53,7 +53,7 @@ On-the-fly thumbnail generator used by `boxxy-viewer`:
 1. Rejects inputs exceeding `MAX_THUMBNAIL_INPUT_BYTES` (50 MB).
 2. Validates header dimensions before full decode (`<= 16,384 px` per axis, `<= 64 MP` total pixels) to guard against decompression bombs while supporting 5K/8K wallpapers and high-res photos.
 3. Downscales images larger than `spec` (`max_width × max_height`) using `FilterType::Triangle` while preserving aspect ratio and original `width × height` metadata (`ThumbnailOutput`).
-4. Also provides `encode_rgba_to_png` and `decode_rgba_from_png` for persistent disk thumbnail caching.
+4. Also provides `generate_square_thumbnail_png(input, size)` (which uses `Pipeline::new().add(SquareCrop).add(Resize { width: size, height: size })` to produce square attachment thumbnails) as well as `encode_rgba_to_png` and `decode_rgba_from_png` for persistent disk thumbnail caching.
 
 ### `user.rs`
 ```rust

@@ -52,9 +52,10 @@ impl PersistentClawRowExt {
         event: &ClawEngineEvent,
     ) -> Option<PersistentClawRow> {
         match event {
-            ClawEngineEvent::UserMessage { content, .. } => Some(PersistentClawRow::User {
+            ClawEngineEvent::UserMessage { content, images } => Some(PersistentClawRow::User {
                 pane_id,
                 content: content.clone(),
+                images: images.clone(),
             }),
             ClawEngineEvent::DiagnosisComplete {
                 agent_name,

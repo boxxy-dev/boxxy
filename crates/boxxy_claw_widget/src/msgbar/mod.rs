@@ -13,7 +13,8 @@ pub use attachment::{Attachment, AttachmentManager};
 
 pub struct MsgBarComponent {
     pub widget: gtk::Box,
-    pub entry: gtk::Entry,
+    pub entry: gtk::TextView,
+    placeholder_label: gtk::Label,
     pub send_btn: gtk::Button,
     pub is_active: Rc<Cell<bool>>,
     pub attachment_mgr: AttachmentManager,
@@ -62,14 +63,45 @@ impl MsgBarComponent {
         // Remove app-notification as it adds margins and rounded corners
         widget.set_visible(false);
 
-        let entry = gtk::Entry::builder()
+        let attachment_mgr = AttachmentManager::new();
+
+        // Group the left status/avatar badges in a box with `valign(Start)` so they stay
+        // anchored to the first line when the text input wraps across multiple lines.
+        let left_badges = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        left_badges.set_valign(gtk::Align::Start);
+        widget.append(&left_badges);
+
+        let entry = gtk::TextView::builder()
             .hexpand(true)
-            .width_chars(4)
-            .has_frame(false) // removes borders
-            .placeholder_text(
-                "Type your message... (Ctrl+V: attach, @character: direct, /resume: session)",
-            )
+            .valign(gtk::Align::Center)
+            .wrap_mode(gtk::WrapMode::WordChar)
+            .accepts_tab(false)
             .build();
+
+        let placeholder_label = gtk::Label::builder()
+            .label("Type your message... (Ctrl+V: attach, @character: direct, /resume: session)")
+            .halign(gtk::Align::Fill)
+            .valign(gtk::Align::Center)
+            .xalign(0.0)
+            .ellipsize(gtk::pango::EllipsizeMode::End)
+            .can_target(false)
+            .can_focus(false)
+            .css_classes(["msgbar-placeholder"])
+            .build();
+
+        let entry_overlay = gtk::Overlay::builder()
+            .hexpand(true)
+            .valign(gtk::Align::Center)
+            .child(&entry)
+            .build();
+        entry_overlay.add_overlay(&placeholder_label);
+
+        let placeholder_for_buf = placeholder_label.clone();
+        let entry_for_buf = entry.clone();
+        entry.buffer().connect_changed(move |buf| {
+            placeholder_for_buf.set_visible(buf.char_count() == 0);
+            entry_for_buf.queue_resize();
+        });
 
         // Default app font, not terminal monospace. The msgbar is
         // chat-chrome inside the drawer; monospace made it feel like a
@@ -106,7 +138,7 @@ impl MsgBarComponent {
             claw_entry_focus.grab_focus();
         });
 
-        widget.append(&claw_toggle);
+        left_badges.append(&claw_toggle);
 
         let sleep_img = gtk::Image::from_icon_name("boxxy-bedtime-symbolic");
         let sleep_toggle = gtk::Button::builder()
@@ -128,7 +160,7 @@ impl MsgBarComponent {
             sleep_entry_focus.grab_focus();
         });
 
-        widget.append(&sleep_toggle);
+        left_badges.append(&sleep_toggle);
 
         let pin_img = gtk::Image::from_icon_name("boxxy-view-pin-symbolic");
         let pin_toggle = gtk::Button::builder()
@@ -150,7 +182,7 @@ impl MsgBarComponent {
             pin_entry_focus.grab_focus();
         });
 
-        widget.append(&pin_toggle);
+        left_badges.append(&pin_toggle);
 
         let web_search_img = gtk::Image::from_icon_name("boxxy-globe-symbolic");
         let web_search_toggle = gtk::Button::builder()
@@ -172,34 +204,71 @@ impl MsgBarComponent {
             web_search_entry_focus.grab_focus();
         });
 
-        widget.append(&web_search_toggle);
+        left_badges.append(&web_search_toggle);
 
-        let attachment_mgr = AttachmentManager::new();
-        widget.append(attachment_mgr.widget());
-
-        widget.append(&entry);
+        widget.append(&entry_overlay);
 
         // Send button — mirrors Enter in the entry. Intentionally NOT
         // appended to `widget`: callers (the claw overlay drawer) place
         // it *outside* the msgbar box so the bar itself can be a rounded
         // field and the send icon floats next to it, matching chat UIs.
+        // Anchored to `End` (bottom) so when the input wraps to multiple
+        // lines, the send icon sits on the last line.
         let send_btn = gtk::Button::builder()
             .icon_name("boxxy-paper-plane-symbolic")
             .css_classes(["flat", "image-button", "msgbar-send"])
             .tooltip_text("Send")
-            .valign(gtk::Align::Center)
+            .valign(gtk::Align::End)
+            .margin_bottom(6)
             .can_focus(false)
             .build();
-        let send_entry = entry.clone();
-        send_btn.connect_clicked(move |_| {
-            // Reuse the existing Enter submit path so attachments, history
-            // push, and the embedded-mode visibility rules all apply.
-            send_entry.emit_activate();
-        });
 
         let is_active = Rc::new(Cell::new(false));
-
         let history = Rc::new(RefCell::new(history::MsgHistory::new()));
+        let embedded = Rc::new(Cell::new(false));
+
+        let on_submit_rc = Rc::new(on_submit);
+        let on_cancel_rc = Rc::new(on_cancel);
+
+        let submit_action: Rc<dyn Fn()> = {
+            let entry = entry.clone();
+            let attachment_mgr = attachment_mgr.clone();
+            let history = history.clone();
+            let on_submit = on_submit_rc;
+            let embedded = embedded.clone();
+            let is_active = is_active.clone();
+            let widget = widget.clone();
+
+            Rc::new(move || {
+                let buf = entry.buffer();
+                let original_text = buf
+                    .text(&buf.start_iter(), &buf.end_iter(), false)
+                    .to_string();
+                let (text, images) = attachment_mgr.build_payload(&original_text);
+
+                if !text.trim().is_empty() || !images.is_empty() {
+                    history
+                        .borrow_mut()
+                        .push(original_text, attachment_mgr.get_attachments());
+                    on_submit((text, images));
+                    buf.set_text("");
+                }
+
+                attachment_mgr.clear();
+
+                // When embedded in a drawer, visibility is owned by the
+                // container; self-hiding would leave an empty strip in the UI.
+                if !embedded.get() {
+                    is_active.set(false);
+                    widget.set_visible(false);
+                }
+            })
+        };
+
+        let send_submit = submit_action.clone();
+        send_btn.connect_clicked(move |_| {
+            send_submit();
+        });
 
         let mut providers: Vec<Box<dyn boxxy_core_widgets::autocomplete::CompletionProvider>> = vec![
             Box::new(autocomplete::AgentCompletionProvider),
@@ -211,54 +280,19 @@ impl MsgBarComponent {
         // Sort by trigger length descending to ensure "/resume " matches before "/"
         providers.sort_by(|a, b| b.trigger().len().cmp(&a.trigger().len()));
 
-        let c_entry_activate = entry.clone();
+        let autocomplete_submit = submit_action.clone();
         let autocomplete_ctrl = boxxy_core_widgets::autocomplete::AutocompleteController::new(
             &entry,
             providers,
             Some(Box::new(move |replacement| {
                 if replacement.starts_with("/resume ") {
-                    c_entry_activate.emit_activate();
+                    autocomplete_submit();
                 }
             })),
         );
 
-        let embedded = Rc::new(Cell::new(false));
-
-        let c_active = is_active.clone();
-        let c_widget = widget.clone();
-        let c_embedded_enter = embedded.clone();
-        let c_attachment_mgr = attachment_mgr.clone();
-        let c_history = history.clone();
-
-        let on_submit_rc = Rc::new(on_submit);
-        let on_cancel_rc = Rc::new(on_cancel);
-
-        let c_submit = on_submit_rc;
-
-        let c_history_activate = c_history.clone();
-        entry.connect_activate(move |e| {
-            let original_text = e.text().to_string();
-            let (text, images) = c_attachment_mgr.build_payload(&original_text);
-
-            if !text.trim().is_empty() || !images.is_empty() {
-                c_history_activate
-                    .borrow_mut()
-                    .push(original_text, c_attachment_mgr.get_attachments());
-                c_submit((text, images));
-                e.set_text("");
-            }
-
-            c_attachment_mgr.clear();
-
-            // When embedded in a drawer, visibility is owned by the
-            // container; self-hiding would leave an empty strip in the UI.
-            if !c_embedded_enter.get() {
-                c_active.set(false);
-                c_widget.set_visible(false);
-            }
-        });
-
-        // To truly intercept Ctrl+V, it's easier to use the key controller
+        // Key controller for Enter submit (Shift+Enter inserts newline),
+        // Up/Down history navigation, Ctrl+V paste, and Escape cancel.
         let key_ctrl = gtk::EventControllerKey::new();
         key_ctrl.set_propagation_phase(gtk::PropagationPhase::Capture);
         let k_active = is_active.clone();
@@ -267,17 +301,20 @@ impl MsgBarComponent {
         let k_entry = entry.clone();
         let k_cancel = on_cancel_rc;
         let k_attachment_mgr = attachment_mgr.clone();
-        let k_history = c_history;
+        let k_history = history.clone();
+        let k_submit = submit_action;
 
         let k_autocomplete = autocomplete_ctrl.clone();
         key_ctrl.connect_key_pressed(move |_, key, _, state| {
             let is_ctrl = state.contains(gtk::gdk::ModifierType::CONTROL_MASK);
+            let is_shift = state.contains(gtk::gdk::ModifierType::SHIFT_MASK);
 
             if k_autocomplete.is_visible() {
                 // If autocomplete is visible, let it handle its own navigation/selection keys
                 if key == gtk::gdk::Key::Up
                     || key == gtk::gdk::Key::Down
                     || key == gtk::gdk::Key::Return
+                    || key == gtk::gdk::Key::KP_Enter
                     || key == gtk::gdk::Key::Tab
                     || key == gtk::gdk::Key::Escape
                 {
@@ -285,24 +322,46 @@ impl MsgBarComponent {
                 }
             }
 
+            if key == gtk::gdk::Key::Return || key == gtk::gdk::Key::KP_Enter {
+                if !is_shift {
+                    k_submit();
+                    return glib::Propagation::Stop;
+                }
+                return glib::Propagation::Proceed;
+            }
+
             if key == gtk::gdk::Key::Up {
-                let current_text = k_entry.text().to_string();
+                let buf = k_entry.buffer();
+                let mut iter = buf.iter_at_offset(buf.cursor_position());
+                if k_entry.backward_display_line(&mut iter) {
+                    return glib::Propagation::Proceed;
+                }
+                let current_text = buf
+                    .text(&buf.start_iter(), &buf.end_iter(), false)
+                    .to_string();
                 let current_atts = k_attachment_mgr.get_attachments();
                 if let Some(item) = k_history
                     .borrow_mut()
                     .navigate_up(current_text, current_atts)
                 {
-                    k_entry.set_text(&item.text);
-                    k_entry.set_position(-1);
+                    buf.set_text(&item.text);
+                    let end = buf.end_iter();
+                    buf.place_cursor(&end);
                     k_attachment_mgr.load_attachments(item.attachments);
                 }
                 return glib::Propagation::Stop;
             }
 
             if key == gtk::gdk::Key::Down {
+                let buf = k_entry.buffer();
+                let mut iter = buf.iter_at_offset(buf.cursor_position());
+                if k_entry.forward_display_line(&mut iter) {
+                    return glib::Propagation::Proceed;
+                }
                 if let Some(item) = k_history.borrow_mut().navigate_down() {
-                    k_entry.set_text(&item.text);
-                    k_entry.set_position(-1);
+                    buf.set_text(&item.text);
+                    let end = buf.end_iter();
+                    buf.place_cursor(&end);
                     k_attachment_mgr.load_attachments(item.attachments);
                 }
                 return glib::Propagation::Stop;
@@ -321,7 +380,7 @@ impl MsgBarComponent {
                     k_active.set(false);
                     k_widget.set_visible(false);
                 }
-                k_entry.set_text("");
+                k_entry.buffer().set_text("");
                 k_history.borrow_mut().reset();
                 k_attachment_mgr.clear();
                 k_cancel();
@@ -335,6 +394,7 @@ impl MsgBarComponent {
         Self {
             widget,
             entry,
+            placeholder_label,
             send_btn,
             is_active,
             attachment_mgr,
@@ -356,6 +416,10 @@ impl MsgBarComponent {
         }
     }
 
+    pub fn set_text(&self, text: &str) {
+        self.entry.buffer().set_text(text);
+    }
+
     /// Refreshes the input bar's left-hand avatar to show the user's own profile avatar.
     pub fn refresh_user_avatar(&self) {
         let profile = boxxy_preferences::user_profile::current();
@@ -369,25 +433,22 @@ impl MsgBarComponent {
 
         let registry = boxxy_claw_protocol::characters::CHARACTER_CACHE.load();
         if let Some(info) = registry.iter().find(|c| c.config.id == character_id) {
-            if let Some(entry) = self.widget.last_child() {
-                if let Ok(entry) = entry.downcast::<gtk::Entry>() {
-                    let formatted_name = info
-                        .config
-                        .name
-                        .split('-')
-                        .map(|word| {
-                            let mut c = word.chars();
-                            match c.next() {
-                                None => String::new(),
-                                Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
-                            }
-                        })
-                        .collect::<Vec<String>>()
-                        .join(" ");
+            let formatted_name = info
+                .config
+                .name
+                .split('-')
+                .map(|word| {
+                    let mut c = word.chars();
+                    match c.next() {
+                        None => String::new(),
+                        Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+                    }
+                })
+                .collect::<Vec<String>>()
+                .join(" ");
 
-                    entry.set_placeholder_text(Some(&format!("Message {}...", formatted_name)));
-                }
-            }
+            self.placeholder_label
+                .set_label(&format!("Message {}...", formatted_name));
         }
 
         self.refresh_user_avatar();
@@ -461,7 +522,7 @@ impl MsgBarComponent {
     pub fn hide(&self) {
         self.widget.set_visible(false);
         self.is_active.set(false);
-        self.entry.set_text("");
+        self.set_text("");
         self.history.borrow_mut().reset();
     }
 

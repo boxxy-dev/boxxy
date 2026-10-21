@@ -221,6 +221,14 @@ pub fn create_claw_message_list() -> (gtk::ListView, gio::ListStore) {
 
         vbox.append(&header);
 
+        let thumbs_box = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        thumbs_box.set_halign(gtk::Align::Start);
+        thumbs_box.set_margin_top(4);
+        thumbs_box.set_margin_bottom(4);
+        thumbs_box.set_visible(false);
+        thumbs_box.add_css_class("user-attachment-thumbs");
+        vbox.append(&thumbs_box);
+
         let viewer = StructuredViewer::new(get_claw_viewer_registry());
         vbox.append(viewer.widget());
 
@@ -235,6 +243,7 @@ pub fn create_claw_message_list() -> (gtk::ListView, gio::ListStore) {
 
         hbox.set_safe_data("left_col", left_col);
         hbox.set_safe_data("header", header);
+        hbox.set_safe_data("thumbs_box", thumbs_box);
         hbox.set_safe_data("icon", icon);
         hbox.set_safe_data("avatar", avatar);
         hbox.set_safe_data("title", title);
@@ -251,6 +260,7 @@ pub fn create_claw_message_list() -> (gtk::ListView, gio::ListStore) {
 
         let left_col = hbox.get_safe_data::<gtk::Box>("left_col").unwrap();
         let header = hbox.get_safe_data::<gtk::Box>("header").unwrap();
+        let thumbs_box = hbox.get_safe_data::<gtk::Box>("thumbs_box").unwrap();
         let icon = hbox.get_safe_data::<gtk::Image>("icon").unwrap();
         let avatar = hbox.get_safe_data::<adw::Avatar>("avatar").unwrap();
         let title = hbox.get_safe_data::<gtk::Label>("title").unwrap();
@@ -265,6 +275,10 @@ pub fn create_claw_message_list() -> (gtk::ListView, gio::ListStore) {
         // Reset per-row state that specific variants may mutate.
         left_col.set_visible(true);
         header.set_visible(true);
+        while let Some(child) = thumbs_box.first_child() {
+            thumbs_box.remove(&child);
+        }
+        thumbs_box.set_visible(false);
         icon.set_visible(true);
         avatar.set_visible(false);
         avatar.set_custom_image(None::<&gdk::Texture>);
@@ -403,12 +417,29 @@ pub fn create_claw_message_list() -> (gtk::ListView, gio::ListStore) {
                 viewer.widget().set_visible(true);
                 cmd_label.set_visible(false);
             }
-            PersistentClawRow::User { content, .. } => {
+            PersistentClawRow::User {
+                content, images, ..
+            } => {
                 set_user_header();
                 hbox.add_css_class("claw-row-user");
 
+                for img_path in images {
+                    if let Ok(texture) = gdk::Texture::from_filename(&img_path) {
+                        let thumb_frame = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+                        thumb_frame.set_overflow(gtk::Overflow::Hidden);
+                        thumb_frame.add_css_class("user-attachment-thumb");
+
+                        let img = gtk::Image::new();
+                        img.set_paintable(Some(&texture));
+                        img.set_pixel_size(56);
+                        thumb_frame.append(&img);
+                        thumbs_box.append(&thumb_frame);
+                    }
+                }
+                thumbs_box.set_visible(thumbs_box.first_child().is_some());
+
                 viewer.set_content(&content);
-                viewer.widget().set_visible(true);
+                viewer.widget().set_visible(!content.is_empty());
                 cmd_label.set_visible(false);
             }
             PersistentClawRow::Suggested {
@@ -562,10 +593,16 @@ pub fn add_diagnosis_row(
     }));
 }
 
-pub fn add_user_row(store: &gio::ListStore, pane_id: String, content: &str) {
+pub fn add_user_row(
+    store: &gio::ListStore,
+    pane_id: String,
+    content: &str,
+    images: Vec<String>,
+) {
     store.append(&ClawRowObject::new(PersistentClawRow::User {
         pane_id,
         content: content.to_string(),
+        images,
     }));
 }
 

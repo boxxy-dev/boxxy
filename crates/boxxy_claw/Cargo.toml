@@ -21,6 +21,7 @@ rig-memory.workspace = true
 home = { workspace = true }
 notify.workspace = true
 boxxy-ai-core = { path = "../ai_core" }
+boxxy-assets = { path = "../boxxy_assets" }
 boxxy-sys-utils.workspace = true
 boxxy-core-toolbox = { path = "../core_toolbox" }
 boxxy-telemetry = { path = "../telemetry" }
@@ -35,4 +36,9 @@ serde_yml = { workspace = true }
 thiserror = { workspace = true }
 sqlx = { workspace = true }
 uuid = { workspace = true }
+base64.workspace = true
+sha2.workspace = true
 petname = "3.2.0"
+
+[dev-dependencies]
+tempfile.workspace = true

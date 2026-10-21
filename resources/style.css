@@ -489,8 +489,12 @@ boxxyterminalwidget {
   box-shadow: none;
 }
 
-.boxxy-msgbar entry {
+.boxxy-msgbar entry,
+.boxxy-msgbar textview,
+.boxxy-msgbar textview text,
+.boxxy-msgbar scrolledwindow {
   background: transparent;
+  background-color: transparent;
   box-shadow: none;
   border: none;
   border-radius: 0;
@@ -511,14 +515,31 @@ boxxyterminalwidget {
 
 .claw-drawer .boxxy-msgbar entry,
 .claw-drawer .boxxy-msgbar entry:focus,
-.claw-drawer .boxxy-msgbar entry:focus-within {
+.claw-drawer .boxxy-msgbar entry:focus-within,
+.claw-drawer .boxxy-msgbar textview,
+.claw-drawer .boxxy-msgbar textview:focus,
+.claw-drawer .boxxy-msgbar textview:focus-within {
   background: transparent;
+  background-color: transparent;
   border: none;
   border-radius: 0;
   padding: 4px 4px;
+  min-height: 0;
   box-shadow: none;
   outline: none;
   font-size: 1.1em;
+}
+
+.claw-drawer .boxxy-msgbar textview text {
+  background: transparent;
+  background-color: transparent;
+}
+
+.claw-drawer .boxxy-msgbar .msgbar-placeholder {
+  padding: 4px 4px;
+  min-height: 0;
+  font-size: 1.1em;
+  opacity: 0.5;
 }
 
 /* Toggle buttons on the left side of the bar: flat with no bg at rest. */
@@ -610,12 +631,23 @@ boxxyterminalwidget {
 
 
 /* --- MsgBar Attachment Tags --- */
+.msgbar-tags-flow {
+  padding: 0;
+}
+
+.msgbar-tags-flow flowboxchild {
+  padding: 0;
+  margin: 0;
+  background: transparent;
+  outline: none;
+}
+
 .msgbar-tag {
   background: rgba(128, 128, 128, 0.15);
   color: inherit;
   border-radius: 12px;
   padding: 0 4px 0 10px;
-  margin: 4px 2px;
+  margin: 0;
   font-size: 0.9em;
   font-weight: bold;
   border: 1px solid rgba(128, 128, 128, 0.2);
@@ -636,6 +668,11 @@ boxxyterminalwidget {
 .msgbar-tag button:hover {
   opacity: 1.0;
   background: rgba(255, 255, 255, 0.1);
+}
+
+.user-attachment-thumb {
+  border-radius: 8px;
+  border: 1px solid rgba(128, 128, 128, 0.25);
 }
 
 

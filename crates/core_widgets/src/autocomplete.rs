@@ -21,8 +21,67 @@ pub trait CompletionProvider {
     fn trigger(&self) -> String;
     fn get_completions(&self, query: &str) -> Vec<CompletionItem>;
 }
+
+pub trait AutocompleteInput: Clone + 'static {
+    fn widget(&self) -> &gtk::Widget;
+    fn get_text(&self) -> String;
+    fn cursor_char_pos(&self) -> usize;
+    fn set_text_and_cursor(&self, text: &str, char_pos: usize);
+    fn connect_text_changed(&self, f: Box<dyn Fn() + 'static>);
+}
+
+impl AutocompleteInput for gtk::Entry {
+    fn widget(&self) -> &gtk::Widget {
+        self.upcast_ref()
+    }
+
+    fn get_text(&self) -> String {
+        self.text().to_string()
+    }
+
+    fn cursor_char_pos(&self) -> usize {
+        self.position().max(0) as usize
+    }
+
+    fn set_text_and_cursor(&self, text: &str, char_pos: usize) {
+        self.set_text(text);
+        self.set_position(char_pos as i32);
+    }
+
+    fn connect_text_changed(&self, f: Box<dyn Fn() + 'static>) {
+        self.connect_changed(move |_| f());
+    }
+}
+
+impl AutocompleteInput for gtk::TextView {
+    fn widget(&self) -> &gtk::Widget {
+        self.upcast_ref()
+    }
+
+    fn get_text(&self) -> String {
+        let buf = self.buffer();
+        buf.text(&buf.start_iter(), &buf.end_iter(), false)
+            .to_string()
+    }
+
+    fn cursor_char_pos(&self) -> usize {
+        self.buffer().cursor_position().max(0) as usize
+    }
+
+    fn set_text_and_cursor(&self, text: &str, char_pos: usize) {
+        let buf = self.buffer();
+        buf.set_text(text);
+        let iter = buf.iter_at_offset(char_pos as i32);
+        buf.place_cursor(&iter);
+    }
+
+    fn connect_text_changed(&self, f: Box<dyn Fn() + 'static>) {
+        self.buffer().connect_changed(move |_| f());
+    }
+}
+
 pub struct AutocompleteController {
-    entry: gtk::Entry,
+    input: Box<dyn AutocompleteInputObj>,
     popover: gtk::Popover,
     list: gtk::ListBox,
     providers: Vec<Box<dyn CompletionProvider>>,
@@ -30,15 +89,45 @@ pub struct AutocompleteController {
     on_activated: Option<Box<dyn Fn(String) + 'static>>,
 }
 
+trait AutocompleteInputObj {
+    fn widget(&self) -> &gtk::Widget;
+    fn get_text(&self) -> String;
+    fn cursor_char_pos(&self) -> usize;
+    fn set_text_and_cursor(&self, text: &str, char_pos: usize);
+    fn connect_text_changed(&self, f: Box<dyn Fn() + 'static>);
+}
+
+impl<T: AutocompleteInput> AutocompleteInputObj for T {
+    fn widget(&self) -> &gtk::Widget {
+        AutocompleteInput::widget(self)
+    }
+
+    fn get_text(&self) -> String {
+        AutocompleteInput::get_text(self)
+    }
+
+    fn cursor_char_pos(&self) -> usize {
+        AutocompleteInput::cursor_char_pos(self)
+    }
+
+    fn set_text_and_cursor(&self, text: &str, char_pos: usize) {
+        AutocompleteInput::set_text_and_cursor(self, text, char_pos);
+    }
+
+    fn connect_text_changed(&self, f: Box<dyn Fn() + 'static>) {
+        AutocompleteInput::connect_text_changed(self, f);
+    }
+}
+
 impl AutocompleteController {
     #[must_use]
-    pub fn new(
-        entry: &gtk::Entry,
+    pub fn new<I: AutocompleteInput>(
+        entry: &I,
         providers: Vec<Box<dyn CompletionProvider>>,
         on_activated: Option<Box<dyn Fn(String) + 'static>>,
     ) -> Rc<Self> {
         let popover = gtk::Popover::new();
-        popover.set_parent(entry);
+        popover.set_parent(entry.widget());
         popover.set_position(gtk::PositionType::Top);
         popover.set_autohide(false);
         popover.set_has_arrow(false);
@@ -60,7 +149,7 @@ impl AutocompleteController {
         popover.set_halign(gtk::Align::Start);
 
         let controller = Rc::new(Self {
-            entry: entry.clone(),
+            input: Box::new(entry.clone()),
             popover,
             list,
             providers,
@@ -81,12 +170,11 @@ impl AutocompleteController {
     }
 
     fn setup_signals(self: &Rc<Self>) {
-        let entry = &self.entry;
         let c_clone = self.clone();
 
-        entry.connect_changed(move |entry| {
-            let text = entry.text().to_string();
-            let cursor_pos = entry.position() as usize;
+        self.input.connect_text_changed(Box::new(move || {
+            let text = c_clone.input.get_text();
+            let cursor_pos = c_clone.input.cursor_char_pos();
 
             // Simple logic: look backwards from cursor to find a trigger
             let mut found_trigger = None;
@@ -101,12 +189,12 @@ impl AutocompleteController {
                 for provider in &c_clone.providers {
                     let trigger = provider.trigger();
                     if let Some(idx) = text_before.rfind(&trigger) {
-                        // Trigger must be preceded by space or be at the start
+                        // Trigger must be preceded by space/newline or be at the start
                         let is_at_start = idx == 0;
                         let followed_by_space = if is_at_start {
                             false
                         } else {
-                            text_before.as_bytes().get(idx - 1) == Some(&b' ')
+                            matches!(text_before.as_bytes().get(idx - 1), Some(&b' ' | &b'\n'))
                         };
 
                         if is_at_start || followed_by_space {
@@ -142,7 +230,7 @@ impl AutocompleteController {
                 c_clone.popover.popdown();
                 c_clone.active_trigger.replace(None);
             }
-        });
+        }));
 
         let c_clone = self.clone();
         self.list.connect_row_activated(move |_, row| {
@@ -164,7 +252,7 @@ impl AutocompleteController {
                         c_clone.move_selection(1);
                         gtk::glib::Propagation::Stop
                     }
-                    gtk::gdk::Key::Return | gtk::gdk::Key::Tab
+                    gtk::gdk::Key::Return | gtk::gdk::Key::KP_Enter | gtk::gdk::Key::Tab
                         if let Some(row) = c_clone.list.selected_row() =>
                     {
                         c_clone.apply_completion(row.widget_name().as_str());
@@ -180,7 +268,7 @@ impl AutocompleteController {
                 gtk::glib::Propagation::Proceed
             }
         });
-        entry.add_controller(key_ctrl);
+        self.input.widget().add_controller(key_ctrl);
     }
 
     fn update_list(&self, items: Vec<CompletionItem>) {
@@ -372,8 +460,8 @@ impl AutocompleteController {
 
         let trigger_info = self.active_trigger.borrow().clone();
         if let Some((_trigger, start_idx)) = trigger_info {
-            let text = self.entry.text().to_string();
-            let cursor_pos = self.entry.position() as usize;
+            let text = self.input.get_text();
+            let cursor_pos = self.input.cursor_char_pos();
             let byte_cursor_pos = text
                 .char_indices()
                 .nth(cursor_pos)
@@ -394,8 +482,7 @@ impl AutocompleteController {
             let new_cursor_pos =
                 start_char_pos + replacement_char_len + if is_command { 0 } else { 1 };
 
-            self.entry.set_text(&new_text);
-            self.entry.set_position(new_cursor_pos as i32);
+            self.input.set_text_and_cursor(&new_text, new_cursor_pos);
 
             if let Some(on_activated) = &self.on_activated {
                 on_activated(replacement.to_string());

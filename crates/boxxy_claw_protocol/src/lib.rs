@@ -234,6 +234,8 @@ pub enum PersistentClawRow {
     User {
         pane_id: String,
         content: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        images: Vec<String>,
     },
     Suggested {
         pane_id: String,
@@ -405,6 +407,8 @@ pub enum ClawEngineEvent {
     },
     UserMessage {
         content: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        images: Vec<String>,
     },
     DiagnosisComplete {
         agent_name: String,

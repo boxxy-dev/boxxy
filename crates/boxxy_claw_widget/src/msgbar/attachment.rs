@@ -1,7 +1,10 @@
 use gtk4 as gtk;
+use gtk4::gdk;
+use gtk4::glib;
 use gtk4::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
+use std::path::Path;
 use std::rc::Rc;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -14,7 +17,7 @@ pub struct Attachment {
 
 #[derive(Clone)]
 pub struct AttachmentManager {
-    pub tags_box: gtk::Box,
+    pub tags_box: gtk::FlowBox,
     pub attachments: Rc<RefCell<Vec<Attachment>>>,
 }
 
@@ -26,8 +29,17 @@ impl Default for AttachmentManager {
 
 impl AttachmentManager {
     pub fn new() -> Self {
-        let tags_box = gtk::Box::new(gtk::Orientation::Horizontal, 4);
-        tags_box.set_valign(gtk::Align::Center);
+        let tags_box = gtk::FlowBox::builder()
+            .selection_mode(gtk::SelectionMode::None)
+            .column_spacing(6)
+            .row_spacing(4)
+            .max_children_per_line(12)
+            .min_children_per_line(1)
+            .halign(gtk::Align::Start)
+            .valign(gtk::Align::Center)
+            .visible(false)
+            .css_classes(["msgbar-tags-flow"])
+            .build();
 
         Self {
             tags_box,
@@ -35,7 +47,7 @@ impl AttachmentManager {
         }
     }
 
-    pub fn widget(&self) -> &gtk::Box {
+    pub fn widget(&self) -> &gtk::FlowBox {
         &self.tags_box
     }
 
@@ -44,6 +56,7 @@ impl AttachmentManager {
         while let Some(child) = self.tags_box.first_child() {
             self.tags_box.remove(&child);
         }
+        self.tags_box.set_visible(false);
     }
 
     pub fn get_attachments(&self) -> Vec<Attachment> {
@@ -59,6 +72,12 @@ impl AttachmentManager {
 
     pub fn add_attachment(&self, label: String, content: String, is_image: bool) {
         let id = uuid::Uuid::new_v4().to_string();
+        let tooltip = if is_image {
+            label.clone()
+        } else {
+            build_text_preview_tooltip(&content)
+        };
+
         let att = Attachment {
             id: id.clone(),
             label: label.clone(),
@@ -70,7 +89,7 @@ impl AttachmentManager {
 
         let chip = gtk::Box::new(gtk::Orientation::Horizontal, 4);
         chip.add_css_class("msgbar-tag");
-        chip.set_widget_name(&id);
+        chip.set_tooltip_text(Some(&tooltip));
 
         let lbl = gtk::Label::new(Some(&label));
         chip.append(&lbl);
@@ -78,28 +97,33 @@ impl AttachmentManager {
         let close_btn = gtk::Button::builder()
             .icon_name("boxxy-window-close-symbolic")
             .css_classes(["flat", "circular"])
+            .valign(gtk::Align::Center)
+            .tooltip_text("Remove attachment")
+            .can_focus(false)
+            .build();
+        chip.append(&close_btn);
+
+        let flow_child = gtk::FlowBoxChild::builder()
+            .child(&chip)
             .can_focus(false)
             .build();
 
         let atts_clone = self.attachments.clone();
         let tags_clone = self.tags_box.clone();
+        let flow_child_clone = flow_child.clone();
         let id_clone = id;
         close_btn.connect_clicked(move |_| {
-            atts_clone.borrow_mut().retain(|a| a.id != id_clone);
-            if let Some(child) = tags_clone.first_child() {
-                let mut curr = Some(child);
-                while let Some(c) = curr {
-                    if c.widget_name() == id_clone {
-                        tags_clone.remove(&c);
-                        break;
-                    }
-                    curr = c.next_sibling();
-                }
-            }
+            let is_empty = {
+                let mut atts = atts_clone.borrow_mut();
+                atts.retain(|a| a.id != id_clone);
+                atts.is_empty()
+            };
+            tags_clone.remove(&flow_child_clone);
+            tags_clone.set_visible(!is_empty);
         });
 
-        chip.append(&close_btn);
-        self.tags_box.append(&chip);
+        self.tags_box.append(&flow_child);
+        self.tags_box.set_visible(true);
     }
 
     pub fn build_payload(&self, base_text: &str) -> (String, Vec<String>) {
@@ -117,7 +141,10 @@ impl AttachmentManager {
                         text.push_str("\n\n--- ATTACHMENTS ---");
                         text_attachments_present = true;
                     }
-                    text.push_str(&format!("\n\n[{}]\n{}", att.label, att.content));
+                    text.push_str(&format!(
+                        "\n\n**{}**\n```text\n{}\n```",
+                        att.label, att.content
+                    ));
                 }
             }
         }
@@ -125,38 +152,93 @@ impl AttachmentManager {
         (text, images)
     }
 
-    pub fn handle_paste(&self, entry: &gtk::Entry) {
-        let clipboard = gtk::gdk::Display::default().unwrap().clipboard();
+    pub fn handle_paste(&self, entry: &gtk::TextView) {
+        let Some(display) = gdk::Display::default() else {
+            return;
+        };
+        let clipboard = display.clipboard();
         let entry_clone = entry.clone();
         let clipboard_clone = clipboard.clone();
-
         let self_clone = self.clone();
 
         clipboard.read_text_async(None::<&gtk::gio::Cancellable>, move |res| {
-            let mut has_text = false;
+            let mut handled = false;
             if let Ok(Some(text)) = res {
                 let text_str = text.to_string();
                 if !text_str.is_empty() {
-                    has_text = true;
-                    if text_str.len() > 250 || text_str.contains('\n') {
+                    handled = true;
+                    if let Some(texture) = try_load_image_from_pasted_path(&text_str) {
+                        self_clone.attach_texture(texture);
+                    } else if text_str.len() > 250 || text_str.contains('\n') {
                         self_clone.add_attachment("Text Snippet".to_string(), text_str, false);
                     } else {
-                        let mut pos = entry_clone.position();
-                        entry_clone.insert_text(&text_str, &mut pos);
+                        let buf = entry_clone.buffer();
+                        buf.delete_selection(true, true);
+                        buf.insert_at_cursor(&text_str);
                     }
                 }
             }
 
-            if !has_text {
+            if !handled {
                 let self_clone_img = self_clone.clone();
                 clipboard_clone.read_texture_async(None::<&gtk::gio::Cancellable>, move |res| {
                     if let Ok(Some(texture)) = res {
-                        let bytes = texture.save_to_png_bytes();
-                        let b64 = gtk::glib::base64_encode(&bytes);
-                        self_clone_img.add_attachment("Image".to_string(), b64.to_string(), true);
+                        self_clone_img.attach_texture(texture);
                     }
                 });
             }
         });
     }
+
+    fn attach_texture(&self, texture: gdk::Texture) {
+        let bytes = texture.save_to_png_bytes();
+        let b64 = glib::base64_encode(&bytes).to_string();
+        self.add_attachment("Image".to_string(), b64, true);
+    }
+}
+
+fn build_text_preview_tooltip(content: &str) -> String {
+    const MAX_PREVIEW_LINES: usize = 8;
+    const MAX_PREVIEW_CHARS: usize = 320;
+
+    let mut preview: String = content
+        .lines()
+        .take(MAX_PREVIEW_LINES)
+        .collect::<Vec<_>>()
+        .join("\n");
+    if preview.chars().count() > MAX_PREVIEW_CHARS {
+        preview = preview.chars().take(MAX_PREVIEW_CHARS).collect::<String>();
+        preview.push('…');
+    } else if content.lines().count() > MAX_PREVIEW_LINES {
+        preview.push_str("\n…");
+    }
+    preview
+}
+
+fn try_load_image_from_pasted_path(text: &str) -> Option<gdk::Texture> {
+    let trimmed = text.trim();
+    if trimmed.contains('\n') {
+        return None;
+    }
+    let path_str = if let Some(stripped) = trimmed.strip_prefix("file://") {
+        glib::Uri::unescape_string(stripped, None)
+            .map_or_else(|| stripped.to_string(), |g| g.to_string())
+    } else {
+        trimmed.to_string()
+    };
+
+    let lower = path_str.to_lowercase();
+    let is_supported_img = lower.ends_with(".png")
+        || lower.ends_with(".jpg")
+        || lower.ends_with(".jpeg")
+        || lower.ends_with(".webp");
+    if !is_supported_img {
+        return None;
+    }
+
+    let path = Path::new(&path_str);
+    if !path.is_file() {
+        return None;
+    }
+    gdk::Texture::from_filename(path).ok()
 }

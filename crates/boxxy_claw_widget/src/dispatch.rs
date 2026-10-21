@@ -56,8 +56,13 @@ pub fn spawn_dispatch(
                     msg_bar.set_status(status.clone());
                     indicator.set_mode(status.clone());
                 }
-                ClawEngineEvent::UserMessage { content } => {
-                    boxxy_claw_ui::add_user_row(&overlay_store, id.clone(), content);
+                ClawEngineEvent::UserMessage { content, images } => {
+                    boxxy_claw_ui::add_user_row(
+                        &overlay_store,
+                        id.clone(),
+                        content,
+                        images.clone(),
+                    );
                 }
                 ClawEngineEvent::ToolCallStarted {
                     agent_name: event_agent_name,

@@ -119,6 +119,68 @@ pub fn generate_thumbnail(input: &[u8], spec: ThumbnailSpec) -> Result<Thumbnail
     })
 }
 
+/// Validates, decodes, center-crops to a square, and resizes an image to `size × size`
+/// via the `boxxy-assets` transformation `Pipeline` (`SquareCrop` + `Resize`), returning PNG bytes.
+pub fn generate_square_thumbnail_png(input: &[u8], size: u32) -> Result<Vec<u8>, AssetError> {
+    if input.len() > MAX_THUMBNAIL_INPUT_BYTES {
+        return Err(AssetError::FileTooLarge(
+            input.len(),
+            MAX_THUMBNAIL_INPUT_BYTES,
+        ));
+    }
+
+    let format = image::guess_format(input)?;
+
+    let mut dim_reader = image::ImageReader::new(Cursor::new(input));
+    dim_reader.set_format(format);
+    let (orig_w, orig_h) = dim_reader.into_dimensions()?;
+
+    if orig_w == 0 || orig_h == 0 {
+        return Err(AssetError::DimensionsTooSmall(orig_w, orig_h, 1));
+    }
+
+    if orig_w > MAX_SOURCE_DIMENSION || orig_h > MAX_SOURCE_DIMENSION {
+        return Err(AssetError::DimensionsTooLarge(
+            orig_w,
+            orig_h,
+            MAX_SOURCE_DIMENSION,
+        ));
+    }
+
+    let total_pixels = u64::from(orig_w) * u64::from(orig_h);
+    if total_pixels > MAX_SOURCE_PIXELS {
+        return Err(AssetError::DimensionsTooLarge(
+            orig_w,
+            orig_h,
+            MAX_SOURCE_DIMENSION,
+        ));
+    }
+
+    let mut decode_reader = image::ImageReader::new(Cursor::new(input));
+    decode_reader.set_format(format);
+    let mut limits = Limits::default();
+    limits.max_image_width = Some(MAX_SOURCE_DIMENSION);
+    limits.max_image_height = Some(MAX_SOURCE_DIMENSION);
+    limits.max_alloc = Some(MAX_SOURCE_PIXELS * 4);
+    decode_reader.limits(limits);
+
+    let decoded = decode_reader.decode()?;
+    let target = size.max(1);
+    let pipeline = super::pipeline::Pipeline::new()
+        .add(super::transform::SquareCrop)
+        .add(super::transform::Resize {
+            width: target,
+            height: target,
+        });
+    let processed = pipeline.run(decoded)?;
+
+    let mut png_bytes = Vec::new();
+    processed
+        .write_to(&mut Cursor::new(&mut png_bytes), ImageFormat::Png)
+        .map_err(|e| AssetError::ImageEncode(e.to_string()))?;
+    Ok(png_bytes)
+}
+
 /// Encodes an RGBA8 buffer to PNG bytes for disk thumbnail caching.
 pub fn encode_rgba_to_png(rgba: &[u8], width: u32, height: u32) -> Result<Vec<u8>, AssetError> {
     let img: ImageBuffer<Rgba<u8>, &[u8]> = ImageBuffer::from_raw(width, height, rgba)
@@ -198,5 +260,13 @@ mod tests {
         let (w, h, decoded) = decode_rgba_from_png(&encoded).unwrap();
         assert_eq!((w, h), (4, 4));
         assert_eq!(decoded, rgba);
+    }
+
+    #[test]
+    fn generates_square_thumbnail_png() {
+        let png = make_png(300, 180);
+        let out_png = generate_square_thumbnail_png(&png, 64).unwrap();
+        let (w, h, _) = decode_rgba_from_png(&out_png).unwrap();
+        assert_eq!((w, h), (64, 64));
     }
 }

@@ -14,7 +14,7 @@ static RESUME_REFRESHING: AtomicBool = AtomicBool::new(false);
 
 /// Triggers an asynchronous background refresh of the `/resume ` session cache
 /// if one is not already in flight. Never blocks the GTK main thread.
-pub fn refresh_resume_sessions_async(entry_weak: Option<gtk::glib::WeakRef<gtk::Entry>>) {
+pub fn refresh_resume_sessions_async(entry_weak: Option<gtk::glib::WeakRef<gtk::TextView>>) {
     if RESUME_REFRESHING
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
         .is_err()
@@ -46,10 +46,12 @@ pub fn refresh_resume_sessions_async(entry_weak: Option<gtk::glib::WeakRef<gtk::
         gtk::glib::spawn_future_local(async move {
             let handle = boxxy_sys_utils::runtime().spawn(fetch_fut);
             let _ = handle.await;
-            if let Some(entry) = entry_weak.upgrade()
-                && entry.text().contains("/resume ")
-            {
-                entry.emit_by_name::<()>("changed", &[]);
+            if let Some(entry) = entry_weak.upgrade() {
+                let buf = entry.buffer();
+                let text = buf.text(&buf.start_iter(), &buf.end_iter(), false);
+                if text.contains("/resume ") {
+                    buf.emit_by_name::<()>("changed", &[]);
+                }
             }
         });
     } else {
@@ -223,11 +225,11 @@ fn get_relative_age(updated_at: &str) -> String {
 
 #[derive(Default)]
 pub struct ResumeCompletionProvider {
-    entry_weak: Option<gtk::glib::WeakRef<gtk::Entry>>,
+    entry_weak: Option<gtk::glib::WeakRef<gtk::TextView>>,
 }
 
 impl ResumeCompletionProvider {
-    pub fn new(entry_weak: Option<gtk::glib::WeakRef<gtk::Entry>>) -> Self {
+    pub fn new(entry_weak: Option<gtk::glib::WeakRef<gtk::TextView>>) -> Self {
         Self { entry_weak }
     }
 }
