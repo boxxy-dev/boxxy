@@ -68,6 +68,9 @@
     <file compressed="true" alias="ui/widgets/notification_pill.ui">ui/widgets/notification_pill.ui</file>
     <file compressed="true" alias="ui/widgets/notification_details.ui">ui/widgets/notification_details.ui</file>
     <file compressed="true" alias="ui/claw_overlay.ui">ui/claw_overlay.ui</file>
+    <file compressed="true" alias="ui/bookmarks_tab.ui">ui/bookmarks_tab.ui</file>
+    <file compressed="true" alias="ui/bookmarks_sidebar.ui">ui/bookmarks_sidebar.ui</file>
+    <file compressed="true" alias="ui/bookmark_editor.ui">ui/bookmark_editor.ui</file>
     <file compressed="true" alias="sounds/task.wav">sounds/task.wav</file>
     <file compressed="true" alias="sounds/timer.wav">sounds/timer.wav</file>
   </gresource>

@@ -31,6 +31,7 @@ pub struct TerminalOverlay {
     diagnosis_viewer: StructuredViewer,
     command_view: gtk::TextView,
     template_entry: gtk::Entry,
+    msgbar_slot: gtk::Box,
     msg_bar: Rc<MsgBarComponent>,
     accept_btn: gtk::Button,
     reject_btn: gtk::Button,
@@ -520,6 +521,7 @@ impl TerminalOverlay {
             diagnosis_viewer,
             command_view,
             template_entry,
+            msgbar_slot,
             msg_bar,
             accept_btn,
             reject_btn,
@@ -876,12 +878,12 @@ impl TerminalOverlay {
         // on (Accept / Approve-file / template variables).
         let _ = ok_btn; // retained for clarity
         gtk4::glib::timeout_add_local(std::time::Duration::from_millis(50), move || {
-            if accept_btn.is_visible() {
+            if template_box.is_visible() {
+                template_entry.grab_focus();
+            } else if accept_btn.is_visible() {
                 accept_btn.grab_focus();
             } else if approve_file_btn.is_visible() {
                 approve_file_btn.grab_focus();
-            } else if template_box.is_visible() {
-                template_entry.grab_focus();
             } else if mode == OverlayMode::Claw {
                 msg_bar.entry.grab_focus();
             }
@@ -1016,9 +1018,12 @@ impl TerminalOverlay {
         self.template_box.set_visible(false);
 
         // 2. Base components based on mode
-        self.msg_bar.widget.set_visible(mode == OverlayMode::Claw);
-        self.inspect_btn.set_visible(mode == OverlayMode::Claw);
-        self.clear_history_btn.set_visible(mode == OverlayMode::Claw);
+        let is_claw = mode == OverlayMode::Claw;
+        self.msgbar_slot.set_visible(is_claw);
+        self.msg_bar.widget.set_visible(is_claw);
+        self.msg_bar.send_btn.set_visible(is_claw);
+        self.inspect_btn.set_visible(is_claw);
+        self.clear_history_btn.set_visible(is_claw);
 
         // 3. Character Selector Box logic
         // Only visible if in Claw mode, NOT thinking/pending, and no active agent is set yet.
@@ -1063,8 +1068,20 @@ impl TerminalOverlay {
                         self.action_box.set_visible(true);
                         self.accept_btn.set_visible(true);
                         self.reject_btn.set_visible(true);
-                        self.template_box
-                            .set_visible(matches!(proposal, Proposal::Bookmark { .. }));
+                        if matches!(proposal, Proposal::Bookmark { .. }) {
+                            self.reject_btn.set_label("Close");
+                            self.reject_btn.remove_css_class("destructive-action");
+                        } else {
+                            self.reject_btn.set_label("Reject");
+                            self.reject_btn.add_css_class("destructive-action");
+                        }
+                        self.template_box.set_visible(matches!(
+                            proposal,
+                            Proposal::Bookmark {
+                                ref placeholders,
+                                ..
+                            } if !placeholders.is_empty()
+                        ));
                     }
                     Proposal::BackgroundCommand { .. } => {
                         self.approve_file_btn.set_label("Approve & Launch");

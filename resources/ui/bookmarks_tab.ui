@@ -1,0 +1,323 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<interface>
+  <object class="GtkBox" id="root_box">
+    <property name="orientation">vertical</property>
+    <property name="hexpand">true</property>
+    <property name="vexpand">true</property>
+    <child>
+      <object class="GtkStack" id="main_stack">
+        <property name="transition-type">crossfade</property>
+        <property name="transition-duration">180</property>
+        <property name="hexpand">true</property>
+        <property name="vexpand">true</property>
+
+        <!-- Empty State Page (First-time experience) -->
+        <child>
+          <object class="GtkStackPage">
+            <property name="name">empty</property>
+            <property name="child">
+              <object class="GtkScrolledWindow">
+                <property name="hscrollbar-policy">never</property>
+                <property name="vexpand">true</property>
+                <child>
+                  <object class="AdwClamp">
+                    <property name="maximum-size">660</property>
+                    <property name="margin-top">36</property>
+                    <property name="margin-bottom">36</property>
+                    <property name="margin-start">24</property>
+                    <property name="margin-end">24</property>
+                    <child>
+                      <object class="GtkBox">
+                        <property name="orientation">vertical</property>
+                        <property name="spacing">24</property>
+                        <property name="valign">center</property>
+                        <property name="vexpand">true</property>
+
+                        <!-- Hero Header -->
+                        <child>
+                          <object class="GtkBox">
+                            <property name="orientation">vertical</property>
+                            <property name="spacing">10</property>
+                            <property name="halign">center</property>
+                            <child>
+                              <object class="GtkImage">
+                                <property name="icon-name">boxxy-user-bookmarks-symbolic</property>
+                                <property name="pixel-size">64</property>
+                                <property name="margin-bottom">4</property>
+                                <style>
+                                  <class name="bookmark-hero-icon"/>
+                                </style>
+                              </object>
+                            </child>
+                            <child>
+                              <object class="GtkLabel">
+                                <property name="label">Terminal Bookmarks</property>
+                                <property name="justify">center</property>
+                                <property name="wrap">true</property>
+                                <style>
+                                  <class name="title-1"/>
+                                </style>
+                              </object>
+                            </child>
+                            <child>
+                              <object class="GtkLabel">
+                                <property name="label">Save reusable Bash and Python scripts, parameterize commands with dynamic variables, and run them in any terminal with a single click.</property>
+                                <property name="justify">center</property>
+                                <property name="wrap">true</property>
+                                <property name="max-width-chars">58</property>
+                                <style>
+                                  <class name="dim-label"/>
+                                </style>
+                              </object>
+                            </child>
+                          </object>
+                        </child>
+
+                        <!-- Feature Highlights Card List -->
+                        <child>
+                          <object class="GtkListBox">
+                            <property name="selection-mode">none</property>
+                            <style>
+                              <class name="boxed-list"/>
+                            </style>
+                            <child>
+                              <object class="AdwActionRow">
+                                <property name="title">Dynamic Template Variables</property>
+                                <property name="subtitle">Wrap parameters in triple braces like {{{user}}} or {{{host}}}. Boxxy prompts you to fill them in before execution.</property>
+                                <child type="prefix">
+                                  <object class="GtkImage">
+                                    <property name="icon-name">boxxy-build-circle-symbolic</property>
+                                    <property name="pixel-size">20</property>
+                                    <style>
+                                      <class name="accent"/>
+                                    </style>
+                                  </object>
+                                </child>
+                                <child type="suffix">
+                                  <object class="GtkLabel">
+                                    <property name="label">{{{var}}}</property>
+                                    <property name="valign">center</property>
+                                    <style>
+                                      <class name="bookmark-var-chip"/>
+                                      <class name="monospace"/>
+                                      <class name="caption"/>
+                                    </style>
+                                  </object>
+                                </child>
+                              </object>
+                            </child>
+                            <child>
+                              <object class="AdwActionRow">
+                                <property name="title">Generate Scripts with AI</property>
+                                <property name="subtitle">Describe what you want to automate in plain English and let Boxxy write the script and template variables for you.</property>
+                                <child type="prefix">
+                                  <object class="GtkImage">
+                                    <property name="icon-name">boxxy-ai-slop-symbolic</property>
+                                    <property name="pixel-size">20</property>
+                                    <style>
+                                      <class name="accent"/>
+                                    </style>
+                                  </object>
+                                </child>
+                              </object>
+                            </child>
+                            <child>
+                              <object class="AdwActionRow">
+                                <property name="title">One-Click Access Anywhere</property>
+                                <property name="subtitle">Launch your saved scripts from the left sidebar, the Command Palette (Ctrl+Shift+P), or directly from this tab.</property>
+                                <child type="prefix">
+                                  <object class="GtkImage">
+                                    <property name="icon-name">boxxy-media-playback-start-symbolic</property>
+                                    <property name="pixel-size">20</property>
+                                    <style>
+                                      <class name="accent"/>
+                                    </style>
+                                  </object>
+                                </child>
+                              </object>
+                            </child>
+                          </object>
+                        </child>
+
+                        <!-- Primary Call to Action -->
+                        <child>
+                          <object class="GtkButton" id="empty_create_btn">
+                            <property name="halign">center</property>
+                            <style>
+                              <class name="suggested-action"/>
+                              <class name="pill"/>
+                            </style>
+                            <child>
+                              <object class="GtkBox">
+                                <property name="orientation">horizontal</property>
+                                <property name="spacing">8</property>
+                                <property name="halign">center</property>
+                                <child>
+                                  <object class="GtkImage">
+                                    <property name="icon-name">boxxy-plus-symbolic</property>
+                                  </object>
+                                </child>
+                                <child>
+                                  <object class="GtkLabel">
+                                    <property name="label">Create First Bookmark</property>
+                                  </object>
+                                </child>
+                              </object>
+                            </child>
+                          </object>
+                        </child>
+                      </object>
+                    </child>
+                  </object>
+                </child>
+              </object>
+            </property>
+          </object>
+        </child>
+
+        <!-- Populated Gallery Page -->
+        <child>
+          <object class="GtkStackPage">
+            <property name="name">gallery</property>
+            <property name="child">
+              <object class="GtkScrolledWindow" id="gallery_scroll">
+                <property name="hscrollbar-policy">never</property>
+                <property name="vexpand">true</property>
+                <child>
+                  <object class="AdwClamp">
+                    <property name="maximum-size">840</property>
+                    <child>
+                      <object class="GtkBox" id="gallery_content_box">
+                        <property name="orientation">vertical</property>
+                        <property name="spacing">16</property>
+                        <property name="margin-top">24</property>
+                        <property name="margin-bottom">24</property>
+                        <property name="margin-start">16</property>
+                        <property name="margin-end">16</property>
+                        <property name="hexpand">true</property>
+                        <property name="vexpand">true</property>
+
+                        <!-- Gallery Header Bar -->
+                        <child>
+                          <object class="GtkBox">
+                            <property name="orientation">horizontal</property>
+                            <property name="spacing">12</property>
+                            <child>
+                              <object class="GtkBox">
+                                <property name="orientation">vertical</property>
+                                <property name="spacing">2</property>
+                                <property name="hexpand">true</property>
+                                <property name="valign">center</property>
+                                <child>
+                                  <object class="GtkBox">
+                                    <property name="orientation">horizontal</property>
+                                    <property name="spacing">8</property>
+                                    <child>
+                                      <object class="GtkLabel">
+                                        <property name="label">Bookmarks</property>
+                                        <property name="halign">start</property>
+                                        <style>
+                                          <class name="title-2"/>
+                                        </style>
+                                      </object>
+                                    </child>
+                                    <child>
+                                      <object class="GtkLabel" id="count_badge">
+                                        <property name="label">0</property>
+                                        <property name="valign">center</property>
+                                        <style>
+                                          <class name="bookmark-count-badge"/>
+                                          <class name="caption"/>
+                                        </style>
+                                      </object>
+                                    </child>
+                                  </object>
+                                </child>
+                                <child>
+                                  <object class="GtkLabel">
+                                    <property name="label">Reusable scripts and {{{variable}}} command templates</property>
+                                    <property name="halign">start</property>
+                                    <style>
+                                      <class name="caption"/>
+                                      <class name="dim-label"/>
+                                    </style>
+                                  </object>
+                                </child>
+                              </object>
+                            </child>
+                            <child>
+                              <object class="GtkSearchEntry" id="search_entry">
+                                <property name="placeholder-text">Filter bookmarks...</property>
+                                <property name="valign">center</property>
+                                <property name="width-chars">20</property>
+                              </object>
+                            </child>
+                            <child>
+                              <object class="GtkButton" id="header_new_btn">
+                                <property name="valign">center</property>
+                                <property name="tooltip-text">Create a new script bookmark</property>
+                                <style>
+                                  <class name="suggested-action"/>
+                                </style>
+                                <child>
+                                  <object class="GtkBox">
+                                    <property name="orientation">horizontal</property>
+                                    <property name="spacing">6</property>
+                                    <child>
+                                      <object class="GtkImage">
+                                        <property name="icon-name">boxxy-plus-symbolic</property>
+                                      </object>
+                                    </child>
+                                    <child>
+                                      <object class="GtkLabel">
+                                        <property name="label">New Bookmark</property>
+                                      </object>
+                                    </child>
+                                  </object>
+                                </child>
+                              </object>
+                            </child>
+                          </object>
+                        </child>
+
+                        <!-- List or Filter Empty State -->
+                        <child>
+                          <object class="GtkStack" id="results_stack">
+                            <property name="vexpand">true</property>
+                            <child>
+                              <object class="GtkStackPage">
+                                <property name="name">list</property>
+                                <property name="child">
+                                  <object class="GtkBox" id="list_container">
+                                    <property name="orientation">vertical</property>
+                                    <property name="vexpand">true</property>
+                                  </object>
+                                </property>
+                              </object>
+                            </child>
+                            <child>
+                              <object class="GtkStackPage">
+                                <property name="name">no-results</property>
+                                <property name="child">
+                                  <object class="AdwStatusPage">
+                                    <property name="icon-name">boxxy-edit-find-symbolic</property>
+                                    <property name="title">No Matching Bookmarks</property>
+                                    <property name="description">Try a different search term or create a new bookmark.</property>
+                                  </object>
+                                </property>
+                              </object>
+                            </child>
+                          </object>
+                        </child>
+                      </object>
+                    </child>
+                  </object>
+                </child>
+              </object>
+            </property>
+          </object>
+        </child>
+      </object>
+    </child>
+  </object>
+</interface>

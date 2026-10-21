@@ -856,12 +856,10 @@ dependencies = [
 name = "boxxy-bookmarks"
 version = "0.0.35"
 dependencies = [
- "async-channel",
  "boxxy-ai-core",
- "boxxy-model-selection",
+ "boxxy-core-widgets",
  "boxxy-preferences",
  "boxxy-sys-utils",
- "boxxy-terminal",
  "boxxy-themes",
  "gtk4",
  "libadwaita",
@@ -869,7 +867,9 @@ dependencies = [
  "regex",
  "serde",
  "serde_json",
+ "serial_test",
  "sourceview5",
+ "tempfile",
  "tokio",
  "uuid",
 ]

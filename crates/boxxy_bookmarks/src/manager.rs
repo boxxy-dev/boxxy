@@ -1,5 +1,6 @@
-use crate::Bookmark;
+use crate::{Bookmark, ScriptLanguage};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::{LazyLock, OnceLock, RwLock};
@@ -27,6 +28,10 @@ static BOOKMARKS_CACHE: OnceLock<RwLock<BookmarksData>> = OnceLock::new();
 struct BookmarksData {
     pub bookmarks: Vec<Bookmark>,
     pub order: Vec<Uuid>,
+    /// In-memory cache of filename -> script contents to avoid synchronous disk
+    /// reads on the GTK main thread during ListView scrolling and sidebar binds.
+    #[serde(skip)]
+    pub scripts: HashMap<String, String>,
 }
 
 pub struct BookmarksManager;
@@ -48,12 +53,10 @@ impl BookmarksManager {
         Self::get_base_dir().map(|d| d.join(filename))
     }
 
+    #[must_use]
     pub fn get_runs_dir() -> Option<PathBuf> {
         let config_dir = boxxy_sys_utils::get_config_dir();
-        let runs_dir = config_dir
-            .join("cache")
-            .join("bookmarks")
-            .join("runs");
+        let runs_dir = config_dir.join("cache").join("bookmarks").join("runs");
         if !runs_dir.exists() {
             let _ = fs::create_dir_all(&runs_dir);
         }
@@ -67,65 +70,72 @@ impl BookmarksManager {
         }
     }
 
-    pub fn init() {
-        // Clean up runs dir on startup
-        Self::clean_runs_dir();
+    fn load_from_disk() -> BookmarksData {
+        let mut data = BookmarksData::default();
+        if let Some(path) = Self::get_index_path()
+            && let Ok(content) = fs::read_to_string(path)
+            && let Ok(d) = serde_json::from_str::<BookmarksData>(&content)
+        {
+            data = d;
+        }
 
-        let _ = BOOKMARKS_CACHE.get_or_init(|| {
-            let mut data = BookmarksData::default();
-            if let Some(path) = Self::get_index_path()
-                && let Ok(content) = fs::read_to_string(path)
-                && let Ok(d) = serde_json::from_str::<BookmarksData>(&content)
+        // Sync order with bookmarks if needed
+        if data.order.len() != data.bookmarks.len() {
+            data.order = data.bookmarks.iter().map(|b| b.id).collect();
+        }
+
+        // Migration & In-Memory Cache Hydration
+        let mut migrated = false;
+        let existing_bookmarks = data.bookmarks.clone();
+        for bm in &mut data.bookmarks {
+            if !bm.script.is_empty() {
+                if bm.filename.is_empty() {
+                    bm.filename = Self::generate_unique_filename_in(
+                        &existing_bookmarks,
+                        &bm.name,
+                        &bm.script,
+                        Some(bm.id),
+                    );
+                }
+                if let Some(path) = Self::get_script_path(&bm.filename) {
+                    let _ = fs::write(path, &bm.script);
+                    data.scripts.insert(bm.filename.clone(), bm.script.clone());
+                    bm.script.clear();
+                    migrated = true;
+                }
+            } else if !bm.filename.is_empty()
+                && let Some(path) = Self::get_script_path(&bm.filename)
+                && let Ok(script_content) = fs::read_to_string(path)
             {
-                data = d;
+                data.scripts.insert(bm.filename.clone(), script_content);
             }
+        }
 
-            // Sync order with bookmarks if needed
-            if data.order.len() != data.bookmarks.len() {
-                data.order = data.bookmarks.iter().map(|b| b.id).collect();
-            }
+        if migrated
+            && let Some(path) = Self::get_index_path()
+            && let Ok(content) = serde_json::to_string_pretty(&data)
+        {
+            let _ = fs::write(path, content);
+        }
 
-            // Migration & Lazy Load Preparation
-            let mut migrated = false;
-            for bm in &mut data.bookmarks {
-                // If script is still in JSON, migrate to file
-                if !bm.script.is_empty() {
-                    if bm.filename.is_empty() {
-                        bm.filename = Self::generate_unique_filename(&bm.name, &bm.script, None);
-                    }
-                    if let Some(path) = Self::get_script_path(&bm.filename) {
-                        let _ = fs::write(path, &bm.script);
-                        bm.script = String::new(); // Clear from index
-                        migrated = true;
-                    }
-                }
-            }
+        data
+    }
 
-            if migrated {
-                let index = data.clone();
-                if let Some(path) = Self::get_index_path()
-                    && let Ok(content) = serde_json::to_string_pretty(&index)
-                {
-                    let _ = fs::write(path, content);
-                }
-            }
+    pub fn init() {
+        Self::clean_runs_dir();
+        let _ = BOOKMARKS_CACHE.get_or_init(|| RwLock::new(Self::load_from_disk()));
+    }
 
-            RwLock::new(data)
-        });
+    fn cache() -> &'static RwLock<BookmarksData> {
+        BOOKMARKS_CACHE.get_or_init(|| RwLock::new(Self::load_from_disk()))
     }
 
     fn get_data() -> BookmarksData {
-        if let Some(cache) = BOOKMARKS_CACHE.get() {
-            return cache.read().unwrap().clone();
-        }
-        Self::init();
-        Self::get_data()
+        Self::cache().read().unwrap().clone()
     }
 
     fn save_data(data: &BookmarksData) {
-        if let Some(cache) = BOOKMARKS_CACHE.get() {
-            *cache.write().unwrap() = data.clone();
-        }
+        *Self::cache().write().unwrap() = data.clone();
 
         if let Some(path) = Self::get_index_path()
             && let Ok(content) = serde_json::to_string_pretty(data)
@@ -134,6 +144,7 @@ impl BookmarksManager {
         }
     }
 
+    #[must_use]
     pub fn list() -> Vec<Bookmark> {
         let data = Self::get_data();
         let mut sorted = Vec::with_capacity(data.bookmarks.len());
@@ -144,7 +155,6 @@ impl BookmarksManager {
             }
         }
 
-        // Add any bookmarks missing from order (shouldn't happen but for safety)
         for bm in data.bookmarks {
             if !data.order.contains(&bm.id) {
                 sorted.push(bm);
@@ -154,14 +164,20 @@ impl BookmarksManager {
         sorted
     }
 
+    #[must_use]
+    pub fn count() -> usize {
+        Self::cache().read().unwrap().bookmarks.len()
+    }
+
     pub fn add(name: String, script: String) -> Bookmark {
         let mut data = Self::get_data();
-        let filename = Self::generate_unique_filename(&name, &script, None);
+        let filename = Self::generate_unique_filename_in(&data.bookmarks, &name, &script, None);
 
-        // Save script to file
         if let Some(path) = Self::get_script_path(&filename) {
             let _ = fs::write(path, &script);
         }
+
+        data.scripts.insert(filename.clone(), script.clone());
 
         let mut bookmark = Bookmark::new(name, String::new(), filename);
         data.bookmarks.push(bookmark.clone());
@@ -169,7 +185,6 @@ impl BookmarksManager {
 
         Self::save_data(&data);
 
-        // Put script back for the event so UI can use it immediately if needed
         bookmark.script = script;
         let _ = BOOKMARKS_EVENT_BUS.send(BookmarkEvent::Added(bookmark.clone()));
         bookmark
@@ -177,13 +192,19 @@ impl BookmarksManager {
 
     pub fn update(id: Uuid, name: String, script: String) -> Option<Bookmark> {
         let mut data = Self::get_data();
+        let existing_bookmarks = data.bookmarks.clone();
+
         if let Some(bm) = data.bookmarks.iter_mut().find(|b| b.id == id) {
             let name_changed = bm.name != name;
             let old_filename = bm.filename.clone();
 
             if name_changed {
-                let script_to_use = Self::get_script(&old_filename).unwrap_or_default();
-                let new_filename = Self::generate_unique_filename(&name, &script_to_use, Some(id));
+                let new_filename = Self::generate_unique_filename_in(
+                    &existing_bookmarks,
+                    &name,
+                    &script,
+                    Some(id),
+                );
                 if new_filename != old_filename {
                     if let (Some(old_path), Some(new_path)) = (
                         Self::get_script_path(&old_filename),
@@ -191,21 +212,22 @@ impl BookmarksManager {
                     ) {
                         let _ = fs::rename(old_path, new_path);
                     }
+                    data.scripts.remove(&old_filename);
                     bm.filename = new_filename;
                 }
             }
 
             bm.name = name;
 
-            // Save script to file
             if let Some(path) = Self::get_script_path(&bm.filename) {
                 let _ = fs::write(path, &script);
             }
+            data.scripts.insert(bm.filename.clone(), script.clone());
 
             let mut updated = bm.clone();
             Self::save_data(&data);
 
-            updated.script = script; // Send with script in event
+            updated.script = script;
             let _ = BOOKMARKS_EVENT_BUS.send(BookmarkEvent::Updated(updated.clone()));
             return Some(updated);
         }
@@ -215,10 +237,11 @@ impl BookmarksManager {
     pub fn delete(id: Uuid) {
         let mut data = Self::get_data();
         if let Some(idx) = data.bookmarks.iter().position(|b| b.id == id) {
-            let bm = &data.bookmarks[idx];
-            if let Some(path) = Self::get_script_path(&bm.filename) {
+            let filename = data.bookmarks[idx].filename.clone();
+            if let Some(path) = Self::get_script_path(&filename) {
                 let _ = fs::remove_file(path);
             }
+            data.scripts.remove(&filename);
             data.bookmarks.remove(idx);
             data.order.retain(|u| u != &id);
             Self::save_data(&data);
@@ -228,11 +251,12 @@ impl BookmarksManager {
 
     pub fn reorder(new_order: Vec<Uuid>) {
         let mut data = Self::get_data();
-        data.order = new_order.clone();
+        data.order.clone_from(&new_order);
         Self::save_data(&data);
         let _ = BOOKMARKS_EVENT_BUS.send(BookmarkEvent::Reordered(new_order));
     }
 
+    #[must_use]
     pub fn get_by_id(id: Uuid) -> Option<Bookmark> {
         let data = Self::get_data();
         if let Some(mut bm) = data.bookmarks.into_iter().find(|b| b.id == id) {
@@ -242,40 +266,56 @@ impl BookmarksManager {
         None
     }
 
+    #[must_use]
     pub fn get_script(filename: &str) -> Option<String> {
-        if let Some(path) = Self::get_script_path(filename) {
-            return fs::read_to_string(path).ok();
+        if filename.is_empty() {
+            return None;
+        }
+        if let Some(cached) = Self::cache().read().unwrap().scripts.get(filename).cloned() {
+            return Some(cached);
+        }
+        if let Some(path) = Self::get_script_path(filename)
+            && let Ok(content) = fs::read_to_string(path)
+        {
+            Self::cache()
+                .write()
+                .unwrap()
+                .scripts
+                .insert(filename.to_string(), content.clone());
+            return Some(content);
         }
         None
     }
 
-    fn generate_unique_filename(name: &str, script: &str, current_id: Option<Uuid>) -> String {
-        let name = name.trim();
-        let (base, ext) = if let Some(pos) = name.rfind('.') {
-            let (b, e) = name.split_at(pos);
-            if e.len() > 1 && (e == ".sh" || e == ".py" || e == ".js" || e == ".rb") {
+    fn generate_unique_filename_in(
+        existing: &[Bookmark],
+        name: &str,
+        script: &str,
+        current_id: Option<Uuid>,
+    ) -> String {
+        // Normalize common comma-for-dot typos at the end of a script name (e.g. `test,py` -> `test.py`)
+        let normalized_name = {
+            let trimmed = name.trim();
+            if let Some(prefix) = trimmed.strip_suffix(",py") {
+                format!("{prefix}.py")
+            } else if let Some(prefix) = trimmed.strip_suffix(",sh") {
+                format!("{prefix}.sh")
+            } else {
+                trimmed.to_string()
+            }
+        };
+
+        let default_ext = ScriptLanguage::detect(&normalized_name, script).default_extension();
+
+        let (base, ext) = if let Some(pos) = normalized_name.rfind('.') {
+            let (b, e) = normalized_name.split_at(pos);
+            if e.len() > 1 && matches!(e, ".sh" | ".py" | ".js" | ".rb") {
                 (b, e)
             } else {
-                let default_ext = if script.starts_with("```python")
-                    || script.contains("#!/usr/bin/env python")
-                    || script.contains("#!/usr/bin/python")
-                {
-                    ".py"
-                } else {
-                    ".sh"
-                };
-                (name, default_ext)
+                (normalized_name.as_str(), default_ext)
             }
         } else {
-            let default_ext = if script.starts_with("```python")
-                || script.contains("#!/usr/bin/env python")
-                || script.contains("#!/usr/bin/python")
-            {
-                ".py"
-            } else {
-                ".sh"
-            };
-            (name, default_ext)
+            (normalized_name.as_str(), default_ext)
         };
 
         let sanitized = base
@@ -289,24 +329,51 @@ impl BookmarksManager {
             })
             .collect::<String>();
 
-        let mut filename = format!("{}{}", sanitized, ext);
-        let mut count = 1;
-
-        let data = if let Some(cache) = BOOKMARKS_CACHE.get() {
-            cache.read().unwrap().clone()
+        let sanitized = if sanitized.is_empty() {
+            "bookmark".to_string()
         } else {
-            BookmarksData::default()
+            sanitized
         };
 
-        while data
-            .bookmarks
+        let mut filename = format!("{sanitized}{ext}");
+        let mut count = 1;
+
+        while existing
             .iter()
             .any(|b| b.filename == filename && Some(b.id) != current_id)
         {
             count += 1;
-            filename = format!("{}_{}{}", sanitized, count, ext);
+            filename = format!("{sanitized}_{count}{ext}");
         }
 
         filename
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn generates_clean_unique_filenames() {
+        let existing = vec![Bookmark::new(
+            "deploy".to_string(),
+            String::new(),
+            "deploy.sh".to_string(),
+        )];
+
+        // Duplicate name gets incremented suffix
+        let next = BookmarksManager::generate_unique_filename_in(
+            &existing,
+            "deploy",
+            "#!/bin/bash\necho hi",
+            None,
+        );
+        assert_eq!(next, "deploy_2.sh");
+
+        // Comma typo `test,py` normalizes to `test.py`
+        let py_name =
+            BookmarksManager::generate_unique_filename_in(&existing, "test,py", "print(1)", None);
+        assert_eq!(py_name, "test.py");
     }
 }

@@ -1,5 +1,7 @@
 use crate::Bookmark;
+use crate::editor::BookmarkEditor;
 use crate::manager::{BOOKMARKS_EVENT_BUS, BookmarkEvent, BookmarksManager};
+use crate::parser::BookmarkTemplate;
 use gtk::glib;
 use gtk::prelude::*;
 use gtk4 as gtk;
@@ -14,6 +16,7 @@ pub struct BookmarksSidebarComponent {
 }
 
 struct BookmarksSidebarInner {
+    sidebar_stack: gtk::Stack,
     list_box: gtk::ListBox,
     on_execute: Rc<dyn Fn(String, String, String)>,
 }
@@ -25,22 +28,63 @@ impl std::fmt::Debug for BookmarksSidebarComponent {
 }
 
 impl BookmarksSidebarComponent {
-    pub fn new<F: Fn(String, String, String) + 'static>(on_execute: F) -> Self {
-        let widget = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    pub fn new<FE, FO>(on_execute: FE, on_open_tab: FO) -> Self
+    where
+        FE: Fn(String, String, String) + 'static,
+        FO: Fn() + 'static,
+    {
+        let builder =
+            gtk::Builder::from_resource("/dev/boxxy/BoxxyTerminal/ui/bookmarks_sidebar.ui");
 
-        let scroll = gtk::ScrolledWindow::new();
-        scroll.set_vexpand(true);
-        scroll.set_hscrollbar_policy(gtk::PolicyType::Never);
+        let widget: gtk::Box = builder
+            .object("root_box")
+            .expect("root_box in bookmarks_sidebar.ui");
+        let sidebar_stack: gtk::Stack = builder
+            .object("sidebar_stack")
+            .expect("sidebar_stack in bookmarks_sidebar.ui");
+        let list_box: gtk::ListBox = builder
+            .object("list_box")
+            .expect("list_box in bookmarks_sidebar.ui");
+        let empty_open_tab_btn: gtk::Button = builder
+            .object("empty_open_tab_btn")
+            .expect("empty_open_tab_btn in bookmarks_sidebar.ui");
+        let empty_new_btn: gtk::Button = builder
+            .object("empty_new_btn")
+            .expect("empty_new_btn in bookmarks_sidebar.ui");
+        let footer_open_tab_btn: gtk::Button = builder
+            .object("footer_open_tab_btn")
+            .expect("footer_open_tab_btn in bookmarks_sidebar.ui");
+        let footer_new_btn: gtk::Button = builder
+            .object("footer_new_btn")
+            .expect("footer_new_btn in bookmarks_sidebar.ui");
 
-        let list_box = gtk::ListBox::new();
-        list_box.set_selection_mode(gtk::SelectionMode::None);
-        list_box.add_css_class("navigation-sidebar");
-        scroll.set_child(Some(&list_box));
+        let on_open_tab: Rc<dyn Fn()> = Rc::new(on_open_tab);
 
-        widget.append(&scroll);
+        let open_empty = on_open_tab.clone();
+        empty_open_tab_btn.connect_clicked(move |_| {
+            open_empty();
+        });
+
+        let open_footer = on_open_tab;
+        footer_open_tab_btn.connect_clicked(move |_| {
+            open_footer();
+        });
+
+        empty_new_btn.connect_clicked(move |btn| {
+            if let Some(root) = btn.root() {
+                BookmarkEditor::show(&root, None, None);
+            }
+        });
+
+        footer_new_btn.connect_clicked(move |btn| {
+            if let Some(root) = btn.root() {
+                BookmarkEditor::show(&root, None, None);
+            }
+        });
 
         let inner = Rc::new(RefCell::new(BookmarksSidebarInner {
-            list_box: list_box.clone(),
+            sidebar_stack,
+            list_box,
             on_execute: Rc::new(on_execute),
         }));
 
@@ -48,30 +92,27 @@ impl BookmarksSidebarComponent {
 
         comp.load_bookmarks();
 
-        // Listen for events
+        // Listen for bookmark events
         let c = comp.clone();
         let mut rx = BOOKMARKS_EVENT_BUS.subscribe();
         glib::spawn_future_local(async move {
-            loop {
-                match rx.recv().await {
-                    Ok(
-                        BookmarkEvent::Added(_)
-                        | BookmarkEvent::Removed(_)
-                        | BookmarkEvent::Reloaded
-                        | BookmarkEvent::Reordered(_)
-                        | BookmarkEvent::Updated(_),
-                    )
-                    | Err(crate::manager::BroadcastRecvError::Lagged(_)) => {
-                        c.load_bookmarks();
-                    }
-                    Err(crate::manager::BroadcastRecvError::Closed) => break,
-                }
+            while let Ok(
+                BookmarkEvent::Added(_)
+                | BookmarkEvent::Removed(_)
+                | BookmarkEvent::Reloaded
+                | BookmarkEvent::Reordered(_)
+                | BookmarkEvent::Updated(_),
+            )
+            | Err(crate::manager::BroadcastRecvError::Lagged(_)) = rx.recv().await
+            {
+                c.load_bookmarks();
             }
         });
 
         comp
     }
 
+    #[must_use]
     pub fn widget(&self) -> &gtk::Box {
         &self.widget
     }
@@ -83,35 +124,36 @@ impl BookmarksSidebarComponent {
         }
 
         let bookmarks = BookmarksManager::list();
-        for bm in bookmarks {
-            let row = self.create_row(bm);
-            inner.list_box.append(&row);
+        if bookmarks.is_empty() {
+            inner.sidebar_stack.set_visible_child_name("empty");
+        } else {
+            for bm in bookmarks {
+                let row = self.create_row(&bm);
+                inner.list_box.append(&row);
+            }
+            inner.sidebar_stack.set_visible_child_name("list");
         }
     }
 
-    fn create_row(&self, bm: Bookmark) -> gtk::ListBoxRow {
+    fn create_row(&self, bm: &Bookmark) -> gtk::ListBoxRow {
         let row = gtk::ListBoxRow::new();
         row.add_css_class("activatable");
+        row.set_tooltip_text(Some("Click to run in active terminal (drag to reorder)"));
 
-        let hbox = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+        let hbox = gtk::Box::new(gtk::Orientation::Horizontal, 10);
         hbox.set_margin_top(8);
         hbox.set_margin_bottom(8);
-        hbox.set_margin_start(12);
-        hbox.set_margin_end(12);
+        hbox.set_margin_start(10);
+        hbox.set_margin_end(10);
 
         let script_icon = gtk::Image::new();
         script_icon.set_pixel_size(16);
 
+        let mut placeholder_count = 0;
         if let Some(script) = BookmarksManager::get_script(&bm.filename) {
-            if bm.filename.ends_with(".py")
-                || script.starts_with("#!/usr/bin/env python")
-                || script.starts_with("#!/usr/bin/python")
-                || script.starts_with("```python")
-            {
-                script_icon.set_icon_name(Some("python"));
-            } else {
-                script_icon.set_icon_name(Some("console"));
-            }
+            let lang = bm.language(&script);
+            script_icon.set_icon_name(Some(lang.icon_name()));
+            placeholder_count = BookmarkTemplate::parse(&script).placeholders.len();
         } else {
             script_icon.set_icon_name(Some("boxxy-dialog-warning-symbolic"));
         }
@@ -123,6 +165,23 @@ impl BookmarksSidebarComponent {
         label.set_hexpand(true);
         label.set_ellipsize(gtk::pango::EllipsizeMode::End);
         hbox.append(&label);
+
+        if placeholder_count > 0 {
+            let var_badge = gtk::Label::new(Some(&format!("{{{placeholder_count}}}")));
+            var_badge.add_css_class("bookmark-var-chip");
+            var_badge.add_css_class("monospace");
+            var_badge.add_css_class("caption");
+            var_badge.set_tooltip_text(Some(&format!(
+                "{placeholder_count} template variable{}",
+                if placeholder_count == 1 { "" } else { "s" }
+            )));
+            hbox.append(&var_badge);
+        }
+
+        let play_icon = gtk::Image::from_icon_name("boxxy-media-playback-start-symbolic");
+        play_icon.set_pixel_size(12);
+        play_icon.add_css_class("dim-label");
+        hbox.append(&play_icon);
 
         row.set_child(Some(&hbox));
 
@@ -138,7 +197,7 @@ impl BookmarksSidebarComponent {
         });
         row.add_controller(gesture);
 
-        // Drag and Drop
+        // Drag and Drop Reordering
         let drag_source = gtk::DragSource::new();
         drag_source.set_actions(gtk::gdk::DragAction::MOVE);
         let id_str = bm.id.to_string();
@@ -155,7 +214,8 @@ impl BookmarksSidebarComponent {
                 && let Ok(source_id) = Uuid::parse_str(&source_id_str)
             {
                 if source_id != target_id {
-                    c.reorder_bookmarks(source_id, target_id);
+                    Self::reorder_bookmarks(source_id, target_id);
+                    let _ = &c;
                 }
                 return true;
             }
@@ -166,7 +226,7 @@ impl BookmarksSidebarComponent {
         row
     }
 
-    fn reorder_bookmarks(&self, source_id: Uuid, target_id: Uuid) {
+    fn reorder_bookmarks(source_id: Uuid, target_id: Uuid) {
         let bookmarks = BookmarksManager::list();
         let mut order: Vec<Uuid> = bookmarks.iter().map(|b| b.id).collect();
 

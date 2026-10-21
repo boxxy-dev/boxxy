@@ -107,9 +107,15 @@ impl AppWindow {
         );
 
         let tx_bookmarks = tx.clone();
-        let bookmarks_sidebar = BookmarksSidebarComponent::new(move |name, filename, script| {
-            let _ = tx_bookmarks.send_blocking(AppInput::ExecuteBookmark(name, filename, script));
-        });
+        let tx_open_bookmarks = tx.clone();
+        let bookmarks_sidebar = BookmarksSidebarComponent::new(
+            move |name, filename, script| {
+                let _ = tx_bookmarks.send_blocking(AppInput::ExecuteBookmark(name, filename, script));
+            },
+            move || {
+                let _ = tx_open_bookmarks.send_blocking(AppInput::OpenBookmarks);
+            },
+        );
 
         let tx_theme = tx.clone();
         let theme_selector = ThemeSelectorComponent::new(move |palette| {

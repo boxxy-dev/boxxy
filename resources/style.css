@@ -403,17 +403,72 @@ tabbox separator {
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
 }
 
-/* ── Bookmarks Gallery ─────────────────────────────────────────────────── */
+/* ── Bookmarks Gallery & Editor ────────────────────────────────────────── */
 .bookmarks-gallery {
     background-color: transparent;
 }
 
 .bookmarks-gallery row {
-	background:@window_bg_color;
+    background: transparent;
+    padding: 0;
 }
 
-.bookmarks-gallery .sourceview {
+.bookmarks-gallery row:hover {
+    background: transparent;
+}
+
+.bookmark-card {
+    border-radius: 12px;
+    padding: 4px;
+}
+
+.bookmarks-gallery .sourceview,
+.bookmark-preview-frame {
     border-radius: 8px;
+}
+
+.bookmark-preview-frame {
+    background-color: @window_bg_color;
+    border: 1px solid alpha(currentColor, 0.08);
+    overflow: hidden;
+}
+
+.bookmark-hero-icon {
+    color: @accent_color;
+    opacity: 0.85;
+}
+
+.bookmark-count-badge,
+.bookmark-lang-badge {
+    background-color: alpha(currentColor, 0.08);
+    border-radius: 9999px;
+    padding: 2px 10px;
+    font-weight: 600;
+}
+
+.bookmark-var-chip {
+    background-color: alpha(@accent_bg_color, 0.16);
+    color: @accent_color;
+    border: 1px solid alpha(@accent_color, 0.28);
+    border-radius: 6px;
+    padding: 1px 7px;
+    font-weight: 600;
+}
+
+.bookmark-template-bar {
+    background-color: alpha(currentColor, 0.03);
+}
+
+.bookmark-insert-var-btn {
+    border: 1px solid alpha(currentColor, 0.14);
+    border-radius: 6px;
+    padding: 2px 8px;
+}
+
+.bookmarks-ai-input {
+    border-radius: 8px;
+    border: 1px solid alpha(currentColor, 0.12);
+    background-color: alpha(@window_bg_color, 0.6);
 }
 
 

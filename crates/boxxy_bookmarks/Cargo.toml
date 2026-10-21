@@ -15,11 +15,13 @@ uuid.workspace = true
 tokio.workspace = true
 regex = { workspace = true }
 log.workspace = true
-async-channel.workspace = true
 sourceview5.workspace = true
 boxxy-preferences = { path = "../preferences" }
 boxxy-themes = { path = "../themes" }
 boxxy-ai-core = { path = "../ai_core" }
-boxxy-model-selection.workspace = true
-boxxy-terminal = { path = "../terminal" }
+boxxy-core-widgets.workspace = true
 boxxy-sys-utils.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+serial_test.workspace = true

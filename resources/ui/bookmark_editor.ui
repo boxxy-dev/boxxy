@@ -1,0 +1,244 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<interface>
+  <object class="AdwDialog" id="editor_dialog">
+    <property name="content-width">820</property>
+    <property name="content-height">640</property>
+    <property name="title">Bookmark Editor</property>
+    <child>
+      <object class="AdwToolbarView">
+        <!-- Header Bar -->
+        <child type="top">
+          <object class="AdwHeaderBar">
+            <property name="show-start-title-buttons">false</property>
+            <property name="show-end-title-buttons">false</property>
+            <child type="start">
+              <object class="GtkButton" id="cancel_btn">
+                <property name="label">Cancel</property>
+              </object>
+            </child>
+            <property name="title-widget">
+              <object class="AdwWindowTitle" id="window_title">
+                <property name="title">New Bookmark</property>
+                <property name="subtitle">Reusable script and command template</property>
+              </object>
+            </property>
+            <child type="end">
+              <object class="GtkButton" id="save_btn">
+                <property name="label">Save Bookmark</property>
+                <property name="sensitive">false</property>
+                <style>
+                  <class name="suggested-action"/>
+                </style>
+              </object>
+            </child>
+          </object>
+        </child>
+
+        <!-- Script Metadata Bar -->
+        <child type="top">
+          <object class="GtkBox">
+            <property name="orientation">horizontal</property>
+            <property name="spacing">10</property>
+            <property name="margin-start">16</property>
+            <property name="margin-end">16</property>
+            <property name="margin-top">8</property>
+            <property name="margin-bottom">10</property>
+            <child>
+              <object class="GtkBox">
+                <property name="orientation">horizontal</property>
+                <property name="spacing">8</property>
+                <property name="hexpand">true</property>
+                <child>
+                  <object class="GtkImage" id="lang_icon">
+                    <property name="icon-name">console</property>
+                    <property name="pixel-size">20</property>
+                    <property name="valign">center</property>
+                  </object>
+                </child>
+                <child>
+                  <object class="GtkEntry" id="name_entry">
+                    <property name="placeholder-text">Script name (e.g. deploy.sh or backup.py)...</property>
+                    <property name="hexpand">true</property>
+                    <property name="valign">center</property>
+                  </object>
+                </child>
+                <child>
+                  <object class="GtkLabel" id="lang_badge">
+                    <property name="label">Bash (.sh)</property>
+                    <property name="valign">center</property>
+                    <style>
+                      <class name="bookmark-lang-badge"/>
+                      <class name="caption"/>
+                    </style>
+                  </object>
+                </child>
+              </object>
+            </child>
+            <child>
+              <object class="GtkButton" id="ai_btn">
+                <property name="valign">center</property>
+                <property name="tooltip-text">Generate script using AI</property>
+                <style>
+                  <class name="bookmark-ai-btn"/>
+                </style>
+                <child>
+                  <object class="GtkBox">
+                    <property name="orientation">horizontal</property>
+                    <property name="spacing">6</property>
+                    <child>
+                      <object class="GtkImage">
+                        <property name="icon-name">boxxy-ai-slop-symbolic</property>
+                      </object>
+                    </child>
+                    <child>
+                      <object class="GtkLabel">
+                        <property name="label">Generate with AI</property>
+                      </object>
+                    </child>
+                  </object>
+                </child>
+              </object>
+            </child>
+          </object>
+        </child>
+
+        <child type="top">
+          <object class="GtkSeparator">
+            <property name="orientation">horizontal</property>
+          </object>
+        </child>
+
+        <!-- Main Editor Content -->
+        <property name="content">
+          <object class="GtkScrolledWindow" id="editor_scroll">
+            <property name="vexpand">true</property>
+            <property name="hexpand">true</property>
+          </object>
+        </property>
+
+        <!-- Bottom Template Variables Info and Helper Bar -->
+        <child type="bottom">
+          <object class="GtkBox" id="template_info_bar">
+            <property name="orientation">vertical</property>
+            <child>
+              <object class="GtkSeparator">
+                <property name="orientation">horizontal</property>
+              </object>
+            </child>
+            <child>
+              <object class="GtkBox">
+                <property name="orientation">horizontal</property>
+                <property name="spacing">12</property>
+                <property name="margin-start">16</property>
+                <property name="margin-end">16</property>
+                <property name="margin-top">10</property>
+                <property name="margin-bottom">10</property>
+                <style>
+                  <class name="bookmark-template-bar"/>
+                </style>
+                <child>
+                  <object class="GtkImage">
+                    <property name="icon-name">boxxy-build-circle-symbolic</property>
+                    <property name="pixel-size">16</property>
+                    <property name="valign">center</property>
+                    <style>
+                      <class name="accent"/>
+                    </style>
+                  </object>
+                </child>
+                <child>
+                  <object class="GtkBox">
+                    <property name="orientation">vertical</property>
+                    <property name="spacing">4</property>
+                    <property name="hexpand">true</property>
+                    <property name="valign">center</property>
+                    <child>
+                      <object class="GtkBox">
+                        <property name="orientation">horizontal</property>
+                        <property name="spacing">6</property>
+                        <child>
+                          <object class="GtkLabel">
+                            <property name="label">Template Variables:</property>
+                            <property name="halign">start</property>
+                            <style>
+                              <class name="caption-heading"/>
+                            </style>
+                          </object>
+                        </child>
+                        <child>
+                          <object class="GtkLabel" id="template_hint_label">
+                            <property name="label">Use {{{name}}} anywhere in your script to prompt for values before running (e.g. ssh {{{user}}}@{{{host}}}).</property>
+                            <property name="halign">start</property>
+                            <property name="ellipsize">end</property>
+                            <property name="hexpand">true</property>
+                            <style>
+                              <class name="caption"/>
+                              <class name="dim-label"/>
+                            </style>
+                          </object>
+                        </child>
+                      </object>
+                    </child>
+                    <child>
+                      <object class="GtkBox" id="detected_vars_row">
+                        <property name="orientation">horizontal</property>
+                        <property name="spacing">6</property>
+                        <property name="visible">false</property>
+                        <child>
+                          <object class="GtkLabel">
+                            <property name="label">Detected inputs:</property>
+                            <style>
+                              <class name="caption"/>
+                              <class name="dim-label"/>
+                            </style>
+                          </object>
+                        </child>
+                        <child>
+                          <object class="GtkBox" id="detected_vars_chips">
+                            <property name="orientation">horizontal</property>
+                            <property name="spacing">6</property>
+                          </object>
+                        </child>
+                      </object>
+                    </child>
+                  </object>
+                </child>
+                <child>
+                  <object class="GtkButton" id="insert_var_btn">
+                    <property name="valign">center</property>
+                    <property name="tooltip-text">Insert a {{{variable}}} template placeholder at the cursor</property>
+                    <style>
+                      <class name="flat"/>
+                      <class name="bookmark-insert-var-btn"/>
+                    </style>
+                    <child>
+                      <object class="GtkBox">
+                        <property name="orientation">horizontal</property>
+                        <property name="spacing">4</property>
+                        <child>
+                          <object class="GtkImage">
+                            <property name="icon-name">boxxy-plus-symbolic</property>
+                            <property name="pixel-size">12</property>
+                          </object>
+                        </child>
+                        <child>
+                          <object class="GtkLabel">
+                            <property name="label">Insert {{{var}}}</property>
+                            <style>
+                              <class name="monospace"/>
+                              <class name="caption"/>
+                            </style>
+                          </object>
+                        </child>
+                      </object>
+                    </child>
+                  </object>
+                </child>
+              </object>
+            </child>
+          </object>
+        </child>
+      </object>
+    </child>
+  </object>
+</interface>
