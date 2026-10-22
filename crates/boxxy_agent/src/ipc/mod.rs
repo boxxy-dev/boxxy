@@ -239,7 +239,15 @@ pub struct AgentInterface {
 #[zbus::interface(name = "dev.boxxy.BoxxyTerminal.Agent")]
 impl AgentInterface {
     async fn get_version(&self) -> String {
-        env!("CARGO_PKG_VERSION").to_string()
+        let is_deleted_on_disk = std::fs::read_link("/proc/self/exe")
+            .ok()
+            .and_then(|p| p.to_str().map(|s| s.ends_with(" (deleted)")))
+            .unwrap_or(false);
+        if is_deleted_on_disk {
+            format!("{}-stale", env!("CARGO_PKG_VERSION"))
+        } else {
+            env!("CARGO_PKG_VERSION").to_string()
+        }
     }
 
     async fn get_config_dir(&self) -> String {

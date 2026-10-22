@@ -48,6 +48,8 @@ pub async fn ensure_agent_running() -> Result<()> {
     if is_flatpak() {
         // Step 1 — Re-deploy binary if needed (only in Flatpak).
         if needs_redeploy(&host_path).await {
+            let _ = stop_ghost().await;
+            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
             deploy_agent_binary(&host_path).await?;
         }
     }
@@ -88,6 +90,20 @@ async fn wait_for_agent_ready() -> Result<()> {
 
 async fn needs_redeploy(host_path: &PathBuf) -> bool {
     if !host_path.exists() {
+        return true;
+    }
+
+    // Compare the packaged `/app/libexec/boxxy-agent` binary against the deployed
+    // host binary so Flatpak rebuilds with the same CARGO_PKG_VERSION always redeploy.
+    let src_path = PathBuf::from("/app/libexec/boxxy-agent");
+    if src_path.exists()
+        && let (Ok(src_bytes), Ok(dst_bytes)) = (
+            tokio::fs::read(&src_path).await,
+            tokio::fs::read(host_path).await,
+        )
+        && src_bytes != dst_bytes
+    {
+        info!("Host boxxy-agent binary differs from /app/libexec/boxxy-agent — redeploying");
         return true;
     }
 

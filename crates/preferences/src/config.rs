@@ -201,6 +201,28 @@ pub struct UserProfile {
     pub color: Option<String>,
 }
 
+fn deserialize_optional_model_provider<'de, D>(
+    deserializer: D,
+) -> Result<Option<ModelProvider>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let val = Option::<serde_json::Value>::deserialize(deserializer)?;
+    let Some(v) = val else {
+        return Ok(None);
+    };
+    if v.is_null() {
+        return Ok(None);
+    }
+    match serde_json::from_value::<ModelProvider>(v) {
+        Ok(mp) => Ok(Some(mp)),
+        Err(e) => {
+            log::warn!("Ignoring unrecognized model provider in settings.json: {e}");
+            Ok(None)
+        }
+    }
+}
+
 // --- User Configurable Settings ---
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(default)]
@@ -242,8 +264,11 @@ pub struct Settings {
     pub image_preview_trigger: ImagePreviewTrigger,
     pub preview_max_width: i32,
     pub preview_max_height: i32,
+    #[serde(default, deserialize_with = "deserialize_optional_model_provider")]
     pub ai_chat_model: Option<ModelProvider>,
+    #[serde(default, deserialize_with = "deserialize_optional_model_provider")]
     pub claw_model: Option<ModelProvider>,
+    #[serde(default, deserialize_with = "deserialize_optional_model_provider")]
     pub memory_model: Option<ModelProvider>,
     pub enable_auto_dreaming: bool,
     pub invert_scroll: bool,
@@ -421,23 +446,67 @@ You can add your own sensitive paths here. One path per line. Lines starting wit
         }
     }
 
+    /// Parses `Settings` from JSON, falling back to field-by-field recovery if a single field
+    /// contains an invalid or legacy value so `api_keys` and user preferences are never lost.
+    pub fn parse_lenient(content: &str) -> Result<Self, serde_json::Error> {
+        match serde_json::from_str::<Settings>(content) {
+            Ok(s) => Ok(s),
+            Err(primary_err) => {
+                let raw_val = serde_json::from_str::<serde_json::Value>(content)?;
+                let Some(raw_obj) = raw_val.as_object() else {
+                    return Err(primary_err);
+                };
+                log::warn!(
+                    "Settings JSON had an invalid field ({primary_err}); recovering valid fields individually."
+                );
+                let mut base_val =
+                    serde_json::to_value(Settings::default()).unwrap_or_default();
+                if let Some(base_obj) = base_val.as_object_mut() {
+                    for (k, v) in raw_obj {
+                        let prev = base_obj.insert(k.clone(), v.clone());
+                        if serde_json::from_value::<Settings>(serde_json::Value::Object(
+                            base_obj.clone(),
+                        ))
+                        .is_err()
+                        {
+                            log::warn!("Skipping invalid field '{k}' in settings.json");
+                            if let Some(old) = prev {
+                                base_obj.insert(k.clone(), old);
+                            } else {
+                                base_obj.remove(k);
+                            }
+                        }
+                    }
+                }
+                serde_json::from_value::<Settings>(base_val)
+            }
+        }
+    }
+
     pub fn init() {
         if SETTINGS_INITIALIZED.swap(true, Ordering::AcqRel) {
             return;
         }
 
         let mut settings = Self::default();
+        let mut had_unrecoverable_parse_error = false;
         if let Some(path) = Self::get_path()
             && let Ok(content) = fs::read_to_string(path)
+            && !content.trim().is_empty()
         {
-            match serde_json::from_str::<Settings>(&content) {
+            match Self::parse_lenient(&content) {
                 Ok(s) => settings = s,
-                Err(e) => log::error!("Failed to load settings: {}", e),
+                Err(e) => {
+                    log::error!("Failed to load settings: {}", e);
+                    had_unrecoverable_parse_error = true;
+                }
             }
         }
 
-        // Generate install_id if missing
-        let needs_initial_save = if settings.install_id.is_none() {
+        // Generate install_id if missing, but NEVER overwrite an existing settings.json
+        // that failed to parse due to a syntax error.
+        let needs_initial_save = if !had_unrecoverable_parse_error && settings.install_id.is_none()
+        {
             settings.install_id = Some(uuid::Uuid::new_v4().to_string());
             true
         } else {
@@ -492,7 +561,7 @@ You can add your own sensitive paths here. One path per line. Lines starting wit
         if let Some(path) = Self::get_path()
             && let Ok(content) = fs::read_to_string(path)
         {
-            match serde_json::from_str::<Settings>(&content) {
+            match Self::parse_lenient(&content) {
                 Ok(s) => fresh = s,
                 Err(e) => {
                     log::error!("Failed to reload settings: {}", e);
@@ -834,6 +903,43 @@ mod tests {
         assert_eq!(
             s.resolve_model_state(&local_model),
             ModelConfigState::Ready(local_model.unwrap())
+        );
+    }
+
+    #[test]
+    fn parse_lenient_preserves_api_keys_and_options_when_a_field_is_invalid() {
+        let json = r#"{
+            "font_name": "JetBrains Mono",
+            "font_size": 15,
+            "theme": "Dracula",
+            "api_keys": {
+                "Gemini": "secret-gemini-key",
+                "OpenAI": "secret-openai-key"
+            },
+            "claw_model": {
+                "FutureUnknownProvider": { "foo": "bar" }
+            },
+            "cursor_shape": "invalid_shape_from_future",
+            "install_id": "preserved-install-uuid"
+        }"#;
+
+        let parsed = Settings::parse_lenient(json).expect("lenient parse should succeed");
+        assert_eq!(parsed.font_name, "JetBrains Mono");
+        assert_eq!(parsed.font_size, 15);
+        assert_eq!(parsed.theme, "Dracula");
+        assert_eq!(
+            parsed.api_keys.get("Gemini").map(String::as_str),
+            Some("secret-gemini-key")
+        );
+        assert_eq!(
+            parsed.api_keys.get("OpenAI").map(String::as_str),
+            Some("secret-openai-key")
+        );
+        assert_eq!(parsed.claw_model, None);
+        assert_eq!(parsed.cursor_shape, CursorShape::Block);
+        assert_eq!(
+            parsed.install_id.as_deref(),
+            Some("preserved-install-uuid")
         );
     }
 }
