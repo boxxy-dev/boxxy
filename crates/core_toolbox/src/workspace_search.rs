@@ -1,7 +1,7 @@
 use crate::ApprovalHandler;
 use crate::utils::resolve_path;
 use regex::{Regex, RegexBuilder};
-use rig::tool::PortableTool;
+use rig::tool::{Tool, ToolContext};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -46,7 +46,7 @@ pub struct GlobSearchTool {
     pub approval: Arc<dyn ApprovalHandler>,
 }
 
-impl PortableTool for GlobSearchTool {
+impl Tool for GlobSearchTool {
     const NAME: &'static str = "glob_search";
 
     type Error = std::io::Error;
@@ -74,7 +74,11 @@ impl PortableTool for GlobSearchTool {
         })
     }
 
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+    async fn call(
+        &self,
+        _context: &mut ToolContext,
+        args: Self::Args,
+    ) -> Result<Self::Output, Self::Error> {
         self.approval
             .report_tool_started(Self::NAME.to_string())
             .await;
@@ -139,7 +143,7 @@ pub struct GrepSearchTool {
     pub approval: Arc<dyn ApprovalHandler>,
 }
 
-impl PortableTool for GrepSearchTool {
+impl Tool for GrepSearchTool {
     const NAME: &'static str = "grep_search";
 
     type Error = std::io::Error;
@@ -175,7 +179,11 @@ impl PortableTool for GrepSearchTool {
         })
     }
 
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+    async fn call(
+        &self,
+        _context: &mut ToolContext,
+        args: Self::Args,
+    ) -> Result<Self::Output, Self::Error> {
         self.approval
             .report_tool_started(Self::NAME.to_string())
             .await;
@@ -525,11 +533,15 @@ mod tests {
             approval: approval.clone(),
         };
 
+        let mut ctx = ToolContext::default();
         let rs_files = glob_tool
-            .call(GlobSearchArgs {
-                pattern: "**/*.rs".to_string(),
-                path: None,
-            })
+            .call(
+                &mut ctx,
+                GlobSearchArgs {
+                    pattern: "**/*.rs".to_string(),
+                    path: None,
+                },
+            )
             .await
             .unwrap();
         assert_eq!(rs_files.total_found, 2);
@@ -547,12 +559,15 @@ mod tests {
         };
 
         let grep_out = grep_tool
-            .call(GrepSearchArgs {
-                pattern: "magic".to_string(),
-                path: None,
-                include: Some("*.rs".to_string()),
-                case_sensitive: Some(false),
-            })
+            .call(
+                &mut ctx,
+                GrepSearchArgs {
+                    pattern: "magic".to_string(),
+                    path: None,
+                    include: Some("*.rs".to_string()),
+                    case_sensitive: Some(false),
+                },
+            )
             .await
             .unwrap();
 

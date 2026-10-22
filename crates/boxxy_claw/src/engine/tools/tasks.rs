@@ -1,6 +1,6 @@
 use crate::engine::{ClawEngineEvent, ScheduledTask, TaskStatus, TaskType};
 use chrono::{Duration, Utc};
-use rig::tool::PortableTool;
+use rig::tool::{Tool, ToolContext};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -26,7 +26,7 @@ pub struct ScheduleTaskTool {
     pub approval: Arc<crate::engine::tools::ClawApprovalHandler>,
 }
 
-impl PortableTool for ScheduleTaskTool {
+impl Tool for ScheduleTaskTool {
     const NAME: &'static str = "schedule_task";
 
     type Error = std::io::Error;
@@ -49,7 +49,11 @@ impl PortableTool for ScheduleTaskTool {
         })
     }
 
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+    async fn call(
+        &self,
+        _context: &mut ToolContext,
+        args: Self::Args,
+    ) -> Result<Self::Output, Self::Error> {
         self.approval.begin_tool(Self::NAME).await;
 
         let task_type = match args.task_type.as_str() {
@@ -120,7 +124,7 @@ pub struct ListTasksTool {
     pub approval: Arc<crate::engine::tools::ClawApprovalHandler>,
 }
 
-impl PortableTool for ListTasksTool {
+impl Tool for ListTasksTool {
     const NAME: &'static str = "list_my_tasks";
 
     type Error = std::io::Error;
@@ -138,7 +142,11 @@ impl PortableTool for ListTasksTool {
         })
     }
 
-    async fn call(&self, _args: Self::Args) -> Result<Self::Output, Self::Error> {
+    async fn call(
+        &self,
+        _context: &mut ToolContext,
+        _args: Self::Args,
+    ) -> Result<Self::Output, Self::Error> {
         self.approval.begin_tool(Self::NAME).await;
         let tasks = self.state.lock().await.pending_tasks.clone();
         let out = ListTasksOutput { tasks };
@@ -164,7 +172,7 @@ pub struct CancelTaskTool {
     pub approval: Arc<crate::engine::tools::ClawApprovalHandler>,
 }
 
-impl PortableTool for CancelTaskTool {
+impl Tool for CancelTaskTool {
     const NAME: &'static str = "cancel_task";
 
     type Error = std::io::Error;
@@ -185,7 +193,11 @@ impl PortableTool for CancelTaskTool {
         })
     }
 
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+    async fn call(
+        &self,
+        _context: &mut ToolContext,
+        args: Self::Args,
+    ) -> Result<Self::Output, Self::Error> {
         self.approval.begin_tool(Self::NAME).await;
 
         let id = Uuid::parse_str(&args.task_id)

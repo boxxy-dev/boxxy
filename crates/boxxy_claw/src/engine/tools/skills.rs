@@ -1,4 +1,4 @@
-use rig::tool::PortableTool;
+use rig::tool::{Tool, ToolContext};
 use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize)]
@@ -17,7 +17,7 @@ pub struct ActivateSkillTool {
     pub approval: std::sync::Arc<dyn boxxy_core_toolbox::ApprovalHandler>,
 }
 
-impl PortableTool for ActivateSkillTool {
+impl Tool for ActivateSkillTool {
     const NAME: &'static str = "activate_skill";
 
     type Error = std::io::Error;
@@ -44,7 +44,11 @@ impl PortableTool for ActivateSkillTool {
         })
     }
 
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+    async fn call(
+        &self,
+        _context: &mut ToolContext,
+        args: Self::Args,
+    ) -> Result<Self::Output, Self::Error> {
         self.approval
             .report_tool_started(Self::NAME.to_string())
             .await;

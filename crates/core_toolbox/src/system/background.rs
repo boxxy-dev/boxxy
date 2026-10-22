@@ -1,7 +1,7 @@
 use crate::ApprovalHandler;
 use crate::utils::resolve_path;
 use boxxy_claw_protocol::ClawEnvironment;
-use rig::tool::PortableTool;
+use rig::tool::{Tool, ToolContext};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -24,7 +24,7 @@ pub struct RunBackgroundCommandTool {
     pub approval: Arc<dyn ApprovalHandler>,
 }
 
-impl PortableTool for RunBackgroundCommandTool {
+impl Tool for RunBackgroundCommandTool {
     const NAME: &'static str = "run_background_command";
 
     type Error = std::io::Error;
@@ -56,7 +56,11 @@ impl PortableTool for RunBackgroundCommandTool {
         })
     }
 
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+    async fn call(
+        &self,
+        _context: &mut ToolContext,
+        args: Self::Args,
+    ) -> Result<Self::Output, Self::Error> {
         self.approval
             .report_tool_started(Self::NAME.to_string())
             .await;
@@ -224,12 +228,16 @@ mod tests {
             approval,
         };
 
+        let mut ctx = ToolContext::default();
         let out = tool
-            .call(RunBackgroundCommandArgs {
-                command: "npm run dev".to_string(),
-                explanation: "Start dev server".to_string(),
-                cwd: None,
-            })
+            .call(
+                &mut ctx,
+                RunBackgroundCommandArgs {
+                    command: "npm run dev".to_string(),
+                    explanation: "Start dev server".to_string(),
+                    cwd: None,
+                },
+            )
             .await
             .unwrap();
         assert!(out.success);
@@ -240,11 +248,14 @@ mod tests {
         );
 
         let out_rel = tool
-            .call(RunBackgroundCommandArgs {
-                command: "npm run dev".to_string(),
-                explanation: "Start frontend".to_string(),
-                cwd: Some("frontend".to_string()),
-            })
+            .call(
+                &mut ctx,
+                RunBackgroundCommandArgs {
+                    command: "npm run dev".to_string(),
+                    explanation: "Start frontend".to_string(),
+                    cwd: Some("frontend".to_string()),
+                },
+            )
             .await
             .unwrap();
         assert!(out_rel.success);

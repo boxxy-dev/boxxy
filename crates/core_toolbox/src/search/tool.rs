@@ -1,5 +1,5 @@
 use crate::search::{SearchDepth, SearchOptions, SearchProvider};
-use rig::tool::PortableTool;
+use rig::tool::{Tool, ToolContext};
 use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize)]
@@ -28,7 +28,7 @@ pub struct WebSearchTool {
     pub approval: std::sync::Arc<dyn crate::ApprovalHandler>,
 }
 
-impl PortableTool for WebSearchTool {
+impl Tool for WebSearchTool {
     const NAME: &'static str = "web_search";
 
     type Error = std::io::Error;
@@ -61,7 +61,11 @@ impl PortableTool for WebSearchTool {
         })
     }
 
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+    async fn call(
+        &self,
+        _context: &mut ToolContext,
+        args: Self::Args,
+    ) -> Result<Self::Output, Self::Error> {
         self.approval
             .report_tool_started(Self::NAME.to_string())
             .await;

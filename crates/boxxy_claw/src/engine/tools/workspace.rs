@@ -3,7 +3,7 @@ pub use delegation::*;
 
 use crate::engine::{ClawEngineEvent, SpawnLocation};
 use crate::registry::workspace::global_workspace;
-use rig::tool::PortableTool;
+use rig::tool::{Tool, ToolContext};
 use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize)]
@@ -23,7 +23,7 @@ pub struct SpawnAgentTool {
     pub approval: std::sync::Arc<crate::engine::tools::ClawApprovalHandler>,
 }
 
-impl PortableTool for SpawnAgentTool {
+impl Tool for SpawnAgentTool {
     const NAME: &'static str = "spawn_agent";
 
     type Error = std::io::Error;
@@ -53,7 +53,11 @@ impl PortableTool for SpawnAgentTool {
         })
     }
 
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+    async fn call(
+        &self,
+        _context: &mut ToolContext,
+        args: Self::Args,
+    ) -> Result<Self::Output, Self::Error> {
         self.approval.begin_tool(Self::NAME).await;
         let my_name = self.state.lock().await.agent_name.clone();
 
@@ -109,7 +113,7 @@ pub struct CloseAgentTool {
     pub approval: std::sync::Arc<crate::engine::tools::ClawApprovalHandler>,
 }
 
-impl PortableTool for CloseAgentTool {
+impl Tool for CloseAgentTool {
     const NAME: &'static str = "close_agent";
 
     type Error = std::io::Error;
@@ -134,7 +138,11 @@ impl PortableTool for CloseAgentTool {
         })
     }
 
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+    async fn call(
+        &self,
+        _context: &mut ToolContext,
+        args: Self::Args,
+    ) -> Result<Self::Output, Self::Error> {
         self.approval.begin_tool(Self::NAME).await;
 
         if let Err(e) = self
@@ -176,7 +184,7 @@ pub struct ReadPaneTool {
     pub approval: std::sync::Arc<crate::engine::tools::ClawApprovalHandler>,
 }
 
-impl PortableTool for ReadPaneTool {
+impl Tool for ReadPaneTool {
     const NAME: &'static str = "read_pane_buffer";
 
     type Error = std::io::Error;
@@ -201,7 +209,11 @@ impl PortableTool for ReadPaneTool {
         })
     }
 
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+    async fn call(
+        &self,
+        _context: &mut ToolContext,
+        args: Self::Args,
+    ) -> Result<Self::Output, Self::Error> {
         self.approval.begin_tool(Self::NAME).await;
 
         let workspace = global_workspace().await;
@@ -248,7 +260,7 @@ pub struct ListActiveAgentsTool {
     pub approval: std::sync::Arc<crate::engine::tools::ClawApprovalHandler>,
 }
 
-impl PortableTool for ListActiveAgentsTool {
+impl Tool for ListActiveAgentsTool {
     const NAME: &'static str = "list_active_agents";
 
     type Error = std::io::Error;
@@ -268,7 +280,11 @@ impl PortableTool for ListActiveAgentsTool {
         })
     }
 
-    async fn call(&self, _args: Self::Args) -> Result<Self::Output, Self::Error> {
+    async fn call(
+        &self,
+        _context: &mut ToolContext,
+        _args: Self::Args,
+    ) -> Result<Self::Output, Self::Error> {
         self.approval.begin_tool(Self::NAME).await;
 
         let workspace = global_workspace().await;
@@ -288,7 +304,7 @@ pub struct SetGlobalIntentTool {
     pub approval: std::sync::Arc<crate::engine::tools::ClawApprovalHandler>,
 }
 
-impl PortableTool for SetGlobalIntentTool {
+impl Tool for SetGlobalIntentTool {
     const NAME: &'static str = "set_global_intent";
 
     type Error = std::io::Error;
@@ -315,7 +331,11 @@ impl PortableTool for SetGlobalIntentTool {
         })
     }
 
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+    async fn call(
+        &self,
+        _context: &mut ToolContext,
+        args: Self::Args,
+    ) -> Result<Self::Output, Self::Error> {
         self.approval.begin_tool(Self::NAME).await;
         let workspace = global_workspace().await;
         workspace.set_global_intent(args.intent.clone()).await;
@@ -341,7 +361,7 @@ pub struct AbortAgentTaskTool {
     pub approval: std::sync::Arc<crate::engine::tools::ClawApprovalHandler>,
 }
 
-impl PortableTool for AbortAgentTaskTool {
+impl Tool for AbortAgentTaskTool {
     const NAME: &'static str = "abort_agent_task";
 
     type Error = std::io::Error;
@@ -367,7 +387,11 @@ impl PortableTool for AbortAgentTaskTool {
         })
     }
 
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+    async fn call(
+        &self,
+        _context: &mut ToolContext,
+        args: Self::Args,
+    ) -> Result<Self::Output, Self::Error> {
         self.approval.begin_tool(Self::NAME).await;
 
         let workspace = global_workspace().await;
@@ -405,7 +429,7 @@ pub struct RestoreBackgroundShellTool {
     pub approval: std::sync::Arc<crate::engine::tools::ClawApprovalHandler>,
 }
 
-impl PortableTool for RestoreBackgroundShellTool {
+impl Tool for RestoreBackgroundShellTool {
     const NAME: &'static str = "restore_background_shell";
 
     type Error = std::io::Error;
@@ -431,7 +455,11 @@ impl PortableTool for RestoreBackgroundShellTool {
         })
     }
 
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+    async fn call(
+        &self,
+        _context: &mut ToolContext,
+        args: Self::Args,
+    ) -> Result<Self::Output, Self::Error> {
         self.approval.begin_tool(Self::NAME).await;
         let query = args.target.trim().to_lowercase();
 

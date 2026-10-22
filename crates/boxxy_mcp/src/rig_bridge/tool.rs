@@ -517,6 +517,7 @@ mod tests {
         let tool_handle = ToolServer::new().dynamic_tools(vec![rig_tool]).run();
         let mut ctx = ToolContext::default();
         let result = tool_handle
+            .toolset()
             .execute(
                 "demo__echo_msg",
                 r#"{"message":"hello rmcp 3.5.1"}"#,

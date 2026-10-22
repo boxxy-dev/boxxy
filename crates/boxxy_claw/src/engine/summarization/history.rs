@@ -15,37 +15,29 @@ pub struct DemotionExtractor {
     pub project_path: String,
 }
 
-impl rig::memory::DemotionHook for DemotionExtractor {
-    fn on_demote<'a>(
-        &'a self,
-        session_id: &'a rig::id::ConversationId,
-        messages: Vec<Message>,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), rig::memory::MemoryError>> + Send + 'a>> {
+impl DemotionExtractor {
+    pub async fn on_demote(&self, session_id: &str, messages: Vec<Message>) {
+        if messages.is_empty() {
+            return;
+        }
+
         let db_clone = self.db.clone();
         let session_id_owned = session_id.to_string();
         let claw_model_clone = self.claw_model.clone();
         let creds_clone = self.creds.clone();
         let project_path_clone = self.project_path.clone();
 
-        Box::pin(async move {
-            if messages.is_empty() {
-                return Ok(());
-            }
-
-            tokio::spawn(async move {
-                let _ = flush_history(
-                    db_clone,
-                    &session_id_owned,
-                    messages,
-                    &claw_model_clone,
-                    &creds_clone,
-                    &project_path_clone,
-                )
-                .await;
-            });
-
-            Ok(())
-        })
+        tokio::spawn(async move {
+            let _ = flush_history(
+                db_clone,
+                &session_id_owned,
+                messages,
+                &claw_model_clone,
+                &creds_clone,
+                &project_path_clone,
+            )
+            .await;
+        });
     }
 }
 

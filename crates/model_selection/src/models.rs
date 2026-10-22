@@ -41,7 +41,7 @@ fn strip_date_suffix(id: &str) -> Option<&str> {
 
 /// Returns `true` if `spec` is an active, tool-capable chat/reasoning model suitable
 /// for interactive and agentic selection.
-fn is_selectable_chat_model(catalog: &Catalog, vendor: &str, spec: &ModelSpec) -> bool {
+fn is_selectable_chat_model(catalog: &Catalog, _vendor: &str, spec: &ModelSpec) -> bool {
     if spec.deprecated || !spec.tools || !spec.input.text {
         return false;
     }
@@ -49,10 +49,10 @@ fn is_selectable_chat_model(catalog: &Catalog, vendor: &str, spec: &ModelSpec) -
     // In rig-core's catalog, a row with `reasoning: true` but no levels, no budget,
     // and `can_disable: false` is a specialized non-standard endpoint (e.g. deep-research)
     // that refuses all standard reasoning options.
-    if spec.reasoning.supported
-        && spec.reasoning.levels.is_empty()
-        && spec.reasoning.budget.is_none()
-        && !spec.reasoning.can_disable
+    if spec.reasoning.supported()
+        && spec.reasoning.levels().is_some_and(<[_]>::is_empty)
+        && spec.reasoning.budget().is_none()
+        && spec.reasoning.can_disable() == Some(false)
     {
         return false;
     }
@@ -63,13 +63,15 @@ fn is_selectable_chat_model(catalog: &Catalog, vendor: &str, spec: &ModelSpec) -
         || id.contains("-realtime")
         || id.contains("-tts")
         || id.contains("-customtools")
+        || id.contains("deep-research")
+        || id.contains("computer-use")
     {
         return false;
     }
 
     // Skip dated snapshot duplicates when the undated alias exists in the same vendor catalog.
     if let Some(base_id) = strip_date_suffix(id)
-        && catalog.resolve(&format!("{vendor}/{base_id}")).is_some()
+        && catalog.get_exact(spec.provider, base_id).is_some()
     {
         return false;
     }
@@ -96,26 +98,29 @@ pub fn catalog_models_for_vendor(vendor: &str) -> Vec<&'static ModelSpec> {
 
 /// Computes the available [`ThinkingLevel`]s for a model from its [`ModelSpec`] in [`Catalog::builtin`].
 pub fn catalog_thinking_levels(vendor: &str, model_id: &str) -> Vec<ThinkingLevel> {
-    let Some(spec) = Catalog::builtin().resolve(&format!("{vendor}/{model_id}")) else {
+    let Ok(resolved) = Catalog::builtin().resolve(&format!("{vendor}/{model_id}")) else {
         return Vec::new();
     };
-    if !spec.reasoning.supported {
+    let spec = resolved.spec;
+    if !spec.reasoning.supported() {
         return Vec::new();
     }
 
     let mut levels = Vec::new();
-    if spec.reasoning.can_disable {
+    if spec.reasoning.can_disable().unwrap_or(false) {
         levels.push(ThinkingLevel::None);
     }
 
-    if !spec.reasoning.levels.is_empty() {
-        for &effort in &spec.reasoning.levels {
+    if let Some(spec_levels) = spec.reasoning.levels()
+        && !spec_levels.is_empty()
+    {
+        for &effort in spec_levels {
             let mapped = effort_to_thinking_level(effort);
             if !levels.contains(&mapped) {
                 levels.push(mapped);
             }
         }
-    } else if spec.reasoning.budget.is_some() {
+    } else if spec.reasoning.budget().is_some() {
         for level in [
             ThinkingLevel::Low,
             ThinkingLevel::Medium,
@@ -137,8 +142,8 @@ pub fn catalog_default_thinking_level(vendor: &str, model_id: &str) -> Option<Th
         return None;
     }
 
-    if let Some(spec) = Catalog::builtin().resolve(&format!("{vendor}/{model_id}"))
-        && let Some(def_effort) = spec.reasoning.default
+    if let Ok(resolved) = Catalog::builtin().resolve(&format!("{vendor}/{model_id}"))
+        && let Some(def_effort) = resolved.spec.reasoning.default_effort()
     {
         let mapped = effort_to_thinking_level(def_effort);
         if levels.contains(&mapped) {
@@ -159,10 +164,11 @@ pub fn catalog_default_thinking_level(vendor: &str, model_id: &str) -> Option<Th
 pub fn catalog_uses_budget_thinking(vendor: &str, model_id: &str) -> bool {
     Catalog::builtin()
         .resolve(&format!("{vendor}/{model_id}"))
-        .is_some_and(|spec| {
-            spec.reasoning.supported
-                && spec.reasoning.levels.is_empty()
-                && spec.reasoning.budget.is_some()
+        .is_ok_and(|resolved| {
+            let spec = resolved.spec;
+            spec.reasoning.supported()
+                && spec.reasoning.levels().is_none_or(<[_]>::is_empty)
+                && spec.reasoning.budget().is_some()
         })
 }
 
@@ -170,7 +176,7 @@ pub fn catalog_uses_budget_thinking(vendor: &str, model_id: &str) -> bool {
 pub fn catalog_display_name<'a>(vendor: &str, model_id: &'a str) -> &'a str {
     Catalog::builtin()
         .resolve(&format!("{vendor}/{model_id}"))
-        .map(|spec| spec.display_name.as_str())
+        .map(|resolved| resolved.spec.display_name.as_str())
         .unwrap_or(model_id)
 }
 

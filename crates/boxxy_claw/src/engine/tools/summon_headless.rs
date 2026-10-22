@@ -1,6 +1,6 @@
 use crate::engine::ClawEnvironment;
 use crate::engine::session::{ClawSession, SessionState};
-use rig::tool::PortableTool;
+use rig::tool::{Tool, ToolContext};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::sync::Arc;
@@ -25,7 +25,7 @@ pub struct SummonHeadlessWorkerTool {
     pub approval: Arc<crate::engine::tools::ClawApprovalHandler>,
 }
 
-impl PortableTool for SummonHeadlessWorkerTool {
+impl Tool for SummonHeadlessWorkerTool {
     const NAME: &'static str = "summon_headless_worker";
     type Error = std::io::Error;
     type Args = SummonHeadlessArgs;
@@ -52,7 +52,11 @@ impl PortableTool for SummonHeadlessWorkerTool {
         })
     }
 
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+    async fn call(
+        &self,
+        _context: &mut ToolContext,
+        args: Self::Args,
+    ) -> Result<Self::Output, Self::Error> {
         self.approval.begin_tool(Self::NAME).await;
         let task_id = uuid::Uuid::new_v4();
 

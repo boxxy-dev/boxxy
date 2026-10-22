@@ -1,6 +1,6 @@
 use crate::engine::ClawEngineEvent;
 use crate::registry::workspace::global_workspace;
-use rig::tool::PortableTool;
+use rig::tool::{Tool, ToolContext};
 use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize)]
@@ -20,7 +20,7 @@ pub struct DelegateTaskTool {
     pub approval: std::sync::Arc<crate::engine::tools::ClawApprovalHandler>,
 }
 
-impl PortableTool for DelegateTaskTool {
+impl Tool for DelegateTaskTool {
     const NAME: &'static str = "delegate_task";
     type Error = std::io::Error;
     type Args = DelegateTaskArgs;
@@ -51,7 +51,11 @@ impl PortableTool for DelegateTaskTool {
         })
     }
 
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+    async fn call(
+        &self,
+        _context: &mut ToolContext,
+        args: Self::Args,
+    ) -> Result<Self::Output, Self::Error> {
         self.approval.begin_tool(Self::NAME).await;
         let workspace = global_workspace().await;
         let request_id = uuid::Uuid::new_v4();
@@ -121,7 +125,7 @@ pub struct DelegateTaskAsyncTool {
     pub approval: std::sync::Arc<crate::engine::tools::ClawApprovalHandler>,
 }
 
-impl PortableTool for DelegateTaskAsyncTool {
+impl Tool for DelegateTaskAsyncTool {
     const NAME: &'static str = "delegate_task_async";
     type Error = std::io::Error;
     type Args = DelegateTaskAsyncArgs;
@@ -151,7 +155,11 @@ impl PortableTool for DelegateTaskAsyncTool {
         })
     }
 
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+    async fn call(
+        &self,
+        _context: &mut ToolContext,
+        args: Self::Args,
+    ) -> Result<Self::Output, Self::Error> {
         self.approval.begin_tool(Self::NAME).await;
         let workspace = global_workspace().await;
         let request_id = uuid::Uuid::new_v4();
@@ -229,7 +237,7 @@ pub struct SendKeystrokesTool {
     pub approval: std::sync::Arc<crate::engine::tools::ClawApprovalHandler>,
 }
 
-impl PortableTool for SendKeystrokesTool {
+impl Tool for SendKeystrokesTool {
     const NAME: &'static str = "send_keystrokes_to_pane";
 
     type Error = std::io::Error;
@@ -261,7 +269,11 @@ impl PortableTool for SendKeystrokesTool {
         })
     }
 
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+    async fn call(
+        &self,
+        _context: &mut ToolContext,
+        args: Self::Args,
+    ) -> Result<Self::Output, Self::Error> {
         self.approval.begin_tool(Self::NAME).await;
 
         log::debug!(
@@ -310,7 +322,7 @@ pub struct SendCommandToPaneTool {
     pub state: std::sync::Arc<tokio::sync::Mutex<crate::engine::session::SessionState>>,
 }
 
-impl PortableTool for SendCommandToPaneTool {
+impl Tool for SendCommandToPaneTool {
     const NAME: &'static str = "send_command_to_pane";
 
     type Error = std::io::Error;
@@ -340,7 +352,11 @@ impl PortableTool for SendCommandToPaneTool {
         })
     }
 
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+    async fn call(
+        &self,
+        _context: &mut ToolContext,
+        args: Self::Args,
+    ) -> Result<Self::Output, Self::Error> {
         boxxy_telemetry::track_tool_use(Self::NAME).await;
 
         let (agent_name, character_id) = {

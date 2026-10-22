@@ -1,5 +1,5 @@
 use crate::engine::ClawEngineEvent;
-use rig::tool::PortableTool;
+use rig::tool::{Tool, ToolContext};
 use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize)]
@@ -19,7 +19,7 @@ pub struct ReadScrollbackTool {
     pub approval: std::sync::Arc<crate::engine::tools::ClawApprovalHandler>,
 }
 
-impl PortableTool for ReadScrollbackTool {
+impl Tool for ReadScrollbackTool {
     const NAME: &'static str = "read_scrollback_page";
 
     type Error = std::io::Error;
@@ -50,7 +50,11 @@ impl PortableTool for ReadScrollbackTool {
         })
     }
 
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+    async fn call(
+        &self,
+        _context: &mut ToolContext,
+        args: Self::Args,
+    ) -> Result<Self::Output, Self::Error> {
         self.approval.begin_tool(Self::NAME).await;
         let request_id = uuid::Uuid::new_v4();
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();

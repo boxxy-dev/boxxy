@@ -1,6 +1,6 @@
 use crate::ApprovalHandler;
 use boxxy_claw_protocol::ClawEnvironment;
-use rig::tool::PortableTool;
+use rig::tool::{Tool, ToolContext};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -59,7 +59,7 @@ pub struct GetSystemInfoTool {
     pub approval: Arc<dyn ApprovalHandler>,
 }
 
-impl PortableTool for GetSystemInfoTool {
+impl Tool for GetSystemInfoTool {
     const NAME: &'static str = "get_system_info";
 
     type Error = std::io::Error;
@@ -77,7 +77,11 @@ impl PortableTool for GetSystemInfoTool {
         })
     }
 
-    async fn call(&self, _args: Self::Args) -> Result<Self::Output, Self::Error> {
+    async fn call(
+        &self,
+        _context: &mut ToolContext,
+        _args: Self::Args,
+    ) -> Result<Self::Output, Self::Error> {
         self.approval
             .report_tool_started(Self::NAME.to_string())
             .await;
@@ -132,7 +136,7 @@ pub struct ListProcessesTool {
     pub approval: Arc<dyn ApprovalHandler>,
 }
 
-impl PortableTool for ListProcessesTool {
+impl Tool for ListProcessesTool {
     const NAME: &'static str = "list_processes";
 
     type Error = std::io::Error;
@@ -164,7 +168,11 @@ impl PortableTool for ListProcessesTool {
         })
     }
 
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+    async fn call(
+        &self,
+        _context: &mut ToolContext,
+        args: Self::Args,
+    ) -> Result<Self::Output, Self::Error> {
         self.approval
             .report_tool_started(Self::NAME.to_string())
             .await;
@@ -267,7 +275,7 @@ pub struct KillProcessTool {
     pub approval: Arc<dyn ApprovalHandler>,
 }
 
-impl PortableTool for KillProcessTool {
+impl Tool for KillProcessTool {
     const NAME: &'static str = "kill_process";
 
     type Error = std::io::Error;
@@ -290,7 +298,11 @@ impl PortableTool for KillProcessTool {
         })
     }
 
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+    async fn call(
+        &self,
+        _context: &mut ToolContext,
+        args: Self::Args,
+    ) -> Result<Self::Output, Self::Error> {
         self.approval
             .report_tool_started(Self::NAME.to_string())
             .await;
@@ -427,12 +439,16 @@ mod tests {
         };
 
         // Filter by 'cargo', sorted by memory descending
+        let mut ctx = ToolContext::default();
         let out = tool
-            .call(ListProcessesArgs {
-                filter: Some("CARGO".to_string()),
-                sort_by: Some("memory".to_string()),
-                limit: Some(1),
-            })
+            .call(
+                &mut ctx,
+                ListProcessesArgs {
+                    filter: Some("CARGO".to_string()),
+                    sort_by: Some("memory".to_string()),
+                    limit: Some(1),
+                },
+            )
             .await
             .unwrap();
 

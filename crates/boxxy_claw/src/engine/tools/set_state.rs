@@ -1,5 +1,5 @@
 use crate::engine::ClawMessage;
-use rig::tool::PortableTool;
+use rig::tool::{Tool, ToolContext};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -21,7 +21,7 @@ pub struct SetAgentStateTool {
     pub approval: Arc<crate::engine::tools::ClawApprovalHandler>,
 }
 
-impl PortableTool for SetAgentStateTool {
+impl Tool for SetAgentStateTool {
     const NAME: &'static str = "set_agent_state";
 
     type Error = std::io::Error;
@@ -46,7 +46,11 @@ impl PortableTool for SetAgentStateTool {
         })
     }
 
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+    async fn call(
+        &self,
+        _context: &mut ToolContext,
+        args: Self::Args,
+    ) -> Result<Self::Output, Self::Error> {
         self.approval.begin_tool(Self::NAME).await;
 
         let out = if args.state.to_lowercase() == "sleep" {

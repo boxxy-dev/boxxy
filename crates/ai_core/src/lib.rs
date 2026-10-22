@@ -215,12 +215,22 @@ pub fn extract_native_search_summary(messages: &[Message]) -> Option<String> {
 pub fn resolve_catalog_spec(provider: &ModelProvider) -> Option<&'static rig::catalog::ModelSpec> {
     let catalog = rig::catalog::Catalog::builtin();
     match provider {
-        ModelProvider::Gemini(model, _) => catalog.resolve(&format!("gcp.gemini/{}", model.api_name())),
-        ModelProvider::Anthropic(model, _) => {
-            catalog.resolve(&format!("anthropic/{}", model.api_name()))
-        }
-        ModelProvider::OpenAi(model, _) => catalog.resolve(&format!("openai/{}", model.api_name())),
-        ModelProvider::DeepSeek(model) => catalog.resolve(&format!("deepseek/{}", model.api_name())),
+        ModelProvider::Gemini(model, _) => catalog
+            .resolve(&format!("gcp.gemini/{}", model.api_name()))
+            .ok()
+            .map(|r| r.spec),
+        ModelProvider::Anthropic(model, _) => catalog
+            .resolve(&format!("anthropic/{}", model.api_name()))
+            .ok()
+            .map(|r| r.spec),
+        ModelProvider::OpenAi(model, _) => catalog
+            .resolve(&format!("openai/{}", model.api_name()))
+            .ok()
+            .map(|r| r.spec),
+        ModelProvider::DeepSeek(model) => catalog
+            .resolve(&format!("deepseek/{}", model.api_name()))
+            .ok()
+            .map(|r| r.spec),
         ModelProvider::OpenRouter(slug) => {
             let trimmed = slug.trim();
             if trimmed.is_empty() {
@@ -228,14 +238,19 @@ pub fn resolve_catalog_spec(provider: &ModelProvider) -> Option<&'static rig::ca
             }
             catalog
                 .resolve(&format!("openrouter/{trimmed}"))
-                .or_else(|| catalog.resolve(trimmed))
+                .or_else(|_| catalog.resolve(trimmed))
+                .ok()
+                .map(|r| r.spec)
         }
         ModelProvider::Ollama(name) => {
             let trimmed = name.trim();
             if trimmed.is_empty() {
                 return None;
             }
-            catalog.resolve(&format!("ollama/{trimmed}"))
+            catalog
+                .resolve(&format!("ollama/{trimmed}"))
+                .ok()
+                .map(|r| r.spec)
         }
     }
 }
@@ -299,18 +314,18 @@ fn resolve_model_reasoning(
     let spec = resolve_catalog_spec(provider);
 
     if level == ThinkingLevel::None {
-        if spec.is_none_or(|s| s.reasoning.can_disable) {
+        if spec.is_none_or(|s| s.reasoning.can_disable().unwrap_or(true)) {
             return Some(Reasoning::Off);
         }
         return None;
     }
 
     if let Some(s) = spec {
-        if !s.reasoning.supported {
+        if !s.reasoning.supported() {
             return None;
         }
-        if s.reasoning.levels.is_empty()
-            && let Some(range) = &s.reasoning.budget
+        if s.reasoning.levels().is_none_or(<[_]>::is_empty)
+            && let Some(range) = s.reasoning.budget()
         {
             let tokens = level
                 .anthropic_budget_tokens()

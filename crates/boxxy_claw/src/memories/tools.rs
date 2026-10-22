@@ -2,7 +2,7 @@ use anyhow::Result;
 use boxxy_core_toolbox::ApprovalHandler;
 use boxxy_db::Db;
 use boxxy_db::store::Store;
-use rig::tool::PortableTool;
+use rig::tool::{Tool, ToolContext};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -29,7 +29,7 @@ pub struct MemoryStoreTool {
     pub approval: Arc<crate::engine::tools::ClawApprovalHandler>,
 }
 
-impl PortableTool for MemoryStoreTool {
+impl Tool for MemoryStoreTool {
     const NAME: &'static str = "memory_store";
 
     type Args = MemoryStoreArgs;
@@ -70,7 +70,11 @@ impl PortableTool for MemoryStoreTool {
         })
     }
 
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+    async fn call(
+        &self,
+        _context: &mut ToolContext,
+        args: Self::Args,
+    ) -> Result<Self::Output, Self::Error> {
         self.approval
             .report_tool_started(Self::NAME.to_string())
             .await;
@@ -143,7 +147,7 @@ pub struct MemoryDeleteTool {
     pub approval: Arc<crate::engine::tools::ClawApprovalHandler>,
 }
 
-impl PortableTool for MemoryDeleteTool {
+impl Tool for MemoryDeleteTool {
     const NAME: &'static str = "memory_delete";
 
     type Args = MemoryDeleteArgs;
@@ -174,7 +178,11 @@ impl PortableTool for MemoryDeleteTool {
         })
     }
 
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+    async fn call(
+        &self,
+        _context: &mut ToolContext,
+        args: Self::Args,
+    ) -> Result<Self::Output, Self::Error> {
         self.approval
             .report_tool_started(Self::NAME.to_string())
             .await;

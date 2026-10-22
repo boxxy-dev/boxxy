@@ -8,7 +8,7 @@ pub mod workspace;
 use crate::engine::session::SessionState;
 use crate::engine::{ClawEngineEvent, ClawEnvironment};
 use boxxy_core_toolbox::ApprovalHandler;
-use rig::tool::PortableTool;
+use rig::tool::{Tool, ToolContext};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -338,7 +338,7 @@ pub struct SysShellTool {
     pub approval: Arc<ClawApprovalHandler>,
 }
 
-impl PortableTool for SysShellTool {
+impl Tool for SysShellTool {
     const NAME: &'static str = "sys_shell_exec";
 
     type Error = std::io::Error;
@@ -362,7 +362,11 @@ impl PortableTool for SysShellTool {
         })
     }
 
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+    async fn call(
+        &self,
+        _context: &mut ToolContext,
+        args: Self::Args,
+    ) -> Result<Self::Output, Self::Error> {
         self.approval
             .report_tool_started(Self::NAME.to_string())
             .await;
@@ -472,19 +476,26 @@ mod tests {
             approval,
         };
 
+        let mut ctx = ToolContext::default();
         // Turn 1: live CWD in SessionState is "/turn1/dir"
         state.lock().await.current_dir = "/turn1/dir".to_string();
-        tool.call(SysShellArgs {
-            command: "cargo check".to_string(),
-        })
+        tool.call(
+            &mut ctx,
+            SysShellArgs {
+                command: "cargo check".to_string(),
+            },
+        )
         .await
         .unwrap();
 
         // Turn 2: user cd'd to "/turn2/new_dir" without rebuilding SysShellTool
         state.lock().await.current_dir = "/turn2/new_dir".to_string();
-        tool.call(SysShellArgs {
-            command: "cargo test".to_string(),
-        })
+        tool.call(
+            &mut ctx,
+            SysShellArgs {
+                command: "cargo test".to_string(),
+            },
+        )
         .await
         .unwrap();
 

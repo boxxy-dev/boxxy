@@ -1,7 +1,7 @@
 use crate::ApprovalHandler;
 use crate::utils::resolve_path;
 use boxxy_claw_protocol::{ClawEnvironment, FileDiff};
-use rig::tool::PortableTool;
+use rig::tool::{Tool, ToolContext};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -25,7 +25,7 @@ pub struct FileReadTool {
     pub approval: Arc<dyn ApprovalHandler>,
 }
 
-impl PortableTool for FileReadTool {
+impl Tool for FileReadTool {
     const NAME: &'static str = "file_read";
 
     type Error = std::io::Error;
@@ -57,7 +57,11 @@ impl PortableTool for FileReadTool {
         })
     }
 
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+    async fn call(
+        &self,
+        _context: &mut ToolContext,
+        args: Self::Args,
+    ) -> Result<Self::Output, Self::Error> {
         const DEFAULT_MAX_LINES: u32 = 500;
         self.approval
             .report_tool_started(Self::NAME.to_string())
@@ -117,7 +121,7 @@ pub struct ListDirectoryTool {
     pub approval: Arc<dyn ApprovalHandler>,
 }
 
-impl PortableTool for ListDirectoryTool {
+impl Tool for ListDirectoryTool {
     const NAME: &'static str = "list_directory";
 
     type Error = std::io::Error;
@@ -140,7 +144,11 @@ impl PortableTool for ListDirectoryTool {
         })
     }
 
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+    async fn call(
+        &self,
+        _context: &mut ToolContext,
+        args: Self::Args,
+    ) -> Result<Self::Output, Self::Error> {
         const MAX_DIR_ENTRIES: usize = 250;
         self.approval
             .report_tool_started(Self::NAME.to_string())
@@ -206,7 +214,7 @@ pub struct FileWriteTool {
     pub approval: Arc<dyn ApprovalHandler>,
 }
 
-impl PortableTool for FileWriteTool {
+impl Tool for FileWriteTool {
     const NAME: &'static str = "file_write";
 
     type Error = std::io::Error;
@@ -234,7 +242,11 @@ impl PortableTool for FileWriteTool {
         })
     }
 
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+    async fn call(
+        &self,
+        _context: &mut ToolContext,
+        args: Self::Args,
+    ) -> Result<Self::Output, Self::Error> {
         self.approval
             .report_tool_started(Self::NAME.to_string())
             .await;
@@ -335,7 +347,7 @@ pub struct ReplaceInFileTool {
     pub approval: Arc<dyn ApprovalHandler>,
 }
 
-impl PortableTool for ReplaceInFileTool {
+impl Tool for ReplaceInFileTool {
     const NAME: &'static str = "replace_in_file";
 
     type Error = std::io::Error;
@@ -384,7 +396,11 @@ impl PortableTool for ReplaceInFileTool {
         })
     }
 
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+    async fn call(
+        &self,
+        _context: &mut ToolContext,
+        args: Self::Args,
+    ) -> Result<Self::Output, Self::Error> {
         self.approval
             .report_tool_started(Self::NAME.to_string())
             .await;
@@ -606,7 +622,7 @@ pub struct FileDeleteTool {
     pub approval: Arc<dyn ApprovalHandler>,
 }
 
-impl PortableTool for FileDeleteTool {
+impl Tool for FileDeleteTool {
     const NAME: &'static str = "file_delete";
 
     type Error = std::io::Error;
@@ -630,7 +646,11 @@ impl PortableTool for FileDeleteTool {
         })
     }
 
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+    async fn call(
+        &self,
+        _context: &mut ToolContext,
+        args: Self::Args,
+    ) -> Result<Self::Output, Self::Error> {
         self.approval
             .report_tool_started(Self::NAME.to_string())
             .await;
@@ -809,12 +829,16 @@ mod tests {
             approval: approval.clone(),
         };
 
+        let mut ctx = ToolContext::default();
         let out1 = tool
-            .call(FileReadArgs {
-                path: "Cargo.toml".to_string(),
-                start_line: None,
-                end_line: None,
-            })
+            .call(
+                &mut ctx,
+                FileReadArgs {
+                    path: "Cargo.toml".to_string(),
+                    start_line: None,
+                    end_line: None,
+                },
+            )
             .await
             .unwrap();
         assert_eq!(out1.content, "read:/workspace/initial/Cargo.toml:1-500");
@@ -822,11 +846,14 @@ mod tests {
         // Simulate user `cd` in terminal between turns without rebuilding tool
         *approval.live_cwd.lock().unwrap() = Some("/workspace/subdir".to_string());
         let out2 = tool
-            .call(FileReadArgs {
-                path: "src/lib.rs".to_string(),
-                start_line: Some(10),
-                end_line: Some(30),
-            })
+            .call(
+                &mut ctx,
+                FileReadArgs {
+                    path: "src/lib.rs".to_string(),
+                    start_line: Some(10),
+                    end_line: Some(30),
+                },
+            )
             .await
             .unwrap();
         assert_eq!(out2.content, "read:/workspace/subdir/src/lib.rs:10-30");
@@ -834,6 +861,7 @@ mod tests {
 
     #[tokio::test]
     async fn file_write_and_delete_return_explicit_reject_token() {
+        let mut ctx = ToolContext::default();
         let env = Arc::new(MockEnv::new());
         let approval = Arc::new(MockApproval {
             approve: false,
@@ -847,10 +875,13 @@ mod tests {
             approval: approval.clone(),
         };
         let write_out = write_tool
-            .call(FileWriteArgs {
-                path: "a.txt".to_string(),
-                content: "hello".to_string(),
-            })
+            .call(
+                &mut ctx,
+                FileWriteArgs {
+                    path: "a.txt".to_string(),
+                    content: "hello".to_string(),
+                },
+            )
             .await
             .unwrap();
         assert!(!write_out.success);
@@ -862,9 +893,12 @@ mod tests {
             approval: approval.clone(),
         };
         let delete_out = delete_tool
-            .call(FileDeleteArgs {
-                path: "a.txt".to_string(),
-            })
+            .call(
+                &mut ctx,
+                FileDeleteArgs {
+                    path: "a.txt".to_string(),
+                },
+            )
             .await
             .unwrap();
         assert!(!delete_out.success);
@@ -874,6 +908,7 @@ mod tests {
 
     #[tokio::test]
     async fn replace_in_file_handles_unique_multiple_and_crlf_matches() {
+        let mut ctx = ToolContext::default();
         let env = Arc::new(MockEnv::new());
         *env.file_content.lock().unwrap() = "fn a() {\r\n    let x = 1;\r\n    let y = 1;\r\n}\r\n".to_string();
 
@@ -890,13 +925,16 @@ mod tests {
 
         // 1. Multiple matches with replace_all: false fails safely
         let multi_err = tool
-            .call(ReplaceInFileArgs {
-                path: "main.rs".to_string(),
-                old_string: Some("= 1;".to_string()),
-                new_string: Some("= 2;".to_string()),
-                replace_all: Some(false),
-                edits: None,
-            })
+            .call(
+                &mut ctx,
+                ReplaceInFileArgs {
+                    path: "main.rs".to_string(),
+                    old_string: Some("= 1;".to_string()),
+                    new_string: Some("= 2;".to_string()),
+                    replace_all: Some(false),
+                    edits: None,
+                },
+            )
             .await
             .unwrap();
         assert!(!multi_err.success);
@@ -904,13 +942,16 @@ mod tests {
 
         // 2. Single match with LF input preserves CRLF in target file
         let single_ok = tool
-            .call(ReplaceInFileArgs {
-                path: "main.rs".to_string(),
-                old_string: Some("    let x = 1;\n    let y = 1;".to_string()),
-                new_string: Some("    let x = 42;\n    let y = 1;".to_string()),
-                replace_all: None,
-                edits: None,
-            })
+            .call(
+                &mut ctx,
+                ReplaceInFileArgs {
+                    path: "main.rs".to_string(),
+                    old_string: Some("    let x = 1;\n    let y = 1;".to_string()),
+                    new_string: Some("    let x = 42;\n    let y = 1;".to_string()),
+                    replace_all: None,
+                    edits: None,
+                },
+            )
             .await
             .unwrap();
         assert!(single_ok.success);
@@ -923,24 +964,27 @@ mod tests {
 
         // 3. Batch `edits` array applies multiple non-contiguous edits in a single approval
         let batch_ok = tool
-            .call(ReplaceInFileArgs {
-                path: "main.rs".to_string(),
-                old_string: None,
-                new_string: None,
-                replace_all: None,
-                edits: Some(vec![
-                    FileEditItem {
-                        old_string: "let x = 1;".to_string(),
-                        new_string: "let x = 10;".to_string(),
-                        replace_all: None,
-                    },
-                    FileEditItem {
-                        old_string: "let y = 1;".to_string(),
-                        new_string: "let y = 20;".to_string(),
-                        replace_all: None,
-                    },
-                ]),
-            })
+            .call(
+                &mut ctx,
+                ReplaceInFileArgs {
+                    path: "main.rs".to_string(),
+                    old_string: None,
+                    new_string: None,
+                    replace_all: None,
+                    edits: Some(vec![
+                        FileEditItem {
+                            old_string: "let x = 1;".to_string(),
+                            new_string: "let x = 10;".to_string(),
+                            replace_all: None,
+                        },
+                        FileEditItem {
+                            old_string: "let y = 1;".to_string(),
+                            new_string: "let y = 20;".to_string(),
+                            replace_all: None,
+                        },
+                    ]),
+                },
+            )
             .await
             .unwrap();
         assert!(batch_ok.success);
@@ -998,20 +1042,27 @@ mod tests {
             approval: approval.clone(),
         };
 
+        let mut ctx = ToolContext::default();
         // 1. New file (MockEnv has empty file_content -> returns NotFound)
-        tool.call(FileWriteArgs {
-            path: "src/new_mod.rs".to_string(),
-            content: "pub fn hello() {}\n".to_string(),
-        })
+        tool.call(
+            &mut ctx,
+            FileWriteArgs {
+                path: "src/new_mod.rs".to_string(),
+                content: "pub fn hello() {}\n".to_string(),
+            },
+        )
         .await
         .unwrap();
 
         // 2. Existing file (MockEnv has existing content -> returns Modified diff)
         *env.file_content.lock().unwrap() = "pub fn hello() {\n    old();\n}\n".to_string();
-        tool.call(FileWriteArgs {
-            path: "src/new_mod.rs".to_string(),
-            content: "pub fn hello() {\n    new();\n}\n".to_string(),
-        })
+        tool.call(
+            &mut ctx,
+            FileWriteArgs {
+                path: "src/new_mod.rs".to_string(),
+                content: "pub fn hello() {\n    new();\n}\n".to_string(),
+            },
+        )
         .await
         .unwrap();
 
@@ -1049,7 +1100,11 @@ mod tests {
             approval,
         };
 
-        let out = tool.call(ListDirectoryArgs { path: None }).await.unwrap();
+        let mut ctx = ToolContext::default();
+        let out = tool
+            .call(&mut ctx, ListDirectoryArgs { path: None })
+            .await
+            .unwrap();
         assert_eq!(out.total_entries, 264);
         assert!(out.truncated);
         assert_eq!(out.entries.len(), 250);

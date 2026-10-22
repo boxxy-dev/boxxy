@@ -1,6 +1,6 @@
 use crate::ApprovalHandler;
 use boxxy_claw_protocol::ClawEnvironment;
-use rig::tool::PortableTool;
+use rig::tool::{Tool, ToolContext};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -21,7 +21,7 @@ pub struct GetClipboardTool {
     pub approval: Arc<dyn ApprovalHandler>,
 }
 
-impl PortableTool for GetClipboardTool {
+impl Tool for GetClipboardTool {
     const NAME: &'static str = "get_clipboard";
 
     type Error = std::io::Error;
@@ -39,7 +39,11 @@ impl PortableTool for GetClipboardTool {
         })
     }
 
-    async fn call(&self, _args: Self::Args) -> Result<Self::Output, Self::Error> {
+    async fn call(
+        &self,
+        _context: &mut ToolContext,
+        _args: Self::Args,
+    ) -> Result<Self::Output, Self::Error> {
         self.approval
             .report_tool_started(Self::NAME.to_string())
             .await;
@@ -101,7 +105,7 @@ pub struct SetClipboardTool {
     pub approval: Arc<dyn ApprovalHandler>,
 }
 
-impl PortableTool for SetClipboardTool {
+impl Tool for SetClipboardTool {
     const NAME: &'static str = "set_clipboard";
 
     type Error = std::io::Error;
@@ -125,7 +129,11 @@ impl PortableTool for SetClipboardTool {
         })
     }
 
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+    async fn call(
+        &self,
+        _context: &mut ToolContext,
+        args: Self::Args,
+    ) -> Result<Self::Output, Self::Error> {
         self.approval
             .report_tool_started(Self::NAME.to_string())
             .await;
@@ -258,7 +266,11 @@ mod tests {
             env: env.clone(),
             approval: approval.clone(),
         };
-        let get_out = get_tool.call(GetClipboardArgs {}).await.unwrap();
+        let mut ctx = ToolContext::default();
+        let get_out = get_tool
+            .call(&mut ctx, GetClipboardArgs {})
+            .await
+            .unwrap();
         assert!(!get_out.success);
         assert_eq!(get_out.error.as_deref(), Some("[USER_EXPLICIT_REJECT]"));
 
@@ -267,9 +279,12 @@ mod tests {
             approval: approval.clone(),
         };
         let set_out = set_tool
-            .call(SetClipboardArgs {
-                text: "secret".to_string(),
-            })
+            .call(
+                &mut ctx,
+                SetClipboardArgs {
+                    text: "secret".to_string(),
+                },
+            )
             .await
             .unwrap();
         assert!(!set_out.success);

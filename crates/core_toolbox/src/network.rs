@@ -1,5 +1,5 @@
 use crate::ApprovalHandler;
-use rig::tool::PortableTool;
+use rig::tool::{Tool, ToolContext};
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, LazyLock};
 
@@ -28,7 +28,7 @@ pub struct HttpFetchTool {
     pub approval: Arc<dyn ApprovalHandler>,
 }
 
-impl PortableTool for HttpFetchTool {
+impl Tool for HttpFetchTool {
     const NAME: &'static str = "http_fetch";
 
     type Error = std::io::Error;
@@ -56,7 +56,11 @@ impl PortableTool for HttpFetchTool {
         })
     }
 
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+    async fn call(
+        &self,
+        _context: &mut ToolContext,
+        args: Self::Args,
+    ) -> Result<Self::Output, Self::Error> {
         self.approval
             .report_tool_started(Self::NAME.to_string())
             .await;

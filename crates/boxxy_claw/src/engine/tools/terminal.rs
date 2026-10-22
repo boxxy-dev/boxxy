@@ -1,6 +1,6 @@
 use crate::engine::ClawEngineEvent;
 use crate::engine::session::SessionState;
-use rig::tool::PortableTool;
+use rig::tool::{Tool, ToolContext};
 use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize)]
@@ -25,7 +25,7 @@ pub struct TerminalCommandTool {
     pub pane_id: String,
 }
 
-impl PortableTool for TerminalCommandTool {
+impl Tool for TerminalCommandTool {
     const NAME: &'static str = "terminal_exec";
 
     type Error = std::io::Error;
@@ -55,7 +55,11 @@ impl PortableTool for TerminalCommandTool {
         })
     }
 
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+    async fn call(
+        &self,
+        _context: &mut ToolContext,
+        args: Self::Args,
+    ) -> Result<Self::Output, Self::Error> {
         boxxy_telemetry::track_tool_use(Self::NAME).await;
         let (tx, rx) = tokio::sync::oneshot::channel();
 

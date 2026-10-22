@@ -1,7 +1,7 @@
 use crate::engine::{AgentStatus, ClawEngineEvent, ClawEvent};
 use crate::registry::workspace::{EventFilter, global_workspace};
 use boxxy_core_toolbox::ApprovalHandler;
-use rig::tool::PortableTool;
+use rig::tool::{Tool, ToolContext};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -27,7 +27,7 @@ pub struct SubscribeToPaneTool {
     pub approval: Arc<ClawApprovalHandler>,
 }
 
-impl PortableTool for SubscribeToPaneTool {
+impl Tool for SubscribeToPaneTool {
     const NAME: &'static str = "subscribe_to_pane";
 
     type Error = std::io::Error;
@@ -62,7 +62,11 @@ impl PortableTool for SubscribeToPaneTool {
         })
     }
 
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+    async fn call(
+        &self,
+        _context: &mut ToolContext,
+        args: Self::Args,
+    ) -> Result<Self::Output, Self::Error> {
         self.approval
             .report_tool_started(Self::NAME.to_string())
             .await;
@@ -147,7 +151,7 @@ pub struct AcquireLockTool {
     pub approval: Arc<ClawApprovalHandler>,
 }
 
-impl PortableTool for AcquireLockTool {
+impl Tool for AcquireLockTool {
     const NAME: &'static str = "acquire_lock";
 
     type Error = std::io::Error;
@@ -173,7 +177,11 @@ impl PortableTool for AcquireLockTool {
         })
     }
 
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+    async fn call(
+        &self,
+        _context: &mut ToolContext,
+        args: Self::Args,
+    ) -> Result<Self::Output, Self::Error> {
         self.approval
             .report_tool_started(Self::NAME.to_string())
             .await;
@@ -236,7 +244,7 @@ pub struct ReleaseLockTool {
     pub approval: Arc<ClawApprovalHandler>,
 }
 
-impl PortableTool for ReleaseLockTool {
+impl Tool for ReleaseLockTool {
     const NAME: &'static str = "release_lock";
 
     type Error = std::io::Error;
@@ -260,7 +268,11 @@ impl PortableTool for ReleaseLockTool {
         })
     }
 
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+    async fn call(
+        &self,
+        _context: &mut ToolContext,
+        args: Self::Args,
+    ) -> Result<Self::Output, Self::Error> {
         self.approval
             .report_tool_started(Self::NAME.to_string())
             .await;
@@ -309,7 +321,7 @@ pub struct PublishEventTool {
     pub approval: Arc<ClawApprovalHandler>,
 }
 
-impl PortableTool for PublishEventTool {
+impl Tool for PublishEventTool {
     const NAME: &'static str = "publish_custom_event";
 
     type Error = std::io::Error;
@@ -339,7 +351,11 @@ impl PortableTool for PublishEventTool {
         })
     }
 
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+    async fn call(
+        &self,
+        _context: &mut ToolContext,
+        args: Self::Args,
+    ) -> Result<Self::Output, Self::Error> {
         self.approval
             .report_tool_started(Self::NAME.to_string())
             .await;
@@ -377,7 +393,7 @@ pub struct AwaitTasksTool {
     pub approval: Arc<ClawApprovalHandler>,
 }
 
-impl PortableTool for AwaitTasksTool {
+impl Tool for AwaitTasksTool {
     const NAME: &'static str = "await_tasks";
 
     type Error = std::io::Error;
@@ -405,7 +421,11 @@ impl PortableTool for AwaitTasksTool {
         })
     }
 
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+    async fn call(
+        &self,
+        _context: &mut ToolContext,
+        args: Self::Args,
+    ) -> Result<Self::Output, Self::Error> {
         self.approval
             .report_tool_started(Self::NAME.to_string())
             .await;
@@ -453,7 +473,7 @@ pub struct OrchestrateAgentTool {
     pub approval: Arc<ClawApprovalHandler>,
 }
 
-impl PortableTool for OrchestrateAgentTool {
+impl Tool for OrchestrateAgentTool {
     const NAME: &'static str = "orchestrate_agent";
 
     type Error = std::io::Error;
@@ -484,7 +504,11 @@ impl PortableTool for OrchestrateAgentTool {
         })
     }
 
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+    async fn call(
+        &self,
+        _context: &mut ToolContext,
+        args: Self::Args,
+    ) -> Result<Self::Output, Self::Error> {
         self.approval
             .report_tool_started(Self::NAME.to_string())
             .await;
@@ -562,13 +586,17 @@ mod tests {
             approval: approval.clone(),
         };
 
+        let mut ctx = ToolContext::default();
         let sub_res = tokio::time::timeout(
             std::time::Duration::from_secs(2),
-            sub_tool.call(SubscribeArgs {
-                agent_name: "red-pony".to_string(),
-                event_type: "process_exit".to_string(),
-                regex: None,
-            }),
+            sub_tool.call(
+                &mut ctx,
+                SubscribeArgs {
+                    agent_name: "red-pony".to_string(),
+                    event_type: "process_exit".to_string(),
+                    regex: None,
+                },
+            ),
         )
         .await
         .expect("SubscribeToPaneTool should not deadlock")
@@ -590,9 +618,12 @@ mod tests {
 
         let await_res = tokio::time::timeout(
             std::time::Duration::from_secs(2),
-            await_tool.call(AwaitArgs {
-                task_ids: vec![t1.to_string(), t2.to_string()],
-            }),
+            await_tool.call(
+                &mut ctx,
+                AwaitArgs {
+                    task_ids: vec![t1.to_string(), t2.to_string()],
+                },
+            ),
         )
         .await
         .expect("AwaitTasksTool should not deadlock")

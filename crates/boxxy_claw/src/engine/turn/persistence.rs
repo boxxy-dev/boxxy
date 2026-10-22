@@ -25,13 +25,22 @@ pub async fn perform_persistence(ctx: PersistenceContext, state: Arc<Mutex<Sessi
     );
 
     let evicted_messages = if state_lock.history.len() >= 15 {
-        use rig_memory::{MemoryPolicy, SlidingWindowMemory};
-        let policy = SlidingWindowMemory::last_messages(10);
-        if let Ok((kept, demoted)) = policy.apply_with_demoted(state_lock.history.clone()) {
+        let shared: Vec<Arc<rig::message::Message>> = state_lock
+            .history
+            .iter()
+            .cloned()
+            .map(Arc::new)
+            .collect();
+        let kept_view =
+            rig_memory::recent::view(&shared, &rig_memory::recent::LastMessages(10));
+        let cut = shared.len().saturating_sub(kept_view.len());
+        if cut > 0 {
+            let kept = state_lock.history.split_off(cut);
+            let demoted = std::mem::replace(&mut state_lock.history, kept);
             let demoted_len = demoted.len();
             let already_flushed = state_lock.flushed_watermark.min(demoted_len);
-            state_lock.history = kept;
-            state_lock.flushed_watermark = state_lock.flushed_watermark.saturating_sub(demoted_len);
+            state_lock.flushed_watermark =
+                state_lock.flushed_watermark.saturating_sub(demoted_len);
             demoted.into_iter().skip(already_flushed).collect()
         } else {
             vec![]
@@ -100,7 +109,6 @@ pub async fn perform_persistence(ctx: PersistenceContext, state: Arc<Mutex<Sessi
     }
 
     if !evicted_messages.is_empty() {
-        use rig::memory::DemotionHook;
         let extractor = crate::engine::summarization::history::DemotionExtractor {
             db: ctx.db.clone(),
             claw_model: ctx
@@ -111,8 +119,9 @@ pub async fn perform_persistence(ctx: PersistenceContext, state: Arc<Mutex<Sessi
             creds: creds.clone(),
             project_path: ctx.cwd.clone(),
         };
-        let conv_id = rig::id::ConversationId::from(ctx.session_id.as_str());
-        let _ = extractor.on_demote(&conv_id, evicted_messages).await;
+        extractor
+            .on_demote(ctx.session_id.as_str(), evicted_messages)
+            .await;
     }
 
     drop(state_lock);
