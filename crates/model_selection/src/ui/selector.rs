@@ -1,5 +1,7 @@
-use crate::models::ModelProvider;
-use crate::registry::{AiProvider, get_providers};
+use crate::models::{
+    ModelProvider, OpenAiCompatibleEndpoint, catalog_thinking_levels_for_any_slug,
+};
+use crate::registry::{AiProvider, get_providers_with_custom};
 use gtk4 as gtk;
 use gtk4::prelude::*;
 use std::cell::RefCell;
@@ -33,7 +35,17 @@ impl SingleModelSelector {
         api_keys: std::collections::HashMap<String, String>,
         on_change: F,
     ) -> Self {
-        let providers: Vec<Box<dyn AiProvider>> = get_providers()
+        Self::new_with_custom(initial, ollama_url, api_keys, Vec::new(), on_change)
+    }
+
+    pub fn new_with_custom<F: Fn(Option<ModelProvider>) + 'static>(
+        initial: Option<ModelProvider>,
+        ollama_url: String,
+        api_keys: std::collections::HashMap<String, String>,
+        custom_endpoints: Vec<OpenAiCompatibleEndpoint>,
+        on_change: F,
+    ) -> Self {
+        let providers: Vec<Box<dyn AiProvider>> = get_providers_with_custom(&custom_endpoints)
             .into_iter()
             .filter(|p| {
                 !p.requires_api_key()
@@ -146,11 +158,10 @@ impl SingleModelSelector {
             } else {
                 String::new()
             },
-            last_selected_openrouter_model: if let Some(ModelProvider::OpenRouter(ref m)) = initial
-            {
-                m.clone()
-            } else {
-                String::new()
+            last_selected_openrouter_model: match &initial {
+                Some(ModelProvider::OpenRouter(m)) => m.clone(),
+                Some(ModelProvider::OpenAiCompatible { model_id, .. }) => model_id.clone(),
+                _ => String::new(),
             },
             on_change_callback: None,
         }));
@@ -198,7 +209,7 @@ impl SingleModelSelector {
                         }
                     }
 
-                    let new_prov = if prov_def.name() == "OpenRouter" {
+                    let new_prov = if prov_def.uses_custom_entry() {
                         prov_def.create_model_provider(
                             m_idx,
                             Some(inner.model_entry.text().to_string()),
@@ -215,7 +226,11 @@ impl SingleModelSelector {
                         if let Ok(mut inner_mut) = s_clone.inner.try_borrow_mut() {
                             inner_mut.last_selected_ollama_model = name.clone();
                         }
-                    } else if let ModelProvider::OpenRouter(ref name) = new_prov {
+                    } else if let ModelProvider::OpenRouter(ref name)
+                    | ModelProvider::OpenAiCompatible {
+                        model_id: ref name, ..
+                    } = new_prov
+                    {
                         if name.is_empty() {
                             return;
                         }
@@ -258,8 +273,30 @@ impl SingleModelSelector {
             let s_clone = self_.clone();
             move |entry| {
                 if let Ok(mut inner) = s_clone.inner.try_borrow_mut() {
-                    inner.last_selected_openrouter_model = entry.text().to_string();
+                    let slug = entry.text().to_string();
+                    inner.last_selected_openrouter_model = slug.clone();
                     if !inner.updating {
+                        let p_idx = inner.provider_dropdown.selected();
+                        let is_custom_openai = p_idx > 0
+                            && inner
+                                .providers
+                                .get((p_idx - 1) as usize)
+                                .is_some_and(|p| p.uses_custom_entry() && p.name() != "OpenRouter");
+                        if is_custom_openai {
+                            inner.updating = true;
+                            inner
+                                .thinking_list
+                                .splice(0, inner.thinking_list.n_items(), &[]);
+                            let levels = catalog_thinking_levels_for_any_slug(&slug);
+                            for l in &levels {
+                                inner.thinking_list.append(&l.to_string());
+                            }
+                            inner.options_vbox.set_visible(!levels.is_empty());
+                            if !levels.is_empty() {
+                                inner.thinking_dropdown.set_selected(0);
+                            }
+                            inner.updating = false;
+                        }
                         drop(inner);
                         update_state();
                     }
@@ -375,7 +412,7 @@ impl SingleModelSelector {
 
         inner.providers.get((p_idx - 1) as usize).map(|prov_def| {
             let mut m_name = None;
-            if prov_def.name() == "OpenRouter" {
+            if prov_def.uses_custom_entry() {
                 m_name = Some(inner.model_entry.text().to_string());
             } else if let Some(item) = inner
                 .model_list
@@ -413,12 +450,12 @@ impl SingleModelSelector {
                 should_update = true;
             } else if let Some(prov_def) = inner.providers.get((p_idx - 1) as usize) {
                 let is_ollama = prov_def.name() == "Ollama";
-                let is_openrouter = prov_def.name() == "OpenRouter";
+                let uses_entry = prov_def.uses_custom_entry();
 
-                if is_openrouter {
+                if uses_entry {
                     inner.model_dropdown.set_visible(false);
                     inner.model_entry.set_visible(true);
-                    inner.options_vbox.set_visible(false); // No thinking dropdown for OpenRouter yet
+                    inner.options_vbox.set_visible(false);
                     if !inner.last_selected_openrouter_model.is_empty() {
                         inner
                             .model_entry
@@ -593,14 +630,37 @@ impl SingleModelSelector {
                 let prov_def = &inner.providers[p_idx];
 
                 let is_ollama = prov_name == "Ollama";
-                let is_openrouter = prov_name == "OpenRouter";
+                let uses_entry = prov_def.uses_custom_entry();
 
-                if is_openrouter {
+                if uses_entry {
                     inner.model_dropdown.set_visible(false);
                     inner.model_entry.set_visible(true);
                     inner.options_vbox.set_visible(false);
-                    if let ModelProvider::OpenRouter(ref target_m) = provider {
-                        inner.model_entry.set_text(target_m);
+                    match provider {
+                        ModelProvider::OpenRouter(ref target_m) => {
+                            inner.model_entry.set_text(target_m);
+                        }
+                        ModelProvider::OpenAiCompatible {
+                            ref model_id,
+                            thinking,
+                            ..
+                        } => {
+                            inner.model_entry.set_text(model_id);
+                            inner
+                                .thinking_list
+                                .splice(0, inner.thinking_list.n_items(), &[]);
+                            let levels = catalog_thinking_levels_for_any_slug(model_id);
+                            for l in &levels {
+                                inner.thinking_list.append(&l.to_string());
+                            }
+                            if let Some(think) = thinking
+                                && let Some(pos) = levels.iter().position(|l| *l == think)
+                            {
+                                inner.thinking_dropdown.set_selected(pos as u32);
+                            }
+                            inner.options_vbox.set_visible(!levels.is_empty());
+                        }
+                        _ => {}
                     }
                 } else if !is_ollama {
                     inner.model_dropdown.set_visible(true);

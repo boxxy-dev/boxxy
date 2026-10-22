@@ -186,12 +186,13 @@ impl AiSidebarComponent {
         let initial_memory_model = settings.memory_model.clone();
         let api_keys = settings.get_effective_api_keys();
 
-        let model_selector = GlobalModelSelectorDialog::new(
+        let model_selector = GlobalModelSelectorDialog::new_with_custom(
             initial_model.clone(),
             initial_claw_model,
             initial_memory_model,
             ollama_url,
             api_keys,
+            settings.openai_compatible_endpoints.clone(),
             move |ai_provider, claw_provider, memory_provider| {
                 boxxy_preferences::Settings::update(|settings| {
                     settings.ai_chat_model = ai_provider.clone();
@@ -365,7 +366,8 @@ impl AiSidebarComponent {
         let creds = boxxy_ai_core::AiCredentials::new(
             settings.get_effective_api_keys(),
             settings.ollama_base_url.clone(),
-        );
+        )
+        .with_custom_endpoints(settings.openai_compatible_endpoints.clone());
         let enable_native_search = settings.enable_web_search && settings.use_native_search;
 
         let data = gtk::gio::resources_lookup_data(

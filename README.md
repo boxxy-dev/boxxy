@@ -47,6 +47,7 @@ curl -O https://boxxy-dev.github.io/boxxy-flatpak-remote/boxxy.gpg && \
 | **DeepSeek** | Full DeepSeek model catalog |
 | **Ollama** | Any locally installed model (`ollama run ...`) |
 | **OpenRouter** | Any OpenRouter model ID |
+| **OpenAI-Compatible Endpoints** | Any custom `/v1/chat/completions` or `/v1/responses` endpoint (OpenCode Go, OpenCode Zen, LiteLLM, vLLM, llama.cpp, LM Studio, etc.) with live `/models` discovery, configurable context size, and thinking modes |
 
 > Need support for another provider? Please [open an issue](https://github.com/boxxy-dev/boxxy/issues) to request it!
 

@@ -33,8 +33,8 @@ fn main() {
     boxxy_preferences::Settings::init();
     boxxy_preferences::AppState::init();
 
-    // Ensure all default files are generated immediately on first run
-    // in the background, without blocking the UI thread.
+    // Ensure all default files and the built-in model catalog index are initialized
+    // in the background on startup, without blocking the UI thread.
     tokio::spawn(async {
         boxxy_preferences::Settings::ensure_claw_skills();
     });
@@ -93,23 +93,37 @@ fn main() {
             boxxy_telemetry::track_launch(&os, &arch, pkg_type, version, &shell, &desktop).await;
         }
 
-        let keys_to_check = [
+        let mut keys_to_check: Vec<(String, String)> = [
             ("GEMINI_API_KEY", "Gemini"),
             ("ANTHROPIC_API_KEY", "Anthropic"),
             ("OPENAI_API_KEY", "OpenAI"),
             ("OPENROUTER_API_KEY", "OpenRouter"),
             ("DEEPSEEK_API_KEY", "DeepSeek"),
-        ];
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+
+        for ep in &boxxy_preferences::Settings::load().openai_compatible_endpoints {
+            if let Some(env_var) = ep
+                .api_key_env
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+            {
+                keys_to_check.push((env_var.to_string(), ep.name.clone()));
+            }
+        }
 
         let mut found_any = false;
         for (env_var, provider) in keys_to_check {
             if let Ok(key) = agent
                 .proxy()
-                .get_environment_variable(env_var.to_string())
+                .get_environment_variable(env_var)
                 .await
             {
                 if !key.is_empty() {
-                    boxxy_preferences::Settings::set_env_api_key(provider, key);
+                    boxxy_preferences::Settings::set_env_api_key(&provider, key);
                     found_any = true;
                 }
             }

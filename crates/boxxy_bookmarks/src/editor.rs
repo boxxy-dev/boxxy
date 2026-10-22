@@ -396,7 +396,8 @@ impl BookmarkEditor {
             let creds = boxxy_ai_core::AiCredentials::new(
                 settings.get_effective_api_keys(),
                 settings.ollama_base_url.clone(),
-            );
+            )
+            .with_custom_endpoints(settings.openai_compatible_endpoints.clone());
 
             let data = gtk::gio::resources_lookup_data(
                 "/dev/boxxy/BoxxyTerminal/prompts/bookmark_generator.md",

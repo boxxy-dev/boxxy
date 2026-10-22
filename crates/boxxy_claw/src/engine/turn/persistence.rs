@@ -22,7 +22,8 @@ pub async fn perform_persistence(ctx: PersistenceContext, state: Arc<Mutex<Sessi
     let creds = boxxy_ai_core::AiCredentials::new(
         ctx.settings.get_effective_api_keys(),
         ctx.settings.ollama_base_url.clone(),
-    );
+    )
+    .with_custom_endpoints(ctx.settings.openai_compatible_endpoints.clone());
 
     let evicted_messages = if state_lock.history.len() >= 15 {
         let shared: Vec<Arc<rig::message::Message>> = state_lock

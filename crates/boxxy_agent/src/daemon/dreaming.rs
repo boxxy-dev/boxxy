@@ -176,6 +176,7 @@ async fn run_one_cycle(settings: &boxxy_preferences::Settings) -> anyhow::Result
     // so the daemon's dream cycle works the same way a fresh UI would.
     creds.api_keys = settings.get_effective_api_keys();
     creds.ollama_url = settings.ollama_base_url.clone();
+    creds.openai_compatible_endpoints = settings.openai_compatible_endpoints.clone();
 
     let model = settings
         .memory_model

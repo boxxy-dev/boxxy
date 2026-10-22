@@ -274,6 +274,8 @@ pub struct Settings {
     pub enable_telemetry: bool,
     pub install_id: Option<String>,
     pub mcp_servers: Vec<boxxy_mcp::config::McpServerConfig>,
+    #[serde(default)]
+    pub openai_compatible_endpoints: Vec<boxxy_model_selection::OpenAiCompatibleEndpoint>,
 }
 
 impl Default for Settings {
@@ -337,6 +339,7 @@ impl Default for Settings {
             enable_telemetry: true, // ON by default during Preview
             install_id: None,
             mcp_servers: vec![],
+            openai_compatible_endpoints: vec![],
         }
     }
 }
@@ -379,6 +382,7 @@ You can add your own sensitive paths here. One path per line. Lines starting wit
         }
 
         Self::sync_nautilus_extension(Self::load().nautilus_integration);
+        let _ = boxxy_model_selection::resolve_any_catalog_spec("deepseek-v4-pro");
     }
 
     pub fn get_nautilus_extension_path() -> Option<PathBuf> {
@@ -546,11 +550,31 @@ You can add your own sensitive paths here. One path per line. Lines starting wit
 
     pub fn get_effective_api_key(&self, provider: &str) -> String {
         if let Some(key) = self.api_keys.get(provider)
-            && !key.is_empty()
+            && !key.trim().is_empty()
         {
             return key.clone();
         }
-        Self::get_env_api_key(provider).unwrap_or_default()
+        if let Some(env_key) = Self::get_env_api_key(provider)
+            && !env_key.trim().is_empty()
+        {
+            return env_key;
+        }
+        if let Some(ep) = self
+            .openai_compatible_endpoints
+            .iter()
+            .find(|e| e.name == provider)
+            && let Some(env_var) = ep.api_key_env.as_deref().map(str::trim).filter(|s| !s.is_empty())
+        {
+            if let Some(k) = Self::get_env_api_key(env_var).filter(|k| !k.trim().is_empty()) {
+                return k;
+            }
+            if let Ok(k) = std::env::var(env_var)
+                && !k.trim().is_empty()
+            {
+                return k;
+            }
+        }
+        String::new()
     }
 
     pub fn get_effective_api_keys(&self) -> std::collections::HashMap<String, String> {
@@ -558,11 +582,26 @@ You can add your own sensitive paths here. One path per line. Lines starting wit
         let env_keys = ENV_API_KEYS.read().unwrap();
         for (provider, key) in env_keys.iter() {
             if !keys.contains_key(provider)
-                || keys.get(provider).map(|k| k.is_empty()).unwrap_or(true)
+                || keys.get(provider).map(|k| k.trim().is_empty()).unwrap_or(true)
             {
                 keys.insert(provider.clone(), key.clone());
             }
         }
+        drop(env_keys);
+
+        for ep in &self.openai_compatible_endpoints {
+            let needs_key = keys
+                .get(&ep.name)
+                .map(|k| k.trim().is_empty())
+                .unwrap_or(true);
+            if needs_key {
+                let resolved = self.get_effective_api_key(&ep.name);
+                if !resolved.is_empty() {
+                    keys.insert(ep.name.clone(), resolved);
+                }
+            }
+        }
+
         keys
     }
 
@@ -589,17 +628,45 @@ You can add your own sensitive paths here. One path per line. Lines starting wit
             };
         }
 
+        if let ModelProvider::OpenAiCompatible {
+            provider_name,
+            model_id,
+            ..
+        } = m
+        {
+            if model_id.trim().is_empty() {
+                return ModelConfigState::Unconfigured;
+            }
+            let Some(ep) = self
+                .openai_compatible_endpoints
+                .iter()
+                .find(|e| e.name == *provider_name)
+            else {
+                return ModelConfigState::Unconfigured;
+            };
+            if !ep.enabled || ep.base_url.trim().is_empty() {
+                return ModelConfigState::Unconfigured;
+            }
+            if !ep.requires_api_key || !self.get_effective_api_key(provider_name).is_empty() {
+                return ModelConfigState::Ready(m.clone());
+            }
+            return ModelConfigState::MissingApiKey {
+                provider_name: provider_name.clone(),
+            };
+        }
+
         let provider_name = m.provider_name();
-        let requires_key = boxxy_model_selection::get_providers()
-            .iter()
-            .any(|p| p.name() == provider_name && p.requires_api_key());
+        let requires_key = boxxy_model_selection::get_providers_with_custom(
+            &self.openai_compatible_endpoints,
+        )
+        .iter()
+        .any(|p| p.name() == provider_name && p.requires_api_key());
 
         if !requires_key {
             return ModelConfigState::Ready(m.clone());
         }
 
-        let has_key = self.api_keys.get(provider_name).map(|k| !k.is_empty()).unwrap_or(false)
-            || Self::get_env_api_key(provider_name).map(|k| !k.is_empty()).unwrap_or(false);
+        let has_key = !self.get_effective_api_key(provider_name).is_empty();
 
         if has_key {
             ModelConfigState::Ready(m.clone())
@@ -727,5 +794,46 @@ mod tests {
         assert_eq!(Currency::Cny.format_from_usd(1.0), "¥6.69");
         assert_eq!(Currency::Inr.format_from_usd(1.0), "₹95.06");
         assert_eq!(Currency::Brl.format_from_usd(1.0), "R$5.06");
+    }
+
+    #[test]
+    fn resolve_model_state_handles_openai_compatible_endpoints() {
+        let mut s = Settings::default();
+        let go_ep = boxxy_model_selection::OpenAiCompatibleEndpoint::preset_opencode_go();
+        let local_ep = boxxy_model_selection::OpenAiCompatibleEndpoint::preset_local_server();
+        s.openai_compatible_endpoints = vec![go_ep, local_ep];
+
+        let go_model = Some(ModelProvider::OpenAiCompatible {
+            provider_name: "OpenCode Go".to_string(),
+            model_id: "deepseek-v4-pro".to_string(),
+            thinking: None,
+        });
+
+        // Missing key initially
+        assert_eq!(
+            s.resolve_model_state(&go_model),
+            ModelConfigState::MissingApiKey {
+                provider_name: "OpenCode Go".to_string()
+            }
+        );
+
+        // Ready once key is added
+        s.api_keys
+            .insert("OpenCode Go".to_string(), "sk-opencode-test".to_string());
+        assert_eq!(
+            s.resolve_model_state(&go_model),
+            ModelConfigState::Ready(go_model.clone().unwrap())
+        );
+
+        // Keyless local server is immediately Ready without an API key
+        let local_model = Some(ModelProvider::OpenAiCompatible {
+            provider_name: "Local OpenAI Server".to_string(),
+            model_id: "qwen3-coder".to_string(),
+            thinking: None,
+        });
+        assert_eq!(
+            s.resolve_model_state(&local_model),
+            ModelConfigState::Ready(local_model.unwrap())
+        );
     }
 }

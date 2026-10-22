@@ -81,7 +81,8 @@ impl ClawSession {
         let creds = boxxy_ai_core::AiCredentials::new(
             settings.get_effective_api_keys(),
             settings.ollama_base_url.clone(),
-        );
+        )
+        .with_custom_endpoints(settings.openai_compatible_endpoints.clone());
         let cwd_owned = if cwd.is_empty() {
             "global".to_string()
         } else {
@@ -133,12 +134,16 @@ impl ClawSession {
         );
 
         if !matches!(msg, ClawMessage::Initialize) {
+            let endpoints = &boxxy_preferences::Settings::load().openai_compatible_endpoints;
             let (web_search_enabled, char_id, context_window) = {
                 let state_lock = self.state.lock().await;
                 (
                     state_lock.web_search_enabled,
                     state_lock.character_id.clone(),
-                    boxxy_ai_core::model_context_window(&state_lock.current_claw_model),
+                    boxxy_ai_core::model_context_window_with_endpoints(
+                        &state_lock.current_claw_model,
+                        endpoints,
+                    ),
                 )
             };
             let _ = self
@@ -393,7 +398,10 @@ impl ClawSession {
             crate::engine::agent_config::resolve_active_search_label(&after, web_search_enabled)
                 .to_string(),
         );
-        let new_context_window = boxxy_ai_core::model_context_window(&after.claw_model);
+        let new_context_window = boxxy_ai_core::model_context_window_with_endpoints(
+            &after.claw_model,
+            &after.openai_compatible_endpoints,
+        );
 
         self.state.lock().await.persistent_agent = None;
 
@@ -667,7 +675,10 @@ impl ClawSession {
                         .await;
 
                     let settings = boxxy_preferences::Settings::load();
-                    let context_window = boxxy_ai_core::model_context_window(&settings.claw_model);
+                    let context_window = boxxy_ai_core::model_context_window_with_endpoints(
+                        &settings.claw_model,
+                        &settings.openai_compatible_endpoints,
+                    );
 
                     let _ = self
                         .tx_ui
@@ -799,7 +810,10 @@ impl ClawSession {
             .await;
 
         let settings = boxxy_preferences::Settings::load();
-        let context_window = boxxy_ai_core::model_context_window(&settings.claw_model);
+        let context_window = boxxy_ai_core::model_context_window_with_endpoints(
+            &settings.claw_model,
+            &settings.openai_compatible_endpoints,
+        );
         let web_search_enabled = self.state.lock().await.web_search_enabled;
         let _ = self
             .tx_ui

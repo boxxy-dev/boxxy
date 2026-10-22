@@ -1,4 +1,4 @@
-use crate::models::ModelProvider;
+use crate::models::{ModelProvider, OpenAiCompatibleEndpoint};
 use crate::ui::selector::SingleModelSelector;
 use gtk4 as gtk;
 use gtk4::prelude::*;
@@ -24,6 +24,29 @@ impl GlobalModelSelectorDialog {
     where
         F: Fn(Option<ModelProvider>, Option<ModelProvider>, Option<ModelProvider>) + 'static,
     {
+        Self::new_with_custom(
+            init_ai,
+            init_claw,
+            init_memory,
+            ollama_url,
+            api_keys,
+            Vec::new(),
+            on_done,
+        )
+    }
+
+    pub fn new_with_custom<F>(
+        init_ai: Option<ModelProvider>,
+        init_claw: Option<ModelProvider>,
+        init_memory: Option<ModelProvider>,
+        ollama_url: String,
+        api_keys: std::collections::HashMap<String, String>,
+        custom_endpoints: Vec<OpenAiCompatibleEndpoint>,
+        on_done: F,
+    ) -> Self
+    where
+        F: Fn(Option<ModelProvider>, Option<ModelProvider>, Option<ModelProvider>) + 'static,
+    {
         let dialog = libadwaita::Dialog::builder()
             .title("Models Selection")
             .content_width(450)
@@ -35,17 +58,29 @@ impl GlobalModelSelectorDialog {
         stack.set_hhomogeneous(true);
         stack.set_vhomogeneous(true);
 
-        let ai_chat_selector =
-            SingleModelSelector::new(init_ai, ollama_url.clone(), api_keys.clone(), |_| {});
-        let claw_selector = SingleModelSelector::new(
+        let ai_chat_selector = SingleModelSelector::new_with_custom(
+            init_ai,
+            ollama_url.clone(),
+            api_keys.clone(),
+            custom_endpoints.clone(),
+            |_| {},
+        );
+        let claw_selector = SingleModelSelector::new_with_custom(
             init_claw.clone(),
             ollama_url.clone(),
             api_keys.clone(),
+            custom_endpoints.clone(),
             |_| {},
         );
 
         let mem_initial = init_memory.or(init_claw);
-        let memory_selector = SingleModelSelector::new(mem_initial, ollama_url, api_keys, |_| {});
+        let memory_selector = SingleModelSelector::new_with_custom(
+            mem_initial,
+            ollama_url,
+            api_keys,
+            custom_endpoints,
+            |_| {},
+        );
 
         let build_tab = |selector: &SingleModelSelector, help_text: &str| -> gtk::Box {
             let vbox = gtk::Box::new(gtk::Orientation::Vertical, 0);

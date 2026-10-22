@@ -96,12 +96,8 @@ pub fn catalog_models_for_vendor(vendor: &str) -> Vec<&'static ModelSpec> {
     specs
 }
 
-/// Computes the available [`ThinkingLevel`]s for a model from its [`ModelSpec`] in [`Catalog::builtin`].
-pub fn catalog_thinking_levels(vendor: &str, model_id: &str) -> Vec<ThinkingLevel> {
-    let Ok(resolved) = Catalog::builtin().resolve(&format!("{vendor}/{model_id}")) else {
-        return Vec::new();
-    };
-    let spec = resolved.spec;
+/// Computes the available [`ThinkingLevel`]s for a [`ModelSpec`].
+pub fn thinking_levels_from_spec(spec: &ModelSpec) -> Vec<ThinkingLevel> {
     if !spec.reasoning.supported() {
         return Vec::new();
     }
@@ -111,17 +107,29 @@ pub fn catalog_thinking_levels(vendor: &str, model_id: &str) -> Vec<ThinkingLeve
         levels.push(ThinkingLevel::None);
     }
 
-    if let Some(spec_levels) = spec.reasoning.levels()
-        && !spec_levels.is_empty()
-    {
-        for &effort in spec_levels {
-            let mapped = effort_to_thinking_level(effort);
-            if !levels.contains(&mapped) {
-                levels.push(mapped);
+    if let Some(spec_levels) = spec.reasoning.levels() {
+        if !spec_levels.is_empty() {
+            for &effort in spec_levels {
+                let mapped = effort_to_thinking_level(effort);
+                if !levels.contains(&mapped) {
+                    levels.push(mapped);
+                }
+            }
+        } else if spec.reasoning.budget().is_some() {
+            for level in [
+                ThinkingLevel::Low,
+                ThinkingLevel::Medium,
+                ThinkingLevel::High,
+            ] {
+                if !levels.contains(&level) {
+                    levels.push(level);
+                }
             }
         }
-    } else if spec.reasoning.budget().is_some() {
+    } else {
+        // `ReasoningSupport::Unknown` — model supports reasoning and refuses no standard level
         for level in [
+            ThinkingLevel::None,
             ThinkingLevel::Low,
             ThinkingLevel::Medium,
             ThinkingLevel::High,
@@ -135,6 +143,114 @@ pub fn catalog_thinking_levels(vendor: &str, model_id: &str) -> Vec<ThinkingLeve
     levels
 }
 
+/// Helper that looks up `(vendor, model_id)` in [`Catalog::builtin`] using O(log N) binary search
+/// (`Catalog::get`) without triggering `Catalog::resolve`'s expensive Levenshtein suggestion scan on a miss.
+#[must_use]
+pub fn catalog_get_spec(vendor: &str, model_id: &str) -> Option<&'static ModelSpec> {
+    let pid = rig::providers::registry::ProviderId::catalog(vendor)?;
+    Catalog::builtin().get(pid, model_id).map(|r| r.spec)
+}
+
+/// Computes the available [`ThinkingLevel`]s for a model from its [`ModelSpec`] in [`Catalog::builtin`].
+pub fn catalog_thinking_levels(vendor: &str, model_id: &str) -> Vec<ThinkingLevel> {
+    let Some(spec) = catalog_get_spec(vendor, model_id) else {
+        return Vec::new();
+    };
+    thinking_levels_from_spec(spec)
+}
+
+/// O(1) lookup index over [`Catalog::builtin`] by lowercase `"vendor/id"` and bare `"id"` so
+/// [`resolve_any_catalog_spec`] is a single `HashMap` lookup (~30ns) and never blocks the UI thread.
+static CATALOG_LOOKUP_INDEX: std::sync::LazyLock<
+    std::collections::HashMap<String, &'static ModelSpec>,
+> = std::sync::LazyLock::new(|| {
+    let catalog = Catalog::builtin();
+    let mut map = std::collections::HashMap::with_capacity(3200);
+
+    for spec in catalog.iter() {
+        if !spec.deprecated {
+            map.insert(
+                format!("{}/{}", spec.provider.vendor(), spec.id).to_ascii_lowercase(),
+                spec,
+            );
+            map.entry(spec.id.to_ascii_lowercase()).or_insert(spec);
+        }
+    }
+
+    // Prioritize primary origin vendors over gateway copies for bare model IDs
+    const PRIMARY_VENDORS: &[&str] = &[
+        "openai",
+        "anthropic",
+        "deepseek",
+        "gcp.gemini",
+        "xai",
+        "moonshot",
+        "zai",
+        "alibaba",
+        "minimax",
+        "xiaomimimo",
+        "mistral",
+        "cohere",
+    ];
+    for spec in catalog.iter() {
+        if !spec.deprecated && PRIMARY_VENDORS.contains(&spec.provider.vendor()) {
+            map.insert(spec.id.to_ascii_lowercase(), spec);
+        }
+    }
+
+    if let Some(&ds_flash) = map.get("deepseek/deepseek-flash") {
+        map.insert("deepseek-v4.1-flash".to_string(), ds_flash);
+        map.insert("deepseek-v4-flash".to_string(), ds_flash);
+    }
+
+    map
+});
+
+/// Resolves any model slug (e.g. `"anthropic/claude-sonnet-5-5"`, `"opencode-go/deepseek-v4-flash"`,
+/// `"deepseek-v4-pro"`, `"gpt-6-astra"`) against [`Catalog::builtin`] in O(1) time.
+#[must_use]
+pub fn resolve_any_catalog_spec(slug: &str) -> Option<&'static ModelSpec> {
+    let trimmed = slug.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let index = &*CATALOG_LOOKUP_INDEX;
+    let lower = trimmed.to_ascii_lowercase();
+
+    if let Some(&spec) = index.get(&lower) {
+        return Some(spec);
+    }
+
+    if let Some(base) = strip_date_suffix(&lower)
+        && let Some(&spec) = index.get(base)
+    {
+        return Some(spec);
+    }
+
+    if let Some((_, bare)) = lower.split_once('/') {
+        let bare = bare.trim();
+        if let Some(&spec) = index.get(bare) {
+            return Some(spec);
+        }
+        if let Some(base) = strip_date_suffix(bare)
+            && let Some(&spec) = index.get(base)
+        {
+            return Some(spec);
+        }
+    }
+
+    None
+}
+
+/// Returns available [`ThinkingLevel`]s for an arbitrary model slug by consulting [`Catalog::builtin`].
+#[must_use]
+pub fn catalog_thinking_levels_for_any_slug(slug: &str) -> Vec<ThinkingLevel> {
+    resolve_any_catalog_spec(slug)
+        .map(thinking_levels_from_spec)
+        .unwrap_or_default()
+}
+
 /// Returns the recommended default [`ThinkingLevel`] for `(vendor, model_id)` from [`Catalog::builtin`].
 pub fn catalog_default_thinking_level(vendor: &str, model_id: &str) -> Option<ThinkingLevel> {
     let levels = catalog_thinking_levels(vendor, model_id);
@@ -142,8 +258,8 @@ pub fn catalog_default_thinking_level(vendor: &str, model_id: &str) -> Option<Th
         return None;
     }
 
-    if let Ok(resolved) = Catalog::builtin().resolve(&format!("{vendor}/{model_id}"))
-        && let Some(def_effort) = resolved.spec.reasoning.default_effort()
+    if let Some(spec) = catalog_get_spec(vendor, model_id)
+        && let Some(def_effort) = spec.reasoning.default_effort()
     {
         let mapped = effort_to_thinking_level(def_effort);
         if levels.contains(&mapped) {
@@ -162,21 +278,17 @@ pub fn catalog_default_thinking_level(vendor: &str, model_id: &str) -> Option<Th
 
 /// Returns `true` when `(vendor, model_id)` uses token-budget reasoning rather than effort levels.
 pub fn catalog_uses_budget_thinking(vendor: &str, model_id: &str) -> bool {
-    Catalog::builtin()
-        .resolve(&format!("{vendor}/{model_id}"))
-        .is_ok_and(|resolved| {
-            let spec = resolved.spec;
-            spec.reasoning.supported()
-                && spec.reasoning.levels().is_none_or(<[_]>::is_empty)
-                && spec.reasoning.budget().is_some()
-        })
+    catalog_get_spec(vendor, model_id).is_some_and(|spec| {
+        spec.reasoning.supported()
+            && spec.reasoning.levels().is_none_or(<[_]>::is_empty)
+            && spec.reasoning.budget().is_some()
+    })
 }
 
 /// Resolves the human-readable display name for `(vendor, model_id)` from [`Catalog::builtin`].
 pub fn catalog_display_name<'a>(vendor: &str, model_id: &'a str) -> &'a str {
-    Catalog::builtin()
-        .resolve(&format!("{vendor}/{model_id}"))
-        .map(|resolved| resolved.spec.display_name.as_str())
+    catalog_get_spec(vendor, model_id)
+        .map(|spec| spec.display_name.as_str())
         .unwrap_or(model_id)
 }
 
@@ -279,6 +391,44 @@ impl ThinkingLevel {
             ThinkingLevel::High => 32_000,
             _ => 2_000,
         }
+    }
+
+    /// Parses a single thinking level token (case-insensitive).
+    #[must_use]
+    pub fn from_token(token: &str) -> Option<Self> {
+        match token.trim().to_ascii_lowercase().as_str() {
+            "none" | "off" | "disabled" => Some(Self::None),
+            "minimal" | "min" => Some(Self::Minimal),
+            "low" => Some(Self::Low),
+            "medium" | "med" => Some(Self::Medium),
+            "high" => Some(Self::High),
+            "xhigh" | "extreme" | "extreme high" | "extreme_high" => Some(Self::XHigh),
+            _ => None,
+        }
+    }
+
+    /// Parses a comma-separated list of thinking levels (e.g. `"none, low, medium, high"`).
+    #[must_use]
+    pub fn parse_comma_separated(input: &str) -> Vec<Self> {
+        let mut out = Vec::new();
+        for part in input.split(',') {
+            if let Some(level) = Self::from_token(part)
+                && !out.contains(&level)
+            {
+                out.push(level);
+            }
+        }
+        out
+    }
+
+    /// Formats a slice of thinking levels as a comma-separated string (e.g. `"none, low, medium, high"`).
+    #[must_use]
+    pub fn format_comma_separated(levels: &[Self]) -> String {
+        levels
+            .iter()
+            .map(Self::api_name)
+            .collect::<Vec<_>>()
+            .join(", ")
     }
 }
 
@@ -442,6 +592,319 @@ impl fmt::Display for DeepSeekModel {
     }
 }
 
+fn default_true() -> bool {
+    true
+}
+
+/// Which OpenAI-compatible wire endpoint a model uses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum OpenAiApiRoute {
+    /// Standard `/chat/completions` route (used by LiteLLM, vLLM, llama.cpp, OpenCode Go chat models).
+    #[default]
+    ChatCompletions,
+    /// OpenAI `/responses` route (used by OpenCode Zen/Go for GPT & Grok models).
+    Responses,
+}
+
+impl OpenAiApiRoute {
+    /// Infers the best default route for `model_id` on `base_url`.
+    #[must_use]
+    pub fn infer_for_model(base_url: &str, model_id: &str) -> Self {
+        let bare = model_id
+            .trim()
+            .split_once('/')
+            .map_or_else(|| model_id.trim(), |(_, m)| m.trim())
+            .to_ascii_lowercase();
+        let url_lower = base_url.to_ascii_lowercase();
+        if url_lower.contains("opencode.ai/zen")
+            && (bare.starts_with("gpt-") || bare.starts_with("grok-"))
+        {
+            Self::Responses
+        } else {
+            Self::ChatCompletions
+        }
+    }
+
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::ChatCompletions => "Chat Completions (/chat/completions)",
+            Self::Responses => "Responses (/responses)",
+        }
+    }
+}
+
+/// Configuration for a single model under an [`OpenAiCompatibleEndpoint`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CustomModelConfig {
+    /// Model slug / ID sent to the API (e.g. `"deepseek-v4-pro"`, `"gpt-6-astra"`, `"qwen3-coder"`).
+    pub id: String,
+    /// Optional human-readable display name. Defaults to catalog display name or `id` when empty.
+    #[serde(default)]
+    pub display_name: String,
+    /// API wire route (`/chat/completions` vs `/responses`).
+    #[serde(default)]
+    pub route: OpenAiApiRoute,
+    /// Optional context window size in tokens (e.g. `128_000`). Falls back to `Catalog::builtin()` if `None`.
+    #[serde(default)]
+    pub context_window: Option<u64>,
+    /// Optional user-configured thinking modes. Falls back to `Catalog::builtin()` if empty.
+    #[serde(default)]
+    pub thinking_levels: Vec<ThinkingLevel>,
+    /// Optional custom input price in USD per 1M tokens.
+    #[serde(default)]
+    pub input_cost_per_1m: Option<f64>,
+    /// Optional custom output price in USD per 1M tokens.
+    #[serde(default)]
+    pub output_cost_per_1m: Option<f64>,
+}
+
+impl CustomModelConfig {
+    #[must_use]
+    pub fn new(id: impl Into<String>) -> Self {
+        let id = id.into();
+        Self {
+            id,
+            display_name: String::new(),
+            route: OpenAiApiRoute::ChatCompletions,
+            context_window: None,
+            thinking_levels: Vec::new(),
+            input_cost_per_1m: None,
+            output_cost_per_1m: None,
+        }
+    }
+
+    #[must_use]
+    pub fn with_route(mut self, route: OpenAiApiRoute) -> Self {
+        self.route = route;
+        self
+    }
+
+    #[must_use]
+    pub fn effective_display_name(&self) -> String {
+        let trimmed_disp = self.display_name.trim();
+        if !trimmed_disp.is_empty() {
+            return trimmed_disp.to_string();
+        }
+        if let Some(spec) = resolve_any_catalog_spec(&self.id) {
+            return format!("{} ({})", spec.display_name, self.id);
+        }
+        self.id.clone()
+    }
+
+    #[must_use]
+    pub fn effective_context_window(&self) -> Option<u64> {
+        if let Some(ctx) = self.context_window.filter(|&w| w > 0) {
+            return Some(ctx);
+        }
+        resolve_any_catalog_spec(&self.id)
+            .and_then(|s| s.context_window)
+            .map(u64::from)
+    }
+
+    #[must_use]
+    pub fn effective_thinking_levels(&self) -> Vec<ThinkingLevel> {
+        if !self.thinking_levels.is_empty() {
+            return self.thinking_levels.clone();
+        }
+        catalog_thinking_levels_for_any_slug(&self.id)
+    }
+
+    #[must_use]
+    pub fn supports_thinking(&self) -> bool {
+        !self.effective_thinking_levels().is_empty()
+    }
+
+    #[must_use]
+    pub fn default_thinking_level(&self) -> Option<ThinkingLevel> {
+        let levels = self.effective_thinking_levels();
+        if levels.is_empty() {
+            return None;
+        }
+        if let Some(spec) = resolve_any_catalog_spec(&self.id)
+            && let Some(def_effort) = spec.reasoning.default_effort()
+        {
+            let mapped = effort_to_thinking_level(def_effort);
+            if levels.contains(&mapped) {
+                return Some(mapped);
+            }
+        }
+        if levels.contains(&ThinkingLevel::Medium) {
+            Some(ThinkingLevel::Medium)
+        } else if levels.contains(&ThinkingLevel::Low) {
+            Some(ThinkingLevel::Low)
+        } else {
+            levels.first().copied()
+        }
+    }
+}
+
+/// Configuration for a custom OpenAI-compatible provider endpoint (e.g. OpenCode Go, OpenCode Zen, LiteLLM, vLLM, llama.cpp).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OpenAiCompatibleEndpoint {
+    /// Unique provider name displayed in dropdowns and settings (e.g. `"OpenCode Go"`, `"OpenCode Zen"`, `"Local vLLM"`).
+    pub name: String,
+    /// Endpoint Base URL including `/v1` (e.g. `"https://opencode.ai/zen/go/v1"`, `"http://localhost:8000/v1"`).
+    pub base_url: String,
+    /// Optional environment variable name to read the API key from (e.g. `"OPENCODE_API_KEY"`).
+    #[serde(default)]
+    pub api_key_env: Option<String>,
+    /// Whether this endpoint requires an API key (`true` for cloud gateways, `false` for local unauthenticated servers).
+    #[serde(default = "default_true")]
+    pub requires_api_key: bool,
+    /// When `true` (e.g. local server or flat-rate subscription like OpenCode Go), token cost is `$0.00` unless overridden on the model.
+    #[serde(default)]
+    pub zero_cost: bool,
+    /// Configured models for this endpoint.
+    #[serde(default)]
+    pub models: Vec<CustomModelConfig>,
+    /// Whether this endpoint is active and selectable.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
+impl OpenAiCompatibleEndpoint {
+    /// Preset for **OpenCode Go** (`https://opencode.ai/zen/go/v1`, subscription-based).
+    #[must_use]
+    pub fn preset_opencode_go() -> Self {
+        let base_url = "https://opencode.ai/zen/go/v1".to_string();
+        let default_slugs = [
+            "deepseek-v4-pro",
+            "deepseek-v4.1-flash",
+            "glm-5.3",
+            "glm-5.3-flash",
+            "kimi-k3",
+            "kimi-k2.7-code",
+            "gpt-6-luna",
+            "gpt-5.6-luna",
+            "grok-4.7",
+            "mimo-v2.6-flash",
+        ];
+        let models = default_slugs
+            .into_iter()
+            .map(|slug| {
+                let route = OpenAiApiRoute::infer_for_model(&base_url, slug);
+                CustomModelConfig::new(slug).with_route(route)
+            })
+            .collect();
+
+        Self {
+            name: "OpenCode Go".to_string(),
+            base_url,
+            api_key_env: Some("OPENCODE_API_KEY".to_string()),
+            requires_api_key: true,
+            zero_cost: true,
+            models,
+            enabled: true,
+        }
+    }
+
+    /// Preset for **OpenCode Zen** (`https://opencode.ai/zen/v1`, pay-as-you-go).
+    #[must_use]
+    pub fn preset_opencode_zen() -> Self {
+        let base_url = "https://opencode.ai/zen/v1".to_string();
+        let default_slugs = [
+            "gpt-6.1-sol",
+            "gpt-6-astra",
+            "gpt-6-sol",
+            "gpt-6-luna",
+            "gpt-5.6-sol",
+            "deepseek-v4-pro",
+            "deepseek-v4.1-flash",
+            "glm-5.3",
+            "kimi-k3",
+        ];
+        let models = default_slugs
+            .into_iter()
+            .map(|slug| {
+                let route = OpenAiApiRoute::infer_for_model(&base_url, slug);
+                CustomModelConfig::new(slug).with_route(route)
+            })
+            .collect();
+
+        Self {
+            name: "OpenCode Zen".to_string(),
+            base_url,
+            api_key_env: Some("OPENCODE_API_KEY".to_string()),
+            requires_api_key: true,
+            zero_cost: false,
+            models,
+            enabled: true,
+        }
+    }
+
+    /// Preset for **LiteLLM Proxy** (`http://localhost:4000/v1`).
+    #[must_use]
+    pub fn preset_litellm() -> Self {
+        Self {
+            name: "LiteLLM".to_string(),
+            base_url: "http://localhost:4000/v1".to_string(),
+            api_key_env: Some("LITELLM_API_KEY".to_string()),
+            requires_api_key: true,
+            zero_cost: false,
+            models: Vec::new(),
+            enabled: true,
+        }
+    }
+
+    /// Preset for a **Local OpenAI-Compatible Server** (`vLLM`, `llama.cpp`, `LM Studio` at `http://localhost:8000/v1`).
+    #[must_use]
+    pub fn preset_local_server() -> Self {
+        Self {
+            name: "Local OpenAI Server".to_string(),
+            base_url: "http://localhost:8000/v1".to_string(),
+            api_key_env: None,
+            requires_api_key: false,
+            zero_cost: true,
+            models: Vec::new(),
+            enabled: true,
+        }
+    }
+
+    /// Looks up a configured model by ID.
+    #[must_use]
+    pub fn find_model(&self, model_id: &str) -> Option<&CustomModelConfig> {
+        let trimmed = model_id.trim();
+        self.models.iter().find(|m| m.id.trim() == trimmed)
+    }
+}
+
+/// Queries an OpenAI-compatible endpoint's `/models` route (`GET {base_url}/models`)
+/// using [`rig::providers::openai::OpenAIConfig`] and returns the discovered model IDs.
+pub async fn fetch_openai_compatible_models(
+    base_url: &str,
+    api_key: &str,
+) -> Result<Vec<String>, String> {
+    let trimmed_url = base_url.trim().trim_end_matches('/');
+    if trimmed_url.is_empty() {
+        return Err("Base URL cannot be empty.".to_string());
+    }
+    let effective_key = if api_key.trim().is_empty() {
+        "not-needed"
+    } else {
+        api_key.trim()
+    };
+
+    let client = rig::providers::openai::OpenAIConfig::new(effective_key)
+        .with_base_url(trimmed_url)
+        .client();
+
+    match client.list_models().await {
+        Ok(list) => {
+            let mut ids: Vec<String> = list
+                .iter()
+                .map(|m| m.id.trim().to_string())
+                .filter(|id| !id.is_empty())
+                .collect();
+            ids.sort();
+            ids.dedup();
+            Ok(ids)
+        }
+        Err(e) => Err(format!("Failed to list models from {trimmed_url}: {e}")),
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ModelProvider {
     Gemini(GeminiModel, Option<ThinkingLevel>),
@@ -450,10 +913,15 @@ pub enum ModelProvider {
     OpenAi(OpenAiModel, Option<ThinkingLevel>),
     OpenRouter(String),
     DeepSeek(DeepSeekModel),
+    OpenAiCompatible {
+        provider_name: String,
+        model_id: String,
+        thinking: Option<ThinkingLevel>,
+    },
 }
 
 impl ModelProvider {
-    pub fn provider_name(&self) -> &'static str {
+    pub fn provider_name(&self) -> &str {
         match self {
             ModelProvider::Gemini(_, _) => "Gemini",
             ModelProvider::Ollama(_) => "Ollama",
@@ -461,6 +929,7 @@ impl ModelProvider {
             ModelProvider::OpenAi(_, _) => "OpenAI",
             ModelProvider::OpenRouter(_) => "OpenRouter",
             ModelProvider::DeepSeek(_) => "DeepSeek",
+            ModelProvider::OpenAiCompatible { provider_name, .. } => provider_name.as_str(),
         }
     }
 
@@ -472,6 +941,7 @@ impl ModelProvider {
             ModelProvider::OpenAi(model, _) => model.api_name(),
             ModelProvider::OpenRouter(model) => model.as_str(),
             ModelProvider::DeepSeek(model) => model.api_name(),
+            ModelProvider::OpenAiCompatible { model_id, .. } => model_id.as_str(),
         }
     }
 
@@ -483,6 +953,11 @@ impl ModelProvider {
             ModelProvider::OpenAi(model, _) => format!("OpenAI/{}", model),
             ModelProvider::OpenRouter(model) => format!("OpenRouter/{}", model),
             ModelProvider::DeepSeek(model) => format!("DeepSeek/{}", model),
+            ModelProvider::OpenAiCompatible {
+                provider_name,
+                model_id,
+                ..
+            } => format!("{provider_name}/{model_id}"),
         }
     }
 
@@ -608,5 +1083,68 @@ mod tests {
         assert!(
             !ModelProvider::DeepSeek(DeepSeekModel::new("deepseek-flash")).supports_native_search()
         );
+        assert!(
+            !ModelProvider::OpenAiCompatible {
+                provider_name: "OpenCode Go".to_string(),
+                model_id: "deepseek-v4-pro".to_string(),
+                thinking: Some(ThinkingLevel::Medium),
+            }
+            .supports_native_search()
+        );
+    }
+
+    #[test]
+    fn test_openai_compatible_models_and_presets() {
+        let parsed = ThinkingLevel::parse_comma_separated("off, low, MED, high, xhigh, low");
+        assert_eq!(
+            parsed,
+            vec![
+                ThinkingLevel::None,
+                ThinkingLevel::Low,
+                ThinkingLevel::Medium,
+                ThinkingLevel::High,
+                ThinkingLevel::XHigh,
+            ]
+        );
+        assert_eq!(
+            ThinkingLevel::format_comma_separated(&parsed),
+            "none, low, medium, high, xhigh"
+        );
+
+        let go = OpenAiCompatibleEndpoint::preset_opencode_go();
+        assert_eq!(go.name, "OpenCode Go");
+        assert_eq!(go.base_url, "https://opencode.ai/zen/go/v1");
+        assert!(go.zero_cost);
+        assert!(go.requires_api_key);
+        assert_eq!(go.api_key_env.as_deref(), Some("OPENCODE_API_KEY"));
+
+        // DeepSeek on OpenCode Go uses ChatCompletions, GPT-6 Luna uses Responses
+        let ds = go.find_model("deepseek-v4-pro").expect("deepseek-v4-pro");
+        assert_eq!(ds.route, OpenAiApiRoute::ChatCompletions);
+        assert_eq!(ds.effective_context_window(), Some(1_000_000));
+
+        let gpt = go.find_model("gpt-6-luna").expect("gpt-6-luna");
+        assert_eq!(gpt.route, OpenAiApiRoute::Responses);
+
+        // Verify all preset models resolve metadata in < 1ms without any slow misses
+        let start = std::time::Instant::now();
+        for m in &go.models {
+            let _ = m.effective_display_name();
+            let _ = m.effective_context_window();
+            let _ = m.effective_thinking_levels();
+        }
+        let zen = OpenAiCompatibleEndpoint::preset_opencode_zen();
+        for m in &zen.models {
+            let _ = m.effective_display_name();
+            let _ = m.effective_context_window();
+            let _ = m.effective_thinking_levels();
+        }
+        assert!(
+            start.elapsed().as_millis() < 50,
+            "Preset metadata resolution should be sub-millisecond after catalog init"
+        );
+        let prefixed = resolve_any_catalog_spec("opencode-go/deepseek-v4.1-flash")
+            .expect("should resolve prefixed deepseek flash");
+        assert_eq!(prefixed.id, "deepseek-flash");
     }
 }

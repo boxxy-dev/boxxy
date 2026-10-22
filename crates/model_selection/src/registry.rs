@@ -1,15 +1,23 @@
-use crate::models::{AnthropicModel, DeepSeekModel, GeminiModel, ModelProvider, OpenAiModel};
+use crate::models::{
+    AnthropicModel, CustomModelConfig, DeepSeekModel, GeminiModel, ModelProvider, OpenAiModel,
+    OpenAiCompatibleEndpoint, ThinkingLevel, catalog_thinking_levels_for_any_slug,
+};
 use gtk4 as gtk;
 use gtk4::prelude::*;
 
 // --- Provider Abstraction Trait ---
 
 pub trait AiProvider {
-    fn name(&self) -> &'static str;
+    fn name(&self) -> &str;
 
     /// Returns true if this provider requires an API key in settings.
     fn requires_api_key(&self) -> bool {
         true
+    }
+
+    /// Returns true if this provider uses a free-form text entry instead of a fixed dropdown.
+    fn uses_custom_entry(&self) -> bool {
+        false
     }
 
     /// Returns a list of model display names.
@@ -51,7 +59,7 @@ pub trait AiProvider {
 
 struct GeminiProviderImpl;
 impl AiProvider for GeminiProviderImpl {
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         "Gemini"
     }
     fn get_models(&self) -> Vec<String> {
@@ -136,7 +144,7 @@ impl AiProvider for GeminiProviderImpl {
 
 struct AnthropicProviderImpl;
 impl AiProvider for AnthropicProviderImpl {
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         "Anthropic"
     }
     fn get_models(&self) -> Vec<String> {
@@ -223,7 +231,7 @@ impl AiProvider for AnthropicProviderImpl {
 
 struct OpenAiProviderImpl;
 impl AiProvider for OpenAiProviderImpl {
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         "OpenAI"
     }
     fn get_models(&self) -> Vec<String> {
@@ -308,7 +316,7 @@ impl AiProvider for OpenAiProviderImpl {
 
 struct OllamaProviderImpl;
 impl AiProvider for OllamaProviderImpl {
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         "Ollama"
     }
     fn requires_api_key(&self) -> bool {
@@ -357,8 +365,11 @@ impl AiProvider for OllamaProviderImpl {
 
 struct OpenRouterProviderImpl;
 impl AiProvider for OpenRouterProviderImpl {
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         "OpenRouter"
+    }
+    fn uses_custom_entry(&self) -> bool {
+        true
     }
     fn get_models(&self) -> Vec<String> {
         vec![]
@@ -385,7 +396,7 @@ impl AiProvider for OpenRouterProviderImpl {
 
 struct DeepSeekProviderImpl;
 impl AiProvider for DeepSeekProviderImpl {
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         "DeepSeek"
     }
     fn get_models(&self) -> Vec<String> {
@@ -424,13 +435,148 @@ impl AiProvider for DeepSeekProviderImpl {
     }
 }
 
+struct OpenAiCompatibleProviderImpl {
+    endpoint: OpenAiCompatibleEndpoint,
+}
+
+impl AiProvider for OpenAiCompatibleProviderImpl {
+    fn name(&self) -> &str {
+        self.endpoint.name.as_str()
+    }
+
+    fn requires_api_key(&self) -> bool {
+        self.endpoint.requires_api_key
+    }
+
+    fn uses_custom_entry(&self) -> bool {
+        self.endpoint.models.is_empty()
+    }
+
+    fn get_models(&self) -> Vec<String> {
+        self.endpoint
+            .models
+            .iter()
+            .map(CustomModelConfig::effective_display_name)
+            .collect()
+    }
+
+    fn supports_thinking(&self, model_idx: u32) -> bool {
+        self.endpoint
+            .models
+            .get(model_idx as usize)
+            .is_some_and(CustomModelConfig::supports_thinking)
+    }
+
+    fn get_thinking_levels(&self, model_idx: u32) -> Vec<String> {
+        if let Some(m) = self.endpoint.models.get(model_idx as usize) {
+            m.effective_thinking_levels()
+                .into_iter()
+                .map(|l| l.to_string())
+                .collect()
+        } else {
+            vec![]
+        }
+    }
+
+    fn default_thinking_idx(&self, model_idx: u32) -> u32 {
+        if let Some(m) = self.endpoint.models.get(model_idx as usize) {
+            let levels = m.effective_thinking_levels();
+            if let Some(def) = m.default_thinking_level()
+                && let Some(pos) = levels.iter().position(|l| *l == def)
+            {
+                return pos as u32;
+            }
+        }
+        0
+    }
+
+    fn create_model_provider(
+        &self,
+        model_idx: u32,
+        model_name: Option<String>,
+        thinking_idx: Option<u32>,
+    ) -> ModelProvider {
+        if let Some(m) = self.endpoint.models.get(model_idx as usize) {
+            let levels = m.effective_thinking_levels();
+            let thinking = thinking_idx
+                .and_then(|idx| levels.get(idx as usize))
+                .copied();
+            ModelProvider::OpenAiCompatible {
+                provider_name: self.endpoint.name.clone(),
+                model_id: m.id.clone(),
+                thinking,
+            }
+        } else {
+            let slug = model_name.unwrap_or_default();
+            let levels: Vec<ThinkingLevel> = catalog_thinking_levels_for_any_slug(&slug);
+            let thinking = thinking_idx
+                .and_then(|idx| levels.get(idx as usize))
+                .copied();
+            ModelProvider::OpenAiCompatible {
+                provider_name: self.endpoint.name.clone(),
+                model_id: slug,
+                thinking,
+            }
+        }
+    }
+
+    fn sync_ui(
+        &self,
+        provider: &ModelProvider,
+        model_dropdown: &gtk::DropDown,
+        thinking_dropdown: &gtk::DropDown,
+        _model_list: &gtk::StringList,
+        thinking_list: &gtk::StringList,
+    ) {
+        if let ModelProvider::OpenAiCompatible {
+            model_id, thinking, ..
+        } = provider
+            && let Some(pos) = self
+                .endpoint
+                .models
+                .iter()
+                .position(|x| x.id.trim() == model_id.trim())
+        {
+            model_dropdown.set_selected(pos as u32);
+            thinking_list.splice(0, thinking_list.n_items(), &[]);
+            let levels = self.endpoint.models[pos].effective_thinking_levels();
+            for l in &levels {
+                thinking_list.append(&l.to_string());
+            }
+            if let Some(think) = thinking
+                && let Some(t_pos) = levels.iter().position(|l| l == think)
+            {
+                thinking_dropdown.set_selected(t_pos as u32);
+            } else if !levels.is_empty() {
+                thinking_dropdown.set_selected(self.default_thinking_idx(pos as u32));
+            }
+        }
+    }
+}
+
 pub fn get_providers() -> Vec<Box<dyn AiProvider>> {
-    vec![
+    get_providers_with_custom(&[])
+}
+
+pub fn get_providers_with_custom(
+    custom_endpoints: &[OpenAiCompatibleEndpoint],
+) -> Vec<Box<dyn AiProvider>> {
+    let mut providers: Vec<Box<dyn AiProvider>> = vec![
         Box::new(GeminiProviderImpl),
         Box::new(OllamaProviderImpl),
         Box::new(AnthropicProviderImpl),
         Box::new(OpenAiProviderImpl),
         Box::new(OpenRouterProviderImpl),
         Box::new(DeepSeekProviderImpl),
-    ]
+    ];
+
+    for ep in custom_endpoints {
+        if ep.enabled && !ep.name.trim().is_empty() && !ep.base_url.trim().is_empty() {
+            providers.push(Box::new(OpenAiCompatibleProviderImpl {
+                endpoint: ep.clone(),
+            }));
+        }
+    }
+
+    providers
 }

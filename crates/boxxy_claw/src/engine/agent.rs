@@ -95,9 +95,16 @@ impl ClawAgent {
                 let output =
                     boxxy_ai_core::append_citations_to_output(&res.messages, &raw_output);
                 let context_tokens = boxxy_ai_core::extract_response_context_tokens(&res);
-                let context_window = boxxy_ai_core::model_context_window(&self.config.model);
-                let usage =
-                    boxxy_ai_core::enrich_usage_with_catalog_cost(res.usage, &self.config.model);
+                let endpoints = &boxxy_preferences::Settings::load().openai_compatible_endpoints;
+                let context_window = boxxy_ai_core::model_context_window_with_endpoints(
+                    &self.config.model,
+                    endpoints,
+                );
+                let usage = boxxy_ai_core::enrich_usage_with_endpoints_cost(
+                    res.usage,
+                    &self.config.model,
+                    endpoints,
+                );
 
                 // Track Invocations
                 boxxy_telemetry::track_ai_invocation(&provider_name, &model_name, "claw").await;
@@ -201,19 +208,20 @@ pub async fn create_claw_agent(
     // `update_credentials` yet — e.g. keys are stored in settings.json,
     // not env vars) fall back to the on-disk settings. This also merges
     // in provider env vars via `get_effective_api_keys`.
+    let settings_snapshot = boxxy_preferences::Settings::load();
     let is_usable =
         |keys: &std::collections::HashMap<String, String>| keys.values().any(|v| !v.is_empty());
     if !is_usable(&api_keys) {
-        let settings = boxxy_preferences::Settings::load();
-        api_keys = settings.get_effective_api_keys();
+        api_keys = settings_snapshot.get_effective_api_keys();
         if ollama_url.is_empty() {
-            ollama_url = settings.ollama_base_url.clone();
+            ollama_url = settings_snapshot.ollama_base_url.clone();
         }
     }
 
     let creds = AiCredentials {
         api_keys,
         ollama_url,
+        openai_compatible_endpoints: settings_snapshot.openai_compatible_endpoints.clone(),
     };
 
     let approval_handler = std::sync::Arc::new(ClawApprovalHandler {
@@ -535,6 +543,7 @@ pub async fn create_claw_agent(
         .default_max_turns(100)
         .cache(CacheRetention::Short)
         .on_unsupported(OnUnsupported::Ignore)
+        .accept_unknown_finish_reasons(true)
         .tool_server_handle(tool_handle);
 
     if let Some(reasoning) = reasoning {

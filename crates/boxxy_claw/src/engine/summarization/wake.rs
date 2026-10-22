@@ -51,7 +51,8 @@ pub async fn summarize_wake_delta(
                 let creds = boxxy_ai_core::AiCredentials::new(
                     settings.get_effective_api_keys(),
                     settings.ollama_base_url.clone(),
-                );
+                )
+                .with_custom_endpoints(settings.openai_compatible_endpoints.clone());
 
                 let raw_history = recent_commands.join("\n");
                 // Truncate to roughly 10k tokens (40k chars) to prevent blowing up the context window

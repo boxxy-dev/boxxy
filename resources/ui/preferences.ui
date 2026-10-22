@@ -195,7 +195,19 @@
             <property name="child">
               <object class="AdwToolbarView">
                 <child type="top">
-                  <object class="AdwHeaderBar">
+                  <object class="AdwHeaderBar" id="content_header_bar">
+                    <child type="start">
+                      <object class="GtkButton" id="apis_back_btn">
+                        <property name="visible">False</property>
+                        <property name="tooltip-text" translatable="yes">Back to APIs</property>
+                        <child>
+                          <object class="AdwButtonContent">
+                            <property name="icon-name">go-previous-symbolic</property>
+                            <property name="label" translatable="yes">APIs</property>
+                          </object>
+                        </child>
+                      </object>
+                    </child>
                     <property name="title-widget">
                       <object class="AdwWindowTitle" id="content_title">
                         <property name="title" translatable="yes">Appearance</property>
@@ -428,58 +440,97 @@
                       <object class="AdwViewStackPage">
                         <property name="name">apis</property>
                         <property name="child">
-                          <object class="AdwPreferencesPage" id="page_apis">
+                          <object class="GtkStack" id="apis_stack">
+                            <property name="transition-type">slide-left-right</property>
+                            <property name="transition-duration">200</property>
                             <child>
-                              <object class="AdwPreferencesGroup" id="dynamic_apis_group">
-                                <property name="title" translatable="yes">AI Providers</property>
-                                <property name="description" translatable="yes">Configure API keys for your AI providers.</property>
-                              </object>
-                            </child>
-                            <child>
-                              <object class="AdwPreferencesGroup" id="group_search_engines">
-                                <property name="title" translatable="yes">Search Engines</property>
-                                <property name="description" translatable="yes">Configure API keys for web search providers.</property>
-                                <child>
-                                  <object class="AdwPasswordEntryRow" id="tavily_api_key_entry">
-                                    <property name="title" translatable="yes">Tavily API Key</property>
-                                  </object>
-                                </child>
-                                <child>
-                                  <object class="AdwSwitchRow" id="native_search_switch">
-                                    <property name="title" translatable="yes">Use Native Model Search</property>
-                                    <property name="subtitle" translatable="yes">Use built-in search from Gemini, GPT, or Claude instead of external search engines.</property>
-                                    <property name="sensitive">True</property>
-                                  </object>
-                                </child>
-                              </object>
-                            </child>
-                            <child>
-                              <object class="AdwPreferencesGroup" id="group_ollama_api">
-                                <property name="title" translatable="yes">Ollama API</property>
-                                <property name="description" translatable="yes">Configure Local Ollama settings.</property>
-                                <child>
-                                  <object class="AdwEntryRow" id="ollama_base_url_entry">
-                                    <property name="title" translatable="yes">Base URL</property>
-                                  </object>
-                                </child>
-                              </object>
-                            </child>
-                            <child>
-                              <object class="AdwPreferencesGroup" id="group_model_status">
-                                <property name="margin-top">12</property>
-                                <child>
-                                  <object class="AdwActionRow" id="model_status_row">
-                                    <property name="title" translatable="yes">Models Status</property>
-                                    <property name="activatable">True</property>
-                                    <property name="action-name">win.model-selection</property>
-                                    <child type="suffix">
-                                      <object class="GtkImage">
-                                        <property name="icon-name">boxxy-external-link-symbolic</property>
-                                        <property name="valign">center</property>
+                              <object class="GtkStackPage">
+                                <property name="name">list</property>
+                                <property name="child">
+                                  <object class="AdwPreferencesPage" id="page_apis">
+                                    <child>
+                                      <object class="AdwPreferencesGroup" id="dynamic_apis_group">
+                                        <property name="title" translatable="yes">AI Providers</property>
+                                        <property name="description" translatable="yes">Configure API keys for your AI providers.</property>
+                                      </object>
+                                    </child>
+                                    <child>
+                                      <object class="AdwPreferencesGroup" id="group_openai_compatible">
+                                        <property name="title" translatable="yes">OpenAI-Compatible Endpoints</property>
+                                        <property name="description" translatable="yes">Connect custom OpenAI-compatible API endpoints.</property>
+                                        <child>
+                                          <object class="AdwActionRow" id="add_openai_compat_row">
+                                            <property name="title" translatable="yes">Add Endpoint…</property>
+                                            <property name="subtitle" translatable="yes">Configure a custom OpenAI-compatible server and its models.</property>
+                                            <property name="activatable">True</property>
+                                            <child type="suffix">
+                                              <object class="GtkImage">
+                                                <property name="icon-name">list-add-symbolic</property>
+                                                <property name="valign">center</property>
+                                              </object>
+                                            </child>
+                                          </object>
+                                        </child>
+                                      </object>
+                                    </child>
+                                    <child>
+                                      <object class="AdwPreferencesGroup" id="group_search_engines">
+                                        <property name="title" translatable="yes">Search Engines</property>
+                                        <property name="description" translatable="yes">Configure API keys for web search providers.</property>
+                                        <child>
+                                          <object class="AdwPasswordEntryRow" id="tavily_api_key_entry">
+                                            <property name="title" translatable="yes">Tavily API Key</property>
+                                          </object>
+                                        </child>
+                                        <child>
+                                          <object class="AdwSwitchRow" id="native_search_switch">
+                                            <property name="title" translatable="yes">Use Native Model Search</property>
+                                            <property name="subtitle" translatable="yes">Use built-in search from Gemini, GPT, or Claude instead of external search engines.</property>
+                                            <property name="sensitive">True</property>
+                                          </object>
+                                        </child>
+                                      </object>
+                                    </child>
+                                    <child>
+                                      <object class="AdwPreferencesGroup" id="group_ollama_api">
+                                        <property name="title" translatable="yes">Ollama API</property>
+                                        <property name="description" translatable="yes">Configure Local Ollama settings.</property>
+                                        <child>
+                                          <object class="AdwEntryRow" id="ollama_base_url_entry">
+                                            <property name="title" translatable="yes">Base URL</property>
+                                          </object>
+                                        </child>
+                                      </object>
+                                    </child>
+                                    <child>
+                                      <object class="AdwPreferencesGroup" id="group_model_status">
+                                        <property name="margin-top">12</property>
+                                        <child>
+                                          <object class="AdwActionRow" id="model_status_row">
+                                            <property name="title" translatable="yes">Models Status</property>
+                                            <property name="activatable">True</property>
+                                            <property name="action-name">win.model-selection</property>
+                                            <child type="suffix">
+                                              <object class="GtkImage">
+                                                <property name="icon-name">boxxy-external-link-symbolic</property>
+                                                <property name="valign">center</property>
+                                              </object>
+                                            </child>
+                                          </object>
+                                        </child>
                                       </object>
                                     </child>
                                   </object>
-                                </child>
+                                </property>
+                              </object>
+                            </child>
+                            <child>
+                              <object class="GtkStackPage">
+                                <property name="name">editor</property>
+                                <property name="child">
+                                  <object class="AdwPreferencesPage" id="page_openai_compat_editor">
+                                  </object>
+                                </property>
                               </object>
                             </child>
                           </object>

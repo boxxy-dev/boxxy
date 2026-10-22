@@ -349,12 +349,13 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
             // TODO: Signal all tabs to reload their claw session?
         }
         AppInput::ModelSelection => {
-            let dialog = boxxy_model_selection::GlobalModelSelectorDialog::new(
+            let dialog = boxxy_model_selection::GlobalModelSelectorDialog::new_with_custom(
                 inner.current_settings.ai_chat_model.clone(),
                 inner.current_settings.claw_model.clone(),
                 inner.current_settings.memory_model.clone(),
                 inner.current_settings.ollama_base_url.clone(),
                 inner.current_settings.get_effective_api_keys(),
+                inner.current_settings.openai_compatible_endpoints.clone(),
                 move |ai_provider, claw_provider, memory_provider| {
                     boxxy_preferences::Settings::update(|settings| {
                         settings.ai_chat_model = ai_provider.clone();

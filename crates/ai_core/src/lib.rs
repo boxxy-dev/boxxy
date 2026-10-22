@@ -1,4 +1,7 @@
-use boxxy_model_selection::{ModelProvider, ThinkingLevel};
+use boxxy_model_selection::{
+    ModelProvider, OpenAiApiRoute, OpenAiCompatibleEndpoint, ThinkingLevel,
+    resolve_any_catalog_spec,
+};
 use rig::agent::hook::{
     AgentHook, CompletionCallAction, CompletionCallEvent, DispatchAction, DispatchEvent,
     HookContext,
@@ -39,9 +42,10 @@ pub fn native_search_additional_params(provider: &ModelProvider) -> Option<serde
         ModelProvider::Anthropic(_, _) => Some(serde_json::json!({
             "tools": [{ "type": "web_search_20250305", "name": "web_search" }]
         })),
-        ModelProvider::Ollama(_) | ModelProvider::OpenRouter(_) | ModelProvider::DeepSeek(_) => {
-            None
-        }
+        ModelProvider::Ollama(_)
+        | ModelProvider::OpenRouter(_)
+        | ModelProvider::DeepSeek(_)
+        | ModelProvider::OpenAiCompatible { .. } => None,
     }
 }
 
@@ -213,44 +217,27 @@ pub fn extract_native_search_summary(messages: &[Message]) -> Option<String> {
 /// context window and pricing when not listed separately under OpenRouter.
 #[must_use]
 pub fn resolve_catalog_spec(provider: &ModelProvider) -> Option<&'static rig::catalog::ModelSpec> {
-    let catalog = rig::catalog::Catalog::builtin();
     match provider {
-        ModelProvider::Gemini(model, _) => catalog
-            .resolve(&format!("gcp.gemini/{}", model.api_name()))
-            .ok()
-            .map(|r| r.spec),
-        ModelProvider::Anthropic(model, _) => catalog
-            .resolve(&format!("anthropic/{}", model.api_name()))
-            .ok()
-            .map(|r| r.spec),
-        ModelProvider::OpenAi(model, _) => catalog
-            .resolve(&format!("openai/{}", model.api_name()))
-            .ok()
-            .map(|r| r.spec),
-        ModelProvider::DeepSeek(model) => catalog
-            .resolve(&format!("deepseek/{}", model.api_name()))
-            .ok()
-            .map(|r| r.spec),
-        ModelProvider::OpenRouter(slug) => {
-            let trimmed = slug.trim();
-            if trimmed.is_empty() {
-                return None;
-            }
-            catalog
-                .resolve(&format!("openrouter/{trimmed}"))
-                .or_else(|_| catalog.resolve(trimmed))
-                .ok()
-                .map(|r| r.spec)
+        ModelProvider::Gemini(model, _) => {
+            boxxy_model_selection::catalog_get_spec("gcp.gemini", model.api_name())
         }
+        ModelProvider::Anthropic(model, _) => {
+            boxxy_model_selection::catalog_get_spec("anthropic", model.api_name())
+        }
+        ModelProvider::OpenAi(model, _) => {
+            boxxy_model_selection::catalog_get_spec("openai", model.api_name())
+        }
+        ModelProvider::DeepSeek(model) => {
+            boxxy_model_selection::catalog_get_spec("deepseek", model.api_name())
+        }
+        ModelProvider::OpenRouter(slug) => resolve_any_catalog_spec(slug),
+        ModelProvider::OpenAiCompatible { model_id, .. } => resolve_any_catalog_spec(model_id),
         ModelProvider::Ollama(name) => {
             let trimmed = name.trim();
             if trimmed.is_empty() {
                 return None;
             }
-            catalog
-                .resolve(&format!("ollama/{trimmed}"))
-                .ok()
-                .map(|r| r.spec)
+            boxxy_model_selection::catalog_get_spec("ollama", trimmed)
         }
     }
 }
@@ -258,7 +245,29 @@ pub fn resolve_catalog_spec(provider: &ModelProvider) -> Option<&'static rig::ca
 /// Returns the model's maximum context window in tokens from [`rig::catalog::Catalog::builtin`], if known.
 #[must_use]
 pub fn model_context_window(provider: &Option<ModelProvider>) -> Option<u64> {
+    model_context_window_with_endpoints(provider, &[])
+}
+
+/// Returns the model's maximum context window in tokens, checking custom endpoint overrides first
+/// and falling back to [`rig::catalog::Catalog::builtin`].
+#[must_use]
+pub fn model_context_window_with_endpoints(
+    provider: &Option<ModelProvider>,
+    endpoints: &[OpenAiCompatibleEndpoint],
+) -> Option<u64> {
     let p = provider.as_ref()?;
+    if let ModelProvider::OpenAiCompatible {
+        provider_name,
+        model_id,
+        ..
+    } = p
+        && let Some(ep) = endpoints.iter().find(|e| e.name == *provider_name)
+        && let Some(custom_model) = ep.find_model(model_id)
+        && let Some(ctx) = custom_model.context_window.filter(|&w| w > 0)
+    {
+        return Some(ctx);
+    }
+
     resolve_catalog_spec(p)
         .and_then(|spec| spec.context_window)
         .map(u64::from)
@@ -267,16 +276,55 @@ pub fn model_context_window(provider: &Option<ModelProvider>) -> Option<u64> {
 /// Ensures `usage.cost` is populated when the model's pricing is known in [`rig::catalog::Catalog::builtin`]
 /// (e.g., for OpenRouter models resolved via base-vendor fallback). Local `Ollama` models are never priced.
 pub fn enrich_usage_with_catalog_cost(
-    mut usage: rig::completion::Usage,
+    usage: rig::completion::Usage,
     provider: &Option<ModelProvider>,
 ) -> rig::completion::Usage {
-    if usage.cost.is_some() {
-        return usage;
-    }
+    enrich_usage_with_endpoints_cost(usage, provider, &[])
+}
+
+/// Populates `usage.cost` using:
+/// 1. Custom `OpenAiCompatibleEndpoint` model pricing overrides (or `$0.00` when `endpoint.zero_cost` is true),
+/// 2. Provider-reported `usage.cost` on the wire,
+/// 3. Fallback pricing from [`rig::catalog::Catalog::builtin`].
+pub fn enrich_usage_with_endpoints_cost(
+    mut usage: rig::completion::Usage,
+    provider: &Option<ModelProvider>,
+    endpoints: &[OpenAiCompatibleEndpoint],
+) -> rig::completion::Usage {
     let Some(p) = provider.as_ref() else {
         return usage;
     };
     if matches!(p, ModelProvider::Ollama(_)) {
+        return usage;
+    }
+
+    if let ModelProvider::OpenAiCompatible {
+        provider_name,
+        model_id,
+        ..
+    } = p
+        && let Some(ep) = endpoints.iter().find(|e| e.name == *provider_name)
+    {
+        if let Some(custom_model) = ep.find_model(model_id)
+            && (custom_model.input_cost_per_1m.is_some()
+                || custom_model.output_cost_per_1m.is_some())
+        {
+            let pricing = rig::catalog::Pricing::new(
+                custom_model.input_cost_per_1m.unwrap_or(0.0),
+                custom_model.output_cost_per_1m.unwrap_or(0.0),
+            );
+            if let Some(cost) = pricing.cost(&usage) {
+                usage.cost = Some(cost);
+            }
+            return usage;
+        }
+        if ep.zero_cost {
+            usage.cost = None;
+            return usage;
+        }
+    }
+
+    if usage.cost.is_some() {
         return usage;
     }
     if let Some(spec) = resolve_catalog_spec(p)
@@ -421,8 +469,63 @@ pub fn build_provider_model(
                 None,
             )
         }
+        ModelProvider::OpenAiCompatible {
+            provider_name,
+            model_id,
+            thinking,
+        } => {
+            let endpoint = creds
+                .openai_compatible_endpoints
+                .iter()
+                .find(|e| e.name == *provider_name);
+
+            let base_url = endpoint
+                .map(|e| e.base_url.trim())
+                .filter(|u| !u.is_empty())
+                .unwrap_or("http://localhost:8000/v1");
+
+            let raw_key = creds
+                .api_keys
+                .get(provider_name.as_str())
+                .cloned()
+                .filter(|k| !k.trim().is_empty())
+                .or_else(|| {
+                    endpoint
+                        .and_then(|e| e.api_key_env.as_deref())
+                        .map(str::trim)
+                        .filter(|v| !v.is_empty())
+                        .and_then(|var| std::env::var(var).ok())
+                        .filter(|k| !k.trim().is_empty())
+                })
+                .unwrap_or_else(|| "not-needed".to_string());
+
+            let route = endpoint
+                .and_then(|e| e.find_model(model_id))
+                .map(|m| m.route)
+                .unwrap_or_else(|| OpenAiApiRoute::infer_for_model(base_url, model_id));
+
+            let mut config = rig::providers::openai::OpenAIConfig::new(raw_key.trim())
+                .with_base_url(base_url);
+            config.dialect.quirks.done_without_finish_reason = true;
+            let client = config.client();
+
+            let dyn_model: rig::DynModel<rig::operation::Completion> = match route {
+                OpenAiApiRoute::ChatCompletions => client.chat(model_id.as_str()).into(),
+                OpenAiApiRoute::Responses => client.responses(model_id.as_str()).into(),
+            };
+
+            let reasoning = thinking.map(map_thinking_level);
+            (
+                dyn_model,
+                provider_name.clone(),
+                model_id.clone(),
+                reasoning,
+            )
+        }
     }
 }
+
+pub use boxxy_model_selection::fetch_openai_compatible_models;
 
 #[derive(Clone)]
 pub struct ModelContextHook {
@@ -491,6 +594,7 @@ pub struct BoxxyAgent {
     inner: BoxxyAgentInner,
     preamble: String,
     provider: Option<ModelProvider>,
+    endpoints: Vec<OpenAiCompatibleEndpoint>,
 }
 
 #[derive(Clone)]
@@ -541,7 +645,11 @@ impl BoxxyAgent {
                         output
                     );
                 }
-                let usage = enrich_usage_with_catalog_cost(res.usage, &self.provider);
+                let usage = enrich_usage_with_endpoints_cost(
+                    res.usage,
+                    &self.provider,
+                    &self.endpoints,
+                );
                 Ok((output, Some(usage), Some(res.messages)))
             }
             Err(e) => {
@@ -593,7 +701,11 @@ impl BoxxyAgent {
                         output
                     );
                 }
-                let usage = enrich_usage_with_catalog_cost(res.usage, &self.provider);
+                let usage = enrich_usage_with_endpoints_cost(
+                    res.usage,
+                    &self.provider,
+                    &self.endpoints,
+                );
                 Ok((output, Some(usage), Some(res.messages)))
             }
             Err(e) => {
@@ -614,6 +726,7 @@ impl BoxxyAgent {
 pub struct AiCredentials {
     pub api_keys: std::collections::HashMap<String, String>,
     pub ollama_url: String,
+    pub openai_compatible_endpoints: Vec<OpenAiCompatibleEndpoint>,
 }
 
 impl AiCredentials {
@@ -621,7 +734,17 @@ impl AiCredentials {
         Self {
             api_keys,
             ollama_url,
+            openai_compatible_endpoints: Vec::new(),
         }
+    }
+
+    #[must_use]
+    pub fn with_custom_endpoints(
+        mut self,
+        endpoints: Vec<OpenAiCompatibleEndpoint>,
+    ) -> Self {
+        self.openai_compatible_endpoints = endpoints;
+        self
     }
 }
 
@@ -649,6 +772,7 @@ pub fn create_agent_with_options(
                 ),
                 preamble: system_prompt.to_string(),
                 provider: None,
+                endpoints: creds.openai_compatible_endpoints.clone(),
             }
         }
     };
@@ -658,7 +782,8 @@ pub fn create_agent_with_options(
     let mut builder = rig::agent::AgentBuilder::new(model)
         .preamble(system_prompt)
         .cache(CacheRetention::Short)
-        .on_unsupported(OnUnsupported::Ignore);
+        .on_unsupported(OnUnsupported::Ignore)
+        .accept_unknown_finish_reasons(true);
 
     if let Some(reasoning) = reasoning {
         builder = builder.reasoning(reasoning);
@@ -674,6 +799,7 @@ pub fn create_agent_with_options(
         inner: BoxxyAgentInner::Ready(builder.build()),
         preamble: system_prompt.to_string(),
         provider: Some(provider.clone()),
+        endpoints: creds.openai_compatible_endpoints.clone(),
     }
 }
 
@@ -870,5 +996,63 @@ mod tests {
         let ollama = Some(ModelProvider::Ollama("llama3.2:latest".to_string()));
         let ollama_priced = enrich_usage_with_catalog_cost(usage, &ollama);
         assert!(ollama_priced.cost.is_none());
+
+        // OpenAiCompatible: OpenCode Go (zero_cost = true) vs OpenCode Zen (catalog fallback) vs custom override
+        let go_ep = OpenAiCompatibleEndpoint::preset_opencode_go();
+        let mut zen_ep = OpenAiCompatibleEndpoint::preset_opencode_zen();
+        let mut custom_ep = OpenAiCompatibleEndpoint::preset_local_server();
+        custom_ep.name = "Custom vLLM".to_string();
+        custom_ep.zero_cost = false;
+        custom_ep.models.push(boxxy_model_selection::CustomModelConfig {
+            id: "my-local-model".to_string(),
+            display_name: "My Local Model".to_string(),
+            route: OpenAiApiRoute::ChatCompletions,
+            context_window: Some(65_536),
+            thinking_levels: vec![ThinkingLevel::Low, ThinkingLevel::High],
+            input_cost_per_1m: Some(1.50),
+            output_cost_per_1m: Some(6.00),
+        });
+        zen_ep.models.push(boxxy_model_selection::CustomModelConfig::new(
+            "anthropic/claude-sonnet-5",
+        ));
+
+        let endpoints = vec![go_ep, zen_ep, custom_ep];
+
+        let go_prov = Some(ModelProvider::OpenAiCompatible {
+            provider_name: "OpenCode Go".to_string(),
+            model_id: "deepseek-v4-pro".to_string(),
+            thinking: None,
+        });
+        assert_eq!(
+            model_context_window_with_endpoints(&go_prov, &endpoints),
+            Some(1_000_000)
+        );
+        let go_priced = enrich_usage_with_endpoints_cost(usage, &go_prov, &endpoints);
+        assert!(
+            go_priced.cost.is_none(),
+            "Subscription endpoint with zero_cost=true should not add per-token cost"
+        );
+
+        let zen_prov = Some(ModelProvider::OpenAiCompatible {
+            provider_name: "OpenCode Zen".to_string(),
+            model_id: "anthropic/claude-sonnet-5".to_string(),
+            thinking: None,
+        });
+        let zen_priced = enrich_usage_with_endpoints_cost(usage, &zen_prov, &endpoints);
+        assert!(zen_priced.cost.is_some());
+        assert!((zen_priced.cost.unwrap().total - 0.30).abs() < 1e-6);
+
+        let custom_prov = Some(ModelProvider::OpenAiCompatible {
+            provider_name: "Custom vLLM".to_string(),
+            model_id: "my-local-model".to_string(),
+            thinking: Some(ThinkingLevel::High),
+        });
+        assert_eq!(
+            model_context_window_with_endpoints(&custom_prov, &endpoints),
+            Some(65_536)
+        );
+        let custom_priced = enrich_usage_with_endpoints_cost(usage, &custom_prov, &endpoints);
+        // 100k * $1.50/1M ($0.15) + 10k * $6.00/1M ($0.06) = $0.21
+        assert!((custom_priced.cost.unwrap().total - 0.21).abs() < 1e-6);
     }
 }

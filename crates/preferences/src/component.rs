@@ -37,12 +37,26 @@ impl PreferencesComponent {
         let dialog: adw::Dialog = builder.object("dialog").unwrap();
         let stack: adw::ViewStack = builder.object("stack").unwrap();
         let content_title: adw::WindowTitle = builder.object("content_title").unwrap();
+        let apis_stack: gtk::Stack = builder.object("apis_stack").unwrap();
+        let apis_back_btn: gtk::Button = builder.object("apis_back_btn").unwrap();
 
         let esc_handler = gtk::EventControllerKey::new();
         esc_handler.set_propagation_phase(gtk::PropagationPhase::Capture);
         let dialog_esc_clone = dialog.clone();
+        let stack_esc = stack.clone();
+        let apis_stack_esc = apis_stack.clone();
+        let apis_back_esc = apis_back_btn.clone();
+        let title_esc = content_title.clone();
         esc_handler.connect_key_pressed(move |_, keyval, _, _| {
             if keyval == gtk::gdk::Key::Escape {
+                if stack_esc.visible_child_name().as_deref() == Some("apis")
+                    && apis_stack_esc.visible_child_name().as_deref() == Some("editor")
+                {
+                    apis_stack_esc.set_visible_child_name("list");
+                    apis_back_esc.set_visible(false);
+                    title_esc.set_title("APIs");
+                    return gtk::glib::Propagation::Stop;
+                }
                 dialog_esc_clone.close();
                 gtk::glib::Propagation::Stop
             } else {
@@ -76,8 +90,12 @@ impl PreferencesComponent {
 
         let stack_clone = stack.clone();
         let title_clone = content_title.clone();
+        let apis_stack_nav = apis_stack;
+        let apis_back_nav = apis_back_btn;
         category_list.connect_row_selected(move |_, row| {
             if let Some(r) = row {
+                apis_stack_nav.set_visible_child_name("list");
+                apis_back_nav.set_visible(false);
                 let name = match r.widget_name().as_str() {
                     "nav_appearance" => {
                         title_clone.set_title("Appearance");
