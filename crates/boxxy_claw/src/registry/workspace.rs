@@ -178,6 +178,34 @@ impl WorkspaceRegistry {
         }
     }
 
+    pub async fn get_pane_pending_tasks(
+        &self,
+        pane_id: &str,
+    ) -> Vec<crate::engine::ScheduledTask> {
+        let all_tasks = self.tasks.read().await;
+        all_tasks
+            .get(pane_id)
+            .map(|list| {
+                list.iter()
+                    .filter(|t| t.status == crate::engine::TaskStatus::Pending)
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    pub async fn get_pane_pending_task_count(&self, pane_id: &str) -> u32 {
+        let all_tasks = self.tasks.read().await;
+        all_tasks
+            .get(pane_id)
+            .map(|list| {
+                list.iter()
+                    .filter(|t| t.status == crate::engine::TaskStatus::Pending)
+                    .count() as u32
+            })
+            .unwrap_or(0)
+    }
+
     pub async fn get_all_pending_tasks(&self) -> Vec<(String, crate::engine::ScheduledTask)> {
         let all_tasks = self.tasks.read().await;
         let mut pending = Vec::new();
@@ -195,6 +223,60 @@ impl WorkspaceRegistry {
             }
         }
         pending
+    }
+
+    pub async fn get_all_pending_tasks_with_pane(
+        &self,
+    ) -> Vec<(String, String, crate::engine::ScheduledTask)> {
+        let all_tasks = self.tasks.read().await;
+        let panes = self.panes.read().await;
+        let mut pending = Vec::new();
+
+        for (pane_id, tasks) in all_tasks.iter() {
+            let agent_name = panes
+                .get(pane_id)
+                .map(|p| p.name.clone())
+                .unwrap_or_else(|| "Unknown Agent".to_string());
+            for task in tasks {
+                if task.status == crate::engine::TaskStatus::Pending {
+                    pending.push((pane_id.clone(), agent_name.clone(), task.clone()));
+                }
+            }
+        }
+        pending
+    }
+
+    pub async fn rebind_pane(&self, old_id: &str, new_id: String) {
+        if old_id == new_id {
+            return;
+        }
+        {
+            let mut panes = self.panes.write().await;
+            if let Some(mut state) = panes.remove(old_id) {
+                state.id = new_id.clone();
+                panes.insert(new_id.clone(), state);
+            }
+        }
+        {
+            let mut tasks = self.tasks.write().await;
+            if let Some(task_list) = tasks.remove(old_id) {
+                tasks.insert(new_id.clone(), task_list);
+            }
+        }
+        {
+            let mut subs = self.subscriptions.write().await;
+            if let Some(sub_list) = subs.remove(old_id) {
+                subs.insert(new_id.clone(), sub_list);
+            }
+        }
+        {
+            let mut locks = self.locks.write().await;
+            for holder in locks.values_mut() {
+                if holder == old_id {
+                    *holder = new_id.clone();
+                }
+            }
+        }
     }
 
     pub async fn register_pane_tx(

@@ -129,12 +129,21 @@ pub(crate) async fn query_detached_sessions_detailed(
     pty_registry: &registry::PtyRegistry,
 ) -> Vec<DetachedSessionInfo> {
     let detached = pty_registry.list_detached_with_cwd().await;
+    let workspace = boxxy_claw::registry::workspace::global_workspace().await;
+    let claims = boxxy_claw_protocol::characters::CLAIMS_CACHE.load();
+    let catalog = boxxy_claw_protocol::characters::CHARACTER_CACHE.load();
+
     let mut out = Vec::with_capacity(detached.len());
-    for (pid, pane_id, idle_secs, initial_cwd) in detached {
+    for (pid, pane_id, orig_pane_id, idle_secs, initial_cwd) in detached {
+        let pending_tasks = workspace.get_pane_pending_tasks(&orig_pane_id).await;
+        let pending_task_count = pending_tasks.len() as u32;
+        let claim_opt = claims.iter().find(|c| c.holder_id == orig_pane_id);
+        let has_claw = pending_task_count > 0 || claim_opt.is_some();
+
         // If a detached shell has no active foreground/child process anymore
-        // (it returned to an idle shell prompt), reap it instead of prompting
+        // AND no detached AI agent / pending reminder, reap it instead of prompting
         // the user to restore an empty interactive shell.
-        if !shell_has_active_process(pid) {
+        if !shell_has_active_process(pid) && !has_claw {
             log::info!(
                 "pty-registry: reaping idle detached shell pid={} (no active child processes)",
                 pid
@@ -145,6 +154,23 @@ pub(crate) async fn query_detached_sessions_detailed(
             }
             continue;
         }
+
+        let (character_id, character_name, character_slug, session_id) =
+            if let Some(claim) = claim_opt {
+                let char_info = catalog.iter().find(|c| c.config.id == claim.character_id);
+                let name = char_info
+                    .map(|c| c.config.display_name.clone())
+                    .unwrap_or_default();
+                let slug = char_info.map(|c| c.config.name.clone()).unwrap_or_default();
+                (
+                    claim.character_id.clone(),
+                    name,
+                    slug,
+                    claim.session_id.clone(),
+                )
+            } else {
+                (String::new(), String::new(), String::new(), String::new())
+            };
 
         let live_cwd = std::fs::read_link(format!("/proc/{pid}/cwd"))
             .ok()
@@ -157,6 +183,23 @@ pub(crate) async fn query_detached_sessions_detailed(
         {
             fg_proc = child_name;
         }
+        if fg_proc.is_empty() {
+            if let Some(first_task) = pending_tasks.first() {
+                let msg = first_task.payload.trim();
+                let extra = if pending_task_count > 1 {
+                    format!(" (+{} more)", pending_task_count - 1)
+                } else {
+                    String::new()
+                };
+                if !character_name.is_empty() {
+                    fg_proc = format!("{character_name}: \"{msg}\"{extra}");
+                } else {
+                    fg_proc = format!("Reminder: \"{msg}\"{extra}");
+                }
+            } else if !character_name.is_empty() {
+                fg_proc = format!("{character_name} (AI Agent)");
+            }
+        }
         let waiting_for_input = wchan_tty && idle_secs >= 2;
         out.push(DetachedSessionInfo {
             pid,
@@ -165,6 +208,11 @@ pub(crate) async fn query_detached_sessions_detailed(
             cwd: live_cwd,
             foreground_process: fg_proc,
             waiting_for_input,
+            character_id,
+            character_name,
+            character_slug,
+            session_id,
+            pending_task_count,
         });
     }
     out
@@ -799,6 +847,55 @@ mod tests {
         assert_eq!(outcome, registry::DetachOutcome::Terminated);
         assert!(reg.list_detached().await.is_empty());
 
+        let _ = idle_proc.kill();
+        let _ = idle_proc.wait();
+    }
+
+    #[tokio::test]
+    async fn idle_shell_with_pending_claw_task_stays_alive_on_detach() {
+        use nix::fcntl::OFlag;
+        use nix::pty::{grantpt, posix_openpt, unlockpt};
+        use std::os::fd::{FromRawFd, IntoRawFd};
+
+        let mut idle_proc = std::process::Command::new("/bin/sh")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("spawn /bin/sh");
+        let pid = idle_proc.id();
+
+        let master = posix_openpt(OFlag::O_RDWR | OFlag::O_NOCTTY | OFlag::O_NONBLOCK)
+            .expect("posix_openpt");
+        grantpt(&master).expect("grantpt");
+        unlockpt(&master).expect("unlockpt");
+        let master_owned = unsafe { std::os::unix::io::OwnedFd::from_raw_fd(master.into_raw_fd()) };
+
+        let pane_id = format!("pane-reminder-test-{}", uuid::Uuid::new_v4());
+        let workspace = boxxy_claw::registry::workspace::global_workspace().await;
+        workspace
+            .update_pane_tasks(
+                pane_id.clone(),
+                vec![boxxy_claw_protocol::ScheduledTask {
+                    id: uuid::Uuid::new_v4(),
+                    task_type: boxxy_claw_protocol::TaskType::Notification,
+                    payload: "Wake me up".to_string(),
+                    due_at: chrono::Utc::now() + chrono::Duration::seconds(120),
+                    status: boxxy_claw_protocol::TaskStatus::Pending,
+                }],
+            )
+            .await;
+
+        let reg = registry::PtyRegistry::new();
+        reg.register(pid, pane_id.clone(), Some(master_owned)).await;
+        reg.set_persistence(pid, true).await;
+
+        let outcome = reg.detach(pid).await;
+        assert_eq!(outcome, registry::DetachOutcome::Detached);
+        assert_eq!(reg.list_detached().await.len(), 1);
+
+        workspace.update_pane_tasks(pane_id, Vec::new()).await;
+        reg.remove(pid).await;
         let _ = idle_proc.kill();
         let _ = idle_proc.wait();
     }

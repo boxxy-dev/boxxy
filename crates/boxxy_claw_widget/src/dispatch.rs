@@ -45,6 +45,7 @@ pub fn spawn_dispatch(
     is_web_search: Rc<Cell<bool>>,
     agent_name: Rc<RefCell<String>>,
     session_usage: Rc<Cell<SessionUsage>>,
+    pending_tasks: Rc<RefCell<Vec<boxxy_claw_protocol::ScheduledTask>>>,
 ) {
     let overlay_store = overlay.history_store();
 
@@ -417,6 +418,7 @@ pub fn spawn_dispatch(
                     msg_bar.update_ui(status, msg_bar.pin_state.get(), *enabled);
                 }
                 ClawEngineEvent::Evicted => {
+                    *pending_tasks.borrow_mut() = Vec::new();
                     indicator.set_evicted(true);
                     indicator.hide();
                     overlay.set_indicator_slot_visible(false);
@@ -516,6 +518,7 @@ pub fn spawn_dispatch(
                     }
                 }
                 ClawEngineEvent::TaskStatusChanged { tasks, .. } => {
+                    *pending_tasks.borrow_mut() = tasks.clone();
                     let has_pending = tasks
                         .iter()
                         .any(|t| t.status == boxxy_claw_protocol::TaskStatus::Pending);

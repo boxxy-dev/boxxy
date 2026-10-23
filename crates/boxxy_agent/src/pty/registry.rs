@@ -173,8 +173,10 @@ impl RingBuffer {
 
 pub struct PtySession {
     pub pid: u32,
-    /// The pane UUID that owns this PTY, for `list_detached_sessions()`.
+    /// The pane_id / layout_tag exposed in `list_detached_sessions()` for split grouping.
     pub pane_id: String,
+    /// The active terminal pane UUID (`holder_id` in `CharacterRegistry` / `WorkspaceRegistry`).
+    pub original_pane_id: String,
     /// Unique D-Bus name (`:1.xxx`) of the UI client currently attached to this PTY.
     /// Used by `client_tracker` to automatically detach (or SIGTERM) on UI exit/crash.
     pub owner_bus_name: String,
@@ -196,6 +198,10 @@ pub struct PtySession {
     master_fd: Option<OwnedFd>,
 }
 
+fn extract_base_pane_id(pane_id: &str) -> String {
+    pane_id.split("::").next().unwrap_or(pane_id).to_string()
+}
+
 impl PtySession {
     fn new(
         pid: u32,
@@ -205,9 +211,11 @@ impl PtySession {
         persistence_enabled: bool,
         master_fd: Option<OwnedFd>,
     ) -> Self {
+        let original_pane_id = extract_base_pane_id(&pane_id);
         Self {
             pid,
             pane_id,
+            original_pane_id,
             owner_bus_name,
             initial_cwd,
             state: ProcessState::Running,
@@ -253,6 +261,20 @@ impl Default for PtyRegistry {
             changed_tx,
         }
     }
+}
+
+pub async fn has_pending_claw_work_for_pane(pane_id: &str) -> bool {
+    if pane_id.is_empty() {
+        return false;
+    }
+    let workspace = boxxy_claw::registry::workspace::global_workspace().await;
+    if workspace.get_pane_pending_task_count(pane_id).await > 0 {
+        return true;
+    }
+    let claims = boxxy_claw_protocol::characters::CLAIMS_CACHE.load();
+    claims
+        .iter()
+        .any(|c| c.holder_id == pane_id && c.owner_bus_name.is_empty())
 }
 
 impl PtyRegistry {
@@ -386,8 +408,37 @@ impl PtyRegistry {
 
     pub async fn set_pane_id(&self, pid: u32, pane_id: String) {
         if let Some(s) = self.inner.write().await.get_mut(&pid) {
+            if !pane_id.contains("::") {
+                s.original_pane_id = pane_id.clone();
+            }
             s.pane_id = pane_id;
         }
+    }
+
+    pub async fn set_original_pane_id(&self, pid: u32, original_pane_id: String) {
+        if let Some(s) = self.inner.write().await.get_mut(&pid) {
+            s.original_pane_id = original_pane_id;
+        }
+    }
+
+    pub async fn get_original_pane_id(&self, pid: u32) -> Option<String> {
+        self.inner
+            .read()
+            .await
+            .get(&pid)
+            .map(|s| s.original_pane_id.clone())
+    }
+
+    pub async fn find_pid_by_pane_id(&self, pane_id: &str) -> Option<(u32, bool)> {
+        let map = self.inner.read().await;
+        for s in map.values() {
+            if matches!(s.state, ProcessState::Running)
+                && (s.original_pane_id == pane_id || s.pane_id == pane_id)
+            {
+                return Some((s.pid, s.is_detached()));
+            }
+        }
+        None
     }
 
     /// Called by `client_tracker` when a UI process disconnects or crashes.
@@ -473,7 +524,14 @@ impl PtyRegistry {
     }
 
     pub async fn detach_with_snapshot(&self, pid: u32, initial_snapshot: &[u8]) -> DetachOutcome {
-        let has_active_work = super::shell_has_active_process(pid);
+        let orig_pane_id = {
+            let map = self.inner.read().await;
+            map.get(&pid)
+                .map(|s| s.original_pane_id.clone())
+                .unwrap_or_default()
+        };
+        let has_active_work = super::shell_has_active_process(pid)
+            || has_pending_claw_work_for_pane(&orig_pane_id).await;
         let (start_reader, should_kill) = {
             let mut map = self.inner.write().await;
             let Some(s) = map.get_mut(&pid) else {
@@ -562,8 +620,8 @@ impl PtyRegistry {
             .collect()
     }
 
-    /// Returns `(pid, pane_id, idle_secs, initial_cwd)` for all detached sessions.
-    pub async fn list_detached_with_cwd(&self) -> Vec<(u32, String, u64, String)> {
+    /// Returns `(pid, pane_id, original_pane_id, idle_secs, initial_cwd)` for all detached sessions.
+    pub async fn list_detached_with_cwd(&self) -> Vec<(u32, String, String, u64, String)> {
         let now = Instant::now();
         self.inner
             .read()
@@ -574,6 +632,7 @@ impl PtyRegistry {
                 (
                     s.pid,
                     s.pane_id.clone(),
+                    s.original_pane_id.clone(),
                     now.saturating_duration_since(s.last_activity).as_secs(),
                     s.initial_cwd.clone(),
                 )

@@ -18,8 +18,12 @@ pub fn save_window_state(inner: &mut AppWindowInner, width: i32, height: i32, is
 
 pub fn handle_close_request(inner_ref: &Rc<RefCell<AppWindowInner>>, inner: &mut AppWindowInner) {
     let mut pids = Vec::new();
+    let mut window_pane_ids = std::collections::HashSet::new();
     for tab in &inner.tabs {
         pids.extend(tab.controller.get_pids());
+        for pid_str in tab.controller.get_pane_ids() {
+            window_pane_ids.insert(pid_str);
+        }
     }
 
     let inner_clone = inner_ref.clone();
@@ -48,8 +52,13 @@ pub fn handle_close_request(inner_ref: &Rc<RefCell<AppWindowInner>>, inner: &mut
             }
         }
 
-        let workspace = boxxy_claw::registry::workspace::global_workspace().await;
-        let pending_tasks = workspace.get_all_pending_tasks().await;
+        let pending_tasks: Vec<_> = agent
+            .get_pending_tasks()
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|t| !t.is_detached && window_pane_ids.contains(&t.pane_id))
+            .collect();
 
         if running_apps.is_empty() && pending_tasks.is_empty() {
             let tabs: Vec<_> = inner_clone
@@ -100,11 +109,16 @@ pub fn handle_close_request(inner_ref: &Rc<RefCell<AppWindowInner>>, inner: &mut
             group.add(&row);
         }
 
-        for (agent_name, task) in pending_tasks {
+        for task in pending_tasks {
             let type_str = match task.task_type {
                 TaskType::Notification => "Reminder",
                 TaskType::Command => "Scheduled Command",
                 TaskType::Query => "Scheduled Query",
+            };
+            let agent_name = if task.character_name.is_empty() {
+                "AI Agent"
+            } else {
+                &task.character_name
             };
             let row = libadwaita::ActionRow::builder()
                 .title(&task.payload)

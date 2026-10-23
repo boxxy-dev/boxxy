@@ -613,6 +613,63 @@ impl AgentManager {
             .context("Failed to release holder via Agent")
     }
 
+    pub async fn detach_holder(&self, holder_id: String) -> Result<()> {
+        self.agent_proxy
+            .detach_holder(holder_id)
+            .await
+            .context("Failed to detach holder via Agent")
+    }
+
+    pub async fn reattach_holder_by_pid_with_sender(
+        &self,
+        pid: u32,
+        new_pane_id: String,
+        event_tx: async_channel::Sender<ClawEngineEvent>,
+    ) -> Result<Option<(String, SubscriptionGuard)>> {
+        // Subscribe to the existing session_id BEFORE calling reattach_holder_by_pid
+        // if we can find the claim in CLAIMS_CACHE, or right after.
+        // Wait: reattach_holder_by_pid triggers RebindPane asynchronously in the actor loop.
+        // To ensure we don't miss the immediate Identity/RestoreHistory signals emitted by
+        // RebindPane, let's check what reattach_holder_by_pid does!
+        let result_json = self
+            .agent_proxy
+            .reattach_holder_by_pid(pid, new_pane_id)
+            .await
+            .context("Failed to reattach holder by pid via Agent")?;
+
+        let claimed_opt: Option<boxxy_claw_protocol::characters::ClaimedSession> =
+            serde_json::from_str(&result_json).unwrap_or(None);
+
+        let Some(claimed) = claimed_opt else {
+            return Ok(None);
+        };
+
+        let session_id = claimed.session_id;
+        let guard = self
+            .connection
+            .claw_router
+            .subscribe_with_sender(session_id.clone(), event_tx);
+
+        Ok(Some((session_id, guard)))
+    }
+
+    pub async fn get_pending_tasks(&self) -> Result<Vec<boxxy_claw_protocol::PendingTaskInfo>> {
+        let json = self
+            .agent_proxy
+            .get_pending_tasks()
+            .await
+            .context("Failed to get pending tasks via Agent")?;
+        let tasks = serde_json::from_str(&json).unwrap_or_default();
+        Ok(tasks)
+    }
+
+    pub async fn cancel_pending_task(&self, pane_id: String, task_id: String) -> Result<()> {
+        self.agent_proxy
+            .cancel_pending_task(pane_id, task_id)
+            .await
+            .context("Failed to cancel pending task via Agent")
+    }
+
     pub async fn resolve_peer(
         &self,
         query: boxxy_claw_protocol::characters::PeerQuery,

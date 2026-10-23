@@ -94,6 +94,7 @@ pub struct TerminalPaneComponent {
     agent_name: Rc<RefCell<String>>,
     msg_bar: Rc<MsgBarComponent>,
     pub session_usage: Rc<Cell<SessionUsage>>,
+    pending_tasks: Rc<RefCell<Vec<ScheduledTask>>>,
     msgbar_shortcut: gtk::Shortcut,
 }
 
@@ -109,26 +110,6 @@ impl Drop for PaneInner {
             *sub = None;
         }
 
-        // Release the character assignment in the daemon so the character
-        // becomes available for other panes immediately after the tab closes.
-        // TODO: when PTY persistence is stable, mirror it for claw sessions —
-        // if `pty_persistence` is on, keep the session alive in the daemon
-        // (skip end_claw_session) so the conversation can be resumed after the
-        // UI restarts, the same way the shell process survives detach.
-        let session_arc = self.session_id.clone();
-        let pane_id = self.id.clone();
-        glib::spawn_future_local(async move {
-            let sid = session_arc.lock().await.clone();
-            if sid.is_some() {
-                let agent = crate::get_agent().await;
-                let _ = agent.release_holder(pane_id).await;
-            }
-        });
-
-        let Some(pid) = self.pid else {
-            self.terminal.detach_pty();
-            return;
-        };
         if self.already_handled_close {
             self.terminal.detach_pty();
             return;
@@ -141,6 +122,25 @@ impl Drop for PaneInner {
         // idle tab sets `force_terminate_on_close = true` so it doesn't
         // linger in the background.
         let persist = Settings::load().pty_persistence && !self.force_terminate_on_close;
+
+        let session_arc = self.session_id.clone();
+        let pane_id = self.id.clone();
+        glib::spawn_future_local(async move {
+            let sid = session_arc.lock().await.take();
+            if sid.is_some() {
+                let agent = crate::get_agent().await;
+                if persist {
+                    let _ = agent.detach_holder(pane_id).await;
+                } else {
+                    let _ = agent.release_holder(pane_id).await;
+                }
+            }
+        });
+
+        let Some(pid) = self.pid else {
+            self.terminal.detach_pty();
+            return;
+        };
 
         if persist {
             log::info!(
@@ -239,18 +239,36 @@ impl TerminalPaneComponent {
         let (pid, snapshot) = {
             let mut inner = self.inner.borrow_mut();
             inner.already_handled_close = true;
+            // Close per-pane channels and drop the router subscription BEFORE
+            // calling `detach_session_sync` so the closing pane cannot consume
+            // events meant for a future reattached pane, and GTK widget drops
+            // cannot later treat this pane as an unhandled close.
+            inner.claw_event_tx.close();
+            inner.claw_msg_tx.close();
             inner.process_subscriptions.clear();
+            if let Ok(mut sub) = inner.claw_subscription.lock() {
+                *sub = None;
+            }
             let snap = inner.export_snapshot_with_title();
             // Shut down this pane's EventLoop and close its master_fd BEFORE
             // handing the session to the daemon's background reader.
             inner.terminal.detach_pty();
             (inner.pid, snap)
         };
-        self.end_session_sync().await;
+        self.detach_session_sync().await;
         if let Some(pid) = pid {
             let agent = crate::get_agent().await;
             let _ = agent.set_persistence(pid, true).await;
             let _ = agent.detach_with_snapshot(pid, snapshot).await;
+        }
+    }
+
+    pub async fn detach_session_sync(&self) {
+        let sid = self.inner.borrow().session_id.lock().await.take();
+        let pane_id = self.inner.borrow().id.clone();
+        if sid.is_some() {
+            let agent = crate::get_agent().await;
+            let _ = agent.detach_holder(pane_id).await;
         }
     }
 
@@ -259,7 +277,12 @@ impl TerminalPaneComponent {
             let mut inner = self.inner.borrow_mut();
             inner.already_handled_close = true;
             inner.force_terminate_on_close = true;
+            inner.claw_event_tx.close();
+            inner.claw_msg_tx.close();
             inner.process_subscriptions.clear();
+            if let Ok(mut sub) = inner.claw_subscription.lock() {
+                *sub = None;
+            }
             inner.terminal.detach_pty();
             inner.pid
         };
@@ -279,7 +302,7 @@ impl TerminalPaneComponent {
         let session_arc = self.inner.borrow().session_id.clone();
         let pane_id = self.inner.borrow().id.clone();
         glib::spawn_future_local(async move {
-            let sid = session_arc.lock().await.clone();
+            let sid = session_arc.lock().await.take();
             if sid.is_some() {
                 let agent = crate::get_agent().await;
                 let _ = agent.release_holder(pane_id).await;
@@ -288,7 +311,7 @@ impl TerminalPaneComponent {
     }
 
     pub async fn end_session_sync(&self) {
-        let sid = self.inner.borrow().session_id.lock().await.clone();
+        let sid = self.inner.borrow().session_id.lock().await.take();
         let pane_id = self.inner.borrow().id.clone();
         if sid.is_some() {
             let agent = crate::get_agent().await;
@@ -365,6 +388,7 @@ impl TerminalPaneComponent {
         let agent_name = Rc::new(RefCell::new(String::new()));
         let claw_indicator = ClawIndicator::new();
         let session_usage = Rc::new(Cell::new(SessionUsage::default()));
+        let pending_tasks: Rc<RefCell<Vec<ScheduledTask>>> = Rc::new(RefCell::new(Vec::new()));
 
         let (msg_bar, inner) = {
             let tx_msg = claw_sender.clone();
@@ -847,6 +871,7 @@ impl TerminalPaneComponent {
             agent_name.clone(),
             &claw_indicator,
             pending_char_for_overlay,
+            pending_tasks.clone(),
         );
 
         // Badge must be added AFTER the drawer overlay so it renders on top.
@@ -918,6 +943,7 @@ impl TerminalPaneComponent {
             agent_name,
             msg_bar,
             session_usage,
+            pending_tasks,
             msgbar_shortcut,
         }
     }
@@ -928,6 +954,24 @@ impl TerminalPaneComponent {
 
     pub fn get_session_usage(&self) -> SessionUsage {
         self.session_usage.get()
+    }
+
+    pub fn get_pending_tasks(&self) -> Vec<ScheduledTask> {
+        self.pending_tasks.borrow().clone()
+    }
+
+    pub fn has_pending_tasks(&self) -> bool {
+        self.pending_tasks
+            .borrow()
+            .iter()
+            .any(|t| t.status == TaskStatus::Pending)
+    }
+
+    pub fn reveal_claw_chat(&self) {
+        let aname = self.agent_name.borrow().clone();
+        if !aname.is_empty() && !self.claw_popover.is_visible() {
+            self.claw_popover.show_chat_only(&aname);
+        }
     }
 
     pub fn get_total_tokens(&self) -> u64 {
@@ -1028,6 +1072,12 @@ impl TerminalPaneComponent {
         let inner_rc = self.inner.clone();
         let id = self.id();
         let claw_sender = self.claw_sender.clone();
+        let is_claw_active_cell = self.is_claw_active.clone();
+        let session_status_cell = self.session_status.clone();
+        let is_pinned_cell = self.is_pinned.clone();
+        let is_web_search_cell = self.is_web_search.clone();
+        let claw_popover_reattach = self.claw_popover.clone();
+        let agent_name_reattach = self.agent_name.clone();
         let is_claw_active_spawn = self.is_claw_active.get();
 
         glib::spawn_future_local(async move {
@@ -1053,6 +1103,58 @@ impl TerminalPaneComponent {
                             inner.pid = Some(pid);
                         }
                         let _ = agent.set_pane_id(pid, layout_tag).await;
+
+                        // If this detached PTY had a backgrounded ClawSession, rebind it
+                        // to this newly created pane so the character badge, conversation
+                        // history, and pending reminders are restored immediately.
+                        let (event_tx, session_id_ref, claw_sub_ref) = {
+                            let inner = inner_rc.borrow();
+                            (
+                                inner.claw_event_tx.clone(),
+                                inner.session_id.clone(),
+                                inner.claw_subscription.clone(),
+                            )
+                        };
+                        let mut reattached_claw = false;
+                        if let Ok(Some((sid, sub_guard))) = agent
+                            .reattach_holder_by_pid_with_sender(pid, id.clone(), event_tx)
+                            .await
+                        {
+                            reattached_claw = true;
+                            if let Ok(mut guard_slot) = claw_sub_ref.lock() {
+                                *guard_slot = Some(sub_guard);
+                            }
+                            *session_id_ref.lock().await = Some(sid);
+                            is_claw_active_cell.set(true);
+                            *session_status_cell.borrow_mut() = AgentStatus::Waiting;
+                            {
+                                let inner = inner_rc.borrow();
+                                if let Some(ind) = &inner.claw_indicator {
+                                    ind.set_visible(true);
+                                }
+                                inner.msg_bar.update_ui(
+                                    AgentStatus::Waiting,
+                                    is_pinned_cell.get(),
+                                    is_web_search_cell.get(),
+                                );
+                                (inner.callback)(PaneOutput::ClawStateChanged(
+                                    id.clone(),
+                                    true,
+                                    false,
+                                ));
+                            }
+                            let pop = claw_popover_reattach.clone();
+                            let aname = agent_name_reattach.clone();
+                            glib::timeout_add_local_once(
+                                std::time::Duration::from_millis(60),
+                                move || {
+                                    let name = aname.borrow().clone();
+                                    if !name.is_empty() && !pop.is_visible() {
+                                        pop.show_chat_only(&name);
+                                    }
+                                },
+                            );
+                        }
 
                         let has_osc_title = replay_bytes
                             .windows(4)
@@ -1124,7 +1226,7 @@ impl TerminalPaneComponent {
                             }
                         });
 
-                        if is_claw_active_spawn {
+                        if is_claw_active_spawn || reattached_claw {
                             let _ = agent.set_foreground_tracking(pid, true).await;
                         }
                         return;
@@ -1205,7 +1307,7 @@ impl TerminalPaneComponent {
                         env,
                         cols,
                         rows,
-                        pane_id: layout_tag,
+                        pane_id: id.clone(),
                     };
 
                     use std::os::unix::io::{AsRawFd, FromRawFd};
@@ -1220,6 +1322,7 @@ impl TerminalPaneComponent {
                                 let mut inner = inner_rc.borrow_mut();
                                 inner.pid = Some(pid);
                             }
+                            let _ = agent.set_pane_id(pid, layout_tag).await;
 
                             inner_rc.borrow().terminal.attach_pty(master_fd);
 

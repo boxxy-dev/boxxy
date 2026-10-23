@@ -81,9 +81,13 @@ pub async fn start_services(
     });
 
     // Spawn a background task to broadcast detached PTY session changes to all D-Bus
-    // clients (GNOME Shell extension, Waybar, KDE widgets, and Boxxy windows).
+    // clients (GNOME Shell extension, Waybar, KDE widgets, and Boxxy windows), and
+    // garbage-collect any unowned detached CharacterClaims whose backing PTY has exited
+    // and that have no remaining scheduled tasks.
     let mut rx_pty = core.state.pty_registry.subscribe();
     let pty_reg_for_signals = core.state.pty_registry.clone();
+    let reg_for_pty_gc = core.registry.clone();
+    let mgr_for_pty_gc = session_manager.clone();
     let conn_for_pty_signals = conn.clone();
     tokio::spawn(async move {
         loop {
@@ -96,6 +100,33 @@ pub async fn start_services(
                 rx_pty.try_recv(),
                 Ok(()) | Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_))
             ) {}
+
+            // Garbage-collect any detached holder whose PTY is no longer running
+            // and that has no pending tasks.
+            let workspace = boxxy_claw::registry::workspace::global_workspace().await;
+            let snapshot = reg_for_pty_gc.snapshot().await;
+            for claim in snapshot.claims.iter().filter(|c| c.owner_bus_name.is_empty()) {
+                let pty_alive = pty_reg_for_signals
+                    .find_pid_by_pane_id(&claim.holder_id)
+                    .await
+                    .is_some();
+                let has_tasks =
+                    workspace.get_pane_pending_task_count(&claim.holder_id).await > 0;
+                if !pty_alive && !has_tasks {
+                    log::info!(
+                        "Reaping orphaned detached holder {} (PTY exited and no pending tasks)",
+                        claim.holder_id
+                    );
+                    mgr_for_pty_gc.lock().await.shutdown_pane(&claim.holder_id);
+                    let _ = reg_for_pty_gc.release_holder(&claim.holder_id).await;
+                    workspace.release_all_locks(&claim.holder_id).await;
+                    workspace.unregister_pane(claim.holder_id.clone()).await;
+                    workspace
+                        .update_pane_tasks(claim.holder_id.clone(), Vec::new())
+                        .await;
+                }
+            }
+
             let list = crate::pty::query_detached_sessions_detailed(&pty_reg_for_signals).await;
             if let Ok(json) = serde_json::to_string(&list) {
                 let _ = conn_for_pty_signals
@@ -158,6 +189,99 @@ impl ClawSessionManager {
             session.tx.close();
         }
     }
+
+    pub fn rebind_pane(&mut self, old_pane_id: &str, new_pane_id: &str) {
+        self.prune_dead();
+        for s in self.sessions.values_mut() {
+            if s.pane_id == old_pane_id {
+                s.pane_id = new_pane_id.to_string();
+                let _ = s.tx.try_send(ClawMessage::RebindPane {
+                    new_pane_id: new_pane_id.to_string(),
+                });
+            }
+        }
+    }
+}
+
+pub(crate) async fn build_pending_tasks_snapshot(
+    pty_registry: &crate::pty::registry::PtyRegistry,
+) -> Vec<boxxy_claw_protocol::PendingTaskInfo> {
+    let workspace = boxxy_claw::registry::workspace::global_workspace().await;
+    let raw_tasks = workspace.get_all_pending_tasks_with_pane().await;
+    if raw_tasks.is_empty() {
+        return Vec::new();
+    }
+
+    let claims = boxxy_claw_protocol::characters::CLAIMS_CACHE.load();
+    let catalog = boxxy_claw_protocol::characters::CHARACTER_CACHE.load();
+    let now = chrono::Utc::now();
+
+    let mut out = Vec::with_capacity(raw_tasks.len());
+    for (pane_id, fallback_agent_name, task) in raw_tasks {
+        let claim_opt = claims.iter().find(|c| c.holder_id == pane_id);
+        let (character_id, session_id, claim_detached) = if let Some(claim) = claim_opt {
+            (
+                claim.character_id.clone(),
+                claim.session_id.clone(),
+                claim.owner_bus_name.is_empty(),
+            )
+        } else {
+            (String::new(), String::new(), false)
+        };
+
+        let char_info = catalog.iter().find(|c| c.config.id == character_id);
+        let character_name = char_info
+            .map(|c| c.config.display_name.clone())
+            .filter(|s| !s.is_empty())
+            .unwrap_or(fallback_agent_name);
+        let character_slug = char_info
+            .map(|c| c.config.name.clone())
+            .unwrap_or_default();
+
+        let (pid, pty_detached) = match pty_registry.find_pid_by_pane_id(&pane_id).await {
+            Some((p, det)) => (Some(p), det),
+            None => (None, false),
+        };
+
+        let due_at_unix = task.due_at.timestamp();
+        let remaining_secs = (task.due_at - now).num_seconds().max(0);
+
+        out.push(boxxy_claw_protocol::PendingTaskInfo {
+            id: task.id,
+            pane_id,
+            session_id,
+            character_id,
+            character_name,
+            character_slug,
+            task_type: task.task_type,
+            payload: task.payload,
+            due_at_unix,
+            remaining_secs,
+            is_detached: pty_detached || claim_detached,
+            pid,
+        });
+    }
+    out.sort_by_key(|t| t.due_at_unix);
+    out
+}
+
+pub(crate) async fn emit_pending_tasks_changed(
+    conn: &Connection,
+    pty_registry: &crate::pty::registry::PtyRegistry,
+) {
+    let tasks = build_pending_tasks_snapshot(pty_registry).await;
+    if let Ok(json) = serde_json::to_string(&tasks) {
+        let _ = conn
+            .emit_signal(
+                Option::<zbus::names::BusName>::None,
+                "/dev/boxxy/Agent",
+                "dev.boxxy.BoxxyTerminal.Agent",
+                "PendingTasksChanged",
+                &(json,),
+            )
+            .await;
+    }
+    pty_registry.notify_changed();
 }
 
 #[zbus::proxy(
@@ -214,6 +338,32 @@ pub trait Agent {
     /// Terminates a detached background shell (`pid`, or `0` for all).
     async fn terminate_detached_session(&self, pid: u32) -> zbus::Result<()>;
 
+    /// Marks `holder_id` (`pane_id`) as detached in the background so its character claim
+    /// and `ClawSession` actor survive UI tab/window close.
+    async fn detach_holder(&self, holder_id: String) -> zbus::Result<()>;
+
+    /// Rebinds a detached `ClawSession` and `CharacterClaim` from `old_holder_id` to
+    /// `new_holder_id`, triggers UI state hydration, and returns `Option<ClaimedSession>` JSON.
+    async fn reattach_holder(
+        &self,
+        old_holder_id: String,
+        new_holder_id: String,
+    ) -> zbus::Result<String>;
+
+    /// Rebinds a detached `ClawSession` and `CharacterClaim` associated with PTY `pid`
+    /// to `new_holder_id`, triggers UI state hydration, and returns `Option<ClaimedSession>` JSON.
+    async fn reattach_holder_by_pid(
+        &self,
+        pid: u32,
+        new_holder_id: String,
+    ) -> zbus::Result<String>;
+
+    /// Returns a JSON array of `PendingTaskInfo` across all open and detached agent sessions.
+    async fn get_pending_tasks(&self) -> zbus::Result<String>;
+
+    /// Cancels a pending scheduled task (`task_id`) in `pane_id`.
+    async fn cancel_pending_task(&self, pane_id: String, task_id: String) -> zbus::Result<()>;
+
     #[zbus(signal)]
     async fn claw_event(&self, session_id: String, event_json: String) -> zbus::Result<()>;
 
@@ -222,6 +372,9 @@ pub trait Agent {
 
     #[zbus(signal)]
     async fn detached_sessions_changed(&self, sessions_json: String) -> zbus::Result<()>;
+
+    #[zbus(signal)]
+    async fn pending_tasks_changed(&self, tasks_json: String) -> zbus::Result<()>;
 
     #[zbus(signal)]
     async fn restore_detached_requested(&self, pid: u32, cwd: String) -> zbus::Result<()>;
@@ -374,7 +527,11 @@ impl AgentInterface {
         serde_json::to_string(&result).unwrap_or_default()
     }
 
-    async fn release_holder(&self, holder_id: String) {
+    async fn release_holder(
+        &self,
+        #[zbus(connection)] conn: &zbus::Connection,
+        holder_id: String,
+    ) {
         self.session_manager.lock().await.shutdown_pane(&holder_id);
 
         if let Some(claim) = self.core.registry.release_holder(&holder_id).await {
@@ -387,8 +544,109 @@ impl AgentInterface {
             if claim.holder_kind == boxxy_claw_protocol::characters::HolderKind::Pane {
                 let workspace = boxxy_claw::registry::workspace::global_workspace().await;
                 workspace.release_all_locks(&claim.holder_id).await;
-                workspace.unregister_pane(claim.holder_id).await;
+                workspace.unregister_pane(claim.holder_id.clone()).await;
+                workspace
+                    .update_pane_tasks(claim.holder_id, Vec::new())
+                    .await;
             }
+        }
+        emit_pending_tasks_changed(conn, &self.core.state.pty_registry).await;
+    }
+
+    async fn detach_holder(
+        &self,
+        #[zbus(connection)] conn: &zbus::Connection,
+        holder_id: String,
+    ) {
+        if let Some(claim) = self.core.registry.detach_holder(&holder_id).await {
+            log::info!(
+                "Detached holder {} into background (session_id={})",
+                holder_id,
+                claim.session_id
+            );
+            emit_pending_tasks_changed(conn, &self.core.state.pty_registry).await;
+        }
+    }
+
+    async fn reattach_holder(
+        &self,
+        #[zbus(connection)] conn: &zbus::Connection,
+        #[zbus(header)] header: zbus::message::Header<'_>,
+        old_holder_id: String,
+        new_holder_id: String,
+    ) -> String {
+        let owner_bus_name = header
+            .sender()
+            .map(|s| s.as_str().to_string())
+            .unwrap_or_default();
+        let res = self
+            .do_reattach_holder(conn, &old_holder_id, new_holder_id, owner_bus_name)
+            .await;
+        serde_json::to_string(&res).unwrap_or_default()
+    }
+
+    async fn reattach_holder_by_pid(
+        &self,
+        #[zbus(connection)] conn: &zbus::Connection,
+        #[zbus(header)] header: zbus::message::Header<'_>,
+        pid: u32,
+        new_holder_id: String,
+    ) -> String {
+        let owner_bus_name = header
+            .sender()
+            .map(|s| s.as_str().to_string())
+            .unwrap_or_default();
+        let old_holder_opt = self.core.state.pty_registry.get_original_pane_id(pid).await;
+        let res = if let Some(old_holder_id) = old_holder_opt {
+            self.core
+                .state
+                .pty_registry
+                .set_original_pane_id(pid, new_holder_id.clone())
+                .await;
+            self.do_reattach_holder(conn, &old_holder_id, new_holder_id, owner_bus_name)
+                .await
+        } else {
+            None
+        };
+        serde_json::to_string(&res).unwrap_or_default()
+    }
+
+    async fn get_pending_tasks(&self) -> String {
+        let tasks = build_pending_tasks_snapshot(&self.core.state.pty_registry).await;
+        serde_json::to_string(&tasks).unwrap_or_else(|_| "[]".to_string())
+    }
+
+    async fn cancel_pending_task(
+        &self,
+        #[zbus(connection)] conn: &zbus::Connection,
+        pane_id: String,
+        task_id: String,
+    ) {
+        let Ok(parsed_id) = uuid::Uuid::parse_str(&task_id) else {
+            return;
+        };
+        let tx_opt = {
+            let manager = self.session_manager.lock().await;
+            manager
+                .sessions
+                .values()
+                .find(|s| s.pane_id == pane_id)
+                .map(|s| s.tx.clone())
+        };
+        if let Some(tx) = tx_opt {
+            let _ = tx
+                .send(ClawMessage::CancelTask { task_id: parsed_id })
+                .await;
+        } else {
+            let workspace = boxxy_claw::registry::workspace::global_workspace().await;
+            let raw = workspace.get_all_pending_tasks_with_pane().await;
+            let remaining: Vec<boxxy_claw_protocol::ScheduledTask> = raw
+                .into_iter()
+                .filter(|(p, _, t)| p == &pane_id && t.id != parsed_id)
+                .map(|(_, _, t)| t)
+                .collect();
+            workspace.update_pane_tasks(pane_id, remaining).await;
+            emit_pending_tasks_changed(conn, &self.core.state.pty_registry).await;
         }
     }
 
@@ -570,6 +828,12 @@ impl AgentInterface {
     ) -> zbus::Result<()>;
 
     #[zbus(signal)]
+    pub async fn pending_tasks_changed(
+        emitter: &SignalEmitter<'_>,
+        tasks_json: String,
+    ) -> zbus::Result<()>;
+
+    #[zbus(signal)]
     pub async fn restore_detached_requested(
         emitter: &SignalEmitter<'_>,
         pid: u32,
@@ -632,7 +896,11 @@ impl AgentInterface {
             .collect()
     }
 
-    async fn terminate_detached_session(&self, pid: u32) {
+    async fn terminate_detached_session(
+        &self,
+        #[zbus(connection)] conn: &zbus::Connection,
+        pid: u32,
+    ) {
         let list = crate::pty::query_detached_sessions_detailed(&self.core.state.pty_registry).await;
         let targets: Vec<u32> = if pid == 0 {
             list.into_iter().map(|s| s.pid).collect()
@@ -644,6 +912,26 @@ impl AgentInterface {
         };
 
         for target_pid in targets {
+            if let Some(orig_pane_id) = self
+                .core
+                .state
+                .pty_registry
+                .get_original_pane_id(target_pid)
+                .await
+            {
+                self.session_manager
+                    .lock()
+                    .await
+                    .shutdown_pane(&orig_pane_id);
+                if let Some(claim) = self.core.registry.release_holder(&orig_pane_id).await {
+                    let workspace = boxxy_claw::registry::workspace::global_workspace().await;
+                    workspace.release_all_locks(&claim.holder_id).await;
+                    workspace.unregister_pane(claim.holder_id.clone()).await;
+                    workspace
+                        .update_pane_tasks(claim.holder_id, Vec::new())
+                        .await;
+                }
+            }
             self.core
                 .state
                 .pty_registry
@@ -653,27 +941,20 @@ impl AgentInterface {
                 libc::kill(-(target_pid as i32), libc::SIGTERM);
             }
         }
-        self.core.state.pty_registry.notify_changed();
+        emit_pending_tasks_changed(conn, &self.core.state.pty_registry).await;
     }
 }
 
-/// Converts select `ClawEngineEvent`s into host desktop notifications when in Ghost Mode.
-///
-/// When at least one UI window is attached (`!ghost.is_ghost()`), `boxxy-window`
-/// handles `TaskCompleted`, `LongTaskCompleted`, and `PushGlobalNotification` via
-/// `gio::Notification` (with character avatars and focus-suppression). When no UI is
-/// attached (`ghost.is_ghost()`), the daemon emits desktop notifications directly over
-/// `org.freedesktop.Notifications` so background reminders and long tasks are never lost.
+/// Converts select `ClawEngineEvent`s into host desktop notifications over
+/// `org.freedesktop.Notifications` so reminders and long tasks always appear
+/// reliably on all Linux desktops (COSMIC, KDE, Sway, GNOME) whether Boxxy
+/// Terminal is open, unfocused, or running in Ghost Mode.
 async fn maybe_send_desktop_notification(
     conn: &Connection,
-    ghost: &crate::daemon::lifecycle::GhostMode,
+    _ghost: &crate::daemon::lifecycle::GhostMode,
     agent_name: &str,
     event: &ClawEngineEvent,
 ) {
-    if !ghost.is_ghost() {
-        return;
-    }
-
     let first_name = agent_name.split_whitespace().next().unwrap_or(agent_name);
     match event {
         ClawEngineEvent::PushGlobalNotification { title, message } => {
@@ -707,6 +988,21 @@ impl AgentInterface {
         boxxy_claw_protocol::characters::ClaimedSession,
         boxxy_claw_protocol::characters::ClaimError,
     > {
+        // Look up any detached holder that currently owns `character_id` so we can
+        // shut down its background actor if it is being reclaimed by a new pane.
+        let mut reclaimed_detached_holders = Vec::new();
+        {
+            let snapshot = self.core.registry.snapshot().await;
+            for c in snapshot.claims {
+                if c.character_id == character_id
+                    && c.holder_id != holder_id
+                    && c.owner_bus_name.is_empty()
+                {
+                    reclaimed_detached_holders.push(c.holder_id);
+                }
+            }
+        }
+
         let claim_res = self
             .core
             .registry
@@ -717,6 +1013,17 @@ impl AgentInterface {
                 owner_bus_name.clone(),
             )
             .await;
+
+        if claim_res.is_ok() && !reclaimed_detached_holders.is_empty() {
+            let workspace = boxxy_claw::registry::workspace::global_workspace().await;
+            let mut mgr = self.session_manager.lock().await;
+            for stale_id in reclaimed_detached_holders {
+                mgr.shutdown_pane(&stale_id);
+                workspace.release_all_locks(&stale_id).await;
+                workspace.unregister_pane(stale_id.clone()).await;
+                workspace.update_pane_tasks(stale_id, Vec::new()).await;
+            }
+        }
 
         match claim_res {
             Ok(claimed_session) => {
@@ -778,6 +1085,7 @@ impl AgentInterface {
                 let emitter = emitter.to_owned();
                 let conn_clone = conn.clone();
                 let ghost_clone = self.core.ghost.clone();
+                let pty_reg_clone = self.core.state.pty_registry.clone();
                 let character_display_name_clone = character_display_name.clone();
                 tokio::spawn(async move {
                     while let Ok(event) = rx_ui.recv().await {
@@ -788,6 +1096,14 @@ impl AgentInterface {
                             &event,
                         )
                         .await;
+
+                        if matches!(
+                            event,
+                            ClawEngineEvent::TaskStatusChanged { .. }
+                                | ClawEngineEvent::TaskCompleted { .. }
+                        ) {
+                            emit_pending_tasks_changed(&conn_clone, &pty_reg_clone).await;
+                        }
 
                         if let Ok(event_json) = serde_json::to_string(&event) {
                             let _ =
@@ -801,6 +1117,57 @@ impl AgentInterface {
             }
             Err(e) => Err(e),
         }
+    }
+
+    async fn do_reattach_holder(
+        &self,
+        conn: &zbus::Connection,
+        old_holder_id: &str,
+        new_holder_id: String,
+        owner_bus_name: String,
+    ) -> Option<boxxy_claw_protocol::characters::ClaimedSession> {
+        let mut resolved_old = old_holder_id.to_string();
+        let mut claimed = self
+            .core
+            .registry
+            .reattach_holder(&resolved_old, new_holder_id.clone(), owner_bus_name.clone())
+            .await;
+
+        // Fallback: if `old_holder_id` did not match directly (e.g. only a single
+        // unowned detached claim exists in `CharacterRegistry`), rebind that detached
+        // claim so the backgrounded agent session is never stranded.
+        if claimed.is_none() {
+            let snap = self.core.registry.snapshot().await;
+            let unowned: Vec<_> = snap
+                .claims
+                .into_iter()
+                .filter(|c| c.owner_bus_name.is_empty())
+                .collect();
+            if unowned.len() == 1 {
+                resolved_old = unowned[0].holder_id.clone();
+                claimed = self
+                    .core
+                    .registry
+                    .reattach_holder(&resolved_old, new_holder_id.clone(), owner_bus_name)
+                    .await;
+            }
+        }
+
+        let claimed = claimed?;
+        log::info!(
+            "Reattached holder {} -> {} (session_id={})",
+            resolved_old,
+            new_holder_id,
+            claimed.session_id
+        );
+
+        self.session_manager
+            .lock()
+            .await
+            .rebind_pane(&resolved_old, &new_holder_id);
+
+        emit_pending_tasks_changed(conn, &self.core.state.pty_registry).await;
+        Some(claimed)
     }
 }
 

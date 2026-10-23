@@ -408,6 +408,9 @@ impl ClawSession {
                 self.handle_task_completed_event(ctx, &session_ctx, task_id, result)
                     .await;
             }
+            ClawMessage::RebindPane { new_pane_id } => {
+                self.handle_rebind_pane(ctx, new_pane_id).await;
+            }
         }
     }
 }

@@ -65,6 +65,14 @@ impl TerminalController {
         self.controller.get_session_usage()
     }
 
+    pub fn get_pending_tasks(&self) -> Vec<boxxy_claw_protocol::ScheduledTask> {
+        self.controller.get_pending_tasks()
+    }
+
+    pub fn has_pending_tasks(&self) -> bool {
+        self.controller.has_pending_tasks()
+    }
+
     pub fn get_total_tokens(&self) -> u64 {
         self.controller.get_total_tokens()
     }

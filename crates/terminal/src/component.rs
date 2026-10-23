@@ -170,6 +170,15 @@ impl TerminalComponent {
             .collect()
     }
 
+    pub fn get_pane_ids(&self) -> Vec<String> {
+        self.inner
+            .borrow()
+            .panes
+            .keys()
+            .cloned()
+            .collect()
+    }
+
     pub fn send_text(&self, text: &str) {
         let active_id = self.inner.borrow().active_pane_id.clone();
         if let Some(pane) = self.inner.borrow().panes.get(&active_id) {
@@ -711,6 +720,23 @@ impl TerminalComponent {
             .get(&inner.active_pane_id)
             .map(|p| p.controller.get_session_usage())
             .unwrap_or_default()
+    }
+
+    pub fn get_pending_tasks(&self) -> Vec<boxxy_claw_protocol::ScheduledTask> {
+        let inner = self.inner.borrow();
+        inner
+            .panes
+            .get(&inner.active_pane_id)
+            .map(|p| p.controller.get_pending_tasks())
+            .unwrap_or_default()
+    }
+
+    pub fn has_pending_tasks(&self) -> bool {
+        let inner = self.inner.borrow();
+        inner
+            .panes
+            .values()
+            .any(|p| p.controller.has_pending_tasks())
     }
 
     pub fn get_total_tokens(&self) -> u64 {

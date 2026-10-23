@@ -85,17 +85,17 @@ impl Tool for ScheduleTaskTool {
             )
         };
 
+        let workspace = crate::registry::workspace::global_workspace().await;
+        workspace.update_pane_tasks(pane_id, tasks.clone()).await;
+
         let _ = self
             .tx_ui
             .send(ClawEngineEvent::TaskStatusChanged {
                 agent_name,
                 character_id,
-                tasks: tasks.clone(),
+                tasks,
             })
             .await;
-
-        let workspace = crate::registry::workspace::global_workspace().await;
-        workspace.update_pane_tasks(pane_id, tasks).await;
 
         let out = ScheduleTaskOutput {
             success: true,
@@ -217,17 +217,17 @@ impl Tool for CancelTaskTool {
         };
 
         let out = if found {
+            let workspace = crate::registry::workspace::global_workspace().await;
+            workspace.update_pane_tasks(pane_id, tasks.clone()).await;
+
             let _ = self
                 .tx_ui
                 .send(ClawEngineEvent::TaskStatusChanged {
                     agent_name,
                     character_id,
-                    tasks: tasks.clone(),
+                    tasks,
                 })
                 .await;
-
-            let workspace = crate::registry::workspace::global_workspace().await;
-            workspace.update_pane_tasks(pane_id, tasks).await;
 
             CancelTaskOutput {
                 success: true,

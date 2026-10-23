@@ -462,10 +462,6 @@ impl AppWindow {
             crate::update::update(&inner_ref, AppInput::AdoptOrphanTabs);
         }
 
-        if !is_drag_window && inner_ref.borrow().tabs.is_empty() {
-            crate::update::update(&inner_ref, AppInput::NewTab);
-        }
-
         // Query initial maintenance status, show startup toast if background shells
         // are waiting, and keep the HeaderBar badge synced with the daemon.
         if !is_drag_window {
@@ -479,6 +475,7 @@ impl AppWindow {
                         .send(AppInput::RefreshMaintenanceStatus(status, on_battery))
                         .await;
                 }
+                let mut restored_any = false;
                 if let Ok(pending_restores) = agent.take_pending_restores().await
                     && !pending_restores.is_empty()
                 {
@@ -486,18 +483,23 @@ impl AppWindow {
                         if let Ok(all_detached) = agent.list_detached_sessions_detailed().await
                             && !all_detached.is_empty()
                         {
+                            restored_any = true;
                             let _ = tx_startup
                                 .send(AppInput::ReattachDetachedBatch(all_detached))
                                 .await;
                         }
                     } else {
                         for (pid, cwd) in pending_restores {
+                            restored_any = true;
                             let cwd_opt = (!cwd.is_empty()).then_some(cwd);
                             let _ = tx_startup
                                 .send(AppInput::ReattachDetachedSession(pid, cwd_opt))
                                 .await;
                         }
                     }
+                }
+                if !restored_any {
+                    let _ = tx_startup.send(AppInput::EnsureInitialTab).await;
                 }
                 if let Ok(detached) = agent.list_detached_sessions_detailed().await {
                     if !detached.is_empty() {

@@ -92,7 +92,12 @@ pub fn handle_terminal_event(
                 let page = inner.tab_view.page(widget);
 
                 // Update tab icon (swap: claw is indicator, timer is main icon)
-                if active {
+                if inner.tabs[pos].has_pending_tasks() {
+                    page.set_indicator_icon(Some(&gtk4::gio::ThemedIcon::new(
+                        "boxxy-timer-symbolic",
+                    )));
+                    page.set_indicator_activatable(false);
+                } else if active {
                     page.set_indicator_icon(Some(&gtk4::gio::ThemedIcon::new(
                         "boxxy-boxxyclaw-symbolic",
                     )));
@@ -111,7 +116,12 @@ pub fn handle_terminal_event(
 
                 // Update tab icon
                 let is_claw_active = inner.tabs[pos].controller.is_claw_active();
-                if is_claw_active {
+                if inner.tabs[pos].has_pending_tasks() {
+                    page.set_indicator_icon(Some(&gtk4::gio::ThemedIcon::new(
+                        "boxxy-timer-symbolic",
+                    )));
+                    page.set_indicator_activatable(false);
+                } else if is_claw_active {
                     page.set_indicator_icon(Some(&gtk4::gio::ThemedIcon::new(
                         "boxxy-boxxyclaw-symbolic",
                     )));
@@ -131,6 +141,9 @@ pub fn handle_terminal_event(
                     inner
                         .claw
                         .set_session_usage(inner.tabs[pos].controller.get_session_usage());
+                    inner
+                        .claw
+                        .update_tasks(inner.tabs[pos].get_pending_tasks());
                 }
             }
             TerminalEventKind::FocusClawSidebar => {

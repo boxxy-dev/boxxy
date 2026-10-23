@@ -26,6 +26,7 @@ pub(super) fn setup_claw(
     agent_name: Rc<RefCell<String>>,
     claw_indicator: &ClawIndicator,
     pending_character: std::rc::Rc<std::cell::RefCell<String>>,
+    pending_tasks: Rc<RefCell<Vec<boxxy_claw_protocol::ScheduledTask>>>,
 ) -> (TerminalOverlay, PendingDiagnosis) {
     let pending_proactive_diagnosis =
         Rc::new(RefCell::new(None::<(String, crate::TerminalProposal)>));
@@ -148,6 +149,7 @@ pub(super) fn setup_claw(
         is_web_search,
         agent_name,
         session_usage,
+        pending_tasks,
     );
 
     (claw_popover, pending_proactive_diagnosis)

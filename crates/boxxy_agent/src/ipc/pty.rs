@@ -21,6 +21,16 @@ pub struct DetachedSessionInfo {
     pub cwd: String,
     pub foreground_process: String,
     pub waiting_for_input: bool,
+    #[serde(default)]
+    pub character_id: String,
+    #[serde(default)]
+    pub character_name: String,
+    #[serde(default)]
+    pub character_slug: String,
+    #[serde(default)]
+    pub session_id: String,
+    #[serde(default)]
+    pub pending_task_count: u32,
 }
 
 #[proxy(

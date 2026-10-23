@@ -34,6 +34,7 @@ pub async fn spawn_owner_tracker(
 ) -> anyhow::Result<()> {
     let proxy = zbus::fdo::DBusProxy::new(conn).await?;
     let mut stream = proxy.receive_name_owner_changed().await?;
+    let conn_clone = conn.clone();
 
     tokio::spawn(async move {
         while let Some(sig) = stream.next().await {
@@ -77,6 +78,7 @@ pub async fn spawn_owner_tracker(
             // still attached to this disconnected client. This guarantees crash-resilient
             // PTY persistence even if the UI exited before async Drop futures ran.
             let pty_outcomes = pty_registry.release_owner(bus_name).await;
+            let mut detached_pane_ids = HashSet::new();
             for (pid, outcome) in pty_outcomes {
                 log::info!(
                     "Client {} disconnect released PTY pid={} -> {:?}",
@@ -84,14 +86,37 @@ pub async fn spawn_owner_tracker(
                     pid,
                     outcome
                 );
+                if outcome == crate::pty::registry::DetachOutcome::Detached
+                    && let Some(orig_id) = pty_registry.get_original_pane_id(pid).await
+                {
+                    detached_pane_ids.insert(orig_id);
+                }
             }
 
             // Fast path: skip lock acquisition if we don't own anything.
             if !registry.has_owner(bus_name).await {
+                if !detached_pane_ids.is_empty() {
+                    crate::ipc::emit_pending_tasks_changed(&conn_clone, &pty_registry).await;
+                }
                 continue;
             }
 
-            log::info!("Client {} releasing all owned claims", bus_name);
+            // Preserve claims whose panes were detached into the background or have
+            // pending AI reminders/tasks so their ClawSession actors keep running.
+            let snapshot = registry.snapshot().await;
+            for claim in snapshot.claims.iter().filter(|c| c.owner_bus_name == bus_name) {
+                let has_tasks = workspace.get_pane_pending_task_count(&claim.holder_id).await > 0;
+                if detached_pane_ids.contains(&claim.holder_id) || has_tasks {
+                    log::info!(
+                        "Preserving detached ClawSession for pane {} on client {} disconnect",
+                        claim.holder_id,
+                        bus_name
+                    );
+                    registry.detach_holder(&claim.holder_id).await;
+                }
+            }
+
+            log::info!("Client {} releasing remaining owned claims", bus_name);
             let released_claims = registry.release_owner(bus_name).await;
 
             // Cascade swarm and session actor cleanup for each released pane claim.
@@ -107,9 +132,13 @@ pub async fn spawn_owner_tracker(
                 if claim.holder_kind == boxxy_claw_protocol::characters::HolderKind::Pane {
                     log::debug!("Cascading swarm cleanup for pane {}", claim.holder_id);
                     workspace.release_all_locks(&claim.holder_id).await;
-                    workspace.unregister_pane(claim.holder_id).await;
+                    workspace.unregister_pane(claim.holder_id.clone()).await;
+                    workspace
+                        .update_pane_tasks(claim.holder_id, Vec::new())
+                        .await;
                 }
             }
+            crate::ipc::emit_pending_tasks_changed(&conn_clone, &pty_registry).await;
         }
     });
 

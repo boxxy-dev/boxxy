@@ -41,14 +41,14 @@ pub struct TransitionRequest {
     pub source: TriggerSource,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum TaskType {
     Notification,
     Command,
     Query,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum TaskStatus {
     Pending,
     Completed,
@@ -62,6 +62,26 @@ pub struct ScheduledTask {
     pub payload: String,
     pub due_at: DateTime<Utc>,
     pub status: TaskStatus,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PendingTaskInfo {
+    pub id: Uuid,
+    pub pane_id: String,
+    pub session_id: String,
+    pub character_id: String,
+    pub character_name: String,
+    pub character_slug: String,
+    pub task_type: TaskType,
+    pub payload: String,
+    /// UTC Unix timestamp (seconds) when the task is due.
+    pub due_at_unix: i64,
+    /// Remaining seconds at snapshot time (`max(0, due_at - now)`).
+    pub remaining_secs: i64,
+    /// True if the owning pane is currently detached in the background.
+    pub is_detached: bool,
+    /// PTY PID associated with the pane, used to restore if detached.
+    pub pid: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -377,6 +397,9 @@ pub enum ClawMessage {
     Abort,
     TurnFinished,
     SettingsInvalidated,
+    RebindPane {
+        new_pane_id: String,
+    },
 }
 
 /// Events emitted from the Claw Engine up to the GTK UI
@@ -647,5 +670,26 @@ mod tests {
         assert_eq!(su.context_window, Some(1_048_576));
         assert_eq!(su.context_percent(), Some(2));
         assert!((su.cost_usd - 0.05).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_pending_task_info_roundtrip() {
+        let info = PendingTaskInfo {
+            id: Uuid::new_v4(),
+            pane_id: "pane-1".to_string(),
+            session_id: "sess-1".to_string(),
+            character_id: "char-1".to_string(),
+            character_name: "Niko".to_string(),
+            character_slug: "niko".to_string(),
+            task_type: TaskType::Notification,
+            payload: "Wake me up".to_string(),
+            due_at_unix: 1_750_000_000,
+            remaining_secs: 120,
+            is_detached: true,
+            pid: Some(4242),
+        };
+        let json = serde_json::to_string(&info).unwrap();
+        let decoded: PendingTaskInfo = serde_json::from_str(&json).unwrap();
+        assert_eq!(info, decoded);
     }
 }

@@ -357,9 +357,18 @@ impl CharacterRegistry {
             return Err(ClaimError::UnknownCharacter { character_id });
         }
 
-        // 3. Validate character is not already taken by another holder
+        // 3. Validate character is not already taken by another live holder.
+        // If an existing claim for `character_id` is an unowned detached claim
+        // (`owner_bus_name.is_empty()`), we allow the new holder to reclaim it
+        // cleanly (returning the orphaned holder_id to the caller if needed, or
+        // removing the stale detached claim from the map).
+        let mut stale_detached_holders = Vec::new();
         for (other_holder_id, claim) in &inner.claims {
             if other_holder_id != &holder_id && claim.character_id == character_id {
+                if claim.owner_bus_name.is_empty() {
+                    stale_detached_holders.push(other_holder_id.clone());
+                    continue;
+                }
                 let holder_display_name = inner
                     .catalog
                     .iter()
@@ -373,6 +382,9 @@ impl CharacterRegistry {
                     holder_display_name,
                 });
             }
+        }
+        for stale_id in stale_detached_holders {
+            inner.claims.remove(&stale_id);
         }
 
         // 4. Mint or reuse identity
@@ -419,6 +431,103 @@ impl CharacterRegistry {
                 session_id,
                 petname,
                 owner_bus_name,
+            },
+        })
+    }
+
+    pub async fn detach_holder(&self, holder_id: &str) -> Option<CharacterClaim> {
+        let mut inner = self.inner.write().await;
+        let (old_owner, out) = {
+            let claim = inner.claims.get_mut(holder_id)?;
+            let old_owner = std::mem::take(&mut claim.owner_bus_name);
+            let out = CharacterClaim {
+                holder_id: holder_id.to_string(),
+                holder_kind: claim.holder_kind,
+                character_id: claim.character_id.clone(),
+                session_id: claim.session_id.clone(),
+                petname: claim.petname.clone(),
+                owner_bus_name: String::new(),
+            };
+            (old_owner, out)
+        };
+
+        if !old_owner.is_empty()
+            && let Some(holders) = inner.by_owner.get_mut(&old_owner)
+        {
+            holders.remove(holder_id);
+            if holders.is_empty() {
+                inner.by_owner.remove(&old_owner);
+            }
+        }
+
+        inner.revision += 1;
+        let snapshot = inner.snapshot();
+        boxxy_claw_protocol::characters::update_caches(
+            snapshot.catalog.clone(),
+            snapshot.claims.clone(),
+            snapshot.revision,
+        );
+        let _ = self.on_change.send(snapshot);
+
+        Some(out)
+    }
+
+    pub async fn reattach_holder(
+        &self,
+        old_holder_id: &str,
+        new_holder_id: String,
+        new_owner_bus_name: String,
+    ) -> Option<ClaimedSession> {
+        let mut inner = self.inner.write().await;
+        let mut claim = if old_holder_id == new_holder_id {
+            inner.claims.remove(old_holder_id)?
+        } else {
+            // If new_holder_id already has a claim for some reason, remove old_holder_id
+            inner.claims.remove(old_holder_id)?
+        };
+
+        if !claim.owner_bus_name.is_empty()
+            && let Some(holders) = inner.by_owner.get_mut(&claim.owner_bus_name)
+        {
+            holders.remove(old_holder_id);
+            if holders.is_empty() {
+                inner.by_owner.remove(&claim.owner_bus_name);
+            }
+        }
+
+        claim.owner_bus_name = new_owner_bus_name.clone();
+        let session_id = claim.session_id.clone();
+        let holder_kind = claim.holder_kind;
+        let character_id = claim.character_id.clone();
+        let petname = claim.petname.clone();
+
+        inner.claims.insert(new_holder_id.clone(), claim);
+        if !new_owner_bus_name.is_empty() {
+            inner
+                .by_owner
+                .entry(new_owner_bus_name.clone())
+                .or_default()
+                .insert(new_holder_id.clone());
+        }
+
+        inner.revision += 1;
+        let snapshot = inner.snapshot();
+        boxxy_claw_protocol::characters::update_caches(
+            snapshot.catalog.clone(),
+            snapshot.claims.clone(),
+            snapshot.revision,
+        );
+        let _ = self.on_change.send(snapshot);
+
+        Some(ClaimedSession {
+            session_id: session_id.clone(),
+            claim: CharacterClaim {
+                holder_id: new_holder_id,
+                holder_kind,
+                character_id,
+                session_id,
+                petname,
+                owner_bus_name: new_owner_bus_name,
             },
         })
     }
@@ -572,5 +681,48 @@ mod tests {
         let target_first =
             find_replacement_character(&old_catalog, &after_remove_c1, "id-1").unwrap();
         assert_eq!(target_first.config.id, "id-2");
+    }
+
+    #[tokio::test]
+    async fn test_detach_and_reattach_holder_preserves_claim_across_release_owner() {
+        let db = boxxy_db::Db::new_in_memory().await.unwrap();
+        let reg = CharacterRegistry::load_or_default(&db).await;
+
+        let catalog = reg.snapshot().await.catalog;
+        let char_id = catalog.first().expect("default character").config.id.clone();
+
+        let claimed = reg
+            .try_claim(
+                "pane-orig".to_string(),
+                HolderKind::Pane,
+                char_id.clone(),
+                ":1.55".to_string(),
+            )
+            .await
+            .expect("initial claim");
+
+        // Detach the holder before client disconnect
+        let detached = reg.detach_holder("pane-orig").await.expect("detach_holder");
+        assert!(detached.owner_bus_name.is_empty());
+
+        // Client disconnect (:1.55) must not release the detached claim
+        let released = reg.release_owner(":1.55").await;
+        assert!(released.is_empty());
+
+        let snap = reg.snapshot().await;
+        assert!(snap.claims.iter().any(|c| c.holder_id == "pane-orig"));
+
+        // Reattach to a new pane ID and new client bus name
+        let reattached = reg
+            .reattach_holder("pane-orig", "pane-new".to_string(), ":1.77".to_string())
+            .await
+            .expect("reattach_holder");
+        assert_eq!(reattached.session_id, claimed.session_id);
+        assert_eq!(reattached.claim.holder_id, "pane-new");
+        assert_eq!(reattached.claim.owner_bus_name, ":1.77");
+
+        let snap_after = reg.snapshot().await;
+        assert!(!snap_after.claims.iter().any(|c| c.holder_id == "pane-orig"));
+        assert!(snap_after.claims.iter().any(|c| c.holder_id == "pane-new"));
     }
 }

@@ -694,17 +694,17 @@ impl ClawSession {
                         })
                         .await;
 
+                    workspace
+                        .update_pane_tasks(self.pane_id.clone(), tasks_clone.clone())
+                        .await;
+
                     let _ = self
                         .tx_ui
                         .send(ClawEngineEvent::TaskStatusChanged {
                             agent_name: agent_name_clone,
                             character_id: self.character_id.clone(),
-                            tasks: tasks_clone.clone(),
+                            tasks: tasks_clone,
                         })
-                        .await;
-
-                    workspace
-                        .update_pane_tasks(self.pane_id.clone(), tasks_clone)
                         .await;
 
                     let session_type = if self.pinned { "pinned" } else { "normal" };
@@ -857,5 +857,141 @@ impl ClawSession {
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
             let _ = tx_ui.send(event).await;
         });
+    }
+
+    pub(super) async fn handle_rebind_pane(
+        &mut self,
+        ctx: &mut super::run::context::RunContext,
+        new_pane_id: String,
+    ) {
+        let old_pane_id = self.pane_id.clone();
+        info!(
+            "Rebinding live ClawSession {} from pane {} -> {}",
+            self.session_id, old_pane_id, new_pane_id
+        );
+        self.pane_id = new_pane_id.clone();
+
+        // Give the D-Bus caller a brief moment to register its `claw_router`
+        // subscription for `session_id` before we emit the hydration events.
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+
+        let (
+            agent_name,
+            character_id,
+            pinned,
+            web_search_enabled,
+            total_tokens,
+            context_tokens,
+            total_cost_usd,
+            status,
+            tasks,
+        ) = {
+            let mut state_lock = self.state.lock().await;
+            state_lock.pane_id = new_pane_id.clone();
+            if state_lock.status == crate::engine::AgentStatus::Off {
+                state_lock.status = crate::engine::AgentStatus::Waiting;
+            }
+            (
+                state_lock.agent_name.clone(),
+                state_lock.character_id.clone(),
+                state_lock.pinned,
+                state_lock.web_search_enabled,
+                state_lock.total_tokens,
+                state_lock.context_tokens,
+                state_lock.total_cost_usd,
+                state_lock.status.clone(),
+                state_lock.pending_tasks.clone(),
+            )
+        };
+
+        ctx.workspace.rebind_pane(&old_pane_id, new_pane_id.clone()).await;
+        ctx.workspace
+            .register_pane_tx(new_pane_id.clone(), self.tx_self.clone())
+            .await;
+
+        let settings = boxxy_preferences::Settings::load();
+        let context_window = boxxy_ai_core::model_context_window_with_endpoints(
+            &settings.claw_model,
+            &settings.openai_compatible_endpoints,
+        );
+
+        let _ = self
+            .tx_ui
+            .send(ClawEngineEvent::Identity {
+                agent_name: agent_name.clone(),
+                character_id: character_id.clone(),
+                pinned,
+                web_search_enabled,
+                total_tokens,
+                context_tokens,
+                context_window,
+                total_cost_usd,
+            })
+            .await;
+
+        let _ = self
+            .tx_ui
+            .send(ClawEngineEvent::SessionStateChanged {
+                agent_name: agent_name.clone(),
+                character_id: character_id.clone(),
+                status,
+            })
+            .await;
+
+        {
+            let db_guard = self.db.lock().await;
+            if db_guard.is_none()
+                && let Ok(db) = Db::new().await
+            {
+                drop(db_guard);
+                *self.db.lock().await = Some(db);
+            }
+        }
+
+        let db_guard = self.db.lock().await;
+        if let Some(db) = &*db_guard {
+            let store = boxxy_db::store::Store::new(db.pool());
+            if let Ok(event_jsons) = store.get_claw_events(&self.session_id).await {
+                let rows: Vec<PersistentClawRow> = event_jsons
+                    .into_iter()
+                    .filter_map(|json| serde_json::from_str::<PersistentClawRow>(&json).ok())
+                    .map(|mut row| {
+                        match &mut row {
+                            PersistentClawRow::Diagnosis { pane_id, .. }
+                            | PersistentClawRow::User { pane_id, .. }
+                            | PersistentClawRow::Suggested { pane_id, .. }
+                            | PersistentClawRow::ProcessList { pane_id, .. }
+                            | PersistentClawRow::ToolCall { pane_id, .. }
+                            | PersistentClawRow::SystemMessage { pane_id, .. }
+                            | PersistentClawRow::FileDiff { pane_id, .. } => {
+                                *pane_id = new_pane_id.clone();
+                            }
+                            PersistentClawRow::Command { .. } => {}
+                        }
+                        row
+                    })
+                    .collect();
+                if !rows.is_empty() {
+                    let _ = self
+                        .tx_ui
+                        .send(ClawEngineEvent::RestoreHistory(rows))
+                        .await;
+                }
+            }
+        }
+        drop(db_guard);
+
+        ctx.workspace
+            .update_pane_tasks(new_pane_id, tasks.clone())
+            .await;
+
+        let _ = self
+            .tx_ui
+            .send(ClawEngineEvent::TaskStatusChanged {
+                agent_name,
+                character_id,
+                tasks,
+            })
+            .await;
     }
 }

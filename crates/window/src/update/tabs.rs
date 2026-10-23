@@ -292,6 +292,8 @@ pub fn close_tab_request(
     };
 
     let pids = inner.tabs[pos].controller.get_pids();
+    let pane_ids: std::collections::HashSet<String> =
+        inner.tabs[pos].controller.get_pane_ids().into_iter().collect();
     let inner_clone = inner_ref.clone();
     gtk4::glib::spawn_future_local(async move {
         let agent = boxxy_terminal::get_agent().await;
@@ -307,39 +309,68 @@ pub fn close_tab_request(
             }
         }
 
-        // If the tab only has an idle shell prompt (no running child commands),
-        // terminate the idle shell cleanly even when `pty_persistence` is on so
-        // explicitly closed tabs don't accumulate empty shells in the background.
-        if running_apps.is_empty() {
+        let tab_pending_tasks: Vec<_> = agent
+            .get_pending_tasks()
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|t| pane_ids.contains(&t.pane_id))
+            .collect();
+
+        // If the tab only has an idle shell prompt (no running child commands)
+        // and no pending AI reminders/tasks, terminate the idle shell cleanly even
+        // when `pty_persistence` is on so explicitly closed tabs don't accumulate
+        // empty shells in the background.
+        if running_apps.is_empty() && tab_pending_tasks.is_empty() {
             let controller_opt = {
-                let mut inner = inner_clone.borrow_mut();
+                let inner = inner_clone.borrow();
                 inner
                     .tabs
                     .iter()
-                    .position(|c| c.controller.widget().as_ptr() as usize == key)
-                    .map(|pos| inner.tabs.remove(pos).controller)
+                    .find(|c| c.controller.widget().as_ptr() as usize == key)
+                    .map(|c| c.controller.clone())
             };
             if let Some(controller) = controller_opt {
                 controller.terminate_on_close_sync().await;
+            }
+            {
+                let mut inner = inner_clone.borrow_mut();
+                if let Some(pos) = inner
+                    .tabs
+                    .iter()
+                    .position(|c| c.controller.widget().as_ptr() as usize == key)
+                {
+                    inner.tabs.remove(pos);
+                }
             }
             inner_clone.borrow().tab_view.close_page_finish(&page, true);
             return;
         }
 
-        // If child processes ARE running and "Always Keep Running Processes in Background"
+        // If child processes or AI tasks ARE running and "Always Keep Running Processes in Background"
         // (`pty_persistence`) is on, detach the busy shell into the background without nagging.
         if boxxy_preferences::Settings::load().pty_persistence {
             let (controller_opt, tx) = {
-                let mut inner = inner_clone.borrow_mut();
+                let inner = inner_clone.borrow();
                 let ctrl = inner
                     .tabs
                     .iter()
-                    .position(|c| c.controller.widget().as_ptr() as usize == key)
-                    .map(|pos| inner.tabs.remove(pos).controller);
+                    .find(|c| c.controller.widget().as_ptr() as usize == key)
+                    .map(|c| c.controller.clone());
                 (ctrl, inner.tx.clone())
             };
             if let Some(controller) = controller_opt {
                 controller.detach_on_close_sync().await;
+            }
+            {
+                let mut inner = inner_clone.borrow_mut();
+                if let Some(pos) = inner
+                    .tabs
+                    .iter()
+                    .position(|c| c.controller.widget().as_ptr() as usize == key)
+                {
+                    inner.tabs.remove(pos);
+                }
             }
             inner_clone.borrow().tab_view.close_page_finish(&page, true);
             let _ = tx.send(crate::state::AppInput::RefreshDetachedSessions).await;
@@ -348,7 +379,7 @@ pub fn close_tab_request(
 
         let dialog = libadwaita::AlertDialog::builder()
             .heading("Close Tab?")
-            .body("Some processes are still running in this tab.")
+            .body("Some processes or AI tasks are still running in this tab.")
             .build();
 
         let group = libadwaita::PreferencesGroup::new();
@@ -356,6 +387,24 @@ pub fn close_tab_request(
             let row = libadwaita::ActionRow::builder()
                 .title(&comm)
                 .subtitle(format!("Process {}", pid))
+                .build();
+            group.add(&row);
+        }
+
+        for task in tab_pending_tasks {
+            let type_str = match task.task_type {
+                boxxy_claw_protocol::TaskType::Notification => "Reminder",
+                boxxy_claw_protocol::TaskType::Command => "Scheduled Command",
+                boxxy_claw_protocol::TaskType::Query => "Scheduled Query",
+            };
+            let agent_name = if task.character_name.is_empty() {
+                "AI Agent"
+            } else {
+                &task.character_name
+            };
+            let row = libadwaita::ActionRow::builder()
+                .title(&task.payload)
+                .subtitle(format!("{} by {}", type_str, agent_name))
                 .build();
             group.add(&row);
         }
@@ -434,30 +483,50 @@ pub fn close_tab_request(
         let response = chosen.get();
         if response == "background" {
             let (controller_opt, tx) = {
-                let mut inner = inner_clone.borrow_mut();
+                let inner = inner_clone.borrow();
                 let ctrl = inner
                     .tabs
                     .iter()
-                    .position(|c| c.controller.widget().as_ptr() as usize == key)
-                    .map(|pos| inner.tabs.remove(pos).controller);
+                    .find(|c| c.controller.widget().as_ptr() as usize == key)
+                    .map(|c| c.controller.clone());
                 (ctrl, inner.tx.clone())
             };
             if let Some(controller) = controller_opt {
                 controller.detach_on_close_sync().await;
             }
+            {
+                let mut inner = inner_clone.borrow_mut();
+                if let Some(pos) = inner
+                    .tabs
+                    .iter()
+                    .position(|c| c.controller.widget().as_ptr() as usize == key)
+                {
+                    inner.tabs.remove(pos);
+                }
+            }
             inner_clone.borrow().tab_view.close_page_finish(&page, true);
             let _ = tx.send(crate::state::AppInput::RefreshDetachedSessions).await;
         } else if response == "close" {
             let controller_opt = {
-                let mut inner = inner_clone.borrow_mut();
+                let inner = inner_clone.borrow();
                 inner
                     .tabs
                     .iter()
-                    .position(|c| c.controller.widget().as_ptr() as usize == key)
-                    .map(|pos| inner.tabs.remove(pos).controller)
+                    .find(|c| c.controller.widget().as_ptr() as usize == key)
+                    .map(|c| c.controller.clone())
             };
             if let Some(controller) = controller_opt {
                 controller.terminate_on_close_sync().await;
+            }
+            {
+                let mut inner = inner_clone.borrow_mut();
+                if let Some(pos) = inner
+                    .tabs
+                    .iter()
+                    .position(|c| c.controller.widget().as_ptr() as usize == key)
+                {
+                    inner.tabs.remove(pos);
+                }
             }
             inner_clone.borrow().tab_view.close_page_finish(&page, true);
         } else {
@@ -658,8 +727,12 @@ pub fn focus_active_terminal(inner: &mut AppWindowInner) {
 
             // Sync Claw UI state
             let tab_is_claw_active = tc.controller.is_claw_active();
+            let tab_has_tasks = tc.has_pending_tasks();
             inner.claw_active = tab_is_claw_active;
-            if tab_is_claw_active {
+            if tab_has_tasks {
+                page.set_indicator_icon(Some(&gio::ThemedIcon::new("boxxy-timer-symbolic")));
+                page.set_indicator_activatable(false);
+            } else if tab_is_claw_active {
                 page.set_indicator_icon(Some(&gio::ThemedIcon::new("boxxy-boxxyclaw-symbolic")));
                 page.set_indicator_activatable(false);
             } else {
@@ -676,6 +749,7 @@ pub fn focus_active_terminal(inner: &mut AppWindowInner) {
             inner
                 .claw
                 .set_session_usage(tc.controller.get_session_usage());
+            inner.claw.update_tasks(tc.get_pending_tasks());
         }
     }
     sync_header_title(inner);

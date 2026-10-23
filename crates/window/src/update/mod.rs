@@ -21,6 +21,11 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
         AppInput::NewTab => {
             tabs::new_tab(&mut inner);
         }
+        AppInput::EnsureInitialTab => {
+            if inner.tabs.is_empty() {
+                tabs::new_tab(&mut inner);
+            }
+        }
         AppInput::NewTabInDir(dir) => {
             tabs::new_tab_in_dir(&mut inner, dir);
         }
@@ -389,7 +394,11 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
             let msg = ready.message.clone();
 
             let is_update = ready.level == crate::widgets::notification::NotificationLevel::Update;
-            let should_notify = !is_update || !inner.window.is_active();
+            // Agent reminders and long-task desktop notifications are emitted directly
+            // by `boxxy-agent` over `org.freedesktop.Notifications` so they work reliably
+            // on non-GNOME desktops (COSMIC, KDE, Sway) as well as GNOME. Only send
+            // `gio::Notification` here for app-level update alerts when unfocused.
+            let should_notify = is_update && !inner.window.is_active();
 
             if should_notify {
                 if let Some(app) = inner.window.application() {
@@ -741,12 +750,24 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
                         format!("{}h idle", s.idle_secs / 3600)
                     };
 
+                    let mut subtitle_str = format!(
+                        "PID {} • {} • {}",
+                        s.pid, cwd_display, idle_display
+                    );
+                    if !s.character_name.is_empty() {
+                        subtitle_str.push_str(&format!(" • {}", s.character_name));
+                    }
+                    if s.pending_task_count > 0 {
+                        subtitle_str.push_str(&format!(
+                            " • {} reminder{}",
+                            s.pending_task_count,
+                            if s.pending_task_count == 1 { "" } else { "s" }
+                        ));
+                    }
+
                     let row = adw::ActionRow::builder()
                         .title(gtk4::glib::markup_escape_text(&title))
-                        .subtitle(gtk4::glib::markup_escape_text(&format!(
-                            "PID {} • {} • {}",
-                            s.pid, cwd_display, idle_display
-                        )))
+                        .subtitle(gtk4::glib::markup_escape_text(&subtitle_str))
                         .build();
 
                     let btn_box = gtk4::Box::new(gtk4::Orientation::Horizontal, 6);

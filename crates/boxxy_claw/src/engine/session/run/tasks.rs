@@ -14,17 +14,17 @@ impl ClawSession {
         let tasks = state_lock.pending_tasks.clone();
         drop(state_lock);
 
+        ctx.workspace
+            .update_pane_tasks(self.pane_id.clone(), tasks.clone())
+            .await;
+
         let _ = self
             .tx_ui
             .send(ClawEngineEvent::TaskStatusChanged {
                 agent_name,
                 character_id,
-                tasks: tasks.clone(),
+                tasks,
             })
-            .await;
-
-        ctx.workspace
-            .update_pane_tasks(self.pane_id.clone(), tasks)
             .await;
     }
 
@@ -229,12 +229,16 @@ impl ClawSession {
             let tasks = state_lock.pending_tasks.clone();
             drop(state_lock);
 
+            ctx.workspace
+                .update_pane_tasks(self.pane_id.clone(), tasks.clone())
+                .await;
+
             let _ = self
                 .tx_ui
                 .send(ClawEngineEvent::TaskStatusChanged {
                     agent_name,
                     character_id: character_id.clone(),
-                    tasks: tasks.clone(),
+                    tasks,
                 })
                 .await;
 
@@ -246,10 +250,6 @@ impl ClawSession {
                     character_id,
                     message: completed_payload,
                 })
-                .await;
-
-            ctx.workspace
-                .update_pane_tasks(self.pane_id.clone(), tasks)
                 .await;
         }
     }

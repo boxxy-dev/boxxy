@@ -231,6 +231,7 @@ impl ClawSession {
                 | ClawMessage::ScrollbackReply { .. }
                 | ClawMessage::TaskCompletedEvent { .. }
                 | ClawMessage::CommandFinished { .. }
+                | ClawMessage::RebindPane { .. }
         )
     }
 
