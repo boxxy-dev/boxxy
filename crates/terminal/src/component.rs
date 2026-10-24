@@ -754,6 +754,10 @@ impl TerminalComponent {
         let catalog = boxxy_claw_protocol::characters::CHARACTER_CACHE.load();
         let mut out = Vec::new();
         for (pane_id, data) in &inner.panes {
+            // Skip panes whose PTY process has already exited.
+            if data.controller.get_pid().is_none() {
+                continue;
+            }
             let claim_opt = claims.iter().find(|c| &c.holder_id == pane_id);
             if data.controller.is_claw_active() || claim_opt.is_some() {
                 let mut name = data.controller.agent_name();

@@ -298,31 +298,42 @@ pub fn close_tab_request(
     let inner_clone = inner_ref.clone();
     gtk4::glib::spawn_future_local(async move {
         let agent = boxxy_terminal::get_agent().await;
+        let daemon_alive = agent.is_daemon_alive().await;
         let mut running_apps = Vec::new();
-        for pid in &pids {
-            if let Ok(Ok(mut procs)) = tokio::time::timeout(
-                std::time::Duration::from_millis(500),
-                agent.get_running_processes(*pid),
-            )
-            .await
-            {
-                running_apps.append(&mut procs);
+        if daemon_alive {
+            for pid in &pids {
+                if let Ok(Ok(mut procs)) = tokio::time::timeout(
+                    std::time::Duration::from_millis(500),
+                    agent.get_running_processes(*pid),
+                )
+                .await
+                {
+                    running_apps.append(&mut procs);
+                }
             }
         }
 
-        let tab_pending_tasks: Vec<_> = agent
-            .get_pending_tasks()
-            .await
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|t| pane_ids.contains(&t.pane_id))
-            .collect();
+        let tab_pending_tasks: Vec<_> = if daemon_alive {
+            agent
+                .get_pending_tasks()
+                .await
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|t| pane_ids.contains(&t.pane_id))
+                .collect()
+        } else {
+            Vec::new()
+        };
 
         // If the tab only has an idle shell prompt (no running child commands),
-        // no pending AI reminders/tasks, and no active AI agent session, terminate
-        // the idle shell cleanly even when `pty_persistence` is on so explicitly
-        // closed tabs don't accumulate empty shells in the background.
-        if running_apps.is_empty() && tab_pending_tasks.is_empty() && active_claw_panes.is_empty() {
+        // no pending AI reminders/tasks, and no active AI agent session (or the
+        // daemon is stopped), terminate the shell cleanly even when `pty_persistence`
+        // is on so explicitly closed tabs don't accumulate empty shells in the background.
+        if !daemon_alive
+            || (running_apps.is_empty()
+                && tab_pending_tasks.is_empty()
+                && active_claw_panes.is_empty())
+        {
             let controller_opt = {
                 let inner = inner_clone.borrow();
                 inner
@@ -331,7 +342,9 @@ pub fn close_tab_request(
                     .find(|c| c.controller.widget().as_ptr() as usize == key)
                     .map(|c| c.controller.clone())
             };
-            if let Some(controller) = controller_opt {
+            if let Some(controller) = controller_opt
+                && daemon_alive
+            {
                 controller.terminate_on_close_sync().await;
             }
             {
@@ -552,6 +565,15 @@ pub fn close_tab_request(
 pub fn close_tab(inner: &mut AppWindowInner, id: String) {
     let unpinned_count = inner.tab_view.n_pages() - inner.tab_view.n_pinned_pages();
     if unpinned_count <= 1 {
+        if let Some(pos) = inner.tabs.iter().position(|c| c.id == id) {
+            inner.tabs.remove(pos);
+        }
+        if inner.tabs.is_empty() {
+            inner.force_close.set(true);
+            inner.window.close();
+            inner.window.destroy();
+            return;
+        }
         inner.window.close();
         return;
     }

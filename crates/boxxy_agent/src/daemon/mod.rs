@@ -67,6 +67,8 @@ impl DaemonCore {
         // Spawn the client owner tracker. This handles automatic cleanup of
         // character assignments, PTY sessions, and swarm locks when a UI process disconnects.
         let workspace = boxxy_claw::registry::workspace::global_workspace().await;
+        let session_manager_for_sig = session_manager.clone();
+        let pty_registry_for_sig = core.state.pty_registry.clone();
         crate::ipc::client_tracker::spawn_owner_tracker(
             &conn,
             registry.clone(),
@@ -117,9 +119,11 @@ impl DaemonCore {
                 Err(_) => return,
             };
             tokio::select! {
-                _ = sigterm.recv() => log::info!("SIGTERM received; flushing telemetry before exit..."),
-                _ = sigint.recv() => log::info!("SIGINT received; flushing telemetry before exit..."),
+                _ = sigterm.recv() => log::info!("SIGTERM received; terminating sessions and flushing telemetry before exit..."),
+                _ = sigint.recv() => log::info!("SIGINT received; terminating sessions and flushing telemetry before exit..."),
             }
+            session_manager_for_sig.lock().await.shutdown_all();
+            pty_registry_for_sig.terminate_all().await;
             boxxy_telemetry::flush_journal().await;
             std::process::exit(0);
         });

@@ -445,6 +445,35 @@ impl ClawSidebarComponent {
             }
         });
 
+        let s_box_reg = comp.sessions_box.clone();
+        let s_list_reg = comp.sessions_list.clone();
+        let h_box_reg = comp.hero_box.clone();
+        let h_icon_reg = comp.hero_icon.clone();
+        let mem_lbl_reg = comp.memories_lbl.clone();
+        let is_new_reg = comp.is_new_session.clone();
+        let sig_reg = comp.rendered_sessions_sig.clone();
+        let active_pop_reg = comp.active_options_popover.clone();
+        let on_res_reg = comp.on_resume_session.clone();
+        let mut reg_rx = boxxy_claw_protocol::characters::subscribe_registry_changes();
+        glib::spawn_future_local(async move {
+            while reg_rx.changed().await.is_ok() {
+                if is_new_reg.get() {
+                    populate_past_sessions(
+                        s_box_reg.clone(),
+                        s_list_reg.clone(),
+                        h_box_reg.clone(),
+                        h_icon_reg.clone(),
+                        mem_lbl_reg.clone(),
+                        is_new_reg.clone(),
+                        sig_reg.clone(),
+                        active_pop_reg.clone(),
+                        on_res_reg.clone(),
+                        true,
+                    );
+                }
+            }
+        });
+
         comp
     }
 
@@ -985,6 +1014,7 @@ fn populate_past_sessions(
         }
 
         let registry = boxxy_claw_protocol::characters::CHARACTER_CACHE.load();
+        let claims = boxxy_claw_protocol::characters::CLAIMS_CACHE.load();
         let chars_dir = boxxy_claw_protocol::character_loader::get_characters_dir().ok();
 
         for session in fetched {
@@ -1011,6 +1041,12 @@ fn populate_past_sessions(
                 &fallback_names,
             );
 
+            let active_claim = char_info
+                .and_then(|info| claims.iter().find(|c| c.character_id == info.config.id));
+            let is_active_session = active_claim.is_some_and(|c| c.session_id == session_id);
+            let is_in_background = active_claim.is_some_and(|c| c.owner_bus_name.is_empty());
+            let is_disabled_row = active_claim.is_some() && !is_active_session;
+
             let char_display = char_info
                 .map(|c| prettify_name(&c.config.display_name))
                 .unwrap_or_else(|| {
@@ -1034,7 +1070,7 @@ fn populate_past_sessions(
             } else {
                 "msgs"
             };
-            let subtitle_text = if is_pinned {
+            let base_meta = if is_pinned {
                 format!(
                     "Pinned • {} • {} {} • {}",
                     char_display, session.message_count, msg_word, age
@@ -1045,9 +1081,29 @@ fn populate_past_sessions(
                     char_display, session.message_count, msg_word, age
                 )
             };
+            let subtitle_text = if is_active_session {
+                if is_in_background {
+                    format!("Active in Background • {base_meta}")
+                } else {
+                    format!("Active in Tab • {base_meta}")
+                }
+            } else if is_disabled_row {
+                if is_in_background {
+                    format!("In Background • {base_meta}")
+                } else {
+                    format!("In Use • {base_meta}")
+                }
+            } else {
+                base_meta
+            };
 
             let row = gtk::ListBoxRow::new();
-            row.add_css_class("activatable");
+            if is_disabled_row {
+                row.set_sensitive(false);
+                row.set_activatable(false);
+            } else {
+                row.add_css_class("activatable");
+            }
 
             let outer_hbox = gtk::Box::new(gtk::Orientation::Horizontal, 8);
             outer_hbox.set_margin_top(6);
@@ -1058,6 +1114,19 @@ fn populate_past_sessions(
 
             let resume_btn_content = gtk::Box::new(gtk::Orientation::Horizontal, 10);
             resume_btn_content.set_hexpand(true);
+            if is_active_session {
+                resume_btn_content.set_tooltip_text(Some(if is_in_background {
+                    "Reattach active background session"
+                } else {
+                    "Focus active session"
+                }));
+            } else if is_disabled_row {
+                resume_btn_content.set_tooltip_text(Some(if is_in_background {
+                    "Character is already running in the background"
+                } else {
+                    "Character is currently in use"
+                }));
+            }
 
             let avatar = adw::Avatar::new(28, Some(&char_display), true);
             avatar.set_valign(gtk::Align::Center);
@@ -1078,6 +1147,14 @@ fn populate_past_sessions(
 
             let title_hbox = gtk::Box::new(gtk::Orientation::Horizontal, 4);
             title_hbox.set_hexpand(true);
+            if is_active_session {
+                let active_dot = gtk::Label::builder()
+                    .label("•")
+                    .css_classes(["caption", "success", "monospace"])
+                    .valign(gtk::Align::Center)
+                    .build();
+                title_hbox.append(&active_dot);
+            }
             if is_pinned {
                 let pin_icon = gtk::Image::builder()
                     .icon_name("boxxy-view-pin-symbolic")
@@ -1110,15 +1187,17 @@ fn populate_past_sessions(
 
             resume_btn_content.append(&text_vbox);
 
-            let gesture = gtk::GestureClick::new();
-            let sid_for_resume = session_id.clone();
-            let cb_for_resume = on_resume_session.clone();
-            gesture.connect_released(move |_, _, _, _| {
-                if let Some(cb) = cb_for_resume.borrow().as_ref().cloned() {
-                    cb(sid_for_resume.clone());
-                }
-            });
-            resume_btn_content.add_controller(gesture);
+            if !is_disabled_row {
+                let gesture = gtk::GestureClick::new();
+                let sid_for_resume = session_id.clone();
+                let cb_for_resume = on_resume_session.clone();
+                gesture.connect_released(move |_, _, _, _| {
+                    if let Some(cb) = cb_for_resume.borrow().as_ref().cloned() {
+                        cb(sid_for_resume.clone());
+                    }
+                });
+                resume_btn_content.add_controller(gesture);
+            }
             outer_hbox.append(&resume_btn_content);
 
             // Row options button (plain Button + parented Popover to avoid MenuButton press/release race)
@@ -1196,6 +1275,7 @@ fn populate_past_sessions(
             let del_btn = gtk::Button::builder()
                 .css_classes(["flat", "error"])
                 .child(&del_hbox)
+                .sensitive(!is_active_session)
                 .build();
 
             {

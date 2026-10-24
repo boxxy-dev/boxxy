@@ -215,6 +215,20 @@ impl AgentConnection {
                             snapshot.claims,
                             snapshot.revision,
                         );
+                    } else if !boxxy_claw_protocol::characters::CLAIMS_CACHE
+                        .load()
+                        .is_empty()
+                    {
+                        // Daemon is unreachable (e.g. stopped via "Stop Agent"): clear
+                        // volatile claims so the UI never treats dead sessions as active.
+                        last_seen_revision = last_seen_revision.saturating_add(1);
+                        let catalog =
+                            (**boxxy_claw_protocol::characters::CHARACTER_CACHE.load()).clone();
+                        boxxy_claw_protocol::characters::update_caches(
+                            catalog,
+                            Vec::new(),
+                            last_seen_revision,
+                        );
                     }
                 }
             });
@@ -594,6 +608,39 @@ impl AgentManager {
             .subscribe_with_sender(session_id.clone(), event_tx);
 
         Ok((session_id, guard))
+    }
+
+    pub fn subscribe_claw_session(
+        &self,
+        session_id: String,
+        event_tx: async_channel::Sender<ClawEngineEvent>,
+    ) -> SubscriptionGuard {
+        self.connection
+            .claw_router
+            .subscribe_with_sender(session_id, event_tx)
+    }
+
+    pub async fn is_daemon_alive(&self) -> bool {
+        tokio::time::timeout(
+            std::time::Duration::from_millis(250),
+            self.agent_proxy.get_version(),
+        )
+        .await
+        .is_ok_and(|res| res.is_ok())
+    }
+
+    pub async fn terminate_detached_session(&self, pid: u32) -> Result<()> {
+        self.agent_proxy
+            .terminate_detached_session(pid)
+            .await
+            .context("Failed to terminate detached session via Agent")
+    }
+
+    pub async fn request_focus_pane(&self, pane_id: String) -> Result<()> {
+        self.agent_proxy
+            .request_focus_pane(pane_id)
+            .await
+            .context("Failed to request focus pane via Agent")
     }
 
     pub async fn create_claw_session_with_sender(

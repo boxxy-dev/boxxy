@@ -284,13 +284,15 @@ impl CharacterRegistry {
     }
 
     /// Resolves the target character for a resumed session and updates `holder_id`'s
-    /// active claim in the registry so all panes and caches reflect the session's character.
+    /// active claim in the registry (both `character_id` and `session_id`) so all
+    /// panes and caches reflect the resumed session's identity.
     pub async fn resolve_and_update_holder_character(
         &self,
         holder_id: &str,
         session_character_id: &str,
         session_display_name: &str,
         session_agent_name: Option<&str>,
+        resumed_session_id: Option<&str>,
     ) -> Option<(String, String)> {
         let mut inner = self.inner.write().await;
 
@@ -310,15 +312,47 @@ impl CharacterRegistry {
             &fallback_names,
         )?;
 
-        let target_id = resolved.config.id.clone();
-        let target_display = resolved.config.display_name.clone();
+        let mut target_id = resolved.config.id.clone();
+        let mut target_display = resolved.config.display_name.clone();
+
+        // Ensure we never reassign a holder to a character that is already claimed
+        // by another live or detached background holder.
+        let taken_elsewhere = inner
+            .claims
+            .iter()
+            .any(|(other_id, c)| other_id != holder_id && c.character_id == target_id);
+        if taken_elsewhere {
+            if let Some(existing) = inner.claims.get(holder_id)
+                && let Some(existing_info) = inner
+                    .catalog
+                    .iter()
+                    .find(|c| c.config.id == existing.character_id)
+            {
+                target_id = existing_info.config.id.clone();
+                target_display = existing_info.config.display_name.clone();
+            } else if let Some(free_info) = inner.catalog.iter().find(|info| {
+                !inner
+                    .claims
+                    .iter()
+                    .any(|(other_id, c)| other_id != holder_id && c.character_id == info.config.id)
+            }) {
+                target_id = free_info.config.id.clone();
+                target_display = free_info.config.display_name.clone();
+            }
+        }
 
         let mut claim_changed = false;
-        if let Some(claim) = inner.claims.get_mut(holder_id)
-            && claim.character_id != target_id
-        {
-            claim.character_id = target_id.clone();
-            claim_changed = true;
+        if let Some(claim) = inner.claims.get_mut(holder_id) {
+            if claim.character_id != target_id {
+                claim.character_id = target_id.clone();
+                claim_changed = true;
+            }
+            if let Some(new_sid) = resumed_session_id.filter(|s| !s.is_empty())
+                && claim.session_id != new_sid
+            {
+                claim.session_id = new_sid.to_string();
+                claim_changed = true;
+            }
         }
 
         if claim_changed {
@@ -357,18 +391,12 @@ impl CharacterRegistry {
             return Err(ClaimError::UnknownCharacter { character_id });
         }
 
-        // 3. Validate character is not already taken by another live holder.
-        // If an existing claim for `character_id` is an unowned detached claim
-        // (`owner_bus_name.is_empty()`), we allow the new holder to reclaim it
-        // cleanly (returning the orphaned holder_id to the caller if needed, or
-        // removing the stale detached claim from the map).
-        let mut stale_detached_holders = Vec::new();
+        // 3. Validate character is not already taken by another live holder
+        // (including detached background holders where `owner_bus_name` is empty).
+        // Backgrounded characters must never be silently stolen or killed by a new
+        // pane — they can only be reattached via `reattach_holder`.
         for (other_holder_id, claim) in &inner.claims {
             if other_holder_id != &holder_id && claim.character_id == character_id {
-                if claim.owner_bus_name.is_empty() {
-                    stale_detached_holders.push(other_holder_id.clone());
-                    continue;
-                }
                 let holder_display_name = inner
                     .catalog
                     .iter()
@@ -382,9 +410,6 @@ impl CharacterRegistry {
                     holder_display_name,
                 });
             }
-        }
-        for stale_id in stale_detached_holders {
-            inner.claims.remove(&stale_id);
         }
 
         // 4. Mint or reuse identity
@@ -724,5 +749,48 @@ mod tests {
         let snap_after = reg.snapshot().await;
         assert!(!snap_after.claims.iter().any(|c| c.holder_id == "pane-orig"));
         assert!(snap_after.claims.iter().any(|c| c.holder_id == "pane-new"));
+    }
+
+    #[tokio::test]
+    async fn test_detached_holder_blocks_conflicting_try_claim() {
+        let db = boxxy_db::Db::new_in_memory().await.unwrap();
+        let reg = CharacterRegistry::load_or_default(&db).await;
+
+        let catalog = reg.snapshot().await.catalog;
+        let char_id = catalog.first().expect("default character").config.id.clone();
+
+        let claimed = reg
+            .try_claim(
+                "pane-bg".to_string(),
+                HolderKind::Pane,
+                char_id.clone(),
+                ":1.10".to_string(),
+            )
+            .await
+            .expect("initial claim");
+
+        reg.detach_holder("pane-bg").await.expect("detach_holder");
+
+        // Another pane attempting to claim the same character while it is running
+        // in the background must receive AlreadyTaken instead of killing the background claim.
+        let err = reg
+            .try_claim(
+                "pane-other".to_string(),
+                HolderKind::Pane,
+                char_id.clone(),
+                ":1.11".to_string(),
+            )
+            .await
+            .expect_err("detached claim must block conflicting try_claim");
+        assert!(matches!(err, ClaimError::AlreadyTaken { .. }));
+
+        // Original detached claim must still be intact with its session_id
+        let snap = reg.snapshot().await;
+        let bg_claim = snap
+            .claims
+            .iter()
+            .find(|c| c.holder_id == "pane-bg")
+            .expect("detached claim still present");
+        assert_eq!(bg_claim.session_id, claimed.session_id);
     }
 }

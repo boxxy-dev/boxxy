@@ -222,6 +222,24 @@ impl PaneInner {
         snap.extend_from_slice(&self.terminal.export_ansi_snapshot());
         snap
     }
+
+    pub(super) fn mark_pty_exited(
+        &mut self,
+    ) -> Option<std::sync::Arc<tokio::sync::Mutex<Option<String>>>> {
+        if self.already_handled_close {
+            return None;
+        }
+        self.already_handled_close = true;
+        self.pid = None;
+        self.claw_event_tx.close();
+        self.claw_msg_tx.close();
+        self.process_subscriptions.clear();
+        if let Ok(mut sub) = self.claw_subscription.lock() {
+            *sub = None;
+        }
+        self.terminal.detach_pty();
+        Some(self.session_id.clone())
+    }
 }
 
 impl std::fmt::Debug for TerminalPaneComponent {
@@ -264,8 +282,11 @@ impl TerminalPaneComponent {
     }
 
     pub async fn detach_session_sync(&self) {
-        let sid = self.inner.borrow().session_id.lock().await.take();
-        let pane_id = self.inner.borrow().id.clone();
+        let (session_arc, pane_id) = {
+            let inner = self.inner.borrow();
+            (inner.session_id.clone(), inner.id.clone())
+        };
+        let sid = session_arc.lock().await.take();
         if sid.is_some() {
             let agent = crate::get_agent().await;
             let _ = agent.detach_holder(pane_id).await;
@@ -299,8 +320,10 @@ impl TerminalPaneComponent {
     /// Do NOT rely solely on PaneInner::drop for this — GTK closures hold
     /// Rc clones of inner, so drop may fire very late or not at all.
     pub fn end_session(&self) {
-        let session_arc = self.inner.borrow().session_id.clone();
-        let pane_id = self.inner.borrow().id.clone();
+        let (session_arc, pane_id) = {
+            let inner = self.inner.borrow();
+            (inner.session_id.clone(), inner.id.clone())
+        };
         glib::spawn_future_local(async move {
             let sid = session_arc.lock().await.take();
             if sid.is_some() {
@@ -311,8 +334,11 @@ impl TerminalPaneComponent {
     }
 
     pub async fn end_session_sync(&self) {
-        let sid = self.inner.borrow().session_id.lock().await.take();
-        let pane_id = self.inner.borrow().id.clone();
+        let (session_arc, pane_id) = {
+            let inner = self.inner.borrow();
+            (inner.session_id.clone(), inner.id.clone())
+        };
+        let sid = session_arc.lock().await.take();
         if sid.is_some() {
             let agent = crate::get_agent().await;
             let _ = agent.release_holder(pane_id).await;
@@ -495,6 +521,43 @@ impl TerminalPaneComponent {
                                 .filter(|s| !s.is_empty())
                                 .map(str::to_string);
 
+                            // If `/resume <id>` targets a session that is currently running in the
+                            // background (or active in another open pane), reattach or focus it
+                            // instead of creating a conflicting session.
+                            if let Some(ref resume_id) = resume_id_opt {
+                                let existing_claim = boxxy_claw_protocol::characters::CLAIMS_CACHE
+                                    .load()
+                                    .iter()
+                                    .find(|c| c.session_id == *resume_id && c.holder_id != pane_id)
+                                    .cloned();
+                                if let Some(claim) = existing_claim {
+                                    let agent = crate::get_agent().await;
+                                    if claim.owner_bus_name.is_empty() {
+                                        if let Ok(detached) =
+                                            agent.list_detached_sessions_detailed().await
+                                            && let Some(s) = detached.into_iter().find(|s| {
+                                                s.session_id == *resume_id
+                                                    || s.character_id == claim.character_id
+                                                    || s.pane_id == claim.holder_id
+                                            })
+                                        {
+                                            let _ = crate::TERMINAL_EVENT_BUS.send(
+                                                crate::TerminalEvent {
+                                                    id: String::new(),
+                                                    kind: crate::TerminalEventKind::RestoreDetached(
+                                                        s.pid, s.cwd,
+                                                    ),
+                                                },
+                                            );
+                                            return;
+                                        }
+                                    } else {
+                                        let _ = agent.request_focus_pane(claim.holder_id).await;
+                                        return;
+                                    }
+                                }
+                            }
+
                             if !has_session {
                                 let agent = crate::get_agent().await;
 
@@ -529,49 +592,72 @@ impl TerminalPaneComponent {
                                 };
 
                                 if let Ok((session_id, sub_guard)) = agent
-                                    .create_claw_session_with_sender(pane_id, char_id, event_tx)
+                                    .create_claw_session_with_sender(
+                                        pane_id,
+                                        char_id,
+                                        event_tx.clone(),
+                                    )
                                     .await
                                 {
                                     if session_id.is_empty() {
                                         return;
                                     }
-                                    if let Ok(mut guard_slot) = claw_sub_ref.lock() {
-                                        *guard_slot = Some(sub_guard);
-                                    }
-                                    *session_id_ref.lock().await = Some(session_id.clone());
-
-                                    let first_msg = if let Some(resume_id) = resume_id_opt {
-                                        ClawMessage::ResumeSession {
-                                            session_id: resume_id,
+                                    if let Some(resume_id) = resume_id_opt {
+                                        let resume_guard = agent
+                                            .subscribe_claw_session(resume_id.clone(), event_tx);
+                                        if let Ok(mut guard_slot) = claw_sub_ref.lock() {
+                                            *guard_slot = Some(resume_guard);
                                         }
+                                        *session_id_ref.lock().await = Some(resume_id.clone());
+                                        let _ = agent
+                                            .post_claw_message(
+                                                session_id,
+                                                ClawMessage::ResumeSession {
+                                                    session_id: resume_id,
+                                                },
+                                            )
+                                            .await;
                                     } else {
-                                        ClawMessage::ClawQuery {
-                                            query,
-                                            snapshot,
-                                            cwd,
-                                            image_attachments: images,
+                                        if let Ok(mut guard_slot) = claw_sub_ref.lock() {
+                                            *guard_slot = Some(sub_guard);
                                         }
-                                    };
-
-                                    // New conversations need an explicit Initialize so the
-                                    // session announces identity and emits the model-info
-                                    // SystemMessage. ResumeSession has its own init path.
-                                    if matches!(first_msg, ClawMessage::ClawQuery { .. }) {
+                                        *session_id_ref.lock().await = Some(session_id.clone());
                                         let _ = agent
                                             .post_claw_message(
                                                 session_id.clone(),
                                                 ClawMessage::Initialize,
                                             )
                                             .await;
+                                        let _ = agent
+                                            .post_claw_message(
+                                                session_id,
+                                                ClawMessage::ClawQuery {
+                                                    query,
+                                                    snapshot,
+                                                    cwd,
+                                                    image_attachments: images,
+                                                },
+                                            )
+                                            .await;
                                     }
-                                    let _ = agent.post_claw_message(session_id, first_msg).await;
                                 }
                                 return;
                             }
 
                             // Session already exists — send through the established pump.
-                            if let Some(session_id) = resume_id_opt {
-                                let _ = tx.send(ClawMessage::ResumeSession { session_id }).await;
+                            if let Some(resume_id) = resume_id_opt {
+                                let agent = crate::get_agent().await;
+                                let resume_guard =
+                                    agent.subscribe_claw_session(resume_id.clone(), event_tx);
+                                if let Ok(mut guard_slot) = claw_sub_ref.lock() {
+                                    *guard_slot = Some(resume_guard);
+                                }
+                                let _ = tx
+                                    .send(ClawMessage::ResumeSession {
+                                        session_id: resume_id.clone(),
+                                    })
+                                    .await;
+                                *session_id_ref.lock().await = Some(resume_id);
                                 return;
                             }
                             let _ = tx
@@ -980,6 +1066,47 @@ impl TerminalPaneComponent {
             return;
         }
 
+        let (pane_id, session_id_ref, claw_sub_ref, event_tx) = {
+            let inner = self.inner.borrow();
+            (
+                inner.id.clone(),
+                inner.session_id.clone(),
+                inner.claw_subscription.clone(),
+                inner.claw_event_tx.clone(),
+            )
+        };
+
+        // Check if `resume_id` is already an active background or open session
+        // BEFORE mutating this pane's Claw state so reattaching/focusing doesn't
+        // leave the current empty pane in a half-activated state.
+        let existing_claim = boxxy_claw_protocol::characters::CLAIMS_CACHE
+            .load()
+            .iter()
+            .find(|c| c.session_id == resume_id && c.holder_id != pane_id)
+            .cloned();
+        if let Some(claim) = existing_claim {
+            glib::spawn_future_local(async move {
+                let agent = crate::get_agent().await;
+                if claim.owner_bus_name.is_empty() {
+                    if let Ok(detached) = agent.list_detached_sessions_detailed().await
+                        && let Some(s) = detached.into_iter().find(|s| {
+                            s.session_id == resume_id
+                                || s.character_id == claim.character_id
+                                || s.pane_id == claim.holder_id
+                        })
+                    {
+                        let _ = crate::TERMINAL_EVENT_BUS.send(crate::TerminalEvent {
+                            id: String::new(),
+                            kind: crate::TerminalEventKind::RestoreDetached(s.pid, s.cwd),
+                        });
+                    }
+                } else {
+                    let _ = agent.request_focus_pane(claim.holder_id).await;
+                }
+            });
+            return;
+        }
+
         if !self.is_claw_active.get() {
             self.is_claw_active.set(true);
             let mut status = self.session_status.borrow().clone();
@@ -1004,15 +1131,6 @@ impl TerminalPaneComponent {
             ));
         }
 
-        let (pane_id, session_id_ref, claw_sub_ref, event_tx) = {
-            let inner = self.inner.borrow();
-            (
-                inner.id.clone(),
-                inner.session_id.clone(),
-                inner.claw_subscription.clone(),
-                inner.claw_event_tx.clone(),
-            )
-        };
         let tx = self.claw_sender.clone();
         let claw_popover = self.claw_popover.clone();
         let agent_name_rc = self.agent_name.clone();
@@ -1036,17 +1154,18 @@ impl TerminalPaneComponent {
                             .unwrap_or_default()
                     });
 
-                if let Ok((session_id, sub_guard)) = agent
-                    .create_claw_session_with_sender(pane_id, char_id, event_tx)
+                if let Ok((session_id, _sub_guard)) = agent
+                    .create_claw_session_with_sender(pane_id, char_id, event_tx.clone())
                     .await
                 {
                     if session_id.is_empty() {
                         return;
                     }
+                    let resume_guard = agent.subscribe_claw_session(resume_id.clone(), event_tx);
                     if let Ok(mut guard_slot) = claw_sub_ref.lock() {
-                        *guard_slot = Some(sub_guard);
+                        *guard_slot = Some(resume_guard);
                     }
-                    *session_id_ref.lock().await = Some(session_id.clone());
+                    *session_id_ref.lock().await = Some(resume_id.clone());
                     let _ = agent
                         .post_claw_message(
                             session_id,
@@ -1057,11 +1176,17 @@ impl TerminalPaneComponent {
                         .await;
                 }
             } else {
+                let agent = crate::get_agent().await;
+                let resume_guard = agent.subscribe_claw_session(resume_id.clone(), event_tx);
+                if let Ok(mut guard_slot) = claw_sub_ref.lock() {
+                    *guard_slot = Some(resume_guard);
+                }
                 let _ = tx
                     .send(ClawMessage::ResumeSession {
-                        session_id: resume_id,
+                        session_id: resume_id.clone(),
                     })
                     .await;
+                *session_id_ref.lock().await = Some(resume_id);
             }
 
             glib::timeout_add_local_once(std::time::Duration::from_millis(80), move || {
@@ -1299,11 +1424,27 @@ impl TerminalPaneComponent {
 
                         let inner_weak_exit = Rc::downgrade(&inner_rc);
                         let id_for_exit = id.clone();
+                        let active_for_exit = is_claw_active_cell.clone();
                         glib::spawn_future_local(async move {
                             if let Ok(exit_code) = exit_rx.recv().await
                                 && let Some(inner) = inner_weak_exit.upgrade()
                             {
-                                let cb = inner.borrow().callback.clone();
+                                active_for_exit.set(false);
+                                let (session_opt, cb) = {
+                                    let mut inner_mut = inner.borrow_mut();
+                                    (inner_mut.mark_pty_exited(), inner_mut.callback.clone())
+                                };
+                                let Some(session_arc) = session_opt else {
+                                    return;
+                                };
+                                let pane_id = id_for_exit.clone();
+                                glib::spawn_future_local(async move {
+                                    let sid = session_arc.lock().await.take();
+                                    if sid.is_some() {
+                                        let agent = crate::get_agent().await;
+                                        let _ = agent.release_holder(pane_id).await;
+                                    }
+                                });
                                 cb(PaneOutput::Exited(id_for_exit, exit_code));
                             }
                         });
@@ -1439,11 +1580,27 @@ impl TerminalPaneComponent {
 
                             let inner_weak_exit = Rc::downgrade(&inner_rc);
                             let id_for_exit = id.clone();
+                            let active_for_exit = is_claw_active_cell.clone();
                             glib::spawn_future_local(async move {
                                 if let Ok(exit_code) = exit_rx.recv().await
                                     && let Some(inner) = inner_weak_exit.upgrade()
                                 {
-                                    let cb = inner.borrow().callback.clone();
+                                    active_for_exit.set(false);
+                                    let (session_opt, cb) = {
+                                        let mut inner_mut = inner.borrow_mut();
+                                        (inner_mut.mark_pty_exited(), inner_mut.callback.clone())
+                                    };
+                                    let Some(session_arc) = session_opt else {
+                                        return;
+                                    };
+                                    let pane_id = id_for_exit.clone();
+                                    glib::spawn_future_local(async move {
+                                        let sid = session_arc.lock().await.take();
+                                        if sid.is_some() {
+                                            let agent = crate::get_agent().await;
+                                            let _ = agent.release_holder(pane_id).await;
+                                        }
+                                    });
                                     cb(PaneOutput::Exited(id_for_exit, exit_code));
                                 }
                             });

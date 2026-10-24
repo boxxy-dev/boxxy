@@ -16,6 +16,18 @@ pub fn save_window_state(inner: &mut AppWindowInner, width: i32, height: i32, is
     inner.app_state.save();
 }
 
+fn finalize_window_close(inner_ref: &Rc<RefCell<AppWindowInner>>) {
+    let window = {
+        let inner = inner_ref.borrow();
+        inner.force_close.set(true);
+        inner.window.clone()
+    };
+    window.close();
+    // Also call `destroy()` so Libadwaita's internal `AdwDialogHost` cannot
+    // swallow `close-request` while an `AdwAlertDialog` is still animating closed.
+    window.destroy();
+}
+
 pub fn handle_close_request(inner_ref: &Rc<RefCell<AppWindowInner>>, inner: &mut AppWindowInner) {
     let mut pids = Vec::new();
     let mut window_pane_ids = std::collections::HashSet::new();
@@ -28,9 +40,22 @@ pub fn handle_close_request(inner_ref: &Rc<RefCell<AppWindowInner>>, inner: &mut
         active_claw_panes.extend(tab.controller.get_active_claw_panes());
     }
 
+    if pids.is_empty() && active_claw_panes.is_empty() {
+        finalize_window_close(inner_ref);
+        return;
+    }
+
     let inner_clone = inner_ref.clone();
     gtk4::glib::spawn_future_local(async move {
         let agent = boxxy_terminal::get_agent().await;
+
+        // If `boxxy-agent` has already stopped (e.g. "Stop Agent" in the desktop
+        // companion extension), no background detach is possible — close immediately.
+        if !agent.is_daemon_alive().await {
+            finalize_window_close(&inner_clone);
+            return;
+        }
+
         let mut running_apps = Vec::new();
         for pid in &pids {
             log::debug!(
@@ -73,8 +98,7 @@ pub fn handle_close_request(inner_ref: &Rc<RefCell<AppWindowInner>>, inner: &mut
                 tab.terminate_on_close_sync().await;
             }
 
-            inner_clone.borrow().force_close.set(true);
-            inner_clone.borrow().window.close();
+            finalize_window_close(&inner_clone);
             return;
         }
 
@@ -92,8 +116,7 @@ pub fn handle_close_request(inner_ref: &Rc<RefCell<AppWindowInner>>, inner: &mut
                 tab.detach_on_close_sync().await;
             }
 
-            inner_clone.borrow().force_close.set(true);
-            inner_clone.borrow().window.close();
+            finalize_window_close(&inner_clone);
             return;
         }
 
@@ -224,8 +247,7 @@ pub fn handle_close_request(inner_ref: &Rc<RefCell<AppWindowInner>>, inner: &mut
                 tab.detach_on_close_sync().await;
             }
 
-            inner_clone.borrow().force_close.set(true);
-            inner_clone.borrow().window.close();
+            finalize_window_close(&inner_clone);
         } else if response == "close" {
             let tabs: Vec<_> = inner_clone
                 .borrow()
@@ -237,8 +259,7 @@ pub fn handle_close_request(inner_ref: &Rc<RefCell<AppWindowInner>>, inner: &mut
                 tab.terminate_on_close_sync().await;
             }
 
-            inner_clone.borrow().force_close.set(true);
-            inner_clone.borrow().window.close();
+            finalize_window_close(&inner_clone);
         }
     });
 }

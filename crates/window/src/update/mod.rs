@@ -846,8 +846,7 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
                         let tx_after_kill = tx_kill.clone();
                         gtk4::glib::spawn_future_local(async move {
                             let agent = boxxy_terminal::get_agent().await;
-                            let _ = agent.set_persistence(pid, false).await;
-                            let _ = agent.signal_process_group(pid, 15).await;
+                            let _ = agent.terminate_detached_session(pid).await;
                             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                             let _ = tx_after_kill.send(AppInput::RefreshDetachedSessions).await;
                         });
@@ -940,13 +939,8 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
                         }
                     }
                     "terminate-all" => {
-                        if let Ok(remaining) = agent.list_detached_sessions_detailed().await {
-                            for s in remaining {
-                                let _ = agent.set_persistence(s.pid, false).await;
-                                let _ = agent.signal_process_group(s.pid, 15).await;
-                            }
-                            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-                        }
+                        let _ = agent.terminate_detached_session(0).await;
+                        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                     }
                     _ => {}
                 }

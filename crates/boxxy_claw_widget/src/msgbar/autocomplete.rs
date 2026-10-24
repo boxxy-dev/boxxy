@@ -311,13 +311,25 @@ impl CompletionProvider for ResumeCompletionProvider {
                 let mut is_disabled = false;
                 let mut display_age = age;
 
-                if let Some(info) = char_info {
-                    let is_taken = claims
+                if let Some(info) = char_info
+                    && let Some(claim) = claims
                         .iter()
-                        .any(|claim| claim.character_id == info.config.id);
-                    if is_taken {
+                        .find(|claim| claim.character_id == info.config.id)
+                {
+                    if claim.session_id == session.id {
+                        is_disabled = false;
+                        display_age = if claim.owner_bus_name.is_empty() {
+                            "Active in Background".to_string()
+                        } else {
+                            "Active in Tab".to_string()
+                        };
+                    } else {
                         is_disabled = true;
-                        display_age = "In Use".to_string();
+                        display_age = if claim.owner_bus_name.is_empty() {
+                            "In Background".to_string()
+                        } else {
+                            "In Use".to_string()
+                        };
                     }
                 }
 

@@ -88,7 +88,24 @@ pub(super) fn wire_terminal_events(
 
     let cb_clone = callback.clone();
     let id_clone = id.clone();
+    let inner_for_exit = Rc::downgrade(inner);
+    let active_for_exit = is_claw_active.clone();
     terminal.on_exit(move |code| {
+        active_for_exit.set(false);
+        if let Some(inner_rc) = inner_for_exit.upgrade() {
+            let session_opt = inner_rc.borrow_mut().mark_pty_exited();
+            let Some(session_arc) = session_opt else {
+                return;
+            };
+            let pane_id = id_clone.clone();
+            gtk::glib::spawn_future_local(async move {
+                let sid = session_arc.lock().await.take();
+                if sid.is_some() {
+                    let agent = crate::get_agent().await;
+                    let _ = agent.release_holder(pane_id).await;
+                }
+            });
+        }
         cb_clone(PaneOutput::Exited(id_clone.clone(), code));
     });
 

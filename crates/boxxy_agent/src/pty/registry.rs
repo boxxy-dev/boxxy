@@ -664,6 +664,30 @@ impl PtyRegistry {
             // mark_exited() is driven by the child-waiter when SIGCHLD fires.
         }
     }
+
+    /// Terminates all tracked running PTY process groups on daemon stop so
+    /// detached background shells and child apps exit cleanly.
+    pub async fn terminate_all(&self) {
+        let pids: Vec<u32> = {
+            let mut map = self.inner.write().await;
+            let mut active = Vec::new();
+            for s in map.values_mut() {
+                if matches!(s.state, ProcessState::Running) {
+                    s.persistence_enabled = false;
+                    if let Some(handle) = s.reader_task.take() {
+                        handle.abort();
+                    }
+                    active.push(s.pid);
+                }
+            }
+            active
+        };
+        for pid in pids {
+            unsafe {
+                libc::kill(-(pid as i32), libc::SIGTERM);
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

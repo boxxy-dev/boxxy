@@ -167,9 +167,11 @@ pub async fn start_services(
 
 /// Bookkeeping for one hosted `ClawSession`. We keep the pane id and agent
 /// name so the UI can reattach by querying `list_sessions()`.
+#[derive(Clone)]
 struct HostedSession {
     pane_id: String,
     agent_name: String,
+    active_session_id: Arc<std::sync::RwLock<String>>,
     tx: async_channel::Sender<ClawMessage>,
 }
 
@@ -205,19 +207,36 @@ impl ClawSessionManager {
             .map(|(_, s)| s)
             .collect();
         for session in to_close {
-            let _ = session.tx.try_send(ClawMessage::Deactivate);
-            session.tx.close();
+            if !session.tx.is_closed() {
+                let _ = session.tx.try_send(ClawMessage::Deactivate);
+                session.tx.close();
+            }
+        }
+    }
+
+    /// Shuts down all active `ClawSession` actors when the daemon stops.
+    pub fn shutdown_all(&mut self) {
+        self.prune_dead();
+        for (_, session) in self.sessions.drain() {
+            if !session.tx.is_closed() {
+                let _ = session.tx.try_send(ClawMessage::Deactivate);
+                session.tx.close();
+            }
         }
     }
 
     pub fn rebind_pane(&mut self, old_pane_id: &str, new_pane_id: &str) {
         self.prune_dead();
+        let mut notified = false;
         for s in self.sessions.values_mut() {
             if s.pane_id == old_pane_id {
                 s.pane_id = new_pane_id.to_string();
-                let _ = s.tx.try_send(ClawMessage::RebindPane {
-                    new_pane_id: new_pane_id.to_string(),
-                });
+                if !notified {
+                    notified = true;
+                    let _ = s.tx.try_send(ClawMessage::RebindPane {
+                        new_pane_id: new_pane_id.to_string(),
+                    });
+                }
             }
         }
     }
@@ -763,7 +782,9 @@ impl AgentInterface {
     }
 
     async fn request_stop(&self) {
-        log::info!("Stop requested. Flushing telemetry and exiting...");
+        log::info!("Stop requested. Terminating sessions, flushing telemetry, and exiting...");
+        self.session_manager.lock().await.shutdown_all();
+        self.core.state.pty_registry.terminate_all().await;
         boxxy_telemetry::flush_journal().await;
         std::process::exit(0);
     }
@@ -793,12 +814,18 @@ impl AgentInterface {
                                 &db_session.character_id,
                                 &db_session.character_display_name,
                                 db_session.agent_name.as_deref(),
+                                Some(resume_sid),
                             )
                             .await
                     {
                         let mut manager = self.session_manager.lock().await;
                         if let Some(hosted) = manager.sessions.get_mut(&session_id) {
                             hosted.agent_name = display_name;
+                            if let Ok(mut active_sid) = hosted.active_session_id.write() {
+                                *active_sid = resume_sid.clone();
+                            }
+                            let aliased = hosted.clone();
+                            manager.sessions.insert(resume_sid.clone(), aliased);
                         }
                     }
                 }
@@ -810,11 +837,19 @@ impl AgentInterface {
     async fn list_claw_sessions(&self) -> Vec<(String, String, String)> {
         let mut manager = self.session_manager.lock().await;
         manager.prune_dead();
-        manager
-            .sessions
-            .iter()
-            .map(|(sid, s)| (sid.clone(), s.pane_id.clone(), s.agent_name.clone()))
-            .collect()
+        let mut seen_panes = std::collections::HashSet::new();
+        let mut out = Vec::new();
+        for (sid, s) in manager.sessions.iter() {
+            let effective_sid = s
+                .active_session_id
+                .read()
+                .map(|g| g.clone())
+                .unwrap_or_else(|_| sid.clone());
+            if seen_panes.insert(s.pane_id.clone()) {
+                out.push((effective_sid, s.pane_id.clone(), s.agent_name.clone()));
+            }
+        }
+        out
     }
 
     async fn request_focus_pane(
@@ -823,14 +858,38 @@ impl AgentInterface {
         pane_id: String,
     ) {
         log::info!("Focus requested for pane {}", pane_id);
+        // If `pane_id` belongs to a detached background session, restore it
+        // instead of emitting `FocusPane` into a pane with no attached UI viewer.
+        if let Some((pid, true)) = self
+            .core
+            .state
+            .pty_registry
+            .find_pid_by_pane_id(&pane_id)
+            .await
+        {
+            log::info!(
+                "Pane {} is detached in background (pid={}); restoring detached session",
+                pane_id,
+                pid
+            );
+            self.request_restore_detached(emitter, pid).await;
+            return;
+        }
+
         let manager = self.session_manager.lock().await;
         // Find any session tied to this pane. Usually there is only one.
         for (sid, session) in manager.sessions.iter() {
             if session.pane_id == pane_id {
+                let effective_sid = session
+                    .active_session_id
+                    .read()
+                    .map(|g| g.clone())
+                    .unwrap_or_else(|_| sid.clone());
                 let event = ClawEngineEvent::FocusPane;
                 if let Ok(event_json) = serde_json::to_string(&event) {
-                    let _ = Self::claw_event(&emitter, sid.clone(), event_json).await;
+                    let _ = Self::claw_event(&emitter, effective_sid, event_json).await;
                 }
+                break;
             }
         }
     }
@@ -1010,21 +1069,6 @@ impl AgentInterface {
         boxxy_claw_protocol::characters::ClaimedSession,
         boxxy_claw_protocol::characters::ClaimError,
     > {
-        // Look up any detached holder that currently owns `character_id` so we can
-        // shut down its background actor if it is being reclaimed by a new pane.
-        let mut reclaimed_detached_holders = Vec::new();
-        {
-            let snapshot = self.core.registry.snapshot().await;
-            for c in snapshot.claims {
-                if c.character_id == character_id
-                    && c.holder_id != holder_id
-                    && c.owner_bus_name.is_empty()
-                {
-                    reclaimed_detached_holders.push(c.holder_id);
-                }
-            }
-        }
-
         let claim_res = self
             .core
             .registry
@@ -1035,17 +1079,6 @@ impl AgentInterface {
                 owner_bus_name.clone(),
             )
             .await;
-
-        if claim_res.is_ok() && !reclaimed_detached_holders.is_empty() {
-            let workspace = boxxy_claw::registry::workspace::global_workspace().await;
-            let mut mgr = self.session_manager.lock().await;
-            for stale_id in reclaimed_detached_holders {
-                mgr.shutdown_pane(&stale_id);
-                workspace.release_all_locks(&stale_id).await;
-                workspace.unregister_pane(stale_id.clone()).await;
-                workspace.update_pane_tasks(stale_id, Vec::new()).await;
-            }
-        }
 
         match claim_res {
             Ok(claimed_session) => {
@@ -1084,6 +1117,7 @@ impl AgentInterface {
                     state_lock.tx_self = tx.clone();
                 }
 
+                let active_session_id = Arc::new(std::sync::RwLock::new(session_id.clone()));
                 {
                     let mut manager = self.session_manager.lock().await;
                     manager.prune_dead();
@@ -1092,6 +1126,7 @@ impl AgentInterface {
                         HostedSession {
                             pane_id: holder_id.clone(),
                             agent_name: character_display_name.clone(),
+                            active_session_id: active_session_id.clone(),
                             tx,
                         },
                     );
@@ -1128,8 +1163,12 @@ impl AgentInterface {
                         }
 
                         if let Ok(event_json) = serde_json::to_string(&event) {
+                            let effective_sid = active_session_id
+                                .read()
+                                .map(|g| g.clone())
+                                .unwrap_or_else(|_| session_id_clone.clone());
                             let _ =
-                                Self::claw_event(&emitter, session_id_clone.clone(), event_json)
+                                Self::claw_event(&emitter, effective_sid, event_json)
                                     .await;
                         }
                     }

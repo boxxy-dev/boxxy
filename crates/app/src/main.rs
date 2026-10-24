@@ -169,6 +169,14 @@ fn main() {
         None,
     );
     app.add_main_option(
+        "present",
+        glib::Char::from(0),
+        glib::OptionFlags::NONE,
+        glib::OptionArg::None,
+        "Present the active window if one is open, or launch a new window",
+        None,
+    );
+    app.add_main_option(
         "tab",
         glib::Char::from(b't'),
         glib::OptionFlags::NONE,
@@ -187,6 +195,7 @@ fn main() {
 
     app.connect_command_line(|app, cmdline| {
         let options = cmdline.options_dict();
+        let present_only = options.contains("present");
         let new_tab = options.contains("tab");
 
         // Resolve working directory from `--working-directory` (`-d`) or first positional argument.
@@ -228,6 +237,12 @@ fn main() {
                     working_dir: explicit_dir,
                 },
             );
+        } else if present_only {
+            // Companion applets / shortcut helpers pass `--present` to raise the active
+            // window with a Wayland activation token without spawning an extra window.
+            if let Some(window) = app.active_window() {
+                window.present();
+            }
         } else if new_tab {
             // Open a new tab in the active window (optionally in `explicit_dir`) and focus it.
             if let Some(window) = app.active_window() {

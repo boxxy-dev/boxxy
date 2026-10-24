@@ -684,14 +684,12 @@ impl TerminalOverlay {
         let claims = boxxy_claw_protocol::characters::CLAIMS_CACHE.load();
         let host_id = self.host.host_id();
 
-        // Returns true if the character with the given UUID is Active in another attached holder.
-        // Detached background holders (`owner_bus_name.is_empty()`) do not block the UI picker.
+        // Returns true if the character with the given UUID is Active in another holder
+        // (including detached background holders).
         let is_taken = |id: &str| -> bool {
-            claims.iter().any(|claim| {
-                claim.character_id == id
-                    && claim.holder_id != host_id
-                    && !claim.owner_bus_name.is_empty()
-            })
+            claims
+                .iter()
+                .any(|claim| claim.character_id == id && claim.holder_id != host_id)
         };
 
         // Auto-default (or auto-correct): ensure `pending` always points to a
