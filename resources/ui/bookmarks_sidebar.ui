@@ -59,59 +59,28 @@
                 </child>
                 <child>
                   <object class="GtkBox">
-                    <property name="orientation">vertical</property>
-                    <property name="spacing">8</property>
+                    <property name="orientation">horizontal</property>
+                    <property name="spacing">16</property>
                     <property name="halign">center</property>
                     <property name="margin-top">8</property>
                     <child>
-                      <object class="GtkButton" id="empty_open_tab_btn">
-                        <property name="halign">center</property>
+                      <object class="GtkLabel" id="empty_open_tab_btn">
+                        <property name="label">Open Bookmarks</property>
+                        <property name="tooltip-text">Open Bookmarks Tab to manage and edit scripts</property>
                         <style>
-                          <class name="suggested-action"/>
-                          <class name="pill"/>
+                          <class name="caption"/>
+                          <class name="accent"/>
                         </style>
-                        <child>
-                          <object class="GtkBox">
-                            <property name="orientation">horizontal</property>
-                            <property name="spacing">6</property>
-                            <property name="halign">center</property>
-                            <child>
-                              <object class="GtkImage">
-                                <property name="icon-name">boxxy-user-bookmarks-symbolic</property>
-                              </object>
-                            </child>
-                            <child>
-                              <object class="GtkLabel">
-                                <property name="label">Open Bookmarks Tab</property>
-                              </object>
-                            </child>
-                          </object>
-                        </child>
                       </object>
                     </child>
                     <child>
-                      <object class="GtkButton" id="empty_new_btn">
-                        <property name="halign">center</property>
+                      <object class="GtkLabel" id="empty_new_btn">
+                        <property name="label">Create New</property>
+                        <property name="tooltip-text">Create New Bookmark</property>
                         <style>
-                          <class name="flat"/>
+                          <class name="caption"/>
+                          <class name="accent"/>
                         </style>
-                        <child>
-                          <object class="GtkBox">
-                            <property name="orientation">horizontal</property>
-                            <property name="spacing">6</property>
-                            <property name="halign">center</property>
-                            <child>
-                              <object class="GtkImage">
-                                <property name="icon-name">boxxy-plus-symbolic</property>
-                              </object>
-                            </child>
-                            <child>
-                              <object class="GtkLabel">
-                                <property name="label">New Bookmark</property>
-                              </object>
-                            </child>
-                          </object>
-                        </child>
                       </object>
                     </child>
                   </object>
@@ -148,50 +117,35 @@
                   </object>
                 </child>
                 <child>
-                  <object class="GtkSeparator">
-                    <property name="orientation">horizontal</property>
-                  </object>
-                </child>
-                <child>
                   <object class="GtkBox">
                     <property name="orientation">horizontal</property>
-                    <property name="spacing">6</property>
+                    <property name="spacing">12</property>
                     <property name="margin-top">8</property>
-                    <property name="margin-bottom">8</property>
-                    <property name="margin-start">10</property>
-                    <property name="margin-end">10</property>
+                    <property name="margin-bottom">12</property>
+                    <property name="margin-start">14</property>
+                    <property name="margin-end">14</property>
                     <child>
-                      <object class="GtkButton" id="footer_open_tab_btn">
+                      <object class="GtkLabel" id="footer_open_tab_btn">
+                        <property name="label">Open Bookmarks</property>
+                        <property name="halign">start</property>
                         <property name="hexpand">true</property>
+                        <property name="xalign">0</property>
                         <property name="tooltip-text">Open Bookmarks Tab to manage and edit scripts</property>
                         <style>
-                          <class name="flat"/>
+                          <class name="caption"/>
+                          <class name="accent"/>
                         </style>
-                        <child>
-                          <object class="GtkBox">
-                            <property name="orientation">horizontal</property>
-                            <property name="spacing">6</property>
-                            <property name="halign">center</property>
-                            <child>
-                              <object class="GtkImage">
-                                <property name="icon-name">boxxy-external-link-symbolic</property>
-                              </object>
-                            </child>
-                            <child>
-                              <object class="GtkLabel">
-                                <property name="label">Open Bookmarks Tab</property>
-                              </object>
-                            </child>
-                          </object>
-                        </child>
                       </object>
                     </child>
                     <child>
-                      <object class="GtkButton" id="footer_new_btn">
-                        <property name="icon-name">boxxy-plus-symbolic</property>
+                      <object class="GtkLabel" id="footer_new_btn">
+                        <property name="label">Create New</property>
+                        <property name="halign">end</property>
+                        <property name="xalign">1</property>
                         <property name="tooltip-text">Create New Bookmark</property>
                         <style>
-                          <class name="flat"/>
+                          <class name="caption"/>
+                          <class name="accent"/>
                         </style>
                       </object>
                     </child>

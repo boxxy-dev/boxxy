@@ -430,7 +430,6 @@ tabbox separator {
 .bookmark-preview-frame {
     background-color: @window_bg_color;
     border: 1px solid alpha(currentColor, 0.08);
-    overflow: hidden;
 }
 
 .bookmark-hero-icon {

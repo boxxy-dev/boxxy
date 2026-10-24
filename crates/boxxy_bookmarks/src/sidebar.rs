@@ -45,42 +45,44 @@ impl BookmarksSidebarComponent {
         let list_box: gtk::ListBox = builder
             .object("list_box")
             .expect("list_box in bookmarks_sidebar.ui");
-        let empty_open_tab_btn: gtk::Button = builder
+        let empty_open_tab_btn: gtk::Label = builder
             .object("empty_open_tab_btn")
             .expect("empty_open_tab_btn in bookmarks_sidebar.ui");
-        let empty_new_btn: gtk::Button = builder
+        let empty_new_btn: gtk::Label = builder
             .object("empty_new_btn")
             .expect("empty_new_btn in bookmarks_sidebar.ui");
-        let footer_open_tab_btn: gtk::Button = builder
+        let footer_open_tab_btn: gtk::Label = builder
             .object("footer_open_tab_btn")
             .expect("footer_open_tab_btn in bookmarks_sidebar.ui");
-        let footer_new_btn: gtk::Button = builder
+        let footer_new_btn: gtk::Label = builder
             .object("footer_new_btn")
             .expect("footer_new_btn in bookmarks_sidebar.ui");
 
         let on_open_tab: Rc<dyn Fn()> = Rc::new(on_open_tab);
 
-        let open_empty = on_open_tab.clone();
-        empty_open_tab_btn.connect_clicked(move |_| {
-            open_empty();
-        });
+        for open_lbl in [&empty_open_tab_btn, &footer_open_tab_btn] {
+            open_lbl.set_cursor_from_name(Some("pointer"));
+            let open_cb = on_open_tab.clone();
+            let gesture = gtk::GestureClick::new();
+            gesture.connect_released(move |_, _, _, _| {
+                open_cb();
+            });
+            open_lbl.add_controller(gesture);
+        }
 
-        let open_footer = on_open_tab;
-        footer_open_tab_btn.connect_clicked(move |_| {
-            open_footer();
-        });
-
-        empty_new_btn.connect_clicked(move |btn| {
-            if let Some(root) = btn.root() {
-                BookmarkEditor::show(&root, None, None);
-            }
-        });
-
-        footer_new_btn.connect_clicked(move |btn| {
-            if let Some(root) = btn.root() {
-                BookmarkEditor::show(&root, None, None);
-            }
-        });
+        for new_lbl in [&empty_new_btn, &footer_new_btn] {
+            new_lbl.set_cursor_from_name(Some("pointer"));
+            let lbl_weak = new_lbl.downgrade();
+            let gesture = gtk::GestureClick::new();
+            gesture.connect_released(move |_, _, _, _| {
+                if let Some(lbl) = lbl_weak.upgrade()
+                    && let Some(root) = lbl.root()
+                {
+                    BookmarkEditor::show(&root, None, None);
+                }
+            });
+            new_lbl.add_controller(gesture);
+        }
 
         let inner = Rc::new(RefCell::new(BookmarksSidebarInner {
             sidebar_stack,
@@ -138,7 +140,6 @@ impl BookmarksSidebarComponent {
     fn create_row(&self, bm: &Bookmark) -> gtk::ListBoxRow {
         let row = gtk::ListBoxRow::new();
         row.add_css_class("activatable");
-        row.set_tooltip_text(Some("Click to run in active terminal (drag to reorder)"));
 
         let hbox = gtk::Box::new(gtk::Orientation::Horizontal, 10);
         hbox.set_margin_top(8);
@@ -178,10 +179,9 @@ impl BookmarksSidebarComponent {
             hbox.append(&var_badge);
         }
 
-        let play_icon = gtk::Image::from_icon_name("boxxy-media-playback-start-symbolic");
-        play_icon.set_pixel_size(12);
-        play_icon.add_css_class("dim-label");
-        hbox.append(&play_icon);
+        let drag_icon = gtk::Image::from_icon_name("list-drag-handle-symbolic");
+        drag_icon.add_css_class("dim-label");
+        hbox.append(&drag_icon);
 
         row.set_child(Some(&hbox));
 

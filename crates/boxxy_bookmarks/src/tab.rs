@@ -77,27 +77,54 @@ impl BookmarksTabComponent {
             .object("list_container")
             .expect("list_container in bookmarks_tab.ui");
 
-        // Register shared preview font CSS once per display
+        // Register shared preview font CSS from terminal settings
         let settings = boxxy_preferences::Settings::load();
         let palette = boxxy_themes::load_palette(&settings.theme);
         let is_dark = adw::StyleManager::default().is_dark();
 
-        static PREVIEW_CSS_ONCE: std::sync::Once = std::sync::Once::new();
-        let font_name = settings.font_name.clone();
-        PREVIEW_CSS_ONCE.call_once(move || {
-            if let Some(display) = gtk::gdk::Display::default() {
-                let provider = gtk::CssProvider::new();
+        let preview_provider = gtk::CssProvider::new();
+        let apply_preview_font = {
+            let provider = preview_provider.clone();
+            move |font_name: &str, font_size: u16| {
                 let css = format!(
-                    "textview.bookmark-preview-tv {{ font-family: \"{font_name}\"; background-color: @window_bg_color; }}"
+                    "textview.bookmark-preview-tv {{ font-family: \"{font_name}\"; font-size: {font_size}pt; background-color: @window_bg_color; }}"
                 );
                 provider.load_from_string(&css);
-                gtk::style_context_add_provider_for_display(
-                    &display,
-                    &provider,
-                    gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
-                );
             }
-        });
+        };
+        apply_preview_font(&settings.font_name, settings.font_size);
+
+        if let Some(display) = gtk::gdk::Display::default() {
+            gtk::style_context_add_provider_for_display(
+                &display,
+                &preview_provider,
+                gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+            );
+            let provider_cleanup = preview_provider;
+            widget.connect_destroy(move |_| {
+                if let Some(display) = gtk::gdk::Display::default() {
+                    gtk::style_context_remove_provider_for_display(&display, &provider_cleanup);
+                }
+            });
+        }
+
+        {
+            let mut settings_rx = boxxy_preferences::SETTINGS_EVENT_BUS.subscribe();
+            glib::spawn_future_local(async move {
+                loop {
+                    match settings_rx.recv().await {
+                        Ok(new_settings) => {
+                            apply_preview_font(&new_settings.font_name, new_settings.font_size);
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                            let latest = boxxy_preferences::Settings::load();
+                            apply_preview_font(&latest.font_name, latest.font_size);
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                    }
+                }
+            });
+        }
 
         let list_store = gtk::gio::ListStore::new::<glib::BoxedAnyObject>();
 
@@ -188,15 +215,9 @@ impl BookmarksTabComponent {
             let actions_box = gtk::Box::new(gtk::Orientation::Horizontal, 6);
             actions_box.set_valign(gtk::Align::Center);
 
-            let run_btn = gtk::Button::new();
-            run_btn.add_css_class("suggested-action");
+            let run_btn = gtk::Button::with_label("Run");
+            run_btn.add_css_class("flat");
             run_btn.set_tooltip_text(Some("Run in New Tab"));
-            let run_content = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-            run_content.append(&gtk::Image::from_icon_name(
-                "boxxy-media-playback-start-symbolic",
-            ));
-            run_content.append(&gtk::Label::new(Some("Run")));
-            run_btn.set_child(Some(&run_content));
 
             let list_item_run = list_item.clone();
             let inner_weak_run = inner_weak.clone();
@@ -291,6 +312,7 @@ impl BookmarksTabComponent {
 
             let preview_container = gtk::Box::new(gtk::Orientation::Vertical, 0);
             preview_container.add_css_class("bookmark-preview-frame");
+            preview_container.set_overflow(gtk::Overflow::Hidden);
 
             let buffer = sourceview5::Buffer::new(None);
             let lang_manager = sourceview5::LanguageManager::default();
@@ -298,6 +320,7 @@ impl BookmarksTabComponent {
             boxxy_themes::apply_sourceview_palette(&buffer, palette.as_ref(), is_dark);
 
             let source_view = sourceview5::View::with_buffer(&buffer);
+            source_view.set_monospace(true);
             source_view.set_editable(false);
             source_view.set_cursor_visible(false);
             source_view.set_show_line_numbers(false);

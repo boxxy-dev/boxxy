@@ -29,6 +29,7 @@ pub struct ClawSidebarComponent {
     hero_title: gtk::Label,
     hero_subtitle: gtk::Label,
     badges_box: gtk::Box,
+    stats_box: gtk::Box,
     sessions_box: gtk::Box,
     sessions_list: gtk::ListBox,
     is_new_session: Rc<Cell<bool>>,
@@ -63,22 +64,19 @@ impl ClawSidebarComponent {
         _on_soft_clear: FS,
     ) -> Self {
         let widget = gtk::Box::new(gtk::Orientation::Vertical, 12);
-        widget.set_margin_top(12);
-        widget.set_margin_bottom(14);
-        widget.set_margin_start(14);
-        widget.set_margin_end(14);
 
         // --- Centered Hero / Identity Section ---
         let hero_box = gtk::Box::new(gtk::Orientation::Vertical, 10);
         hero_box.set_vexpand(true);
         hero_box.set_valign(gtk::Align::Center);
         hero_box.set_halign(gtk::Align::Center);
-        hero_box.set_margin_start(12);
-        hero_box.set_margin_end(12);
+        hero_box.set_margin_top(12);
+        hero_box.set_margin_start(20);
+        hero_box.set_margin_end(20);
 
         let hero_icon = gtk::Image::builder()
             .icon_name("boxxyclaw")
-            .pixel_size(96)
+            .pixel_size(72)
             .halign(gtk::Align::Center)
             .build();
         hero_box.append(&hero_icon);
@@ -94,11 +92,12 @@ impl ClawSidebarComponent {
             .halign(gtk::Align::Center)
             .justify(gtk::Justification::Center)
             .wrap(true)
+            .visible(false)
             .build();
         hero_box.append(&hero_title);
 
         let hero_subtitle = gtk::Label::builder()
-            .label("System-eccentric agentic control.")
+            .label("Conversations will appear here")
             .css_classes(["dim-label"])
             .halign(gtk::Align::Center)
             .justify(gtk::Justification::Center)
@@ -116,6 +115,7 @@ impl ClawSidebarComponent {
         let stats_box = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         stats_box.set_halign(gtk::Align::Center);
         stats_box.set_margin_top(2);
+        stats_box.set_visible(false);
 
         let memories_lbl = gtk::Label::builder()
             .label("🧠 0 Memories")
@@ -146,17 +146,13 @@ impl ClawSidebarComponent {
         sessions_box.set_hexpand(true);
         sessions_box.set_visible(false);
 
-        let sessions_header = gtk::Label::builder()
-            .label("Past Conversations")
-            .css_classes(["caption", "heading"])
-            .halign(gtk::Align::Start)
-            .xalign(0.0)
-            .build();
-        sessions_box.append(&sessions_header);
-
         let sessions_list = gtk::ListBox::builder()
-            .css_classes(["boxed-list"])
+            .css_classes(["navigation-sidebar"])
             .selection_mode(gtk::SelectionMode::None)
+            .margin_top(6)
+            .margin_bottom(6)
+            .margin_start(6)
+            .margin_end(6)
             .build();
 
         let sessions_scroll = gtk::ScrolledWindow::builder()
@@ -177,6 +173,8 @@ impl ClawSidebarComponent {
         let tasks_expander = gtk::Expander::builder()
             .label("Pending Tasks")
             .child(&tasks_list)
+            .margin_start(14)
+            .margin_end(14)
             .visible(false)
             .build();
         widget.append(&tasks_expander);
@@ -186,6 +184,9 @@ impl ClawSidebarComponent {
         command_panel.set_valign(gtk::Align::End);
         command_panel.set_hexpand(true);
         command_panel.set_halign(gtk::Align::Fill);
+        command_panel.set_margin_start(14);
+        command_panel.set_margin_end(14);
+        command_panel.set_margin_bottom(14);
 
         let footer_info_vbox = gtk::Box::new(gtk::Orientation::Vertical, 12);
         footer_info_vbox.set_hexpand(true);
@@ -361,6 +362,7 @@ impl ClawSidebarComponent {
             hero_title,
             hero_subtitle,
             badges_box,
+            stats_box,
             sessions_box,
             sessions_list,
             is_new_session: Rc::new(Cell::new(true)),
@@ -515,6 +517,8 @@ impl ClawSidebarComponent {
                 .css_classes(["caption", "dim-label", "monospace"])
                 .build();
             self.badges_box.append(&ws_lbl);
+            self.hero_title.set_visible(true);
+            self.stats_box.set_visible(true);
             self.badges_box.set_visible(true);
             self.is_new_session.set(false);
             self.sessions_box.set_visible(false);
@@ -524,12 +528,14 @@ impl ClawSidebarComponent {
             self.hero_icon.set_pixel_size(96);
             self.context_box.set_visible(true);
         } else {
-            self.hero_title.set_label("Claw Mode");
+            self.hero_title.set_visible(false);
             self.hero_subtitle
-                .set_label("System-eccentric agentic control.");
+                .set_label("Conversations will appear here");
             self.hero_avatar.set_visible(false);
+            self.hero_icon.set_pixel_size(72);
             self.hero_icon.set_visible(true);
             self.badges_box.set_visible(false);
+            self.stats_box.set_visible(false);
             self.is_new_session.set(true);
             self.context_box.set_visible(false);
             self.refresh_past_sessions();
@@ -951,7 +957,7 @@ fn populate_past_sessions(
             hero_box.set_visible(true);
             hero_box.set_vexpand(true);
             hero_box.set_valign(gtk::Align::Center);
-            hero_icon.set_pixel_size(96);
+            hero_icon.set_pixel_size(if is_new_session.get() { 72 } else { 96 });
             return;
         }
 
@@ -1040,19 +1046,17 @@ fn populate_past_sessions(
                 )
             };
 
-            let row = gtk::ListBoxRow::builder()
-                .activatable(false)
-                .selectable(false)
-                .build();
+            let row = gtk::ListBoxRow::new();
+            row.add_css_class("activatable");
 
-            let outer_hbox = gtk::Box::new(gtk::Orientation::Horizontal, 4);
-            outer_hbox.set_margin_top(2);
-            outer_hbox.set_margin_bottom(2);
-            outer_hbox.set_margin_start(4);
-            outer_hbox.set_margin_end(4);
+            let outer_hbox = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+            outer_hbox.set_margin_top(6);
+            outer_hbox.set_margin_bottom(6);
+            outer_hbox.set_margin_start(10);
+            outer_hbox.set_margin_end(6);
             outer_hbox.set_hexpand(true);
 
-            let resume_btn_content = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+            let resume_btn_content = gtk::Box::new(gtk::Orientation::Horizontal, 10);
             resume_btn_content.set_hexpand(true);
 
             let avatar = adw::Avatar::new(28, Some(&char_display), true);
@@ -1106,21 +1110,16 @@ fn populate_past_sessions(
 
             resume_btn_content.append(&text_vbox);
 
-            let resume_btn = gtk::Button::builder()
-                .css_classes(["flat"])
-                .hexpand(true)
-                .tooltip_text(format!("Resume \"{}\"", title))
-                .child(&resume_btn_content)
-                .build();
-
+            let gesture = gtk::GestureClick::new();
             let sid_for_resume = session_id.clone();
             let cb_for_resume = on_resume_session.clone();
-            resume_btn.connect_clicked(move |_| {
+            gesture.connect_released(move |_, _, _, _| {
                 if let Some(cb) = cb_for_resume.borrow().as_ref().cloned() {
                     cb(sid_for_resume.clone());
                 }
             });
-            outer_hbox.append(&resume_btn);
+            resume_btn_content.add_controller(gesture);
+            outer_hbox.append(&resume_btn_content);
 
             // Row options button (plain Button + parented Popover to avoid MenuButton press/release race)
             let options_btn = gtk::Button::builder()
