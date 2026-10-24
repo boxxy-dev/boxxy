@@ -428,15 +428,18 @@ impl TerminalWidget {
                         }
                         Event::TextAreaSizeRequest(formatter) => {
                             let cs = widget.imp().get_char_size(&widget);
-                            let cols = (widget.width() as f64 / cs.0).floor() as u16;
-                            let lines = (widget.height() as f64 / cs.1).floor() as u16;
+                            let pad = widget.imp().padding.get() as f64;
+                            let inner_w = (widget.width() as f64 - 2.0 * pad).max(1.0);
+                            let inner_h = (widget.height() as f64 - 2.0 * pad).max(1.0);
+                            let cols = (inner_w / cs.0).floor().max(1.0) as u16;
+                            let lines = (inner_h / cs.1).floor().max(1.0) as u16;
                             let resp = formatter(crate::engine::event::WindowSize {
                                 num_cols: cols,
                                 num_lines: lines,
                                 cell_width: cs.0 as u16,
                                 cell_height: cs.1 as u16,
-                                pixel_width: widget.width() as u16,
-                                pixel_height: widget.height() as u16,
+                                pixel_width: inner_w.round() as u16,
+                                pixel_height: inner_h.round() as u16,
                             });
                             if let Some(backend) = widget.imp().backend.borrow().as_ref() {
                                 backend.write_to_pty(resp.into_bytes());

@@ -1,12 +1,33 @@
+use crate::engine::term::TermMode;
 use gtk4::gdk::{Key, ModifierType};
 
-/// Translates a GTK key event into an ANSI byte sequence for the PTY
+/// Translates a GTK key event into an ANSI byte sequence for the PTY using
+/// legacy xterm/VT100 encoding rules (with optional `APP_CURSOR` mode).
 pub fn translate_key(key: Key, modifiers: ModifierType, is_app_cursor: bool) -> Option<Vec<u8>> {
+    let mut mode = TermMode::NONE;
+    if is_app_cursor {
+        mode.insert(TermMode::APP_CURSOR);
+    }
+    translate_key_with_mode(key, modifiers, mode)
+}
+
+/// Translates a GTK key event into an ANSI byte sequence for the PTY,
+/// respecting both legacy modes (`APP_CURSOR`) and the Kitty Keyboard Protocol
+/// (`DISAMBIGUATE_ESC_CODES`, `REPORT_ALL_KEYS_AS_ESC`).
+pub fn translate_key_with_mode(
+    key: Key,
+    modifiers: ModifierType,
+    mode: TermMode,
+) -> Option<Vec<u8>> {
     let mut bytes = Vec::new();
 
     let ctrl = modifiers.contains(ModifierType::CONTROL_MASK);
     let alt = modifiers.contains(ModifierType::ALT_MASK);
     let shift = modifiers.contains(ModifierType::SHIFT_MASK);
+    let is_app_cursor = mode.contains(TermMode::APP_CURSOR);
+    let kitty_disambiguate = mode
+        .intersects(TermMode::DISAMBIGUATE_ESC_CODES | TermMode::REPORT_ALL_KEYS_AS_ESC);
+    let kitty_all_esc = mode.contains(TermMode::REPORT_ALL_KEYS_AS_ESC);
 
     // Standard modifier code: 1=none, 2=shift, 3=alt, 4=shift+alt, 5=ctrl, 6=shift+ctrl, 7=alt+ctrl, 8=shift+alt+ctrl
     let modifier_code = {
@@ -31,11 +52,37 @@ pub fn translate_key(key: Key, modifiers: ModifierType, is_app_cursor: bool) -> 
     // Handle special keys
     match key {
         Key::Return | Key::KP_Enter => {
-            bytes.push(b'\r');
+            if (kitty_disambiguate && (has_modifier || kitty_all_esc)) || shift || ctrl {
+                if has_modifier {
+                    bytes.extend_from_slice(format!("\x1b[13;{}u", modifier_code).as_bytes());
+                } else {
+                    bytes.extend_from_slice(b"\x1b[13u");
+                }
+            } else {
+                if alt {
+                    bytes.push(0x1b);
+                }
+                bytes.push(b'\r');
+            }
             return Some(bytes);
         }
         Key::BackSpace => {
-            bytes.push(0x7f); // DEL
+            if kitty_disambiguate && (has_modifier || kitty_all_esc) {
+                if has_modifier {
+                    bytes.extend_from_slice(format!("\x1b[127;{}u", modifier_code).as_bytes());
+                } else {
+                    bytes.extend_from_slice(b"\x1b[127u");
+                }
+            } else {
+                if alt {
+                    bytes.push(0x1b);
+                }
+                if ctrl {
+                    bytes.push(0x08); // BS (^H) for Ctrl+Backspace
+                } else {
+                    bytes.push(0x7f); // DEL
+                }
+            }
             return Some(bytes);
         }
         Key::Insert | Key::KP_Insert => {
@@ -54,12 +101,45 @@ pub fn translate_key(key: Key, modifiers: ModifierType, is_app_cursor: bool) -> 
             }
             return Some(bytes);
         }
-        Key::Tab | Key::KP_Tab => {
-            bytes.push(b'\t');
+        Key::Tab | Key::KP_Tab | Key::ISO_Left_Tab => {
+            // On GTK4/XKB, Shift+Tab produces Key::ISO_Left_Tab (often with SHIFT_MASK consumed).
+            let tab_shift = shift || key == Key::ISO_Left_Tab;
+            let tab_mod_code = 1
+                + if tab_shift { 1 } else { 0 }
+                + if alt { 2 } else { 0 }
+                + if ctrl { 4 } else { 0 };
+            if kitty_disambiguate && (tab_mod_code > 1 || kitty_all_esc) {
+                if tab_mod_code > 1 {
+                    bytes.extend_from_slice(format!("\x1b[9;{}u", tab_mod_code).as_bytes());
+                } else {
+                    bytes.extend_from_slice(b"\x1b[9u");
+                }
+            } else if tab_shift {
+                if alt {
+                    bytes.push(0x1b);
+                }
+                bytes.extend_from_slice(b"\x1b[Z");
+            } else {
+                if alt {
+                    bytes.push(0x1b);
+                }
+                bytes.push(b'\t');
+            }
             return Some(bytes);
         }
         Key::Escape => {
-            bytes.push(0x1b);
+            if kitty_disambiguate {
+                if has_modifier {
+                    bytes.extend_from_slice(format!("\x1b[27;{}u", modifier_code).as_bytes());
+                } else {
+                    bytes.extend_from_slice(b"\x1b[27u");
+                }
+            } else {
+                if alt {
+                    bytes.push(0x1b);
+                }
+                bytes.push(0x1b);
+            }
             return Some(bytes);
         }
         Key::Up | Key::KP_Up => {
@@ -147,66 +227,135 @@ pub fn translate_key(key: Key, modifiers: ModifierType, is_app_cursor: bool) -> 
             return Some(bytes);
         }
         Key::F1 => {
-            bytes.extend_from_slice(b"\x1bOP");
+            if has_modifier {
+                bytes.extend_from_slice(format!("\x1b[1;{}P", modifier_code).as_bytes());
+            } else {
+                bytes.extend_from_slice(b"\x1bOP");
+            }
             return Some(bytes);
         }
         Key::F2 => {
-            bytes.extend_from_slice(b"\x1bOQ");
+            if has_modifier {
+                bytes.extend_from_slice(format!("\x1b[1;{}Q", modifier_code).as_bytes());
+            } else {
+                bytes.extend_from_slice(b"\x1bOQ");
+            }
             return Some(bytes);
         }
         Key::F3 => {
-            bytes.extend_from_slice(b"\x1bOR");
+            if has_modifier {
+                bytes.extend_from_slice(format!("\x1b[1;{}R", modifier_code).as_bytes());
+            } else {
+                bytes.extend_from_slice(b"\x1bOR");
+            }
             return Some(bytes);
         }
         Key::F4 => {
-            bytes.extend_from_slice(b"\x1bOS");
+            if has_modifier {
+                bytes.extend_from_slice(format!("\x1b[1;{}S", modifier_code).as_bytes());
+            } else {
+                bytes.extend_from_slice(b"\x1bOS");
+            }
             return Some(bytes);
         }
         Key::F5 => {
-            bytes.extend_from_slice(b"\x1b[15~");
+            if has_modifier {
+                bytes.extend_from_slice(format!("\x1b[15;{}~", modifier_code).as_bytes());
+            } else {
+                bytes.extend_from_slice(b"\x1b[15~");
+            }
             return Some(bytes);
         }
         Key::F6 => {
-            bytes.extend_from_slice(b"\x1b[17~");
+            if has_modifier {
+                bytes.extend_from_slice(format!("\x1b[17;{}~", modifier_code).as_bytes());
+            } else {
+                bytes.extend_from_slice(b"\x1b[17~");
+            }
             return Some(bytes);
         }
         Key::F7 => {
-            bytes.extend_from_slice(b"\x1b[18~");
+            if has_modifier {
+                bytes.extend_from_slice(format!("\x1b[18;{}~", modifier_code).as_bytes());
+            } else {
+                bytes.extend_from_slice(b"\x1b[18~");
+            }
             return Some(bytes);
         }
         Key::F8 => {
-            bytes.extend_from_slice(b"\x1b[19~");
+            if has_modifier {
+                bytes.extend_from_slice(format!("\x1b[19;{}~", modifier_code).as_bytes());
+            } else {
+                bytes.extend_from_slice(b"\x1b[19~");
+            }
             return Some(bytes);
         }
         Key::F9 => {
-            bytes.extend_from_slice(b"\x1b[20~");
+            if has_modifier {
+                bytes.extend_from_slice(format!("\x1b[20;{}~", modifier_code).as_bytes());
+            } else {
+                bytes.extend_from_slice(b"\x1b[20~");
+            }
             return Some(bytes);
         }
         Key::F10 => {
-            bytes.extend_from_slice(b"\x1b[21~");
+            if has_modifier {
+                bytes.extend_from_slice(format!("\x1b[21;{}~", modifier_code).as_bytes());
+            } else {
+                bytes.extend_from_slice(b"\x1b[21~");
+            }
             return Some(bytes);
         }
         Key::F11 => {
-            bytes.extend_from_slice(b"\x1b[23~");
+            if has_modifier {
+                bytes.extend_from_slice(format!("\x1b[23;{}~", modifier_code).as_bytes());
+            } else {
+                bytes.extend_from_slice(b"\x1b[23~");
+            }
             return Some(bytes);
         }
         Key::F12 => {
-            bytes.extend_from_slice(b"\x1b[24~");
+            if has_modifier {
+                bytes.extend_from_slice(format!("\x1b[24;{}~", modifier_code).as_bytes());
+            } else {
+                bytes.extend_from_slice(b"\x1b[24~");
+            }
             return Some(bytes);
         }
         _ => {}
     }
 
-    // Handle printable characters and Control combinations
+    // Handle printable characters and Control / Alt combinations
     if let Some(ch) = key.to_unicode() {
+        // Under Kitty Keyboard Protocol, disambiguate modified keys (Ctrl, Alt, or all keys in REPORT_ALL_KEYS_AS_ESC)
+        // using the lowercase/unshifted Unicode codepoint.
+        if (kitty_disambiguate && (ctrl || alt)) || kitty_all_esc {
+            let base_cp = ch.to_lowercase().next().unwrap_or(ch) as u32;
+            if has_modifier {
+                bytes.extend_from_slice(format!("\x1b[{};{}u", base_cp, modifier_code).as_bytes());
+            } else {
+                bytes.extend_from_slice(format!("\x1b[{}u", base_cp).as_bytes());
+            }
+            return Some(bytes);
+        }
+
         if ctrl {
-            // Control combinations: A-Z map to 1-26
-            let c = ch.to_ascii_uppercase();
-            if c.is_ascii_uppercase() {
+            let ctrl_byte = match ch {
+                'a'..='z' | 'A'..='Z' => Some(ch.to_ascii_uppercase() as u8 - b'A' + 1),
+                ' ' | '@' | '2' => Some(0x00),
+                '[' | '3' => Some(0x1b),
+                '\\' | '4' => Some(0x1c),
+                ']' | '5' => Some(0x1d),
+                '^' | '~' | '6' => Some(0x1e),
+                '_' | '/' | '7' => Some(0x1f),
+                '?' | '8' => Some(0x7f),
+                _ => None,
+            };
+            if let Some(b) = ctrl_byte {
                 if alt {
                     bytes.push(0x1b);
                 }
-                bytes.push(c as u8 - b'A' + 1);
+                bytes.push(b);
                 return Some(bytes);
             }
         } else {
@@ -392,6 +541,116 @@ mod tests {
         assert_eq!(
             translate_key(Key::KP_Delete, ModifierType::empty(), false),
             Some(b"\x1b[3~".to_vec())
+        );
+    }
+
+    #[test]
+    fn test_translate_shift_tab_and_modified_c0_keys() {
+        // Shift+Tab via ISO_Left_Tab (XKB consumed shift) or Key::Tab + SHIFT_MASK
+        assert_eq!(
+            translate_key(Key::ISO_Left_Tab, ModifierType::empty(), false),
+            Some(b"\x1b[Z".to_vec())
+        );
+        assert_eq!(
+            translate_key(Key::ISO_Left_Tab, ModifierType::SHIFT_MASK, false),
+            Some(b"\x1b[Z".to_vec())
+        );
+        assert_eq!(
+            translate_key(Key::Tab, ModifierType::SHIFT_MASK, false),
+            Some(b"\x1b[Z".to_vec())
+        );
+        // Alt+Backspace -> ESC DEL, Ctrl+Backspace -> BS (0x08)
+        assert_eq!(
+            translate_key(Key::BackSpace, ModifierType::ALT_MASK, false),
+            Some(vec![0x1b, 0x7f])
+        );
+        assert_eq!(
+            translate_key(Key::BackSpace, ModifierType::CONTROL_MASK, false),
+            Some(vec![0x08])
+        );
+        // Alt+Return -> ESC CR, Shift+Return -> CSI 13;2u
+        assert_eq!(
+            translate_key(Key::Return, ModifierType::ALT_MASK, false),
+            Some(vec![0x1b, b'\r'])
+        );
+        assert_eq!(
+            translate_key(Key::Return, ModifierType::SHIFT_MASK, false),
+            Some(b"\x1b[13;2u".to_vec())
+        );
+    }
+
+    #[test]
+    fn test_translate_non_alpha_ctrl_and_modified_fkeys() {
+        assert_eq!(
+            translate_key(Key::space, ModifierType::CONTROL_MASK, false),
+            Some(vec![0x00])
+        );
+        assert_eq!(
+            translate_key(Key::slash, ModifierType::CONTROL_MASK, false),
+            Some(vec![0x1f])
+        );
+        assert_eq!(
+            translate_key(Key::underscore, ModifierType::CONTROL_MASK, false),
+            Some(vec![0x1f])
+        );
+        assert_eq!(
+            translate_key(Key::bracketright, ModifierType::CONTROL_MASK, false),
+            Some(vec![0x1d])
+        );
+        assert_eq!(
+            translate_key(Key::F1, ModifierType::SHIFT_MASK, false),
+            Some(b"\x1b[1;2P".to_vec())
+        );
+        assert_eq!(
+            translate_key(Key::F5, ModifierType::CONTROL_MASK, false),
+            Some(b"\x1b[15;5~".to_vec())
+        );
+    }
+
+    #[test]
+    fn test_kitty_keyboard_protocol_disambiguate() {
+        let mode = TermMode::DISAMBIGUATE_ESC_CODES;
+        // Unmodified Enter/Tab/Backspace stay legacy under DISAMBIGUATE_ESC_CODES
+        assert_eq!(
+            translate_key_with_mode(Key::Return, ModifierType::empty(), mode),
+            Some(vec![b'\r'])
+        );
+        assert_eq!(
+            translate_key_with_mode(Key::Tab, ModifierType::empty(), mode),
+            Some(vec![b'\t'])
+        );
+        assert_eq!(
+            translate_key_with_mode(Key::BackSpace, ModifierType::empty(), mode),
+            Some(vec![0x7f])
+        );
+        // Escape is always disambiguated as CSI 27 u
+        assert_eq!(
+            translate_key_with_mode(Key::Escape, ModifierType::empty(), mode),
+            Some(b"\x1b[27u".to_vec())
+        );
+        // Shift+Return -> CSI 13;2u (multiline input in OpenCode / modern TUIs)
+        assert_eq!(
+            translate_key_with_mode(Key::Return, ModifierType::SHIFT_MASK, mode),
+            Some(b"\x1b[13;2u".to_vec())
+        );
+        // Shift+Tab (ISO_Left_Tab) -> CSI 9;2u
+        assert_eq!(
+            translate_key_with_mode(Key::ISO_Left_Tab, ModifierType::SHIFT_MASK, mode),
+            Some(b"\x1b[9;2u".to_vec())
+        );
+        // Ctrl+I -> CSI 105;5u (distinct from Tab)
+        assert_eq!(
+            translate_key_with_mode(Key::i, ModifierType::CONTROL_MASK, mode),
+            Some(b"\x1b[105;5u".to_vec())
+        );
+        // Ctrl+Shift+A -> uses lowercase codepoint 97 with modifier 6
+        assert_eq!(
+            translate_key_with_mode(
+                Key::A,
+                ModifierType::CONTROL_MASK | ModifierType::SHIFT_MASK,
+                mode
+            ),
+            Some(b"\x1b[97;6u".to_vec())
         );
     }
 }

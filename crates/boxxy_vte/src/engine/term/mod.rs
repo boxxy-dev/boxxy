@@ -315,7 +315,7 @@ impl Default for Config {
             semantic_escape_chars: SEMANTIC_ESCAPE_CHARS.to_owned(),
             default_cursor_style: Default::default(),
             vi_mode_cursor_style: Default::default(),
-            kitty_keyboard: Default::default(),
+            kitty_keyboard: true,
             osc52: Default::default(),
         }
     }

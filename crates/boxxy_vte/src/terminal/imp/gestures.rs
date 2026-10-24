@@ -265,7 +265,8 @@ impl super::TerminalWidget {
         obj.connect_has_focus_notify(move |widget| {
             let imp = widget.imp();
             let im = imp.im_context.borrow();
-            if widget.has_focus() {
+            let has_focus = widget.has_focus();
+            if has_focus {
                 widget.start_cursor_blink();
                 im.focus_in();
             } else {
@@ -273,6 +274,22 @@ impl super::TerminalWidget {
                 imp.cursor_visible.set(true);
                 im.focus_out();
                 widget.queue_draw();
+            }
+            if let Some(backend) = imp.backend.borrow().as_ref() {
+                let state = backend.render_state.load();
+                if state
+                    .mode
+                    .contains(crate::engine::term::TermMode::FOCUS_IN_OUT)
+                {
+                    let seq: &[u8] = if has_focus { b"\x1b[I" } else { b"\x1b[O" };
+                    backend
+                        .notifier
+                        .0
+                        .send(crate::engine::event_loop::Msg::Input(
+                            std::borrow::Cow::Borrowed(seq),
+                        ))
+                        .ok();
+                }
             }
         });
 
@@ -285,15 +302,6 @@ impl super::TerminalWidget {
             move |ctrl, key, _keycode, modifier| {
                 let imp = obj.imp();
                 obj.start_cursor_blink();
-
-                // Let the IM context have first dibs on the key event (dead keys etc.)
-                if imp
-                    .im_context
-                    .borrow()
-                    .filter_keypress(&ctrl.current_event().unwrap())
-                {
-                    return glib::Propagation::Stop;
-                }
 
                 if key == gtk4::gdk::Key::V
                     && modifier.contains(
@@ -346,24 +354,51 @@ impl super::TerminalWidget {
                         return glib::Propagation::Stop;
                     }
                 }
-                if let Some(backend) = imp.backend.borrow().as_ref() {
-                    let state = backend.render_state.load();
-                    let is_app_cursor = state
-                        .mode
-                        .contains(crate::engine::term::TermMode::APP_CURSOR);
-                    if let Some(bytes) =
-                        crate::terminal::input::translate_key(key, modifier, is_app_cursor)
-                    {
-                        // Special key handled (Ctrl+C, Up, Tab, etc.)
-                        // Reset IM context so we don't have partial dead key state.
-                        imp.im_context.borrow().reset();
 
-                        if !backend.is_alt_screen() {
-                            backend.scroll_display(Scroll::Bottom);
-                        }
-                        backend.write_to_pty(bytes);
-                        return glib::Propagation::Stop;
+                let term_mode = imp
+                    .backend
+                    .borrow()
+                    .as_ref()
+                    .map(|b| b.render_state.load().mode)
+                    .unwrap_or(crate::engine::term::TermMode::NONE);
+
+                // Let the IM context handle unmodified/Shift text composition (dead keys, IME)
+                // unless Ctrl/Alt are held or the app requested REPORT_ALL_KEYS_AS_ESC.
+                let bypass_im = modifier.intersects(
+                    gtk4::gdk::ModifierType::CONTROL_MASK | gtk4::gdk::ModifierType::ALT_MASK,
+                ) || term_mode
+                    .contains(crate::engine::term::TermMode::REPORT_ALL_KEYS_AS_ESC)
+                    || matches!(
+                        key,
+                        gtk4::gdk::Key::Return
+                            | gtk4::gdk::Key::KP_Enter
+                            | gtk4::gdk::Key::Tab
+                            | gtk4::gdk::Key::KP_Tab
+                            | gtk4::gdk::Key::ISO_Left_Tab
+                            | gtk4::gdk::Key::BackSpace
+                            | gtk4::gdk::Key::Escape
+                    );
+                if !bypass_im
+                    && let Some(event) = ctrl.current_event()
+                    && imp.im_context.borrow().filter_keypress(&event)
+                {
+                    return glib::Propagation::Stop;
+                }
+
+                if let Some(backend) = imp.backend.borrow().as_ref()
+                    && let Some(bytes) = crate::terminal::input::translate_key_with_mode(
+                        key, modifier, term_mode,
+                    )
+                {
+                    // Special key handled (Ctrl+C, Up, Tab, Shift+Tab, CSI u, etc.)
+                    // Reset IM context so we don't have partial dead key state.
+                    imp.im_context.borrow().reset();
+
+                    if !backend.is_alt_screen() {
+                        backend.scroll_display(Scroll::Bottom);
                     }
+                    backend.write_to_pty(bytes);
+                    return glib::Propagation::Stop;
                 }
                 glib::Propagation::Proceed
             }
@@ -419,6 +454,44 @@ impl super::TerminalWidget {
                                 .ok();
                             return glib::Propagation::Stop;
                         }
+                    }
+                    // Alternate Scroll Mode (DECSET 1007): on the alternate screen without
+                    // mouse reporting, translate wheel ticks into Up/Down cursor keys for pagers
+                    // like `less`, `man`, and `git log`.
+                    if state.is_alt_screen
+                        && state
+                            .mode
+                            .contains(crate::engine::term::TermMode::ALTERNATE_SCROLL)
+                        && !modifiers.contains(gtk4::gdk::ModifierType::SHIFT_MASK)
+                        && dy != 0.0
+                    {
+                        let lines = ((dy.abs() * 3.0).round() as usize).clamp(1, 15);
+                        let step: &[u8] = if dy > 0.0 {
+                            if state
+                                .mode
+                                .contains(crate::engine::term::TermMode::APP_CURSOR)
+                            {
+                                b"\x1bOB"
+                            } else {
+                                b"\x1b[B"
+                            }
+                        } else if state
+                            .mode
+                            .contains(crate::engine::term::TermMode::APP_CURSOR)
+                        {
+                            b"\x1bOA"
+                        } else {
+                            b"\x1b[A"
+                        };
+                        let seq = step.repeat(lines);
+                        backend
+                            .notifier
+                            .0
+                            .send(crate::engine::event_loop::Msg::Input(
+                                std::borrow::Cow::Owned(seq),
+                            ))
+                            .ok();
+                        return glib::Propagation::Stop;
                     }
                     let mut adj_dy = dy;
                     if imp.invert_scroll.get() {
