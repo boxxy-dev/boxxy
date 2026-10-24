@@ -67,6 +67,7 @@ pub struct TerminalWidget {
     pub match_rules: RefCell<Vec<MatchRule>>,
     pub next_match_tag: Cell<i32>,
     pub mouse_pos: Cell<Option<(f64, f64)>>,
+    pub last_mouse_cell: Cell<Option<(usize, usize)>>,
     pub drag_start_pos: Cell<Option<(f64, f64)>>,
     pub selection_dragged: Cell<bool>,
     pub last_selection_point:
@@ -126,6 +127,7 @@ impl Default for TerminalWidget {
             vscroll_policy: Cell::new(gtk4::ScrollablePolicy::Minimum),
             match_rules: RefCell::new(Vec::new()),
             mouse_pos: Cell::new(None),
+            last_mouse_cell: Cell::new(None),
             drag_start_pos: Cell::new(None),
             selection_dragged: Cell::new(false),
             last_selection_point: Cell::new(None),

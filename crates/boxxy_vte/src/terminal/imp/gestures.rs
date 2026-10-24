@@ -417,21 +417,6 @@ impl super::TerminalWidget {
                                     std::borrow::Cow::Owned(seq),
                                 ))
                                 .ok();
-                            if state
-                                .mode
-                                .contains(crate::engine::term::TermMode::SGR_MOUSE)
-                                && let Some(rs) = format_mouse_report(
-                                    button, false, false, cell_x, cell_y, modifiers, state.mode,
-                                )
-                            {
-                                backend
-                                    .notifier
-                                    .0
-                                    .send(crate::engine::event_loop::Msg::Input(
-                                        std::borrow::Cow::Owned(rs),
-                                    ))
-                                    .ok();
-                            }
                             return glib::Propagation::Stop;
                         }
                     }
@@ -506,6 +491,7 @@ impl super::TerminalWidget {
                         }
                         imp.mouse_pressed.set(true);
                         imp.mouse_pos.set(Some((x, y)));
+                        imp.last_mouse_cell.set(Some((col, row)));
                         let button = match gesture.current_button() {
                             1 => 0,
                             2 => 1,
@@ -598,6 +584,7 @@ impl super::TerminalWidget {
                         imp.last_selection_point.set(None);
                         imp.selection_dragged.set(false);
                         imp.mouse_pressed.set(false);
+                        imp.last_mouse_cell.set(Some((col, row)));
                         let button = match gesture.current_button() {
                             1 => 0,
                             2 => 1,
@@ -690,8 +677,21 @@ impl super::TerminalWidget {
                         imp.mouse_pos.set(Some((x, y)));
                         let (col, row) =
                             imp.pixel_to_cell(&obj, x, y, state.columns, state.screen_lines);
+                        if imp.last_mouse_cell.replace(Some((col, row))) == Some((col, row)) {
+                            return;
+                        }
                         let is_drag = imp.mouse_pressed.get();
-                        let button = if is_drag { 0 } else { 35 };
+                        let button = if is_drag {
+                            if modifiers.contains(gtk4::gdk::ModifierType::BUTTON2_MASK) {
+                                1
+                            } else if modifiers.contains(gtk4::gdk::ModifierType::BUTTON3_MASK) {
+                                2
+                            } else {
+                                0
+                            }
+                        } else {
+                            3
+                        };
                         if let Some(seq) = format_mouse_report(
                             button, is_drag, true, col, row, modifiers, state.mode,
                         ) {
@@ -775,6 +775,7 @@ impl super::TerminalWidget {
                 if !imp.mouse_pressed.get() {
                     imp.mouse_pos.set(None);
                 }
+                imp.last_mouse_cell.set(None);
                 imp.hovered_regex_match.set(None);
                 obj.queue_draw();
             }
@@ -806,16 +807,18 @@ fn format_mouse_report(
         cb += 16;
     }
     if is_motion {
-        if !mode.contains(crate::engine::term::TermMode::MOUSE_MOTION)
-            && !mode.contains(crate::engine::term::TermMode::MOUSE_DRAG)
-        {
+        let report_motion = mode.contains(crate::engine::term::TermMode::MOUSE_MOTION)
+            || (mode.contains(crate::engine::term::TermMode::MOUSE_DRAG) && is_press);
+        if !report_motion {
             return None;
         }
         cb += 32;
     }
     let (x, y) = (x + 1, y + 1);
     if mode.contains(crate::engine::term::TermMode::SGR_MOUSE) {
-        let suffix = if is_press { b'M' } else { b'm' };
+        // In SGR mouse protocol (1006), lowercase 'm' is exclusively for button
+        // release; button press, scroll, and all motion events use uppercase 'M'.
+        let suffix = if is_press || is_motion { b'M' } else { b'm' };
         Some(format!("\x1b[<{};{};{}{}", cb, x, y, suffix as char).into_bytes())
     } else {
         if x > 223 || y > 223 {
@@ -829,5 +832,42 @@ fn format_mouse_report(
             (32 + x as u8).max(32),
             (32 + y as u8).max(32),
         ])
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::format_mouse_report;
+    use crate::engine::term::TermMode;
+    use gtk4::gdk::ModifierType;
+
+    #[test]
+    fn sgr_hover_motion_uses_button_35_and_uppercase_m() {
+        let mode = TermMode::MOUSE_MOTION | TermMode::SGR_MOUSE;
+        let seq = format_mouse_report(3, false, true, 9, 4, ModifierType::empty(), mode);
+        assert_eq!(seq.as_deref(), Some(&b"\x1b[<35;10;5M"[..]));
+    }
+
+    #[test]
+    fn sgr_drag_motion_uses_button_32_and_uppercase_m() {
+        let mode = TermMode::MOUSE_DRAG | TermMode::SGR_MOUSE;
+        let seq = format_mouse_report(0, true, true, 9, 4, ModifierType::empty(), mode);
+        assert_eq!(seq.as_deref(), Some(&b"\x1b[<32;10;5M"[..]));
+    }
+
+    #[test]
+    fn mouse_drag_mode_ignores_unpressed_hover_motion() {
+        let mode = TermMode::MOUSE_DRAG | TermMode::SGR_MOUSE;
+        let seq = format_mouse_report(3, false, true, 9, 4, ModifierType::empty(), mode);
+        assert!(seq.is_none());
+    }
+
+    #[test]
+    fn sgr_click_press_and_release() {
+        let mode = TermMode::MOUSE_REPORT_CLICK | TermMode::SGR_MOUSE;
+        let press = format_mouse_report(0, true, false, 2, 3, ModifierType::empty(), mode);
+        let release = format_mouse_report(0, false, false, 2, 3, ModifierType::empty(), mode);
+        assert_eq!(press.as_deref(), Some(&b"\x1b[<0;3;4M"[..]));
+        assert_eq!(release.as_deref(), Some(&b"\x1b[<0;3;4m"[..]));
     }
 }
