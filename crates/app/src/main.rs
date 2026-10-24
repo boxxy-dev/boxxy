@@ -187,7 +187,6 @@ fn main() {
 
     app.connect_command_line(|app, cmdline| {
         let options = cmdline.options_dict();
-        let new_window = options.contains("new-window");
         let new_tab = options.contains("tab");
 
         // Resolve working directory from `--working-directory` (`-d`) or first positional argument.
@@ -236,25 +235,20 @@ fn main() {
                 let _ = window.activate_action("win.new-tab-dir", Some(&dir_arg));
                 window.present();
             }
-        } else if new_window || explicit_dir.is_some() {
-            // Open a new window. If `explicit_dir` was provided, spawn directly in that directory;
-            // otherwise let `win.new-window` preserve the active tab's CWD if configured.
-            if explicit_dir.is_some() {
-                AppWindow::new(
-                    app,
-                    AppInit {
-                        incoming_tab_view: None,
-                        working_dir: explicit_dir,
-                    },
-                );
-            } else if let Some(window) = app.active_window() {
-                let _ = window.activate_action("win.new-window", None);
-            }
-        } else {
-            // Subsequent launch with no special flags or directory. Just present the existing window.
-            if let Some(window) = app.active_window() {
-                window.present();
-            }
+        } else if explicit_dir.is_some() {
+            // Open a new window directly in `explicit_dir`.
+            AppWindow::new(
+                app,
+                AppInit {
+                    incoming_tab_view: None,
+                    working_dir: explicit_dir,
+                },
+            );
+        } else if let Some(window) = app.active_window() {
+            // Any secondary CLI or desktop Exec invocation (`boxxy-terminal` or
+            // `boxxy-terminal --new-window`) opens a new window, preserving the
+            // active tab's CWD if configured.
+            let _ = window.activate_action("win.new-window", None);
         }
 
         0.into()
