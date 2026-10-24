@@ -472,11 +472,10 @@ impl AppWindow {
             crate::update::update(&inner_ref, AppInput::AdoptOrphanTabs);
         }
 
-        // Query initial maintenance status, show startup toast if background shells
-        // are waiting, and keep the HeaderBar badge synced with the daemon.
+        // Query initial maintenance status and keep the HeaderBar background shells
+        // badge synced with the daemon.
         if !is_drag_window {
             let tx_startup = tx.clone();
-            let toast_overlay_startup = inner_ref.borrow().toast_overlay.clone();
             let window_weak = window.downgrade();
             gtk::glib::spawn_future_local(async move {
                 let agent = boxxy_terminal::get_agent().await;
@@ -512,34 +511,6 @@ impl AppWindow {
                     let _ = tx_startup.send(AppInput::EnsureInitialTab).await;
                 }
                 if let Ok(detached) = agent.list_detached_sessions_detailed().await {
-                    if !detached.is_empty() {
-                        let waiting_count =
-                            detached.iter().filter(|s| s.waiting_for_input).count();
-                        let label = if detached.len() == 1 {
-                            if waiting_count > 0 {
-                                "1 background shell waiting for input".to_string()
-                            } else {
-                                "1 background shell is still running".to_string()
-                            }
-                        } else if waiting_count > 0 {
-                            format!(
-                                "{} background shells running ({} waiting for input)",
-                                detached.len(),
-                                waiting_count
-                            )
-                        } else {
-                            format!("{} background shells are still running", detached.len())
-                        };
-
-                        let toast = adw::Toast::new(&label);
-                        toast.set_timeout(0);
-                        toast.set_button_label(Some("Review"));
-                        let tx_btn = tx_startup.clone();
-                        toast.connect_button_clicked(move |_| {
-                            let _ = tx_btn.send_blocking(AppInput::ShowDetachedSessions);
-                        });
-                        toast_overlay_startup.add_toast(toast);
-                    }
                     let _ = tx_startup
                         .send(AppInput::UpdateDetachedSessionsBadge(detached))
                         .await;
