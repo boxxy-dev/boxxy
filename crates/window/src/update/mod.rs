@@ -81,6 +81,10 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
         AppInput::OpenPreferences => {
             inner.preferences.show(&inner.window.clone().upcast());
         }
+        AppInput::OpenApisPreferences => {
+            inner.preferences.show_page("apis");
+            inner.preferences.show(&inner.window.clone().upcast());
+        }
         AppInput::OpenBookmarks => {
             tabs::open_bookmarks(&mut inner);
         }
@@ -354,6 +358,7 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
             // TODO: Signal all tabs to reload their claw session?
         }
         AppInput::ModelSelection => {
+            let tx_apis = inner.tx.clone();
             let dialog = boxxy_model_selection::GlobalModelSelectorDialog::new_with_custom(
                 inner.current_settings.ai_chat_model.clone(),
                 inner.current_settings.claw_model.clone(),
@@ -369,6 +374,9 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
                     });
                 },
             );
+            dialog.set_on_open_apis(move || {
+                let _ = tx_apis.send_blocking(AppInput::OpenApisPreferences);
+            });
             dialog.present(Some(&inner.window));
         }
         AppInput::CloseRequested => {
@@ -647,6 +655,18 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
                 }
             }
         }
+        AppInput::ResumeClawSession(session_id) => {
+            if let Some(page) = inner.tab_view.selected_page() {
+                let child = page.child();
+                if let Some(pos) = inner
+                    .tabs
+                    .iter()
+                    .position(|c| c.controller.widget() == &child)
+                {
+                    inner.tabs[pos].controller.resume_session(&session_id);
+                }
+            }
+        }
         AppInput::RefreshMaintenanceStatus(status, on_battery) => {
             inner.claw.set_maintenance_status(&status, on_battery);
         }
@@ -750,11 +770,12 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
                         format!("{}h idle", s.idle_secs / 3600)
                     };
 
-                    let mut subtitle_str = format!(
-                        "PID {} • {} • {}",
-                        s.pid, cwd_display, idle_display
-                    );
-                    if !s.character_name.is_empty() {
+                    let mut subtitle_str = format!("{} • {}", cwd_display, idle_display);
+                    if !s.character_name.is_empty()
+                        && !title
+                            .to_lowercase()
+                            .starts_with(&s.character_name.to_lowercase())
+                    {
                         subtitle_str.push_str(&format!(" • {}", s.character_name));
                     }
                     if s.pending_task_count > 0 {

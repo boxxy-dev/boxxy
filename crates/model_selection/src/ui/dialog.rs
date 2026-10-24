@@ -3,6 +3,8 @@ use crate::ui::selector::SingleModelSelector;
 use gtk4 as gtk;
 use gtk4::prelude::*;
 use libadwaita::prelude::*;
+use std::cell::RefCell;
+use std::rc::Rc;
 
 #[derive(Clone)]
 pub struct GlobalModelSelectorDialog {
@@ -10,6 +12,7 @@ pub struct GlobalModelSelectorDialog {
     pub ai_chat_selector: SingleModelSelector,
     pub claw_selector: SingleModelSelector,
     pub memory_selector: SingleModelSelector,
+    on_open_apis: Rc<RefCell<Option<Rc<dyn Fn() + 'static>>>>,
 }
 
 impl GlobalModelSelectorDialog {
@@ -132,28 +135,81 @@ impl GlobalModelSelectorDialog {
         container.append(&switcher);
         container.append(&stack);
 
+        let footer_row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+        footer_row.set_margin_start(14);
+        footer_row.set_margin_end(14);
+        footer_row.set_margin_top(4);
+        footer_row.set_margin_bottom(12);
+        footer_row.set_hexpand(true);
+
+        let apis_link_lbl = gtk::Label::builder()
+            .label("Manage APIs and Search Engine…")
+            .css_classes(["caption", "accent"])
+            .halign(gtk::Align::Start)
+            .valign(gtk::Align::Center)
+            .hexpand(true)
+            .xalign(0.0)
+            .tooltip_text("Open API Keys, Custom Endpoints, and Search Engine in Preferences")
+            .build();
+        apis_link_lbl.set_cursor_from_name(Some("pointer"));
+        footer_row.append(&apis_link_lbl);
+
         let close_btn = gtk::Button::builder()
             .label("Done")
-            .margin_start(10)
-            .margin_end(10)
-            .margin_bottom(10)
-            .halign(gtk::Align::Center)
+            .halign(gtk::Align::End)
+            .valign(gtk::Align::Center)
             .css_classes(["suggested-action", "pill"])
             .build();
-        container.append(&close_btn);
+        footer_row.append(&close_btn);
+        container.append(&footer_row);
 
-        let d_clone = dialog.clone();
-        let ai_sel = ai_chat_selector.clone();
-        let claw_sel = claw_selector.clone();
-        let mem_sel = memory_selector.clone();
-        close_btn.connect_clicked(move |_| {
-            on_done(
-                ai_sel.get_current_provider(),
-                claw_sel.get_current_provider(),
-                mem_sel.get_current_provider(),
-            );
-            d_clone.close();
-        });
+        let on_done_rc: Rc<
+            dyn Fn(Option<ModelProvider>, Option<ModelProvider>, Option<ModelProvider>),
+        > = Rc::new(on_done);
+        let on_open_apis: Rc<RefCell<Option<Rc<dyn Fn() + 'static>>>> =
+            Rc::new(RefCell::new(None));
+
+        {
+            let d_clone = dialog.clone();
+            let ai_sel = ai_chat_selector.clone();
+            let claw_sel = claw_selector.clone();
+            let mem_sel = memory_selector.clone();
+            let done_cb = on_done_rc.clone();
+            close_btn.connect_clicked(move |_| {
+                done_cb(
+                    ai_sel.get_current_provider(),
+                    claw_sel.get_current_provider(),
+                    mem_sel.get_current_provider(),
+                );
+                d_clone.close();
+            });
+        }
+
+        {
+            let gesture = gtk::GestureClick::new();
+            let lbl_weak = apis_link_lbl.downgrade();
+            let d_clone = dialog.clone();
+            let ai_sel = ai_chat_selector.clone();
+            let claw_sel = claw_selector.clone();
+            let mem_sel = memory_selector.clone();
+            let done_cb = on_done_rc;
+            let open_apis_cb = on_open_apis.clone();
+            gesture.connect_released(move |_, _, _, _| {
+                done_cb(
+                    ai_sel.get_current_provider(),
+                    claw_sel.get_current_provider(),
+                    mem_sel.get_current_provider(),
+                );
+                let root_opt = lbl_weak.upgrade().and_then(|l| l.root());
+                d_clone.close();
+                if let Some(cb) = open_apis_cb.borrow().as_ref().cloned() {
+                    cb();
+                } else if let Some(root) = root_opt {
+                    let _ = gtk::prelude::WidgetExt::activate_action(&root, "win.open-apis", None);
+                }
+            });
+            apis_link_lbl.add_controller(gesture);
+        }
 
         dialog.set_child(Some(&container));
 
@@ -162,7 +218,12 @@ impl GlobalModelSelectorDialog {
             ai_chat_selector,
             claw_selector,
             memory_selector,
+            on_open_apis,
         }
+    }
+
+    pub fn set_on_open_apis<FA: Fn() + 'static>(&self, cb: FA) {
+        *self.on_open_apis.borrow_mut() = Some(Rc::new(cb));
     }
 
     pub fn dialog(&self) -> &libadwaita::Dialog {

@@ -334,8 +334,15 @@ pub fn handle_terminal_event(
                             crate::sound::play_timer_completion_sound();
                         }
 
-                        let first_name =
+                        let raw_first =
                             agent_name.split_whitespace().next().unwrap_or(&agent_name);
+                        let first_name = {
+                            let mut c = raw_first.chars();
+                            match c.next() {
+                                None => String::new(),
+                                Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+                            }
+                        };
                         let mut icon_path = "boxxyclaw-symbolic".to_string();
 
                         let registry = boxxy_claw_protocol::characters::CHARACTER_CACHE.load();
@@ -382,8 +389,15 @@ pub fn handle_terminal_event(
                             crate::sound::play_task_completion_sound();
                         }
 
-                        let first_name =
+                        let raw_first =
                             agent_name.split_whitespace().next().unwrap_or(&agent_name);
+                        let first_name = {
+                            let mut c = raw_first.chars();
+                            match c.next() {
+                                None => String::new(),
+                                Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+                            }
+                        };
                         let mut icon_path = "boxxyclaw-symbolic".to_string();
 
                         let registry = boxxy_claw_protocol::characters::CHARACTER_CACHE.load();

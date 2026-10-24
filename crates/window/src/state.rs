@@ -100,6 +100,7 @@ pub enum AppInput {
     SidebarVisibleChanged(bool),
     SidebarPageChanged(String),
     OpenPreferences,
+    OpenApisPreferences,
     OpenBookmarks,
     OpenShortcuts,
     OpenAbout,
@@ -155,6 +156,7 @@ pub enum AppInput {
     GrabFocus,
     CancelTask(uuid::Uuid, Option<String>), // (task_id, pane_id)
     ClearClawHistory(Option<String>),       // (pane_id)
+    ResumeClawSession(String),              // (session_id)
     ShowDetachedSessions,
     RefreshDetachedSessions,
     UpdateDetachedSessionsBadge(Vec<boxxy_terminal::DetachedSessionInfo>),

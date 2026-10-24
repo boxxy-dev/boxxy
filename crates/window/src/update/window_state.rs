@@ -19,11 +19,13 @@ pub fn save_window_state(inner: &mut AppWindowInner, width: i32, height: i32, is
 pub fn handle_close_request(inner_ref: &Rc<RefCell<AppWindowInner>>, inner: &mut AppWindowInner) {
     let mut pids = Vec::new();
     let mut window_pane_ids = std::collections::HashSet::new();
+    let mut active_claw_panes = Vec::new();
     for tab in &inner.tabs {
         pids.extend(tab.controller.get_pids());
         for pid_str in tab.controller.get_pane_ids() {
             window_pane_ids.insert(pid_str);
         }
+        active_claw_panes.extend(tab.controller.get_active_claw_panes());
     }
 
     let inner_clone = inner_ref.clone();
@@ -60,7 +62,7 @@ pub fn handle_close_request(inner_ref: &Rc<RefCell<AppWindowInner>>, inner: &mut
             .filter(|t| !t.is_detached && window_pane_ids.contains(&t.pane_id))
             .collect();
 
-        if running_apps.is_empty() && pending_tasks.is_empty() {
+        if running_apps.is_empty() && pending_tasks.is_empty() && active_claw_panes.is_empty() {
             let tabs: Vec<_> = inner_clone
                 .borrow()
                 .tabs
@@ -78,7 +80,7 @@ pub fn handle_close_request(inner_ref: &Rc<RefCell<AppWindowInner>>, inner: &mut
 
         // If "Always Keep Running Processes in Background" (`pty_persistence`) is on,
         // detach all tabs (the daemon automatically terminates idle shells and keeps
-        // busy shells alive) and close without showing the confirmation dialog.
+        // busy shells and active AI sessions alive) and close without showing the dialog.
         if Settings::load().pty_persistence {
             let tabs: Vec<_> = inner_clone
                 .borrow()
@@ -97,7 +99,7 @@ pub fn handle_close_request(inner_ref: &Rc<RefCell<AppWindowInner>>, inner: &mut
 
         let dialog = libadwaita::AlertDialog::builder()
             .heading("Close Window?")
-            .body("Some processes or AI tasks are still running.")
+            .body("Put active sessions in the background to continue them later without needing to resume, or terminate them.")
             .build();
 
         let group = libadwaita::PreferencesGroup::new();
@@ -109,7 +111,9 @@ pub fn handle_close_request(inner_ref: &Rc<RefCell<AppWindowInner>>, inner: &mut
             group.add(&row);
         }
 
+        let mut panes_with_tasks = std::collections::HashSet::new();
         for task in pending_tasks {
+            panes_with_tasks.insert(task.pane_id.clone());
             let type_str = match task.task_type {
                 TaskType::Notification => "Reminder",
                 TaskType::Command => "Scheduled Command",
@@ -125,6 +129,16 @@ pub fn handle_close_request(inner_ref: &Rc<RefCell<AppWindowInner>>, inner: &mut
                 .subtitle(format!("{} by {}", type_str, agent_name))
                 .build();
             group.add(&row);
+        }
+
+        for (pane_id, agent_name) in active_claw_panes {
+            if !panes_with_tasks.contains(&pane_id) {
+                let row = libadwaita::ActionRow::builder()
+                    .title(&agent_name)
+                    .subtitle("Active AI Agent Session")
+                    .build();
+                group.add(&row);
+            }
         }
 
         let scrolled = gtk4::ScrolledWindow::builder()
@@ -360,6 +374,7 @@ pub fn sidebar_visible_changed(inner: &mut AppWindowInner, visible: bool) {
 pub fn sidebar_page_changed(inner: &mut AppWindowInner, name: String) {
     if name == "claw" {
         refresh_claw_maintenance_status(inner.tx.clone());
+        inner.claw.refresh_past_sessions();
     }
     inner.app_state.active_sidebar_page = name;
     inner.app_state.save();
@@ -425,6 +440,7 @@ pub fn show_claw_sidebar(inner: &mut AppWindowInner) {
         }
         inner.view_stack.set_visible_child_name("claw");
         refresh_claw_maintenance_status(inner.tx.clone());
+        inner.claw.refresh_past_sessions();
     }
 }
 

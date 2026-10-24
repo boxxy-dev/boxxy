@@ -125,6 +125,19 @@ impl PtySubsystem {
     }
 }
 
+pub(crate) fn prettify_character_name(raw: &str) -> String {
+    raw.split_whitespace()
+        .map(|word| {
+            let mut chars = word.chars();
+            match chars.next() {
+                None => String::new(),
+                Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 pub(crate) async fn query_detached_sessions_detailed(
     pty_registry: &registry::PtyRegistry,
 ) -> Vec<DetachedSessionInfo> {
@@ -159,7 +172,7 @@ pub(crate) async fn query_detached_sessions_detailed(
             if let Some(claim) = claim_opt {
                 let char_info = catalog.iter().find(|c| c.config.id == claim.character_id);
                 let name = char_info
-                    .map(|c| c.config.display_name.clone())
+                    .map(|c| prettify_character_name(&c.config.display_name))
                     .unwrap_or_default();
                 let slug = char_info.map(|c| c.config.name.clone()).unwrap_or_default();
                 (
@@ -192,9 +205,9 @@ pub(crate) async fn query_detached_sessions_detailed(
                     String::new()
                 };
                 if !character_name.is_empty() {
-                    fg_proc = format!("{character_name}: \"{msg}\"{extra}");
+                    fg_proc = format!("{character_name}: {msg}{extra}");
                 } else {
-                    fg_proc = format!("Reminder: \"{msg}\"{extra}");
+                    fg_proc = format!("Reminder: {msg}{extra}");
                 }
             } else if !character_name.is_empty() {
                 fg_proc = format!("{character_name} (AI Agent)");

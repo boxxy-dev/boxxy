@@ -294,6 +294,7 @@ pub fn close_tab_request(
     let pids = inner.tabs[pos].controller.get_pids();
     let pane_ids: std::collections::HashSet<String> =
         inner.tabs[pos].controller.get_pane_ids().into_iter().collect();
+    let active_claw_panes = inner.tabs[pos].controller.get_active_claw_panes();
     let inner_clone = inner_ref.clone();
     gtk4::glib::spawn_future_local(async move {
         let agent = boxxy_terminal::get_agent().await;
@@ -317,11 +318,11 @@ pub fn close_tab_request(
             .filter(|t| pane_ids.contains(&t.pane_id))
             .collect();
 
-        // If the tab only has an idle shell prompt (no running child commands)
-        // and no pending AI reminders/tasks, terminate the idle shell cleanly even
-        // when `pty_persistence` is on so explicitly closed tabs don't accumulate
-        // empty shells in the background.
-        if running_apps.is_empty() && tab_pending_tasks.is_empty() {
+        // If the tab only has an idle shell prompt (no running child commands),
+        // no pending AI reminders/tasks, and no active AI agent session, terminate
+        // the idle shell cleanly even when `pty_persistence` is on so explicitly
+        // closed tabs don't accumulate empty shells in the background.
+        if running_apps.is_empty() && tab_pending_tasks.is_empty() && active_claw_panes.is_empty() {
             let controller_opt = {
                 let inner = inner_clone.borrow();
                 inner
@@ -347,8 +348,9 @@ pub fn close_tab_request(
             return;
         }
 
-        // If child processes or AI tasks ARE running and "Always Keep Running Processes in Background"
-        // (`pty_persistence`) is on, detach the busy shell into the background without nagging.
+        // If child processes, AI tasks, or an AI agent session ARE active and
+        // "Always Keep Running Processes in Background" (`pty_persistence`) is on,
+        // detach the session into the background without nagging.
         if boxxy_preferences::Settings::load().pty_persistence {
             let (controller_opt, tx) = {
                 let inner = inner_clone.borrow();
@@ -379,7 +381,7 @@ pub fn close_tab_request(
 
         let dialog = libadwaita::AlertDialog::builder()
             .heading("Close Tab?")
-            .body("Some processes or AI tasks are still running in this tab.")
+            .body("Put this session in the background to continue it later without needing to resume, or terminate it.")
             .build();
 
         let group = libadwaita::PreferencesGroup::new();
@@ -391,7 +393,9 @@ pub fn close_tab_request(
             group.add(&row);
         }
 
+        let mut panes_with_tasks = std::collections::HashSet::new();
         for task in tab_pending_tasks {
+            panes_with_tasks.insert(task.pane_id.clone());
             let type_str = match task.task_type {
                 boxxy_claw_protocol::TaskType::Notification => "Reminder",
                 boxxy_claw_protocol::TaskType::Command => "Scheduled Command",
@@ -407,6 +411,16 @@ pub fn close_tab_request(
                 .subtitle(format!("{} by {}", type_str, agent_name))
                 .build();
             group.add(&row);
+        }
+
+        for (pane_id, agent_name) in active_claw_panes {
+            if !panes_with_tasks.contains(&pane_id) {
+                let row = libadwaita::ActionRow::builder()
+                    .title(&agent_name)
+                    .subtitle("Active AI Agent Session")
+                    .build();
+                group.add(&row);
+            }
         }
 
         let scrolled = gtk4::ScrolledWindow::builder()
@@ -722,8 +736,15 @@ pub fn focus_active_terminal(inner: &mut AppWindowInner) {
             .iter()
             .position(|c| c.controller.widget() == &child)
         {
+            let popover_open = inner.claw.is_options_popover_open()
+                || gtk4::prelude::GtkWindowExt::focus(&inner.window)
+                    .and_then(|w| w.ancestor(gtk4::Popover::static_type()))
+                    .is_some();
+
             let tc = &inner.tabs[pos];
-            tc.controller.grab_focus();
+            if !popover_open {
+                tc.controller.grab_focus();
+            }
 
             // Sync Claw UI state
             let tab_is_claw_active = tc.controller.is_claw_active();

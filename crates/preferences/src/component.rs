@@ -8,6 +8,7 @@ use std::rc::Rc;
 pub struct PreferencesComponent {
     dialog: adw::Dialog,
     stack: adw::ViewStack,
+    nav_apis: gtk::ListBoxRow,
     nav_shortcuts: gtk::ListBoxRow,
     nav_about: gtk::ListBoxRow,
     nav_characters: gtk::ListBoxRow,
@@ -223,6 +224,7 @@ impl PreferencesComponent {
         Self {
             dialog,
             stack,
+            nav_apis,
             nav_shortcuts,
             nav_about,
             nav_characters,
@@ -255,7 +257,9 @@ impl PreferencesComponent {
             .parent()
             .and_then(|p| p.downcast::<gtk::ListBox>().ok())
         {
-            if page_name == "shortcuts" {
+            if page_name == "apis" {
+                list_box.select_row(Some(&self.nav_apis));
+            } else if page_name == "shortcuts" {
                 list_box.select_row(Some(&self.nav_shortcuts));
             } else if page_name == "about" {
                 list_box.select_row(Some(&self.nav_about));

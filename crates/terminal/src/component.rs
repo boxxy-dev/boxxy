@@ -739,6 +739,52 @@ impl TerminalComponent {
             .any(|p| p.controller.has_pending_tasks())
     }
 
+    pub fn resume_session(&self, session_id: &str) {
+        let inner = self.inner.borrow();
+        if let Some(pane_data) = inner.panes.get(&inner.active_pane_id) {
+            pane_data.controller.resume_session(session_id);
+        }
+    }
+
+    /// Returns `(pane_id, formatted_agent_name)` for every pane in this tab that
+    /// currently has an active Claw agent session.
+    pub fn get_active_claw_panes(&self) -> Vec<(String, String)> {
+        let inner = self.inner.borrow();
+        let claims = boxxy_claw_protocol::characters::CLAIMS_CACHE.load();
+        let catalog = boxxy_claw_protocol::characters::CHARACTER_CACHE.load();
+        let mut out = Vec::new();
+        for (pane_id, data) in &inner.panes {
+            let claim_opt = claims.iter().find(|c| &c.holder_id == pane_id);
+            if data.controller.is_claw_active() || claim_opt.is_some() {
+                let mut name = data.controller.agent_name();
+                if name.trim().is_empty()
+                    && let Some(claim) = claim_opt
+                    && let Some(info) = catalog.iter().find(|c| c.config.id == claim.character_id)
+                {
+                    name = info.config.display_name.clone();
+                }
+                let formatted = name
+                    .split_whitespace()
+                    .map(|word| {
+                        let mut chars = word.chars();
+                        match chars.next() {
+                            None => String::new(),
+                            Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                let display = if formatted.is_empty() {
+                    "AI Agent".to_string()
+                } else {
+                    formatted
+                };
+                out.push((pane_id.clone(), display));
+            }
+        }
+        out
+    }
+
     pub fn get_total_tokens(&self) -> u64 {
         let inner = self.inner.borrow();
         inner

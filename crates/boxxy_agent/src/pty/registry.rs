@@ -272,9 +272,7 @@ pub async fn has_pending_claw_work_for_pane(pane_id: &str) -> bool {
         return true;
     }
     let claims = boxxy_claw_protocol::characters::CLAIMS_CACHE.load();
-    claims
-        .iter()
-        .any(|c| c.holder_id == pane_id && c.owner_bus_name.is_empty())
+    claims.iter().any(|c| c.holder_id == pane_id)
 }
 
 impl PtyRegistry {

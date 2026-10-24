@@ -974,6 +974,109 @@ impl TerminalPaneComponent {
         }
     }
 
+    pub fn resume_session(&self, resume_id: &str) {
+        let resume_id = resume_id.trim().to_string();
+        if resume_id.is_empty() {
+            return;
+        }
+
+        if !self.is_claw_active.get() {
+            self.is_claw_active.set(true);
+            let mut status = self.session_status.borrow().clone();
+            if status == AgentStatus::Off {
+                status = AgentStatus::Waiting;
+                *self.session_status.borrow_mut() = status.clone();
+            }
+            self.claw_indicator.set_visible(true);
+            self.msg_bar.update_ui(
+                status.clone(),
+                self.is_pinned.get(),
+                self.is_web_search.get(),
+            );
+            let (cb, pane_id) = {
+                let inner = self.inner.borrow();
+                (inner.callback.clone(), inner.id.clone())
+            };
+            cb(PaneOutput::ClawStateChanged(
+                pane_id,
+                true,
+                matches!(status, AgentStatus::Sleep),
+            ));
+        }
+
+        let (pane_id, session_id_ref, claw_sub_ref, event_tx) = {
+            let inner = self.inner.borrow();
+            (
+                inner.id.clone(),
+                inner.session_id.clone(),
+                inner.claw_subscription.clone(),
+                inner.claw_event_tx.clone(),
+            )
+        };
+        let tx = self.claw_sender.clone();
+        let claw_popover = self.claw_popover.clone();
+        let agent_name_rc = self.agent_name.clone();
+        let msg_bar = self.msg_bar.clone();
+        let terminal = self.terminal();
+
+        glib::spawn_future_local(async move {
+            let has_session = session_id_ref.lock().await.is_some();
+            if !has_session {
+                let agent = crate::get_agent().await;
+                let char_id =
+                    boxxy_claw_widget::msgbar::autocomplete::resolve_session_character_id(
+                        &resume_id,
+                    )
+                    .await
+                    .unwrap_or_else(|| {
+                        boxxy_claw_protocol::characters::CHARACTER_CACHE
+                            .load()
+                            .first()
+                            .map(|c| c.config.id.clone())
+                            .unwrap_or_default()
+                    });
+
+                if let Ok((session_id, sub_guard)) = agent
+                    .create_claw_session_with_sender(pane_id, char_id, event_tx)
+                    .await
+                {
+                    if session_id.is_empty() {
+                        return;
+                    }
+                    if let Ok(mut guard_slot) = claw_sub_ref.lock() {
+                        *guard_slot = Some(sub_guard);
+                    }
+                    *session_id_ref.lock().await = Some(session_id.clone());
+                    let _ = agent
+                        .post_claw_message(
+                            session_id,
+                            ClawMessage::ResumeSession {
+                                session_id: resume_id,
+                            },
+                        )
+                        .await;
+                }
+            } else {
+                let _ = tx
+                    .send(ClawMessage::ResumeSession {
+                        session_id: resume_id,
+                    })
+                    .await;
+            }
+
+            glib::timeout_add_local_once(std::time::Duration::from_millis(80), move || {
+                terminal.set_focusable(false);
+                let aname = agent_name_rc.borrow().clone();
+                if !aname.is_empty() {
+                    claw_popover.show_input_only(&aname);
+                } else {
+                    claw_popover.show_chat_only("Agent");
+                }
+                msg_bar.entry.grab_focus();
+            });
+        });
+    }
+
     pub fn get_total_tokens(&self) -> u64 {
         self.session_usage.get().total_tokens
     }

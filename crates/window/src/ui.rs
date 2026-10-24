@@ -97,6 +97,7 @@ impl AppWindow {
 
         let tx_claw_cancel = tx.clone();
         let tx_claw_soft_clear = tx.clone();
+        let tx_claw_resume = tx.clone();
         let claw = ClawSidebarComponent::new(
             move |task_id| {
                 let _ = tx_claw_cancel.send_blocking(AppInput::CancelTask(task_id, None));
@@ -105,6 +106,9 @@ impl AppWindow {
                 let _ = tx_claw_soft_clear.send_blocking(AppInput::ClearClawHistory(None));
             },
         );
+        claw.set_on_resume_session(move |session_id| {
+            let _ = tx_claw_resume.send_blocking(AppInput::ResumeClawSession(session_id));
+        });
 
         let tx_bookmarks = tx.clone();
         let tx_open_bookmarks = tx.clone();
@@ -223,6 +227,12 @@ impl AppWindow {
         let tx_focus = tx.clone();
         window.connect_notify(Some("is-active"), move |win, _| {
             if win.is_active() {
+                if gtk::prelude::GtkWindowExt::focus(win)
+                    .and_then(|w| w.ancestor(gtk::Popover::static_type()))
+                    .is_some()
+                {
+                    return;
+                }
                 let _ = tx_focus.send_blocking(AppInput::FocusActiveTerminal);
             }
         });

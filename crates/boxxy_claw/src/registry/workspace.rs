@@ -21,6 +21,7 @@ pub struct WorkspaceRegistry {
     panes: Arc<RwLock<HashMap<String, PaneState>>>,
     // Map of pane_id -> Vec<ScheduledTask>
     tasks: Arc<RwLock<HashMap<String, Vec<crate::engine::ScheduledTask>>>>,
+    tasks_changed_tx: tokio::sync::broadcast::Sender<()>,
     // Global shared intent/scratchpad for system-wide orchestration
     global_intent: Arc<RwLock<Option<String>>>,
     // Event subscriptions: subscriber_pane_id -> Vec<EventFilter>
@@ -61,13 +62,19 @@ impl Default for WorkspaceRegistry {
 
 impl WorkspaceRegistry {
     pub fn new() -> Self {
+        let (tasks_changed_tx, _) = tokio::sync::broadcast::channel(32);
         Self {
             panes: Arc::new(RwLock::new(HashMap::new())),
             tasks: Arc::new(RwLock::new(HashMap::new())),
+            tasks_changed_tx,
             global_intent: Arc::new(RwLock::new(None)),
             subscriptions: Arc::new(RwLock::new(HashMap::new())),
             locks: Arc::new(RwLock::new(HashMap::new())),
         }
+    }
+
+    pub fn subscribe_tasks(&self) -> tokio::sync::broadcast::Receiver<()> {
+        self.tasks_changed_tx.subscribe()
     }
 
     pub async fn acquire_lock(&self, pane_id: String, resource: String) -> Result<(), String> {
@@ -170,12 +177,15 @@ impl WorkspaceRegistry {
     }
 
     pub async fn update_pane_tasks(&self, id: String, tasks: Vec<crate::engine::ScheduledTask>) {
-        let mut all_tasks = self.tasks.write().await;
-        if tasks.is_empty() {
-            all_tasks.remove(&id);
-        } else {
-            all_tasks.insert(id, tasks);
+        {
+            let mut all_tasks = self.tasks.write().await;
+            if tasks.is_empty() {
+                all_tasks.remove(&id);
+            } else {
+                all_tasks.insert(id, tasks);
+            }
         }
+        let _ = self.tasks_changed_tx.send(());
     }
 
     pub async fn get_pane_pending_tasks(
@@ -263,6 +273,7 @@ impl WorkspaceRegistry {
                 tasks.insert(new_id.clone(), task_list);
             }
         }
+        let _ = self.tasks_changed_tx.send(());
         {
             let mut subs = self.subscriptions.write().await;
             if let Some(sub_list) = subs.remove(old_id) {

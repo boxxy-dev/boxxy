@@ -142,6 +142,26 @@ pub async fn start_services(
         }
     });
 
+    // Spawn a background task to broadcast pending scheduled task changes to all
+    // D-Bus clients whenever `WorkspaceRegistry` tasks are updated or rebound.
+    let workspace_for_tasks = boxxy_claw::registry::workspace::global_workspace().await;
+    let mut rx_tasks = workspace_for_tasks.subscribe_tasks();
+    let pty_reg_for_tasks = core.state.pty_registry.clone();
+    let conn_for_tasks = conn.clone();
+    tokio::spawn(async move {
+        loop {
+            match rx_tasks.recv().await {
+                Ok(()) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            }
+            while matches!(
+                rx_tasks.try_recv(),
+                Ok(()) | Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_))
+            ) {}
+            emit_pending_tasks_changed(&conn_for_tasks, &pty_reg_for_tasks).await;
+        }
+    });
+
     Ok((conn, session_manager))
 }
 
@@ -230,10 +250,11 @@ pub(crate) async fn build_pending_tasks_snapshot(
         };
 
         let char_info = catalog.iter().find(|c| c.config.id == character_id);
-        let character_name = char_info
+        let raw_character_name = char_info
             .map(|c| c.config.display_name.clone())
             .filter(|s| !s.is_empty())
             .unwrap_or(fallback_agent_name);
+        let character_name = crate::pty::prettify_character_name(&raw_character_name);
         let character_slug = char_info
             .map(|c| c.config.name.clone())
             .unwrap_or_default();
@@ -955,7 +976,8 @@ async fn maybe_send_desktop_notification(
     agent_name: &str,
     event: &ClawEngineEvent,
 ) {
-    let first_name = agent_name.split_whitespace().next().unwrap_or(agent_name);
+    let raw_first = agent_name.split_whitespace().next().unwrap_or(agent_name);
+    let first_name = crate::pty::prettify_character_name(raw_first);
     match event {
         ClawEngineEvent::PushGlobalNotification { title, message } => {
             notifier::send(conn, title, message).await;

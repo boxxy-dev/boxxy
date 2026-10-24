@@ -219,6 +219,23 @@ impl<'a> Store<'a> {
         Ok(())
     }
 
+    pub async fn set_session_pinned(&self, session_id: &str, pinned: bool) -> Result<()> {
+        sqlx::query("UPDATE sessions SET pinned = ? WHERE id = ?")
+            .bind(pinned)
+            .bind(session_id)
+            .execute(self.pool)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn delete_session(&self, session_id: &str) -> Result<()> {
+        sqlx::query("DELETE FROM sessions WHERE id = ?")
+            .bind(session_id)
+            .execute(self.pool)
+            .await?;
+        Ok(())
+    }
+
     // --- Interactions (Episodic Memory) ---
     pub async fn add_interaction(
         &self,
@@ -1572,5 +1589,80 @@ mod tests {
             key_hits.iter().any(|m| m.key == "update_cmd"),
             "FTS5 should match tokens inside the memory `key` column"
         );
+    }
+
+    #[tokio::test]
+    async fn test_session_pin_toggle_and_delete() {
+        let db = Db::new_in_memory().await.unwrap();
+        let store = Store::new(db.pool());
+
+        store
+            .upsert_session_state(
+                "sess_pin_1",
+                "niko",
+                "char-1",
+                "niko",
+                "First Session",
+                "[]",
+                "[]",
+                "niko",
+                "/tmp",
+                "model",
+                false,
+                10,
+                10,
+                0.0,
+            )
+            .await
+            .unwrap();
+        store
+            .add_claw_event("sess_pin_1", "{\"type\":\"user\"}")
+            .await
+            .unwrap();
+
+        store
+            .upsert_session_state(
+                "sess_pin_2",
+                "levi",
+                "char-2",
+                "levi",
+                "Second Session",
+                "[]",
+                "[]",
+                "levi",
+                "/tmp",
+                "model",
+                false,
+                20,
+                20,
+                0.0,
+            )
+            .await
+            .unwrap();
+        store
+            .add_claw_event("sess_pin_2", "{\"type\":\"user\"}")
+            .await
+            .unwrap();
+
+        // Pin sess_pin_1 and verify it floats to the top
+        store.set_session_pinned("sess_pin_1", true).await.unwrap();
+        let recent = store.get_recent_active_sessions(10).await.unwrap();
+        assert_eq!(recent.len(), 2);
+        assert_eq!(recent[0].id, "sess_pin_1");
+        assert!(recent[0].pinned);
+
+        // Unpin sess_pin_1
+        store.set_session_pinned("sess_pin_1", false).await.unwrap();
+        let s1 = store.get_session("sess_pin_1").await.unwrap().unwrap();
+        assert!(!s1.pinned);
+
+        // Delete sess_pin_1 and verify session + cascading claw_events are removed
+        store.delete_session("sess_pin_1").await.unwrap();
+        assert!(store.get_session("sess_pin_1").await.unwrap().is_none());
+        assert!(store.get_claw_events("sess_pin_1").await.unwrap().is_empty());
+
+        let remaining = store.get_recent_active_sessions(10).await.unwrap();
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].id, "sess_pin_2");
     }
 }

@@ -44,6 +44,7 @@ pub fn setup_actions(
     add_action!("close-tab", AppInput::CloseActiveTab);
     add_action!("toggle-sidebar", AppInput::ToggleSidebar);
     add_action!("preferences", AppInput::OpenPreferences);
+    add_action!("open-apis", AppInput::OpenApisPreferences);
     add_action!("bookmarks", AppInput::OpenBookmarks);
     add_action!("shortcuts", AppInput::OpenShortcuts);
     add_action!("about", AppInput::OpenAbout);
