@@ -391,7 +391,7 @@ impl AiSidebarComponent {
             );
             let res = agent.chat(&prompt, history_to_send).await;
             if let (Some(prov), Ok((_, Some(usage), _))) = (&provider, &res) {
-                let provider_name = prov.provider_name();
+                let provider_name = prov.telemetry_provider_name();
                 let model_name = prov.api_model_name();
                 boxxy_telemetry::track_ai_invocation(provider_name, model_name, "ai_chat").await;
                 boxxy_telemetry::track_ai_latency(

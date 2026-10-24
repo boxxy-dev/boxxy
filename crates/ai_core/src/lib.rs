@@ -517,7 +517,7 @@ pub fn build_provider_model(
             let reasoning = thinking.map(map_thinking_level);
             (
                 dyn_model,
-                provider_name.clone(),
+                "Custom Endpoints".to_string(),
                 model_id.clone(),
                 reasoning,
             )

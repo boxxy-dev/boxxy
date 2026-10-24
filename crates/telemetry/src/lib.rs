@@ -70,6 +70,7 @@ pub const BUILTIN_BOXXY_TOOLS: &[&str] = &[
 ];
 
 pub const EXTERNAL_MCP_TOOL_NAME: &str = "external_mcp_tool";
+pub const CUSTOM_ENDPOINT_PROVIDER_NAME: &str = "Custom Endpoints";
 
 struct MetricsState {
     provider: SdkMeterProvider,
@@ -131,6 +132,21 @@ pub fn normalize_tool_name(tool_name: &str) -> &'static str {
         BUILTIN_BOXXY_TOOLS[idx]
     } else {
         EXTERNAL_MCP_TOOL_NAME
+    }
+}
+
+/// Normalizes a model provider name to one of the 6 built-in providers or `"Custom Endpoints"`,
+/// ensuring user-defined custom endpoint names never leak into telemetry.
+#[must_use]
+pub fn normalize_provider_name(provider: &str) -> &'static str {
+    match provider.trim().to_ascii_lowercase().as_str() {
+        "gemini" => "Gemini",
+        "ollama" => "Ollama",
+        "anthropic" => "Anthropic",
+        "openai" => "OpenAI",
+        "openrouter" => "OpenRouter",
+        "deepseek" => "DeepSeek",
+        _ => CUSTOM_ENDPOINT_PROVIDER_NAME,
     }
 }
 
@@ -417,6 +433,8 @@ pub async fn flush_journal() {
                             serde_json::Value::String(s) => {
                                 if k == "tool_name" {
                                     opentelemetry::Value::String(normalize_tool_name(s).into())
+                                } else if k == "model_provider" {
+                                    opentelemetry::Value::String(normalize_provider_name(s).into())
                                 } else {
                                     opentelemetry::Value::String(s.clone().into())
                                 }
@@ -566,11 +584,12 @@ pub async fn track_ai_tokens(model: &str, provider: &str, role: &str, count: u64
     if count == 0 {
         return;
     }
+    let normalized_provider = normalize_provider_name(provider);
     track_event(
         "ai.tokens",
         count as f64,
         vec![
-            KeyValue::new("model_provider", provider.to_string()),
+            KeyValue::new("model_provider", normalized_provider.to_string()),
             KeyValue::new("model_name", model.to_string()),
             KeyValue::new("role", role.to_string()),
             KeyValue::new("feature", feature.to_string()),
@@ -580,11 +599,12 @@ pub async fn track_ai_tokens(model: &str, provider: &str, role: &str, count: u64
 }
 
 pub async fn track_ai_invocation(provider: &str, model: &str, feature: &str) {
+    let normalized_provider = normalize_provider_name(provider);
     track_event(
         "ai.invocations",
         1.0,
         vec![
-            KeyValue::new("model_provider", provider.to_string()),
+            KeyValue::new("model_provider", normalized_provider.to_string()),
             KeyValue::new("model_name", model.to_string()),
             KeyValue::new("feature", feature.to_string()),
         ],
@@ -593,11 +613,12 @@ pub async fn track_ai_invocation(provider: &str, model: &str, feature: &str) {
 }
 
 pub async fn track_ai_latency(model: &str, provider: &str, ms: u64, feature: &str) {
+    let normalized_provider = normalize_provider_name(provider);
     track_event(
         "ai.latency",
         ms as f64,
         vec![
-            KeyValue::new("model_provider", provider.to_string()),
+            KeyValue::new("model_provider", normalized_provider.to_string()),
             KeyValue::new("model_name", model.to_string()),
             KeyValue::new("feature", feature.to_string()),
         ],
@@ -679,6 +700,26 @@ mod tests {
         assert_eq!(normalize_desktop("zorin:GNOME"), "GNOME");
         assert_eq!(normalize_desktop("X-Cinnamon"), "Cinnamon");
         assert_eq!(normalize_desktop("sway:wlroots"), "Sway");
+
+        assert_eq!(normalize_provider_name("Gemini"), "Gemini");
+        assert_eq!(normalize_provider_name("gemini"), "Gemini");
+        assert_eq!(normalize_provider_name("OpenAI"), "OpenAI");
+        assert_eq!(normalize_provider_name("OpenRouter"), "OpenRouter");
+        assert_eq!(normalize_provider_name("DeepSeek"), "DeepSeek");
+        assert_eq!(normalize_provider_name("Anthropic"), "Anthropic");
+        assert_eq!(normalize_provider_name("Ollama"), "Ollama");
+        assert_eq!(
+            normalize_provider_name("Ollama Test"),
+            CUSTOM_ENDPOINT_PROVIDER_NAME
+        );
+        assert_eq!(
+            normalize_provider_name("Test"),
+            CUSTOM_ENDPOINT_PROVIDER_NAME
+        );
+        assert_eq!(
+            normalize_provider_name("OpenCode Go"),
+            CUSTOM_ENDPOINT_PROVIDER_NAME
+        );
     }
 
     #[test]

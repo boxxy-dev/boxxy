@@ -933,6 +933,21 @@ impl ModelProvider {
         }
     }
 
+    /// Returns a privacy-safe provider label for telemetry, grouping all user-defined
+    /// OpenAI-compatible endpoints under `"Custom Endpoints"` so custom endpoint names never leak.
+    #[must_use]
+    pub fn telemetry_provider_name(&self) -> &'static str {
+        match self {
+            ModelProvider::Gemini(_, _) => "Gemini",
+            ModelProvider::Ollama(_) => "Ollama",
+            ModelProvider::Anthropic(_, _) => "Anthropic",
+            ModelProvider::OpenAi(_, _) => "OpenAI",
+            ModelProvider::OpenRouter(_) => "OpenRouter",
+            ModelProvider::DeepSeek(_) => "DeepSeek",
+            ModelProvider::OpenAiCompatible { .. } => "Custom Endpoints",
+        }
+    }
+
     pub fn api_model_name(&self) -> &str {
         match self {
             ModelProvider::Gemini(model, _) => model.api_name(),
