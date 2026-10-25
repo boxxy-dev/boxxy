@@ -356,7 +356,10 @@ impl<T> Term<T> {
     }
 
     /// Resize terminal to new dimensions.
-    pub fn resize<S: Dimensions>(&mut self, size: S) {
+    pub fn resize<S: Dimensions>(&mut self, size: S)
+    where
+        T: EventListener,
+    {
         let old_cols = self.columns();
         let old_lines = self.screen_lines();
 
@@ -405,6 +408,15 @@ impl<T> Term<T> {
 
         // Resize damage information.
         self.damage.resize(num_cols, num_lines);
+
+        // Emit in-band resize report when DECSET 2048 is active.
+        if self.mode.contains(TermMode::IN_BAND_RESIZE) {
+            let pixel_h = (num_lines as u32) * (self.cell_height as u32);
+            let pixel_w = (num_cols as u32) * (self.cell_width as u32);
+            self.event_proxy.send_event(Event::PtyWrite(format!(
+                "\x1b[48;{num_lines};{num_cols};{pixel_h};{pixel_w}t"
+            )));
+        }
     }
 
     /// Swap primary and alternate screen buffer.

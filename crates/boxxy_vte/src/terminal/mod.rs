@@ -230,9 +230,13 @@ impl TerminalWidget {
         // 2. file:// URIs
         self.add_match_regex_str(concat!(r"file://[^\s)>\]", r#"'""#, r"]+"), 0);
 
-        // 3. Bare absolute / relative / home-relative Unix paths
+        // 3. Bare absolute / relative / home-relative Unix paths (with optional :line[:col] suffix)
         self.add_match_regex_str(
-            concat!(r"(?:~|\.{0,2})?/[^\s:,;)>\]|*?\\", r#"'""#, r"]+"),
+            concat!(
+                r"(?:~|\.{0,2})?/[^\s:,;)>\]|*?\\",
+                r#"'""#,
+                r"]+(?::\d+(?::\d+)?)?"
+            ),
             0,
         );
     }

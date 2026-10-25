@@ -43,12 +43,24 @@ pub(super) fn setup_preview(terminal: &TerminalWidget, inner: &Rc<RefCell<PaneIn
                 let (match_opt, _tag, _) = term_for_primary_click.check_match_at(x, y);
                 if let Some(matched) = match_opt {
                     let matched_str = matched.to_string();
-                    if matched_str.starts_with("http://") || matched_str.starts_with("https://") {
+                    if matched_str.starts_with("http://")
+                        || matched_str.starts_with("https://")
+                        || matched_str.starts_with("file://")
+                    {
                         gesture.set_state(gtk::EventSequenceState::Claimed);
                         let _ = gio::AppInfo::launch_default_for_uri(
                             &matched_str,
                             None::<&gio::AppLaunchContext>,
                         );
+                    } else {
+                        let cwd = inner.borrow().working_dir.clone();
+                        if let Some(uri) = resolve_local_path_to_file_uri(&matched_str, cwd.as_deref()) {
+                            gesture.set_state(gtk::EventSequenceState::Claimed);
+                            let _ = gio::AppInfo::launch_default_for_uri(
+                                &uri,
+                                None::<&gio::AppLaunchContext>,
+                            );
+                        }
                     }
                 }
             }
@@ -140,4 +152,52 @@ pub(super) fn setup_preview(terminal: &TerminalWidget, inner: &Rc<RefCell<PaneIn
     });
 
     terminal.add_controller(motion_ctrl);
+}
+
+/// Resolves a matched terminal path (supporting `~/`, `./`, `../`, `/`, and optional
+/// `:line` or `:line:col` suffixes) against `working_dir` and returns a `file://` URI
+/// if the target exists on disk.
+fn resolve_local_path_to_file_uri(raw_match: &str, working_dir: Option<&str>) -> Option<String> {
+    use std::path::{Path, PathBuf};
+
+    fn strip_line_col(s: &str) -> &str {
+        if let Some((before, last)) = s.rsplit_once(':')
+            && !last.is_empty()
+            && last.bytes().all(|b| b.is_ascii_digit())
+        {
+            if let Some((before2, mid)) = before.rsplit_once(':')
+                && !mid.is_empty()
+                && mid.bytes().all(|b| b.is_ascii_digit())
+            {
+                return before2;
+            }
+            return before;
+        }
+        s
+    }
+
+    let path_str = if Path::new(raw_match).exists() {
+        raw_match
+    } else {
+        strip_line_col(raw_match)
+    };
+
+    let expanded: PathBuf = if let Some(rest) = path_str.strip_prefix("~/") {
+        let home = std::env::var("HOME").ok()?;
+        PathBuf::from(home).join(rest)
+    } else if path_str.starts_with('/') {
+        PathBuf::from(path_str)
+    } else if let Some(cwd) = working_dir {
+        let clean_cwd = cwd.strip_prefix("file://").unwrap_or(cwd);
+        PathBuf::from(clean_cwd).join(path_str)
+    } else {
+        PathBuf::from(path_str)
+    };
+
+    if expanded.exists() {
+        let canonical = expanded.canonicalize().unwrap_or(expanded);
+        Some(format!("file://{}", canonical.to_string_lossy()))
+    } else {
+        None
+    }
 }

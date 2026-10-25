@@ -644,4 +644,58 @@ mod tests {
         assert!(h.term.scroll_to_prompt(Direction::Right));
         assert_eq!(h.term.grid().display_offset(), 0);
     }
+
+    #[test]
+    fn xtgettcap_decset_2048_in_band_resize_and_osc_3008_context() {
+        use crate::engine::event::Osc3008Context;
+
+        let mut h = HeadlessTerminal::new(80, 24);
+
+        // 1. XTGETTCAP (DCS + q <hex> ST): query "TN" (544e), "Smulx" (536d756c78), and unknown "foo" (666f6f)
+        h.feed(b"\x1bP+q544e;536d756c78;666f6f\x1b\\");
+        let writes = h.take_pty_writes();
+        assert_eq!(
+            writes,
+            vec![
+                // "TN" = "xterm-256color"
+                "\x1bP1+r544E=787465726D2D323536636F6C6F72\x1b\\",
+                // "Smulx" = "\x1b[4:%p1%dm"
+                "\x1bP1+r536D756C78=1B5B343A25703125646D\x1b\\",
+                // "foo" -> unsupported (0+r)
+                "\x1bP0+r666F6F\x1b\\",
+            ]
+        );
+
+        // 2. DECSET 2048 (In-Band Resize Notifications): enabling emits initial size immediately,
+        //    and resizing emits updated CSI 48 ; rows ; cols ; pixel_h ; pixel_w t.
+        h.feed(b"\x1b[?2048h");
+        assert!(h.mode().contains(TermMode::IN_BAND_RESIZE));
+        assert_eq!(h.take_pty_writes(), vec!["\x1b[48;24;80;0;0t"]);
+
+        h.resize(100, 30);
+        assert_eq!(h.take_pty_writes(), vec!["\x1b[48;30;100;0;0t"]);
+
+        h.feed(b"\x1b[?2048$p\x1b[?2048l");
+        assert_eq!(h.take_pty_writes(), vec!["\x1b[?2048;1$y"]);
+        assert!(!h.mode().contains(TermMode::IN_BAND_RESIZE));
+
+        // 3. OSC 3008 (systemd v258+ / sudo context signaling)
+        h.feed(b"\x1b]3008;start=abc123;user=alice;targetuser=root;pid=4242;comm=sudo\x07");
+        let events = h.take_events();
+        let osc_ctx = events.into_iter().find_map(|ev| match ev {
+            Event::Osc3008(ctx) => Some(ctx),
+            _ => None,
+        });
+        assert_eq!(
+            osc_ctx,
+            Some(Osc3008Context {
+                start: Some("abc123".to_string()),
+                user: Some("alice".to_string()),
+                target_user: Some("root".to_string()),
+                pid: Some(4242),
+                comm: Some("sudo".to_string()),
+                ..Osc3008Context::default()
+            })
+        );
+    }
 }

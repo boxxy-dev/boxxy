@@ -1234,6 +1234,75 @@ impl<T: EventListener> Handler for Term<T> {
     }
 
     #[inline]
+    fn osc_3008(&mut self, context: crate::engine::event::Osc3008Context) {
+        trace!("Received OSC 3008 context: {context:?}");
+        self.event_proxy.send_event(Event::Osc3008(context));
+    }
+
+    #[inline]
+    fn xtgettcap(&mut self, query: &[u8]) {
+        use std::fmt::Write;
+
+        fn decode_hex(hex: &[u8]) -> Option<Vec<u8>> {
+            if hex.is_empty() || !hex.len().is_multiple_of(2) {
+                return None;
+            }
+            let mut out = Vec::with_capacity(hex.len() / 2);
+            for pair in hex.chunks_exact(2) {
+                let hi = (pair[0] as char).to_digit(16)?;
+                let lo = (pair[1] as char).to_digit(16)?;
+                out.push(((hi << 4) | lo) as u8);
+            }
+            Some(out)
+        }
+
+        fn encode_hex(bytes: &[u8]) -> String {
+            let mut s = String::with_capacity(bytes.len() * 2);
+            for &b in bytes {
+                let _ = write!(s, "{b:02X}");
+            }
+            s
+        }
+
+        for hex_name in query.split(|&b| b == b';') {
+            if hex_name.is_empty() {
+                continue;
+            }
+            let Some(name_bytes) = decode_hex(hex_name) else {
+                self.event_proxy
+                    .send_event(Event::PtyWrite(String::from("\x1bP0+r\x1b\\")));
+                continue;
+            };
+            let hex_key = encode_hex(&name_bytes);
+            let value: Option<&[u8]> = match name_bytes.as_slice() {
+                b"TN" | b"name" => Some(b"xterm-256color"),
+                b"RGB" => Some(b"8/8/8"),
+                b"Tc" | b"Su" | b"fullkbd" => Some(b""),
+                b"colors" => Some(b"256"),
+                b"Smulx" => Some(b"\x1b[4:%p1%dm"),
+                b"Setulc" => Some(
+                    b"\x1b[58:2::%p1%{65536}%/%d:%p1%{256}%/%{255}%&%d:%p1%{255}%&%dm",
+                ),
+                b"Ss" => Some(b"\x1b[%p1%d q"),
+                b"Se" => Some(b"\x1b[0 q"),
+                b"Ms" => Some(b"\x1b]52;%p1%s;%p2%s\x07"),
+                b"Sync" => Some(b"\x1b[?2026%?%p1%{1}%-%tl%eh%;"),
+                _ => None,
+            };
+
+            let response = match value {
+                Some(b"") => format!("\x1bP1+r{hex_key}\x1b\\"),
+                Some(val) => {
+                    let hex_val = encode_hex(val);
+                    format!("\x1bP1+r{hex_key}={hex_val}\x1b\\")
+                }
+                None => format!("\x1bP0+r{hex_key}\x1b\\"),
+            };
+            self.event_proxy.send_event(Event::PtyWrite(response));
+        }
+    }
+
+    #[inline]
     fn set_cwd(&mut self, cwd: String) {
         trace!("Setting CWD to '{cwd}'");
         self.event_proxy.send_event(Event::CwdChanged(cwd));

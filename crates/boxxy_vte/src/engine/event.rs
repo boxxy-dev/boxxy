@@ -6,6 +6,23 @@ use std::sync::Arc;
 use crate::engine::ansi::Rgb;
 use crate::engine::term::ClipboardType;
 
+/// Structured process context metadata emitted by `OSC 3008` (`systemd` v258+ / `sudo`).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Osc3008Context {
+    pub start: Option<String>,
+    pub end: Option<String>,
+    pub user: Option<String>,
+    pub hostname: Option<String>,
+    pub machine_id: Option<String>,
+    pub boot_id: Option<String>,
+    pub pid: Option<u32>,
+    pub pidfd_id: Option<u32>,
+    pub comm: Option<String>,
+    pub target_user: Option<String>,
+    pub session_id: Option<String>,
+    pub cgroup: Option<String>,
+}
+
 /// Terminal event.
 ///
 /// These events instruct the UI over changes that can't be handled by the terminal emulation layer
@@ -35,6 +52,9 @@ pub enum Event {
         state: u8,
         progress: u8,
     },
+
+    /// Hierarchical process context signaling (OSC 3008).
+    Osc3008(Osc3008Context),
 
     /// Reset to the default color palette.
     ResetColor,
@@ -103,6 +123,7 @@ impl Debug for Event {
             Event::ProgressChanged { state, progress } => {
                 write!(f, "ProgressChanged({state}, {progress})")
             }
+            Event::Osc3008(ctx) => write!(f, "Osc3008({ctx:?})"),
             Event::ResetColor => write!(f, "ResetColor"),
         }
     }

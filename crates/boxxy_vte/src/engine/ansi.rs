@@ -247,6 +247,12 @@ struct ProcessorState<T: Timeout> {
 
     /// State for synchronized terminal updates.
     sync_state: SyncState<T>,
+
+    /// Whether the parser is currently collecting a `DCS + q` (`XTGETTCAP`) payload.
+    dcs_xtgettcap: bool,
+
+    /// Bounded payload buffer for active DCS sequences (`XTGETTCAP`).
+    dcs_buffer: Vec<u8>,
 }
 
 #[derive(Debug)]
@@ -509,6 +515,12 @@ pub trait Handler {
 
     /// OSC 9;4 Progress Bar
     fn set_progress(&mut self, _state: u8, _progress: u8) {}
+
+    /// OSC 3008 Hierarchical Context Signaling (`systemd` v258+ / `sudo`).
+    fn osc_3008(&mut self, _context: crate::engine::event::Osc3008Context) {}
+
+    /// `XTGETTCAP` (`DCS + q <hex> ST`) capability query.
+    fn xtgettcap(&mut self, _query: &[u8]) {}
 
     /// OSC to set window title.
     fn set_title(&mut self, _: Option<String>) {}
@@ -942,6 +954,7 @@ impl PrivateMode {
             2026 => Self::Named(NamedPrivateMode::SyncUpdate),
             2027 => Self::Named(NamedPrivateMode::GraphemeClustering),
             2031 => Self::Named(NamedPrivateMode::ColorSchemeUpdates),
+            2048 => Self::Named(NamedPrivateMode::InBandResize),
             _ => Self::Unknown(mode),
         }
     }
@@ -997,6 +1010,8 @@ pub enum NamedPrivateMode {
     GraphemeClustering = 2027,
     /// Dark/light color scheme change notifications (`DECSET 2031`).
     ColorSchemeUpdates = 2031,
+    /// In-band terminal resize notifications (`DECSET 2048`).
+    InBandResize = 2048,
 }
 
 /// Mode for clearing line.
@@ -1340,13 +1355,25 @@ where
     }
 
     #[inline]
-    fn hook(&mut self, _params: &Params, _intermediates: &[u8], _ignore: bool, _action: char) {}
+    fn hook(&mut self, _params: &Params, intermediates: &[u8], ignore: bool, action: char) {
+        self.state.dcs_xtgettcap = !ignore && intermediates == [b'+'] && action == 'q';
+        self.state.dcs_buffer.clear();
+    }
 
     #[inline]
-    fn put(&mut self, _byte: u8) {}
+    fn put(&mut self, byte: u8) {
+        if self.state.dcs_xtgettcap && self.state.dcs_buffer.len() < 1024 {
+            self.state.dcs_buffer.push(byte);
+        }
+    }
 
     #[inline]
-    fn unhook(&mut self) {}
+    fn unhook(&mut self) {
+        if mem::replace(&mut self.state.dcs_xtgettcap, false) {
+            self.handler.xtgettcap(&self.state.dcs_buffer);
+            self.state.dcs_buffer.clear();
+        }
+    }
 
     #[inline]
     fn osc_dispatch(&mut self, params: &[&[u8]], bell_terminated: bool) {
@@ -1623,6 +1650,35 @@ where
 
             // Reset text cursor color.
             b"112" => self.handler.reset_color(NamedColor::Cursor as usize),
+
+            // Hierarchical context signaling (systemd v258+ / sudo).
+            b"3008" => {
+                let mut ctx = crate::engine::event::Osc3008Context::default();
+                for param in &params[1..] {
+                    let Ok(kv) = str::from_utf8(param) else {
+                        continue;
+                    };
+                    let Some((key, val)) = kv.split_once('=') else {
+                        continue;
+                    };
+                    match key {
+                        "start" => ctx.start = Some(val.to_string()),
+                        "end" => ctx.end = Some(val.to_string()),
+                        "user" => ctx.user = Some(val.to_string()),
+                        "hostname" => ctx.hostname = Some(val.to_string()),
+                        "machineid" | "machine_id" => ctx.machine_id = Some(val.to_string()),
+                        "bootid" | "boot_id" => ctx.boot_id = Some(val.to_string()),
+                        "pid" => ctx.pid = val.parse::<u32>().ok(),
+                        "pidfdid" | "pidfd_id" => ctx.pidfd_id = val.parse::<u32>().ok(),
+                        "comm" => ctx.comm = Some(val.to_string()),
+                        "targetuser" | "target_user" => ctx.target_user = Some(val.to_string()),
+                        "sessionid" | "session_id" => ctx.session_id = Some(val.to_string()),
+                        "cgroup" => ctx.cgroup = Some(val.to_string()),
+                        _ => {}
+                    }
+                }
+                self.handler.osc_3008(ctx);
+            }
 
             _ => unhandled(params),
         }
