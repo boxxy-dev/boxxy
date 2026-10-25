@@ -1443,3 +1443,30 @@ fn render_state_update_from_reuses_allocation_and_applies_partial_damage() {
     assert_eq!(state.cell(Point::new(Line(0), Column(1))).c, 'B');
 }
 
+#[test]
+fn calculate_navigation_sequence_while_scrolled_into_history_does_not_panic() {
+    let size = TermSize::new(20, 4);
+    let mut term = Term::new(Config::default(), &size, VoidListener);
+
+    // Fill scrollback so display_offset can be scrolled far past screen_lines
+    for i in 0..30 {
+        for ch in format!("line {i}").chars() {
+            term.input(ch);
+        }
+        term.newline();
+        term.carriage_return();
+    }
+
+    // Simulate OSC 133;A;cl=line prompt at the bottom of the terminal
+    term.cl_mode = Some("line".to_string());
+    term.scroll_display(Scroll::Delta(15));
+    assert!(term.grid().display_offset() > 0);
+
+    let state = RenderState::new(&term);
+    // Clicking anywhere in the scrolled viewport must return None without indexing
+    // off-screen cursor rows past `state.cells`.
+    let clicked = Point::new(Line(1 - state.display_offset), Column(2));
+    assert_eq!(state.calculate_navigation_sequence(clicked), None);
+}
+
+

@@ -387,6 +387,10 @@ impl RenderState {
     }
 
     pub fn calculate_character_delta(&self, start: Point, end: Point) -> isize {
+        if self.columns == 0 || self.cells.is_empty() {
+            return 0;
+        }
+        let n_rows = self.cells.len() / self.columns;
         let mut char_delta = 0isize;
         let cur_line = start.line.0;
         let cur_col = start.column.0;
@@ -401,7 +405,11 @@ impl RenderState {
             };
 
         for line in start_line..=end_line {
-            let row_in_viewport = (line + self.display_offset) as usize;
+            let row_i32 = line + self.display_offset;
+            if row_i32 < 0 || (row_i32 as usize) >= n_rows {
+                return 0;
+            }
+            let row_in_viewport = row_i32 as usize;
             let row_cells =
                 &self.cells[row_in_viewport * self.columns..(row_in_viewport + 1) * self.columns];
 
@@ -440,10 +448,9 @@ impl RenderState {
             let actual_e_col = e_col.max(line_start_bound);
 
             if actual_s_col < actual_e_col {
-                for i in actual_s_col..actual_e_col {
+                for i in actual_s_col..actual_e_col.min(row_cells.len()) {
                     let flags = row_cells[i].flags;
-                    if i < row_cells.len()
-                        && !flags.contains(Flags::WIDE_CHAR_SPACER)
+                    if !flags.contains(Flags::WIDE_CHAR_SPACER)
                         && !flags.contains(Flags::LEADING_WIDE_CHAR_SPACER)
                         && !flags.contains(Flags::SEMANTIC_PROMPT)
                     {
@@ -467,12 +474,19 @@ impl RenderState {
     /// Returns true if every row between line_a and line_b (exclusive of max) has WRAPLINE set,
     /// meaning they form a single logical line in the shell's view.
     fn is_in_same_wrap_chain(&self, line_a: Line, line_b: Line) -> bool {
+        if self.columns == 0 || self.cells.is_empty() {
+            return false;
+        }
         let min_line = line_a.0.min(line_b.0);
         let max_line = line_a.0.max(line_b.0);
         let n_rows = self.cells.len() / self.columns;
         for l in min_line..max_line {
-            let row_idx = (l + self.display_offset) as usize;
-            if (row_idx + 1) * self.columns > self.cells.len() || row_idx >= n_rows {
+            let row_i32 = l + self.display_offset;
+            if row_i32 < 0 {
+                return false;
+            }
+            let row_idx = row_i32 as usize;
+            if row_idx >= n_rows || (row_idx + 1) * self.columns > self.cells.len() {
                 return false;
             }
             let last_cell = &self.cells[(row_idx + 1) * self.columns - 1];
@@ -484,6 +498,9 @@ impl RenderState {
     }
 
     pub fn calculate_navigation_sequence(&self, point: Point) -> Option<String> {
+        if self.columns == 0 || self.cells.is_empty() {
+            return None;
+        }
         // Only fires when the shell has explicitly advertised cl=line (or click_events=1)
         // support via OSC 133;A, and no foreground command is currently executing (OSC 133;C).
         let cl_mode_str = self.cl_mode.as_deref()?;
@@ -491,6 +508,29 @@ impl RenderState {
             debug!("nav: not line mode, cl_mode={:?}", self.cl_mode);
             return None;
         }
+
+        // Don't navigate when the user has scrolled into history — clicking in scrollback
+        // is for selection, and the live cursor row is typically off-screen (outside self.cells).
+        if self.display_offset != 0 {
+            debug!(
+                "nav: rejected — scrolled into history (display_offset={})",
+                self.display_offset
+            );
+            return None;
+        }
+
+        let n_rows = self.cells.len() / self.columns;
+        let cursor_row_i32 = self.cursor_point.line.0 + self.display_offset;
+        let target_row_i32 = point.line.0 + self.display_offset;
+        if cursor_row_i32 < 0
+            || target_row_i32 < 0
+            || (cursor_row_i32 as usize) >= n_rows
+            || (target_row_i32 as usize) >= n_rows
+        {
+            return None;
+        }
+        let cursor_row_idx = cursor_row_i32 as usize;
+        let target_row_idx = target_row_i32 as usize;
 
         let is_app_cursor = self.mode.contains(TermMode::APP_CURSOR);
         let (right_seq, left_seq) = if is_app_cursor {
@@ -510,7 +550,7 @@ impl RenderState {
         if is_same_line || is_soft_wrap {
             // Case 1 & 2: same logical line (exact match or soft-wrapped).
             // The shell sees this as one line; Left/Right arrows navigate it transparently.
-            let row_in_viewport = (point.line.0 + self.display_offset) as usize;
+            let row_in_viewport = target_row_idx;
             let mut target_col = point.column.0;
             let line_cells =
                 &self.cells[row_in_viewport * self.columns..(row_in_viewport + 1) * self.columns];
@@ -571,13 +611,6 @@ impl RenderState {
             // Case 3: hard-newline multiline command.
             // Left/Right cannot cross hard newlines; use Up/Down to change logical lines,
             // then Left/Right to adjust to the target column.
-            let n_rows = self.cells.len() / self.columns;
-            let cursor_row_idx = (self.cursor_point.line.0 + self.display_offset) as usize;
-            let target_row_idx = (point.line.0 + self.display_offset) as usize;
-            if target_row_idx >= n_rows {
-                return None;
-            }
-
             let cursor_row =
                 &self.cells[cursor_row_idx * self.columns..(cursor_row_idx + 1) * self.columns];
             let target_row =
@@ -587,13 +620,6 @@ impl RenderState {
                 "nav B: cursor_idx={} target_idx={} display_offset={}",
                 cursor_row_idx, target_row_idx, self.display_offset
             );
-
-            // Don't navigate when the user has scrolled into history — Up/Down would move
-            // through command history instead of within the current multiline command.
-            if self.display_offset != 0 {
-                debug!("nav B: rejected — scrolled into history");
-                return None;
-            }
 
             // Cursor must be on an active command line (OSC 133;B sets SEMANTIC_CMD).
             // Without this guard, Up/Down would navigate shell history instead of within the command.
