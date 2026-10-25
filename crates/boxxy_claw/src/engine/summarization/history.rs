@@ -43,7 +43,7 @@ impl DemotionExtractor {
 
 /// Strips dynamic context blocks (`## YOUR IDENTITY`, `## CURRENT TURN CONTEXT`, etc.)
 /// from a user message text so background memory flush calls don't waste tokens on snapshots.
-fn clean_user_text_for_flush(raw: &str) -> &str {
+pub(crate) fn clean_user_text_for_flush(raw: &str) -> &str {
     for marker in [
         "\n\n## YOUR IDENTITY",
         "\n\n## CURRENT TURN CONTEXT",

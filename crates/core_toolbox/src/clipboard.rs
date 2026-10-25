@@ -49,10 +49,10 @@ impl Tool for GetClipboardTool {
             .await;
         boxxy_telemetry::track_tool_use(Self::NAME).await;
         self.approval.set_thinking(false).await;
-        let approved = self.approval.propose_get_clipboard().await;
+        let outcome = self.approval.propose_get_clipboard().await;
         self.approval.set_thinking(true).await;
 
-        if approved {
+        if outcome.is_approved() {
             match self.env.get_clipboard().await {
                 Ok(text) => {
                     let out = GetClipboardOutput {
@@ -74,7 +74,7 @@ impl Tool for GetClipboardTool {
             let out = GetClipboardOutput {
                 success: false,
                 text: String::new(),
-                error: Some("[USER_EXPLICIT_REJECT]".to_string()),
+                error: Some(outcome.rejection_message()),
             };
             self.approval
                 .report_tool_result(
@@ -139,10 +139,10 @@ impl Tool for SetClipboardTool {
             .await;
         boxxy_telemetry::track_tool_use(Self::NAME).await;
         self.approval.set_thinking(false).await;
-        let approved = self.approval.propose_set_clipboard(args.text.clone()).await;
+        let outcome = self.approval.propose_set_clipboard(args.text.clone()).await;
         self.approval.set_thinking(true).await;
 
-        if approved {
+        if outcome.is_approved() {
             match self.env.set_clipboard(args.text).await {
                 Ok(()) => {
                     let out = SetClipboardOutput {
@@ -162,7 +162,7 @@ impl Tool for SetClipboardTool {
         } else {
             let out = SetClipboardOutput {
                 success: false,
-                error: Some("[USER_EXPLICIT_REJECT]".to_string()),
+                error: Some(outcome.rejection_message()),
             };
             self.approval
                 .report_tool_result(
@@ -230,23 +230,27 @@ mod tests {
             _: String,
             _: String,
             _: crate::FileDiff,
-        ) -> bool {
-            false
+        ) -> crate::ApprovalOutcome {
+            crate::ApprovalOutcome::Rejected
         }
-        async fn propose_file_delete(&self, _: String) -> bool {
-            false
+        async fn propose_file_delete(&self, _: String) -> crate::ApprovalOutcome {
+            crate::ApprovalOutcome::Rejected
         }
-        async fn propose_background_command(&self, _: String, _: String) -> bool {
-            false
+        async fn propose_background_command(
+            &self,
+            _: String,
+            _: String,
+        ) -> crate::ApprovalOutcome {
+            crate::ApprovalOutcome::Rejected
         }
-        async fn propose_kill_process(&self, _: u32, _: String) -> bool {
-            false
+        async fn propose_kill_process(&self, _: u32, _: String) -> crate::ApprovalOutcome {
+            crate::ApprovalOutcome::Rejected
         }
-        async fn propose_get_clipboard(&self) -> bool {
-            false
+        async fn propose_get_clipboard(&self) -> crate::ApprovalOutcome {
+            crate::ApprovalOutcome::Rejected
         }
-        async fn propose_set_clipboard(&self, _: String) -> bool {
-            false
+        async fn propose_set_clipboard(&self, _: String) -> crate::ApprovalOutcome {
+            crate::ApprovalOutcome::Rejected
         }
         async fn report_tool_result(&self, _name: String, result: String) {
             self.results.lock().unwrap().push(result);

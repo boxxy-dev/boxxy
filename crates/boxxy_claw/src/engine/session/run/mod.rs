@@ -319,39 +319,69 @@ impl ClawSession {
                     .await;
             }
             ClawMessage::FileWriteReply { approved } => {
-                let mut state_lock = self.state.lock().await;
-                if let Some(reply) = state_lock.pending_file_reply.take() {
-                    let _ = reply.send(approved);
+                if approved {
+                    let mut state_lock = self.state.lock().await;
+                    state_lock.pending_proposal_summary = None;
+                    if let Some(reply) = state_lock.pending_file_reply.take() {
+                        let _ = reply.send(boxxy_core_toolbox::ApprovalOutcome::Approved);
+                    }
+                } else {
+                    self.handle_cancel_pending(ctx).await;
                 }
             }
             ClawMessage::FileDeleteReply { approved } => {
-                let mut state_lock = self.state.lock().await;
-                if let Some(reply) = state_lock.pending_file_delete_reply.take() {
-                    let _ = reply.send(approved);
+                if approved {
+                    let mut state_lock = self.state.lock().await;
+                    state_lock.pending_proposal_summary = None;
+                    if let Some(reply) = state_lock.pending_file_delete_reply.take() {
+                        let _ = reply.send(boxxy_core_toolbox::ApprovalOutcome::Approved);
+                    }
+                } else {
+                    self.handle_cancel_pending(ctx).await;
                 }
             }
             ClawMessage::KillProcessReply { approved } => {
-                let mut state_lock = self.state.lock().await;
-                if let Some(reply) = state_lock.pending_kill_process_reply.take() {
-                    let _ = reply.send(approved);
+                if approved {
+                    let mut state_lock = self.state.lock().await;
+                    state_lock.pending_proposal_summary = None;
+                    if let Some(reply) = state_lock.pending_kill_process_reply.take() {
+                        let _ = reply.send(boxxy_core_toolbox::ApprovalOutcome::Approved);
+                    }
+                } else {
+                    self.handle_cancel_pending(ctx).await;
                 }
             }
             ClawMessage::BackgroundCommandReply { approved } => {
-                let mut state_lock = self.state.lock().await;
-                if let Some(reply) = state_lock.pending_background_reply.take() {
-                    let _ = reply.send(approved);
+                if approved {
+                    let mut state_lock = self.state.lock().await;
+                    state_lock.pending_proposal_summary = None;
+                    if let Some(reply) = state_lock.pending_background_reply.take() {
+                        let _ = reply.send(boxxy_core_toolbox::ApprovalOutcome::Approved);
+                    }
+                } else {
+                    self.handle_cancel_pending(ctx).await;
                 }
             }
             ClawMessage::GetClipboardReply { approved } => {
-                let mut state_lock = self.state.lock().await;
-                if let Some(reply) = state_lock.pending_get_clipboard_reply.take() {
-                    let _ = reply.send(approved);
+                if approved {
+                    let mut state_lock = self.state.lock().await;
+                    state_lock.pending_proposal_summary = None;
+                    if let Some(reply) = state_lock.pending_get_clipboard_reply.take() {
+                        let _ = reply.send(boxxy_core_toolbox::ApprovalOutcome::Approved);
+                    }
+                } else {
+                    self.handle_cancel_pending(ctx).await;
                 }
             }
             ClawMessage::SetClipboardReply { approved } => {
-                let mut state_lock = self.state.lock().await;
-                if let Some(reply) = state_lock.pending_set_clipboard_reply.take() {
-                    let _ = reply.send(approved);
+                if approved {
+                    let mut state_lock = self.state.lock().await;
+                    state_lock.pending_proposal_summary = None;
+                    if let Some(reply) = state_lock.pending_set_clipboard_reply.take() {
+                        let _ = reply.send(boxxy_core_toolbox::ApprovalOutcome::Approved);
+                    }
+                } else {
+                    self.handle_cancel_pending(ctx).await;
                 }
             }
             ClawMessage::UserMessage {
@@ -379,7 +409,7 @@ impl ClawSession {
                     .await;
             }
             ClawMessage::CancelPending => {
-                self.handle_cancel_pending().await;
+                self.handle_cancel_pending(ctx).await;
             }
             ClawMessage::SoftClearHistory => {
                 info!(

@@ -5,7 +5,6 @@ use boxxy_claw_widget::{
     ClawIndicator, MsgBarComponent, OverlayMode, TerminalOverlay, spawn_dispatch,
 };
 use gtk4 as gtk;
-use gtk4::prelude::*;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
@@ -89,7 +88,7 @@ pub(super) fn setup_claw(
     });
 
     let claw_popover = TerminalOverlay::new(
-        claw_indicator.widget().upcast_ref(),
+        claw_indicator.clone(),
         msg_bar.clone(),
         host.clone(),
         pending_character,
@@ -106,16 +105,17 @@ pub(super) fn setup_claw(
             indicator_for_notify.set_drawer_open(rev.reveals_child());
         });
 
-    // Indicator callbacks: on-cancel aborts the current agent turn and closes the drawer;
-    // on-lazy-click asks the agent for a fresh diagnosis; on-proactive-click drains the
-    // queued-up diagnosis (stashed by `show_diagnosis_ready` from the
+    // Indicator callbacks: on-cancel aborts the current agent turn and transitions the
+    // drawer back to Idle; on-lazy-click asks the agent for a fresh diagnosis; on-proactive-click
+    // drains the queued-up diagnosis (stashed by `show_diagnosis_ready` from the
     // window orchestrator) and pops the drawer.
     let popover_clone = claw_popover.clone();
     let host_lazy = host.clone();
     let host_cancel = host.clone();
-    let _popover_cancel = claw_popover.clone();
+    let popover_cancel = claw_popover.clone();
     claw_indicator.set_callbacks(
         move || {
+            popover_cancel.set_state(boxxy_claw_widget::OverlayState::Idle);
             host_cancel.send_claw(ClawMessage::Abort);
         },
         move || {

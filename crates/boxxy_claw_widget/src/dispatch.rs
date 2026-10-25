@@ -70,26 +70,23 @@ pub fn spawn_dispatch(
                     character_id: _,
                     tool_name,
                 } => {
-                    indicator.show_thinking(event_agent_name, Some(tool_name));
-                    overlay.set_indicator_slot_visible(true);
+                    overlay.set_tool_started(event_agent_name, tool_name);
                 }
                 ClawEngineEvent::AgentThinking {
                     is_thinking,
                     agent_name: event_agent_name,
                     character_id: _,
                 } => {
-                    overlay.set_thinking(*is_thinking);
                     if *is_thinking {
-                        msg_bar.set_input_sensitive(false);
-                        indicator.show_thinking(event_agent_name, None);
+                        if !event_agent_name.is_empty() {
+                            overlay.set_active_agent(event_agent_name);
+                        }
                         if !overlay.is_visible() {
                             overlay.show_chat_only(event_agent_name);
                         }
-                        overlay.set_indicator_slot_visible(true);
+                        overlay.set_thinking(true);
                     } else {
-                        msg_bar.set_input_sensitive(true);
-                        indicator.hide();
-                        overlay.set_indicator_slot_visible(false);
+                        overlay.set_thinking(false);
                     }
                 }
                 ClawEngineEvent::LazyErrorIndicator { .. } => {
@@ -120,8 +117,6 @@ pub fn spawn_dispatch(
                         Some(character_id.clone()),
                         diagnosis,
                     );
-                    indicator.hide();
-                    overlay.set_indicator_slot_visible(false);
                     overlay.show(
                         OverlayMode::Claw,
                         agent_name,
@@ -157,8 +152,6 @@ pub fn spawn_dispatch(
                         command,
                         |_| {},
                     );
-                    indicator.hide();
-                    overlay.set_indicator_slot_visible(false);
                     overlay.show(
                         OverlayMode::Claw,
                         agent_name,
@@ -468,7 +461,7 @@ pub fn spawn_dispatch(
                     });
                 }
                 ClawEngineEvent::ProposalResolved { .. } => {
-                    overlay.hide();
+                    overlay.set_state(OverlayState::Idle);
                 }
                 ClawEngineEvent::RequestSpawnAgent { .. }
                 | ClawEngineEvent::RequestCloseAgent { .. }

@@ -125,6 +125,30 @@ pub async fn perform_persistence(ctx: PersistenceContext, state: Arc<Mutex<Sessi
             .await;
     }
 
+    // Extract the session's first user query from `history` (stripping dynamic context blocks)
+    // so that if Turn 1 was interrupted/rejected before completion, the title is still generated
+    // from the user's original intent rather than a later follow-up like "thank you".
+    let initial_user_query = state_lock
+        .history
+        .iter()
+        .find_map(|m| {
+            if let rig::message::Message::User { content } = m {
+                content.iter().find_map(|c| {
+                    if let rig::message::UserContent::Text(t) = c {
+                        let cleaned = crate::engine::summarization::history::clean_user_text_for_flush(&t.text);
+                        let trimmed = cleaned.trim();
+                        if !trimmed.is_empty() && !trimmed.starts_with("[WHILE_YOU_SLEPT]") {
+                            return Some(trimmed.to_string());
+                        }
+                    }
+                    None
+                })
+            } else {
+                None
+            }
+        })
+        .unwrap_or_else(|| ctx.user_query.clone());
+
     drop(state_lock);
 
     // Background Task: Session Title Generation (only runs on Turn 1 when title is empty).
@@ -133,7 +157,7 @@ pub async fn perform_persistence(ctx: PersistenceContext, state: Arc<Mutex<Sessi
     // when messages are evicted via `DemotionHook`, or when the session enters Sleep/Deactivate/Evict.
     let db_clone = ctx.db.clone();
     let session_id_clone = ctx.session_id.clone();
-    let user_query_clone = ctx.user_query.clone();
+    let user_query_clone = initial_user_query;
     let creds_clone = creds.clone();
     let settings_clone = ctx.settings.clone();
 

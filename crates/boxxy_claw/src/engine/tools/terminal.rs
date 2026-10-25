@@ -80,7 +80,18 @@ impl Tool for TerminalCommandTool {
         {
             let mut state = self.state.lock().await;
             state.pending_terminal_reply = Some(tx);
+            state.pending_proposal_summary =
+                Some(format!("terminal_exec `{}` ({})", args.command, args.explanation));
         }
+
+        let _ = self
+            .tx_ui
+            .send(ClawEngineEvent::AgentThinking {
+                agent_name: agent_name.clone(),
+                character_id: character_id.clone(),
+                is_thinking: false,
+            })
+            .await;
 
         let event = ClawEngineEvent::ProposeTerminalCommand {
             agent_name: agent_name.clone(),
@@ -103,14 +114,6 @@ impl Tool for TerminalCommandTool {
             )));
         }
 
-        let _ = self
-            .tx_ui
-            .send(ClawEngineEvent::AgentThinking {
-                agent_name: agent_name.clone(),
-                character_id: character_id.clone(),
-                is_thinking: false,
-            })
-            .await;
         let result = rx.await;
         let _ = self
             .tx_ui

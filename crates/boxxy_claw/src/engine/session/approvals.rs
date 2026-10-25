@@ -1,72 +1,78 @@
 use super::SessionState;
+use boxxy_core_toolbox::ApprovalOutcome;
 
 impl SessionState {
-    /// Reject all waiting tool channels with a user-interruption payload.
-    /// Returns `true` if any channel was pending (so the caller knows whether
-    /// to skip spawning a new turn).
+    /// Resolve any waiting tool approval channel with a user-interruption payload.
+    /// Returns `true` if a tool was waiting for approval (meaning the active turn is
+    /// still alive and will immediately consume the interruption via the tool output,
+    /// so the caller must NOT abort or spawn a duplicate turn).
     pub fn drain_pending_with_interruption(&mut self, message: &str) -> bool {
+        self.pending_inject_command = false;
+        self.pending_proposal_summary = None;
         let mut fulfilled = false;
+        let outcome = ApprovalOutcome::Interrupted(message.to_string());
 
         if let Some(reply) = self.pending_terminal_reply.take() {
-            let _ = reply.send(Err(format!("[USER_INTERRUPTION]: {message}")));
+            let _ = reply.send(Err(outcome.rejection_message()));
             fulfilled = true;
         }
         if let Some(reply) = self.pending_file_reply.take() {
-            let _ = reply.send(false);
+            let _ = reply.send(outcome.clone());
             fulfilled = true;
         }
         if let Some(reply) = self.pending_file_delete_reply.take() {
-            let _ = reply.send(false);
+            let _ = reply.send(outcome.clone());
             fulfilled = true;
         }
         if let Some(reply) = self.pending_kill_process_reply.take() {
-            let _ = reply.send(false);
+            let _ = reply.send(outcome.clone());
             fulfilled = true;
         }
         if let Some(reply) = self.pending_background_reply.take() {
-            let _ = reply.send(false);
+            let _ = reply.send(outcome.clone());
             fulfilled = true;
         }
         if let Some(reply) = self.pending_get_clipboard_reply.take() {
-            let _ = reply.send(false);
+            let _ = reply.send(outcome.clone());
             fulfilled = true;
         }
         if let Some(reply) = self.pending_set_clipboard_reply.take() {
-            let _ = reply.send(false);
+            let _ = reply.send(outcome);
             fulfilled = true;
-        }
-
-        if fulfilled {
-            self.history
-                .push(rig::message::Message::user(message.to_string()));
         }
 
         fulfilled
     }
 
-    /// Reject all waiting tool channels without recording history (used by CancelPending).
+    /// Reject all waiting tool channels and record a synthetic assistant summary of the
+    /// rejected proposal so the next turn retains context without making an extra LLM call.
     pub fn drain_pending_cancel(&mut self) {
         self.pending_inject_command = false;
+        if let Some(summary) = self.pending_proposal_summary.take() {
+            self.history.push(rig::message::Message::assistant(format!(
+                "[Proposed {summary} — rejected by the user]"
+            )));
+        }
         if let Some(reply) = self.pending_terminal_reply.take() {
             let _ = reply.send(Err("[USER_EXPLICIT_REJECT]".to_string()));
         }
         if let Some(reply) = self.pending_file_reply.take() {
-            let _ = reply.send(false);
+            let _ = reply.send(ApprovalOutcome::Rejected);
         }
         if let Some(reply) = self.pending_file_delete_reply.take() {
-            let _ = reply.send(false);
+            let _ = reply.send(ApprovalOutcome::Rejected);
         }
         if let Some(reply) = self.pending_kill_process_reply.take() {
-            let _ = reply.send(false);
+            let _ = reply.send(ApprovalOutcome::Rejected);
         }
         if let Some(reply) = self.pending_background_reply.take() {
-            let _ = reply.send(false);
+            let _ = reply.send(ApprovalOutcome::Rejected);
         }
         if let Some(reply) = self.pending_get_clipboard_reply.take() {
-            let _ = reply.send(false);
+            let _ = reply.send(ApprovalOutcome::Rejected);
         }
         if let Some(reply) = self.pending_set_clipboard_reply.take() {
-            let _ = reply.send(false);
+            let _ = reply.send(ApprovalOutcome::Rejected);
         }
     }
 }
@@ -103,6 +109,7 @@ mod pending_drain_tests {
             pending_background_reply: None,
             pending_get_clipboard_reply: None,
             pending_set_clipboard_reply: None,
+            pending_proposal_summary: None,
             pending_scrollbacks: HashMap::new(),
             pending_delegations: HashMap::new(),
             history: Vec::new(),
@@ -134,22 +141,24 @@ mod pending_drain_tests {
     }
 
     #[tokio::test]
-    async fn drain_with_interruption_terminal_reply_pushes_history() {
+    async fn drain_with_interruption_terminal_reply_sends_interruption_payload() {
         let mut state = make_state();
         let (tx, mut rx) = tokio::sync::oneshot::channel();
         state.pending_terminal_reply = Some(tx);
         assert!(state.drain_pending_with_interruption("cancel"));
         let res = rx.try_recv();
         assert!(res.is_ok());
-        assert!(res.unwrap().is_err());
-        assert_eq!(state.history.len(), 1);
+        let err_str = res.unwrap().unwrap_err();
+        assert!(err_str.contains("[USER_INTERRUPTION]"));
+        assert!(err_str.contains("cancel"));
+        assert!(state.history.is_empty());
     }
 
     #[tokio::test]
     async fn drain_cancel_clears_inject_command_flag() {
         let mut state = make_state();
         state.pending_inject_command = true;
-        let (tx, _rx) = tokio::sync::oneshot::channel::<bool>();
+        let (tx, _rx) = tokio::sync::oneshot::channel::<ApprovalOutcome>();
         state.pending_file_reply = Some(tx);
         state.drain_pending_cancel();
         assert!(!state.pending_inject_command);
@@ -159,11 +168,15 @@ mod pending_drain_tests {
     #[tokio::test]
     async fn drain_with_interruption_drains_background_command_reply() {
         let mut state = make_state();
-        let (tx, mut rx) = tokio::sync::oneshot::channel::<bool>();
+        let (tx, mut rx) = tokio::sync::oneshot::channel::<ApprovalOutcome>();
         state.pending_background_reply = Some(tx);
         assert!(state.drain_pending_with_interruption("hold on, wrong port"));
         assert!(state.pending_background_reply.is_none());
-        assert_eq!(rx.try_recv(), Ok(false));
-        assert_eq!(state.history.len(), 1);
+        assert_eq!(
+            rx.try_recv(),
+            Ok(ApprovalOutcome::Interrupted(
+                "hold on, wrong port".to_string()
+            ))
+        );
     }
 }

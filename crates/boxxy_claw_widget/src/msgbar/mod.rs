@@ -35,6 +35,7 @@ pub struct MsgBarComponent {
     /// When true, the msgbar does not hide itself on Enter/Escape — its
     /// enclosing container (e.g. the claw overlay drawer) owns visibility.
     embedded: Rc<Cell<bool>>,
+    on_submit_hook: Rc<RefCell<Option<Box<dyn Fn(&str)>>>>,
     _autocomplete: Rc<boxxy_core_widgets::autocomplete::AutocompleteController>,
 }
 
@@ -226,6 +227,7 @@ impl MsgBarComponent {
         let is_active = Rc::new(Cell::new(false));
         let history = Rc::new(RefCell::new(history::MsgHistory::new()));
         let embedded = Rc::new(Cell::new(false));
+        let on_submit_hook: Rc<RefCell<Option<Box<dyn Fn(&str)>>>> = Rc::new(RefCell::new(None));
 
         let on_submit_rc = Rc::new(on_submit);
         let on_cancel_rc = Rc::new(on_cancel);
@@ -235,6 +237,7 @@ impl MsgBarComponent {
             let attachment_mgr = attachment_mgr.clone();
             let history = history.clone();
             let on_submit = on_submit_rc;
+            let on_submit_hook = on_submit_hook.clone();
             let embedded = embedded.clone();
             let is_active = is_active.clone();
             let widget = widget.clone();
@@ -247,6 +250,9 @@ impl MsgBarComponent {
                 let (text, images) = attachment_mgr.build_payload(&original_text);
 
                 if !text.trim().is_empty() || !images.is_empty() {
+                    if let Some(hook) = on_submit_hook.borrow().as_ref() {
+                        hook(&text);
+                    }
                     history
                         .borrow_mut()
                         .push(original_text, attachment_mgr.get_attachments());
@@ -412,8 +418,13 @@ impl MsgBarComponent {
             avatar,
             avatar_stack,
             embedded,
+            on_submit_hook,
             _autocomplete: autocomplete_ctrl,
         }
+    }
+
+    pub fn set_on_submit_hook<F: Fn(&str) + 'static>(&self, hook: F) {
+        *self.on_submit_hook.borrow_mut() = Some(Box::new(hook));
     }
 
     pub fn set_text(&self, text: &str) {

@@ -27,11 +27,17 @@ boxxy_claw_widget/
 The single boundary between widget code and surface-specific code. Ten methods: `host_id`, `inject_line`, `execute_script`, `snapshot` (async), `grab_focus`, `set_focusable`, `is_busy`, `working_dir`, `send_claw`, `focus_sidebar`, `cd`, `notify`, `forward_event`. The trait is `!Send` / `!Sync` — GTK widgets are single-threaded and every call happens on the main thread; a `Send` bound would be a lie and would force `Arc<Mutex<…>>` ceremony in impls.
 
 ### The drawer (`overlay.rs`)
-Defines `TerminalOverlay` and `OverlayMode { Claw, Bookmark }`. Constructed via `TerminalOverlay::new(indicator_widget, msg_bar, host)`. The `.ui` file wires most of the layout; Rust code attaches the `ClawIndicator::widget()` into the header, appends `msg_bar.widget` + `msg_bar.send_btn` into the `msgbar_slot`, and stitches up button handlers (each one is two lines of `host.xyz()`).
+Defines `TerminalOverlay` and `OverlayMode { Claw, Bookmark }`. Constructed via `TerminalOverlay::new(indicator, msg_bar, host, pending_character)`. The `.ui` file wires most of the layout; Rust code attaches `ClawIndicator::widget()` into `indicator_slot`, appends `msg_bar.widget` + `msg_bar.send_btn` into the `msgbar_slot`, and stitches up button handlers (each one is two lines of `host.xyz()`).
+
+`TerminalOverlay::sync_action_state()` is the single source of truth for the bottom action row (`file_action_box`, `action_box`, `ok_btn`, `accept_btn`, `reject_btn`, `indicator_slot`, `tips_cycle`, and `msg_bar.set_input_sensitive`):
+- `OverlayState::Idle` — `ok_btn` visible, `indicator_slot` hidden, input sensitive.
+- `OverlayState::Thinking` — `indicator_slot` visible (spinner pill + Cancel `×`), `ok_btn` and proposal buttons hidden, input disabled until the turn finishes, pauses on a proposal, or is cancelled.
+- `OverlayState::Pending` — `ok_btn` visible + pending tips, `indicator_slot` hidden, input sensitive.
+- `OverlayState::Action(Proposal)` — only the proposal's approval/reject buttons visible, `ok_btn` and `indicator_slot` hidden, input sensitive so the user can steer the proposal by typing a follow-up instruction.
 
 - `show_chat_only(agent_name)` — opens the drawer in an empty-proposal state (used when the agent starts thinking before producing output).
-- `show_input_only(agent_name)` — the `Ctrl+/` entry point. Reveals the drawer if closed; always focuses the input; never hides. The Okay/Reject/Accept buttons are the explicit dismiss paths — silent hiding would strand the user when the agent is waiting for a message.
-- `enter_waiting_state()` — collapses proposal controls so the drawer reads as "thinking…" after the user sends a reply.
+- `show_input_only(agent_name)` — the `Ctrl+/` entry point. Reveals the drawer if closed; focuses the input if sensitive; never hides or clobbers an active `Thinking` or `Action` state. The Okay/Reject/Accept buttons are the explicit dismiss paths — silent hiding would strand the user when the agent is waiting for a message.
+- `enter_waiting_state()` — collapses proposal controls and transitions immediately to `OverlayState::Thinking` so the drawer reads as "thinking…" the moment the user submits a reply or approves an in-turn tool proposal.
 - `set_history_mode(enabled)` — toggles between the single-message view and a full scrollable conversation log (user preference `maintain_overlay_history`).
 
 The character selector renders from `CHARACTER_CACHE` and `CLAIMS_CACHE`; it is refreshed via `RegistrySnapshot` push signals, not polling.

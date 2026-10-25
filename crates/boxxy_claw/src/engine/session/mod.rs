@@ -27,12 +27,20 @@ pub struct SessionState {
     pub ollama_url: Arc<tokio::sync::RwLock<String>>,
     pub pending_terminal_reply: Option<tokio::sync::oneshot::Sender<Result<String, String>>>,
     pub pending_inject_command: bool,
-    pub pending_file_reply: Option<tokio::sync::oneshot::Sender<bool>>,
-    pub pending_file_delete_reply: Option<tokio::sync::oneshot::Sender<bool>>,
-    pub pending_kill_process_reply: Option<tokio::sync::oneshot::Sender<bool>>,
-    pub pending_background_reply: Option<tokio::sync::oneshot::Sender<bool>>,
-    pub pending_get_clipboard_reply: Option<tokio::sync::oneshot::Sender<bool>>,
-    pub pending_set_clipboard_reply: Option<tokio::sync::oneshot::Sender<bool>>,
+    pub pending_file_reply: Option<tokio::sync::oneshot::Sender<boxxy_core_toolbox::ApprovalOutcome>>,
+    pub pending_file_delete_reply:
+        Option<tokio::sync::oneshot::Sender<boxxy_core_toolbox::ApprovalOutcome>>,
+    pub pending_kill_process_reply:
+        Option<tokio::sync::oneshot::Sender<boxxy_core_toolbox::ApprovalOutcome>>,
+    pub pending_background_reply:
+        Option<tokio::sync::oneshot::Sender<boxxy_core_toolbox::ApprovalOutcome>>,
+    pub pending_get_clipboard_reply:
+        Option<tokio::sync::oneshot::Sender<boxxy_core_toolbox::ApprovalOutcome>>,
+    pub pending_set_clipboard_reply:
+        Option<tokio::sync::oneshot::Sender<boxxy_core_toolbox::ApprovalOutcome>>,
+    /// Summary of the currently pending proposal (e.g. file path + content preview) so
+    /// zero-token rejection still records what was proposed and rejected in `history`.
+    pub pending_proposal_summary: Option<String>,
     pub pending_scrollbacks:
         std::collections::HashMap<uuid::Uuid, tokio::sync::oneshot::Sender<String>>,
     pub pending_delegations:
@@ -128,6 +136,7 @@ impl ClawSession {
                 pending_background_reply: None,
                 pending_get_clipboard_reply: None,
                 pending_set_clipboard_reply: None,
+                pending_proposal_summary: None,
                 pending_scrollbacks: std::collections::HashMap::new(),
                 pending_delegations: std::collections::HashMap::new(),
                 history: Vec::new(),

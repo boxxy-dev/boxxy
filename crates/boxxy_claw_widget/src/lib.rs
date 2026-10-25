@@ -22,3 +22,4 @@ pub use msgbar::{Attachment, AttachmentManager, MsgBarComponent};
 pub use overlay::{OverlayMode, TerminalOverlay};
 pub use proposal::Proposal;
 pub mod state;
+pub use state::OverlayState;

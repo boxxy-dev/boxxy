@@ -99,6 +99,31 @@ impl ClawSession {
         })
         .await;
 
+        // Resolve any waiting tool approval channel with the user's new instruction
+        // so an in-flight turn can immediately steer without tearing down and restarting.
+        let fulfilled = {
+            let mut state_lock = self.state.lock().await;
+            state_lock.drain_pending_with_interruption(&query)
+        };
+
+        if fulfilled {
+            debug!(
+                "Pane {} ({}): Fulfilled pending tool approval with user query: {query}.",
+                self.pane_id, self.name
+            );
+            ctx.workspace
+                .update_pane_state(
+                    self.pane_id.clone(),
+                    Some(self.session_id.clone()),
+                    Some(self.name.clone()),
+                    ctx.current_dir.clone(),
+                    Some(query),
+                    Some(snapshot),
+                )
+                .await;
+            return;
+        }
+
         if let Some(handle) = ctx.current_turn.take() {
             handle.abort();
             let _ = self

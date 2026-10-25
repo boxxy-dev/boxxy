@@ -7,7 +7,7 @@ pub mod workspace;
 
 use crate::engine::session::SessionState;
 use crate::engine::{ClawEngineEvent, ClawEnvironment};
-use boxxy_core_toolbox::ApprovalHandler;
+use boxxy_core_toolbox::{ApprovalHandler, ApprovalOutcome};
 use rig::tool::{Tool, ToolContext};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -46,7 +46,7 @@ impl ApprovalHandler for ClawApprovalHandler {
         path: String,
         content: String,
         diff: boxxy_claw_protocol::FileDiff,
-    ) -> bool {
+    ) -> ApprovalOutcome {
         let (tx, rx) = tokio::sync::oneshot::channel();
         let (agent_name, character_id) = {
             let state = self.state.lock().await;
@@ -56,6 +56,9 @@ impl ApprovalHandler for ClawApprovalHandler {
         {
             let mut state = self.state.lock().await;
             state.pending_file_reply = Some(tx);
+            let preview: String = content.chars().take(400).collect();
+            state.pending_proposal_summary =
+                Some(format!("file_write to `{path}`:\n```\n{preview}\n```"));
         }
 
         let event = ClawEngineEvent::ProposeFileWrite {
@@ -75,13 +78,13 @@ impl ApprovalHandler for ClawApprovalHandler {
         );
 
         if self.tx_ui.send(event).await.is_err() {
-            return false;
+            return ApprovalOutcome::Rejected;
         }
 
-        rx.await.unwrap_or(false)
+        rx.await.unwrap_or(ApprovalOutcome::Rejected)
     }
 
-    async fn propose_file_delete(&self, path: String) -> bool {
+    async fn propose_file_delete(&self, path: String) -> ApprovalOutcome {
         let (tx, rx) = tokio::sync::oneshot::channel();
         let (agent_name, character_id) = {
             let state = self.state.lock().await;
@@ -91,6 +94,7 @@ impl ApprovalHandler for ClawApprovalHandler {
         {
             let mut state = self.state.lock().await;
             state.pending_file_delete_reply = Some(tx);
+            state.pending_proposal_summary = Some(format!("file_delete `{path}`"));
         }
 
         let event = ClawEngineEvent::ProposeFileDelete {
@@ -108,13 +112,13 @@ impl ApprovalHandler for ClawApprovalHandler {
         );
 
         if self.tx_ui.send(event).await.is_err() {
-            return false;
+            return ApprovalOutcome::Rejected;
         }
 
-        rx.await.unwrap_or(false)
+        rx.await.unwrap_or(ApprovalOutcome::Rejected)
     }
 
-    async fn propose_kill_process(&self, pid: u32, process_name: String) -> bool {
+    async fn propose_kill_process(&self, pid: u32, process_name: String) -> ApprovalOutcome {
         let (tx, rx) = tokio::sync::oneshot::channel();
         let (agent_name, character_id) = {
             let state = self.state.lock().await;
@@ -124,6 +128,8 @@ impl ApprovalHandler for ClawApprovalHandler {
         {
             let mut state = self.state.lock().await;
             state.pending_kill_process_reply = Some(tx);
+            state.pending_proposal_summary =
+                Some(format!("kill_process PID {pid} ({process_name})"));
         }
 
         let event = ClawEngineEvent::ProposeKillProcess {
@@ -142,13 +148,17 @@ impl ApprovalHandler for ClawApprovalHandler {
         );
 
         if self.tx_ui.send(event).await.is_err() {
-            return false;
+            return ApprovalOutcome::Rejected;
         }
 
-        rx.await.unwrap_or(false)
+        rx.await.unwrap_or(ApprovalOutcome::Rejected)
     }
 
-    async fn propose_background_command(&self, command: String, explanation: String) -> bool {
+    async fn propose_background_command(
+        &self,
+        command: String,
+        explanation: String,
+    ) -> ApprovalOutcome {
         let (tx, rx) = tokio::sync::oneshot::channel();
         let (agent_name, character_id) = {
             let state = self.state.lock().await;
@@ -158,6 +168,8 @@ impl ApprovalHandler for ClawApprovalHandler {
         {
             let mut state = self.state.lock().await;
             state.pending_background_reply = Some(tx);
+            state.pending_proposal_summary =
+                Some(format!("run_background_command `{command}` ({explanation})"));
         }
 
         let event = ClawEngineEvent::ProposeBackgroundCommand {
@@ -176,13 +188,13 @@ impl ApprovalHandler for ClawApprovalHandler {
         );
 
         if self.tx_ui.send(event).await.is_err() {
-            return false;
+            return ApprovalOutcome::Rejected;
         }
 
-        rx.await.unwrap_or(false)
+        rx.await.unwrap_or(ApprovalOutcome::Rejected)
     }
 
-    async fn propose_get_clipboard(&self) -> bool {
+    async fn propose_get_clipboard(&self) -> ApprovalOutcome {
         let (tx, rx) = tokio::sync::oneshot::channel();
         let (agent_name, character_id) = {
             let state = self.state.lock().await;
@@ -192,6 +204,7 @@ impl ApprovalHandler for ClawApprovalHandler {
         {
             let mut state = self.state.lock().await;
             state.pending_get_clipboard_reply = Some(tx);
+            state.pending_proposal_summary = Some("get_clipboard".to_string());
         }
 
         let event = ClawEngineEvent::ProposeGetClipboard {
@@ -208,13 +221,13 @@ impl ApprovalHandler for ClawApprovalHandler {
         );
 
         if self.tx_ui.send(event).await.is_err() {
-            return false;
+            return ApprovalOutcome::Rejected;
         }
 
-        rx.await.unwrap_or(false)
+        rx.await.unwrap_or(ApprovalOutcome::Rejected)
     }
 
-    async fn propose_set_clipboard(&self, text: String) -> bool {
+    async fn propose_set_clipboard(&self, text: String) -> ApprovalOutcome {
         let (tx, rx) = tokio::sync::oneshot::channel();
         let (agent_name, character_id) = {
             let state = self.state.lock().await;
@@ -224,6 +237,7 @@ impl ApprovalHandler for ClawApprovalHandler {
         {
             let mut state = self.state.lock().await;
             state.pending_set_clipboard_reply = Some(tx);
+            state.pending_proposal_summary = Some("set_clipboard".to_string());
         }
 
         let event = ClawEngineEvent::ProposeSetClipboard {
@@ -241,10 +255,10 @@ impl ApprovalHandler for ClawApprovalHandler {
         );
 
         if self.tx_ui.send(event).await.is_err() {
-            return false;
+            return ApprovalOutcome::Rejected;
         }
 
-        rx.await.unwrap_or(false)
+        rx.await.unwrap_or(ApprovalOutcome::Rejected)
     }
 
     async fn report_tool_result(&self, tool_name: String, result: String) {

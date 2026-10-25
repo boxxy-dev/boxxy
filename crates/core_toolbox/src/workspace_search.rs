@@ -468,23 +468,27 @@ mod tests {
             _: String,
             _: String,
             _: crate::FileDiff,
-        ) -> bool {
-            true
+        ) -> crate::ApprovalOutcome {
+            crate::ApprovalOutcome::Approved
         }
-        async fn propose_file_delete(&self, _: String) -> bool {
-            true
+        async fn propose_file_delete(&self, _: String) -> crate::ApprovalOutcome {
+            crate::ApprovalOutcome::Approved
         }
-        async fn propose_background_command(&self, _: String, _: String) -> bool {
-            true
+        async fn propose_background_command(
+            &self,
+            _: String,
+            _: String,
+        ) -> crate::ApprovalOutcome {
+            crate::ApprovalOutcome::Approved
         }
-        async fn propose_kill_process(&self, _: u32, _: String) -> bool {
-            true
+        async fn propose_kill_process(&self, _: u32, _: String) -> crate::ApprovalOutcome {
+            crate::ApprovalOutcome::Approved
         }
-        async fn propose_get_clipboard(&self) -> bool {
-            true
+        async fn propose_get_clipboard(&self) -> crate::ApprovalOutcome {
+            crate::ApprovalOutcome::Approved
         }
-        async fn propose_set_clipboard(&self, _: String) -> bool {
-            true
+        async fn propose_set_clipboard(&self, _: String) -> crate::ApprovalOutcome {
+            crate::ApprovalOutcome::Approved
         }
         async fn report_tool_result(&self, _: String, _: String) {}
         async fn report_tool_started(&self, _: String) {}

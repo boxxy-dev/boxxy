@@ -1,4 +1,5 @@
 use crate::claw_host::ClawHost;
+use crate::claw_indicator::ClawIndicator;
 use crate::msgbar::MsgBarComponent;
 use crate::proposal::Proposal;
 use crate::state::OverlayState;
@@ -21,6 +22,7 @@ pub enum OverlayMode {
 #[derive(Clone)]
 pub struct TerminalOverlay {
     revealer: gtk::Revealer,
+    indicator: ClawIndicator,
     indicator_slot: gtk::Box,
     character_selector_box: gtk::Box,
     single_scroll: gtk::ScrolledWindow,
@@ -57,7 +59,7 @@ pub struct TerminalOverlay {
 
 impl TerminalOverlay {
     pub fn new(
-        indicator_widget: &gtk::Widget,
+        indicator: ClawIndicator,
         msg_bar: Rc<MsgBarComponent>,
         host: Rc<dyn ClawHost>,
         pending_character: Rc<RefCell<String>>,
@@ -68,7 +70,7 @@ impl TerminalOverlay {
         let indicator_slot: gtk::Box = builder.object("indicator_slot").unwrap();
         let character_selector_box: gtk::Box = builder.object("character_selector_box").unwrap();
 
-        indicator_slot.append(indicator_widget);
+        indicator_slot.append(indicator.widget());
         let single_scroll: gtk::ScrolledWindow = builder.object("single_scroll").unwrap();
         let history_scroll: gtk::ScrolledWindow = builder.object("history_scroll").unwrap();
 
@@ -298,6 +300,42 @@ impl TerminalOverlay {
         let active_agent = Rc::new(RefCell::new(String::new()));
         let history_enabled = Rc::new(Cell::new(false));
 
+        let s = Self {
+            revealer: revealer.clone(),
+            indicator: indicator.clone(),
+            indicator_slot: indicator_slot.clone(),
+            character_selector_box: character_selector_box.clone(),
+            single_scroll: single_scroll.clone(),
+            history_scroll: history_scroll.clone(),
+            diagnosis_viewer: diagnosis_viewer.clone(),
+            command_view: command_view.clone(),
+            template_entry: template_entry.clone(),
+            msgbar_slot: msgbar_slot.clone(),
+            msg_bar: msg_bar.clone(),
+            accept_btn: accept_btn.clone(),
+            reject_btn: reject_btn.clone(),
+            ok_btn: ok_btn.clone(),
+            approve_file_btn: approve_file_btn.clone(),
+            inspect_btn: inspect_btn.clone(),
+            clear_history_btn: clear_history_btn.clone(),
+            command_frame: command_frame.clone(),
+            template_box: template_box.clone(),
+            file_action_box: file_action_box.clone(),
+            action_box: action_box.clone(),
+            state: state.clone(),
+            current_mode: current_mode.clone(),
+            active_agent: active_agent.clone(),
+            history_enabled: history_enabled.clone(),
+            history_sticky: history_sticky.clone(),
+            is_auto_scrolling: is_auto_scrolling.clone(),
+            tips_cycle: tips_cycle.clone(),
+            selected_character: pending_character,
+            history_list: history_list.clone(),
+            history_store: history_store.clone(),
+            full_history_store: full_history_store.clone(),
+            host: host.clone(),
+        };
+
         // Common "dismiss the drawer + return focus to the host" tail,
         // used by Reject, Ok, and the two file-action buttons. The
         // 50ms delay mirrors the pre-refactor behavior — it lets the
@@ -305,23 +343,10 @@ impl TerminalOverlay {
         // steal focus from the still-animating widget.
         let dismiss_and_refocus = {
             let host = host.clone();
-            let revealer = revealer.clone();
-            let command_frame = command_frame.clone();
-            let template_box = template_box.clone();
-            let file_action_box = file_action_box.clone();
-            let action_box = action_box.clone();
-            let state_rc = state.clone();
+            let overlay_for_dismiss = s.clone();
 
             Rc::new(move || {
-                revealer.set_reveal_child(false);
-                // Robust hiding: Ensure that if the drawer receives a new event while fading out,
-                // the stale proposal buttons are already hidden.
-                command_frame.set_visible(false);
-                template_box.set_visible(false);
-                file_action_box.set_visible(false);
-                action_box.set_visible(false);
-
-                *state_rc.borrow_mut() = OverlayState::Idle;
+                overlay_for_dismiss.hide();
 
                 let host = host.clone();
                 gtk4::glib::timeout_add_local(std::time::Duration::from_millis(50), move || {
@@ -331,16 +356,22 @@ impl TerminalOverlay {
             })
         };
 
-        // Reject / Ok: in Claw mode send CancelPending so the agent
-        // stops waiting; in Bookmark mode it's purely a UI dismiss.
+        // Reject: in Claw mode send CancelPending so the agent stops waiting,
+        // transition the drawer to Idle (showing the Okay button) and focus the
+        // input bar so the user can continue their conversation. In Bookmark mode
+        // the button is "Close" and dismisses the drawer.
         let host_reject = host.clone();
         let cm_reject = current_mode.clone();
         let dismiss_reject = dismiss_and_refocus.clone();
+        let overlay_for_reject = s.clone();
         reject_btn.connect_clicked(move |_| {
             if *cm_reject.borrow() == OverlayMode::Claw {
                 host_reject.send_claw(ClawMessage::CancelPending);
+                overlay_for_reject.set_state(OverlayState::Idle);
+                overlay_for_reject.grab_input_focus();
+            } else {
+                dismiss_reject();
             }
-            dismiss_reject();
         });
 
         let host_ok = host.clone();
@@ -373,13 +404,7 @@ impl TerminalOverlay {
 
         let host_approve = host.clone();
         let state_approve = state.clone();
-        let dismiss_approve = dismiss_and_refocus.clone();
-
-        let file_action_box_clone = file_action_box.clone();
-        let action_box_clone = action_box.clone();
-        let ok_btn_clone = ok_btn.clone();
-        let tips_cycle_clone = tips_cycle.clone();
-        let revealer_clone = revealer.clone();
+        let overlay_for_approve = s.clone();
 
         approve_file_btn.connect_clicked(move |_| {
             let proposal = if let OverlayState::Action(p) = &*state_approve.borrow() {
@@ -391,36 +416,27 @@ impl TerminalOverlay {
             let msg = make_file_reply(&proposal, true);
             host_approve.send_claw(msg);
 
-            // Background commands keep the drawer open because they don't block the terminal
-            // and the user is likely still conversing with the agent.
-            if !matches!(proposal, Proposal::BackgroundCommand { .. }) {
-                dismiss_approve();
+            // Keep the drawer open after approving an in-turn tool proposal and transition
+            // straight to Thinking (or Pending for background launches) so the user sees the
+            // tool execute and the agent's follow-up response without the drawer closing and
+            // reopening in a mismatched state.
+            if matches!(proposal, Proposal::BackgroundCommand { .. }) {
+                overlay_for_approve.set_state(OverlayState::Pending);
             } else {
-                *state_approve.borrow_mut() = OverlayState::Pending;
-                // Manually do what sync_action_state would do for Pending state,
-                // since we don't have an Rc<TerminalOverlay> or `self` here.
-                file_action_box_clone.set_visible(false);
-                action_box_clone.set_visible(true);
-                ok_btn_clone.set_visible(true);
-
-                let should_tip = tips_cycle_clone.is_enabled() && revealer_clone.reveals_child();
-                if should_tip {
-                    tips_cycle_clone.start_with_messages(crate::tips::PENDING_TIPS);
-                } else {
-                    tips_cycle_clone.stop();
-                }
+                overlay_for_approve.enter_waiting_state();
             }
         });
 
         let host_reject_file = host.clone();
         let state_reject = state.clone();
-        let dismiss_reject_file = dismiss_and_refocus.clone();
+        let overlay_for_reject_file = s.clone();
         reject_file_btn.connect_clicked(move |_| {
             if let OverlayState::Action(p) = &*state_reject.borrow() {
                 let msg = make_file_reply(p, false);
                 host_reject_file.send_claw(msg);
             }
-            dismiss_reject_file();
+            overlay_for_reject_file.set_state(OverlayState::Idle);
+            overlay_for_reject_file.grab_input_focus();
         });
 
         // Inspect — route the user to the sidebar-side log.
@@ -512,40 +528,15 @@ impl TerminalOverlay {
         });
         revealer.add_controller(esc_controller);
 
-        let s = Self {
-            revealer,
-            indicator_slot,
-            character_selector_box,
-            single_scroll,
-            history_scroll,
-            diagnosis_viewer,
-            command_view,
-            template_entry,
-            msgbar_slot,
-            msg_bar,
-            accept_btn,
-            reject_btn,
-            ok_btn,
-            approve_file_btn,
-            inspect_btn,
-            clear_history_btn,
-            command_frame,
-            template_box,
-            file_action_box,
-            action_box,
-            state,
-            current_mode,
-            active_agent,
-            history_enabled,
-            history_sticky,
-            is_auto_scrolling,
-            tips_cycle,
-            selected_character: pending_character,
-            history_list,
-            history_store,
-            full_history_store,
-            host,
-        };
+        // Immediately collapse any active proposal controls into the Thinking state
+        // when the user submits a message in the msgbar (unless it's a slash command like /resume).
+        let overlay_for_submit = s.clone();
+        s.msg_bar.set_on_submit_hook(move |text| {
+            let trimmed = text.trim();
+            if !trimmed.starts_with("/resume ") && !trimmed.starts_with("/btw ") {
+                overlay_for_submit.enter_waiting_state();
+            }
+        });
 
         // Reactively refresh the character selector whenever the catalog or claims change.
         let overlay_for_watch = s.clone();
@@ -647,17 +638,35 @@ impl TerminalOverlay {
         self.sync_action_state();
     }
 
+    /// Transitions the overlay into the active thinking state (hiding any pending proposal
+    /// or `Okay` button and surfacing the thinking indicator pill).
+    pub fn enter_waiting_state(&self) {
+        let agent_name = self.active_agent.borrow().clone();
+        self.indicator.show_thinking(&agent_name, None);
+        self.set_state(OverlayState::Thinking);
+    }
+
     pub fn set_thinking(&self, thinking: bool) {
         let current = self.state.borrow().clone();
         match (current, thinking) {
-            (OverlayState::Idle, true) => self.set_state(OverlayState::Thinking),
-            (OverlayState::Idle, false) => {}
-            (OverlayState::Thinking, true) => {}
-            (OverlayState::Thinking, false) => self.set_state(OverlayState::Idle),
-            (OverlayState::Pending, true) => self.set_state(OverlayState::Thinking),
-            (OverlayState::Pending, false) => self.set_state(OverlayState::Idle),
-            (OverlayState::Action(_), _) => {} // no-op, proposal blocks
+            (_, true) => {
+                let agent_name = self.active_agent.borrow().clone();
+                self.indicator.show_thinking(&agent_name, None);
+                self.set_state(OverlayState::Thinking);
+            }
+            (OverlayState::Thinking, false) | (OverlayState::Pending, false) => {
+                self.set_state(OverlayState::Idle);
+            }
+            (OverlayState::Idle, false) | (OverlayState::Action(_), false) => {}
         }
+    }
+
+    pub fn set_tool_started(&self, agent_name: &str, tool_name: &str) {
+        if !agent_name.is_empty() {
+            *self.active_agent.borrow_mut() = agent_name.to_string();
+        }
+        self.indicator.show_thinking(agent_name, Some(tool_name));
+        self.set_state(OverlayState::Thinking);
     }
 
     pub fn clear_proposal(&self) {
@@ -914,9 +923,6 @@ impl TerminalOverlay {
             self.refresh_character_selector(agent_name);
         }
 
-        // Ensure action buttons are synced (shows "Okay" if no proposal, etc.)
-        self.set_thinking(false);
-
         // Auto-scroll to the newest row so reopening lands on the latest
         // message (history mode) or the bottom of the scroll (single mode).
         self.scroll_to_latest();
@@ -924,7 +930,9 @@ impl TerminalOverlay {
         // Defer focus grab a tick so GTK has realized the revealed widgets.
         let msg_bar = self.msg_bar.clone();
         gtk4::glib::timeout_add_local(std::time::Duration::from_millis(50), move || {
-            msg_bar.entry.grab_focus();
+            if msg_bar.entry.is_sensitive() {
+                msg_bar.entry.grab_focus();
+            }
             gtk4::glib::ControlFlow::Break
         });
     }
@@ -1038,11 +1046,16 @@ impl TerminalOverlay {
         // 4. Pure state machine mapping
         match state {
             OverlayState::Idle => {
+                self.msg_bar.set_input_sensitive(true);
+                self.indicator.hide();
+                self.indicator_slot.set_visible(false);
                 self.action_box.set_visible(true);
                 self.ok_btn.set_visible(true);
                 self.tips_cycle.stop();
             }
             OverlayState::Thinking => {
+                self.msg_bar.set_input_sensitive(false);
+                self.indicator_slot.set_visible(true);
                 let should_tip = self.tips_cycle.is_enabled() && self.revealer.reveals_child();
                 if should_tip {
                     self.tips_cycle.start();
@@ -1051,6 +1064,9 @@ impl TerminalOverlay {
                 }
             }
             OverlayState::Pending => {
+                self.msg_bar.set_input_sensitive(true);
+                self.indicator.hide();
+                self.indicator_slot.set_visible(false);
                 self.action_box.set_visible(true);
                 self.ok_btn.set_visible(true);
                 let should_tip = self.tips_cycle.is_enabled() && self.revealer.reveals_child();
@@ -1062,6 +1078,9 @@ impl TerminalOverlay {
                 }
             }
             OverlayState::Action(proposal) => {
+                self.msg_bar.set_input_sensitive(true);
+                self.indicator.hide();
+                self.indicator_slot.set_visible(false);
                 self.tips_cycle.stop();
                 match proposal {
                     Proposal::Command(_) | Proposal::Bookmark { .. } => {

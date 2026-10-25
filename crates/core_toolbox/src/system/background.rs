@@ -74,13 +74,13 @@ impl Tool for RunBackgroundCommandTool {
         };
 
         self.approval.set_thinking(false).await;
-        let approved = self
+        let outcome = self
             .approval
             .propose_background_command(args.command.clone(), args.explanation.clone())
             .await;
         self.approval.set_thinking(true).await;
 
-        if approved {
+        if outcome.is_approved() {
             match self
                 .env
                 .spawn_detached(args.command.clone(), resolved_cwd)
@@ -122,7 +122,7 @@ impl Tool for RunBackgroundCommandTool {
             let out = RunBackgroundCommandOutput {
                 success: false,
                 pid: None,
-                message: "[USER_EXPLICIT_REJECT]".to_string(),
+                message: outcome.rejection_message(),
             };
             self.approval
                 .report_tool_result(
@@ -191,23 +191,27 @@ mod tests {
             _: String,
             _: String,
             _: crate::FileDiff,
-        ) -> bool {
-            true
+        ) -> crate::ApprovalOutcome {
+            crate::ApprovalOutcome::Approved
         }
-        async fn propose_file_delete(&self, _: String) -> bool {
-            true
+        async fn propose_file_delete(&self, _: String) -> crate::ApprovalOutcome {
+            crate::ApprovalOutcome::Approved
         }
-        async fn propose_background_command(&self, _: String, _: String) -> bool {
-            true
+        async fn propose_background_command(
+            &self,
+            _: String,
+            _: String,
+        ) -> crate::ApprovalOutcome {
+            crate::ApprovalOutcome::Approved
         }
-        async fn propose_kill_process(&self, _: u32, _: String) -> bool {
-            true
+        async fn propose_kill_process(&self, _: u32, _: String) -> crate::ApprovalOutcome {
+            crate::ApprovalOutcome::Approved
         }
-        async fn propose_get_clipboard(&self) -> bool {
-            true
+        async fn propose_get_clipboard(&self) -> crate::ApprovalOutcome {
+            crate::ApprovalOutcome::Approved
         }
-        async fn propose_set_clipboard(&self, _: String) -> bool {
-            true
+        async fn propose_set_clipboard(&self, _: String) -> crate::ApprovalOutcome {
+            crate::ApprovalOutcome::Approved
         }
         async fn report_tool_result(&self, _: String, _: String) {}
         async fn report_tool_started(&self, _: String) {}

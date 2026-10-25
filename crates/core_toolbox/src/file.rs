@@ -272,13 +272,13 @@ impl Tool for FileWriteTool {
         .unwrap_or_else(|_| FileDiff::fallback_new(&path, &args.content));
 
         self.approval.set_thinking(false).await;
-        let approved = self
+        let outcome = self
             .approval
             .propose_file_write(path.clone(), args.content.clone(), diff)
             .await;
         self.approval.set_thinking(true).await;
 
-        if approved {
+        if outcome.is_approved() {
             let total_lines = args.content.lines().count();
             match self.env.write_file(path, args.content).await {
                 Ok(()) => {
@@ -301,7 +301,7 @@ impl Tool for FileWriteTool {
             let out = FileWriteOutput {
                 success: false,
                 total_lines: 0,
-                error: Some("[USER_EXPLICIT_REJECT]".to_string()),
+                error: Some(outcome.rejection_message()),
             };
             self.approval
                 .report_tool_result(
@@ -558,13 +558,13 @@ impl Tool for ReplaceInFileTool {
         .unwrap_or_else(|_| FileDiff::fallback_new(&path, &working));
 
         self.approval.set_thinking(false).await;
-        let approved = self
+        let outcome = self
             .approval
             .propose_file_write(path.clone(), working.clone(), diff)
             .await;
         self.approval.set_thinking(true).await;
 
-        if approved {
+        if outcome.is_approved() {
             match self.env.write_file(path, working).await {
                 Ok(()) => {
                     let out = ReplaceInFileOutput {
@@ -588,7 +588,7 @@ impl Tool for ReplaceInFileTool {
                 success: false,
                 replacements: 0,
                 total_lines: 0,
-                error: Some("[USER_EXPLICIT_REJECT]".to_string()),
+                error: Some(outcome.rejection_message()),
             };
             self.approval
                 .report_tool_result(
@@ -662,10 +662,10 @@ impl Tool for FileDeleteTool {
             .unwrap_or_else(|| self.current_dir.clone());
         let path = resolve_path(&base_dir, &args.path);
         self.approval.set_thinking(false).await;
-        let approved = self.approval.propose_file_delete(path.clone()).await;
+        let outcome = self.approval.propose_file_delete(path.clone()).await;
         self.approval.set_thinking(true).await;
 
-        if approved {
+        if outcome.is_approved() {
             match self.env.delete_file(path).await {
                 Ok(()) => {
                     let out = FileDeleteOutput {
@@ -685,7 +685,7 @@ impl Tool for FileDeleteTool {
         } else {
             let out = FileDeleteOutput {
                 success: false,
-                error: Some("[USER_EXPLICIT_REJECT]".to_string()),
+                error: Some(outcome.rejection_message()),
             };
             self.approval
                 .report_tool_result(
@@ -787,23 +787,55 @@ mod tests {
             _path: String,
             _content: String,
             _diff: FileDiff,
-        ) -> bool {
-            self.approve
+        ) -> crate::ApprovalOutcome {
+            if self.approve {
+                crate::ApprovalOutcome::Approved
+            } else {
+                crate::ApprovalOutcome::Rejected
+            }
         }
-        async fn propose_file_delete(&self, _path: String) -> bool {
-            self.approve
+        async fn propose_file_delete(&self, _path: String) -> crate::ApprovalOutcome {
+            if self.approve {
+                crate::ApprovalOutcome::Approved
+            } else {
+                crate::ApprovalOutcome::Rejected
+            }
         }
-        async fn propose_background_command(&self, _command: String, _explanation: String) -> bool {
-            self.approve
+        async fn propose_background_command(
+            &self,
+            _command: String,
+            _explanation: String,
+        ) -> crate::ApprovalOutcome {
+            if self.approve {
+                crate::ApprovalOutcome::Approved
+            } else {
+                crate::ApprovalOutcome::Rejected
+            }
         }
-        async fn propose_kill_process(&self, _pid: u32, _process_name: String) -> bool {
-            self.approve
+        async fn propose_kill_process(
+            &self,
+            _pid: u32,
+            _process_name: String,
+        ) -> crate::ApprovalOutcome {
+            if self.approve {
+                crate::ApprovalOutcome::Approved
+            } else {
+                crate::ApprovalOutcome::Rejected
+            }
         }
-        async fn propose_get_clipboard(&self) -> bool {
-            self.approve
+        async fn propose_get_clipboard(&self) -> crate::ApprovalOutcome {
+            if self.approve {
+                crate::ApprovalOutcome::Approved
+            } else {
+                crate::ApprovalOutcome::Rejected
+            }
         }
-        async fn propose_set_clipboard(&self, _text: String) -> bool {
-            self.approve
+        async fn propose_set_clipboard(&self, _text: String) -> crate::ApprovalOutcome {
+            if self.approve {
+                crate::ApprovalOutcome::Approved
+            } else {
+                crate::ApprovalOutcome::Rejected
+            }
         }
         async fn report_tool_result(&self, tool_name: String, result: String) {
             self.results.lock().unwrap().push((tool_name, result));
@@ -904,6 +936,68 @@ mod tests {
         assert!(!delete_out.success);
         assert_eq!(delete_out.error.as_deref(), Some("[USER_EXPLICIT_REJECT]"));
         assert_eq!(approval.results.lock().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn file_write_returns_user_interruption_payload_when_steered() {
+        struct InterruptingApproval;
+
+        #[async_trait::async_trait]
+        impl ApprovalHandler for InterruptingApproval {
+            async fn propose_file_write(
+                &self,
+                _path: String,
+                _content: String,
+                _diff: FileDiff,
+            ) -> crate::ApprovalOutcome {
+                crate::ApprovalOutcome::Interrupted("actually type Hello Mii".to_string())
+            }
+            async fn propose_file_delete(&self, _: String) -> crate::ApprovalOutcome {
+                crate::ApprovalOutcome::Rejected
+            }
+            async fn propose_background_command(
+                &self,
+                _: String,
+                _: String,
+            ) -> crate::ApprovalOutcome {
+                crate::ApprovalOutcome::Rejected
+            }
+            async fn propose_kill_process(&self, _: u32, _: String) -> crate::ApprovalOutcome {
+                crate::ApprovalOutcome::Rejected
+            }
+            async fn propose_get_clipboard(&self) -> crate::ApprovalOutcome {
+                crate::ApprovalOutcome::Rejected
+            }
+            async fn propose_set_clipboard(&self, _: String) -> crate::ApprovalOutcome {
+                crate::ApprovalOutcome::Rejected
+            }
+            async fn report_tool_result(&self, _: String, _: String) {}
+            async fn report_tool_started(&self, _: String) {}
+            async fn set_thinking(&self, _: bool) {}
+        }
+
+        let mut ctx = ToolContext::default();
+        let env = Arc::new(MockEnv::new());
+        let write_tool = FileWriteTool {
+            env: env.clone(),
+            current_dir: "/workspace".to_string(),
+            approval: Arc::new(InterruptingApproval),
+        };
+        let out = write_tool
+            .call(
+                &mut ctx,
+                FileWriteArgs {
+                    path: "hello.fish".to_string(),
+                    content: "printf 'Hello, world!'".to_string(),
+                },
+            )
+            .await
+            .unwrap();
+        assert!(!out.success);
+        let err = out.error.unwrap();
+        assert!(err.contains("[USER_INTERRUPTION]"));
+        assert!(err.contains("actually type Hello Mii"));
+        assert!(env.written_content.lock().unwrap().is_none());
     }
 
     #[tokio::test]
@@ -1008,24 +1102,28 @@ mod tests {
                 _path: String,
                 _content: String,
                 diff: FileDiff,
-            ) -> bool {
+            ) -> crate::ApprovalOutcome {
                 self.diffs.lock().unwrap().push(diff);
-                true
+                crate::ApprovalOutcome::Approved
             }
-            async fn propose_file_delete(&self, _: String) -> bool {
-                true
+            async fn propose_file_delete(&self, _: String) -> crate::ApprovalOutcome {
+                crate::ApprovalOutcome::Approved
             }
-            async fn propose_background_command(&self, _: String, _: String) -> bool {
-                true
+            async fn propose_background_command(
+                &self,
+                _: String,
+                _: String,
+            ) -> crate::ApprovalOutcome {
+                crate::ApprovalOutcome::Approved
             }
-            async fn propose_kill_process(&self, _: u32, _: String) -> bool {
-                true
+            async fn propose_kill_process(&self, _: u32, _: String) -> crate::ApprovalOutcome {
+                crate::ApprovalOutcome::Approved
             }
-            async fn propose_get_clipboard(&self) -> bool {
-                true
+            async fn propose_get_clipboard(&self) -> crate::ApprovalOutcome {
+                crate::ApprovalOutcome::Approved
             }
-            async fn propose_set_clipboard(&self, _: String) -> bool {
-                true
+            async fn propose_set_clipboard(&self, _: String) -> crate::ApprovalOutcome {
+                crate::ApprovalOutcome::Approved
             }
             async fn report_tool_result(&self, _: String, _: String) {}
             async fn report_tool_started(&self, _: String) {}

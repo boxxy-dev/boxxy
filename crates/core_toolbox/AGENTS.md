@@ -14,10 +14,11 @@ The crate is modular, with tools grouped by functionality:
 - **`utils.rs`**: Shared utilities like robust path resolution (handling absolute, relative, and `~` home directory paths).
 
 ## Approval Protocol
-Sensitive tools (e.g., file writes/edits, file deletion, process termination, background commands, clipboard access) require user consent. This is handled via the `ApprovalHandler` trait:
+Sensitive tools (e.g., file writes/edits, file deletion, process termination, background commands, clipboard access) require user consent. This is handled via the `ApprovalHandler` trait and `ApprovalOutcome` enum (`Approved`, `Rejected`, `Interrupted(String)`):
 - The toolbox defines the trait (including `current_dir()` so cached tools dynamically track terminal `cd` changes across turns).
 - `boxxy-claw` implements the trait (`ClawApprovalHandler`) to bridge with the GTK UI and `ClawEngineEvent` system.
-- All approval-gated tools return `[USER_EXPLICIT_REJECT]` when denied by the user so the engine can trigger the silent `[SILENT_ACK]` drawer dismissal flow.
+- When the user types a new instruction instead of clicking Approve/Reject while a proposal is on screen, `ApprovalHandler` resolves with `ApprovalOutcome::Interrupted(msg)` and the tool returns a structured `[USER_INTERRUPTION]` message so the active LLM turn immediately pivots to the new instruction without tearing down and restarting the turn.
+- When the user explicitly rejects a proposal, `ClawSession` aborts the in-flight turn immediately (zero wasted LLM tokens) and closes the drawer.
 - The protocol supports **Structured Result Reporting**, allowing tools to send back JSON data (like process lists or system info) for rich UI rendering before the agent continues its turn.
 
 ## Key Features

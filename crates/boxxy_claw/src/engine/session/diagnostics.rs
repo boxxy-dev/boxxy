@@ -50,6 +50,7 @@ impl ClawSession {
 
         let mut state_lock = self.state.lock().await;
         if let Some(reply) = state_lock.pending_terminal_reply.take() {
+            state_lock.pending_proposal_summary = None;
             if exit_code == 0 {
                 let _ = reply.send(Ok(snapshot));
             } else {
