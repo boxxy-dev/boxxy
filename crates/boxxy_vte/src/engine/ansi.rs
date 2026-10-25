@@ -52,7 +52,7 @@ pub struct Hyperlink {
     pub uri: String,
 }
 
-#[derive(Debug, Eq, PartialEq, Copy, Clone, Default)]
+#[derive(Debug, Eq, PartialEq, Copy, Clone, Default, Hash)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct Rgb {
     pub r: u8,
@@ -1037,7 +1037,7 @@ pub enum TabulationClearMode {
 ///
 /// The order here matters since the enum should be castable to a `usize` for
 /// indexing a color list.
-#[derive(Debug, Copy, Clone, Eq, PartialEq, PartialOrd, Ord)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq, PartialOrd, Ord, Hash)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub enum NamedColor {
     /// Black.
@@ -1152,7 +1152,7 @@ impl NamedColor {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub enum Color {
     Named(NamedColor),
@@ -1673,8 +1673,8 @@ where
             ('c', intermediates) if next_param_or(0) == 0 => {
                 handler.identify_terminal(intermediates.first().map(|&i| i as char), 'c')
             }
-            ('q', intermediates) if next_param_or(0) == 0 => {
-                handler.identify_terminal(intermediates.first().map(|&i| i as char), 'q')
+            ('q', [b'>']) if next_param_or(0) == 0 => {
+                handler.identify_terminal(Some('>'), 'q')
             }
             ('D', []) => handler.move_backward(next_param_or(1) as usize),
             ('d', []) => handler.goto_line(next_param_or(1) as i32 - 1),

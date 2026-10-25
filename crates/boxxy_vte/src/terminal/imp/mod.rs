@@ -26,6 +26,18 @@ pub struct SearchViewportCache {
     pub matches: Vec<crate::engine::selection::SelectionRange>,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct RowCacheEpochKey {
+    pub columns: usize,
+    pub char_width_bits: u64,
+    pub char_height_bits: u64,
+    pub offset_y_bits: u32,
+    pub scale_factor: i32,
+    pub is_dimmed: bool,
+    pub palette_generation: u64,
+    pub font_generation: u64,
+}
+
 pub type TitleCallback = Box<dyn Fn(String) + 'static>;
 pub type CwdCallback = Box<dyn Fn(String) + 'static>;
 pub type ProgressCallback = Box<dyn Fn(u8, u8) + 'static>;
@@ -100,6 +112,10 @@ pub struct TerminalWidget {
     pub cached_scale_factor: Cell<i32>,
     pub cached_layout: RefCell<Option<gtk4::pango::Layout>>,
     pub frosted_glass: Cell<bool>,
+    pub palette_generation: Cell<u64>,
+    pub font_generation: Cell<u64>,
+    pub row_cache_epoch: Cell<Option<RowCacheEpochKey>>,
+    pub row_node_cache: RefCell<HashMap<u64, Option<gtk4::gsk::RenderNode>>>,
 }
 
 impl Default for TerminalWidget {
@@ -165,6 +181,10 @@ impl Default for TerminalWidget {
             cached_scale_factor: Cell::new(0),
             cached_layout: RefCell::new(None),
             frosted_glass: Cell::new(false),
+            palette_generation: Cell::new(0),
+            font_generation: Cell::new(0),
+            row_cache_epoch: Cell::new(None),
+            row_node_cache: RefCell::new(HashMap::new()),
         }
     }
 }
@@ -248,6 +268,14 @@ impl TerminalWidget {
     pub(crate) fn invalidate_font_metrics(&self) {
         self.cached_char_size.set(None);
         self.cached_layout.replace(None);
+        self.font_generation
+            .set(self.font_generation.get().wrapping_add(1));
+        self.invalidate_row_cache();
+    }
+
+    pub(crate) fn invalidate_row_cache(&self) {
+        self.row_cache_epoch.set(None);
+        self.row_node_cache.borrow_mut().clear();
     }
 
     pub(crate) fn get_or_create_layout(&self, widget: &super::TerminalWidget) -> gtk4::pango::Layout {

@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use log::debug;
 
-use crate::engine::ansi::CursorShape;
+use crate::engine::ansi::{CursorShape, CursorStyle};
 use crate::engine::event::EventListener;
 use crate::engine::grid::{Dimensions, GridCell, GridIterator};
 use crate::engine::index::{Column, Line, Point};
@@ -20,6 +20,7 @@ pub struct RenderState {
     pub total_lines: usize,
     pub display_offset: i32,
     pub cursor_point: Point,
+    pub cursor_style: Option<CursorStyle>,
     pub selection_range: Option<SelectionRange>,
     pub selection_text: Option<String>,
     pub kitty_placements: Vec<crate::engine::kitty::Placement>,
@@ -63,6 +64,7 @@ impl RenderState {
             total_lines,
             display_offset,
             cursor_point: grid.cursor.point,
+            cursor_style: term.cursor_style,
             selection_range,
             selection_text,
             kitty_placements: term.kitty_graphics.placements.clone(),
@@ -100,6 +102,7 @@ impl RenderState {
         self.total_lines = total_lines;
         self.display_offset = display_offset;
         self.cursor_point = term.grid().cursor.point;
+        self.cursor_style = term.cursor_style;
         self.selection_range = term.selection.as_ref().and_then(|s| s.to_range(term));
         self.selection_text = term
             .selection_to_string()

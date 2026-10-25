@@ -131,7 +131,7 @@ impl ResetDiscriminant<Color> for Cell {
 /// This storage is reserved for cell attributes which are rarely set. This allows reducing the
 /// allocation required ahead of time for every cell, with some additional overhead when the extra
 /// storage is actually required.
-#[derive(Default, Debug, Clone, Eq, PartialEq)]
+#[derive(Default, Debug, Clone, Eq, PartialEq, Hash)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct CellExtra {
     zerowidth: Vec<char>,
@@ -140,7 +140,7 @@ pub struct CellExtra {
 }
 
 /// Content and attributes of a single cell in the terminal grid.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct Cell {
     pub c: char,

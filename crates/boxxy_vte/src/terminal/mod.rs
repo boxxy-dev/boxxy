@@ -140,7 +140,28 @@ impl TerminalWidget {
                     };
                     let imp = obj.imp();
                     imp.cursor_visible.set(!imp.cursor_visible.get());
-                    obj.queue_draw();
+
+                    // Only queue a redraw if the cursor is actually visible and blinking
+                    // (e.g. skip wakeups when hidden by DECTCEM `?25l` or set to steady by DECSCUSR).
+                    let should_draw = imp
+                        .backend
+                        .borrow()
+                        .as_ref()
+                        .map(|b| {
+                            let state = b.render_state.load();
+                            let shown = state
+                                .mode
+                                .contains(crate::engine::term::TermMode::SHOW_CURSOR);
+                            let blinking = state
+                                .cursor_style
+                                .map(|s| s.blinking)
+                                .unwrap_or_else(|| imp.cursor_blinking.get());
+                            shown && blinking
+                        })
+                        .unwrap_or(true);
+                    if should_draw {
+                        obj.queue_draw();
+                    }
                     glib::ControlFlow::Continue
                 });
             imp.cursor_blink_id.replace(Some(source_id));
@@ -322,6 +343,9 @@ impl TerminalWidget {
         }
 
         imp.palette.replace(full_palette);
+        imp.palette_generation
+            .set(imp.palette_generation.get().wrapping_add(1));
+        imp.invalidate_row_cache();
         self.queue_draw();
     }
     pub fn set_color_cursor(&self, color: Option<&gtk4::gdk::RGBA>) {

@@ -369,4 +369,94 @@ mod tests {
         assert_eq!(comb_match.as_deref(), Some("https://example.com/a"));
         assert_eq!(comb_bounds, Some((0, 5, 26)));
     }
+
+    #[test]
+    fn decscusr_and_dectcem_populate_render_state_cursor_style_and_visibility() {
+        use crate::engine::ansi::CursorShape;
+
+        let mut h = HeadlessTerminal::new(80, 24);
+        let initial = h.render_state();
+        assert!(initial.mode.contains(TermMode::SHOW_CURSOR));
+        assert_eq!(initial.cursor_style, None);
+
+        // DECSCUSR 6 -> steady Beam cursor (e.g. Neovim Insert mode)
+        h.feed(b"\x1b[6 q");
+        let beam_state = h.render_state();
+        assert_eq!(
+            beam_state.cursor_style.map(|s| (s.shape, s.blinking)),
+            Some((CursorShape::Beam, false))
+        );
+
+        // DECSCUSR 3 -> blinking Underline cursor
+        h.feed(b"\x1b[3 q");
+        let ul_state = h.render_state();
+        assert_eq!(
+            ul_state.cursor_style.map(|s| (s.shape, s.blinking)),
+            Some((CursorShape::Underline, true))
+        );
+
+        // DECTCEM ?25l -> hide cursor (e.g. TUI apps like btop/fzf)
+        h.feed(b"\x1b[?25l");
+        assert!(!h.render_state().mode.contains(TermMode::SHOW_CURSOR));
+
+        // DECTCEM ?25h + DECSCUSR 0 -> show cursor and restore default user cursor style
+        h.feed(b"\x1b[?25h\x1b[0 q");
+        let restored = h.render_state();
+        assert!(restored.mode.contains(TermMode::SHOW_CURSOR));
+        assert_eq!(restored.cursor_style, None);
+    }
+
+    #[test]
+    fn sgr_underline_styles_and_colors_update_cell_flags_and_row_hash() {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+
+        use crate::engine::ansi::Color;
+        use crate::engine::term::cell::Flags;
+
+        let hash_row = |cells: &[crate::engine::term::cell::Cell]| -> u64 {
+            let mut hasher = DefaultHasher::new();
+            cells.hash(&mut hasher);
+            hasher.finish()
+        };
+
+        let mut h = HeadlessTerminal::new(20, 4);
+        h.feed(b"plain");
+        let base_hash = hash_row(&h.render_state().cells[0..20]);
+
+        // Undercurl (4:3) with truecolor underline color (58:2::255:64:32)
+        h.feed(b"\r\x1b[4:3;58:2::255:64:32mplain\x1b[0m");
+        let state_curl = h.render_state();
+        let cell0 = &state_curl.cells[0];
+        assert!(cell0.flags.contains(Flags::UNDERCURL));
+        assert_eq!(
+            cell0.underline_color(),
+            Some(Color::Spec(Rgb {
+                r: 255,
+                g: 64,
+                b: 32
+            }))
+        );
+        let curl_hash = hash_row(&state_curl.cells[0..20]);
+        assert_ne!(base_hash, curl_hash);
+
+        // Dotted (4:4), Dashed (4:5), Double (4:2) each produce distinct flags and hashes
+        h.feed(b"\r\x1b[4:4mplain\x1b[0m");
+        let state_dotted = h.render_state();
+        assert!(state_dotted.cells[0].flags.contains(Flags::DOTTED_UNDERLINE));
+        let dotted_hash = hash_row(&state_dotted.cells[0..20]);
+        assert_ne!(curl_hash, dotted_hash);
+
+        h.feed(b"\r\x1b[4:5mplain\x1b[0m");
+        let state_dashed = h.render_state();
+        assert!(state_dashed.cells[0].flags.contains(Flags::DASHED_UNDERLINE));
+        let dashed_hash = hash_row(&state_dashed.cells[0..20]);
+        assert_ne!(dotted_hash, dashed_hash);
+
+        h.feed(b"\r\x1b[4:2mplain\x1b[0m");
+        let state_double = h.render_state();
+        assert!(state_double.cells[0].flags.contains(Flags::DOUBLE_UNDERLINE));
+        let double_hash = hash_row(&state_double.cells[0..20]);
+        assert_ne!(dashed_hash, double_hash);
+    }
 }
