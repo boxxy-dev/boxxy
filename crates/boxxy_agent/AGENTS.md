@@ -27,7 +27,7 @@ Each D-Bus interface lives in its own module under `src/`. All of them share an 
 
 Latency-critical terminal I/O. Exposes:
 
-- `create_pty`, `spawn`: open a master PTY, set window size, then `fork/exec` the shell. The daemon `dup()`s the master FD at spawn and keeps it in the session record — idle while a UI is attached, activated when `detach()` is called.
+- `create_pty`, `spawn`: open a master PTY, set window size, inject zero-config shell integration (`pty/shell_integration.rs`) for interactive Bash (`--rcfile` with Bash 5.3 `${ ...; }` `PS0` and array `PROMPT_COMMAND` support), Zsh (`ZDOTDIR` shim), Fish (`XDG_DATA_DIRS` `vendor_conf.d` with self-cleaning `XDG_DATA_DIRS`), and Nushell (`XDG_DATA_DIRS` `nushell/vendor/autoload/boxxy.nu`) to emit `OSC 7` and `OSC 133;A/B/C/D` (`cl=line` / `click_events=1`) without modifying user dotfiles, then `fork/exec` the shell. The daemon `dup()`s the master FD at spawn and keeps it in the session record — idle while a UI is attached, activated when `detach()` is called.
 - `signal_process_group`, `get_foreground_process`, `get_cwd`, `get_running_processes`, `get_environment_variable`, `set_foreground_tracking`: host-side process introspection used by the UI + Claw.
 - `set_persistence(pid, bool)`, `detach(pid)`, `reattach(pid)`, `list_detached_sessions()`, `list_detached_sessions_detailed()`, `get_exit_status(pid)`: persistent-shells and process exit status surface.
 - Emits `Exited`, `ForegroundProcessChanged` signals that the UI subscribes to.

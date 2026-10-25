@@ -1,4 +1,5 @@
 pub mod registry;
+pub mod shell_integration;
 
 use crate::core::state::AgentState;
 use crate::ipc::pty::{DetachedSessionInfo, SpawnOptions};
@@ -374,9 +375,15 @@ impl PtySubsystem {
             })?
         };
 
-        let mut cmd = tokio::process::Command::new(&options.argv[0]);
-        if options.argv.len() > 1 {
-            cmd.args(&options.argv[1..]);
+        let mut argv = options.argv;
+        let mut env = options.env;
+        if let Some(integration_root) = shell_integration::ensure_integration_scripts() {
+            shell_integration::apply_shell_integration(&mut argv, &mut env, &integration_root);
+        }
+
+        let mut cmd = tokio::process::Command::new(&argv[0]);
+        if argv.len() > 1 {
+            cmd.args(&argv[1..]);
         }
 
         // Surgically remove leaked variables from the daemon's inherited environment.
@@ -395,7 +402,7 @@ impl PtySubsystem {
             cmd.current_dir(&options.cwd);
         }
 
-        if options.env.is_empty() {
+        if env.is_empty() {
             if let Ok(Some(user)) = User::from_uid(getuid()) {
                 cmd.env("HOME", user.dir.to_string_lossy().as_ref());
                 cmd.env("USER", &user.name);
@@ -404,7 +411,7 @@ impl PtySubsystem {
             }
         }
 
-        for (key, value) in options.env {
+        for (key, value) in env {
             if !is_leaked_multiplexer_var(&key) {
                 cmd.env(key, value);
             }
