@@ -8,7 +8,7 @@ use unicode_width::UnicodeWidthChar;
 
 use crate::engine::ansi::{
     self, Attr, CharsetIndex, Color, CursorShape, CursorStyle, Handler, Hyperlink, KeyboardModes,
-    KeyboardModesApplyBehavior, NamedColor, PrivateMode, Rgb, StandardCharset,
+    KeyboardModesApplyBehavior, ModifyOtherKeys, NamedColor, PrivateMode, Rgb, StandardCharset,
 };
 use crate::engine::event::{Event, EventListener};
 use crate::engine::grid::Dimensions;
@@ -324,6 +324,36 @@ impl<T: EventListener> Handler for Term<T> {
         }
 
         self.set_keyboard_mode(mode.into(), apply);
+    }
+
+    #[inline]
+    fn set_modify_other_keys(&mut self, mode: ModifyOtherKeys) {
+        trace!("Setting modifyOtherKeys to {mode:?}");
+        self.mode
+            .remove(TermMode::MODIFY_OTHER_KEYS_1 | TermMode::MODIFY_OTHER_KEYS_2);
+        match mode {
+            ModifyOtherKeys::Reset => {}
+            ModifyOtherKeys::EnableExceptWellDefined => {
+                self.mode.insert(TermMode::MODIFY_OTHER_KEYS_1);
+            }
+            ModifyOtherKeys::EnableAll => {
+                self.mode.insert(TermMode::MODIFY_OTHER_KEYS_2);
+            }
+        }
+    }
+
+    #[inline]
+    fn report_modify_other_keys(&mut self) {
+        trace!("Reporting modifyOtherKeys state");
+        let level: u8 = if self.mode.contains(TermMode::MODIFY_OTHER_KEYS_2) {
+            2
+        } else if self.mode.contains(TermMode::MODIFY_OTHER_KEYS_1) {
+            1
+        } else {
+            0
+        };
+        self.event_proxy
+            .send_event(Event::PtyWrite(format!("\x1b[>4;{level}m")));
     }
 
     #[inline]

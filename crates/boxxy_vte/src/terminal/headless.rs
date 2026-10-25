@@ -459,4 +459,63 @@ mod tests {
         let double_hash = hash_row(&state_double.cells[0..20]);
         assert_ne!(dashed_hash, double_hash);
     }
+
+    #[test]
+    fn kitty_keyboard_stack_set_query_and_alt_screen_isolation() {
+        let mut h = HeadlessTerminal::new(80, 24);
+
+        // Initial query -> 0
+        h.feed(b"\x1b[?u");
+        assert_eq!(h.take_pty_writes(), vec!["\x1b[?0u"]);
+
+        // Direct set CSI = 1 u (DISAMBIGUATE_ESC_CODES) and query CSI ? u -> 1
+        h.feed(b"\x1b[=1u\x1b[?u");
+        assert!(h.mode().contains(TermMode::DISAMBIGUATE_ESC_CODES));
+        assert_eq!(h.take_pty_writes(), vec!["\x1b[?1u"]);
+
+        // Union CSI = 2;2 u (add REPORT_EVENT_TYPES) -> 3
+        h.feed(b"\x1b[=2;2u\x1b[?u");
+        assert!(
+            h.mode()
+                .contains(TermMode::DISAMBIGUATE_ESC_CODES | TermMode::REPORT_EVENT_TYPES)
+        );
+        assert_eq!(h.take_pty_writes(), vec!["\x1b[?3u"]);
+
+        // Push stack CSI > 1 u then CSI > 15 u, then enter alt screen (?1049h)
+        h.feed(b"\x1b[>1u\x1b[>15u\x1b[?u");
+        assert_eq!(h.take_pty_writes(), vec!["\x1b[?15u"]);
+
+        // Entering alt screen swaps to clean inactive keyboard stack (0)
+        h.feed(b"\x1b[?1049h\x1b[?u");
+        assert_eq!(h.take_pty_writes(), vec!["\x1b[?0u"]);
+
+        // App on alt screen pushes mode 7, then crashes/exits alt screen (?1049l) -> restores main stack (15)
+        h.feed(b"\x1b[>7u\x1b[?1049l\x1b[?u");
+        assert_eq!(h.take_pty_writes(), vec!["\x1b[?15u"]);
+
+        // Pop 1 -> back to 1
+        h.feed(b"\x1b[<1u\x1b[?u");
+        assert_eq!(h.take_pty_writes(), vec!["\x1b[?1u"]);
+    }
+
+    #[test]
+    fn xterm_modify_other_keys_set_and_query() {
+        let mut h = HeadlessTerminal::new(80, 24);
+
+        h.feed(b"\x1b[?4m");
+        assert_eq!(h.take_pty_writes(), vec!["\x1b[>4;0m"]);
+
+        h.feed(b"\x1b[>4;2m\x1b[?4m");
+        assert!(h.mode().contains(TermMode::MODIFY_OTHER_KEYS_2));
+        assert_eq!(h.take_pty_writes(), vec!["\x1b[>4;2m"]);
+
+        h.feed(b"\x1b[>4;1m\x1b[?4m");
+        assert!(h.mode().contains(TermMode::MODIFY_OTHER_KEYS_1));
+        assert!(!h.mode().contains(TermMode::MODIFY_OTHER_KEYS_2));
+        assert_eq!(h.take_pty_writes(), vec!["\x1b[>4;1m"]);
+
+        h.feed(b"\x1b[>4m\x1b[?4m");
+        assert!(!h.mode().intersects(TermMode::MODIFY_OTHER_KEYS_1 | TermMode::MODIFY_OTHER_KEYS_2));
+        assert_eq!(h.take_pty_writes(), vec!["\x1b[>4;0m"]);
+    }
 }

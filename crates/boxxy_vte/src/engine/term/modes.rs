@@ -40,6 +40,8 @@ bitflags! {
         const REPORT_ALL_KEYS_AS_ESC  = 1 << 21;
         const REPORT_ASSOCIATED_TEXT  = 1 << 22;
         const COLOR_SCHEME_UPDATES    = 1 << 23;
+        const MODIFY_OTHER_KEYS_1     = 1 << 24;
+        const MODIFY_OTHER_KEYS_2     = 1 << 25;
         const MOUSE_MODE              = Self::MOUSE_REPORT_CLICK.bits() | Self::MOUSE_MOTION.bits() | Self::MOUSE_DRAG.bits();
         const KITTY_KEYBOARD_PROTOCOL = Self::DISAMBIGUATE_ESC_CODES.bits()
                                       | Self::REPORT_EVENT_TYPES.bits()
@@ -69,6 +71,33 @@ impl From<KeyboardModes> for TermMode {
         let report_associated_text = value.contains(KeyboardModes::REPORT_ASSOCIATED_TEXT);
         mode.set(TermMode::REPORT_ASSOCIATED_TEXT, report_associated_text);
 
+        mode
+    }
+}
+
+impl From<TermMode> for KeyboardModes {
+    fn from(value: TermMode) -> Self {
+        let mut mode = Self::empty();
+        mode.set(
+            KeyboardModes::DISAMBIGUATE_ESC_CODES,
+            value.contains(TermMode::DISAMBIGUATE_ESC_CODES),
+        );
+        mode.set(
+            KeyboardModes::REPORT_EVENT_TYPES,
+            value.contains(TermMode::REPORT_EVENT_TYPES),
+        );
+        mode.set(
+            KeyboardModes::REPORT_ALTERNATE_KEYS,
+            value.contains(TermMode::REPORT_ALTERNATE_KEYS),
+        );
+        mode.set(
+            KeyboardModes::REPORT_ALL_KEYS_AS_ESC,
+            value.contains(TermMode::REPORT_ALL_KEYS_AS_ESC),
+        );
+        mode.set(
+            KeyboardModes::REPORT_ASSOCIATED_TEXT,
+            value.contains(TermMode::REPORT_ASSOCIATED_TEXT),
+        );
         mode
     }
 }
@@ -170,6 +199,9 @@ impl<T> Term<T> {
         };
         trace!("Setting keyboard mode to {new_mode:?}");
         self.mode |= new_mode;
+        if let Some(top) = self.keyboard_mode_stack.last_mut() {
+            *top = KeyboardModes::from(new_mode);
+        }
     }
 }
 
@@ -181,11 +213,7 @@ impl<T: EventListener> Term<T> {
         }
 
         trace!("Reporting active keyboard mode");
-        let current_mode = self
-            .keyboard_mode_stack
-            .last()
-            .unwrap_or(&KeyboardModes::NO_MODE)
-            .bits();
+        let current_mode = KeyboardModes::from(self.mode).bits();
         let text = format!("\x1b[?{current_mode}u");
         self.event_proxy.send_event(Event::PtyWrite(text));
     }

@@ -1,7 +1,16 @@
 use crate::engine::term::TermMode;
 use gtk4::gdk::{Key, ModifierType};
 
-/// Translates a GTK key event into an ANSI byte sequence for the PTY using
+/// Key event transition type for the Kitty Keyboard Protocol (`REPORT_EVENT_TYPES`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum KeyEventType {
+    Press = 1,
+    Repeat = 2,
+    Release = 3,
+}
+
+/// Translates a GTK key press event into an ANSI byte sequence for the PTY using
 /// legacy xterm/VT100 encoding rules (with optional `APP_CURSOR` mode).
 pub fn translate_key(key: Key, modifiers: ModifierType, is_app_cursor: bool) -> Option<Vec<u8>> {
     let mut mode = TermMode::NONE;
@@ -11,27 +20,49 @@ pub fn translate_key(key: Key, modifiers: ModifierType, is_app_cursor: bool) -> 
     translate_key_with_mode(key, modifiers, mode)
 }
 
-/// Translates a GTK key event into an ANSI byte sequence for the PTY,
-/// respecting both legacy modes (`APP_CURSOR`) and the Kitty Keyboard Protocol
-/// (`DISAMBIGUATE_ESC_CODES`, `REPORT_ALL_KEYS_AS_ESC`).
+/// Translates a GTK key press event into an ANSI byte sequence for the PTY,
+/// respecting legacy modes (`APP_CURSOR`), `modifyOtherKeys`, and the Kitty Keyboard Protocol.
 pub fn translate_key_with_mode(
     key: Key,
     modifiers: ModifierType,
     mode: TermMode,
 ) -> Option<Vec<u8>> {
+    translate_key_event(key, modifiers, mode, KeyEventType::Press)
+}
+
+/// Translates a GTK key event (`Press`, `Repeat`, or `Release`) into an ANSI byte
+/// sequence for the PTY according to active `TermMode` flags.
+pub fn translate_key_event(
+    key: Key,
+    modifiers: ModifierType,
+    mode: TermMode,
+    event_type: KeyEventType,
+) -> Option<Vec<u8>> {
+    let report_events = mode.contains(TermMode::REPORT_EVENT_TYPES);
+    if event_type == KeyEventType::Release && !report_events {
+        return None;
+    }
+
     let mut bytes = Vec::new();
 
     let ctrl = modifiers.contains(ModifierType::CONTROL_MASK);
     let alt = modifiers.contains(ModifierType::ALT_MASK);
     let shift = modifiers.contains(ModifierType::SHIFT_MASK);
+    let super_mod = modifiers.intersects(ModifierType::SUPER_MASK | ModifierType::META_MASK);
     let is_app_cursor = mode.contains(TermMode::APP_CURSOR);
-    let kitty_disambiguate = mode
-        .intersects(TermMode::DISAMBIGUATE_ESC_CODES | TermMode::REPORT_ALL_KEYS_AS_ESC);
+    let kitty_disambiguate = mode.intersects(
+        TermMode::DISAMBIGUATE_ESC_CODES
+            | TermMode::REPORT_ALL_KEYS_AS_ESC
+            | TermMode::MODIFY_OTHER_KEYS_2,
+    );
     let kitty_all_esc = mode.contains(TermMode::REPORT_ALL_KEYS_AS_ESC);
+    let report_alt_keys = mode.contains(TermMode::REPORT_ALTERNATE_KEYS);
+    let report_assoc_text = mode.contains(TermMode::REPORT_ASSOCIATED_TEXT);
+    let needs_event_suffix = report_events && event_type != KeyEventType::Press;
 
-    // Standard modifier code: 1=none, 2=shift, 3=alt, 4=shift+alt, 5=ctrl, 6=shift+ctrl, 7=alt+ctrl, 8=shift+alt+ctrl
+    // Standard modifier code: 1=none, +1=shift, +2=alt, +4=ctrl, +8=super/meta
     let modifier_code = {
-        let mut code = 1;
+        let mut code = 1u8;
         if shift {
             code += 1;
         }
@@ -41,23 +72,61 @@ pub fn translate_key_with_mode(
         if ctrl {
             code += 4;
         }
+        if super_mod {
+            code += 8;
+        }
         code
     };
 
     let has_modifier = modifier_code > 1;
+    let format_mod_param = |mod_code: u8| -> String {
+        if needs_event_suffix {
+            format!("{}:{}", mod_code, event_type as u8)
+        } else if mod_code > 1 {
+            format!("{}", mod_code)
+        } else {
+            String::new()
+        }
+    };
+    let mod_param = format_mod_param(modifier_code);
 
-    // Prepend Esc for Alt if it's not a special CSI sequence
-    let prepend_esc = alt;
+    let encode_csi_u = |out: &mut Vec<u8>, key_code: u32, mod_str: &str| {
+        if mod_str.is_empty() {
+            out.extend_from_slice(format!("\x1b[{key_code}u").as_bytes());
+        } else {
+            out.extend_from_slice(format!("\x1b[{key_code};{mod_str}u").as_bytes());
+        }
+    };
+
+    let encode_csi_tilde = |out: &mut Vec<u8>, num: u8, mod_str: &str| {
+        if mod_str.is_empty() {
+            out.extend_from_slice(format!("\x1b[{num}~").as_bytes());
+        } else {
+            out.extend_from_slice(format!("\x1b[{num};{mod_str}~").as_bytes());
+        }
+    };
+
+    let encode_csi_letter =
+        |out: &mut Vec<u8>, letter: char, app_mode_ss3: bool, mod_str: &str| {
+            if !mod_str.is_empty() {
+                out.extend_from_slice(format!("\x1b[1;{mod_str}{letter}").as_bytes());
+            } else if app_mode_ss3 {
+                out.extend_from_slice(format!("\x1bO{letter}").as_bytes());
+            } else {
+                out.extend_from_slice(format!("\x1b[{letter}").as_bytes());
+            }
+        };
 
     // Handle special keys
     match key {
         Key::Return | Key::KP_Enter => {
-            if (kitty_disambiguate && (has_modifier || kitty_all_esc)) || shift || ctrl {
-                if has_modifier {
-                    bytes.extend_from_slice(format!("\x1b[13;{}u", modifier_code).as_bytes());
-                } else {
-                    bytes.extend_from_slice(b"\x1b[13u");
-                }
+            if (kitty_disambiguate && (has_modifier || kitty_all_esc))
+                || needs_event_suffix
+                || shift
+                || ctrl
+                || super_mod
+            {
+                encode_csi_u(&mut bytes, 13, &mod_param);
             } else {
                 if alt {
                     bytes.push(0x1b);
@@ -67,12 +136,11 @@ pub fn translate_key_with_mode(
             return Some(bytes);
         }
         Key::BackSpace => {
-            if kitty_disambiguate && (has_modifier || kitty_all_esc) {
-                if has_modifier {
-                    bytes.extend_from_slice(format!("\x1b[127;{}u", modifier_code).as_bytes());
-                } else {
-                    bytes.extend_from_slice(b"\x1b[127u");
-                }
+            if (kitty_disambiguate && (has_modifier || kitty_all_esc))
+                || needs_event_suffix
+                || super_mod
+            {
+                encode_csi_u(&mut bytes, 127, &mod_param);
             } else {
                 if alt {
                     bytes.push(0x1b);
@@ -86,19 +154,11 @@ pub fn translate_key_with_mode(
             return Some(bytes);
         }
         Key::Insert | Key::KP_Insert => {
-            if has_modifier {
-                bytes.extend_from_slice(format!("\x1b[2;{}~", modifier_code).as_bytes());
-            } else {
-                bytes.extend_from_slice(b"\x1b[2~");
-            }
+            encode_csi_tilde(&mut bytes, 2, &mod_param);
             return Some(bytes);
         }
         Key::Delete | Key::KP_Delete => {
-            if has_modifier {
-                bytes.extend_from_slice(format!("\x1b[3;{}~", modifier_code).as_bytes());
-            } else {
-                bytes.extend_from_slice(b"\x1b[3~");
-            }
+            encode_csi_tilde(&mut bytes, 3, &mod_param);
             return Some(bytes);
         }
         Key::Tab | Key::KP_Tab | Key::ISO_Left_Tab => {
@@ -107,13 +167,14 @@ pub fn translate_key_with_mode(
             let tab_mod_code = 1
                 + if tab_shift { 1 } else { 0 }
                 + if alt { 2 } else { 0 }
-                + if ctrl { 4 } else { 0 };
-            if kitty_disambiguate && (tab_mod_code > 1 || kitty_all_esc) {
-                if tab_mod_code > 1 {
-                    bytes.extend_from_slice(format!("\x1b[9;{}u", tab_mod_code).as_bytes());
-                } else {
-                    bytes.extend_from_slice(b"\x1b[9u");
-                }
+                + if ctrl { 4 } else { 0 }
+                + if super_mod { 8 } else { 0 };
+            let tab_mod_param = format_mod_param(tab_mod_code);
+            if (kitty_disambiguate && (tab_mod_code > 1 || kitty_all_esc))
+                || needs_event_suffix
+                || super_mod
+            {
+                encode_csi_u(&mut bytes, 9, &tab_mod_param);
             } else if tab_shift {
                 if alt {
                     bytes.push(0x1b);
@@ -128,12 +189,8 @@ pub fn translate_key_with_mode(
             return Some(bytes);
         }
         Key::Escape => {
-            if kitty_disambiguate {
-                if has_modifier {
-                    bytes.extend_from_slice(format!("\x1b[27;{}u", modifier_code).as_bytes());
-                } else {
-                    bytes.extend_from_slice(b"\x1b[27u");
-                }
+            if kitty_disambiguate || needs_event_suffix || super_mod {
+                encode_csi_u(&mut bytes, 27, &mod_param);
             } else {
                 if alt {
                     bytes.push(0x1b);
@@ -143,198 +200,182 @@ pub fn translate_key_with_mode(
             return Some(bytes);
         }
         Key::Up | Key::KP_Up => {
-            if has_modifier {
-                bytes.extend_from_slice(format!("\x1b[1;{}A", modifier_code).as_bytes());
-            } else if is_app_cursor {
-                bytes.extend_from_slice(b"\x1bOA");
-            } else {
-                bytes.extend_from_slice(b"\x1b[A");
-            }
+            encode_csi_letter(&mut bytes, 'A', is_app_cursor, &mod_param);
             return Some(bytes);
         }
         Key::Down | Key::KP_Down => {
-            if has_modifier {
-                bytes.extend_from_slice(format!("\x1b[1;{}B", modifier_code).as_bytes());
-            } else if is_app_cursor {
-                bytes.extend_from_slice(b"\x1bOB");
-            } else {
-                bytes.extend_from_slice(b"\x1b[B");
-            }
+            encode_csi_letter(&mut bytes, 'B', is_app_cursor, &mod_param);
             return Some(bytes);
         }
         Key::Right | Key::KP_Right => {
-            if has_modifier {
-                bytes.extend_from_slice(format!("\x1b[1;{}C", modifier_code).as_bytes());
-            } else if is_app_cursor {
-                bytes.extend_from_slice(b"\x1bOC");
-            } else {
-                bytes.extend_from_slice(b"\x1b[C");
-            }
+            encode_csi_letter(&mut bytes, 'C', is_app_cursor, &mod_param);
             return Some(bytes);
         }
         Key::Left | Key::KP_Left => {
-            if has_modifier {
-                bytes.extend_from_slice(format!("\x1b[1;{}D", modifier_code).as_bytes());
-            } else if is_app_cursor {
-                bytes.extend_from_slice(b"\x1bOD");
-            } else {
-                bytes.extend_from_slice(b"\x1b[D");
-            }
+            encode_csi_letter(&mut bytes, 'D', is_app_cursor, &mod_param);
             return Some(bytes);
         }
         Key::Home | Key::KP_Home => {
-            if has_modifier {
-                bytes.extend_from_slice(format!("\x1b[1;{}H", modifier_code).as_bytes());
-            } else if is_app_cursor {
-                bytes.extend_from_slice(b"\x1bOH");
-            } else {
-                bytes.extend_from_slice(b"\x1b[H");
-            }
+            encode_csi_letter(&mut bytes, 'H', is_app_cursor, &mod_param);
             return Some(bytes);
         }
         Key::End | Key::KP_End => {
-            if has_modifier {
-                bytes.extend_from_slice(format!("\x1b[1;{}F", modifier_code).as_bytes());
-            } else if is_app_cursor {
-                bytes.extend_from_slice(b"\x1bOF");
-            } else {
-                bytes.extend_from_slice(b"\x1b[F");
-            }
+            encode_csi_letter(&mut bytes, 'F', is_app_cursor, &mod_param);
             return Some(bytes);
         }
         Key::Page_Up | Key::KP_Page_Up => {
-            if has_modifier {
-                bytes.extend_from_slice(format!("\x1b[5;{}~", modifier_code).as_bytes());
-            } else {
-                bytes.extend_from_slice(b"\x1b[5~");
-            }
+            encode_csi_tilde(&mut bytes, 5, &mod_param);
             return Some(bytes);
         }
         Key::Page_Down | Key::KP_Page_Down => {
-            if has_modifier {
-                bytes.extend_from_slice(format!("\x1b[6;{}~", modifier_code).as_bytes());
-            } else {
-                bytes.extend_from_slice(b"\x1b[6~");
-            }
+            encode_csi_tilde(&mut bytes, 6, &mod_param);
             return Some(bytes);
         }
         Key::KP_Begin => {
-            if has_modifier {
-                bytes.extend_from_slice(format!("\x1b[1;{}E", modifier_code).as_bytes());
-            } else {
-                bytes.extend_from_slice(b"\x1b[E");
-            }
+            encode_csi_letter(&mut bytes, 'E', false, &mod_param);
             return Some(bytes);
         }
         Key::F1 => {
-            if has_modifier {
-                bytes.extend_from_slice(format!("\x1b[1;{}P", modifier_code).as_bytes());
-            } else {
-                bytes.extend_from_slice(b"\x1bOP");
-            }
+            encode_csi_letter(&mut bytes, 'P', true, &mod_param);
             return Some(bytes);
         }
         Key::F2 => {
-            if has_modifier {
-                bytes.extend_from_slice(format!("\x1b[1;{}Q", modifier_code).as_bytes());
-            } else {
-                bytes.extend_from_slice(b"\x1bOQ");
-            }
+            encode_csi_letter(&mut bytes, 'Q', true, &mod_param);
             return Some(bytes);
         }
         Key::F3 => {
-            if has_modifier {
-                bytes.extend_from_slice(format!("\x1b[1;{}R", modifier_code).as_bytes());
-            } else {
-                bytes.extend_from_slice(b"\x1bOR");
-            }
+            encode_csi_letter(&mut bytes, 'R', true, &mod_param);
             return Some(bytes);
         }
         Key::F4 => {
-            if has_modifier {
-                bytes.extend_from_slice(format!("\x1b[1;{}S", modifier_code).as_bytes());
-            } else {
-                bytes.extend_from_slice(b"\x1bOS");
-            }
+            encode_csi_letter(&mut bytes, 'S', true, &mod_param);
             return Some(bytes);
         }
         Key::F5 => {
-            if has_modifier {
-                bytes.extend_from_slice(format!("\x1b[15;{}~", modifier_code).as_bytes());
-            } else {
-                bytes.extend_from_slice(b"\x1b[15~");
-            }
+            encode_csi_tilde(&mut bytes, 15, &mod_param);
             return Some(bytes);
         }
         Key::F6 => {
-            if has_modifier {
-                bytes.extend_from_slice(format!("\x1b[17;{}~", modifier_code).as_bytes());
-            } else {
-                bytes.extend_from_slice(b"\x1b[17~");
-            }
+            encode_csi_tilde(&mut bytes, 17, &mod_param);
             return Some(bytes);
         }
         Key::F7 => {
-            if has_modifier {
-                bytes.extend_from_slice(format!("\x1b[18;{}~", modifier_code).as_bytes());
-            } else {
-                bytes.extend_from_slice(b"\x1b[18~");
-            }
+            encode_csi_tilde(&mut bytes, 18, &mod_param);
             return Some(bytes);
         }
         Key::F8 => {
-            if has_modifier {
-                bytes.extend_from_slice(format!("\x1b[19;{}~", modifier_code).as_bytes());
-            } else {
-                bytes.extend_from_slice(b"\x1b[19~");
-            }
+            encode_csi_tilde(&mut bytes, 19, &mod_param);
             return Some(bytes);
         }
         Key::F9 => {
-            if has_modifier {
-                bytes.extend_from_slice(format!("\x1b[20;{}~", modifier_code).as_bytes());
-            } else {
-                bytes.extend_from_slice(b"\x1b[20~");
-            }
+            encode_csi_tilde(&mut bytes, 20, &mod_param);
             return Some(bytes);
         }
         Key::F10 => {
-            if has_modifier {
-                bytes.extend_from_slice(format!("\x1b[21;{}~", modifier_code).as_bytes());
-            } else {
-                bytes.extend_from_slice(b"\x1b[21~");
-            }
+            encode_csi_tilde(&mut bytes, 21, &mod_param);
             return Some(bytes);
         }
         Key::F11 => {
-            if has_modifier {
-                bytes.extend_from_slice(format!("\x1b[23;{}~", modifier_code).as_bytes());
-            } else {
-                bytes.extend_from_slice(b"\x1b[23~");
-            }
+            encode_csi_tilde(&mut bytes, 23, &mod_param);
             return Some(bytes);
         }
         Key::F12 => {
-            if has_modifier {
-                bytes.extend_from_slice(format!("\x1b[24;{}~", modifier_code).as_bytes());
+            encode_csi_tilde(&mut bytes, 24, &mod_param);
+            return Some(bytes);
+        }
+        // Standalone modifier keys are only reported when REPORT_ALL_KEYS_AS_ESC (8) is active
+        Key::Shift_L | Key::Shift_R if kitty_all_esc => {
+            let code = if key == Key::Shift_L { 57441 } else { 57447 };
+            let m = if event_type == KeyEventType::Release {
+                modifier_code.saturating_sub(if shift { 1 } else { 0 })
+            } else if !shift {
+                modifier_code + 1
             } else {
-                bytes.extend_from_slice(b"\x1b[24~");
-            }
+                modifier_code
+            };
+            encode_csi_u(&mut bytes, code, &format_mod_param(m.max(1)));
+            return Some(bytes);
+        }
+        Key::Control_L | Key::Control_R if kitty_all_esc => {
+            let code = if key == Key::Control_L { 57442 } else { 57448 };
+            let m = if event_type == KeyEventType::Release {
+                modifier_code.saturating_sub(if ctrl { 4 } else { 0 })
+            } else if !ctrl {
+                modifier_code + 4
+            } else {
+                modifier_code
+            };
+            encode_csi_u(&mut bytes, code, &format_mod_param(m.max(1)));
+            return Some(bytes);
+        }
+        Key::Alt_L | Key::Alt_R if kitty_all_esc => {
+            let code = if key == Key::Alt_L { 57443 } else { 57449 };
+            let m = if event_type == KeyEventType::Release {
+                modifier_code.saturating_sub(if alt { 2 } else { 0 })
+            } else if !alt {
+                modifier_code + 2
+            } else {
+                modifier_code
+            };
+            encode_csi_u(&mut bytes, code, &format_mod_param(m.max(1)));
+            return Some(bytes);
+        }
+        Key::Super_L | Key::Super_R | Key::Meta_L | Key::Meta_R if kitty_all_esc => {
+            let code = if matches!(key, Key::Super_L | Key::Meta_L) {
+                57444
+            } else {
+                57450
+            };
+            let m = if event_type == KeyEventType::Release {
+                modifier_code.saturating_sub(if super_mod { 8 } else { 0 })
+            } else if !super_mod {
+                modifier_code + 8
+            } else {
+                modifier_code
+            };
+            encode_csi_u(&mut bytes, code, &format_mod_param(m.max(1)));
             return Some(bytes);
         }
         _ => {}
     }
 
-    // Handle printable characters and Control / Alt combinations
+    // Handle printable characters and Control / Alt / Super combinations
     if let Some(ch) = key.to_unicode() {
-        // Under Kitty Keyboard Protocol, disambiguate modified keys (Ctrl, Alt, or all keys in REPORT_ALL_KEYS_AS_ESC)
-        // using the lowercase/unshifted Unicode codepoint.
-        if (kitty_disambiguate && (ctrl || alt)) || kitty_all_esc {
-            let base_cp = ch.to_lowercase().next().unwrap_or(ch) as u32;
-            if has_modifier {
-                bytes.extend_from_slice(format!("\x1b[{};{}u", base_cp, modifier_code).as_bytes());
+        let use_csi_u = (kitty_disambiguate && (ctrl || alt || super_mod))
+            || (mode.contains(TermMode::MODIFY_OTHER_KEYS_1) && (ctrl || alt || super_mod))
+            || kitty_all_esc
+            || needs_event_suffix;
+
+        if use_csi_u {
+            let base_char = ch.to_lowercase().next().unwrap_or(ch);
+            let base_cp = base_char as u32;
+            let shifted_char = if shift && ch == base_char && ch.is_ascii_lowercase() {
+                ch.to_ascii_uppercase()
             } else {
-                bytes.extend_from_slice(format!("\x1b[{}u", base_cp).as_bytes());
+                ch
+            };
+            let shifted_cp = shifted_char as u32;
+
+            let key_field = if report_alt_keys && shift && shifted_cp != base_cp {
+                format!("{base_cp}:{shifted_cp}")
+            } else {
+                format!("{base_cp}")
+            };
+
+            let include_assoc_text = report_assoc_text
+                && event_type != KeyEventType::Release
+                && !ctrl
+                && !alt
+                && !super_mod;
+
+            if include_assoc_text {
+                bytes.extend_from_slice(
+                    format!("\x1b[{key_field};{mod_param};{shifted_cp}u").as_bytes(),
+                );
+            } else if !mod_param.is_empty() {
+                bytes.extend_from_slice(format!("\x1b[{key_field};{mod_param}u").as_bytes());
+            } else {
+                bytes.extend_from_slice(format!("\x1b[{key_field}u").as_bytes());
             }
             return Some(bytes);
         }
@@ -359,7 +400,7 @@ pub fn translate_key_with_mode(
                 return Some(bytes);
             }
         } else {
-            if prepend_esc {
+            if alt {
                 bytes.push(0x1b);
             }
             let mut b = [0; 4];
@@ -651,6 +692,92 @@ mod tests {
                 mode
             ),
             Some(b"\x1b[97;6u".to_vec())
+        );
+    }
+
+    #[test]
+    fn test_kitty_event_types_alternate_keys_and_associated_text() {
+        // 1. Key release is ignored when REPORT_EVENT_TYPES is not active
+        assert_eq!(
+            translate_key_event(
+                Key::a,
+                ModifierType::empty(),
+                TermMode::DISAMBIGUATE_ESC_CODES,
+                KeyEventType::Release
+            ),
+            None
+        );
+
+        // 2. Key release under DISAMBIGUATE_ESC_CODES | REPORT_EVENT_TYPES
+        let ev_mode = TermMode::DISAMBIGUATE_ESC_CODES | TermMode::REPORT_EVENT_TYPES;
+        assert_eq!(
+            translate_key_event(Key::a, ModifierType::empty(), ev_mode, KeyEventType::Release),
+            Some(b"\x1b[97;1:3u".to_vec())
+        );
+        assert_eq!(
+            translate_key_event(
+                Key::a,
+                ModifierType::CONTROL_MASK,
+                ev_mode,
+                KeyEventType::Release
+            ),
+            Some(b"\x1b[97;5:3u".to_vec())
+        );
+        assert_eq!(
+            translate_key_event(
+                Key::Up,
+                ModifierType::empty(),
+                ev_mode,
+                KeyEventType::Release
+            ),
+            Some(b"\x1b[1;1:3A".to_vec())
+        );
+        assert_eq!(
+            translate_key_event(
+                Key::Page_Up,
+                ModifierType::empty(),
+                ev_mode,
+                KeyEventType::Repeat
+            ),
+            Some(b"\x1b[5;1:2~".to_vec())
+        );
+
+        // 3. REPORT_ALTERNATE_KEYS (4) encodes base:shifted codepoints
+        let alt_mode = TermMode::DISAMBIGUATE_ESC_CODES | TermMode::REPORT_ALTERNATE_KEYS;
+        assert_eq!(
+            translate_key_with_mode(
+                Key::A,
+                ModifierType::CONTROL_MASK | ModifierType::SHIFT_MASK,
+                alt_mode
+            ),
+            Some(b"\x1b[97:65;6u".to_vec())
+        );
+
+        // 4. REPORT_ALL_KEYS_AS_ESC (8) | REPORT_ALTERNATE_KEYS (4) | REPORT_ASSOCIATED_TEXT (16)
+        let full_mode = TermMode::REPORT_ALL_KEYS_AS_ESC
+            | TermMode::REPORT_ALTERNATE_KEYS
+            | TermMode::REPORT_ASSOCIATED_TEXT;
+        assert_eq!(
+            translate_key_with_mode(Key::a, ModifierType::empty(), full_mode),
+            Some(b"\x1b[97;;97u".to_vec())
+        );
+        assert_eq!(
+            translate_key_with_mode(Key::A, ModifierType::SHIFT_MASK, full_mode),
+            Some(b"\x1b[97:65;2;65u".to_vec())
+        );
+
+        // 5. Super modifier bit (+8 -> modifier 9) and standalone modifier keys under REPORT_ALL_KEYS_AS_ESC
+        assert_eq!(
+            translate_key_with_mode(Key::k, ModifierType::SUPER_MASK, TermMode::DISAMBIGUATE_ESC_CODES),
+            Some(b"\x1b[107;9u".to_vec())
+        );
+        assert_eq!(
+            translate_key_with_mode(
+                Key::Shift_L,
+                ModifierType::empty(),
+                TermMode::REPORT_ALL_KEYS_AS_ESC
+            ),
+            Some(b"\x1b[57441;2u".to_vec())
         );
     }
 }

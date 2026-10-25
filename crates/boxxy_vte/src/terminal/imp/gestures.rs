@@ -477,9 +477,27 @@ impl super::TerminalWidget {
             obj,
             move |ctrl, key, _keycode, modifier| {
                 let imp = obj.imp();
-                if let Some(event) = ctrl.current_event() {
+                let term_mode = imp
+                    .backend
+                    .borrow()
+                    .as_ref()
+                    .map(|b| b.render_state.load().mode)
+                    .unwrap_or(crate::engine::term::TermMode::NONE);
+
+                if term_mode.contains(crate::engine::term::TermMode::REPORT_EVENT_TYPES)
+                    && let Some(backend) = imp.backend.borrow().as_ref()
+                    && let Some(bytes) = crate::terminal::input::translate_key_event(
+                        key,
+                        modifier,
+                        term_mode,
+                        crate::terminal::input::KeyEventType::Release,
+                    )
+                {
+                    backend.write_to_pty(bytes);
+                } else if let Some(event) = ctrl.current_event() {
                     imp.im_context.borrow().filter_keypress(&event);
                 }
+
                 if matches!(
                     key,
                     gtk4::gdk::Key::Control_L | gtk4::gdk::Key::Control_R
