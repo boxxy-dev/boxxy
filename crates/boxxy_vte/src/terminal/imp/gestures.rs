@@ -371,7 +371,34 @@ impl super::TerminalWidget {
                     obj.copy_clipboard();
                     return glib::Propagation::Stop;
                 }
-                if modifier.contains(gtk4::gdk::ModifierType::SHIFT_MASK) {
+                // Ctrl+Shift+PageUp/PageDown (and Ctrl+Shift+Up/Down when not bound at window level):
+                // jump between OSC 133 semantic prompts in scrollback
+                if modifier.contains(
+                    gtk4::gdk::ModifierType::CONTROL_MASK | gtk4::gdk::ModifierType::SHIFT_MASK,
+                ) && let Some(backend) = imp.backend.borrow().as_ref()
+                    && !backend.is_alt_screen()
+                {
+                    match key {
+                        gtk4::gdk::Key::Up
+                        | gtk4::gdk::Key::KP_Up
+                        | gtk4::gdk::Key::Page_Up
+                        | gtk4::gdk::Key::KP_Page_Up => {
+                            backend.scroll_to_prompt(crate::engine::index::Direction::Left);
+                            return glib::Propagation::Stop;
+                        }
+                        gtk4::gdk::Key::Down
+                        | gtk4::gdk::Key::KP_Down
+                        | gtk4::gdk::Key::Page_Down
+                        | gtk4::gdk::Key::KP_Page_Down => {
+                            backend.scroll_to_prompt(crate::engine::index::Direction::Right);
+                            return glib::Propagation::Stop;
+                        }
+                        _ => {}
+                    }
+                }
+                if modifier.contains(gtk4::gdk::ModifierType::SHIFT_MASK)
+                    && !modifier.contains(gtk4::gdk::ModifierType::CONTROL_MASK)
+                {
                     let scroll_op = match key {
                         gtk4::gdk::Key::Page_Up | gtk4::gdk::Key::KP_Page_Up => {
                             Some(Scroll::PageUp)
@@ -514,9 +541,15 @@ impl super::TerminalWidget {
         ));
         obj.add_controller(key_ctrl);
 
-        let scroll_ctrl = gtk4::EventControllerScroll::new(
-            gtk4::EventControllerScrollFlags::VERTICAL | gtk4::EventControllerScrollFlags::DISCRETE,
-        );
+        let scroll_ctrl =
+            gtk4::EventControllerScroll::new(gtk4::EventControllerScrollFlags::VERTICAL);
+        scroll_ctrl.connect_scroll_end(glib::clone!(
+            #[weak]
+            obj,
+            move |_| {
+                obj.imp().scroll_accumulator.set(0.0);
+            }
+        ));
         scroll_ctrl.connect_scroll(glib::clone!(
             #[weak]
             obj,
@@ -524,9 +557,35 @@ impl super::TerminalWidget {
             glib::Propagation::Proceed,
             move |ctrl, _dx, dy| {
                 let imp = obj.imp();
+                if dy == 0.0 {
+                    return glib::Propagation::Proceed;
+                }
                 if let Some(backend) = imp.backend.borrow().as_ref() {
                     let state = backend.render_state.load();
                     let modifiers = ctrl.current_event_state();
+
+                    // Convert high-resolution surface pixel deltas (Wayland touchpads) or
+                    // discrete wheel ticks into fractional terminal line counts.
+                    let (_, char_h) = imp.get_char_size(&obj);
+                    let raw_lines = if ctrl.unit() == gtk4::gdk::ScrollUnit::Surface {
+                        dy / char_h.max(1.0)
+                    } else {
+                        dy * 3.0
+                    };
+
+                    let mut acc = imp.scroll_accumulator.get();
+                    // Reset accumulator immediately when the user reverses scroll direction
+                    if (acc > 0.0 && raw_lines < 0.0) || (acc < 0.0 && raw_lines > 0.0) {
+                        acc = 0.0;
+                    }
+                    let total = acc + raw_lines;
+                    let whole_lines = total.trunc() as i32;
+                    imp.scroll_accumulator.set(total - (whole_lines as f64));
+
+                    if whole_lines == 0 {
+                        return glib::Propagation::Stop;
+                    }
+
                     if state
                         .mode
                         .intersects(crate::engine::term::TermMode::MOUSE_MODE)
@@ -540,15 +599,21 @@ impl super::TerminalWidget {
                             state.columns,
                             state.screen_lines,
                         );
-                        let button = if dy > 0.0 { 65 } else { 64 };
+                        let button = if whole_lines > 0 { 65 } else { 64 };
                         if let Some(seq) = format_mouse_report(
                             button, true, false, cell_x, cell_y, modifiers, state.mode,
                         ) {
+                            let ticks = if ctrl.unit() == gtk4::gdk::ScrollUnit::Surface {
+                                (whole_lines.unsigned_abs() as usize).clamp(1, 5)
+                            } else {
+                                1
+                            };
+                            let payload = seq.repeat(ticks);
                             backend
                                 .notifier
                                 .0
                                 .send(crate::engine::event_loop::Msg::Input(
-                                    std::borrow::Cow::Owned(seq),
+                                    std::borrow::Cow::Owned(payload),
                                 ))
                                 .ok();
                             return glib::Propagation::Stop;
@@ -562,10 +627,9 @@ impl super::TerminalWidget {
                             .mode
                             .contains(crate::engine::term::TermMode::ALTERNATE_SCROLL)
                         && !modifiers.contains(gtk4::gdk::ModifierType::SHIFT_MASK)
-                        && dy != 0.0
                     {
-                        let lines = ((dy.abs() * 3.0).round() as usize).clamp(1, 15);
-                        let step: &[u8] = if dy > 0.0 {
+                        let lines = (whole_lines.unsigned_abs() as usize).clamp(1, 15);
+                        let step: &[u8] = if whole_lines > 0 {
                             if state
                                 .mode
                                 .contains(crate::engine::term::TermMode::APP_CURSOR)
@@ -592,11 +656,11 @@ impl super::TerminalWidget {
                             .ok();
                         return glib::Propagation::Stop;
                     }
-                    let mut adj_dy = dy;
+                    let mut adj_lines = whole_lines;
                     if imp.invert_scroll.get() {
-                        adj_dy = -adj_dy;
+                        adj_lines = -adj_lines;
                     }
-                    let scroll_delta = Scroll::Delta((adj_dy * 3.0) as i32);
+                    let scroll_delta = Scroll::Delta(adj_lines);
                     if imp.mouse_pressed.get()
                         && let Some((mx, my)) = imp.mouse_pos.get()
                     {

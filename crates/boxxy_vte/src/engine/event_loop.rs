@@ -60,12 +60,14 @@ pub enum Msg {
 
     // RCU UI Actions
     Scroll(Scroll),
+    ScrollToPrompt(Direction),
     UpdateSelection(Option<Selection>),
     UpdateSelectionExt(Point, Side),
     UpdateSelectionViewport(usize, Column, Side),
     ScrollAndSelect(Scroll, usize, Column, Side),
     ClearSelection,
     CopySelection(ClipboardType),
+    CopyLastCommandOutput(ClipboardType),
     Search(String, Direction, bool),
     GetTextSnapshot(usize, usize, tokio::sync::oneshot::Sender<String>),
 }
@@ -262,6 +264,11 @@ where
                                     needs_render = true;
                                 }
                             },
+                            Ok(Msg::ScrollToPrompt(direction)) => {
+                                if self.terminal.scroll_to_prompt(direction) {
+                                    needs_render = true;
+                                }
+                            },
                             Ok(Msg::UpdateSelection(sel)) => {
                                 self.terminal.selection = sel;
                                 needs_render = true;
@@ -295,6 +302,12 @@ where
                                     self.event_proxy.send_event(Event::ClipboardStore(clipboard_type, text));
                                 } else {
                                     log::debug!("EventLoop: Copy requested but selection is empty");
+                                }
+                            },
+                            Ok(Msg::CopyLastCommandOutput(clipboard_type)) => {
+                                if let Some(text) = self.terminal.last_command_output() {
+                                    self.event_proxy
+                                        .send_event(Event::ClipboardStore(clipboard_type, text));
                                 }
                             },
                             Ok(Msg::Search(query, direction, case_insensitive)) => {

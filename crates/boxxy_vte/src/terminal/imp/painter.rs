@@ -805,7 +805,11 @@ impl super::TerminalWidget {
                     snapshot.restore();
                 }
 
-                // 3. Dynamic per-row overlays (Selection & Hover Underlines — never invalidate row cache)
+                // 3. Dynamic per-row overlays (Selection & Hover Underlines — never invalidate row cache).
+                // Note: `Flags::SEMANTIC_PROMPT` (OSC 133;A) is intentionally kept as an invisible
+                // semantic anchor (for prompt jumping, click-to-move, and Claw context) rather than
+                // drawing a left-margin bar, so it never clashes with prompt themes (Tide/Starship)
+                // that render box-drawing characters (`╭─`/`╰─`) at column 0.
                 if let Some(ref range) = selection_range
                     && grid_line >= range.start.line
                     && grid_line <= range.end.line

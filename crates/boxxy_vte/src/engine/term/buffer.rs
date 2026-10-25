@@ -6,7 +6,7 @@ use log::{debug, trace};
 use crate::engine::ansi::{Handler, KeyboardModes, KeyboardModesApplyBehavior};
 use crate::engine::event::{Event, EventListener};
 use crate::engine::grid::{Dimensions, Scroll};
-use crate::engine::index::{Column, Line, Point};
+use crate::engine::index::{Column, Direction, Line, Point};
 use crate::engine::selection::{Selection, SelectionRange, SelectionType};
 use crate::engine::term::cell::{Flags, LineLength};
 use crate::engine::term::{Term, TermMode};
@@ -31,6 +31,113 @@ impl<T> Term<T> {
         // Damage everything if display offset changed.
         if old_display_offset != self.grid().display_offset() {
             self.mark_fully_damaged();
+        }
+    }
+
+    /// Scroll the viewport to the previous (`Direction::Left`) or next (`Direction::Right`)
+    /// semantic prompt mark (`Flags::SEMANTIC_PROMPT`, emitted by `OSC 133;A`) in scrollback.
+    ///
+    /// Note: Like Ghostty and Kitty, `Flags::SEMANTIC_PROMPT` is kept strictly as an
+    /// invisible semantic anchor in the cell grid rather than painting a visible left-gutter
+    /// bar in `painter.rs`, avoiding visual collisions with modern prompt themes (e.g. Tide,
+    /// Starship, Powerlevel10k) that draw box-drawing connectors (`╭─`/`╰─`) at column 0.
+    /// Returns `true` if the viewport offset changed.
+    pub fn scroll_to_prompt(&mut self, direction: Direction) -> bool
+    where
+        T: EventListener,
+    {
+        if self.mode.contains(TermMode::ALT_SCREEN) || self.history_size() == 0 {
+            return false;
+        }
+
+        let topmost = self.topmost_line();
+        let current_offset = self.grid.display_offset();
+        let viewport_top = Line(-(current_offset as i32));
+
+        let row_has_prompt = |line: Line| -> bool {
+            self.grid[line][..]
+                .iter()
+                .any(|c| c.flags.contains(Flags::SEMANTIC_PROMPT))
+        };
+        let is_prompt_start = |line: Line| -> bool {
+            row_has_prompt(line) && (line <= topmost || !row_has_prompt(line - 1))
+        };
+
+        match direction {
+            Direction::Left => {
+                let mut line = viewport_top - 1;
+                while line >= topmost {
+                    if is_prompt_start(line) {
+                        let target_offset = (-line.0).clamp(0, self.history_size() as i32) as usize;
+                        let delta = target_offset as i32 - current_offset as i32;
+                        if delta != 0 {
+                            self.scroll_display(Scroll::Delta(delta));
+                            return true;
+                        }
+                        break;
+                    }
+                    line -= 1;
+                }
+                false
+            }
+            Direction::Right => {
+                if current_offset == 0 {
+                    return false;
+                }
+                let mut line = viewport_top + 1;
+                while line <= Line(0) {
+                    if is_prompt_start(line) {
+                        let target_offset = (-line.0).max(0) as usize;
+                        let delta = target_offset as i32 - current_offset as i32;
+                        if delta != 0 {
+                            self.scroll_display(Scroll::Delta(delta));
+                            return true;
+                        }
+                        break;
+                    }
+                    line += 1;
+                }
+                self.scroll_display(Scroll::Bottom);
+                self.grid.display_offset() != current_offset
+            }
+        }
+    }
+
+    /// Extract the text of the most recent command output block (`Flags::SEMANTIC_OUTPUT`,
+    /// bounded by `OSC 133;C` and `OSC 133;D`).
+    pub fn last_command_output(&self) -> Option<String> {
+        let topmost = self.topmost_line();
+        let bottommost = self.bottommost_line();
+
+        let row_has_output = |line: Line| -> bool {
+            self.grid[line][..]
+                .iter()
+                .any(|c| c.flags.contains(Flags::SEMANTIC_OUTPUT))
+        };
+
+        let mut end_line = None;
+        let mut line = bottommost;
+        while line >= topmost {
+            if row_has_output(line) {
+                end_line = Some(line);
+                break;
+            }
+            line -= 1;
+        }
+
+        let end_line = end_line?;
+        let mut start_line = end_line;
+        while start_line > topmost && row_has_output(start_line - 1) {
+            start_line -= 1;
+        }
+
+        let start = Point::new(start_line, Column(0));
+        let end = Point::new(end_line, self.last_column());
+        let text = self.bounds_to_string(start, end);
+        if text.trim().is_empty() {
+            None
+        } else {
+            Some(text)
         }
     }
 

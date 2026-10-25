@@ -343,6 +343,17 @@ impl TerminalBackend {
         let _ = self.notifier.0.send(Msg::Scroll(scroll));
     }
 
+    pub fn scroll_to_prompt(&self, direction: crate::engine::index::Direction) {
+        let _ = self.notifier.0.send(Msg::ScrollToPrompt(direction));
+    }
+
+    pub fn copy_last_command_output(&self, clipboard_type: crate::engine::term::ClipboardType) {
+        let _ = self
+            .notifier
+            .0
+            .send(Msg::CopyLastCommandOutput(clipboard_type));
+    }
+
     pub fn set_selection(&self, sel: Option<crate::engine::selection::Selection>) {
         let _ = self.notifier.0.send(Msg::UpdateSelection(sel));
     }

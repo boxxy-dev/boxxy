@@ -601,4 +601,47 @@ mod tests {
         assert!(!h.mode().contains(TermMode::GRAPHEME_CLUSTERING));
         assert_eq!(h.take_pty_writes(), vec!["\x1b[?2027;2$y"]);
     }
+
+    #[test]
+    fn prompt_jump_navigation_and_last_command_output_extraction() {
+        use crate::engine::index::Direction;
+
+        let mut h = HeadlessTerminal::new(40, 5);
+
+        // Emit 3 commands with OSC 133 A/B/C/D markers so earlier prompts scroll into history
+        for i in 1..=3 {
+            let seq = format!(
+                "\x1b]133;A\x07prompt-{i}$ \x1b]133;B\x07echo out-{i}\r\n\x1b]133;C\x07lineA-{i}\r\nlineB-{i}\r\n\x1b]133;D;0\x07"
+            );
+            h.feed(seq.as_bytes());
+        }
+        // Final idle prompt at bottom
+        h.feed(b"\x1b]133;A\x07prompt-4$ \x1b]133;B\x07");
+
+        // Last command output should be the output block of command 3
+        assert_eq!(
+            h.term.last_command_output().as_deref(),
+            Some("lineA-3\nlineB-3")
+        );
+
+        // Initially at bottom (display_offset == 0)
+        assert_eq!(h.term.grid().display_offset(), 0);
+
+        // Jump to previous prompt (prompt-3 -> prompt-2 -> prompt-1)
+        assert!(h.term.scroll_to_prompt(Direction::Left));
+        let offset_first = h.term.grid().display_offset();
+        assert!(offset_first > 0);
+        assert!(h.render_state().cells[0..40].iter().any(|c| c.c == 'p'));
+
+        assert!(h.term.scroll_to_prompt(Direction::Left));
+        let offset_second = h.term.grid().display_offset();
+        assert!(offset_second > offset_first);
+
+        // Jump forward (Direction::Right) back toward the bottom
+        assert!(h.term.scroll_to_prompt(Direction::Right));
+        assert_eq!(h.term.grid().display_offset(), offset_first);
+
+        assert!(h.term.scroll_to_prompt(Direction::Right));
+        assert_eq!(h.term.grid().display_offset(), 0);
+    }
 }

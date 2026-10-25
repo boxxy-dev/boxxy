@@ -53,6 +53,24 @@ impl TerminalWidget {
         self.imp().copy_clipboard();
     }
 
+    pub fn copy_last_command_output(&self) {
+        if let Some(backend) = self.imp().backend.borrow().as_ref() {
+            backend.copy_last_command_output(crate::engine::term::ClipboardType::Clipboard);
+        }
+    }
+
+    pub fn scroll_to_prev_prompt(&self) {
+        if let Some(backend) = self.imp().backend.borrow().as_ref() {
+            backend.scroll_to_prompt(crate::engine::index::Direction::Left);
+        }
+    }
+
+    pub fn scroll_to_next_prompt(&self) {
+        if let Some(backend) = self.imp().backend.borrow().as_ref() {
+            backend.scroll_to_prompt(crate::engine::index::Direction::Right);
+        }
+    }
+
     pub fn paste_clipboard(&self) {
         self.imp().paste_clipboard();
     }
