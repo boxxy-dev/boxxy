@@ -39,7 +39,7 @@ bitflags! {
         const REPORT_ALTERNATE_KEYS   = 1 << 20;
         const REPORT_ALL_KEYS_AS_ESC  = 1 << 21;
         const REPORT_ASSOCIATED_TEXT  = 1 << 22;
-        const CLICK_REPORT            = 1 << 23;
+        const COLOR_SCHEME_UPDATES    = 1 << 23;
         const MOUSE_MODE              = Self::MOUSE_REPORT_CLICK.bits() | Self::MOUSE_MOTION.bits() | Self::MOUSE_DRAG.bits();
         const KITTY_KEYBOARD_PROTOCOL = Self::DISAMBIGUATE_ESC_CODES.bits()
                                       | Self::REPORT_EVENT_TYPES.bits()
@@ -294,10 +294,8 @@ impl<T: EventListener> Term<T> {
                 self.event_proxy.send_event(Event::CursorBlinkingChange);
             }
             NamedPrivateMode::SyncUpdate => (),
-            NamedPrivateMode::ClickReport => {
-                self.mode.remove(TermMode::MOUSE_MODE);
-                self.mode.insert(TermMode::CLICK_REPORT);
-                self.event_proxy.send_event(Event::MouseCursorDirty);
+            NamedPrivateMode::ColorSchemeUpdates => {
+                self.mode.insert(TermMode::COLOR_SCHEME_UPDATES);
             }
         }
     }
@@ -350,9 +348,8 @@ impl<T: EventListener> Term<T> {
                 self.event_proxy.send_event(Event::CursorBlinkingChange);
             }
             NamedPrivateMode::SyncUpdate => (),
-            NamedPrivateMode::ClickReport => {
-                self.mode.remove(TermMode::CLICK_REPORT);
-                self.event_proxy.send_event(Event::MouseCursorDirty);
+            NamedPrivateMode::ColorSchemeUpdates => {
+                self.mode.remove(TermMode::COLOR_SCHEME_UPDATES);
             }
         }
     }
@@ -400,7 +397,9 @@ impl<T: EventListener> Term<T> {
                 }
                 NamedPrivateMode::SyncUpdate => ModeState::Reset,
                 NamedPrivateMode::ColumnMode => ModeState::NotSupported,
-                NamedPrivateMode::ClickReport => self.mode.contains(TermMode::CLICK_REPORT).into(),
+                NamedPrivateMode::ColorSchemeUpdates => {
+                    self.mode.contains(TermMode::COLOR_SCHEME_UPDATES).into()
+                }
             },
             PrivateMode::Unknown(_) => ModeState::NotSupported,
         };

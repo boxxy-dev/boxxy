@@ -476,9 +476,8 @@ impl RenderState {
     }
 
     pub fn calculate_navigation_sequence(&self, point: Point) -> Option<String> {
-        // Only fires when the shell has explicitly advertised cl=line support via OSC 133;A.
-        // CLICK_REPORT (mode 2031) is handled upstream in the GTK click handler — fish moves
-        // its own cursor via SGR mouse events and must never receive arrow sequences here.
+        // Only fires when the shell has explicitly advertised cl=line (or click_events=1)
+        // support via OSC 133;A, and no foreground command is currently executing (OSC 133;C).
         let cl_mode_str = self.cl_mode.as_deref()?;
         if !cl_mode_str.split(',').any(|m| m == "line") {
             debug!("nav: not line mode, cl_mode={:?}", self.cl_mode);

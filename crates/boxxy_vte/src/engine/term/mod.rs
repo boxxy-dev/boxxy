@@ -28,6 +28,7 @@ pub mod search;
 #[cfg(test)]
 mod tests;
 
+pub use self::handler::{color_scheme_report, is_dark_rgb};
 pub use self::modes::{ClipboardType, TermMode};
 pub use self::render_state::{RenderState, RenderableContent, RenderableCursor};
 

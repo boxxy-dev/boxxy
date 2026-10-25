@@ -9,6 +9,56 @@ const AUTOSCROLL_INTERVAL_MS: u64 = 25;
 const AUTOSCROLL_MAX_LINES_PER_TICK: i32 = 12;
 
 impl super::TerminalWidget {
+    /// Update the hover state (OSC 8 hyperlink, Ctrl+hover regex match, and pointer cursor)
+    /// at widget pixel coordinates `(x, y)` with `modifiers`.
+    /// Only triggers a widget redraw if the active hover underline span actually changes.
+    pub(super) fn update_hover_state(
+        &self,
+        widget: &crate::terminal::TerminalWidget,
+        x: f64,
+        y: f64,
+        modifiers: gtk4::gdk::ModifierType,
+    ) {
+        let is_ctrl = modifiers.contains(gtk4::gdk::ModifierType::CONTROL_MASK);
+        let hovered_uri = widget.check_hyperlink_at(x, y);
+        let is_osclink = hovered_uri.is_some();
+
+        // Only run regex row matching when Control is held and not already on an OSC 8 link.
+        let next_regex_bounds = if is_ctrl && !is_osclink {
+            let (_, _, bounds) = widget.check_match_at(x, y);
+            bounds
+        } else {
+            None
+        };
+
+        let mut needs_redraw = false;
+        if *self.hovered_hyperlink.borrow() != hovered_uri {
+            self.hovered_hyperlink.replace(hovered_uri);
+            needs_redraw = true;
+        }
+        if self.hovered_regex_match.get() != next_regex_bounds {
+            self.hovered_regex_match.set(next_regex_bounds);
+            needs_redraw = true;
+        }
+        if needs_redraw {
+            widget.queue_draw();
+        }
+
+        if !self.pointer_hidden_by_typing.get() {
+            let is_link = is_osclink || next_regex_bounds.is_some();
+            widget.set_cursor_from_name(Some(if is_link { "pointer" } else { "text" }));
+        }
+    }
+
+    #[inline]
+    fn hide_pointer_on_typing(&self, widget: &crate::terminal::TerminalWidget) {
+        if self.mouse_autohide.get()
+            && self.mouse_pos.get().is_some()
+            && !self.pointer_hidden_by_typing.replace(true)
+        {
+            widget.set_cursor_from_name(Some("none"));
+        }
+    }
     /// Convert widget pixel coordinates `(x, y)` into clamped `(col, row)` grid indices.
     #[inline]
     pub(super) fn pixel_to_cell(
@@ -231,10 +281,12 @@ impl super::TerminalWidget {
             #[weak]
             obj,
             move |_, text| {
-                if let Some(backend) = obj.imp().backend.borrow().as_ref() {
-                    if !backend.is_alt_screen() {
+                let imp = obj.imp();
+                if let Some(backend) = imp.backend.borrow().as_ref() {
+                    if !backend.is_alt_screen() && imp.scroll_on_keystroke.get() {
                         backend.scroll_display(Scroll::Bottom);
                     }
+                    imp.hide_pointer_on_typing(&obj);
                     backend.write_to_pty(text.as_bytes().to_vec());
                 }
             }
@@ -394,23 +446,52 @@ impl super::TerminalWidget {
                     // Reset IM context so we don't have partial dead key state.
                     imp.im_context.borrow().reset();
 
-                    if !backend.is_alt_screen() {
+                    if !backend.is_alt_screen() && imp.scroll_on_keystroke.get() {
                         backend.scroll_display(Scroll::Bottom);
                     }
+                    imp.hide_pointer_on_typing(&obj);
                     backend.write_to_pty(bytes);
                     return glib::Propagation::Stop;
                 }
+
+                // If Control was pressed while the pointer is hovering over the terminal,
+                // refresh Ctrl+hover regex link highlighting immediately.
+                if matches!(
+                    key,
+                    gtk4::gdk::Key::Control_L | gtk4::gdk::Key::Control_R
+                ) && let Some((mx, my)) = imp.mouse_pos.get()
+                {
+                    imp.update_hover_state(
+                        &obj,
+                        mx,
+                        my,
+                        modifier | gtk4::gdk::ModifierType::CONTROL_MASK,
+                    );
+                }
+
                 glib::Propagation::Proceed
             }
         ));
         key_ctrl.connect_key_released(glib::clone!(
             #[weak]
             obj,
-            move |ctrl, _key, _keycode, _modifier| {
+            move |ctrl, key, _keycode, modifier| {
                 let imp = obj.imp();
-                imp.im_context
-                    .borrow()
-                    .filter_keypress(&ctrl.current_event().unwrap());
+                if let Some(event) = ctrl.current_event() {
+                    imp.im_context.borrow().filter_keypress(&event);
+                }
+                if matches!(
+                    key,
+                    gtk4::gdk::Key::Control_L | gtk4::gdk::Key::Control_R
+                ) && let Some((mx, my)) = imp.mouse_pos.get()
+                {
+                    imp.update_hover_state(
+                        &obj,
+                        mx,
+                        my,
+                        modifier & !gtk4::gdk::ModifierType::CONTROL_MASK,
+                    );
+                }
             }
         ));
         obj.add_controller(key_ctrl);
@@ -685,27 +766,7 @@ impl super::TerminalWidget {
                         }
                         return;
                     }
-                    let had_selection = backend.has_selection();
                     imp.finish_selection_drag();
-                    if !had_selection
-                        && state
-                            .mode
-                            .contains(crate::engine::term::TermMode::CLICK_REPORT)
-                        && !modifiers.contains(gtk4::gdk::ModifierType::SHIFT_MASK)
-                        && gesture.current_button() == 1
-                    {
-                        let press = format!("\x1b[<0;{};{}M", col + 1, row + 1);
-                        let release = format!("\x1b[<0;{};{}m", col + 1, row + 1);
-                        let report = press + &release;
-                        backend
-                            .notifier
-                            .0
-                            .send(crate::engine::event_loop::Msg::Input(
-                                std::borrow::Cow::Owned(report.into_bytes()),
-                            ))
-                            .ok();
-                        backend.set_selection(None);
-                    }
                 } else {
                     imp.finish_selection_drag();
                 }
@@ -812,30 +873,9 @@ impl super::TerminalWidget {
                         }
                     }
                 } else {
-                    let is_ctrl = modifiers.contains(gtk4::gdk::ModifierType::CONTROL_MASK);
-
-                    let is_osclink = obj.check_hyperlink_at(x, y).is_some();
-                    let (regex_text, _, regex_bounds) = obj.check_match_at(x, y);
-
-                    // We only highlight regex matches when Control is held (performance & UX)
-                    if is_ctrl && regex_text.is_some() {
-                        if obj.imp().hovered_regex_match.get() != regex_bounds {
-                            obj.imp().hovered_regex_match.set(regex_bounds);
-                            obj.queue_draw();
-                        }
-                    } else if obj.imp().hovered_regex_match.get().is_some() {
-                        obj.imp().hovered_regex_match.set(None);
-                        obj.queue_draw();
-                    }
-
-                    let is_link = is_osclink || (is_ctrl && regex_text.is_some());
-
-                    if obj.imp().mouse_pos.get() != Some((x, y)) {
-                        obj.imp().mouse_pos.set(Some((x, y)));
-                        obj.queue_draw();
-                    }
-
-                    obj.set_cursor_from_name(Some(if is_link { "pointer" } else { "text" }));
+                    imp.mouse_pos.set(Some((x, y)));
+                    imp.pointer_hidden_by_typing.set(false);
+                    imp.update_hover_state(&obj, x, y, modifiers);
                 }
             }
         ));
@@ -845,12 +885,16 @@ impl super::TerminalWidget {
             move |_| {
                 obj.set_cursor(None);
                 let imp = obj.imp();
+                imp.pointer_hidden_by_typing.set(false);
                 if !imp.mouse_pressed.get() {
                     imp.mouse_pos.set(None);
                 }
                 imp.last_mouse_cell.set(None);
-                imp.hovered_regex_match.set(None);
-                obj.queue_draw();
+                let had_hyperlink = imp.hovered_hyperlink.replace(None).is_some();
+                let had_regex = imp.hovered_regex_match.replace(None).is_some();
+                if had_hyperlink || had_regex {
+                    obj.queue_draw();
+                }
             }
         ));
         obj.add_controller(motion_ctrl);

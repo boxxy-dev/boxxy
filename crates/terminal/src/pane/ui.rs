@@ -29,9 +29,8 @@ pub(super) fn build_ui() -> (
     terminal.set_vexpand(true);
     terminal.set_cursor_blink_mode(true);
     terminal.set_mouse_autohide(true);
-    terminal.set_scroll_on_output(true);
+    terminal.set_scroll_on_output(false);
     terminal.set_scroll_on_keystroke(true);
-    terminal.set_enable_sixel(true);
 
     scrolled_window.set_child(Some(&terminal));
     widget.set_child(Some(&scrolled_window));

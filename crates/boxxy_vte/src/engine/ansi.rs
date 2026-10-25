@@ -546,6 +546,9 @@ pub trait Handler {
     /// Report device status.
     fn device_status(&mut self, _: usize) {}
 
+    /// Report private device status (`CSI ? Ps n`, e.g. `CSI ? 996 n` color scheme query).
+    fn private_device_status(&mut self, _: usize) {}
+
     /// Move cursor forward `cols`.
     fn move_forward(&mut self, _col: usize) {}
 
@@ -937,7 +940,7 @@ impl PrivateMode {
             1049 => Self::Named(NamedPrivateMode::SwapScreenAndSetRestoreCursor),
             2004 => Self::Named(NamedPrivateMode::BracketedPaste),
             2026 => Self::Named(NamedPrivateMode::SyncUpdate),
-            2031 => Self::Named(NamedPrivateMode::ClickReport),
+            2031 => Self::Named(NamedPrivateMode::ColorSchemeUpdates),
             _ => Self::Unknown(mode),
         }
     }
@@ -989,7 +992,8 @@ pub enum NamedPrivateMode {
     BracketedPaste = 2004,
     /// The mode is handled automatically by [`Processor`].
     SyncUpdate = 2026,
-    ClickReport = 2031,
+    /// Dark/light color scheme change notifications (`DECSET 2031`).
+    ColorSchemeUpdates = 2031,
 }
 
 /// Mode for clearing line.
@@ -1384,11 +1388,16 @@ where
                     let mut cl = None;
                     if params.len() >= 3 {
                         for param in &params[2..] {
-                            if let Ok(s) = str::from_utf8(param)
-                                && let Some(val) = s.strip_prefix("cl=")
-                            {
-                                cl = Some(val.to_string());
-                                break;
+                            if let Ok(s) = str::from_utf8(param) {
+                                if let Some(val) = s.strip_prefix("cl=") {
+                                    cl = Some(val.to_string());
+                                    break;
+                                } else if s == "click_events=1" {
+                                    // Fish 3.6+/4.x emits `click_events=1` on OSC 133;A to
+                                    // request prompt click-to-move-cursor behavior.
+                                    cl = Some(String::from("line"));
+                                    break;
+                                }
                             }
                         }
                     }
@@ -1797,6 +1806,7 @@ where
                 }
             }
             ('n', []) => handler.device_status(next_param_or(0) as usize),
+            ('n', [b'?']) => handler.private_device_status(next_param_or(0) as usize),
             ('P', []) => handler.delete_chars(next_param_or(1) as usize),
             ('p', [b'$']) => {
                 let mode = next_param_or(0);

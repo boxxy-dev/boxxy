@@ -73,7 +73,12 @@ pub struct TerminalWidget {
     pub last_selection_point:
         Cell<Option<(usize, crate::engine::index::Column, crate::engine::index::Side)>>,
     pub autoscroll_source_id: RefCell<Option<glib::SourceId>>,
+    pub hovered_hyperlink: RefCell<Option<String>>,
     pub hovered_regex_match: Cell<Option<(usize, usize, usize)>>, // (row, start_col, end_col)
+    pub mouse_autohide: Cell<bool>,
+    pub pointer_hidden_by_typing: Cell<bool>,
+    pub scroll_on_keystroke: Cell<bool>,
+    pub scroll_on_output: Cell<bool>,
     pub title_callback: RefCell<Option<TitleCallback>>,
     pub cwd_callback: RefCell<Option<CwdCallback>>,
     pub progress_callback: RefCell<Option<ProgressCallback>>,
@@ -132,7 +137,12 @@ impl Default for TerminalWidget {
             selection_dragged: Cell::new(false),
             last_selection_point: Cell::new(None),
             autoscroll_source_id: RefCell::new(None),
+            hovered_hyperlink: RefCell::new(None),
             hovered_regex_match: Cell::new(None),
+            mouse_autohide: Cell::new(true),
+            pointer_hidden_by_typing: Cell::new(false),
+            scroll_on_keystroke: Cell::new(true),
+            scroll_on_output: Cell::new(false),
             next_match_tag: Cell::new(1),
             title_callback: RefCell::new(None),
             cwd_callback: RefCell::new(None),
@@ -310,6 +320,13 @@ impl TerminalWidget {
                         Event::Wakeup => {
                             if let Some(backend) = widget.imp().backend.borrow().as_ref() {
                                 backend.clear_pending_wakeups();
+                                if widget.imp().scroll_on_output.get()
+                                    && !widget.imp().mouse_pressed.get()
+                                    && !backend.is_alt_screen()
+                                    && backend.render_state.load().display_offset > 0
+                                {
+                                    backend.scroll_display(crate::engine::grid::Scroll::Bottom);
+                                }
                             }
                             widget.queue_draw();
                             widget.update_scroll_adjustment();

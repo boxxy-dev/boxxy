@@ -1,4 +1,5 @@
 pub mod backend;
+pub mod headless;
 mod imp;
 pub mod input;
 
@@ -152,10 +153,21 @@ impl TerminalWidget {
             source_id.remove();
         }
     }
-    pub fn set_mouse_autohide(&self, _autohide: bool) {}
-    pub fn set_scroll_on_output(&self, _scroll: bool) {}
-    pub fn set_scroll_on_keystroke(&self, _scroll: bool) {}
-    pub fn set_enable_sixel(&self, _enable: bool) {}
+    pub fn set_mouse_autohide(&self, autohide: bool) {
+        let imp = self.imp();
+        imp.mouse_autohide.set(autohide);
+        if !autohide && imp.pointer_hidden_by_typing.replace(false) {
+            self.set_cursor_from_name(Some("text"));
+        }
+    }
+
+    pub fn set_scroll_on_output(&self, scroll: bool) {
+        self.imp().scroll_on_output.set(scroll);
+    }
+
+    pub fn set_scroll_on_keystroke(&self, scroll: bool) {
+        self.imp().scroll_on_keystroke.set(scroll);
+    }
     /// Enable OSC 8 hyperlink support and register the built-in URL / path
     /// matchers so that `check_match_at` works without any extra setup.
     pub fn set_allow_hyperlink(&self, allow: bool) {
@@ -250,8 +262,33 @@ impl TerminalWidget {
         palette: &[&gtk4::gdk::RGBA],
     ) {
         let imp = self.imp();
+        let prev_bg = *imp.bg_color.borrow();
         imp.fg_color.replace(fg.copied());
         imp.bg_color.replace(bg.copied());
+
+        // If the application subscribed to DECSET 2031 (Color Scheme Updates) and the
+        // background luminance crossed the dark/light threshold, notify the PTY live.
+        if let Some(new_bg) = bg {
+            let to_rgb = |rgba: gtk4::gdk::RGBA| crate::engine::ansi::Rgb {
+                r: (rgba.red() * 255.0).round() as u8,
+                g: (rgba.green() * 255.0).round() as u8,
+                b: (rgba.blue() * 255.0).round() as u8,
+            };
+            let new_rgb = to_rgb(*new_bg);
+            let new_dark = crate::engine::term::is_dark_rgb(new_rgb);
+            let prev_dark = prev_bg.map(|p| crate::engine::term::is_dark_rgb(to_rgb(p)));
+            if prev_dark != Some(new_dark)
+                && let Some(backend) = imp.backend.borrow().as_ref()
+                && backend
+                    .render_state
+                    .load()
+                    .mode
+                    .contains(crate::engine::term::TermMode::COLOR_SCHEME_UPDATES)
+            {
+                let report = crate::engine::term::color_scheme_report(new_rgb);
+                backend.write_to_pty(report.as_bytes().to_vec());
+            }
+        }
 
         // ── Pre-compute the full 256-color palette ───────────────────────────
         // We generate the entire XTerm-compatible color space ahead of time.
@@ -351,11 +388,8 @@ impl TerminalWidget {
     // ── Regex match detection ─────────────────────────────────────────────────
 
     /// Return the regex-matched text at pixel position `(x, y)` together with
-    /// the tag ID of the rule that matched, or `(None, 0)` if no rule matched.
-    ///
-    /// Matching is performed against the full text of the visible grid row.
-    /// For ASCII-dominant content (URLs, file paths) the column-to-byte
-    /// mapping is 1-to-1.
+    /// the tag ID of the rule that matched and its `(row, start_col, end_col)`
+    /// span, or `(None, 0, None)` if no rule matched.
     pub fn check_match_at(
         &self,
         x: f64,
@@ -382,55 +416,14 @@ impl TerminalWidget {
         }
         let (col, row) = (col as usize, row as usize);
 
-        let display_offset = state.display_offset;
-        let grid_line = Line(row as i32 - display_offset);
-
-        // Build a String from the grid row while tracking which byte offset
-        // corresponds to each column.  Wide-char spacer cells emit a space so
-        // that the byte→column mapping stays 1-to-1 for ASCII content.
-        let mut line_text = String::with_capacity(state.columns);
-        let mut col_byte_offsets: Vec<usize> = Vec::with_capacity(state.columns + 1);
-
-        for c in 0..state.columns {
-            col_byte_offsets.push(line_text.len());
-            let ch = state.cell(Point::new(grid_line, Column(c))).c;
-            // Null / wide-char spacer cells → space, keeps offset table aligned
-            line_text.push(if ch == '\0' { ' ' } else { ch });
-        }
-        col_byte_offsets.push(line_text.len()); // sentinel
-
-        let cursor_byte = col_byte_offsets
-            .get(col)
-            .copied()
-            .unwrap_or(line_text.len());
+        let row_start = row * state.columns;
+        let row_end = row_start + state.columns;
+        let Some(row_cells) = state.cells.get(row_start..row_end) else {
+            return (None, 0, None);
+        };
 
         let rules = imp.match_rules.borrow();
-        for rule in rules.iter() {
-            for m in rule.regex.find_iter(&line_text) {
-                if cursor_byte >= m.start() && cursor_byte < m.end() {
-                    let start_col = col_byte_offsets
-                        .iter()
-                        .position(|&b| b >= m.start())
-                        .unwrap_or(0);
-                    // trim trailing whitespace from the end byte index too
-                    let trimmed_str = m.as_str().trim_end();
-                    let trimmed_end = m.start() + trimmed_str.len();
-
-                    let end_col = col_byte_offsets
-                        .iter()
-                        .position(|&b| b >= trimmed_end)
-                        .unwrap_or(state.columns);
-
-                    return (
-                        Some(trimmed_str.to_string()),
-                        rule.id,
-                        Some((row, start_col, end_col)),
-                    );
-                }
-            }
-        }
-
-        (None, 0, None)
+        match_row_cells(row_cells, row, col, &rules)
     }
 
     // ── Regex rule registration ───────────────────────────────────────────────
@@ -480,12 +473,6 @@ impl TerminalWidget {
         if let Some(rule) = rules.iter_mut().find(|r| r.id == tag) {
             rule.cursor_name = name.to_string();
         }
-    }
-
-    /// VTE-compat stub — VTE `Regex` objects cannot be used without `vte4`.
-    /// Use `add_match_regex_str` instead.
-    pub fn match_add_regex(&self, _regex: &glib::Object, _flags: u32) -> i32 {
-        0
     }
 
     // ── Terminal event callbacks ──────────────────────────────────────────────
@@ -725,4 +712,80 @@ impl Default for TerminalWidget {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Pure helper that matches regex rules against a single row of `Cell`s and maps
+/// UTF-8 byte offsets back to terminal column indices, accurately handling
+/// wide characters (`WIDE_CHAR` + `WIDE_CHAR_SPACER`) and combining marks (`zerowidth`).
+pub(crate) fn match_row_cells(
+    row_cells: &[crate::engine::term::cell::Cell],
+    row: usize,
+    col: usize,
+    rules: &[imp::MatchRule],
+) -> (Option<String>, i32, Option<(usize, usize, usize)>) {
+    use crate::engine::term::cell::Flags;
+
+    let cols = row_cells.len();
+    if col >= cols || rules.is_empty() {
+        return (None, 0, None);
+    }
+
+    let mut line_text = String::with_capacity(cols);
+    let mut byte_to_col: Vec<usize> = Vec::with_capacity(cols + 1);
+
+    for (c, cell) in row_cells.iter().enumerate() {
+        if cell
+            .flags
+            .intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER)
+        {
+            // Wide-char spacer cells do not emit a separate character in the logical string.
+            continue;
+        }
+        let start_byte = line_text.len();
+        line_text.push(if cell.c == '\0' { ' ' } else { cell.c });
+        if let Some(zw) = cell.zerowidth() {
+            for &ch in zw {
+                line_text.push(ch);
+            }
+        }
+        let end_byte = line_text.len();
+        byte_to_col.resize(end_byte, c);
+        if end_byte == start_byte {
+            byte_to_col.push(c);
+        }
+    }
+    byte_to_col.push(cols); // sentinel
+
+    for rule in rules {
+        for m in rule.regex.find_iter(&line_text) {
+            let trimmed_str = m.as_str().trim_end();
+            if trimmed_str.is_empty() {
+                continue;
+            }
+            let trimmed_end = m.start() + trimmed_str.len();
+            let start_col = byte_to_col.get(m.start()).copied().unwrap_or(0);
+            let last_col = byte_to_col
+                .get(trimmed_end.saturating_sub(1))
+                .copied()
+                .unwrap_or(cols.saturating_sub(1));
+            let end_col = if row_cells
+                .get(last_col)
+                .is_some_and(|cell| cell.flags.contains(Flags::WIDE_CHAR))
+            {
+                (last_col + 2).min(cols)
+            } else {
+                (last_col + 1).min(cols)
+            };
+
+            if col >= start_col && col < end_col {
+                return (
+                    Some(trimmed_str.to_string()),
+                    rule.id,
+                    Some((row, start_col, end_col)),
+                );
+            }
+        }
+    }
+
+    (None, 0, None)
 }

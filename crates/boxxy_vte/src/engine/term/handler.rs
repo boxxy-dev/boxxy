@@ -38,6 +38,23 @@ pub(super) fn version_number(mut version: &str) -> usize {
     version_number
 }
 
+/// Returns `true` if `color` has a perceived luminance below 50% (dark background).
+#[inline]
+pub fn is_dark_rgb(color: Rgb) -> bool {
+    let luma = 0.2126 * (color.r as f32) + 0.7152 * (color.g as f32) + 0.0722 * (color.b as f32);
+    luma < 128.0
+}
+
+/// Formats the `CSI ? 997 ; Ps n` color scheme report (`1` = dark, `2` = light).
+#[inline]
+pub fn color_scheme_report(color: Rgb) -> &'static str {
+    if is_dark_rgb(color) {
+        "\x1b[?997;1n"
+    } else {
+        "\x1b[?997;2n"
+    }
+}
+
 impl<T: EventListener> Handler for Term<T> {
     /// A character to be displayed.
     #[inline(never)]
@@ -324,6 +341,27 @@ impl<T: EventListener> Handler for Term<T> {
             }
             _ => debug!("unknown device status query: {arg}"),
         };
+    }
+
+    #[inline]
+    fn private_device_status(&mut self, arg: usize) {
+        trace!("Reporting private device status: {arg}");
+        match arg {
+            // Color scheme query (DECSET 2031 / DSR ? 996 n):
+            // Responds with `CSI ? 997 ; 1 n` (dark) or `CSI ? 997 ; 2 n` (light).
+            996 => {
+                if let Some(bg) = self.colors[NamedColor::Background] {
+                    self.event_proxy
+                        .send_event(Event::PtyWrite(color_scheme_report(bg).to_string()));
+                } else {
+                    self.event_proxy.send_event(Event::ColorRequest(
+                        NamedColor::Background as usize,
+                        Arc::new(|color| color_scheme_report(color).to_string()),
+                    ));
+                }
+            }
+            _ => debug!("unknown private device status query: {arg}"),
+        }
     }
 
     #[inline]
@@ -824,6 +862,7 @@ impl<T: EventListener> Handler for Term<T> {
         self.vi_mode_cursor = Default::default();
         self.keyboard_mode_stack = Default::default();
         self.inactive_keyboard_mode_stack = Default::default();
+        self.cl_mode = None;
 
         // Preserve vi mode across resets.
         self.mode &= TermMode::VI;
@@ -1055,6 +1094,9 @@ impl<T: EventListener> Handler for Term<T> {
 
     #[inline]
     fn osc_133_c(&mut self) {
+        // Command is now executing; disable prompt click-to-move-cursor navigation
+        // until the next prompt start (`OSC 133;A`).
+        self.cl_mode = None;
         self.grid
             .cursor
             .template
