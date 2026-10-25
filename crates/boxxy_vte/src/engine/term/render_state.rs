@@ -355,6 +355,11 @@ impl RenderState {
 
                 let ch = if cell.c == '\0' { ' ' } else { cell.c };
                 out.push(ch);
+                if let Some(zw) = cell.zerowidth() {
+                    for &zw_c in zw {
+                        out.push(zw_c);
+                    }
+                }
             }
 
             if cur_fg != default_fg || cur_bg != default_bg || !cur_flags.is_empty() {

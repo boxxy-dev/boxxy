@@ -212,10 +212,20 @@ impl super::TerminalWidget {
                                 let point =
                                     Point::new(Line(row as i32 - display_offset), Column(col));
                                 let cell = state.cell(point);
+                                if cell.flags.intersects(
+                                    Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER,
+                                ) {
+                                    continue;
+                                }
                                 let c = if cell.c == '\0' { ' ' } else { cell.c };
 
                                 let start_byte = visible_text.len();
                                 visible_text.push(c);
+                                if let Some(zw) = cell.zerowidth() {
+                                    for &zw_c in zw {
+                                        visible_text.push(zw_c);
+                                    }
+                                }
                                 let end_byte = visible_text.len();
 
                                 for _ in start_byte..end_byte {
@@ -236,10 +246,17 @@ impl super::TerminalWidget {
                         }
 
                         for m in re.find_iter(&visible_text) {
-                            if let (Some(&start_point), Some(&end_point)) = (
+                            if let (Some(&start_point), Some(&(mut end_point))) = (
                                 byte_to_point.get(m.start()),
                                 byte_to_point.get(m.end().saturating_sub(1)),
                             ) {
+                                // Expand end_point to include the trailing spacer column when a
+                                // match ends on a 2-column wide character or emoji/flag cluster.
+                                if state.cell(end_point).flags.contains(Flags::WIDE_CHAR)
+                                    && end_point.column.0 + 1 < state.columns
+                                {
+                                    end_point.column.0 += 1;
+                                }
                                 visible_matches.push(crate::engine::selection::SelectionRange {
                                     start: start_point,
                                     end: end_point,

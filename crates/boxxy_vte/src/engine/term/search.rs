@@ -347,6 +347,7 @@ impl<T> Term<T> {
         let mut cell = iter.cell();
         self.skip_fullwidth(&mut iter, &mut cell, regex.direction);
         let mut c = cell.c;
+        let mut extra = cell.extra.clone();
         let mut last_wrapped = iter.cell().flags.contains(Flags::WRAPLINE);
 
         let mut point = iter.point();
@@ -363,16 +364,28 @@ impl<T> Term<T> {
         }
 
         'outer: loop {
-            // Convert char to array of bytes.
-            let mut buf = [0; 4];
-            let utf8_len = c.encode_utf8(&mut buf).len();
+            // Convert cell cluster (primary char + any zerowidth chars) to UTF-8 bytes.
+            let mut stack_buf = [0u8; 4];
+            let mut cluster_buf = String::new();
+            let cell_bytes: &[u8] = if let Some(ref ex) = extra
+                && !ex.zerowidth.is_empty()
+            {
+                cluster_buf.push(c);
+                for &zw_c in &ex.zerowidth {
+                    cluster_buf.push(zw_c);
+                }
+                cluster_buf.as_bytes()
+            } else {
+                c.encode_utf8(&mut stack_buf).as_bytes()
+            };
+            let utf8_len = cell_bytes.len();
 
-            // Pass char to DFA as individual bytes.
+            // Pass cell cluster to DFA as individual bytes.
             for i in 0..utf8_len {
                 // Inverse byte order when going left.
                 let byte = match regex.direction {
-                    Direction::Right => buf[i],
-                    Direction::Left => buf[utf8_len - i - 1],
+                    Direction::Right => cell_bytes[i],
+                    Direction::Left => cell_bytes[utf8_len - i - 1],
                 };
 
                 state = regex.dfa.next_state(&mut regex.cache, state, byte)?;
@@ -450,6 +463,7 @@ impl<T> Term<T> {
             self.skip_fullwidth(&mut iter, &mut cell, regex.direction);
 
             c = cell.c;
+            extra = cell.extra.clone();
             let wrapped = iter.cell().flags.contains(Flags::WRAPLINE);
 
             last_point = mem::replace(&mut point, iter.point());

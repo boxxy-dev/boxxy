@@ -134,7 +134,7 @@ impl ResetDiscriminant<Color> for Cell {
 #[derive(Default, Debug, Clone, Eq, PartialEq, Hash)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct CellExtra {
-    zerowidth: Vec<char>,
+    pub(super) zerowidth: Vec<char>,
     underline_color: Option<Color>,
     hyperlink: Option<Hyperlink>,
 }

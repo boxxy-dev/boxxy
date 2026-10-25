@@ -940,6 +940,7 @@ impl PrivateMode {
             1049 => Self::Named(NamedPrivateMode::SwapScreenAndSetRestoreCursor),
             2004 => Self::Named(NamedPrivateMode::BracketedPaste),
             2026 => Self::Named(NamedPrivateMode::SyncUpdate),
+            2027 => Self::Named(NamedPrivateMode::GraphemeClustering),
             2031 => Self::Named(NamedPrivateMode::ColorSchemeUpdates),
             _ => Self::Unknown(mode),
         }
@@ -992,6 +993,8 @@ pub enum NamedPrivateMode {
     BracketedPaste = 2004,
     /// The mode is handled automatically by [`Processor`].
     SyncUpdate = 2026,
+    /// Unicode grapheme clustering mode (`DECSET 2027`).
+    GraphemeClustering = 2027,
     /// Dark/light color scheme change notifications (`DECSET 2031`).
     ColorSchemeUpdates = 2031,
 }

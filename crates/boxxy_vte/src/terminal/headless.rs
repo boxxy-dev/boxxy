@@ -518,4 +518,87 @@ mod tests {
         assert!(!h.mode().intersects(TermMode::MODIFY_OTHER_KEYS_1 | TermMode::MODIFY_OTHER_KEYS_2));
         assert_eq!(h.take_pty_writes(), vec!["\x1b[>4;0m"]);
     }
+
+    #[test]
+    fn decset_2027_grapheme_clustering_zwj_skin_tone_vs16_and_flags() {
+        use crate::engine::term::cell::Flags;
+
+        let mut h = HeadlessTerminal::new(40, 6);
+
+        // Mode 2027 is enabled by default and reportable via DECRQM (?2027$p -> ?2027;1$y)
+        assert!(h.mode().contains(TermMode::GRAPHEME_CLUSTERING));
+        h.feed(b"\x1b[?2027$p");
+        assert_eq!(h.take_pty_writes(), vec!["\x1b[?2027;1$y"]);
+
+        // 1. Emoji ZWJ sequence: 👨‍👩‍👧‍👦 (7 codepoints) must occupy exactly 2 columns (0..2)
+        h.feed("👨‍👩‍👧‍👦!".as_bytes());
+        assert_eq!(h.term.grid().cursor.point, Point::new(Line(0), Column(3)));
+        assert!(h.term.grid()[Line(0)][Column(0)].flags.contains(Flags::WIDE_CHAR));
+        assert!(
+            h.term.grid()[Line(0)][Column(1)]
+                .flags
+                .contains(Flags::WIDE_CHAR_SPACER)
+        );
+        assert_eq!(h.term.grid()[Line(0)][Column(2)].c, '!');
+        assert_eq!(h.row_text_trimmed(0), "👨‍👩‍👧‍👦!");
+
+        // 2. Skin-tone modifier: 👍🏽 (\u{1F44D}\u{1F3FD}) must occupy 2 columns, not 4
+        h.feed("\r\n👍🏽ok".as_bytes());
+        assert_eq!(h.term.grid().cursor.point, Point::new(Line(1), Column(4)));
+        assert_eq!(h.term.grid()[Line(1)][Column(2)].c, 'o');
+        assert_eq!(h.term.grid()[Line(1)][Column(3)].c, 'k');
+        assert_eq!(h.row_text_trimmed(1), "👍🏽ok");
+
+        // 3. VS16 (\u{FE0F}): ❤️ (\u{2764}\u{FE0F}) and ⚠️ (\u{26A0}\u{FE0F}) widen from 1 col to 2 cols
+        h.feed("\r\n❤️⚠️x".as_bytes());
+        assert_eq!(h.term.grid().cursor.point, Point::new(Line(2), Column(5)));
+        assert!(h.term.grid()[Line(2)][Column(0)].flags.contains(Flags::WIDE_CHAR));
+        assert!(h.term.grid()[Line(2)][Column(2)].flags.contains(Flags::WIDE_CHAR));
+        assert_eq!(h.term.grid()[Line(2)][Column(4)].c, 'x');
+        assert_eq!(h.row_text_trimmed(2), "❤️⚠️x");
+
+        // 4. Regional Indicator flags: 🇺🇸🇯🇵 (4 regional indicators -> 2 flags -> 4 columns total)
+        h.feed("\r\n🇺🇸🇯🇵end".as_bytes());
+        assert_eq!(h.term.grid().cursor.point, Point::new(Line(3), Column(7)));
+        assert_eq!(h.term.grid()[Line(3)][Column(0)].c, '🇺');
+        assert_eq!(h.term.grid()[Line(3)][Column(0)].zerowidth(), Some(&['🇸'][..]));
+        assert_eq!(h.term.grid()[Line(3)][Column(2)].c, '🇯');
+        assert_eq!(h.term.grid()[Line(3)][Column(2)].zerowidth(), Some(&['🇵'][..]));
+        assert_eq!(h.term.grid()[Line(3)][Column(4)].c, 'e');
+        assert_eq!(h.row_text_trimmed(3), "🇺🇸🇯🇵end");
+
+        // 5. Engine regex search (`Term::search_next`) matches both columns (0..=1) of 🇺🇸 and 👨‍👩‍👧‍👦
+        let mut flag_search =
+            crate::engine::term::search::RegexSearch::new("🇺🇸", false).expect("compile flag regex");
+        let flag_match = h.term.search_next(
+            &mut flag_search,
+            Point::new(Line(0), Column(0)),
+            crate::engine::index::Direction::Right,
+            crate::engine::index::Side::Left,
+            None,
+        );
+        assert_eq!(
+            flag_match,
+            Some(Point::new(Line(3), Column(0))..=Point::new(Line(3), Column(1)))
+        );
+
+        let mut zwj_search = crate::engine::term::search::RegexSearch::new("👨‍👩‍👧‍👦", false)
+            .expect("compile zwj regex");
+        let zwj_match = h.term.search_next(
+            &mut zwj_search,
+            Point::new(Line(0), Column(0)),
+            crate::engine::index::Direction::Right,
+            crate::engine::index::Side::Left,
+            None,
+        );
+        assert_eq!(
+            zwj_match,
+            Some(Point::new(Line(0), Column(0))..=Point::new(Line(0), Column(1)))
+        );
+
+        // 6. Disabling mode 2027 (?2027l) reports 2 via DECRQM and reverts to codepoint width
+        h.feed(b"\x1b[?2027l\x1b[?2027$p");
+        assert!(!h.mode().contains(TermMode::GRAPHEME_CLUSTERING));
+        assert_eq!(h.take_pty_writes(), vec!["\x1b[?2027;2$y"]);
+    }
 }

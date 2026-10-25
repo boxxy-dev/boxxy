@@ -55,14 +55,164 @@ pub fn color_scheme_report(color: Rgb) -> &'static str {
     }
 }
 
+#[inline]
+fn is_regional_indicator(c: char) -> bool {
+    matches!(c, '\u{1F1E6}'..='\u{1F1FF}')
+}
+
+#[inline]
+fn is_emoji_modifier(c: char) -> bool {
+    matches!(c, '\u{1F3FB}'..='\u{1F3FF}')
+}
+
+#[inline]
+fn can_widen_with_vs16(c: char) -> bool {
+    matches!(
+        c,
+        '#' | '*'
+            | '0'..='9'
+            | '\u{00A9}'
+            | '\u{00AE}'
+            | '\u{203C}'..='\u{3299}'
+            | '\u{1F000}'..='\u{1FAFF}'
+    )
+}
+
+impl<T> Term<T> {
+    /// Returns the column of the most recently written character cluster on the
+    /// current cursor line, stepping back over any `WIDE_CHAR_SPACER`.
+    #[inline]
+    fn prev_cluster_col(&self) -> Option<Column> {
+        let line = self.grid.cursor.point.line;
+        let mut col = if self.grid.cursor.input_needs_wrap {
+            self.grid.cursor.point.column
+        } else if self.grid.cursor.point.column.0 > 0 {
+            Column(self.grid.cursor.point.column.0 - 1)
+        } else {
+            return None;
+        };
+
+        if self.grid[line][col]
+            .flags
+            .contains(Flags::WIDE_CHAR_SPACER)
+        {
+            col.0 = col.0.saturating_sub(1);
+        }
+        Some(col)
+    }
+
+    /// Promotes a 1-column cell at `(line, base_col)` to a 2-column `WIDE_CHAR` +
+    /// `WIDE_CHAR_SPACER` pair when a grapheme continuation (such as `VS16`, a second
+    /// Regional Indicator, or an emoji modifier) widens the cluster.
+    fn widen_cell_at(&mut self, line: Line, base_col: Column)
+    where
+        T: EventListener,
+    {
+        let columns = self.columns();
+        if self.grid[line][base_col].flags.contains(Flags::WIDE_CHAR)
+            || self.grid.cursor.input_needs_wrap
+            || base_col.0 + 1 >= columns
+            || self.grid.cursor.point.column != base_col + 1
+        {
+            return;
+        }
+
+        if self.mode.contains(TermMode::INSERT) && base_col.0 + 2 < columns {
+            let row = &mut self.grid[line][..];
+            for col in ((base_col.0 + 1)..(columns - 1)).rev() {
+                row.swap(col + 1, col);
+            }
+        }
+
+        self.grid[line][base_col].flags.insert(Flags::WIDE_CHAR);
+
+        self.grid
+            .cursor
+            .template
+            .flags
+            .insert(Flags::WIDE_CHAR_SPACER);
+        self.write_at_cursor(' ');
+        self.grid
+            .cursor
+            .template
+            .flags
+            .remove(Flags::WIDE_CHAR_SPACER);
+
+        if self.grid.cursor.point.column + 1 < columns {
+            self.grid.cursor.point.column += 1;
+        } else {
+            self.grid.cursor.input_needs_wrap = true;
+        }
+
+        self.damage
+            .damage_line(line.0 as usize, base_col.0, base_col.0 + 1);
+    }
+}
+
 impl<T: EventListener> Handler for Term<T> {
     /// A character to be displayed.
     #[inline(never)]
     fn input(&mut self, c: char) {
+        // Unicode Grapheme Clustering (DECSET 2027) for non-ASCII sequences:
+        // handles ZWJ sequences, VS16 emoji presentation widening, Fitzpatrick
+        // skin-tone modifiers, and Regional Indicator flag pairs.
+        if !c.is_ascii()
+            && self.mode.contains(TermMode::GRAPHEME_CLUSTERING)
+            && let Some(prev_col) = self.prev_cluster_col()
+        {
+            let line = self.grid.cursor.point.line;
+
+            // 1. Continuation after Zero-Width Joiner (U+200D)
+            if self.grid[line][prev_col]
+                .zerowidth()
+                .and_then(|zw| zw.last())
+                == Some(&'\u{200D}')
+            {
+                self.grid[line][prev_col].push_zerowidth(c);
+                if c.width() == Some(2) {
+                    self.widen_cell_at(line, prev_col);
+                }
+                return;
+            }
+
+            // 2. Variation Selector-16 (U+FE0F) upgrading text symbol to 2-cell emoji
+            if c == '\u{FE0F}' {
+                let base_c = self.grid[line][prev_col].c;
+                self.grid[line][prev_col].push_zerowidth(c);
+                if can_widen_with_vs16(base_c) {
+                    self.widen_cell_at(line, prev_col);
+                }
+                return;
+            }
+
+            // 3. Emoji Fitzpatrick skin-tone modifiers (U+1F3FB..=U+1F3FF)
+            if is_emoji_modifier(c) && !self.grid[line][prev_col].c.is_ascii() {
+                self.grid[line][prev_col].push_zerowidth(c);
+                self.widen_cell_at(line, prev_col);
+                return;
+            }
+
+            // 4. Regional Indicator pair forming a 2-column flag (U+1F1E6..=U+1F1FF)
+            if is_regional_indicator(c)
+                && is_regional_indicator(self.grid[line][prev_col].c)
+                && !self.grid[line][prev_col]
+                    .zerowidth()
+                    .is_some_and(|zw| zw.iter().copied().any(is_regional_indicator))
+            {
+                self.grid[line][prev_col].push_zerowidth(c);
+                self.widen_cell_at(line, prev_col);
+                return;
+            }
+        }
+
         // Number of cells the char will occupy.
-        let width = match c.width() {
-            Some(width) => width,
-            None => return,
+        let width = if c.is_ascii() {
+            1
+        } else {
+            match c.width() {
+                Some(width) => width,
+                None => return,
+            }
         };
 
         // Handle zero-width characters.

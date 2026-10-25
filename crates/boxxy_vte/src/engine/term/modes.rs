@@ -42,6 +42,7 @@ bitflags! {
         const COLOR_SCHEME_UPDATES    = 1 << 23;
         const MODIFY_OTHER_KEYS_1     = 1 << 24;
         const MODIFY_OTHER_KEYS_2     = 1 << 25;
+        const GRAPHEME_CLUSTERING     = 1 << 26;
         const MOUSE_MODE              = Self::MOUSE_REPORT_CLICK.bits() | Self::MOUSE_MOTION.bits() | Self::MOUSE_DRAG.bits();
         const KITTY_KEYBOARD_PROTOCOL = Self::DISAMBIGUATE_ESC_CODES.bits()
                                       | Self::REPORT_EVENT_TYPES.bits()
@@ -108,6 +109,7 @@ impl Default for TermMode {
             | TermMode::LINE_WRAP
             | TermMode::ALTERNATE_SCROLL
             | TermMode::URGENCY_HINTS
+            | TermMode::GRAPHEME_CLUSTERING
     }
 }
 
@@ -322,6 +324,9 @@ impl<T: EventListener> Term<T> {
                 self.event_proxy.send_event(Event::CursorBlinkingChange);
             }
             NamedPrivateMode::SyncUpdate => (),
+            NamedPrivateMode::GraphemeClustering => {
+                self.mode.insert(TermMode::GRAPHEME_CLUSTERING);
+            }
             NamedPrivateMode::ColorSchemeUpdates => {
                 self.mode.insert(TermMode::COLOR_SCHEME_UPDATES);
             }
@@ -376,6 +381,9 @@ impl<T: EventListener> Term<T> {
                 self.event_proxy.send_event(Event::CursorBlinkingChange);
             }
             NamedPrivateMode::SyncUpdate => (),
+            NamedPrivateMode::GraphemeClustering => {
+                self.mode.remove(TermMode::GRAPHEME_CLUSTERING);
+            }
             NamedPrivateMode::ColorSchemeUpdates => {
                 self.mode.remove(TermMode::COLOR_SCHEME_UPDATES);
             }
@@ -425,6 +433,9 @@ impl<T: EventListener> Term<T> {
                 }
                 NamedPrivateMode::SyncUpdate => ModeState::Reset,
                 NamedPrivateMode::ColumnMode => ModeState::NotSupported,
+                NamedPrivateMode::GraphemeClustering => {
+                    self.mode.contains(TermMode::GRAPHEME_CLUSTERING).into()
+                }
                 NamedPrivateMode::ColorSchemeUpdates => {
                     self.mode.contains(TermMode::COLOR_SCHEME_UPDATES).into()
                 }

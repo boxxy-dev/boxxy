@@ -72,7 +72,7 @@ The `TerminalWidget` GObject wrapper.
 
 ## Features
 
-- **Bidirectional Reflow:** Full word wrapping and unwrapping on resize.
+- **Bidirectional Reflow & Unicode Grapheme Clustering (`DECSET 2027`):** Full word wrapping and unwrapping on resize, paired with `TermMode::GRAPHEME_CLUSTERING` (`?2027h` / `?2027$p`, enabled by default) to cluster Emoji ZWJ sequences (`\u{200D}`), Fitzpatrick skin-tone modifiers (`\u{1F3FB}`..`\u{1F3FF}`), Variation Selector-16 (`\u{FE0F}` emoji widening), and Regional Indicator flag pairs (`\u{1F1E6}`..`\u{1F1FF}`) into accurate 2-column cells without increasing `sizeof(Cell)` (24 bytes).
 - **Advanced Regex Search:** Uses `regex-automata` 0.4 with full Unicode support. Features zero-cost wrap-around, look-behind context for word boundaries (`\b`), and automatic viewport scrolling to matches.
 - **OSC 8 Hyperlinks:** Hover-only underlines and native URI support.
 - **OSC 9;4 Progress Bars:** Intercepts progress sequences (e.g. from Flatpak, Cargo) to render a native GTK progress bar indicating normal, error, warning, or indeterminate states.
