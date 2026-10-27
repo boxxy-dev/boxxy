@@ -1,0 +1,168 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<interface>
+  <object class="AdwDialog" id="crop_dialog">
+    <property name="content-width">540</property>
+    <property name="content-height">580</property>
+    <property name="title">Crop Avatar</property>
+    <child>
+      <object class="AdwToolbarView">
+        <!-- Header Bar -->
+        <child type="top">
+          <object class="AdwHeaderBar">
+            <property name="title-widget">
+              <object class="AdwWindowTitle" id="window_title">
+                <property name="title">Crop Avatar</property>
+                <property name="subtitle">Drag inside the square to move, or drag corners and slider to resize</property>
+              </object>
+            </property>
+          </object>
+        </child>
+
+        <!-- Main Content -->
+        <property name="content">
+          <object class="GtkBox">
+            <property name="orientation">vertical</property>
+            <property name="spacing">10</property>
+            <property name="margin-start">16</property>
+            <property name="margin-end">16</property>
+            <property name="margin-top">8</property>
+            <property name="margin-bottom">8</property>
+
+            <!-- Interactive Crop Canvas Frame -->
+            <child>
+              <object class="GtkFrame">
+                <property name="hexpand">true</property>
+                <property name="vexpand">true</property>
+                <style>
+                  <class name="avatar-crop-well"/>
+                </style>
+                <child>
+                  <object class="GtkDrawingArea" id="crop_canvas">
+                    <property name="hexpand">true</property>
+                    <property name="vexpand">true</property>
+                    <property name="content-width">380</property>
+                    <property name="content-height">360</property>
+                  </object>
+                </child>
+              </object>
+            </child>
+
+            <!-- Live Preview and Size Controls -->
+            <child>
+              <object class="GtkBox">
+                <property name="orientation">horizontal</property>
+                <property name="spacing">12</property>
+                <property name="margin-top">2</property>
+                <property name="margin-bottom">2</property>
+
+                <child>
+                  <object class="AdwAvatar" id="preview_avatar">
+                    <property name="size">44</property>
+                    <property name="valign">center</property>
+                    <property name="tooltip-text">Live Avatar Preview</property>
+                  </object>
+                </child>
+
+                <child>
+                  <object class="GtkBox">
+                    <property name="orientation">vertical</property>
+                    <property name="spacing">2</property>
+                    <property name="hexpand">true</property>
+                    <property name="valign">center</property>
+
+                    <child>
+                      <object class="GtkBox">
+                        <property name="orientation">horizontal</property>
+                        <property name="spacing">8</property>
+                        <child>
+                          <object class="GtkLabel">
+                            <property name="label">Square Size</property>
+                            <property name="halign">start</property>
+                            <property name="hexpand">true</property>
+                            <style>
+                              <class name="caption"/>
+                              <class name="dim-label"/>
+                            </style>
+                          </object>
+                        </child>
+                        <child>
+                          <object class="GtkLabel" id="crop_info_label">
+                            <property name="label">256 × 256 px</property>
+                            <property name="halign">end</property>
+                            <style>
+                              <class name="caption"/>
+                              <class name="monospace"/>
+                              <class name="dim-label"/>
+                            </style>
+                          </object>
+                        </child>
+                      </object>
+                    </child>
+
+                    <child>
+                      <object class="GtkScale" id="size_scale">
+                        <property name="hexpand">true</property>
+                        <property name="draw-value">false</property>
+                      </object>
+                    </child>
+                  </object>
+                </child>
+
+                <child>
+                  <object class="GtkButton" id="reset_btn">
+                    <property name="label">Center</property>
+                    <property name="valign">center</property>
+                    <property name="tooltip-text">Reset to maximum centered square</property>
+                    <style>
+                      <class name="flat"/>
+                    </style>
+                  </object>
+                </child>
+              </object>
+            </child>
+          </object>
+        </property>
+
+        <!-- Bottom Action Bar -->
+        <child type="bottom">
+          <object class="GtkBox">
+            <property name="orientation">vertical</property>
+            <child>
+              <object class="GtkSeparator">
+                <property name="orientation">horizontal</property>
+              </object>
+            </child>
+            <child>
+              <object class="GtkBox">
+                <property name="orientation">horizontal</property>
+                <property name="spacing">10</property>
+                <property name="halign">end</property>
+                <property name="margin-start">16</property>
+                <property name="margin-end">16</property>
+                <property name="margin-top">10</property>
+                <property name="margin-bottom">12</property>
+                <child>
+                  <object class="GtkButton" id="cancel_btn">
+                    <property name="label">Cancel</property>
+                    <style>
+                      <class name="pill"/>
+                    </style>
+                  </object>
+                </child>
+                <child>
+                  <object class="GtkButton" id="apply_btn">
+                    <property name="label">Apply Avatar</property>
+                    <style>
+                      <class name="suggested-action"/>
+                      <class name="pill"/>
+                    </style>
+                  </object>
+                </child>
+              </object>
+            </child>
+          </object>
+        </child>
+      </object>
+    </child>
+  </object>
+</interface>

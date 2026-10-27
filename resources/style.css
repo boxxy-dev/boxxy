@@ -1008,3 +1008,77 @@ frame.viewer-blockquote {
     line-height: 1.35;
 }
 
+/* --- Editable Avatar & Crop Dialog --- */
+button.editable-avatar-btn {
+    padding: 0;
+    margin: 5px;
+    min-width: 0;
+    min-height: 0;
+    border-radius: 9999px;
+    background-color: transparent;
+    background-image: none;
+    border: 2px solid transparent;
+    box-shadow: none;
+    transition: border-color 150ms ease, background-color 150ms ease;
+}
+
+.editable-avatar-container:hover button.editable-avatar-btn {
+    background-color: alpha(currentColor, 0.06);
+    border-color: alpha(@accent_color, 0.55);
+}
+
+button.editable-avatar-btn:active {
+    background-color: alpha(currentColor, 0.12);
+    border-color: @accent_color;
+}
+
+button.editable-avatar-badge {
+    padding: 0;
+    min-width: 26px;
+    min-height: 26px;
+    border-radius: 9999px;
+    background-color: @window_bg_color;
+    background-image: none;
+    color: @window_fg_color;
+    border: 1.5px solid alpha(currentColor, 0.24);
+    box-shadow: 0 1px 4px alpha(black, 0.45);
+    transition: background-color 150ms ease, color 150ms ease, border-color 150ms ease;
+}
+
+.editable-avatar-container:hover button.editable-avatar-badge,
+button.editable-avatar-badge:hover,
+button.editable-avatar-badge:active {
+    background-color: @accent_bg_color;
+    background-image: none;
+    color: @accent_fg_color;
+    border-color: @accent_bg_color;
+}
+
+button.editable-avatar-remove-badge {
+    padding: 0;
+    min-width: 26px;
+    min-height: 26px;
+    border-radius: 9999px;
+    background-color: @window_bg_color;
+    background-image: none;
+    color: @window_fg_color;
+    border: 1.5px solid alpha(currentColor, 0.24);
+    box-shadow: 0 1px 4px alpha(black, 0.45);
+    transition: background-color 150ms ease, color 150ms ease, border-color 150ms ease;
+}
+
+button.editable-avatar-remove-badge:hover,
+button.editable-avatar-remove-badge:active {
+    background-color: @error_bg_color;
+    background-image: none;
+    color: @error_fg_color;
+    border-color: @error_bg_color;
+}
+
+frame.avatar-crop-well {
+    background-color: alpha(black, 0.38);
+    border: 1px solid alpha(currentColor, 0.14);
+    border-radius: 12px;
+}
+
+

@@ -927,6 +927,7 @@ dependencies = [
  "serde",
  "serde_json",
  "similar",
+ "tempfile",
  "tokio",
  "toml",
  "uuid",
@@ -1012,9 +1013,13 @@ name = "boxxy-core-widgets"
 version = "0.0.35"
 dependencies = [
  "async-channel",
+ "boxxy-assets",
+ "cairo-rs",
  "glib",
  "gtk4",
  "libadwaita",
+ "log",
+ "tokio",
 ]
 
 [[package]]
@@ -1075,6 +1080,7 @@ dependencies = [
  "arc-swap",
  "boxxy-assets",
  "boxxy-claw-protocol",
+ "boxxy-core-widgets",
  "boxxy-keybindings",
  "boxxy-mcp",
  "boxxy-model-selection",

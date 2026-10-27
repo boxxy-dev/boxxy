@@ -10,3 +10,7 @@ gtk4.workspace = true
 libadwaita.workspace = true
 glib.workspace = true
 async-channel.workspace = true
+cairo-rs.workspace = true
+tokio.workspace = true
+log.workspace = true
+boxxy-assets = { path = "../boxxy_assets" }

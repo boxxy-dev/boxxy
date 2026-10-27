@@ -10,10 +10,10 @@ src/
   error.rs        — AssetError (shared across all asset types)
   image/
     mod.rs        — re-exports everything below
-    transform.rs  — Transformation trait + Resize + SquareCrop
+    transform.rs  — Transformation trait + Resize + SquareCrop + RegionCrop
     analyze.rs    — Analyzer<O> trait (extensibility hook; no impl yet)
     pipeline.rs   — Pipeline builder (ordered chain of Transformations)
-    avatar.rs     — process_avatar() entry point + AvatarOutput
+    avatar.rs     — process_avatar(), load_avatar_source(), crop_avatar_source(), process_avatar_cropped() + AvatarSource / AvatarOutput
     thumbnail.rs  — generate_thumbnail() entry point + ThumbnailSpec / ThumbnailOutput + PNG cache helpers
   user.rs         — get_user_dir() / get_user_avatar_path() helpers
 ```

@@ -34,6 +34,30 @@ impl Transformation for SquareCrop {
     }
 }
 
+/// Crop to a specific rectangular (or square) region in pixel coordinates.
+/// Coordinates and dimensions are automatically clamped to the image bounds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RegionCrop {
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+}
+
+impl Transformation for RegionCrop {
+    fn apply(&self, image: DynamicImage) -> Result<DynamicImage, AssetError> {
+        let img_w = image.width().max(1);
+        let img_h = image.height().max(1);
+
+        let x = self.x.min(img_w - 1);
+        let y = self.y.min(img_h - 1);
+        let w = self.width.max(1).min(img_w - x);
+        let h = self.height.max(1).min(img_h - y);
+
+        Ok(image.crop_imm(x, y, w, h))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -63,5 +87,30 @@ mod tests {
         let result2 = crop.apply(img2).unwrap();
         assert_eq!(result2.width(), 50);
         assert_eq!(result2.height(), 50);
+    }
+
+    #[test]
+    fn test_region_crop_and_clamping() {
+        let img = DynamicImage::ImageRgba8(RgbaImage::new(200, 150));
+        let crop = RegionCrop {
+            x: 20,
+            y: 30,
+            width: 80,
+            height: 80,
+        };
+        let result = crop.apply(img.clone()).unwrap();
+        assert_eq!(result.width(), 80);
+        assert_eq!(result.height(), 80);
+
+        // Out-of-bounds crop should clamp safely without panicking
+        let clamped_crop = RegionCrop {
+            x: 150,
+            y: 120,
+            width: 500,
+            height: 500,
+        };
+        let result2 = clamped_crop.apply(img).unwrap();
+        assert_eq!(result2.width(), 50);
+        assert_eq!(result2.height(), 30);
     }
 }

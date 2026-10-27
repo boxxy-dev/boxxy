@@ -35,6 +35,56 @@ const LEVI_AVATAR: &[u8] = include_bytes!("../../../resources/characters/levi-ku
 const KURO_TOML: &[u8] = include_bytes!("../../../resources/characters/kuro/CHARACTER.toml");
 const KURO_AVATAR: &[u8] = include_bytes!("../../../resources/characters/kuro/AVATAR.png");
 
+/// Returns the bundled default PNG avatar bytes for the three built-in characters
+/// (`niko-una`, `levi-kujo`, `kuro`), or `None` for user-created characters.
+#[must_use]
+pub fn bundled_default_avatar(slug: &str) -> Option<&'static [u8]> {
+    match slug {
+        "niko-una" => Some(NIKO_AVATAR),
+        "levi-kujo" => Some(LEVI_AVATAR),
+        "kuro" => Some(KURO_AVATAR),
+        _ => None,
+    }
+}
+
+/// Returns `true` if the character at `char_dir` currently has a user-customised avatar
+/// that can be reset (either a modified `AVATAR.png` on a bundled character, or any
+/// `AVATAR.png` on a custom character).
+#[must_use]
+pub fn has_custom_character_avatar(slug: &str, char_dir: &Path) -> bool {
+    let avatar_path = char_dir.join("AVATAR.png");
+    let Ok(disk_bytes) = fs::read(&avatar_path) else {
+        return false;
+    };
+    match bundled_default_avatar(slug) {
+        Some(default_bytes) => disk_bytes.as_slice() != default_bytes,
+        None => true,
+    }
+}
+
+/// Resets a character's avatar to its default state:
+/// - For the three bundled characters (`niko-una`, `levi-kujo`, `kuro`), restores the
+///   bundled default `AVATAR.png` and returns `Ok(Some(default_bytes))`.
+/// - For custom characters (4th+), removes `AVATAR.png` so the UI falls back to standard
+///   Adwaita initials and returns `Ok(None)`.
+pub fn reset_character_avatar(slug: &str, char_dir: &Path) -> Result<Option<&'static [u8]>> {
+    let avatar_path = char_dir.join("AVATAR.png");
+    if let Some(default_bytes) = bundled_default_avatar(slug) {
+        fs::create_dir_all(char_dir)
+            .with_context(|| format!("Failed to create character directory {char_dir:?}"))?;
+        fs::write(&avatar_path, default_bytes)
+            .with_context(|| format!("Failed to restore default avatar at {avatar_path:?}"))?;
+        Ok(Some(default_bytes))
+    } else {
+        if let Err(e) = fs::remove_file(&avatar_path)
+            && e.kind() != std::io::ErrorKind::NotFound
+        {
+            return Err(e).with_context(|| format!("Failed to remove avatar at {avatar_path:?}"));
+        }
+        Ok(None)
+    }
+}
+
 /// Ensures the characters directory exists and has at least one valid character.
 /// A valid character is a subdirectory containing a `CHARACTER.toml` file.
 /// If the user has customised the directory (even a single valid character exists),
@@ -253,6 +303,14 @@ fn load_character_from_dir(dir: &Path) -> Result<CharacterInfo> {
         .unwrap_or("")
         .to_string();
 
+    // Ensure the three bundled characters always fall back to their bundled avatar image
+    // if AVATAR.png was removed from disk.
+    if !avatar_path.exists()
+        && let Some(default_bytes) = bundled_default_avatar(&dir_name)
+    {
+        let _ = fs::write(&avatar_path, default_bytes);
+    }
+
     let config = CharacterConfig {
         id,
         name: dir_name,
@@ -263,4 +321,44 @@ fn load_character_from_dir(dir: &Path) -> Result<CharacterInfo> {
     };
 
     Ok(CharacterInfo::new(config, avatar_path.exists()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_bundled_and_custom_character_avatar_reset() {
+        let tmp = tempfile::tempdir().unwrap();
+
+        // 1. Bundled character ("niko-una") starts with default bytes -> not custom
+        let niko_dir = tmp.path().join("niko-una");
+        fs::create_dir_all(&niko_dir).unwrap();
+        let default_bytes = bundled_default_avatar("niko-una").unwrap();
+        fs::write(niko_dir.join("AVATAR.png"), default_bytes).unwrap();
+        assert!(!has_custom_character_avatar("niko-una", &niko_dir));
+
+        // User uploads a custom avatar -> now marked custom
+        fs::write(niko_dir.join("AVATAR.png"), b"custom-png-bytes").unwrap();
+        assert!(has_custom_character_avatar("niko-una", &niko_dir));
+
+        // Resetting restores the bundled default avatar and clears custom state
+        let restored = reset_character_avatar("niko-una", &niko_dir).unwrap();
+        assert_eq!(restored, Some(default_bytes));
+        assert!(!has_custom_character_avatar("niko-una", &niko_dir));
+
+        // 2. 4th custom character ("my-custom-agent") has no bundled avatar
+        let custom_dir = tmp.path().join("my-custom-agent");
+        fs::create_dir_all(&custom_dir).unwrap();
+        assert!(!has_custom_character_avatar("my-custom-agent", &custom_dir));
+
+        fs::write(custom_dir.join("AVATAR.png"), b"custom-png-bytes").unwrap();
+        assert!(has_custom_character_avatar("my-custom-agent", &custom_dir));
+
+        // Resetting removes AVATAR.png so it falls back to standard Adwaita initials
+        let restored_custom = reset_character_avatar("my-custom-agent", &custom_dir).unwrap();
+        assert!(restored_custom.is_none());
+        assert!(!custom_dir.join("AVATAR.png").exists());
+        assert!(!has_custom_character_avatar("my-custom-agent", &custom_dir));
+    }
 }

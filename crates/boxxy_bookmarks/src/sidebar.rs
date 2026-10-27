@@ -147,6 +147,10 @@ impl BookmarksSidebarComponent {
         hbox.set_margin_start(10);
         hbox.set_margin_end(10);
 
+        let drag_icon = gtk::Image::from_icon_name("list-drag-handle-symbolic");
+        drag_icon.add_css_class("dim-label");
+        hbox.append(&drag_icon);
+
         let script_icon = gtk::Image::new();
         script_icon.set_pixel_size(16);
 
@@ -178,10 +182,6 @@ impl BookmarksSidebarComponent {
             )));
             hbox.append(&var_badge);
         }
-
-        let drag_icon = gtk::Image::from_icon_name("list-drag-handle-symbolic");
-        drag_icon.add_css_class("dim-label");
-        hbox.append(&drag_icon);
 
         row.set_child(Some(&hbox));
 

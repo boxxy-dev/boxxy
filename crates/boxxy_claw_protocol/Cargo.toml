@@ -19,3 +19,6 @@ anyhow = { workspace = true }
 arc-swap = { workspace = true }
 async-trait = { workspace = true }
 similar = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

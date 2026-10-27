@@ -31,18 +31,18 @@ pub fn setup_characters_page(
     display_name_row.set_title("What the model calls you");
     display_name_row.set_text(&settings_rc.borrow().user_profile.display_name);
 
-    let user_avatar = adw::Avatar::new(42, None, true);
-    user_avatar.set_margin_top(8);
-    user_avatar.set_margin_bottom(8);
+    let user_avatar = boxxy_core_widgets::EditableAvatar::new(52, None, true);
+    user_avatar.widget().set_margin_top(6);
+    user_avatar.widget().set_margin_bottom(6);
     user_profile::configure_avatar(
-        &user_avatar,
+        user_avatar.avatar(),
         &user_profile::effective(&settings_rc.borrow()),
     );
-    display_name_row.add_prefix(&user_avatar);
+    display_name_row.add_prefix(user_avatar.widget());
 
     let s_rc = settings_rc.clone();
     let cb = on_change.clone();
-    let avatar_clone = user_avatar.clone();
+    let avatar_clone = user_avatar.avatar().clone();
     display_name_row.connect_changed(move |entry| {
         let text = entry.text().to_string();
         let mut s = s_rc.borrow_mut();
@@ -53,104 +53,50 @@ pub fn setup_characters_page(
             cb(s.clone());
         }
     });
-    user_group.add(&display_name_row);
 
-    // Upload & Color Actions
-    let actions_row = adw::ActionRow::new();
-
-    let upload_btn = gtk::Button::with_label("Upload Avatar…");
-    upload_btn.set_valign(gtk::Align::Center);
-    actions_row.add_prefix(&upload_btn);
-
-    let remove_avatar_btn = gtk::Button::with_label("Remove Avatar");
-    remove_avatar_btn.set_valign(gtk::Align::Center);
-    remove_avatar_btn.add_css_class("flat");
     let avatar_exists = boxxy_assets::user::get_user_avatar_path()
         .as_ref()
         .is_some_and(|path| path.exists());
-    remove_avatar_btn.set_visible(avatar_exists);
-    actions_row.add_prefix(&remove_avatar_btn);
+    user_avatar.set_remove_tooltip("Remove custom avatar");
+    user_avatar.set_removable(avatar_exists);
 
     let s_rc_upload = settings_rc.clone();
-    let avatar_clone2 = user_avatar.clone();
-    let remove_avatar_btn_upload = remove_avatar_btn.clone();
-    upload_btn.connect_clicked(move |btn| {
-        let window = btn.root().and_downcast::<gtk::Window>();
-        let dialog = gtk::FileDialog::new();
-        dialog.set_title("Select Avatar");
-        let filter = gtk::FileFilter::new();
-        filter.set_name(Some("Images"));
-        filter.add_mime_type("image/png");
-        filter.add_mime_type("image/jpeg");
-        filter.add_mime_type("image/webp");
-        let filters = gtk::gio::ListStore::new::<gtk::FileFilter>();
-        filters.append(&filter);
-        dialog.set_filters(Some(&filters));
+    let user_avatar_upload = user_avatar.clone();
+    let avatar_btn_toast = user_avatar.widget().clone();
+    user_avatar.connect_avatar_cropped("Crop Your Avatar", move |result| match result {
+        Ok(output) => {
+            let s_rc_upload = s_rc_upload.clone();
+            let user_avatar_upload = user_avatar_upload.clone();
+            let avatar_btn_toast = avatar_btn_toast.clone();
 
-        let s_rc_upload = s_rc_upload.clone();
-        let avatar_clone2 = avatar_clone2.clone();
-        let btn_clone = btn.clone();
-        let remove_avatar_btn_upload = remove_avatar_btn_upload.clone();
-
-        dialog.open(
-            window.as_ref(),
-            None::<&gtk::gio::Cancellable>,
-            move |result| {
-                if let Ok(file) = result {
-                    if let Some(path) = file.path() {
-                        let s_rc_upload = s_rc_upload.clone();
-                        let avatar_clone2 = avatar_clone2.clone();
-                        let btn_clone = btn_clone.clone();
-
-                        glib::spawn_future_local(async move {
-                            let bytes = match tokio::fs::read(&path).await {
-                                Ok(b) => b,
-                                Err(e) => {
-                                    log::error!("Failed to read avatar file: {}", e);
-                                    return;
-                                }
-                            };
-
-                            let process_result = tokio::task::spawn_blocking(move || {
-                                boxxy_assets::image::process_avatar(&bytes)
-                            })
-                            .await;
-
-                            if let Ok(Ok(output)) = process_result {
-                                if let Some(user_avatar_path) =
-                                    boxxy_assets::user::get_user_avatar_path()
-                                {
-                                    if tokio::fs::write(&user_avatar_path, &output.png_bytes)
-                                        .await
-                                        .is_ok()
-                                    {
-                                        user_profile::configure_avatar(
-                                            &avatar_clone2,
-                                            &user_profile::effective(&s_rc_upload.borrow()),
-                                        );
-                                        remove_avatar_btn_upload.set_visible(true);
-
-                                        add_preferences_toast(&btn_clone, "Avatar updated");
-                                    }
-                                }
-                            } else {
-                                add_preferences_toast(&btn_clone, "Failed to process avatar.");
-                            }
-                        });
+            glib::spawn_future_local(async move {
+                if let Some(user_avatar_path) = boxxy_assets::user::get_user_avatar_path() {
+                    if tokio::fs::write(&user_avatar_path, &output.png_bytes)
+                        .await
+                        .is_ok()
+                    {
+                        user_profile::configure_avatar(
+                            user_avatar_upload.avatar(),
+                            &user_profile::effective(&s_rc_upload.borrow()),
+                        );
+                        user_avatar_upload.set_removable(true);
+                        add_preferences_toast(&avatar_btn_toast, "Avatar updated");
+                    } else {
+                        add_preferences_toast(&avatar_btn_toast, "Failed to save avatar.");
                     }
                 }
-            },
-        );
+            });
+        }
+        Err(err) => {
+            add_preferences_toast(&avatar_btn_toast, &format!("Failed to process avatar: {err}"));
+        }
     });
 
     let s_rc_remove = settings_rc.clone();
-    let avatar_remove_clone = user_avatar.clone();
-    let remove_avatar_btn_clone = remove_avatar_btn.clone();
-    remove_avatar_btn.connect_clicked(move |btn| {
+    let user_avatar_remove = user_avatar.clone();
+    user_avatar.connect_avatar_removed(move || {
         let s_rc_remove = s_rc_remove.clone();
-        let avatar_remove_clone = avatar_remove_clone.clone();
-        let remove_avatar_btn_clone = remove_avatar_btn_clone.clone();
-        let btn_clone = btn.clone();
+        let user_avatar_remove = user_avatar_remove.clone();
 
         glib::spawn_future_local(async move {
             if let Some(path) = boxxy_assets::user::get_user_avatar_path()
@@ -158,33 +104,30 @@ pub fn setup_characters_page(
                 && e.kind() != std::io::ErrorKind::NotFound
             {
                 log::error!("Failed to remove user avatar: {}", e);
-                add_preferences_toast(&btn_clone, "Failed to remove avatar.");
+                add_preferences_toast(user_avatar_remove.widget(), "Failed to remove avatar.");
                 return;
             }
 
             user_profile::configure_avatar(
-                &avatar_remove_clone,
+                user_avatar_remove.avatar(),
                 &user_profile::effective(&s_rc_remove.borrow()),
             );
-            remove_avatar_btn_clone.set_visible(false);
+            user_avatar_remove.set_removable(false);
 
-            add_preferences_toast(&btn_clone, "Avatar removed");
+            add_preferences_toast(user_avatar_remove.widget(), "Avatar removed");
         });
     });
 
     let color_dialog = gtk::ColorDialog::builder().with_alpha(false).build();
     let color_btn = gtk::ColorDialogButton::new(Some(color_dialog));
     color_btn.set_valign(gtk::Align::Center);
+    color_btn.set_tooltip_text(Some("Profile Color"));
     user_profile::set_default_color_button(&color_btn, &settings_rc.borrow());
+    display_name_row.add_suffix(&color_btn);
 
-    let color_box = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-    color_box.set_valign(gtk::Align::Center);
-    color_box.append(&color_btn);
-    actions_row.add_suffix(&color_box);
-
-    let s_rc2 = settings_rc.clone();
-    let cb2 = on_change.clone();
-    let avatar_color_clone = user_avatar.clone();
+    let s_rc2 = settings_rc;
+    let cb2 = on_change;
+    let avatar_color_clone = user_avatar.avatar().clone();
     color_btn.connect_rgba_notify(move |cb_btn| {
         let rgba = cb_btn.rgba();
         let hex = format!(
@@ -202,7 +145,7 @@ pub fn setup_characters_page(
         }
     });
 
-    user_group.add(&actions_row);
+    user_group.add(&display_name_row);
     page.add(&user_group);
 
     let chars_dir = boxxy_claw_protocol::character_loader::get_characters_dir().ok();
@@ -388,19 +331,126 @@ fn render_characters(
             row.set_title(&glib::markup_escape_text(&formatted_name));
             row.set_subtitle(&glib::markup_escape_text(&character.config.duties));
 
-            // Avatar — adw::Avatar handles circular clipping automatically
-            let avatar = adw::Avatar::new(52, Some(&character.config.display_name), true);
-            if character.has_avatar {
-                if let Some(dir) = &chars_dir {
-                    let avatar_path = dir.join(&character.config.name).join("AVATAR.png");
-                    if let Ok(texture) = gdk::Texture::from_filename(&avatar_path) {
-                        avatar.set_custom_image(Some(&texture));
+            // Editable Avatar with pencil + hover reset/remove badges
+            let editable_avatar =
+                boxxy_core_widgets::EditableAvatar::new(52, Some(&character.config.display_name), true);
+            let is_bundled =
+                boxxy_claw_protocol::character_loader::bundled_default_avatar(&character.config.name)
+                    .is_some();
+            editable_avatar.set_remove_tooltip(if is_bundled {
+                "Reset to default avatar"
+            } else {
+                "Remove custom avatar"
+            });
+
+            if let Some(dir) = &chars_dir {
+                let char_dir = dir.join(&character.config.name);
+                let avatar_path = char_dir.join("AVATAR.png");
+                if character.has_avatar
+                    && let Ok(texture) = gdk::Texture::from_filename(&avatar_path)
+                {
+                    editable_avatar.avatar().set_custom_image(Some(&texture));
+                }
+                editable_avatar.set_removable(
+                    boxxy_claw_protocol::character_loader::has_custom_character_avatar(
+                        &character.config.name,
+                        &char_dir,
+                    ),
+                );
+            }
+            editable_avatar.widget().set_margin_top(4);
+            editable_avatar.widget().set_margin_bottom(4);
+            row.add_prefix(editable_avatar.widget());
+
+            let char_name = character.config.name.clone();
+            let chars_dir_upload = chars_dir.clone();
+            let editable_avatar_upload = editable_avatar.clone();
+            let btn_toast = editable_avatar.widget().clone();
+            let dialog_title = format!("Crop Avatar — {formatted_name}");
+            editable_avatar.connect_avatar_cropped(&dialog_title, move |result| match result {
+                Ok(output) => {
+                    let char_name = char_name.clone();
+                    let chars_dir_upload = chars_dir_upload.clone();
+                    let editable_avatar_upload = editable_avatar_upload.clone();
+                    let btn_toast = btn_toast.clone();
+
+                    glib::spawn_future_local(async move {
+                        if let Some(base_dir) = &chars_dir_upload {
+                            let char_dir = base_dir.join(&char_name);
+                            let avatar_path = char_dir.join("AVATAR.png");
+
+                            if tokio::fs::write(&avatar_path, &output.png_bytes)
+                                .await
+                                .is_ok()
+                            {
+                                let bytes = glib::Bytes::from(&output.png_bytes);
+                                if let Ok(texture) = gdk::Texture::from_bytes(&bytes) {
+                                    editable_avatar_upload
+                                        .avatar()
+                                        .set_custom_image(Some(&texture));
+                                }
+                                editable_avatar_upload.set_removable(
+                                    boxxy_claw_protocol::character_loader::has_custom_character_avatar(
+                                        &char_name,
+                                        &char_dir,
+                                    ),
+                                );
+                                add_preferences_toast(&btn_toast, "Avatar updated.");
+                            } else {
+                                add_preferences_toast(&btn_toast, "Failed to save avatar.");
+                            }
+                        }
+                    });
+                }
+                Err(err) => {
+                    add_preferences_toast(&btn_toast, &format!("Failed to process avatar: {err}"));
+                }
+            });
+
+            let char_name_reset = character.config.name.clone();
+            let chars_dir_reset = chars_dir.clone();
+            let editable_avatar_reset = editable_avatar.clone();
+            editable_avatar.connect_avatar_removed(move || {
+                let Some(base_dir) = &chars_dir_reset else {
+                    return;
+                };
+                let char_dir = base_dir.join(&char_name_reset);
+                match boxxy_claw_protocol::character_loader::reset_character_avatar(
+                    &char_name_reset,
+                    &char_dir,
+                ) {
+                    Ok(Some(default_bytes)) => {
+                        let bytes = glib::Bytes::from_static(default_bytes);
+                        if let Ok(texture) = gdk::Texture::from_bytes(&bytes) {
+                            editable_avatar_reset
+                                .avatar()
+                                .set_custom_image(Some(&texture));
+                        }
+                        editable_avatar_reset.set_removable(false);
+                        add_preferences_toast(
+                            editable_avatar_reset.widget(),
+                            "Avatar reset to default.",
+                        );
+                    }
+                    Ok(None) => {
+                        editable_avatar_reset
+                            .avatar()
+                            .set_custom_image(None::<&gdk::Texture>);
+                        editable_avatar_reset.set_removable(false);
+                        add_preferences_toast(
+                            editable_avatar_reset.widget(),
+                            "Custom avatar removed.",
+                        );
+                    }
+                    Err(e) => {
+                        log::error!("Failed to reset character avatar: {e}");
+                        add_preferences_toast(
+                            editable_avatar_reset.widget(),
+                            "Failed to reset avatar.",
+                        );
                     }
                 }
-            }
-            avatar.set_margin_top(8);
-            avatar.set_margin_bottom(8);
-            row.add_prefix(&avatar);
+            });
 
             // Drag indicator
             let drag_icon = gtk::Image::from_icon_name("list-drag-handle-symbolic");
@@ -459,84 +509,6 @@ fn render_characters(
             // Color swatch
             let swatch = make_color_dot(&character.config.color);
             row.add_suffix(&swatch);
-
-            // Upload Avatar Action
-            let upload_char_btn = gtk::Button::from_icon_name("document-edit-symbolic");
-            upload_char_btn.set_valign(gtk::Align::Center);
-            upload_char_btn.add_css_class("flat");
-            upload_char_btn.set_tooltip_text(Some("Upload Avatar"));
-            row.add_suffix(&upload_char_btn);
-
-            let char_name = character.config.name.clone();
-            let chars_dir_upload = chars_dir.clone();
-            upload_char_btn.connect_clicked(move |btn| {
-                let window = btn.root().and_downcast::<gtk::Window>();
-                let dialog = gtk::FileDialog::new();
-                dialog.set_title("Select Character Avatar");
-                let filter = gtk::FileFilter::new();
-                filter.set_name(Some("Images"));
-                filter.add_mime_type("image/png");
-                filter.add_mime_type("image/jpeg");
-                filter.add_mime_type("image/webp");
-                let filters = gtk::gio::ListStore::new::<gtk::FileFilter>();
-                filters.append(&filter);
-                dialog.set_filters(Some(&filters));
-
-                let char_name = char_name.clone();
-                let chars_dir_upload = chars_dir_upload.clone();
-                let btn_clone = btn.clone();
-
-                dialog.open(
-                    window.as_ref(),
-                    None::<&gtk::gio::Cancellable>,
-                    move |result| {
-                        if let Ok(file) = result {
-                            if let Some(path) = file.path() {
-                                let char_name = char_name.clone();
-                                let chars_dir_upload = chars_dir_upload.clone();
-                                let btn_clone = btn_clone.clone();
-
-                                glib::spawn_future_local(async move {
-                                    let bytes = match tokio::fs::read(&path).await {
-                                        Ok(b) => b,
-                                        Err(e) => {
-                                            log::error!("Failed to read avatar file: {}", e);
-                                            return;
-                                        }
-                                    };
-
-                                    let process_result = tokio::task::spawn_blocking(move || {
-                                        boxxy_assets::image::process_avatar(&bytes)
-                                    })
-                                    .await;
-
-                                    if let Ok(Ok(output)) = process_result {
-                                        if let Some(base_dir) = &chars_dir_upload {
-                                            let char_dir = base_dir.join(&char_name);
-                                            let avatar_path = char_dir.join("AVATAR.png");
-
-                                            if tokio::fs::write(&avatar_path, &output.png_bytes)
-                                                .await
-                                                .is_ok()
-                                            {
-                                                add_preferences_toast(
-                                                    &btn_clone,
-                                                    "Avatar updated.",
-                                                );
-                                            }
-                                        }
-                                    } else {
-                                        add_preferences_toast(
-                                            &btn_clone,
-                                            "Failed to process avatar.",
-                                        );
-                                    }
-                                });
-                            }
-                        }
-                    },
-                );
-            });
 
             chars_group.add(&row);
             new_rows.push(RowData {
