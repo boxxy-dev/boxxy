@@ -746,6 +746,17 @@ impl TerminalComponent {
         }
     }
 
+    pub fn start_claw_query_with_default_character(&self, query: String) -> bool {
+        let inner = self.inner.borrow();
+        if let Some(pane_data) = inner.panes.get(&inner.active_pane_id) {
+            pane_data
+                .controller
+                .start_claw_query_with_default_character(query)
+        } else {
+            false
+        }
+    }
+
     /// Returns `(pane_id, formatted_agent_name)` for every pane in this tab that
     /// currently has an active Claw agent session.
     pub fn get_active_claw_panes(&self) -> Vec<(String, String)> {

@@ -3,6 +3,7 @@
   <gresource prefix="/dev/boxxy/BoxxyTerminal">
     <file compressed="true">style.css</file>
     <file compressed="true" alias="icons/dev.boxxy.BoxxyTerminal.png">icons/dev.boxxy.BoxxyTerminal.png</file>
+    <file compressed="true" alias="icons/whats_new_banner.png">icons/whats_new_banner.png</file>
     <file compressed="true" alias="icons/boxxy-paper-plane-symbolic.svg">icons/boxxy-paper-plane-symbolic.svg</file>
     <file compressed="true" alias="icons/boxxy-edit-clear-all-symbolic.svg">icons/boxxy-edit-clear-all-symbolic.svg</file>
     <file compressed="true" alias="icons/boxxy-split-close-symbolic.svg">icons/boxxy-split-close-symbolic.svg</file>
@@ -71,6 +72,7 @@
     <file compressed="true" alias="ui/bookmarks_tab.ui">ui/bookmarks_tab.ui</file>
     <file compressed="true" alias="ui/bookmarks_sidebar.ui">ui/bookmarks_sidebar.ui</file>
     <file compressed="true" alias="ui/bookmark_editor.ui">ui/bookmark_editor.ui</file>
+    <file compressed="true" alias="ui/whats_new_dialog.ui">ui/whats_new_dialog.ui</file>
     <file compressed="true" alias="sounds/task.wav">sounds/task.wav</file>
     <file compressed="true" alias="sounds/timer.wav">sounds/timer.wav</file>
   </gresource>

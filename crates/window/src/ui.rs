@@ -510,6 +510,20 @@ impl AppWindow {
                 if !restored_any {
                     let _ = tx_startup.send(AppInput::EnsureInitialTab).await;
                 }
+                if let Some(pending) = crate::updater::whats_new::take_whats_new_pending() {
+                    let tx_wn = tx_startup.clone();
+                    tokio::spawn(async move {
+                        let summary = crate::updater::whats_new::fetch_changelog_summary(
+                            &pending.from_commit,
+                            &pending.to_commit,
+                        )
+                        .await
+                        .ok();
+                        let _ = tx_wn
+                            .send(AppInput::ShowWhatsNewDialog(pending, summary))
+                            .await;
+                    });
+                }
                 if let Ok(detached) = agent.list_detached_sessions_detailed().await {
                     let _ = tx_startup
                         .send(AppInput::UpdateDetachedSessionsBadge(detached))
@@ -526,28 +540,41 @@ impl AppWindow {
             });
         }
 
-        // Background update check
+        // Background update check (10s after startup, then once every hour)
         if boxxy_sys_utils::can_self_update() {
             let tx_update = tx.clone();
             tokio::spawn(async move {
                 // Wait 10 seconds after startup to not interfere with boot
                 tokio::time::sleep(std::time::Duration::from_secs(10)).await;
-                match crate::updater::Updater::check_for_update().await {
-                    Ok(Some((version, date, url, checksum_url))) => {
-                        let notification = crate::widgets::notification::Notification::new_update(
-                            &version,
-                            &date,
-                            &url,
-                            checksum_url,
-                        );
-                        let _ = tx_update
-                            .send(AppInput::PushGlobalNotification(notification))
-                            .await;
+                loop {
+                    if tx_update.is_closed() {
+                        break;
                     }
-                    Ok(None) => {}
-                    Err(e) => {
-                        log::warn!("Background update check failed: {e}");
+                    match crate::updater::Updater::check_for_update().await {
+                        Ok(Some(info)) => {
+                            let notification =
+                                crate::widgets::notification::Notification::new_update(
+                                    &info.current_commit,
+                                    &info.new_commit,
+                                    &info.date,
+                                    &info.download_url,
+                                    info.checksum_source,
+                                );
+                            if tx_update
+                                .send(AppInput::PushGlobalNotification(notification))
+                                .await
+                                .is_err()
+                            {
+                                break;
+                            }
+                        }
+                        Ok(None) => {}
+                        Err(e) => {
+                            log::warn!("Background update check failed: {e}");
+                        }
                     }
+
+                    tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
                 }
             });
         } else {

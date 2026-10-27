@@ -38,8 +38,8 @@ pub fn populate_about_page(
     let group = adw::PreferencesGroup::builder().build();
     let mut rows = Vec::new();
 
-    // Version row with Copy button (Using baked-in env vars)
-    let version_str = format!("{} {}", env!("CARGO_PKG_VERSION"), env!("GIT_HASH"));
+    // Version row with Copy button (Using baked-in commit hash)
+    let version_str = env!("GIT_HASH").to_string();
 
     let copy_icon = gtk::Image::from_icon_name("boxxy-edit-copy-symbolic");
     let version_row = adw::ActionRow::builder()

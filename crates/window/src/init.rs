@@ -92,6 +92,11 @@ impl TerminalController {
     pub fn inject_keystrokes_by_id(&self, pane_id: &str, keys: &str) -> bool {
         self.controller.inject_keystrokes_by_id(pane_id, keys)
     }
+
+    pub fn start_claw_query_with_default_character(&self, query: String) -> bool {
+        self.controller
+            .start_claw_query_with_default_character(query)
+    }
 }
 
 pub struct AppInit {

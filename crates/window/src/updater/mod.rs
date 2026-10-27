@@ -1,3 +1,5 @@
+pub mod whats_new;
+
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -11,12 +13,24 @@ use self_update::{ArchiveKind, Checksum, Compression, Download, Extract, MoveAll
 use serde::Deserialize;
 use sha2::{Digest, Sha256, Sha512};
 
-const REPO_OWNER: &str = "boxxy-dev";
-const REPO_NAME: &str = "boxxy";
-const GITHUB_API_BASE: &str = "https://api.github.com";
-const USER_AGENT_VALUE: &str = concat!("boxxy-terminal/", env!("CARGO_PKG_VERSION"));
+pub const CURRENT_COMMIT: &str = env!("GIT_HASH");
+
+pub(crate) const REPO_OWNER: &str = "boxxy-dev";
+pub(crate) const REPO_NAME: &str = "boxxy";
+pub(crate) const GITHUB_API_BASE: &str = "https://api.github.com";
+pub(crate) const USER_AGENT_VALUE: &str = concat!("boxxy-terminal/", env!("CARGO_PKG_VERSION"));
 const CHECK_THROTTLE_INTERVAL: Duration = Duration::from_secs(60); // 60s burst guard across multi-window opens
 const MAX_UPDATE_ARCHIVE_BYTES: u64 = 250 * 1024 * 1024; // 250 MiB safety cap
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UpdateInfo {
+    pub version: String,
+    pub current_commit: String,
+    pub new_commit: String,
+    pub date: String,
+    pub download_url: String,
+    pub checksum_source: Option<String>,
+}
 
 #[derive(Debug, Deserialize)]
 struct GithubAsset {
@@ -29,9 +43,21 @@ struct GithubAsset {
 #[derive(Debug, Deserialize)]
 struct GithubRelease {
     tag_name: String,
+    #[serde(default)]
+    target_commitish: Option<String>,
     created_at: String,
     published_at: Option<String>,
     assets: Vec<GithubAsset>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GithubCommitRef {
+    sha: String,
+}
+
+fn is_hex_sha(s: &str) -> bool {
+    let trimmed = s.trim();
+    (7..=40).contains(&trimmed.len()) && trimmed.chars().all(|c| c.is_ascii_hexdigit())
 }
 
 /// Handles background update checking, verification, extraction, and atomic multi-binary installation.
@@ -40,15 +66,9 @@ pub struct Updater;
 impl Updater {
     /// Checks for a new nightly build on GitHub.
     ///
-    /// Uses `UpdateCheckGuard` to throttle background checks to once per hour (preventing
-    /// exhaustion of GitHub's 60 req/hr unauthenticated IP quota), and queries the dedicated
-    /// `/releases/tags/nightly` endpoint directly (`self_update 1.x`'s `ReleaseList::fetch`
-    /// intentionally skips non-semver rolling tags like `nightly`).
-    ///
-    /// Returns `(version, date, download_url, checksum_source)` if an update is available.
-    /// `checksum_source` may be either a `sha256:<hex>` digest published directly by GitHub's
-    /// release API or the download URL of the companion `.sha256` sums asset.
-    pub async fn check_for_update() -> Result<Option<(String, String, String, Option<String>)>> {
+    /// Uses `UpdateCheckGuard` to throttle background checks, queries `/releases/tags/nightly`
+    /// directly, and resolves both the current and incoming commit SHAs.
+    pub async fn check_for_update() -> Result<Option<UpdateInfo>> {
         if !boxxy_sys_utils::can_self_update() {
             return Ok(None);
         }
@@ -91,13 +111,101 @@ impl Updater {
             return Ok(None);
         }
 
+        let new_commit = Self::resolve_release_commit(GITHUB_API_BASE, &nightly).await;
+        let current_commit = whats_new::shorten_sha(CURRENT_COMMIT);
+
+        if current_commit != "unknown"
+            && !current_commit.is_empty()
+            && is_hex_sha(&new_commit)
+            && current_commit == new_commit
+        {
+            log::debug!(
+                "Running binary commit ({current_commit}) already matches nightly release; skipping update."
+            );
+            let release_date = nightly
+                .published_at
+                .as_deref()
+                .unwrap_or(&nightly.created_at)
+                .trim();
+            let _ = fs::write(&last_update_path, release_date);
+            let _ = check_guard.record_check();
+            return Ok(None);
+        }
+
         let target_arch = if cfg!(target_arch = "x86_64") {
             "x86_64"
         } else {
             "aarch64"
         };
 
-        Ok(Self::select_nightly_asset(&nightly, target_arch))
+        Ok(Self::select_nightly_asset(
+            &nightly,
+            target_arch,
+            &current_commit,
+            &new_commit,
+        ))
+    }
+
+    async fn resolve_release_commit(api_base: &str, nightly: &GithubRelease) -> String {
+        if let Some(ref commitish) = nightly.target_commitish
+            && is_hex_sha(commitish)
+        {
+            return whats_new::shorten_sha(commitish);
+        }
+
+        if let Ok(Some(sha)) = Self::fetch_tag_commit_sha(api_base, &nightly.tag_name).await {
+            return whats_new::shorten_sha(&sha);
+        }
+
+        nightly.tag_name.clone()
+    }
+
+    async fn fetch_tag_commit_sha(api_base: &str, tag: &str) -> Result<Option<String>> {
+        let url = format!(
+            "{}/repos/{}/{}/commits/{}",
+            api_base.trim_end_matches('/'),
+            REPO_OWNER,
+            REPO_NAME,
+            tag
+        );
+
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(10))
+            .build()?;
+
+        let token = Self::github_token_from_env();
+        let mut req = client
+            .get(&url)
+            .header(USER_AGENT, USER_AGENT_VALUE)
+            .header(ACCEPT, "application/vnd.github+json");
+
+        if let Some(ref token) = token {
+            req = req.header(AUTHORIZATION, format!("Bearer {token}"));
+        }
+
+        let mut resp = req.send().await?;
+        if (resp.status() == reqwest::StatusCode::UNAUTHORIZED
+            || resp.status() == reqwest::StatusCode::FORBIDDEN)
+            && token.is_some()
+        {
+            resp = client
+                .get(&url)
+                .header(USER_AGENT, USER_AGENT_VALUE)
+                .header(ACCEPT, "application/vnd.github+json")
+                .send()
+                .await?;
+        }
+
+        if !resp.status().is_success() {
+            return Ok(None);
+        }
+
+        let commit_ref: GithubCommitRef = resp.json().await?;
+        if is_hex_sha(&commit_ref.sha) {
+            Ok(Some(whats_new::shorten_sha(&commit_ref.sha)))
+        } else {
+            Ok(None)
+        }
     }
 
     fn is_release_already_installed(last_update_path: &Path, nightly: &GithubRelease) -> bool {
@@ -131,7 +239,9 @@ impl Updater {
     fn select_nightly_asset(
         nightly: &GithubRelease,
         target_arch: &str,
-    ) -> Option<(String, String, String, Option<String>)> {
+        current_commit: &str,
+        new_commit: &str,
+    ) -> Option<UpdateInfo> {
         let asset = nightly
             .assets
             .iter()
@@ -163,12 +273,14 @@ impl Updater {
             .unwrap_or(&nightly.created_at)
             .to_string();
 
-        Some((
-            nightly.tag_name.clone(),
-            release_date,
+        Some(UpdateInfo {
+            version: nightly.tag_name.clone(),
+            current_commit: current_commit.to_string(),
+            new_commit: new_commit.to_string(),
+            date: release_date,
             download_url,
             checksum_source,
-        ))
+        })
     }
 
     async fn fetch_nightly_release(api_base: &str) -> Result<Option<GithubRelease>> {
@@ -243,7 +355,7 @@ impl Updater {
     }
 
     /// Reads `GH_TOKEN` then `GITHUB_TOKEN` (matching `gh` CLI and `self_update 1.0` precedence).
-    fn github_token_from_env() -> Option<String> {
+    pub(crate) fn github_token_from_env() -> Option<String> {
         for var in ["GH_TOKEN", "GITHUB_TOKEN"] {
             if let Ok(val) = std::env::var(var) {
                 let trimmed = val.trim();
@@ -258,6 +370,7 @@ impl Updater {
     pub async fn download_update(
         url: String,
         date: String,
+        new_commit: String,
         checksum_source: Option<String>,
     ) -> Result<PathBuf> {
         if !boxxy_sys_utils::can_self_update() {
@@ -325,9 +438,12 @@ impl Updater {
 
         log::info!("Extraction complete to: {}", pending_dir.display());
 
-        // Persist the release date so apply_update_and_restart can write
-        // .last_update without a second network round-trip.
+        // Persist the release date and target commit so apply_update_and_restart can write
+        // .last_update and .whats_new_pending without a second network round-trip.
         fs::write(pending_dir.join(".update_date"), &date)?;
+        if !new_commit.trim().is_empty() {
+            let _ = fs::write(pending_dir.join(".update_commit"), new_commit.trim());
+        }
 
         Ok(pending_dir)
     }
@@ -446,6 +562,8 @@ impl Updater {
         }
 
         let nightly_date = fs::read_to_string(pending_dir.join(".update_date")).unwrap_or_default();
+        let target_commit = fs::read_to_string(pending_dir.join(".update_commit"))
+            .unwrap_or_else(|_| "nightly".to_string());
 
         // Locate the extracted top-level directory (e.g. `boxxy-terminal-nightly-linux-x86_64`).
         let mut inner_folder = None;
@@ -511,6 +629,8 @@ impl Updater {
             fs::write(app_dir.join(".last_update"), nightly_date)?;
         }
 
+        let _ = whats_new::write_whats_new_pending_in(app_dir, CURRENT_COMMIT, target_commit.trim());
+
         let _ = fs::remove_dir_all(&pending_dir);
 
         Ok(bin_dir)
@@ -573,7 +693,7 @@ impl Updater {
         Ok(hex_str)
     }
 
-    fn get_app_dir() -> Result<PathBuf> {
+    pub(crate) fn get_app_dir() -> Result<PathBuf> {
         let home = std::env::var("HOME").context("HOME not set")?;
         Ok(PathBuf::from(home).join(".local").join("boxxy-terminal"))
     }
@@ -659,6 +779,7 @@ mod tests {
             .unwrap();
         fs::remove_file(&tarball_path).unwrap();
         fs::write(pending_dir.join(".update_date"), "2026-10-15T00:00:00Z").unwrap();
+        fs::write(pending_dir.join(".update_commit"), "deadbee123456").unwrap();
 
         Updater::apply_staged_update(app_dir).unwrap();
 
@@ -683,6 +804,11 @@ mod tests {
             !bin_dir.join("boxxy-agent.old").exists(),
             "legacy .old backup should be cleaned up"
         );
+
+        if CURRENT_COMMIT != "unknown" && !CURRENT_COMMIT.is_empty() {
+            let pending = whats_new::take_whats_new_pending_in(app_dir, "deadbee").unwrap();
+            assert_eq!(pending.to_commit, "deadbee");
+        }
     }
 
     #[test]
@@ -691,6 +817,7 @@ mod tests {
         let last_update_path = tmp.path().join(".last_update");
         let release = GithubRelease {
             tag_name: "nightly".to_string(),
+            target_commitish: None,
             created_at: "2026-10-16T15:27:41Z".to_string(),
             published_at: Some("2026-10-16T15:39:20Z".to_string()),
             assets: vec![],
@@ -719,6 +846,7 @@ mod tests {
     fn select_nightly_asset_falls_back_to_github_asset_digest() {
         let release = GithubRelease {
             tag_name: "nightly".to_string(),
+            target_commitish: Some("e4f5a6b7c8d9".to_string()),
             created_at: "2026-10-15T01:00:00Z".to_string(),
             published_at: Some("2026-10-15T02:00:00Z".to_string()),
             assets: vec![GithubAsset {
@@ -734,16 +862,18 @@ mod tests {
             }],
         };
 
-        let (version, date, url, checksum) =
-            Updater::select_nightly_asset(&release, "x86_64").unwrap();
-        assert_eq!(version, "nightly");
-        assert_eq!(date, "2026-10-15T02:00:00Z");
+        let info =
+            Updater::select_nightly_asset(&release, "x86_64", "a1b2c3d", "e4f5a6b").unwrap();
+        assert_eq!(info.version, "nightly");
+        assert_eq!(info.current_commit, "a1b2c3d");
+        assert_eq!(info.new_commit, "e4f5a6b");
+        assert_eq!(info.date, "2026-10-15T02:00:00Z");
         assert_eq!(
-            url,
+            info.download_url,
             "https://example.com/boxxy-terminal-nightly-linux-x86_64.tar.gz"
         );
         assert_eq!(
-            checksum.as_deref(),
+            info.checksum_source.as_deref(),
             Some("sha256:2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824")
         );
     }

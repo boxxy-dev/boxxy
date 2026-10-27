@@ -32,9 +32,16 @@ pub struct Notification {
 }
 
 impl Notification {
-    pub fn new_update(version: &str, date: &str, url: &str, checksum_url: Option<String>) -> Self {
+    pub fn new_update(
+        current_commit: &str,
+        new_commit: &str,
+        date: &str,
+        url: &str,
+        checksum_url: Option<String>,
+    ) -> Self {
         let mut details = vec![
-            ("Version".to_string(), version.to_string()),
+            ("Current Commit".to_string(), current_commit.to_string()),
+            ("New Commit".to_string(), new_commit.to_string()),
             ("Source".to_string(), "github/nightly".to_string()),
             ("Date".to_string(), date.to_string()),
             ("Url".to_string(), url.to_string()),
@@ -44,11 +51,24 @@ impl Notification {
             details.push(("ChecksumUrl".to_string(), checksum_url));
         }
 
+        let message = if !current_commit.is_empty()
+            && current_commit != "unknown"
+            && !new_commit.is_empty()
+            && new_commit != "nightly"
+        {
+            format!(
+                "Update available from commit {} to {}.",
+                current_commit, new_commit
+            )
+        } else {
+            format!("Update to {} is available.", new_commit)
+        };
+
         Self {
             id: "update-available".to_string(),
             level: NotificationLevel::Update,
             title: "Update Available".to_string(),
-            message: format!("Version {} is available.", version),
+            message,
             icon_name: "boxxy-up-arrow-in-a-star-symbolic".to_string(),
             actions: vec![
                 NotificationAction {

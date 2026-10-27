@@ -8,6 +8,7 @@ fn main() {
   <gresource prefix="/dev/boxxy/BoxxyTerminal">
     <file compressed="true">style.css</file>
     <file compressed="true" alias="icons/dev.boxxy.BoxxyTerminal.png">icons/dev.boxxy.BoxxyTerminal.png</file>
+    <file compressed="true" alias="icons/whats_new_banner.png">icons/whats_new_banner.png</file>
     <file compressed="true" alias="icons/boxxy-paper-plane-symbolic.svg">icons/boxxy-paper-plane-symbolic.svg</file>
     <file compressed="true" alias="icons/boxxy-edit-clear-all-symbolic.svg">icons/boxxy-edit-clear-all-symbolic.svg</file>
     <file compressed="true" alias="icons/boxxy-split-close-symbolic.svg">icons/boxxy-split-close-symbolic.svg</file>
@@ -76,6 +77,7 @@ fn main() {
     <file compressed="true" alias="ui/bookmarks_tab.ui">ui/bookmarks_tab.ui</file>
     <file compressed="true" alias="ui/bookmarks_sidebar.ui">ui/bookmarks_sidebar.ui</file>
     <file compressed="true" alias="ui/bookmark_editor.ui">ui/bookmark_editor.ui</file>
+    <file compressed="true" alias="ui/whats_new_dialog.ui">ui/whats_new_dialog.ui</file>
     <file compressed="true" alias="sounds/task.wav">sounds/task.wav</file>
     <file compressed="true" alias="sounds/timer.wav">sounds/timer.wav</file>
   </gresource>
@@ -92,6 +94,7 @@ fn main() {
     // Rerun if any palette file is added/removed/modified.
     println!("cargo:rerun-if-changed=../../resources/style.css");
     println!("cargo:rerun-if-changed=../../resources/icons/dev.boxxy.BoxxyTerminal.png");
+    println!("cargo:rerun-if-changed=../../resources/icons/whats_new_banner.png");
     println!("cargo:rerun-if-changed=../../resources/icons/boxxy-paper-plane-symbolic.svg");
     println!("cargo:rerun-if-changed=../../resources/icons/boxxy-edit-clear-all-symbolic.svg");
     println!("cargo:rerun-if-changed=../../resources/icons/boxxy-split-close-symbolic.svg");
@@ -160,6 +163,7 @@ fn main() {
     println!("cargo:rerun-if-changed=../../resources/ui/bookmarks_tab.ui");
     println!("cargo:rerun-if-changed=../../resources/ui/bookmarks_sidebar.ui");
     println!("cargo:rerun-if-changed=../../resources/ui/bookmark_editor.ui");
+    println!("cargo:rerun-if-changed=../../resources/ui/whats_new_dialog.ui");
     println!("cargo:rerun-if-changed=../../resources/sounds/task.wav");
     println!("cargo:rerun-if-changed=../../resources/sounds/timer.wav");
 

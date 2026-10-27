@@ -35,7 +35,9 @@ pub fn prepare_query_history(history: Vec<Message>, history_len: usize) -> Vec<M
                 if let rig::message::UserContent::Text(text) = item {
                     if is_old {
                         // Find the start of the dynamic block and truncate everything after it
-                        if let Some(idx) = text.text.find("\n\n## YOUR IDENTITY") {
+                        if let Some(idx) = text.text.find("\n\n--- UPDATE CHANGELOG CONTEXT ---") {
+                            text.text.truncate(idx);
+                        } else if let Some(idx) = text.text.find("\n\n## YOUR IDENTITY") {
                             text.text.truncate(idx);
                         } else if let Some(idx) = text.text.find("\n\n## CURRENT TURN CONTEXT") {
                             text.text.truncate(idx);

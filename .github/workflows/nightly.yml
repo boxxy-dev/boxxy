@@ -136,6 +136,7 @@ jobs:
 
           # Use wildcards to include all downloaded tarballs and checksums
           gh release create nightly *.tar.gz *.tar.gz.sha256 \
+            --target "$(git rev-parse HEAD)" \
             --title "Nightly Build ($(date -u '+%Y-%m-%d'))" \
             --notes "This release contains the latest automated builds from the main branch."
 

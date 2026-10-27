@@ -1,0 +1,297 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<interface>
+  <requires lib="gtk" version="4.0"/>
+  <requires lib="libadwaita" version="1.0"/>
+  <object class="AdwDialog" id="whats_new_dialog">
+    <property name="title">What's New in Boxxy</property>
+    <property name="content-width">600</property>
+    <child>
+      <object class="GtkBox">
+        <property name="orientation">vertical</property>
+        <property name="spacing">0</property>
+
+        <!-- Compact Hero Banner: Text is main child (controls height), Character is overlay on right -->
+        <child>
+          <object class="GtkOverlay" id="hero_overlay">
+            <style>
+              <class name="whats-new-hero"/>
+            </style>
+            <property name="height-request">200</property>
+            <property name="overflow">hidden</property>
+            <child>
+              <object class="GtkBox">
+                <property name="orientation">vertical</property>
+                <property name="spacing">6</property>
+                <property name="halign">fill</property>
+                <property name="valign">center</property>
+                <property name="margin-start">24</property>
+                <property name="margin-end">165</property>
+                <property name="margin-top">14</property>
+                <property name="margin-bottom">14</property>
+                <child>
+                  <object class="GtkLabel" id="hero_badge_label">
+                    <property name="label">✨ FRESH UPDATE</property>
+                    <property name="halign">start</property>
+                    <style>
+                      <class name="whats-new-badge"/>
+                    </style>
+                  </object>
+                </child>
+                <child>
+                  <object class="GtkLabel" id="hero_title_label">
+                    <property name="label">Boxxy Leveled Up!</property>
+                    <property name="halign">start</property>
+                    <property name="wrap">true</property>
+                    <property name="xalign">0</property>
+                    <property name="margin-top">2</property>
+                    <property name="margin-bottom">2</property>
+                    <style>
+                      <class name="title-2"/>
+                      <class name="whats-new-hero-title"/>
+                    </style>
+                  </object>
+                </child>
+                <child>
+                  <object class="GtkLabel" id="commit_pill_label">
+                    <property name="label">a1b2c3d → e4f5g6h</property>
+                    <property name="halign">start</property>
+                    <property name="margin-top">24</property>
+                    <style>
+                      <class name="monospace"/>
+                      <class name="whats-new-commit-pill"/>
+                    </style>
+                  </object>
+                </child>
+                <child>
+                  <object class="GtkLabel" id="hero_subtitle_label">
+                    <property name="label">Hot out of the compiler and ready to roll.</property>
+                    <property name="halign">start</property>
+                    <property name="wrap">true</property>
+                    <property name="max-width-chars">28</property>
+                    <property name="xalign">0</property>
+                    <style>
+                      <class name="dim-label"/>
+                      <class name="caption"/>
+                    </style>
+                  </object>
+                </child>
+              </object>
+            </child>
+            <child type="overlay">
+              <object class="GtkPicture" id="banner_picture">
+                <property name="content-fit">contain</property>
+                <property name="halign">end</property>
+                <property name="valign">fill</property>
+                <property name="can-shrink">true</property>
+                <property name="margin-end">12</property>
+                <property name="margin-top">4</property>
+              </object>
+            </child>
+          </object>
+        </child>
+
+        <!-- Main Body Content -->
+        <child>
+          <object class="GtkBox">
+            <property name="orientation">vertical</property>
+            <property name="spacing">14</property>
+            <property name="margin-start">20</property>
+            <property name="margin-end">20</property>
+            <property name="margin-top">16</property>
+            <property name="margin-bottom">20</property>
+
+            <!-- Playful Stats and Fun Fact Card -->
+            <child>
+              <object class="GtkBox" id="stats_card">
+                <property name="orientation">vertical</property>
+                <property name="spacing">12</property>
+                <style>
+                  <class name="whats-new-stats-card"/>
+                </style>
+                <child>
+                  <object class="GtkBox">
+                    <property name="orientation">horizontal</property>
+                    <property name="spacing">10</property>
+                    <property name="homogeneous">true</property>
+                    <child>
+                      <object class="GtkBox">
+                        <property name="orientation">vertical</property>
+                        <property name="spacing">2</property>
+                        <style>
+                          <class name="whats-new-stat-tile"/>
+                        </style>
+                        <child>
+                          <object class="GtkLabel" id="commits_val">
+                            <property name="label">📦 0</property>
+                            <style>
+                              <class name="whats-new-stat-big"/>
+                            </style>
+                          </object>
+                        </child>
+                        <child>
+                          <object class="GtkLabel" id="commits_caption">
+                            <property name="label">Commits Shipped</property>
+                            <style>
+                              <class name="whats-new-stat-sub"/>
+                            </style>
+                          </object>
+                        </child>
+                      </object>
+                    </child>
+                    <child>
+                      <object class="GtkBox">
+                        <property name="orientation">vertical</property>
+                        <property name="spacing">2</property>
+                        <style>
+                          <class name="whats-new-stat-tile"/>
+                        </style>
+                        <child>
+                          <object class="GtkLabel" id="files_val">
+                            <property name="label">🗂️ 0</property>
+                            <style>
+                              <class name="whats-new-stat-big"/>
+                            </style>
+                          </object>
+                        </child>
+                        <child>
+                          <object class="GtkLabel" id="files_caption">
+                            <property name="label">Files Touched</property>
+                            <style>
+                              <class name="whats-new-stat-sub"/>
+                            </style>
+                          </object>
+                        </child>
+                      </object>
+                    </child>
+                    <child>
+                      <object class="GtkBox">
+                        <property name="orientation">vertical</property>
+                        <property name="spacing">2</property>
+                        <style>
+                          <class name="whats-new-stat-tile"/>
+                        </style>
+                        <child>
+                          <object class="GtkLabel" id="lines_val">
+                            <property name="label">+0 / -0</property>
+                            <property name="use-markup">true</property>
+                            <style>
+                              <class name="whats-new-stat-big"/>
+                              <class name="monospace"/>
+                            </style>
+                          </object>
+                        </child>
+                        <child>
+                          <object class="GtkLabel" id="lines_caption">
+                            <property name="label">Lines of Code</property>
+                            <style>
+                              <class name="whats-new-stat-sub"/>
+                            </style>
+                          </object>
+                        </child>
+                      </object>
+                    </child>
+                  </object>
+                </child>
+
+                <!-- Highlighted Playful Fun Fact Box -->
+                <child>
+                  <object class="GtkBox">
+                    <property name="orientation">vertical</property>
+                    <property name="spacing">6</property>
+                    <style>
+                      <class name="whats-new-fun-fact-box"/>
+                    </style>
+                    <child>
+                      <object class="GtkLabel">
+                        <property name="label">🎲 FUN FACT OF THE BUILD</property>
+                        <property name="halign">center</property>
+                        <style>
+                          <class name="whats-new-fun-fact-badge"/>
+                        </style>
+                      </object>
+                    </child>
+                    <child>
+                      <object class="GtkLabel" id="fun_fact_label">
+                        <property name="label">Ready to tell you everything that changed in this build!</property>
+                        <property name="use-markup">true</property>
+                        <property name="wrap">true</property>
+                        <property name="max-width-chars">42</property>
+                        <property name="xalign">0.5</property>
+                        <property name="justify">center</property>
+                        <style>
+                          <class name="whats-new-fun-fact-text"/>
+                        </style>
+                      </object>
+                    </child>
+                  </object>
+                </child>
+              </object>
+            </child>
+
+            <!-- Ask Another AI (Copy Prompt Row) -->
+            <child>
+              <object class="AdwPreferencesGroup">
+                <child>
+                  <object class="AdwActionRow" id="copy_prompt_row">
+                    <property name="title">Ask Another AI</property>
+                    <property name="subtitle">Copy the update changelog prompt to paste in any web AI</property>
+                    <property name="activatable">true</property>
+                    <child type="suffix">
+                      <object class="GtkImage" id="copy_prompt_icon">
+                        <property name="icon-name">boxxy-edit-copy-symbolic</property>
+                        <property name="valign">center</property>
+                      </object>
+                    </child>
+                  </object>
+                </child>
+              </object>
+            </child>
+
+            <!-- Horizontal Action Buttons (Close and Read What's New) -->
+            <child>
+              <object class="GtkBox">
+                <property name="orientation">horizontal</property>
+                <property name="spacing">10</property>
+                <property name="homogeneous">true</property>
+                <property name="margin-top">4</property>
+                <child>
+                  <object class="GtkButton" id="close_btn">
+                    <property name="label">Close</property>
+                    <style>
+                      <class name="pill"/>
+                    </style>
+                  </object>
+                </child>
+                <child>
+                  <object class="GtkButton" id="read_btn">
+                    <child>
+                      <object class="GtkBox">
+                        <property name="orientation">horizontal</property>
+                        <property name="spacing">8</property>
+                        <property name="halign">center</property>
+                        <child>
+                          <object class="GtkImage">
+                            <property name="icon-name">boxxy-boxxyclaw-symbolic</property>
+                          </object>
+                        </child>
+                        <child>
+                          <object class="GtkLabel">
+                            <property name="label">Read What's New</property>
+                          </object>
+                        </child>
+                      </object>
+                    </child>
+                    <style>
+                      <class name="pill"/>
+                      <class name="suggested-action"/>
+                    </style>
+                  </object>
+                </child>
+              </object>
+            </child>
+          </object>
+        </child>
+      </object>
+    </child>
+  </object>
+</interface>

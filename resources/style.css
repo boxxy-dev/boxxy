@@ -922,3 +922,89 @@ frame.viewer-blockquote {
     border-left: 3px solid @accent_bg_color;
     border-radius: 6px;
 }
+
+/* --- What's New Post-Update Dialog --- */
+.whats-new-hero {
+    background-image: linear-gradient(
+        135deg,
+        alpha(@accent_bg_color, 0.22) 0%,
+        alpha(currentColor, 0.05) 55%,
+        alpha(#4ade80, 0.14) 100%
+    );
+    border-bottom: 1px solid alpha(currentColor, 0.10);
+}
+
+.whats-new-badge {
+    background-color: alpha(#4ade80, 0.18);
+    color: #4ade80;
+    border: 1px solid alpha(#4ade80, 0.35);
+    border-radius: 9999px;
+    padding: 3px 10px;
+    font-size: 0.72em;
+    font-weight: 800;
+    letter-spacing: 0.6px;
+}
+
+.whats-new-hero-title {
+    font-weight: 800;
+    line-height: 1.08;
+}
+
+.whats-new-commit-pill {
+    background-color: alpha(currentColor, 0.10);
+    border: 1px solid alpha(currentColor, 0.14);
+    border-radius: 8px;
+    padding: 3px 10px;
+    font-size: 0.85em;
+    font-weight: 700;
+}
+
+.whats-new-stats-card {
+    background-color: alpha(currentColor, 0.05);
+    border: 1px solid alpha(currentColor, 0.12);
+    border-radius: 14px;
+    padding: 14px;
+}
+
+.whats-new-stat-tile {
+    background-color: alpha(currentColor, 0.06);
+    border: 1px solid alpha(currentColor, 0.08);
+    border-radius: 10px;
+    padding: 10px 8px;
+}
+
+.whats-new-stat-big {
+    font-size: 1.25em;
+    font-weight: 800;
+}
+
+.whats-new-stat-sub {
+    font-size: 0.76em;
+    font-weight: 600;
+    opacity: 0.65;
+}
+
+.whats-new-fun-fact-box {
+    background-image: linear-gradient(
+        135deg,
+        alpha(@accent_bg_color, 0.14) 0%,
+        alpha(#4ade80, 0.10) 100%
+    );
+    border: 1px solid alpha(@accent_bg_color, 0.28);
+    border-radius: 10px;
+    padding: 12px 14px;
+}
+
+.whats-new-fun-fact-badge {
+    font-size: 0.72em;
+    font-weight: 800;
+    letter-spacing: 0.8px;
+    color: @accent_color;
+}
+
+.whats-new-fun-fact-text {
+    font-size: 1.04em;
+    font-weight: 600;
+    line-height: 1.35;
+}
+

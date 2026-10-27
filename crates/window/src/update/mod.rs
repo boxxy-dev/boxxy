@@ -398,10 +398,20 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
             inner.toast_overlay.add_toast(toast);
         }
         AppInput::PushGlobalNotification(ready) => {
+            let is_update = ready.level == crate::widgets::notification::NotificationLevel::Update;
+            if is_update {
+                if inner
+                    .notifications
+                    .iter()
+                    .any(|n| n.id == ready.id && n.message == ready.message)
+                {
+                    return;
+                }
+                inner.notifications.retain(|n| n.id != ready.id);
+            }
+
             let title = ready.title.clone();
             let msg = ready.message.clone();
-
-            let is_update = ready.level == crate::widgets::notification::NotificationLevel::Update;
             // Agent reminders and long-task desktop notifications are emitted directly
             // by `boxxy-agent` over `org.freedesktop.Notifications` so they work reliably
             // on non-GNOME desktops (COSMIC, KDE, Sway) as well as GNOME. Only send
@@ -502,6 +512,12 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
                         .find(|(k, _)| k == "Date")
                         .map(|(_, v)| v.clone())
                         .unwrap_or_default();
+                    let new_commit = notification
+                        .details
+                        .iter()
+                        .find(|(k, _)| k == "New Commit")
+                        .map(|(_, v)| v.clone())
+                        .unwrap_or_else(|| "nightly".to_string());
                     let checksum_url = notification
                         .details
                         .iter()
@@ -517,6 +533,7 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
                                     crate::state::AppInput::StartUpdateDownload(
                                         url.clone(),
                                         date.clone(),
+                                        new_commit.clone(),
                                         checksum_url.clone(),
                                     ),
                                 );
@@ -547,10 +564,12 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
         AppInput::DismissNotification(id) => {
             inner.notifications.retain(|n| n.id != id);
         }
-        AppInput::StartUpdateDownload(url, date, checksum_url) => {
+        AppInput::StartUpdateDownload(url, date, new_commit, checksum_url) => {
             let tx_download = inner.tx.clone();
             tokio::spawn(async move {
-                match crate::updater::Updater::download_update(url, date, checksum_url).await {
+                match crate::updater::Updater::download_update(url, date, new_commit, checksum_url)
+                    .await
+                {
                     Ok(path) => {
                         let _ = tx_download
                             .send(AppInput::UpdateDownloaded(
@@ -583,6 +602,166 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
         AppInput::ApplyUpdateAndRestart => {
             if let Err(e) = crate::updater::Updater::apply_update_and_restart() {
                 log::error!("Failed to apply update and restart: {e}");
+            }
+        }
+        AppInput::ShowWhatsNewDialog(pending, summary) => {
+            let claw_ready = matches!(
+                inner
+                    .current_settings
+                    .resolve_model_state(&inner.current_settings.claw_model),
+                boxxy_preferences::config::ModelConfigState::Ready(_)
+            );
+
+            let builder =
+                gtk4::Builder::from_resource("/dev/boxxy/BoxxyTerminal/ui/whats_new_dialog.ui");
+            let Some(dialog) = builder.object::<adw::Dialog>("whats_new_dialog") else {
+                return;
+            };
+
+            if let Some(banner_picture) = builder.object::<gtk4::Picture>("banner_picture") {
+                banner_picture
+                    .set_resource(Some("/dev/boxxy/BoxxyTerminal/icons/whats_new_banner.png"));
+            }
+
+            if let Some(commit_pill) = builder.object::<gtk4::Label>("commit_pill_label") {
+                commit_pill.set_label(&format!("{} → {}", pending.from_commit, pending.to_commit));
+            }
+
+            if let Some(hero_subtitle) = builder.object::<gtk4::Label>("hero_subtitle_label") {
+                if claw_ready {
+                    hero_subtitle.set_label("Hot out of the compiler! Let Boxxy give you the tour.");
+                } else {
+                    hero_subtitle.set_label(
+                        "Hot out of the compiler! Copy the prompt below for your favorite AI.",
+                    );
+                }
+            }
+
+            if let Some(ref s) = summary
+                && s.total_commits > 0
+            {
+                if let Some(commits_val) = builder.object::<gtk4::Label>("commits_val") {
+                    commits_val.set_label(&format!("📦 {}", s.total_commits));
+                }
+                if let Some(commits_caption) = builder.object::<gtk4::Label>("commits_caption") {
+                    let word = if s.total_commits == 1 {
+                        "Commit Shipped"
+                    } else {
+                        "Commits Shipped"
+                    };
+                    commits_caption.set_label(word);
+                }
+                if let Some(files_val) = builder.object::<gtk4::Label>("files_val") {
+                    files_val.set_label(&format!("🗂️ {}", s.files_changed));
+                }
+                if let Some(files_caption) = builder.object::<gtk4::Label>("files_caption") {
+                    let word = if s.files_changed == 1 {
+                        "File Touched"
+                    } else {
+                        "Files Touched"
+                    };
+                    files_caption.set_label(word);
+                }
+                if let Some(lines_val) = builder.object::<gtk4::Label>("lines_val") {
+                    lines_val.set_markup(&format!(
+                        "<span foreground=\"#4ade80\">+{}</span> <span alpha=\"50%\">/</span> <span foreground=\"#f87171\">-{}</span>",
+                        s.additions, s.deletions
+                    ));
+                }
+                if let Some(fun_fact_label) = builder.object::<gtk4::Label>("fun_fact_label") {
+                    fun_fact_label.set_markup(&s.fun_fact_markup());
+                }
+            } else if let Some(stats_card) = builder.object::<gtk4::Box>("stats_card") {
+                stats_card.set_visible(false);
+            }
+
+            if let Some(copy_row) = builder.object::<adw::ActionRow>("copy_prompt_row") {
+                let copy_icon = builder.object::<gtk4::Image>("copy_prompt_icon");
+                let tx_copy = inner.tx.clone();
+                let pending_copy = pending.clone();
+                let summary_copy = summary.clone();
+                copy_row.connect_activated(move |_| {
+                    let clip_text = crate::updater::whats_new::build_clipboard_whats_new_prompt(
+                        &pending_copy,
+                        summary_copy.as_ref(),
+                    );
+                    if let Some(display) = gtk4::gdk::Display::default() {
+                        display.clipboard().set_text(&clip_text);
+                    }
+                    if let Some(ref icon) = copy_icon {
+                        icon.set_icon_name(Some("boxxy-object-select-symbolic"));
+                    }
+                    let _ = tx_copy.send_blocking(AppInput::ShowToast(
+                        crate::state::ToastRequest::ephemeral(
+                            "What's New prompt copied to clipboard",
+                        ),
+                    ));
+                });
+            }
+
+            if let Some(close_btn) = builder.object::<gtk4::Button>("close_btn") {
+                let dialog_weak = dialog.downgrade();
+                close_btn.connect_clicked(move |_| {
+                    if let Some(d) = dialog_weak.upgrade() {
+                        d.close();
+                    }
+                });
+            }
+
+            if let Some(read_btn) = builder.object::<gtk4::Button>("read_btn") {
+                read_btn.set_sensitive(claw_ready);
+                if !claw_ready {
+                    read_btn.set_tooltip_text(Some(
+                        "Configure a Claw AI model in Preferences to let Boxxy read what's new",
+                    ));
+                }
+                let dialog_weak = dialog.downgrade();
+                let tx_read = inner.tx.clone();
+                read_btn.connect_clicked(move |_| {
+                    if let Some(d) = dialog_weak.upgrade() {
+                        d.close();
+                    }
+                    let prompt = crate::updater::whats_new::build_claw_whats_new_prompt(
+                        &pending,
+                        summary.as_ref(),
+                    );
+                    let _ = tx_read.send_blocking(AppInput::StartWhatsNewClaw(prompt));
+                });
+            }
+
+            dialog.present(Some(&inner.window));
+        }
+        AppInput::StartWhatsNewClaw(prompt) => {
+            if inner.tabs.is_empty() {
+                tabs::new_tab(&mut inner);
+            }
+
+            // Ensure we target an idle pane that does not already have a running Claw session.
+            let active_tab_has_claw = inner
+                .tab_view
+                .selected_page()
+                .and_then(|page| {
+                    let target_ptr = page.child().as_ptr() as usize;
+                    inner
+                        .tabs
+                        .iter()
+                        .find(|t| t.controller.widget().as_ptr() as usize == target_ptr)
+                })
+                .is_some_and(|t| t.is_claw_active());
+
+            if active_tab_has_claw {
+                tabs::new_tab(&mut inner);
+            }
+
+            if let Some(page) = inner.tab_view.selected_page() {
+                let target_ptr = page.child().as_ptr() as usize;
+                if let Some(tab) = inner
+                    .tabs
+                    .iter()
+                    .find(|t| t.controller.widget().as_ptr() as usize == target_ptr)
+                {
+                    let _ = tab.start_claw_query_with_default_character(prompt);
+                }
             }
         }
         AppInput::GrabFocus => {

@@ -93,8 +93,13 @@ impl ClawSession {
         ctx.current_dir = cwd.clone();
         self.ensure_session_persisted(&cwd).await;
         let thumb_paths = cache_user_attachment_thumbnails(&image_attachments).await;
+        let display_query = query
+            .split("\n\n--- UPDATE CHANGELOG CONTEXT ---")
+            .next()
+            .unwrap_or(&query)
+            .to_string();
         self.send_ui(ClawEngineEvent::UserMessage {
-            content: query.clone(),
+            content: display_query,
             images: thumb_paths,
         })
         .await;

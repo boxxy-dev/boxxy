@@ -150,9 +150,14 @@ pub enum AppInput {
     PushGlobalNotification(Notification),
     ShowToast(ToastRequest),
     DismissNotification(String),
-    StartUpdateDownload(String, String, Option<String>), // (url, date, checksum_url)
+    StartUpdateDownload(String, String, String, Option<String>), // (url, date, new_commit, checksum_url)
     UpdateDownloaded(String),
     ApplyUpdateAndRestart,
+    ShowWhatsNewDialog(
+        crate::updater::whats_new::WhatsNewPending,
+        Option<crate::updater::whats_new::ChangelogSummary>,
+    ),
+    StartWhatsNewClaw(String),
     GrabFocus,
     CancelTask(uuid::Uuid, Option<String>), // (task_id, pane_id)
     ClearClawHistory(Option<String>),       // (pane_id)

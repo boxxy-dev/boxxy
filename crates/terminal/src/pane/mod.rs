@@ -1044,6 +1044,104 @@ impl TerminalPaneComponent {
         }
     }
 
+    /// Starts the Claw overlay with the default character and submits `query`,
+    /// provided no Claw session is already active on this pane.
+    pub fn start_claw_query_with_default_character(&self, query: String) -> bool {
+        if self.is_claw_active.get() {
+            return false;
+        }
+
+        let (pane_id, session_id_ref, claw_sub_ref, event_tx, cwd, cb) = {
+            let inner = self.inner.borrow();
+            (
+                inner.id.clone(),
+                inner.session_id.clone(),
+                inner.claw_subscription.clone(),
+                inner.claw_event_tx.clone(),
+                inner.working_dir.clone().unwrap_or_default(),
+                inner.callback.clone(),
+            )
+        };
+
+        self.is_claw_active.set(true);
+        *self.session_status.borrow_mut() = AgentStatus::Waiting;
+        self.claw_indicator.set_visible(true);
+        self.msg_bar.update_ui(
+            AgentStatus::Waiting,
+            self.is_pinned.get(),
+            self.is_web_search.get(),
+        );
+        cb(PaneOutput::ClawStateChanged(pane_id.clone(), true, false));
+
+        let catalog = boxxy_claw_protocol::characters::CHARACTER_CACHE.load();
+        let claims = boxxy_claw_protocol::characters::CLAIMS_CACHE.load();
+        let chosen = catalog
+            .iter()
+            .find(|c| !claims.iter().any(|cl| cl.character_id == c.config.id))
+            .or_else(|| catalog.first())
+            .cloned();
+        let char_id = chosen
+            .as_ref()
+            .map(|c| c.config.id.clone())
+            .unwrap_or_default();
+        let display_name = chosen
+            .as_ref()
+            .map(|c| c.config.display_name.clone())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "Agent".to_string());
+
+        let terminal = self.terminal();
+        terminal.set_focusable(false);
+        self.claw_popover.show_chat_only(&display_name);
+        self.claw_popover.enter_waiting_state();
+
+        let tx = self.claw_sender.clone();
+        glib::spawn_future_local(async move {
+            let snapshot = terminal
+                .get_text_snapshot(100, 0)
+                .await
+                .unwrap_or_default();
+            let has_session = session_id_ref.lock().await.is_some();
+
+            if !has_session {
+                let agent = crate::get_agent().await;
+                if let Ok((session_id, sub_guard)) = agent
+                    .create_claw_session_with_sender(pane_id, char_id, event_tx)
+                    .await
+                    && !session_id.is_empty()
+                {
+                    *claw_sub_ref.lock() = Some(sub_guard);
+                    *session_id_ref.lock().await = Some(session_id.clone());
+                    let _ = agent
+                        .post_claw_message(session_id.clone(), ClawMessage::Initialize)
+                        .await;
+                    let _ = agent
+                        .post_claw_message(
+                            session_id,
+                            ClawMessage::ClawQuery {
+                                query,
+                                snapshot,
+                                cwd,
+                                image_attachments: vec![],
+                            },
+                        )
+                        .await;
+                }
+            } else {
+                let _ = tx
+                    .send(ClawMessage::ClawQuery {
+                        query,
+                        snapshot,
+                        cwd,
+                        image_attachments: vec![],
+                    })
+                    .await;
+            }
+        });
+
+        true
+    }
+
     pub fn resume_session(&self, resume_id: &str) {
         let resume_id = resume_id.trim().to_string();
         if resume_id.is_empty() {

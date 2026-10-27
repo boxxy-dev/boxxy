@@ -98,6 +98,12 @@ impl BoxxyNotificationDetails {
                 .find(|(k, _)| k == "Date")
                 .map(|(_, v)| v.clone())
                 .unwrap_or_default();
+            let new_commit = notification
+                .details
+                .iter()
+                .find(|(k, _)| k == "New Commit")
+                .map(|(_, v)| v.clone())
+                .unwrap_or_else(|| "nightly".to_string());
             let checksum_url = notification
                 .details
                 .iter()
@@ -114,6 +120,7 @@ impl BoxxyNotificationDetails {
                         let _ = tx.send_blocking(crate::state::AppInput::StartUpdateDownload(
                             url.clone(),
                             date.clone(),
+                            new_commit.clone(),
                             checksum_url.clone(),
                         ));
                         let _ = tx

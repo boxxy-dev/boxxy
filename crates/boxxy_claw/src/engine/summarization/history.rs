@@ -45,6 +45,7 @@ impl DemotionExtractor {
 /// from a user message text so background memory flush calls don't waste tokens on snapshots.
 pub(crate) fn clean_user_text_for_flush(raw: &str) -> &str {
     for marker in [
+        "\n\n--- UPDATE CHANGELOG CONTEXT ---",
         "\n\n## YOUR IDENTITY",
         "\n\n## CURRENT TURN CONTEXT",
         "\n\n--- GLOBAL RADAR",
