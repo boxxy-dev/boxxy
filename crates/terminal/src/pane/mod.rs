@@ -106,9 +106,7 @@ impl Drop for PaneInner {
         self.claw_event_tx.close();
         self.claw_msg_tx.close();
         self.process_subscriptions.clear();
-        if let Ok(mut sub) = self.claw_subscription.lock() {
-            *sub = None;
-        }
+        *self.claw_subscription.lock() = None;
 
         if self.already_handled_close {
             self.terminal.detach_pty();
@@ -205,7 +203,7 @@ pub(super) struct PaneInner {
     pub(super) claw_msg_tx: async_channel::Sender<boxxy_claw_protocol::ClawMessage>,
     pub(super) process_subscriptions: Vec<crate::agent_manager::SubscriptionGuard>,
     pub(super) claw_subscription:
-        std::sync::Arc<std::sync::Mutex<Option<crate::agent_manager::SubscriptionGuard>>>,
+        std::sync::Arc<parking_lot::Mutex<Option<crate::agent_manager::SubscriptionGuard>>>,
     pub(super) claw_indicator: Option<ClawIndicator>,
     pub(super) msg_bar: Rc<MsgBarComponent>,
     pub(super) callback: std::sync::Arc<dyn Fn(PaneOutput) + Send + Sync + 'static>,
@@ -234,9 +232,7 @@ impl PaneInner {
         self.claw_event_tx.close();
         self.claw_msg_tx.close();
         self.process_subscriptions.clear();
-        if let Ok(mut sub) = self.claw_subscription.lock() {
-            *sub = None;
-        }
+        *self.claw_subscription.lock() = None;
         self.terminal.detach_pty();
         Some(self.session_id.clone())
     }
@@ -264,9 +260,7 @@ impl TerminalPaneComponent {
             inner.claw_event_tx.close();
             inner.claw_msg_tx.close();
             inner.process_subscriptions.clear();
-            if let Ok(mut sub) = inner.claw_subscription.lock() {
-                *sub = None;
-            }
+            *inner.claw_subscription.lock() = None;
             let snap = inner.export_snapshot_with_title();
             // Shut down this pane's EventLoop and close its master_fd BEFORE
             // handing the session to the daemon's background reader.
@@ -301,9 +295,7 @@ impl TerminalPaneComponent {
             inner.claw_event_tx.close();
             inner.claw_msg_tx.close();
             inner.process_subscriptions.clear();
-            if let Ok(mut sub) = inner.claw_subscription.lock() {
-                *sub = None;
-            }
+            *inner.claw_subscription.lock() = None;
             inner.terminal.detach_pty();
             inner.pid
         };
@@ -605,9 +597,7 @@ impl TerminalPaneComponent {
                                     if let Some(resume_id) = resume_id_opt {
                                         let resume_guard = agent
                                             .subscribe_claw_session(resume_id.clone(), event_tx);
-                                        if let Ok(mut guard_slot) = claw_sub_ref.lock() {
-                                            *guard_slot = Some(resume_guard);
-                                        }
+                                        *claw_sub_ref.lock() = Some(resume_guard);
                                         *session_id_ref.lock().await = Some(resume_id.clone());
                                         let _ = agent
                                             .post_claw_message(
@@ -618,9 +608,7 @@ impl TerminalPaneComponent {
                                             )
                                             .await;
                                     } else {
-                                        if let Ok(mut guard_slot) = claw_sub_ref.lock() {
-                                            *guard_slot = Some(sub_guard);
-                                        }
+                                        *claw_sub_ref.lock() = Some(sub_guard);
                                         *session_id_ref.lock().await = Some(session_id.clone());
                                         let _ = agent
                                             .post_claw_message(
@@ -649,9 +637,7 @@ impl TerminalPaneComponent {
                                 let agent = crate::get_agent().await;
                                 let resume_guard =
                                     agent.subscribe_claw_session(resume_id.clone(), event_tx);
-                                if let Ok(mut guard_slot) = claw_sub_ref.lock() {
-                                    *guard_slot = Some(resume_guard);
-                                }
+                                *claw_sub_ref.lock() = Some(resume_guard);
                                 let _ = tx
                                     .send(ClawMessage::ResumeSession {
                                         session_id: resume_id.clone(),
@@ -742,9 +728,7 @@ impl TerminalPaneComponent {
                                         .await
                                         && !sid.is_empty()
                                     {
-                                        if let Ok(mut guard_slot) = claw_sub_ref.lock() {
-                                            *guard_slot = Some(sub_guard);
-                                        }
+                                        *claw_sub_ref.lock() = Some(sub_guard);
                                         *session_id_ref.lock().await = Some(sid.clone());
                                         let _ = agent
                                             .post_claw_message(sid, ClawMessage::Initialize)
@@ -867,7 +851,7 @@ impl TerminalPaneComponent {
                 claw_event_tx: claw_event_tx_for_inner,
                 claw_msg_tx: claw_sender.clone(),
                 process_subscriptions: Vec::new(),
-                claw_subscription: std::sync::Arc::new(std::sync::Mutex::new(None)),
+                claw_subscription: std::sync::Arc::new(parking_lot::Mutex::new(None)),
                 claw_indicator: None,
                 msg_bar: msg_bar.clone(),
                 callback: callback.clone(),
@@ -1162,9 +1146,7 @@ impl TerminalPaneComponent {
                         return;
                     }
                     let resume_guard = agent.subscribe_claw_session(resume_id.clone(), event_tx);
-                    if let Ok(mut guard_slot) = claw_sub_ref.lock() {
-                        *guard_slot = Some(resume_guard);
-                    }
+                    *claw_sub_ref.lock() = Some(resume_guard);
                     *session_id_ref.lock().await = Some(resume_id.clone());
                     let _ = agent
                         .post_claw_message(
@@ -1178,9 +1160,7 @@ impl TerminalPaneComponent {
             } else {
                 let agent = crate::get_agent().await;
                 let resume_guard = agent.subscribe_claw_session(resume_id.clone(), event_tx);
-                if let Ok(mut guard_slot) = claw_sub_ref.lock() {
-                    *guard_slot = Some(resume_guard);
-                }
+                *claw_sub_ref.lock() = Some(resume_guard);
                 let _ = tx
                     .send(ClawMessage::ResumeSession {
                         session_id: resume_id.clone(),
@@ -1349,9 +1329,7 @@ impl TerminalPaneComponent {
                             .await
                         {
                             reattached_claw = true;
-                            if let Ok(mut guard_slot) = claw_sub_ref.lock() {
-                                *guard_slot = Some(sub_guard);
-                            }
+                            *claw_sub_ref.lock() = Some(sub_guard);
                             *session_id_ref.lock().await = Some(sid);
                             is_claw_active_cell.set(true);
                             *session_status_cell.borrow_mut() = AgentStatus::Waiting;

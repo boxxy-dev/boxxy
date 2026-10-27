@@ -5,10 +5,11 @@ use boxxy_agent::ipc::maintenance::AgentMaintenanceProxy;
 use boxxy_agent::ipc::pty::{AgentPtyProxy, DetachedSessionInfo, SpawnOptions};
 use boxxy_claw_protocol::{ClawEngineEvent, ClawEnvironment, ClawMessage};
 use futures_util::StreamExt;
+use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::hash::Hash;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
 use zbus::{Connection, OwnedFd};
 
 static NEXT_SUBSCRIPTION_ID: AtomicU64 = AtomicU64::new(1);
@@ -38,7 +39,7 @@ impl Drop for SubscriptionGuard {
 /// Thread-safe, lock-free-await signal router that multiplexes a single D-Bus
 /// signal stream to keyed per-pane channels.
 ///
-/// Uses `std::sync::Mutex` (never held across `.await`) + unbounded `try_send`
+/// Uses `parking_lot::Mutex` (never held across `.await`) + unbounded `try_send`
 /// so `SubscriptionGuard::drop` can deterministically remove subscribers
 /// synchronously, dropping the channel `Sender` and immediately waking any
 /// awaiting `Receiver::recv().await` task on pane close.
@@ -84,13 +85,13 @@ where
     ) -> SubscriptionGuard {
         let sub_id = NEXT_SUBSCRIPTION_ID.fetch_add(1, Ordering::Relaxed);
         {
-            let mut map = self.subscribers.lock().unwrap();
+            let mut map = self.subscribers.lock();
             map.entry(key.clone()).or_default().push((sub_id, tx));
         }
 
         let subscribers = self.subscribers.clone();
         SubscriptionGuard::new(move || {
-            let mut map = subscribers.lock().unwrap();
+            let mut map = subscribers.lock();
             if let Some(list) = map.get_mut(&key) {
                 list.retain(|(id, _)| *id != sub_id);
                 if list.is_empty() {
@@ -112,7 +113,7 @@ where
     /// Dispatches `value` to all active subscribers for `key`, automatically
     /// purging any closed channels.
     pub fn dispatch(&self, key: &K, value: V) {
-        let mut map = self.subscribers.lock().unwrap();
+        let mut map = self.subscribers.lock();
         if let Some(list) = map.get_mut(key) {
             list.retain(|(_, tx)| !tx.is_closed() && tx.try_send(value.clone()).is_ok());
             if list.is_empty() {
@@ -124,10 +125,7 @@ where
     /// Dispatches `value` once and removes all subscribers for `key` (used for
     /// terminal one-shot events like process `Exited`).
     pub fn dispatch_once(&self, key: &K, value: V) {
-        let removed = {
-            let mut map = self.subscribers.lock().unwrap();
-            map.remove(key)
-        };
+        let removed = self.subscribers.lock().remove(key);
         if let Some(list) = removed {
             for (_, tx) in list {
                 let _ = tx.try_send(value.clone());
@@ -137,12 +135,12 @@ where
 
     /// Removes all subscribers for `key` (dropping their `Sender`s).
     pub fn remove_key(&self, key: &K) {
-        self.subscribers.lock().unwrap().remove(key);
+        self.subscribers.lock().remove(key);
     }
 
     /// Returns a snapshot of keys that currently have at least one live subscriber.
     pub fn active_keys(&self) -> Vec<K> {
-        let mut map = self.subscribers.lock().unwrap();
+        let mut map = self.subscribers.lock();
         map.retain(|_, list| {
             list.retain(|(_, tx)| !tx.is_closed());
             !list.is_empty()
@@ -154,10 +152,8 @@ where
     pub fn subscriber_count(&self, key: &K) -> usize {
         self.subscribers
             .lock()
-            .unwrap()
             .get(key)
-            .map(|l| l.len())
-            .unwrap_or(0)
+            .map_or(0, Vec::len)
     }
 }
 
@@ -457,7 +453,7 @@ impl AgentManager {
     /// message), consuming it so it is only shown once. Call this after the
     /// window has subscribed to TERMINAL_EVENT_BUS.
     pub fn take_startup_notification(&self) -> Option<String> {
-        self.startup_notification.lock().unwrap().take()
+        self.startup_notification.lock().take()
     }
 
     pub async fn disconnect(&self) {

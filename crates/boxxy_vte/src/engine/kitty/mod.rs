@@ -793,9 +793,9 @@ mod tests {
 
         kg.reap_unused_images();
         assert_eq!(kg.images.len(), 2);
-        assert!(kg.images.get(&1).is_none());
-        assert!(kg.images.get(&2).is_some());
-        assert!(kg.images.get(&3).is_some());
+        assert!(!kg.images.contains_key(&1));
+        assert!(kg.images.contains_key(&2));
+        assert!(kg.images.contains_key(&3));
 
         assert_eq!(kg.placements.len(), 2);
         assert!(kg.placements.iter().all(|p| p.image_id != 1));
@@ -827,9 +827,9 @@ mod tests {
         }
 
         assert_eq!(kg.images.len(), 2);
-        assert!(kg.images.get(&1).is_none());
-        assert!(kg.images.get(&2).is_some());
-        assert!(kg.images.get(&3).is_some());
+        assert!(!kg.images.contains_key(&1));
+        assert!(kg.images.contains_key(&2));
+        assert!(kg.images.contains_key(&3));
 
         kg.images.get(&2).unwrap().last_used.store(
             NEXT_LRU_SEQ.fetch_add(1, Ordering::Relaxed),
@@ -855,9 +855,9 @@ mod tests {
         kg.reap_unused_images();
 
         assert_eq!(kg.images.len(), 2);
-        assert!(kg.images.get(&3).is_none());
-        assert!(kg.images.get(&2).is_some());
-        assert!(kg.images.get(&4).is_some());
+        assert!(!kg.images.contains_key(&3));
+        assert!(kg.images.contains_key(&2));
+        assert!(kg.images.contains_key(&4));
     }
 
     #[test]
@@ -901,8 +901,8 @@ mod tests {
         kg.reap_unused_images();
 
         assert_eq!(kg.images.len(), 1);
-        assert!(kg.images.get(&1).is_none());
-        assert!(kg.images.get(&2).is_some());
+        assert!(!kg.images.contains_key(&1));
+        assert!(kg.images.contains_key(&2));
     }
 
     #[test]

@@ -33,5 +33,6 @@ futures-channel.workspace = true
 futures-util.workspace = true
 gstreamer.workspace = true
 log.workspace = true
+parking_lot.workspace = true
 uuid.workspace = true
 getrandom.workspace = true

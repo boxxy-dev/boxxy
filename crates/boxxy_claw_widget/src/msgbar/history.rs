@@ -1,6 +1,7 @@
 use crate::Attachment;
+use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
-use std::sync::{Arc, LazyLock, Mutex};
+use std::sync::{Arc, LazyLock};
 
 const MAX_HISTORY_ITEMS: i64 = 100;
 const MAX_RICH_ATTACHMENTS: usize = 20;
@@ -87,7 +88,7 @@ impl MsgHistory {
 
     fn ensure_loaded_async() {
         {
-            let mut state = GLOBAL_HISTORY.lock().unwrap();
+            let mut state = GLOBAL_HISTORY.lock();
             if matches!(
                 state.status,
                 HistoryLoadStatus::Loading | HistoryLoadStatus::Ready
@@ -114,18 +115,18 @@ impl MsgHistory {
                                     attachments,
                                 });
                             }
-                            let mut state = history_rc.lock().unwrap();
+                            let mut state = history_rc.lock();
                             merge_loaded_history(&mut state, db_items);
                         }
                         Err(e) => {
                             log::warn!("Failed to load msgbar history from DB: {}", e);
-                            history_rc.lock().unwrap().status = HistoryLoadStatus::Failed;
+                            history_rc.lock().status = HistoryLoadStatus::Failed;
                         }
                     }
                 }
                 Err(e) => {
                     log::warn!("Failed to open DB for msgbar history: {}", e);
-                    history_rc.lock().unwrap().status = HistoryLoadStatus::Failed;
+                    history_rc.lock().status = HistoryLoadStatus::Failed;
                 }
             }
         });
@@ -139,7 +140,7 @@ impl MsgHistory {
             };
 
             {
-                let mut state = GLOBAL_HISTORY.lock().unwrap();
+                let mut state = GLOBAL_HISTORY.lock();
                 if state.status != HistoryLoadStatus::Ready {
                     state.pending_writes.push(item.clone());
                 }
@@ -179,7 +180,7 @@ impl MsgHistory {
     ) -> Option<HistoryItem> {
         Self::ensure_loaded_async();
 
-        let state = GLOBAL_HISTORY.lock().unwrap();
+        let state = GLOBAL_HISTORY.lock();
         if state.items.is_empty() {
             return None;
         }
@@ -201,7 +202,7 @@ impl MsgHistory {
     }
 
     pub fn navigate_down(&mut self) -> Option<HistoryItem> {
-        let state = GLOBAL_HISTORY.lock().unwrap();
+        let state = GLOBAL_HISTORY.lock();
         if let Some(current_idx) = self.idx {
             if current_idx + 1 < state.items.len() {
                 self.idx = Some(current_idx + 1);

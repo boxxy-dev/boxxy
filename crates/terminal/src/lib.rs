@@ -1,5 +1,4 @@
 use std::env;
-use std::sync::RwLock;
 
 pub mod agent_manager;
 pub mod claw_proposal;
@@ -17,15 +16,12 @@ pub use boxxy_claw_widget::{ClawHost, Proposal};
 pub use component::{Direction, TerminalComponent};
 pub use events::*;
 
-/// Global broadcast channel — every TerminalComponent writes here;
-/// every AppWindow subscribes and filters by the IDs it owns.
-pub static TERMINAL_EVENTS: RwLock<Option<TerminalEvent>> = RwLock::new(None);
-// We need a way to subscribe to events in raw gtk4-rs across the application.
-// We'll use a tokio broadcast channel instead.
 use crate::agent_manager::AgentManager;
 use std::sync::LazyLock;
 use tokio::sync::broadcast;
 
+/// Global broadcast channel — every TerminalComponent writes here;
+/// every AppWindow subscribes and filters by the IDs it owns.
 pub static TERMINAL_EVENT_BUS: LazyLock<broadcast::Sender<TerminalEvent>> = LazyLock::new(|| {
     let (tx, _) = broadcast::channel(100);
     tx

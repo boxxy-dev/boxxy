@@ -168,9 +168,7 @@ impl<T> Storage<T> {
             let a_ptr = self.inner.as_mut_ptr().add(a) as *mut MaybeUninit<[usize; 4]>;
             let b_ptr = self.inner.as_mut_ptr().add(b) as *mut MaybeUninit<[usize; 4]>;
 
-            let tmp = *a_ptr;
-            *a_ptr = *b_ptr;
-            *b_ptr = tmp;
+            std::ptr::swap(a_ptr, b_ptr);
         }
     }
 

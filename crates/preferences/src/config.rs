@@ -1,5 +1,6 @@
 use arc_swap::ArcSwap;
 use boxxy_model_selection::ModelProvider;
+use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::fs;
@@ -7,7 +8,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(not(test))]
 use std::sync::atomic::AtomicU64;
-use std::sync::{Arc, LazyLock, RwLock};
+use std::sync::{Arc, LazyLock};
 use tokio::sync::broadcast;
 pub use tokio::sync::broadcast::error::RecvError as BroadcastRecvError;
 
@@ -609,12 +610,11 @@ You can add your own sensitive paths here. One path per line. Lines starting wit
     pub fn set_env_api_key(provider: &str, key: String) {
         ENV_API_KEYS
             .write()
-            .unwrap()
             .insert(provider.to_string(), key);
     }
 
     pub fn get_env_api_key(provider: &str) -> Option<String> {
-        ENV_API_KEYS.read().unwrap().get(provider).cloned()
+        ENV_API_KEYS.read().get(provider).cloned()
     }
 
     pub fn get_effective_api_key(&self, provider: &str) -> String {
@@ -648,7 +648,7 @@ You can add your own sensitive paths here. One path per line. Lines starting wit
 
     pub fn get_effective_api_keys(&self) -> std::collections::HashMap<String, String> {
         let mut keys = self.api_keys.clone();
-        let env_keys = ENV_API_KEYS.read().unwrap();
+        let env_keys = ENV_API_KEYS.read();
         for (provider, key) in env_keys.iter() {
             if !keys.contains_key(provider)
                 || keys.get(provider).map(|k| k.trim().is_empty()).unwrap_or(true)

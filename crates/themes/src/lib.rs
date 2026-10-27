@@ -8,29 +8,31 @@ use std::path::PathBuf;
 pub mod preview;
 pub mod selector;
 
+use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::path::Path;
-use std::sync::{Arc, LazyLock, Mutex};
+use std::sync::{Arc, LazyLock};
 
 static TEXTURE_CACHE: LazyLock<Arc<Mutex<HashMap<String, gdk::Texture>>>> =
     LazyLock::new(|| Arc::new(Mutex::new(HashMap::new())));
 
 pub fn get_texture_from_path(path: &str) -> Option<gdk::Texture> {
-    let mut cache = TEXTURE_CACHE.lock().unwrap();
-    if let Some(texture) = cache.get(path) {
-        return Some(texture.clone());
+    if let Some(texture) = TEXTURE_CACHE.lock().get(path).cloned() {
+        return Some(texture);
     }
 
     let file = gtk::gio::File::for_path(path);
     if let Ok(texture) = gdk::Texture::from_file(&file) {
-        cache.insert(path.to_string(), texture.clone());
+        TEXTURE_CACHE
+            .lock()
+            .insert(path.to_string(), texture.clone());
         return Some(texture);
     }
     None
 }
 
 pub fn clear_texture_cache() {
-    TEXTURE_CACHE.lock().unwrap().clear();
+    TEXTURE_CACHE.lock().clear();
 }
 
 pub fn copy_background_image(src_path: &Path) -> Option<String> {

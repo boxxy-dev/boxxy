@@ -1,14 +1,18 @@
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::OnceLock;
+use std::sync::{LazyLock, OnceLock};
 use std::time::Duration;
 use tokio::runtime::Runtime;
 
 static RUNTIME: OnceLock<Runtime> = OnceLock::new();
 static HTTP_CLIENT: OnceLock<Option<reqwest::Client>> = OnceLock::new();
-static LOCATION_CACHE: OnceLock<RwLock<Option<LocationContext>>> = OnceLock::new();
-static EXCHANGE_RATES_CACHE: OnceLock<RwLock<Option<HashMap<String, f64>>>> = OnceLock::new();
+static LOCATION_CACHE: RwLock<Option<LocationContext>> = RwLock::new(None);
+static EXCHANGE_RATES_CACHE: RwLock<Option<HashMap<String, f64>>> = RwLock::new(None);
+static FETCH_LOCATION_LOCK: LazyLock<tokio::sync::Mutex<()>> =
+    LazyLock::new(|| tokio::sync::Mutex::new(()));
+static FETCH_RATES_LOCK: LazyLock<tokio::sync::Mutex<()>> =
+    LazyLock::new(|| tokio::sync::Mutex::new(()));
 
 #[derive(serde::Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct LocationContext {
@@ -119,10 +123,13 @@ fn shared_http_client() -> Option<&'static reqwest::Client> {
 
 /// Fetches the current location context in the background.
 pub async fn fetch_location_context() {
-    let cache = LOCATION_CACHE.get_or_init(|| RwLock::new(None));
+    // Fast-path check before acquiring the async fetch lock
+    if LOCATION_CACHE.read().is_some() {
+        return;
+    }
 
-    // Don't re-fetch if we already have it
-    if cache.read().is_some() {
+    let _fetch_guard = FETCH_LOCATION_LOCK.lock().await;
+    if LOCATION_CACHE.read().is_some() {
         return;
     }
 
@@ -141,14 +148,14 @@ pub async fn fetch_location_context() {
     };
 
     if let Ok(loc) = res.json::<LocationContext>().await {
-        *cache.write() = Some(loc);
+        *LOCATION_CACHE.write() = Some(loc);
     }
 }
 
 /// Returns the current location context from cache.
 #[must_use]
 pub fn get_location_context() -> Option<LocationContext> {
-    LOCATION_CACHE.get()?.read().clone()
+    LOCATION_CACHE.read().clone()
 }
 
 /// Fetches live USD exchange rates from the ECB/Frankfurter API (`api.frankfurter.dev`)
@@ -157,10 +164,13 @@ pub fn get_location_context() -> Option<LocationContext> {
 /// This is a mechanism-only helper: callers decide the policy (e.g. only invoking
 /// this when the user's selected currency is not USD).
 pub async fn fetch_exchange_rates() {
-    let cache = EXCHANGE_RATES_CACHE.get_or_init(|| RwLock::new(None));
+    // Fast-path check before acquiring the async fetch lock
+    if EXCHANGE_RATES_CACHE.read().is_some() {
+        return;
+    }
 
-    // Don't re-fetch if already populated during this session.
-    if cache.read().is_some() {
+    let _fetch_guard = FETCH_RATES_LOCK.lock().await;
+    if EXCHANGE_RATES_CACHE.read().is_some() {
         return;
     }
 
@@ -180,7 +190,7 @@ pub async fn fetch_exchange_rates() {
     if let Ok(payload) = res.json::<FrankfurterResponse>().await
         && !payload.rates.is_empty()
     {
-        *cache.write() = Some(payload.rates);
+        *EXCHANGE_RATES_CACHE.write() = Some(payload.rates);
     }
 }
 
@@ -189,7 +199,6 @@ pub async fn fetch_exchange_rates() {
 #[must_use]
 pub fn get_exchange_rate(code: &str) -> Option<f64> {
     EXCHANGE_RATES_CACHE
-        .get()?
         .read()
         .as_ref()?
         .get(code)
@@ -334,8 +343,7 @@ mod tests {
     #[test]
     #[serial(exchange_rates)]
     fn test_get_exchange_rate_filtering() {
-        let cache = EXCHANGE_RATES_CACHE.get_or_init(|| RwLock::new(None));
-        let prev = cache.read().clone();
+        let prev = EXCHANGE_RATES_CACHE.read().clone();
 
         let mut rates = HashMap::new();
         rates.insert("EUR".to_string(), 0.92);
@@ -343,7 +351,7 @@ mod tests {
         rates.insert("NEG".to_string(), -1.5);
         rates.insert("NAN".to_string(), f64::NAN);
         rates.insert("INF".to_string(), f64::INFINITY);
-        *cache.write() = Some(rates);
+        *EXCHANGE_RATES_CACHE.write() = Some(rates);
 
         assert_eq!(get_exchange_rate("EUR"), Some(0.92));
         assert_eq!(get_exchange_rate("GBP"), None);
@@ -352,7 +360,7 @@ mod tests {
         assert_eq!(get_exchange_rate("NAN"), None);
         assert_eq!(get_exchange_rate("INF"), None);
 
-        *cache.write() = prev;
+        *EXCHANGE_RATES_CACHE.write() = prev;
     }
 
     #[test]

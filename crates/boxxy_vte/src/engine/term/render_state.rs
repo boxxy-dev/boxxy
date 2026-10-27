@@ -448,8 +448,12 @@ impl RenderState {
             let actual_e_col = e_col.max(line_start_bound);
 
             if actual_s_col < actual_e_col {
-                for i in actual_s_col..actual_e_col.min(row_cells.len()) {
-                    let flags = row_cells[i].flags;
+                for cell in row_cells
+                    .iter()
+                    .take(actual_e_col.min(row_cells.len()))
+                    .skip(actual_s_col)
+                {
+                    let flags = cell.flags;
                     if !flags.contains(Flags::WIDE_CHAR_SPACER)
                         && !flags.contains(Flags::LEADING_WIDE_CHAR_SPACER)
                         && !flags.contains(Flags::SEMANTIC_PROMPT)

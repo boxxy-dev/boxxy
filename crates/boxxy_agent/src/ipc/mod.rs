@@ -171,7 +171,7 @@ pub async fn start_services(
 struct HostedSession {
     pane_id: String,
     agent_name: String,
-    active_session_id: Arc<std::sync::RwLock<String>>,
+    active_session_id: Arc<parking_lot::RwLock<String>>,
     tx: async_channel::Sender<ClawMessage>,
 }
 
@@ -821,9 +821,7 @@ impl AgentInterface {
                         let mut manager = self.session_manager.lock().await;
                         if let Some(hosted) = manager.sessions.get_mut(&session_id) {
                             hosted.agent_name = display_name;
-                            if let Ok(mut active_sid) = hosted.active_session_id.write() {
-                                *active_sid = resume_sid.clone();
-                            }
+                            *hosted.active_session_id.write() = resume_sid.clone();
                             let aliased = hosted.clone();
                             manager.sessions.insert(resume_sid.clone(), aliased);
                         }
@@ -839,12 +837,8 @@ impl AgentInterface {
         manager.prune_dead();
         let mut seen_panes = std::collections::HashSet::new();
         let mut out = Vec::new();
-        for (sid, s) in manager.sessions.iter() {
-            let effective_sid = s
-                .active_session_id
-                .read()
-                .map(|g| g.clone())
-                .unwrap_or_else(|_| sid.clone());
+        for s in manager.sessions.values() {
+            let effective_sid = s.active_session_id.read().clone();
             if seen_panes.insert(s.pane_id.clone()) {
                 out.push((effective_sid, s.pane_id.clone(), s.agent_name.clone()));
             }
@@ -878,13 +872,9 @@ impl AgentInterface {
 
         let manager = self.session_manager.lock().await;
         // Find any session tied to this pane. Usually there is only one.
-        for (sid, session) in manager.sessions.iter() {
+        for session in manager.sessions.values() {
             if session.pane_id == pane_id {
-                let effective_sid = session
-                    .active_session_id
-                    .read()
-                    .map(|g| g.clone())
-                    .unwrap_or_else(|_| sid.clone());
+                let effective_sid = session.active_session_id.read().clone();
                 let event = ClawEngineEvent::FocusPane;
                 if let Ok(event_json) = serde_json::to_string(&event) {
                     let _ = Self::claw_event(&emitter, effective_sid, event_json).await;
@@ -1117,7 +1107,7 @@ impl AgentInterface {
                     state_lock.tx_self = tx.clone();
                 }
 
-                let active_session_id = Arc::new(std::sync::RwLock::new(session_id.clone()));
+                let active_session_id = Arc::new(parking_lot::RwLock::new(session_id.clone()));
                 {
                     let mut manager = self.session_manager.lock().await;
                     manager.prune_dead();
@@ -1138,7 +1128,6 @@ impl AgentInterface {
                 };
                 session.start(env);
 
-                let session_id_clone = session_id.clone();
                 let emitter = emitter.to_owned();
                 let conn_clone = conn.clone();
                 let ghost_clone = self.core.ghost.clone();
@@ -1163,10 +1152,7 @@ impl AgentInterface {
                         }
 
                         if let Ok(event_json) = serde_json::to_string(&event) {
-                            let effective_sid = active_session_id
-                                .read()
-                                .map(|g| g.clone())
-                                .unwrap_or_else(|_| session_id_clone.clone());
+                            let effective_sid = active_session_id.read().clone();
                             let _ =
                                 Self::claw_event(&emitter, effective_sid, event_json)
                                     .await;

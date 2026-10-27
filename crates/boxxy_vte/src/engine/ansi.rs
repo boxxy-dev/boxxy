@@ -1356,7 +1356,7 @@ where
 
     #[inline]
     fn hook(&mut self, _params: &Params, intermediates: &[u8], ignore: bool, action: char) {
-        self.state.dcs_xtgettcap = !ignore && intermediates == [b'+'] && action == 'q';
+        self.state.dcs_xtgettcap = !ignore && intermediates == b"+" && action == 'q';
         self.state.dcs_buffer.clear();
     }
 
@@ -1388,7 +1388,7 @@ where
                 }
                 buf.push_str("],");
             }
-            debug!("[unhandled osc_dispatch]: [{}] at line {}", &buf, line!());
+            debug!("[unhandled osc_dispatch]: [{}] at line {}", buf, line!());
         }
 
         if params.is_empty() || params[0].is_empty() {

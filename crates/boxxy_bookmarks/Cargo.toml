@@ -21,6 +21,7 @@ boxxy-themes = { path = "../themes" }
 boxxy-ai-core = { path = "../ai_core" }
 boxxy-core-widgets.workspace = true
 boxxy-sys-utils.workspace = true
+parking_lot.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

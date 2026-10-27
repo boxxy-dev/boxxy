@@ -21,4 +21,4 @@ Minimal, leaf-level utility crate for system environment detection and global as
 The implementation uses `http://ip-api.com/json/` and must stay HTTP. ip-api.com's free tier does not support HTTPS — it requires a paid plan. Do not attempt to switch the scheme; it will fail silently or with a TLS error on their end.
 
 ### No Lock Poisoning
-Uses `parking_lot::RwLock` for `LOCATION_CACHE` to avoid lock poisoning and provide better performance than `std::sync::RwLock`.
+Uses `parking_lot::RwLock` for `LOCATION_CACHE` and `EXCHANGE_RATES_CACHE` (initialized via `const fn RwLock::new(None)`) to avoid lock poisoning, eliminate `OnceLock` indirection, and provide better performance than `std::sync::RwLock`.

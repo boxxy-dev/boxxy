@@ -197,9 +197,7 @@ impl ClawHost for PaneClawHost {
                 }
 
                 if let Ok(inner) = inner_rc.try_borrow_mut() {
-                    if let Ok(mut guard_slot) = inner.claw_subscription.lock() {
-                        *guard_slot = Some(sub_guard);
-                    }
+                    *inner.claw_subscription.lock() = Some(sub_guard);
                     let session_arc = inner.session_id.clone();
                     tokio::spawn(async move {
                         let mut lock = session_arc.lock().await;

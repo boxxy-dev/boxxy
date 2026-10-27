@@ -128,6 +128,7 @@ struct ShellUser {
 impl ShellUser {
     /// look for shell, username, longname, and home dir in the respective environment variables
     /// before falling back on looking into `passwd`.
+    #[allow(clippy::question_mark)]
     fn from_env() -> Result<Self> {
         let mut buf = [0; 1024];
         let pw = get_pw_entry(&mut buf);
@@ -150,10 +151,7 @@ impl ShellUser {
 
         let shell = match env::var("SHELL") {
             Ok(shell) => shell,
-            Err(_) => match pw {
-                Ok(ref pw) => pw.shell.to_owned(),
-                Err(err) => return Err(err),
-            },
+            Err(_) => pw?.shell.to_owned(),
         };
 
         Ok(Self { user, home, shell })

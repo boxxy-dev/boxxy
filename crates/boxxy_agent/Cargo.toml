@@ -36,6 +36,7 @@ boxxy-claw-protocol = { path = "../boxxy_claw_protocol" }
 boxxy-claw = { path = "../boxxy_claw" }
 boxxy-sys-utils = { workspace = true }
 sqlx = { workspace = true }
+parking_lot = { workspace = true }
 petname = "3.2.0"
 
 [dev-dependencies]

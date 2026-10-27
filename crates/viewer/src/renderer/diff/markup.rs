@@ -1,26 +1,14 @@
+use crate::cache::{SimpleLru, syntax_set, theme_set};
 use crate::parser::markdown::escape_pango;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
-use std::collections::VecDeque;
 use std::hash::{Hash, Hasher};
 use std::path::Path;
-use std::sync::{Arc, LazyLock, OnceLock};
+use std::sync::{Arc, LazyLock};
 use syntect::easy::HighlightLines;
-use syntect::highlighting::ThemeSet;
 use syntect::parsing::SyntaxSet;
 
 const DIFF_CACHE_CAPACITY: usize = 64;
-
-static SYNTAX_SET: OnceLock<SyntaxSet> = OnceLock::new();
-static THEME_SET: OnceLock<ThemeSet> = OnceLock::new();
-
-fn syntax_set() -> &'static SyntaxSet {
-    SYNTAX_SET.get_or_init(SyntaxSet::load_defaults_newlines)
-}
-
-fn theme_set() -> &'static ThemeSet {
-    THEME_SET.get_or_init(ThemeSet::load_defaults)
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DiffPayloadKind {
@@ -132,39 +120,10 @@ pub struct PreparedDiff {
     pub hunks: Vec<PreparedHunk>,
 }
 
-struct DiffLru {
-    capacity: usize,
-    entries: VecDeque<((usize, u64, bool), Arc<PreparedDiff>)>,
-}
+type DiffCacheKey = (usize, u64, bool);
 
-impl DiffLru {
-    fn new(capacity: usize) -> Self {
-        Self {
-            capacity,
-            entries: VecDeque::with_capacity(capacity),
-        }
-    }
-
-    fn get(&mut self, key: &(usize, u64, bool)) -> Option<Arc<PreparedDiff>> {
-        let pos = self.entries.iter().position(|(k, _)| k == key)?;
-        let (k, v) = self.entries.remove(pos)?;
-        let out = v.clone();
-        self.entries.push_front((k, v));
-        Some(out)
-    }
-
-    fn insert(&mut self, key: (usize, u64, bool), val: Arc<PreparedDiff>) {
-        if let Some(pos) = self.entries.iter().position(|(k, _)| k == &key) {
-            self.entries.remove(pos);
-        } else if self.entries.len() >= self.capacity {
-            self.entries.pop_back();
-        }
-        self.entries.push_front((key, val));
-    }
-}
-
-static DIFF_CACHE: LazyLock<Mutex<DiffLru>> =
-    LazyLock::new(|| Mutex::new(DiffLru::new(DIFF_CACHE_CAPACITY)));
+static DIFF_CACHE: LazyLock<Mutex<SimpleLru<DiffCacheKey, Arc<PreparedDiff>>>> =
+    LazyLock::new(|| Mutex::new(SimpleLru::new(DIFF_CACHE_CAPACITY)));
 
 fn hash_payload(s: &str) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();

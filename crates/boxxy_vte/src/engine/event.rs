@@ -54,7 +54,7 @@ pub enum Event {
     },
 
     /// Hierarchical process context signaling (OSC 3008).
-    Osc3008(Osc3008Context),
+    Osc3008(Box<Osc3008Context>),
 
     /// Reset to the default color palette.
     ResetColor,

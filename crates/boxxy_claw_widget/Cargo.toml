@@ -25,3 +25,4 @@ boxxy-core-widgets.workspace = true
 boxxy-db = { path = "../db" }
 boxxy-preferences = { path = "../preferences" }
 boxxy-viewer = { path = "../viewer" }
+parking_lot.workspace = true

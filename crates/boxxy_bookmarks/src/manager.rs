@@ -1,9 +1,10 @@
 use crate::{Bookmark, ScriptLanguage};
+use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
-use std::sync::{LazyLock, OnceLock, RwLock};
+use std::sync::{LazyLock, OnceLock};
 use tokio::sync::broadcast;
 pub use tokio::sync::broadcast::error::RecvError as BroadcastRecvError;
 use uuid::Uuid;
@@ -131,11 +132,11 @@ impl BookmarksManager {
     }
 
     fn get_data() -> BookmarksData {
-        Self::cache().read().unwrap().clone()
+        Self::cache().read().clone()
     }
 
     fn save_data(data: &BookmarksData) {
-        *Self::cache().write().unwrap() = data.clone();
+        *Self::cache().write() = data.clone();
 
         if let Some(path) = Self::get_index_path()
             && let Ok(content) = serde_json::to_string_pretty(data)
@@ -166,7 +167,7 @@ impl BookmarksManager {
 
     #[must_use]
     pub fn count() -> usize {
-        Self::cache().read().unwrap().bookmarks.len()
+        Self::cache().read().bookmarks.len()
     }
 
     pub fn add(name: String, script: String) -> Bookmark {
@@ -271,7 +272,7 @@ impl BookmarksManager {
         if filename.is_empty() {
             return None;
         }
-        if let Some(cached) = Self::cache().read().unwrap().scripts.get(filename).cloned() {
+        if let Some(cached) = Self::cache().read().scripts.get(filename).cloned() {
             return Some(cached);
         }
         if let Some(path) = Self::get_script_path(filename)
@@ -279,7 +280,6 @@ impl BookmarksManager {
         {
             Self::cache()
                 .write()
-                .unwrap()
                 .scripts
                 .insert(filename.to_string(), content.clone());
             return Some(content);

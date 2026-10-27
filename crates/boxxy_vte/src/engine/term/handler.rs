@@ -1236,7 +1236,8 @@ impl<T: EventListener> Handler for Term<T> {
     #[inline]
     fn osc_3008(&mut self, context: crate::engine::event::Osc3008Context) {
         trace!("Received OSC 3008 context: {context:?}");
-        self.event_proxy.send_event(Event::Osc3008(context));
+        self.event_proxy
+            .send_event(Event::Osc3008(Box::new(context)));
     }
 
     #[inline]
@@ -1248,9 +1249,9 @@ impl<T: EventListener> Handler for Term<T> {
                 return None;
             }
             let mut out = Vec::with_capacity(hex.len() / 2);
-            for pair in hex.chunks_exact(2) {
-                let hi = (pair[0] as char).to_digit(16)?;
-                let lo = (pair[1] as char).to_digit(16)?;
+            for &[hi_b, lo_b] in hex.as_chunks::<2>().0 {
+                let hi = (hi_b as char).to_digit(16)?;
+                let lo = (lo_b as char).to_digit(16)?;
                 out.push(((hi << 4) | lo) as u8);
             }
             Some(out)

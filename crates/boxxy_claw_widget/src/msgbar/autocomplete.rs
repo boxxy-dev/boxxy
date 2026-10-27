@@ -1,15 +1,14 @@
 use boxxy_core_widgets::autocomplete::{CompletionItem, CompletionProvider};
 use gtk4 as gtk;
 use gtk4::prelude::*;
+use parking_lot::RwLock;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{LazyLock, RwLock};
 use std::time::{Duration, Instant};
 
 const CACHE_TTL: Duration = Duration::from_secs(2);
 
-static RESUME_SESSIONS_CACHE: LazyLock<
-    RwLock<(Option<Instant>, u64, Vec<boxxy_db::models::Session>)>,
-> = LazyLock::new(|| RwLock::new((None, 0, Vec::new())));
+static RESUME_SESSIONS_CACHE: RwLock<(Option<Instant>, u64, Vec<boxxy_db::models::Session>)> =
+    RwLock::new((None, 0, Vec::new()));
 static RESUME_REFRESHING: AtomicBool = AtomicBool::new(false);
 
 /// Triggers an asynchronous background refresh of the `/resume ` session cache
@@ -36,8 +35,7 @@ pub fn refresh_resume_sessions_async(entry_weak: Option<gtk::glib::WeakRef<gtk::
             }
         }
         if let Some(sessions) = fetched {
-            let mut cache = RESUME_SESSIONS_CACHE.write().unwrap();
-            *cache = (Some(Instant::now()), current_rev, sessions);
+            *RESUME_SESSIONS_CACHE.write() = (Some(Instant::now()), current_rev, sessions);
         }
         RESUME_REFRESHING.store(false, Ordering::Release);
     };
@@ -63,7 +61,7 @@ pub fn refresh_resume_sessions_async(entry_weak: Option<gtk::glib::WeakRef<gtk::
 /// in-memory `/resume ` cache first and falling back to SQLite if needed.
 pub async fn resolve_session_character_id(session_id: &str) -> Option<String> {
     let cached_session = {
-        let cache = RESUME_SESSIONS_CACHE.read().unwrap();
+        let cache = RESUME_SESSIONS_CACHE.read();
         cache.2.iter().find(|s| s.id == session_id).cloned()
     };
 
@@ -245,7 +243,7 @@ impl CompletionProvider for ResumeCompletionProvider {
 
         let current_rev = *boxxy_claw_protocol::characters::subscribe_registry_changes().borrow();
         let (needs_refresh, sessions) = {
-            let cache = RESUME_SESSIONS_CACHE.read().unwrap();
+            let cache = RESUME_SESSIONS_CACHE.read();
             let stale = cache
                 .0
                 .map(|last| last.elapsed() >= CACHE_TTL)

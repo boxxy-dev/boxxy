@@ -92,7 +92,7 @@ gstreamer = "0.25.4"
 image = { version = "0.25", features = ["jpeg", "png", "webp"] }
 gsk4 = "0.11"
 regex = "1.13.1"
-parking_lot = "0.12.5"
+parking_lot = "0.13.0"
 base64 = "0.23.1"
 bitflags = "2.13.2"
 home = "0.5.12"

@@ -1,3 +1,4 @@
+use crate::cache::{syntax_set, theme_set};
 use crate::parser::blocks::ContentBlock;
 use crate::parser::markdown::escape_pango;
 use crate::renderer::BlockRenderer;
@@ -5,22 +6,8 @@ use crate::widget::StructuredViewer;
 use gtk4 as gtk;
 use gtk4::prelude::*;
 use std::rc::Rc;
-use std::sync::OnceLock;
 use syntect::easy::HighlightLines;
-use syntect::highlighting::ThemeSet;
-use syntect::parsing::SyntaxSet;
 use syntect::util::LinesWithEndings;
-
-static SYNTAX_SET: OnceLock<SyntaxSet> = OnceLock::new();
-static THEME_SET: OnceLock<ThemeSet> = OnceLock::new();
-
-fn get_syntax_set() -> &'static SyntaxSet {
-    SYNTAX_SET.get_or_init(SyntaxSet::load_defaults_newlines)
-}
-
-fn get_theme_set() -> &'static ThemeSet {
-    THEME_SET.get_or_init(ThemeSet::load_defaults)
-}
 
 pub struct CodeRenderer;
 
@@ -147,9 +134,9 @@ impl BlockRenderer for CodeRenderer {
 
                     let (tx, rx) = async_channel::bounded::<String>(1);
 
-                    std::thread::spawn(move || {
-                        let ss = get_syntax_set();
-                        let ts = get_theme_set();
+                    boxxy_sys_utils::runtime().spawn_blocking(move || {
+                        let ss = syntax_set();
+                        let ts = theme_set();
 
                         let syntax =
                             if !lang_for_highlight.is_empty() && lang_for_highlight != "text" {

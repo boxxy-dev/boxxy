@@ -17,7 +17,7 @@ pub struct FairMutex<T> {
 
 impl<T> FairMutex<T> {
     /// Create a new fair mutex.
-    pub fn new(data: T) -> FairMutex<T> {
+    pub const fn new(data: T) -> FairMutex<T> {
         FairMutex {
             data: Mutex::new(data),
             next: Mutex::new(()),

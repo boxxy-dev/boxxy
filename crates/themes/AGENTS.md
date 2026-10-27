@@ -32,7 +32,7 @@ pub struct ParsedPaletteStatic {
 ```
 
 ### `TextureCache`
-A global thread-safe cache (`Arc<Mutex<HashMap<String, gdk::Texture>>>`) for background images. Ensures that even if multiple terminal tabs use the same high-resolution background image, the texture is only decoded and uploaded to the GPU (VRAM) once.
+A global thread-safe cache (`Arc<parking_lot::Mutex<HashMap<String, gdk::Texture>>>`) for background images. Ensures that even if multiple terminal tabs use the same high-resolution background image, the texture is only decoded and uploaded to the GPU (VRAM) once.
 
 ## Public API
 

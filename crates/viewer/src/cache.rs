@@ -19,20 +19,20 @@ const HIGHLIGHT_CACHE_CAPACITY: usize = 128;
 const DISK_CACHE_MAGIC: &[u8; 4] = b"BXT1";
 
 /// Compact bounded LRU cache backed by `VecDeque`.
-struct SimpleLru<K, V> {
+pub(crate) struct SimpleLru<K, V> {
     capacity: usize,
     entries: VecDeque<(K, V)>,
 }
 
 impl<K: Eq, V: Clone> SimpleLru<K, V> {
-    fn new(capacity: usize) -> Self {
+    pub(crate) fn new(capacity: usize) -> Self {
         Self {
             capacity,
             entries: VecDeque::with_capacity(capacity),
         }
     }
 
-    fn get(&mut self, key: &K) -> Option<V> {
+    pub(crate) fn get(&mut self, key: &K) -> Option<V> {
         let pos = self.entries.iter().position(|(k, _)| k == key)?;
         let (k, v) = self.entries.remove(pos)?;
         let out = v.clone();
@@ -40,7 +40,7 @@ impl<K: Eq, V: Clone> SimpleLru<K, V> {
         Some(out)
     }
 
-    fn insert(&mut self, key: K, val: V) {
+    pub(crate) fn insert(&mut self, key: K, val: V) {
         if let Some(pos) = self.entries.iter().position(|(k, _)| k == &key) {
             self.entries.remove(pos);
         } else if self.entries.len() >= self.capacity {
@@ -202,19 +202,50 @@ pub fn metadata_signature(meta: &std::fs::Metadata) -> (u64, u64) {
 }
 
 // ---------------------------------------------------------------------------
+// Shared Syntect Syntax & Theme Sets
+// ---------------------------------------------------------------------------
+
+static SYNTAX_SET: LazyLock<syntect::parsing::SyntaxSet> =
+    LazyLock::new(syntect::parsing::SyntaxSet::load_defaults_newlines);
+static THEME_SET: LazyLock<syntect::highlighting::ThemeSet> =
+    LazyLock::new(syntect::highlighting::ThemeSet::load_defaults);
+
+/// Returns a reference to the process-wide default `syntect::parsing::SyntaxSet`.
+#[must_use]
+pub fn syntax_set() -> &'static syntect::parsing::SyntaxSet {
+    &SYNTAX_SET
+}
+
+/// Returns a reference to the process-wide default `syntect::highlighting::ThemeSet`.
+#[must_use]
+pub fn theme_set() -> &'static syntect::highlighting::ThemeSet {
+    &THEME_SET
+}
+
+// ---------------------------------------------------------------------------
 // Parsed Markdown AST Cache & Syntax Highlight Cache
 // ---------------------------------------------------------------------------
 
-static AST_CACHE: LazyLock<Mutex<SimpleLru<(usize, u64), Arc<[ContentBlock]>>>> =
+type AstCacheKey = (usize, u64);
+type HighlightCacheKey = (usize, usize, u64, bool);
+
+static AST_CACHE: LazyLock<Mutex<SimpleLru<AstCacheKey, Arc<[ContentBlock]>>>> =
     LazyLock::new(|| Mutex::new(SimpleLru::new(AST_CACHE_CAPACITY)));
 
-static HIGHLIGHT_CACHE: LazyLock<Mutex<SimpleLru<(u64, bool), String>>> =
+static HIGHLIGHT_CACHE: LazyLock<Mutex<SimpleLru<HighlightCacheKey, String>>> =
     LazyLock::new(|| Mutex::new(SimpleLru::new(HIGHLIGHT_CACHE_CAPACITY)));
 
 fn hash_str(s: &str) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     s.hash(&mut hasher);
     hasher.finish()
+}
+
+fn highlight_cache_key(lang: &str, code: &str, is_dark: bool) -> HighlightCacheKey {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    lang.hash(&mut hasher);
+    code.hash(&mut hasher);
+    (lang.len(), code.len(), hasher.finish(), is_dark)
 }
 
 /// Returns cached parsed `ContentBlock`s for `input`, or parses and caches them on miss.
@@ -232,19 +263,13 @@ pub fn get_or_parse_markdown(input: &str) -> Arc<[ContentBlock]> {
 /// Synchronously looks up cached `syntect` Pango markup for a `(lang, code, is_dark)` tuple.
 #[must_use]
 pub fn get_cached_highlight(lang: &str, code: &str, is_dark: bool) -> Option<String> {
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    lang.hash(&mut hasher);
-    code.hash(&mut hasher);
-    let key = (hasher.finish(), is_dark);
+    let key = highlight_cache_key(lang, code, is_dark);
     HIGHLIGHT_CACHE.lock().get(&key)
 }
 
 /// Stores `syntect` Pango markup in the highlight LRU cache.
 pub fn insert_cached_highlight(lang: &str, code: &str, is_dark: bool, markup: String) {
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    lang.hash(&mut hasher);
-    code.hash(&mut hasher);
-    let key = (hasher.finish(), is_dark);
+    let key = highlight_cache_key(lang, code, is_dark);
     HIGHLIGHT_CACHE.lock().insert(key, markup);
 }
 

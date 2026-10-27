@@ -1,7 +1,8 @@
 //! Headless terminal harness for deterministic protocol conformance,
 //! chunk-boundary parsing, query-response verification, and reflow testing.
 
-use std::sync::{Arc, Mutex};
+use parking_lot::Mutex;
+use std::sync::Arc;
 
 use crate::engine::ansi::{self, NamedColor, Rgb};
 use crate::engine::event::{Event, EventListener};
@@ -34,12 +35,12 @@ impl EventListener for HeadlessEventLog {
         if let Event::ColorRequest(index, ref formatter) = event
             && index == NamedColor::Background as usize
         {
-            let bg = *self.default_bg.lock().unwrap();
+            let bg = *self.default_bg.lock();
             let reply = formatter(bg);
-            self.events.lock().unwrap().push(Event::PtyWrite(reply));
+            self.events.lock().push(Event::PtyWrite(reply));
             return;
         }
-        self.events.lock().unwrap().push(event);
+        self.events.lock().push(event);
     }
 }
 
@@ -101,7 +102,7 @@ impl HeadlessTerminal {
 
     /// Set the default background color used when answering `Event::ColorRequest(257, ...)`.
     pub fn set_default_background(&mut self, rgb: Rgb) {
-        *self.listener.default_bg.lock().unwrap() = rgb;
+        *self.listener.default_bg.lock() = rgb;
     }
 
     /// Resize the terminal grid to `(columns, screen_lines)`.
@@ -115,7 +116,7 @@ impl HeadlessTerminal {
 
     /// Drain and return all `Event::PtyWrite` responses emitted by the terminal.
     pub fn take_pty_writes(&mut self) -> Vec<String> {
-        let mut events = self.listener.events.lock().unwrap();
+        let mut events = self.listener.events.lock();
         let mut writes = Vec::new();
         events.retain(|ev| {
             if let Event::PtyWrite(s) = ev {
@@ -130,7 +131,7 @@ impl HeadlessTerminal {
 
     /// Drain and return all recorded terminal events.
     pub fn take_events(&mut self) -> Vec<Event> {
-        std::mem::take(&mut *self.listener.events.lock().unwrap())
+        std::mem::take(&mut *self.listener.events.lock())
     }
 
     /// Return the trimmed text of a visible viewport row (`0..screen_lines`).
@@ -683,7 +684,7 @@ mod tests {
         h.feed(b"\x1b]3008;start=abc123;user=alice;targetuser=root;pid=4242;comm=sudo\x07");
         let events = h.take_events();
         let osc_ctx = events.into_iter().find_map(|ev| match ev {
-            Event::Osc3008(ctx) => Some(ctx),
+            Event::Osc3008(ctx) => Some(*ctx),
             _ => None,
         });
         assert_eq!(
