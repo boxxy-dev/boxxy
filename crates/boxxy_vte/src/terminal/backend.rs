@@ -391,8 +391,24 @@ impl TerminalBackend {
             .send(Msg::ScrollAndSelect(scroll, row, col, side));
     }
 
+    pub fn select_all(&self) {
+        let _ = self.notifier.0.send(Msg::SelectAll);
+    }
+
+    pub fn adjust_selection(&self, adjust: crate::engine::selection::SelectionAdjust) {
+        let _ = self.notifier.0.send(Msg::AdjustSelection(adjust));
+    }
+
     pub fn clear_selection(&self) {
         let _ = self.notifier.0.send(Msg::ClearSelection);
+    }
+
+    pub fn clear_scrollback(&self) {
+        let _ = self.notifier.0.send(Msg::ClearScrollback);
+    }
+
+    pub fn reset_state(&self) {
+        let _ = self.notifier.0.send(Msg::ResetState);
     }
 
     pub fn copy_selection(&self, clipboard_type: crate::engine::term::ClipboardType) {

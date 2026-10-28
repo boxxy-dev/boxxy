@@ -1,6 +1,6 @@
 use crate::engine::grid::Scroll;
 use crate::engine::index::{Column, Line, Point, Side};
-use crate::engine::selection::{Selection, SelectionType};
+use crate::engine::selection::{Selection, SelectionAdjust, SelectionType};
 use gtk4::glib;
 use gtk4::prelude::*;
 use gtk4::subclass::prelude::*;
@@ -355,7 +355,7 @@ impl super::TerminalWidget {
                 let imp = obj.imp();
                 obj.start_cursor_blink();
 
-                if key == gtk4::gdk::Key::V
+                if (key == gtk4::gdk::Key::V || key == gtk4::gdk::Key::v)
                     && modifier.contains(
                         gtk4::gdk::ModifierType::CONTROL_MASK | gtk4::gdk::ModifierType::SHIFT_MASK,
                     )
@@ -369,6 +369,48 @@ impl super::TerminalWidget {
                     )
                 {
                     obj.copy_clipboard();
+                    return glib::Propagation::Stop;
+                }
+                if (key == gtk4::gdk::Key::A || key == gtk4::gdk::Key::a)
+                    && modifier.contains(
+                        gtk4::gdk::ModifierType::CONTROL_MASK | gtk4::gdk::ModifierType::SHIFT_MASK,
+                    )
+                {
+                    obj.select_all();
+                    return glib::Propagation::Stop;
+                }
+                if key == gtk4::gdk::Key::Escape
+                    && !modifier.intersects(
+                        gtk4::gdk::ModifierType::CONTROL_MASK
+                            | gtk4::gdk::ModifierType::ALT_MASK
+                            | gtk4::gdk::ModifierType::SHIFT_MASK
+                            | gtk4::gdk::ModifierType::SUPER_MASK,
+                    )
+                    && let Some(backend) = imp.backend.borrow().as_ref()
+                    && backend.has_selection()
+                {
+                    backend.clear_selection();
+                    obj.queue_draw();
+                    return glib::Propagation::Stop;
+                }
+                // Classic X11/Linux clipboard bindings and dedicated hardware Copy/Paste keys
+                if key == gtk4::gdk::Key::Copy
+                    || (matches!(key, gtk4::gdk::Key::Insert | gtk4::gdk::Key::KP_Insert)
+                        && modifier.contains(gtk4::gdk::ModifierType::CONTROL_MASK)
+                        && !modifier.contains(gtk4::gdk::ModifierType::SHIFT_MASK))
+                {
+                    obj.copy_clipboard();
+                    return glib::Propagation::Stop;
+                }
+                if key == gtk4::gdk::Key::Paste {
+                    obj.paste_clipboard();
+                    return glib::Propagation::Stop;
+                }
+                if matches!(key, gtk4::gdk::Key::Insert | gtk4::gdk::Key::KP_Insert)
+                    && modifier.contains(gtk4::gdk::ModifierType::SHIFT_MASK)
+                    && !modifier.contains(gtk4::gdk::ModifierType::CONTROL_MASK)
+                {
+                    obj.paste_primary();
                     return glib::Propagation::Stop;
                 }
                 // Ctrl+Shift+PageUp/PageDown (and Ctrl+Shift+Up/Down when not bound at window level):
@@ -397,8 +439,44 @@ impl super::TerminalWidget {
                     }
                 }
                 if modifier.contains(gtk4::gdk::ModifierType::SHIFT_MASK)
-                    && !modifier.contains(gtk4::gdk::ModifierType::CONTROL_MASK)
+                    && !modifier.intersects(
+                        gtk4::gdk::ModifierType::CONTROL_MASK
+                            | gtk4::gdk::ModifierType::ALT_MASK
+                            | gtk4::gdk::ModifierType::SUPER_MASK,
+                    )
                 {
+                    // Ghostty-style Shift+Arrow/Home/End keyboard selection adjustment
+                    // when a selection is already active on the terminal.
+                    if let Some(backend) = imp.backend.borrow().as_ref()
+                        && backend.has_selection()
+                    {
+                        let adjust_op = match key {
+                            gtk4::gdk::Key::Left | gtk4::gdk::Key::KP_Left => {
+                                Some(SelectionAdjust::Left)
+                            }
+                            gtk4::gdk::Key::Right | gtk4::gdk::Key::KP_Right => {
+                                Some(SelectionAdjust::Right)
+                            }
+                            gtk4::gdk::Key::Up | gtk4::gdk::Key::KP_Up => Some(SelectionAdjust::Up),
+                            gtk4::gdk::Key::Down | gtk4::gdk::Key::KP_Down => {
+                                Some(SelectionAdjust::Down)
+                            }
+                            gtk4::gdk::Key::Home | gtk4::gdk::Key::KP_Home => {
+                                Some(SelectionAdjust::BeginningOfLine)
+                            }
+                            gtk4::gdk::Key::End | gtk4::gdk::Key::KP_End => {
+                                Some(SelectionAdjust::EndOfLine)
+                            }
+                            _ => None,
+                        };
+                        if let Some(adj) = adjust_op {
+                            backend.adjust_selection(adj);
+                            backend.copy_selection(crate::engine::term::ClipboardType::Selection);
+                            obj.queue_draw();
+                            return glib::Propagation::Stop;
+                        }
+                    }
+
                     let scroll_op = match key {
                         gtk4::gdk::Key::Page_Up | gtk4::gdk::Key::KP_Page_Up => {
                             Some(Scroll::PageUp)

@@ -141,6 +141,141 @@ impl<T> Term<T> {
         }
     }
 
+    /// Select all non-empty content from the top of scrollback history down to
+    /// the last non-empty screen line (or the cursor line).
+    pub fn select_all(&mut self) {
+        let cols = self.columns();
+        let lines = self.screen_lines();
+        if cols == 0 || lines == 0 {
+            return;
+        }
+        let start = Point::new(self.topmost_line(), Column(0));
+        let mut last_line = self.bottommost_line();
+        while last_line > self.grid.cursor.point.line
+            && last_line > start.line
+            && self.grid[last_line].line_length() == Column(0)
+        {
+            last_line -= 1;
+        }
+        let end = Point::new(last_line, Column(cols - 1));
+        let mut sel = Selection::new(
+            SelectionType::Simple,
+            start,
+            crate::engine::index::Side::Left,
+        );
+        sel.update(end, crate::engine::index::Side::Right);
+        self.selection = Some(sel);
+    }
+
+    /// Adjust the active selection endpoint (`Shift + Arrow/Home/End`).
+    /// Returns `true` if a selection existed and was updated.
+    pub fn adjust_selection(&mut self, adjust: crate::engine::selection::SelectionAdjust) -> bool
+    where
+        T: EventListener,
+    {
+        use crate::engine::index::{Boundary, Side};
+        use crate::engine::selection::SelectionAdjust;
+
+        let mut sel = match self.selection.take() {
+            Some(sel) => sel,
+            None => return false,
+        };
+
+        let Some(mut end_pt) = sel.normalize_for_keyboard_adjust(self) else {
+            self.selection = Some(sel);
+            return false;
+        };
+
+        let topmost = self.topmost_line();
+        let bottommost = self.bottommost_line();
+        let last_col = self.last_column();
+        let mut side = Side::Right;
+
+        match adjust {
+            SelectionAdjust::Left => {
+                end_pt = end_pt.sub(self, Boundary::Grid, 1);
+                if self.grid[end_pt.line][end_pt.column]
+                    .flags
+                    .contains(Flags::WIDE_CHAR_SPACER)
+                    && end_pt.column > Column(0)
+                {
+                    end_pt.column -= 1;
+                }
+                side = Side::Left;
+            }
+            SelectionAdjust::Right => {
+                if self.grid[end_pt.line][end_pt.column]
+                    .flags
+                    .contains(Flags::WIDE_CHAR)
+                {
+                    end_pt = end_pt.add(self, Boundary::Grid, 1);
+                }
+                end_pt = end_pt.add(self, Boundary::Grid, 1);
+                side = Side::Right;
+            }
+            SelectionAdjust::Up => {
+                end_pt.line = cmp::max(end_pt.line - 1, topmost);
+            }
+            SelectionAdjust::Down => {
+                end_pt.line = cmp::min(end_pt.line + 1, bottommost);
+            }
+            SelectionAdjust::PageUp => {
+                end_pt.line = cmp::max(end_pt.line - self.screen_lines() as i32, topmost);
+            }
+            SelectionAdjust::PageDown => {
+                end_pt.line = cmp::min(end_pt.line + self.screen_lines() as i32, bottommost);
+            }
+            SelectionAdjust::BeginningOfLine => {
+                end_pt.column = Column(0);
+                side = Side::Left;
+            }
+            SelectionAdjust::EndOfLine => {
+                end_pt.column = last_col;
+                side = Side::Right;
+            }
+            SelectionAdjust::Home => {
+                end_pt = Point::new(topmost, Column(0));
+                side = Side::Left;
+            }
+            SelectionAdjust::End => {
+                end_pt = Point::new(bottommost, last_col);
+                side = Side::Right;
+            }
+        }
+
+        sel.update(end_pt, side);
+        self.selection = Some(sel);
+        self.scroll_to_point(end_pt);
+        self.mark_fully_damaged();
+        true
+    }
+
+    /// Extract plain text of the visible screen (or full scrollback + screen when
+    /// `include_scrollback` is `true`), trimming trailing blank rows below the cursor.
+    pub fn dump_buffer_to_string(&self, include_scrollback: bool) -> String {
+        let cols = self.columns();
+        let lines = self.screen_lines();
+        if cols == 0 || lines == 0 {
+            return String::new();
+        }
+        let start_line = if include_scrollback {
+            self.topmost_line()
+        } else {
+            Line(0)
+        };
+        let mut last_line = self.bottommost_line();
+        while last_line > self.grid.cursor.point.line
+            && last_line > start_line
+            && self.grid[last_line].line_length() == Column(0)
+        {
+            last_line -= 1;
+        }
+        self.bounds_to_string(
+            Point::new(start_line, Column(0)),
+            Point::new(last_line, Column(cols - 1)),
+        )
+    }
+
     /// Convert the active selection to a String.
     pub fn selection_to_string(&self) -> Option<String> {
         let selection_range = self.selection.as_ref().and_then(|s| s.to_range(self))?;

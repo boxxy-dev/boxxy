@@ -571,9 +571,7 @@ impl TerminalWidget {
             self.obj().clipboard().set_text(&text);
             return;
         }
-        if state.selection_range.is_some() {
-            backend.copy_selection(crate::engine::term::ClipboardType::Clipboard);
-        }
+        backend.copy_selection(crate::engine::term::ClipboardType::Clipboard);
     }
 
     pub(crate) fn has_selection(&self) -> bool {

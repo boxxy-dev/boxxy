@@ -79,6 +79,45 @@ impl TerminalWidget {
         self.imp().has_selection()
     }
 
+    pub fn selected_text(&self) -> Option<String> {
+        self.imp()
+            .backend
+            .borrow()
+            .as_ref()
+            .and_then(|b| b.render_state.load().selection_text())
+    }
+
+    pub fn clear_scrollback(&self) {
+        if let Some(backend) = self.imp().backend.borrow().as_ref() {
+            backend.clear_scrollback();
+            self.queue_draw();
+        }
+    }
+
+    pub fn reset_terminal(&self) {
+        if let Some(backend) = self.imp().backend.borrow().as_ref() {
+            backend.reset_state();
+            self.queue_draw();
+        }
+    }
+
+    pub async fn dump_buffer(&self, include_scrollback: bool) -> Option<String> {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let sent = if let Some(backend) = self.imp().backend.borrow().as_ref() {
+            backend
+                .notifier
+                .0
+                .send(crate::engine::event_loop::Msg::DumpBuffer(
+                    include_scrollback,
+                    tx,
+                ))
+                .is_ok()
+        } else {
+            false
+        };
+        if sent { rx.await.ok() } else { None }
+    }
+
     pub fn export_ansi_snapshot(&self) -> Vec<u8> {
         self.imp().export_ansi_snapshot()
     }
@@ -86,27 +125,10 @@ impl TerminalWidget {
     pub fn select_all(&self) {
         if let Some(backend) = self.imp().backend.borrow().as_ref() {
             let state = backend.render_state.load();
-            let (cols, lines, total) = (state.columns, state.screen_lines, state.total_lines);
-            if cols == 0 || lines == 0 {
+            if state.columns == 0 || state.screen_lines == 0 {
                 return;
             }
-            let history_size = total.saturating_sub(lines) as i32;
-            let start = crate::engine::index::Point::new(
-                crate::engine::index::Line(-history_size),
-                crate::engine::index::Column(0),
-            );
-            let end = crate::engine::index::Point::new(
-                crate::engine::index::Line(lines as i32 - 1),
-                crate::engine::index::Column(cols - 1),
-            );
-
-            let mut sel = crate::engine::selection::Selection::new(
-                crate::engine::selection::SelectionType::Simple,
-                start,
-                crate::engine::index::Side::Left,
-            );
-            sel.update(end, crate::engine::index::Side::Right);
-            backend.set_selection(Some(sel));
+            backend.select_all();
             backend.copy_selection(crate::engine::term::ClipboardType::Selection);
             self.queue_draw();
         }
@@ -610,21 +632,26 @@ impl TerminalWidget {
     }
 
     pub fn paste_primary(&self) {
-        let clipboard = self.display().primary_clipboard();
+        let primary = self.display().primary_clipboard();
+        let fallback_cb = self.clipboard();
         let obj_weak = self.downgrade();
         glib::spawn_future_local(async move {
-            match clipboard.read_text_future().await {
-                Ok(Some(text)) if !text.is_empty() => {
-                    log::info!("Terminal: Pasting text from PRIMARY, len={}", text.len());
-                    if let Some(widget) = obj_weak.upgrade()
-                        && let Some(backend) = widget.imp().backend.borrow().as_ref()
-                    {
-                        backend.paste(text.to_string());
-                    }
+            let text_opt = match primary.read_text_future().await {
+                Ok(Some(text)) if !text.is_empty() => Some(text),
+                _ => match fallback_cb.read_text_future().await {
+                    Ok(Some(text)) if !text.is_empty() => Some(text),
+                    _ => None,
+                },
+            };
+            if let Some(text) = text_opt {
+                log::info!("Terminal: Pasting text from PRIMARY/fallback, len={}", text.len());
+                if let Some(widget) = obj_weak.upgrade()
+                    && let Some(backend) = widget.imp().backend.borrow().as_ref()
+                {
+                    backend.paste(text.to_string());
                 }
-                _ => {
-                    log::warn!("Terminal: PRIMARY paste failed or empty");
-                }
+            } else {
+                log::warn!("Terminal: PRIMARY paste failed or empty");
             }
         });
     }

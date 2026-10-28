@@ -13,7 +13,7 @@ use crate::engine::ansi;
 use crate::engine::event::{self, Event, EventListener, WindowSize};
 use crate::engine::grid::Scroll;
 use crate::engine::index::{Column, Direction, Point, Side};
-use crate::engine::selection::{Selection, SelectionType};
+use crate::engine::selection::{Selection, SelectionAdjust, SelectionType};
 use crate::engine::term::ClipboardType;
 use crate::engine::term::{RenderState, Term};
 use crate::engine::tty;
@@ -65,11 +65,16 @@ pub enum Msg {
     UpdateSelectionExt(Point, Side),
     UpdateSelectionViewport(usize, Column, Side),
     ScrollAndSelect(Scroll, usize, Column, Side),
+    AdjustSelection(SelectionAdjust),
+    SelectAll,
     ClearSelection,
+    ClearScrollback,
+    ResetState,
     CopySelection(ClipboardType),
     CopyLastCommandOutput(ClipboardType),
     Search(String, Direction, bool),
     GetTextSnapshot(usize, usize, tokio::sync::oneshot::Sender<String>),
+    DumpBuffer(bool, tokio::sync::oneshot::Sender<String>),
 }
 
 /// The main event loop.
@@ -290,8 +295,27 @@ where
                                     needs_render = true;
                                 }
                             },
+                            Ok(Msg::SelectAll) => {
+                                self.terminal.select_all();
+                                needs_render = true;
+                            },
+                            Ok(Msg::AdjustSelection(adjust)) => {
+                                if self.terminal.adjust_selection(adjust) {
+                                    needs_render = true;
+                                }
+                            },
                             Ok(Msg::ClearSelection) => {
                                 self.terminal.selection = None;
+                                needs_render = true;
+                            },
+                            Ok(Msg::ClearScrollback) => {
+                                use crate::engine::ansi::Handler;
+                                self.terminal.clear_screen(ansi::ClearMode::Saved);
+                                needs_render = true;
+                            },
+                            Ok(Msg::ResetState) => {
+                                use crate::engine::ansi::Handler;
+                                self.terminal.reset_state();
                                 needs_render = true;
                             },
                             Ok(Msg::CopySelection(clipboard_type)) => {
@@ -365,7 +389,12 @@ where
 
                                 let text = self.terminal.semantic_bounds_to_string(start_point, end_point);
                                 let _ = sender.send(text);
-                            },                            Ok(Msg::Shutdown) | Err(_) => {
+                            },
+                            Ok(Msg::DumpBuffer(include_scrollback, sender)) => {
+                                let text = self.terminal.dump_buffer_to_string(include_scrollback);
+                                let _ = sender.send(text);
+                            },
+                            Ok(Msg::Shutdown) | Err(_) => {
                                 core::hint::cold_path();
                                 break 'event_loop;
                             }

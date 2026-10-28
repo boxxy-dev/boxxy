@@ -99,6 +99,36 @@ impl CommandPaletteComponent {
                 shortcut: None,
             },
             CommandItem {
+                title: "Select All".to_string(),
+                action: "win.select-all".to_string(),
+                parameter: None,
+                shortcut: Some("<Primary><Shift>A".to_string()),
+            },
+            CommandItem {
+                title: "Copy Last Command Output".to_string(),
+                action: "win.copy-last-output".to_string(),
+                parameter: None,
+                shortcut: None,
+            },
+            CommandItem {
+                title: "Open Scrollback in Editor".to_string(),
+                action: "win.open-scrollback".to_string(),
+                parameter: None,
+                shortcut: Some("<Primary><Alt><Shift>J".to_string()),
+            },
+            CommandItem {
+                title: "Clear Scrollback".to_string(),
+                action: "win.clear-scrollback".to_string(),
+                parameter: None,
+                shortcut: None,
+            },
+            CommandItem {
+                title: "Reset Terminal".to_string(),
+                action: "win.reset-terminal".to_string(),
+                parameter: None,
+                shortcut: None,
+            },
+            CommandItem {
                 title: "AI Chat".to_string(),
                 action: "win.ai-chat".to_string(),
                 parameter: None,

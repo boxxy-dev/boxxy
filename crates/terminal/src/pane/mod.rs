@@ -1725,6 +1725,35 @@ impl TerminalPaneComponent {
         self.inner.borrow().terminal.copy_clipboard();
     }
 
+    pub fn select_all(&self) {
+        self.inner.borrow().terminal.select_all();
+    }
+
+    pub fn toggle_search(&self) {
+        if !self._search_bar.is_visible() {
+            self._search_bar.reveal();
+        } else {
+            self._search_bar.hide();
+        }
+    }
+
+    pub fn copy_last_command_output(&self) {
+        self.inner.borrow().terminal.copy_last_command_output();
+    }
+
+    pub fn open_scrollback_in_editor(&self) {
+        let term = self.inner.borrow().terminal.clone();
+        gestures::export_and_open_scrollback(&term);
+    }
+
+    pub fn clear_scrollback(&self) {
+        self.inner.borrow().terminal.clear_scrollback();
+    }
+
+    pub fn reset_terminal(&self) {
+        self.inner.borrow().terminal.reset_terminal();
+    }
+
     pub fn inject_keystrokes(&self, keys: &str) {
         log::debug!(
             "Injecting keystrokes into pane {}: {:?}",

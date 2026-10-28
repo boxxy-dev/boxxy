@@ -101,6 +101,21 @@ pub enum SelectionType {
     Lines,
 }
 
+/// Direction or target position for keyboard-driven selection adjustment (`Shift + Arrow/Home/End`).
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum SelectionAdjust {
+    Left,
+    Right,
+    Up,
+    Down,
+    PageUp,
+    PageDown,
+    BeginningOfLine,
+    EndOfLine,
+    Home,
+    End,
+}
+
 /// Describes a region of a 2-dimensional area.
 ///
 /// Used to track a text selection. There are four supported modes, each with its own constructor:
@@ -139,6 +154,29 @@ impl Selection {
     /// Update the end of the selection.
     pub fn update(&mut self, point: Point, side: Side) {
         self.region.end = Anchor::new(point, side);
+    }
+
+    /// Return the active moving endpoint of the selection.
+    pub fn end_point(&self) -> Point {
+        self.region.end.point
+    }
+
+    /// Convert a semantic or line selection into a concrete `Simple` selection
+    /// spanning its resolved grid range so `Shift + Arrow` can adjust it cell-by-cell.
+    pub fn normalize_for_keyboard_adjust<T>(&mut self, term: &Term<T>) -> Option<Point> {
+        let range = self.to_range(term)?;
+        let reversed = self.region.start.point > self.region.end.point;
+        if matches!(self.ty, SelectionType::Semantic | SelectionType::Lines) {
+            self.ty = SelectionType::Simple;
+            if reversed {
+                self.region.start = Anchor::new(range.end, Side::Right);
+                self.region.end = Anchor::new(range.start, Side::Left);
+            } else {
+                self.region.start = Anchor::new(range.start, Side::Left);
+                self.region.end = Anchor::new(range.end, Side::Right);
+            }
+        }
+        Some(self.region.end.point)
     }
 
     pub fn rotate<D: Dimensions>(

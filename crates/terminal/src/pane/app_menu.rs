@@ -127,7 +127,7 @@ impl AppMenuComponent {
         // ── Section 5: App Features ──────────────────────────────────────────
         let app_section = gio::Menu::new();
         app_section.append_item(&item("Open in Files", "win.open-in-files"));
-        app_section.append_item(&item("Bookmarks", "win.bookmarks"));
+        app_section.append_item(&item("Reset", "term.reset-terminal"));
         menu_model.append_section(None, &app_section);
 
         // ── Section 6: Meta Actions ──────────────────────────────────────────

@@ -85,6 +85,96 @@ pub fn setup_actions(
     });
     action_group.add_action(&paste_action);
 
+    let select_all_action = gio::SimpleAction::new("select-all", None);
+    let inner_select_all = Rc::downgrade(inner);
+    select_all_action.connect_activate(move |_, _| {
+        if let Some(inner_rc) = inner_select_all.upgrade() {
+            let inner = inner_rc.borrow();
+            if let Some(page) = inner.tab_view.selected_page() {
+                let child = page.child();
+                if let Some(tab) = inner.tabs.iter().find(|c| c.controller.widget() == &child) {
+                    tab.controller.select_all();
+                }
+            }
+        }
+    });
+    action_group.add_action(&select_all_action);
+
+    let search_action = gio::SimpleAction::new("search", None);
+    let inner_search = Rc::downgrade(inner);
+    search_action.connect_activate(move |_, _| {
+        if let Some(inner_rc) = inner_search.upgrade() {
+            let inner = inner_rc.borrow();
+            if let Some(page) = inner.tab_view.selected_page() {
+                let child = page.child();
+                if let Some(tab) = inner.tabs.iter().find(|c| c.controller.widget() == &child) {
+                    tab.controller.toggle_search();
+                }
+            }
+        }
+    });
+    action_group.add_action(&search_action);
+
+    let copy_last_output_action = gio::SimpleAction::new("copy-last-output", None);
+    let inner_copy_last = Rc::downgrade(inner);
+    copy_last_output_action.connect_activate(move |_, _| {
+        if let Some(inner_rc) = inner_copy_last.upgrade() {
+            let inner = inner_rc.borrow();
+            if let Some(page) = inner.tab_view.selected_page() {
+                let child = page.child();
+                if let Some(tab) = inner.tabs.iter().find(|c| c.controller.widget() == &child) {
+                    tab.controller.copy_last_command_output();
+                }
+            }
+        }
+    });
+    action_group.add_action(&copy_last_output_action);
+
+    let open_scrollback_action = gio::SimpleAction::new("open-scrollback", None);
+    let inner_open_sb = Rc::downgrade(inner);
+    open_scrollback_action.connect_activate(move |_, _| {
+        if let Some(inner_rc) = inner_open_sb.upgrade() {
+            let inner = inner_rc.borrow();
+            if let Some(page) = inner.tab_view.selected_page() {
+                let child = page.child();
+                if let Some(tab) = inner.tabs.iter().find(|c| c.controller.widget() == &child) {
+                    tab.controller.open_scrollback_in_editor();
+                }
+            }
+        }
+    });
+    action_group.add_action(&open_scrollback_action);
+
+    let clear_scrollback_action = gio::SimpleAction::new("clear-scrollback", None);
+    let inner_clear_sb = Rc::downgrade(inner);
+    clear_scrollback_action.connect_activate(move |_, _| {
+        if let Some(inner_rc) = inner_clear_sb.upgrade() {
+            let inner = inner_rc.borrow();
+            if let Some(page) = inner.tab_view.selected_page() {
+                let child = page.child();
+                if let Some(tab) = inner.tabs.iter().find(|c| c.controller.widget() == &child) {
+                    tab.controller.clear_scrollback();
+                }
+            }
+        }
+    });
+    action_group.add_action(&clear_scrollback_action);
+
+    let reset_terminal_action = gio::SimpleAction::new("reset-terminal", None);
+    let inner_reset_term = Rc::downgrade(inner);
+    reset_terminal_action.connect_activate(move |_, _| {
+        if let Some(inner_rc) = inner_reset_term.upgrade() {
+            let inner = inner_rc.borrow();
+            if let Some(page) = inner.tab_view.selected_page() {
+                let child = page.child();
+                if let Some(tab) = inner.tabs.iter().find(|c| c.controller.widget() == &child) {
+                    tab.controller.reset_terminal();
+                }
+            }
+        }
+    });
+    action_group.add_action(&reset_terminal_action);
+
     let execute_bm = gtk4::gio::SimpleAction::new(
         "execute-bookmark",
         Some(gtk4::glib::VariantTy::new("(sss)").unwrap()),

@@ -145,13 +145,21 @@ impl SearchBarComponent {
     }
 
     pub fn reveal(&self) {
+        if let Some(term) = self.terminal.borrow().as_ref()
+            && let Some(sel) = term.selected_text()
+            && let Some(first_line) = sel.lines().map(str::trim).find(|l| !l.is_empty())
+        {
+            self.entry.set_text(first_line);
+        }
         self.revealer.set_reveal_child(true);
         self.entry.grab_focus();
+        self.entry.select_region(0, -1);
     }
 
     pub fn hide(&self) {
         self.revealer.set_reveal_child(false);
         if let Some(term) = self.terminal.borrow().as_ref() {
+            term.search_set_regex(None, 0);
             term.grab_focus();
         }
     }
@@ -315,6 +323,7 @@ impl SearchBarComponent {
         close_btn.connect_clicked(move |_| {
             rev_clone.set_reveal_child(false);
             if let Some(t) = term_focus.borrow().as_ref() {
+                t.search_set_regex(None, 0);
                 t.grab_focus();
             }
         });
@@ -327,6 +336,7 @@ impl SearchBarComponent {
             if keyval == gtk::gdk::Key::Escape {
                 rev_clone2.set_reveal_child(false);
                 if let Some(t) = term_focus2.borrow().as_ref() {
+                    t.search_set_regex(None, 0);
                     t.grab_focus();
                 }
                 gtk::glib::Propagation::Stop

@@ -44,6 +44,7 @@ bitflags! {
         const MODIFY_OTHER_KEYS_2     = 1 << 25;
         const GRAPHEME_CLUSTERING     = 1 << 26;
         const IN_BAND_RESIZE          = 1 << 27;
+        const SYNC_UPDATE             = 1 << 28;
         const MOUSE_MODE              = Self::MOUSE_REPORT_CLICK.bits() | Self::MOUSE_MOTION.bits() | Self::MOUSE_DRAG.bits();
         const KITTY_KEYBOARD_PROTOCOL = Self::DISAMBIGUATE_ESC_CODES.bits()
                                       | Self::REPORT_EVENT_TYPES.bits()
@@ -324,7 +325,9 @@ impl<T: EventListener> Term<T> {
                 style.blinking = true;
                 self.event_proxy.send_event(Event::CursorBlinkingChange);
             }
-            NamedPrivateMode::SyncUpdate => (),
+            NamedPrivateMode::SyncUpdate => {
+                self.mode.insert(TermMode::SYNC_UPDATE);
+            }
             NamedPrivateMode::GraphemeClustering => {
                 self.mode.insert(TermMode::GRAPHEME_CLUSTERING);
             }
@@ -392,7 +395,9 @@ impl<T: EventListener> Term<T> {
                 style.blinking = false;
                 self.event_proxy.send_event(Event::CursorBlinkingChange);
             }
-            NamedPrivateMode::SyncUpdate => (),
+            NamedPrivateMode::SyncUpdate => {
+                self.mode.remove(TermMode::SYNC_UPDATE);
+            }
             NamedPrivateMode::GraphemeClustering => {
                 self.mode.remove(TermMode::GRAPHEME_CLUSTERING);
             }
@@ -446,7 +451,9 @@ impl<T: EventListener> Term<T> {
                 NamedPrivateMode::BracketedPaste => {
                     self.mode.contains(TermMode::BRACKETED_PASTE).into()
                 }
-                NamedPrivateMode::SyncUpdate => ModeState::Reset,
+                NamedPrivateMode::SyncUpdate => {
+                    self.mode.contains(TermMode::SYNC_UPDATE).into()
+                }
                 NamedPrivateMode::ColumnMode => ModeState::NotSupported,
                 NamedPrivateMode::GraphemeClustering => {
                     self.mode.contains(TermMode::GRAPHEME_CLUSTERING).into()

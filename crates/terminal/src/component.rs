@@ -471,6 +471,48 @@ impl TerminalComponent {
         }
     }
 
+    pub fn select_all(&self) {
+        let inner = self.inner.borrow();
+        if let Some(pane_data) = inner.panes.get(&inner.active_pane_id) {
+            pane_data.controller.select_all();
+        }
+    }
+
+    pub fn toggle_search(&self) {
+        let inner = self.inner.borrow();
+        if let Some(pane_data) = inner.panes.get(&inner.active_pane_id) {
+            pane_data.controller.toggle_search();
+        }
+    }
+
+    pub fn copy_last_command_output(&self) {
+        let inner = self.inner.borrow();
+        if let Some(pane_data) = inner.panes.get(&inner.active_pane_id) {
+            pane_data.controller.copy_last_command_output();
+        }
+    }
+
+    pub fn open_scrollback_in_editor(&self) {
+        let inner = self.inner.borrow();
+        if let Some(pane_data) = inner.panes.get(&inner.active_pane_id) {
+            pane_data.controller.open_scrollback_in_editor();
+        }
+    }
+
+    pub fn clear_scrollback(&self) {
+        let inner = self.inner.borrow();
+        if let Some(pane_data) = inner.panes.get(&inner.active_pane_id) {
+            pane_data.controller.clear_scrollback();
+        }
+    }
+
+    pub fn reset_terminal(&self) {
+        let inner = self.inner.borrow();
+        if let Some(pane_data) = inner.panes.get(&inner.active_pane_id) {
+            pane_data.controller.reset_terminal();
+        }
+    }
+
     pub fn grab_focus(&self) {
         let inner = self.inner.borrow();
         if let Some(pane_data) = inner.panes.get(&inner.active_pane_id) {

@@ -699,4 +699,107 @@ mod tests {
             })
         );
     }
+
+    #[test]
+    fn select_all_spans_scrollback_and_viewport_for_copy() {
+        // 1. Scrollback + full viewport
+        let mut h = HeadlessTerminal::new(20, 3);
+        h.feed(b"line-1\r\nline-2\r\nline-3\r\nline-4\r\nline-5");
+        h.term.select_all();
+
+        let state_after = h.render_state();
+        assert_eq!(
+            state_after.selection_text().as_deref(),
+            Some("line-1\nline-2\nline-3\nline-4\nline-5")
+        );
+
+        // 2. Partial viewport with trailing blank rows below cursor (should not append blank lines)
+        let mut h_sparse = HeadlessTerminal::new(20, 10);
+        h_sparse.feed(b"first\r\nsecond");
+        h_sparse.term.select_all();
+
+        let sparse_state = h_sparse.render_state();
+        assert_eq!(
+            sparse_state.selection_text().as_deref(),
+            Some("first\nsecond")
+        );
+    }
+
+    #[test]
+    fn adjust_selection_expands_and_contracts_semantic_and_simple_selections() {
+        use crate::engine::index::Side;
+        use crate::engine::selection::{Selection, SelectionAdjust, SelectionType};
+
+        let mut h = HeadlessTerminal::new(30, 4);
+        h.feed(b"hello world testing\r\nsecond line here");
+
+        // Start with a double-click Semantic selection on "world" (col 6..=10 on line 0)
+        h.term.selection = Some(Selection::new(
+            SelectionType::Semantic,
+            Point::new(Line(0), Column(7)),
+            Side::Left,
+        ));
+        assert_eq!(h.render_state().selection_text().as_deref(), Some("world"));
+
+        // Shift+Right 4 times -> expands character-by-character to "world tes"
+        for _ in 0..4 {
+            assert!(h.term.adjust_selection(SelectionAdjust::Right));
+        }
+        assert_eq!(
+            h.render_state().selection_text().as_deref(),
+            Some("world tes")
+        );
+
+        // Shift+Left 2 times -> shrinks back to "world t"
+        for _ in 0..2 {
+            assert!(h.term.adjust_selection(SelectionAdjust::Left));
+        }
+        assert_eq!(
+            h.render_state().selection_text().as_deref(),
+            Some("world t")
+        );
+
+        // Shift+End -> extends to end of line 0 ("world testing")
+        assert!(h.term.adjust_selection(SelectionAdjust::EndOfLine));
+        assert_eq!(
+            h.render_state().selection_text().as_deref(),
+            Some("world testing")
+        );
+
+        // Shift+Down -> extends to line 1
+        assert!(h.term.adjust_selection(SelectionAdjust::Down));
+        assert_eq!(
+            h.render_state().selection_text().as_deref(),
+            Some("world testing\nsecond line here")
+        );
+    }
+
+    #[test]
+    fn decset_2026_sync_update_decrqm_and_dump_and_reset() {
+        use crate::engine::ansi::Handler;
+
+        let mut h = HeadlessTerminal::new(30, 3);
+
+        // 1. Query ?2026$p inside a synchronized update block (?2026h ... ?2026l) -> reports 1 (set),
+        //    then query ?2026$p after ?2026l -> reports 2 (reset).
+        h.feed(b"\x1b[?2026h\x1b[?2026$p\x1b[?2026l\x1b[?2026$p");
+        assert_eq!(
+            h.take_pty_writes(),
+            vec!["\x1b[?2026;1$y", "\x1b[?2026;2$y"]
+        );
+
+        // 2. dump_buffer_to_string(true) vs dump_buffer_to_string(false)
+        h.feed(b"hist-1\r\nhist-2\r\nvis-1\r\nvis-2");
+        assert_eq!(
+            h.term.dump_buffer_to_string(true),
+            "hist-1\nhist-2\nvis-1\nvis-2"
+        );
+        assert_eq!(h.term.dump_buffer_to_string(false), "hist-2\nvis-1\nvis-2");
+
+        // 3. Reset state clears stuck mouse reporting (?1003h) and alt screen (?1049h)
+        h.feed(b"\x1b[?1049h\x1b[?1003h");
+        assert!(h.mode().contains(TermMode::ALT_SCREEN | TermMode::MOUSE_MOTION));
+        h.term.reset_state();
+        assert!(!h.mode().intersects(TermMode::ALT_SCREEN | TermMode::MOUSE_MODE));
+    }
 }

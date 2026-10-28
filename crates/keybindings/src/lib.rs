@@ -54,6 +54,14 @@ pub const PASTE: Keybinding = Keybinding {
     trigger: "<Ctrl><Shift>v",
     action_name: "win.paste",
 };
+pub const SELECT_ALL: Keybinding = Keybinding {
+    trigger: "<Ctrl><Shift>a",
+    action_name: "win.select-all",
+};
+pub const OPEN_SCROLLBACK: Keybinding = Keybinding {
+    trigger: "<Ctrl><Alt><Shift>j",
+    action_name: "win.open-scrollback",
+};
 pub const MESSAGE_BAR: Keybinding = Keybinding {
     trigger: "<Ctrl>slash",
     action_name: "win.message-bar", // Note: handled manually in pane/mod.rs
@@ -130,6 +138,8 @@ pub fn get_shortcuts_by_category() -> Vec<ShortcutCategory> {
             items: vec![
                 ("Copy", COPY),
                 ("Paste", PASTE),
+                ("Select All", SELECT_ALL),
+                ("Open Scrollback in Editor", OPEN_SCROLLBACK),
                 ("Search", SEARCH),
                 ("Zoom In", ZOOM_IN),
                 ("Zoom Out", ZOOM_OUT),
@@ -184,6 +194,8 @@ pub fn bind_shortcuts(app: &libadwaita::Application) {
     app.set_accels_for_action(COMMAND_PALETTE.action_name, &[COMMAND_PALETTE.trigger]);
     app.set_accels_for_action(COPY.action_name, &[COPY.trigger]);
     app.set_accels_for_action(PASTE.action_name, &[PASTE.trigger]);
+    app.set_accels_for_action(SELECT_ALL.action_name, &[SELECT_ALL.trigger]);
+    app.set_accels_for_action(OPEN_SCROLLBACK.action_name, &[OPEN_SCROLLBACK.trigger]);
     app.set_accels_for_action(SPLIT_DOWN.action_name, &[SPLIT_DOWN.trigger]);
     app.set_accels_for_action(SPLIT_RIGHT.action_name, &[SPLIT_RIGHT.trigger]);
     app.set_accels_for_action(CLOSE_PANE.action_name, &[CLOSE_PANE.trigger]);

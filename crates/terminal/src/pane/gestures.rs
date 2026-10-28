@@ -8,6 +8,42 @@ use gtk4::{gdk, gio, glib};
 use std::cell::RefCell;
 use std::rc::Rc;
 
+pub(crate) fn export_and_open_scrollback(terminal: &TerminalWidget) {
+    let selected = terminal.selected_text();
+    let term_weak = terminal.downgrade();
+    glib::spawn_future_local(async move {
+        let Some(term) = term_weak.upgrade() else {
+            return;
+        };
+        let text = match selected {
+            Some(sel) if !sel.is_empty() => sel,
+            _ => term.dump_buffer(true).await.unwrap_or_default(),
+        };
+        let path_res = boxxy_sys_utils::runtime()
+            .spawn_blocking(move || -> std::io::Result<std::path::PathBuf> {
+                let mut path = std::env::temp_dir();
+                path.push(format!("boxxy-scrollback-{}.txt", uuid::Uuid::new_v4()));
+                std::fs::write(&path, text.as_bytes())?;
+                Ok(path)
+            })
+            .await;
+
+        if let Ok(Ok(path)) = path_res
+            && let Some(term) = term_weak.upgrade()
+        {
+            if let Some(path_str) = path.to_str() {
+                term.display().clipboard().set_text(path_str);
+            }
+            let file = gio::File::for_path(&path);
+            let launcher = gtk::FileLauncher::new(Some(&file));
+            let root_win = term
+                .root()
+                .and_then(|r| r.downcast::<gtk::Window>().ok());
+            launcher.launch(root_win.as_ref(), gio::Cancellable::NONE, |_| {});
+        }
+    });
+}
+
 pub(super) fn setup_gestures(
     terminal: &TerminalWidget,
     search_bar: &Rc<SearchBarComponent>,
@@ -49,6 +85,42 @@ pub(super) fn setup_gestures(
     });
     action_group.add_action(&select_all_action);
 
+    let copy_last_output_action = gio::SimpleAction::new("copy-last-output", None);
+    let term_copy_last = terminal.downgrade();
+    copy_last_output_action.connect_activate(move |_, _| {
+        if let Some(term) = term_copy_last.upgrade() {
+            term.copy_last_command_output();
+        }
+    });
+    action_group.add_action(&copy_last_output_action);
+
+    let open_scrollback_action = gio::SimpleAction::new("open-scrollback", None);
+    let term_open_scrollback = terminal.downgrade();
+    open_scrollback_action.connect_activate(move |_, _| {
+        if let Some(term) = term_open_scrollback.upgrade() {
+            export_and_open_scrollback(&term);
+        }
+    });
+    action_group.add_action(&open_scrollback_action);
+
+    let clear_scrollback_action = gio::SimpleAction::new("clear-scrollback", None);
+    let term_clear_sb = terminal.downgrade();
+    clear_scrollback_action.connect_activate(move |_, _| {
+        if let Some(term) = term_clear_sb.upgrade() {
+            term.clear_scrollback();
+        }
+    });
+    action_group.add_action(&clear_scrollback_action);
+
+    let reset_terminal_action = gio::SimpleAction::new("reset-terminal", None);
+    let term_reset = terminal.downgrade();
+    reset_terminal_action.connect_activate(move |_, _| {
+        if let Some(term) = term_reset.upgrade() {
+            term.reset_terminal();
+        }
+    });
+    action_group.add_action(&reset_terminal_action);
+
     let copy_path_action = gio::SimpleAction::new("copy-path", Some(glib::VariantTy::STRING));
     let term_copy_path = terminal.downgrade();
     copy_path_action.connect_activate(move |_, param: Option<&glib::Variant>| {
@@ -63,7 +135,9 @@ pub(super) fn setup_gestures(
     terminal.insert_action_group("term", Some(&action_group));
 
     let search_bar_clone_ev = search_bar.clone();
+    let term_for_sb_ev = terminal.downgrade();
     let ev_ctrl_search = gtk::EventControllerKey::new();
+    ev_ctrl_search.set_propagation_phase(gtk::PropagationPhase::Capture);
     ev_ctrl_search.connect_key_pressed(move |_, keyval, _, state| {
         if (keyval == gtk::gdk::Key::f || keyval == gtk::gdk::Key::F)
             && state.contains(gtk::gdk::ModifierType::CONTROL_MASK)
@@ -74,6 +148,20 @@ pub(super) fn setup_gestures(
             } else {
                 search_bar_clone_ev.hide();
             }
+            gtk::glib::Propagation::Stop
+        } else if (keyval == gtk::gdk::Key::j || keyval == gtk::gdk::Key::J)
+            && state.contains(
+                gtk::gdk::ModifierType::CONTROL_MASK
+                    | gtk::gdk::ModifierType::ALT_MASK
+                    | gtk::gdk::ModifierType::SHIFT_MASK,
+            )
+        {
+            if let Some(term) = term_for_sb_ev.upgrade() {
+                export_and_open_scrollback(&term);
+            }
+            gtk::glib::Propagation::Stop
+        } else if keyval == gtk::gdk::Key::Escape && search_bar_clone_ev.is_visible() {
+            search_bar_clone_ev.hide();
             gtk::glib::Propagation::Stop
         } else {
             gtk::glib::Propagation::Proceed

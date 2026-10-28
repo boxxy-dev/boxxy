@@ -22,6 +22,8 @@ Predefined `Keybinding` instances:
 - `ZOOM_OUT`
 - `COPY`
 - `PASTE`
+- `SELECT_ALL`
+- `OPEN_SCROLLBACK`
 
 ## International Keyboard Layouts
 To ensure shortcuts (like Zoom In/Out) work across diverse keyboard layouts (e.g., AZERTY, QWERTZ, Brazilian ABNT2) without manual scancode sniffing, we rely on GTK's native layout-aware accelerator parsing. 
