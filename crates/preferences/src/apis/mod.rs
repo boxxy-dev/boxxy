@@ -5,6 +5,7 @@ use libadwaita as adw;
 use std::cell::RefCell;
 use std::rc::Rc;
 
+mod catalog_provider_dialog;
 mod openai_compat_dialog;
 
 fn add_class_to_title_label(widget: &gtk::Widget, title: &str) {
@@ -31,7 +32,11 @@ pub fn setup_apis_page(
     let content_title: adw::WindowTitle = builder.object("content_title").unwrap();
     let page_openai_compat_editor: adw::PreferencesPage =
         builder.object("page_openai_compat_editor").unwrap();
+    let page_catalog_provider_editor: adw::PreferencesPage =
+        builder.object("page_catalog_provider_editor").unwrap();
     let dynamic_apis_group: adw::PreferencesGroup = builder.object("dynamic_apis_group").unwrap();
+    let add_catalog_provider_row: adw::ActionRow =
+        builder.object("add_catalog_provider_row").unwrap();
     let group_openai_compatible: adw::PreferencesGroup =
         builder.object("group_openai_compatible").unwrap();
     let add_openai_compat_row: adw::ActionRow = builder.object("add_openai_compat_row").unwrap();
@@ -40,6 +45,12 @@ pub fn setup_apis_page(
 
     let editor_page = openai_compat_dialog::OpenAiCompatEditorPage::new(
         &page_openai_compat_editor,
+        &apis_stack,
+        &apis_back_btn,
+        &content_title,
+    );
+    let catalog_editor_page = catalog_provider_dialog::CatalogProviderEditorPage::new(
+        &page_catalog_provider_editor,
         &apis_stack,
         &apis_back_btn,
         &content_title,
@@ -95,9 +106,194 @@ pub fn setup_apis_page(
     };
     update_model_status();
 
-    // Listen to SETTINGS_EVENT_BUS for real-time model setting changes (e.g., from the model selector dialog)
+    // --- Configured Catalog Providers Management ---
+    let catalog_added_rows =
+        Rc::new(RefCell::new(Vec::<(String, adw::PasswordEntryRow)>::new()));
+    let render_catalog_list: Rc<RefCell<Option<Rc<dyn Fn()>>>> = Rc::new(RefCell::new(None));
+
+    let render_catalog_impl = {
+        let group = dynamic_apis_group.clone();
+        let add_row = add_catalog_provider_row.clone();
+        let s_rc = settings_rc.clone();
+        let cb = on_change.clone();
+        let added_rows_inner = catalog_added_rows.clone();
+        let render_ref = render_catalog_list.clone();
+        let update_status = update_model_status.clone();
+
+        Rc::new(move || {
+            let mut rows_vec = added_rows_inner.borrow_mut();
+            for (_, row) in rows_vec.drain(..) {
+                group.remove(&row);
+            }
+
+            let providers = boxxy_model_selection::get_providers();
+            let mut unconfigured_count = 0usize;
+
+            for prov in &providers {
+                if !prov.requires_api_key() {
+                    continue;
+                }
+
+                let prov_name = prov.name().to_string();
+                let (direct_key, effective_key) = {
+                    let s = s_rc.borrow();
+                    let direct = s.api_keys.get(&prov_name).cloned().unwrap_or_default();
+                    let effective = s.get_effective_api_key(&prov_name);
+                    (direct, effective)
+                };
+
+                if effective_key.is_empty() {
+                    unconfigured_count += 1;
+                    continue;
+                }
+
+                let title = if direct_key.trim().is_empty() {
+                    format!("{} API Key (Set from environment)", prov_name)
+                } else {
+                    format!("{} API Key", prov_name)
+                };
+
+                let row = adw::PasswordEntryRow::builder().title(&title).build();
+                row.set_text(&direct_key);
+
+                {
+                    let s_rc_inner = s_rc.clone();
+                    let cb_inner = cb.clone();
+                    let prov_name_inner = prov_name.clone();
+                    let prov_name_title = prov_name.clone();
+                    let update_status_inner = update_status.clone();
+                    let row_clone = row.clone();
+                    row.connect_changed(move |entry| {
+                        let mut settings_to_save = None;
+                        {
+                            let mut s = s_rc_inner.borrow_mut();
+                            let new_val = entry.text().to_string();
+                            if s.api_keys.get(&prov_name_inner) != Some(&new_val) {
+                                let is_empty = new_val.trim().is_empty();
+                                s.api_keys.insert(prov_name_inner.clone(), new_val);
+                                s.check_and_unset_invalid_models();
+                                s.save();
+                                settings_to_save = Some(s.clone());
+
+                                if is_empty {
+                                    if Settings::get_env_api_key(&prov_name_inner).is_some() {
+                                        row_clone.set_title(&format!(
+                                            "{} API Key (Set from environment)",
+                                            prov_name_title
+                                        ));
+                                    }
+                                } else {
+                                    row_clone
+                                        .set_title(&format!("{} API Key", prov_name_title));
+                                }
+                            }
+                        }
+
+                        if let Some(s) = settings_to_save {
+                            update_status_inner();
+                            cb_inner(s);
+                        }
+                    });
+                }
+
+                let del_btn = gtk::Button::builder()
+                    .icon_name("user-trash-symbolic")
+                    .valign(gtk::Align::Center)
+                    .css_classes(["flat", "destructive-action"])
+                    .tooltip_text("Remove provider")
+                    .build();
+                {
+                    let s_rc_inner = s_rc.clone();
+                    let cb_inner = cb.clone();
+                    let render_ref_inner = render_ref.clone();
+                    let update_status_inner = update_status.clone();
+                    let prov_name_del = prov_name.clone();
+                    del_btn.connect_clicked(move |_| {
+                        Settings::remove_env_api_key(&prov_name_del);
+                        let s_clone = {
+                            let mut s = s_rc_inner.borrow_mut();
+                            s.api_keys.remove(&prov_name_del);
+                            s.check_and_unset_invalid_models();
+                            s.save();
+                            s.clone()
+                        };
+                        update_status_inner();
+                        cb_inner(s_clone);
+                        let render_ref_idle = render_ref_inner.clone();
+                        gtk::glib::idle_add_local_once(move || {
+                            if let Some(render) = render_ref_idle.borrow().as_ref() {
+                                render();
+                            }
+                        });
+                    });
+                }
+                row.add_suffix(&del_btn);
+
+                group.add(&row);
+                rows_vec.push((prov_name, row));
+            }
+
+            if unconfigured_count == 0 {
+                add_row.set_sensitive(false);
+                add_row.set_subtitle("All built-in catalog providers are configured.");
+            } else {
+                add_row.set_sensitive(true);
+                add_row.set_subtitle("Configure a built-in AI provider from the catalog.");
+            }
+        })
+    };
+    *render_catalog_list.borrow_mut() = Some(render_catalog_impl.clone());
+    render_catalog_impl();
+
+    {
+        let s_rc = settings_rc.clone();
+        let cb = on_change.clone();
+        let render_ref = render_catalog_list.clone();
+        let update_status = update_model_status.clone();
+        let catalog_editor_page = catalog_editor_page;
+        add_catalog_provider_row.connect_activated(move |_| {
+            let unconfigured: Vec<String> = {
+                let s = s_rc.borrow();
+                boxxy_model_selection::get_providers()
+                    .into_iter()
+                    .filter(|p| p.requires_api_key() && s.get_effective_api_key(p.name()).is_empty())
+                    .map(|p| p.name().to_string())
+                    .collect()
+            };
+            if unconfigured.is_empty() {
+                return;
+            }
+
+            let s_rc_inner = s_rc.clone();
+            let cb_inner = cb.clone();
+            let render_ref_inner = render_ref.clone();
+            let update_status_inner = update_status.clone();
+
+            catalog_editor_page.open_editor(unconfigured, move |provider_name, key| {
+                let s_clone = {
+                    let mut s = s_rc_inner.borrow_mut();
+                    s.api_keys.insert(provider_name, key);
+                    s.check_and_unset_invalid_models();
+                    s.save();
+                    s.clone()
+                };
+                update_status_inner();
+                cb_inner(s_clone);
+                let render_ref_idle = render_ref_inner.clone();
+                gtk::glib::idle_add_local_once(move || {
+                    if let Some(render) = render_ref_idle.borrow().as_ref() {
+                        render();
+                    }
+                });
+            });
+        });
+    }
+
+    // Listen to SETTINGS_EVENT_BUS for real-time model setting changes (e.g., from the model selector dialog or env discovery)
     let settings_rc_bus = settings_rc.clone();
     let update_status_bus = update_model_status.clone();
+    let render_catalog_bus = render_catalog_impl.clone();
+    let catalog_rows_bus = catalog_added_rows.clone();
     let mut settings_rx = crate::config::SETTINGS_EVENT_BUS.subscribe();
     gtk::glib::spawn_future_local(async move {
         loop {
@@ -110,74 +306,15 @@ pub fn setup_apis_page(
             };
             *settings_rc_bus.borrow_mut() = settings;
             update_status_bus();
+            let any_focused = catalog_rows_bus
+                .borrow()
+                .iter()
+                .any(|(_, r)| r.has_focus() || r.focus_child().is_some());
+            if !any_focused {
+                render_catalog_bus();
+            }
         }
     });
-
-    let providers = boxxy_model_selection::get_providers();
-    let mut dynamic_rows = Vec::new();
-
-    for prov in &providers {
-        if prov.requires_api_key() {
-            let row = adw::PasswordEntryRow::builder()
-                .title(format!("{} API Key", prov.name()))
-                .build();
-
-            let initial_key = settings_rc
-                .borrow()
-                .api_keys
-                .get(prov.name())
-                .cloned()
-                .unwrap_or_default();
-            row.set_text(&initial_key);
-
-            let prov_name_for_env = prov.name().to_string();
-            if initial_key.is_empty() {
-                if let Some(_env_key) = Settings::get_env_api_key(&prov_name_for_env) {
-                    row.set_title(&format!("{} API Key (Set from environment)", prov.name()));
-                }
-            }
-
-            let s_rc = settings_rc.clone();
-            let cb = on_change.clone();
-            let prov_name = prov.name().to_string();
-            let update_status = update_model_status.clone();
-            let row_clone = row.clone();
-            let prov_name_clone = prov.name().to_string();
-            row.connect_changed(move |entry| {
-                let mut settings_to_save = None;
-                {
-                    let mut s = s_rc.borrow_mut();
-                    let new_val = entry.text().to_string();
-                    if s.api_keys.get(&prov_name) != Some(&new_val) {
-                        let is_empty = new_val.is_empty();
-                        s.api_keys.insert(prov_name.clone(), new_val);
-                        s.check_and_unset_invalid_models();
-                        s.save();
-                        settings_to_save = Some(s.clone());
-
-                        if is_empty {
-                            if let Some(_env_key) = Settings::get_env_api_key(&prov_name) {
-                                row_clone.set_title(&format!(
-                                    "{} API Key (Set from environment)",
-                                    prov_name_clone
-                                ));
-                            }
-                        } else {
-                            row_clone.set_title(&format!("{} API Key", prov_name_clone));
-                        }
-                    }
-                }
-
-                if let Some(s) = settings_to_save {
-                    update_status();
-                    cb(s);
-                }
-            });
-
-            dynamic_apis_group.add(&row);
-            dynamic_rows.push((prov.name().to_string(), row));
-        }
-    }
 
     // --- OpenAI-Compatible Endpoints Management ---
     let compat_added_rows = Rc::new(RefCell::new(Vec::<adw::ActionRow>::new()));
@@ -495,6 +632,8 @@ pub fn setup_apis_page(
 
     let ollama_base_url_entry_clone = ollama_base_url_entry.clone();
     let model_status_row_clone = model_status_row.clone();
+    let add_catalog_provider_row_clone = add_catalog_provider_row.clone();
+    let catalog_added_rows_search = catalog_added_rows.clone();
     let add_openai_compat_row_clone = add_openai_compat_row.clone();
     let group_openai_compatible_clone = group_openai_compatible.clone();
 
@@ -506,7 +645,10 @@ pub fn setup_apis_page(
             m
         };
 
-        let mut any_visible = false;
+        let mut any_visible = match_row(
+            add_catalog_provider_row_clone.upcast_ref(),
+            "add provider catalog api key gemini anthropic claude openai openrouter deepseek moonshot kimi xai grok zai glm zhipu mistral codestral minimax groq",
+        );
 
         let models_visible = match_row(
             model_status_row_clone.upcast_ref(),
@@ -514,7 +656,7 @@ pub fn setup_apis_page(
         );
         group_model_status.set_visible(models_visible);
 
-        for (name, row) in &dynamic_rows {
+        for (name, row) in catalog_added_rows_search.borrow().iter() {
             let extra = match name.as_str() {
                 "Moonshot" => " kimi",
                 "xAI" => " grok",

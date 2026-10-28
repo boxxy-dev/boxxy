@@ -617,6 +617,10 @@ You can add your own sensitive paths here. One path per line. Lines starting wit
         ENV_API_KEYS.read().get(provider).cloned()
     }
 
+    pub fn remove_env_api_key(provider: &str) {
+        ENV_API_KEYS.write().remove(provider);
+    }
+
     pub fn get_effective_api_key(&self, provider: &str) -> String {
         if let Some(key) = self.api_keys.get(provider)
             && !key.trim().is_empty()

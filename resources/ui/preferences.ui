@@ -450,14 +450,25 @@
                                   <object class="AdwPreferencesPage" id="page_apis">
                                     <child>
                                       <object class="AdwPreferencesGroup" id="dynamic_apis_group">
-                                        <property name="title" translatable="yes">AI Providers</property>
-                                        <property name="description" translatable="yes">Configure API keys for your AI providers.</property>
+                                        <property name="title" translatable="yes">Configure API keys for your LLM providers</property>
+                                        <child>
+                                          <object class="AdwActionRow" id="add_catalog_provider_row">
+                                            <property name="title" translatable="yes">Add Provider…</property>
+                                            <property name="subtitle" translatable="yes">Configure a built-in AI provider from the catalog.</property>
+                                            <property name="activatable">True</property>
+                                            <child type="suffix">
+                                              <object class="GtkImage">
+                                                <property name="icon-name">list-add-symbolic</property>
+                                                <property name="valign">center</property>
+                                              </object>
+                                            </child>
+                                          </object>
+                                        </child>
                                       </object>
                                     </child>
                                     <child>
                                       <object class="AdwPreferencesGroup" id="group_openai_compatible">
-                                        <property name="title" translatable="yes">OpenAI-Compatible Endpoints</property>
-                                        <property name="description" translatable="yes">Connect custom OpenAI-compatible API endpoints.</property>
+                                        <property name="title" translatable="yes">Connect custom OpenAI-compatible API endpoints</property>
                                         <child>
                                           <object class="AdwActionRow" id="add_openai_compat_row">
                                             <property name="title" translatable="yes">Add Endpoint…</property>
@@ -475,8 +486,7 @@
                                     </child>
                                     <child>
                                       <object class="AdwPreferencesGroup" id="group_search_engines">
-                                        <property name="title" translatable="yes">Search Engines</property>
-                                        <property name="description" translatable="yes">Configure API keys for web search providers.</property>
+                                        <property name="title" translatable="yes">Enable Web search</property>
                                         <child>
                                           <object class="AdwPasswordEntryRow" id="tavily_api_key_entry">
                                             <property name="title" translatable="yes">Tavily API Key</property>
@@ -493,8 +503,7 @@
                                     </child>
                                     <child>
                                       <object class="AdwPreferencesGroup" id="group_ollama_api">
-                                        <property name="title" translatable="yes">Ollama API</property>
-                                        <property name="description" translatable="yes">Configure Local Ollama settings.</property>
+                                        <property name="title" translatable="yes">Configure Local Ollama settings</property>
                                         <child>
                                           <object class="AdwEntryRow" id="ollama_base_url_entry">
                                             <property name="title" translatable="yes">Base URL</property>
@@ -504,7 +513,7 @@
                                     </child>
                                     <child>
                                       <object class="AdwPreferencesGroup" id="group_model_status">
-                                        <property name="margin-top">12</property>
+                                        <property name="title" translatable="yes">Models Selection</property>
                                         <child>
                                           <object class="AdwActionRow" id="model_status_row">
                                             <property name="title" translatable="yes">Models Status</property>
@@ -529,6 +538,15 @@
                                 <property name="name">editor</property>
                                 <property name="child">
                                   <object class="AdwPreferencesPage" id="page_openai_compat_editor">
+                                  </object>
+                                </property>
+                              </object>
+                            </child>
+                            <child>
+                              <object class="GtkStackPage">
+                                <property name="name">catalog_editor</property>
+                                <property name="child">
+                                  <object class="AdwPreferencesPage" id="page_catalog_provider_editor">
                                   </object>
                                 </property>
                               </object>

@@ -51,7 +51,7 @@ impl PreferencesComponent {
         esc_handler.connect_key_pressed(move |_, keyval, _, _| {
             if keyval == gtk::gdk::Key::Escape {
                 if stack_esc.visible_child_name().as_deref() == Some("apis")
-                    && apis_stack_esc.visible_child_name().as_deref() == Some("editor")
+                    && apis_stack_esc.visible_child_name().as_deref() != Some("list")
                 {
                     apis_stack_esc.set_visible_child_name("list");
                     apis_back_esc.set_visible(false);
