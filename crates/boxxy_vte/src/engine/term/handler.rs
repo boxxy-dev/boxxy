@@ -67,15 +67,9 @@ fn is_emoji_modifier(c: char) -> bool {
 
 #[inline]
 fn can_widen_with_vs16(c: char) -> bool {
-    matches!(
-        c,
-        '#' | '*'
-            | '0'..='9'
-            | '\u{00A9}'
-            | '\u{00AE}'
-            | '\u{203C}'..='\u{3299}'
-            | '\u{1F000}'..='\u{1FAFF}'
-    )
+    // Use `unicode-width 0.2.3`'s zero-allocation `char_iter_width` to check
+    // exact UAX #11 / UTS #51 emoji-presentation variation sequence width.
+    unicode_width::char_iter_width([c, '\u{FE0F}'].into_iter()) == 2
 }
 
 impl<T> Term<T> {

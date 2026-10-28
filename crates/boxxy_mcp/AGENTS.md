@@ -1,7 +1,7 @@
 # Boxxy-MCP Architecture & Guidelines
 
 ## Component Overview
-The `boxxy-mcp` crate provides a generic Model Context Protocol (MCP) client integration for Boxxy-Terminal built on `rmcp 3.5.1` (supporting the MCP `2026-07-28` specification as well as `2025-11-25` and earlier servers). It bridges standard MCP servers (JSON-RPC + JSON Schema Draft 7 / 2020-12) and `rig-core` (the agentic reasoning framework used by Boxxy).
+The `boxxy-mcp` crate provides a generic Model Context Protocol (MCP) client integration for Boxxy-Terminal built on `rmcp 3.8.0` (supporting the MCP `2026-07-28` specification as well as `2025-11-25` and earlier servers). It bridges standard MCP servers (JSON-RPC + JSON Schema Draft 7 / 2020-12) and `rig-core` (the agentic reasoning framework used by Boxxy).
 
 ### Design Philosophy
 - **Strict Modularity:** Boxxy's core UI (`boxxy-preferences`) and agent reasoning (`boxxy-claw`) remain completely decoupled from the underlying MCP SDK (`rmcp`).

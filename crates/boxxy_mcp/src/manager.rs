@@ -4,10 +4,12 @@ use std::time::Duration;
 
 use log::{error, info, warn};
 use rmcp::model::Tool as McpToolDefinition;
-use rmcp::{RoleClient, service::RunningService};
+use rmcp::service::{ClientInitializeError, RunningService};
+use rmcp::RoleClient;
 use tokio::sync::{OnceCell, RwLock};
 
 use crate::client::handler::BoxxyClientHandler;
+use crate::client::http::{find_http_status_error, format_service_error};
 use crate::config::{McpServerConfig, McpTransport};
 use crate::rig_bridge::tool::{DynamicMcpTool, McpToolObserver};
 
@@ -171,12 +173,30 @@ impl McpClientManager {
                     return Ok(client_arc);
                 }
                 Err(e) => {
+                    // Do not waste retry budget on permanent 401/403 authorization failures.
+                    let is_permanent_auth = e
+                        .downcast_ref::<ClientInitializeError>()
+                        .is_some_and(ClientInitializeError::is_authorization_required);
+
+                    // Honor numeric `Retry-After` seconds from rmcp 3.8's `HttpStatusError` (429/503).
+                    let server_retry_ms = find_http_status_error(Some(e.root_cause()))
+                        .and_then(|s| s.retry_after.as_deref())
+                        .and_then(|raw| raw.trim().parse::<u64>().ok())
+                        .map(|secs| (secs.saturating_mul(1_000)).clamp(delay_ms, max_delay_ms));
+
                     last_err = Some(e);
-                    if attempt < attempts {
+                    if is_permanent_auth {
                         warn!(
-                            "MCP connection attempt {attempt}/{attempts} for '{server_name}' failed; retrying in {delay_ms}ms..."
+                            "MCP connection to '{server_name}' rejected with 401/403 authorization error; skipping retries."
                         );
-                        tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+                        break;
+                    }
+                    if attempt < attempts {
+                        let wait_ms = server_retry_ms.unwrap_or(delay_ms);
+                        warn!(
+                            "MCP connection attempt {attempt}/{attempts} for '{server_name}' failed; retrying in {wait_ms}ms..."
+                        );
+                        tokio::time::sleep(Duration::from_millis(wait_ms)).await;
                         delay_ms = ((delay_ms as f64 * f64::from(multiplier)) as u64)
                             .min(max_delay_ms);
                     }
@@ -223,7 +243,10 @@ impl McpClientManager {
         {
             Ok(Ok(tools)) => tools,
             Ok(Err(e)) => {
-                error!("Failed to list tools for MCP server '{server_name}': {e}");
+                error!(
+                    "Failed to list tools for MCP server '{server_name}': {}",
+                    format_service_error(&e)
+                );
                 return None;
             }
             Err(_) => {

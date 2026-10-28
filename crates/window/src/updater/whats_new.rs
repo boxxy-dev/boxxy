@@ -269,13 +269,22 @@ pub async fn fetch_changelog_summary(
             .await?;
     }
 
-    if !resp.status().is_success() {
-        anyhow::bail!(
-            "GitHub compare API returned HTTP {} for {}...{}",
-            resp.status(),
-            from,
-            to
+    let status = resp.status();
+    if !status.is_success() {
+        let err = self_update::Error::http_status_error_with_headers(
+            status.as_u16(),
+            &url,
+            resp.headers(),
         );
+        if let self_update::Error::RateLimited { .. } = &err {
+            log::warn!(
+                "GitHub API rate limit reached while fetching changelog summary (retry delay: {:?})",
+                err.rate_limit_delay()
+            );
+        }
+        return Err(err).with_context(|| {
+            format!("GitHub compare API returned HTTP {status} for {from}...{to}")
+        });
     }
 
     let body = resp.text().await?;

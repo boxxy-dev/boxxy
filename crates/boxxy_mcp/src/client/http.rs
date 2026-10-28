@@ -1,18 +1,136 @@
 use std::collections::HashMap;
+use std::error::Error as StdError;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
 use reqwest::header::{HeaderName, HeaderValue};
+use rmcp::RoleClient;
 use rmcp::model::ProtocolVersion;
 use rmcp::service::{
-    ClientCacheConfig, ClientLifecycleMode, RunningService, serve_client_with_lifecycle,
+    ClientCacheConfig, ClientInitializeError, ClientLifecycleMode, RunningService, ServiceError,
+    serve_client_with_lifecycle,
 };
 use rmcp::transport::streamable_http_client::{
-    StreamableHttpClientTransport, StreamableHttpClientTransportConfig,
+    AuthRequiredError, HttpStatusError, InsufficientScopeError, StreamableHttpClientTransport,
+    StreamableHttpClientTransportConfig,
 };
-use rmcp::RoleClient;
 
 use super::handler::BoxxyClientHandler;
+
+/// Maximum number of same-origin 307/308 redirects followed per request.
+const MAX_REDIRECTS: usize = 10;
+
+/// Redirect policy matching `rmcp 3.8.0`'s default Streamable HTTP client:
+/// follows only same-origin 307/308 redirects (up to 10 hops) so JSON-RPC POST
+/// bodies are preserved and custom headers / session IDs are never leaked to
+/// another origin or rewritten into bodyless GET requests (301/302/303).
+pub(crate) fn same_origin_redirect_policy() -> reqwest::redirect::Policy {
+    reqwest::redirect::Policy::custom(|attempt| {
+        let preserves_body = matches!(
+            attempt.status(),
+            reqwest::StatusCode::TEMPORARY_REDIRECT | reqwest::StatusCode::PERMANENT_REDIRECT
+        );
+        let same_origin = attempt
+            .previous()
+            .first()
+            .is_some_and(|original| original.origin() == attempt.url().origin());
+        if !preserves_body || !same_origin {
+            attempt.stop()
+        } else if attempt.previous().len() > MAX_REDIRECTS {
+            attempt.error(format!("exceeded {MAX_REDIRECTS} redirects"))
+        } else {
+            attempt.follow()
+        }
+    })
+}
+
+/// Walks an error source chain to find `rmcp 3.8.0`'s body-free [`HttpStatusError`]
+/// (emitted for HTTP 429 and 5xx responses with optional `Retry-After` metadata).
+pub fn find_http_status_error<'a>(
+    mut source: Option<&'a (dyn StdError + 'static)>,
+) -> Option<&'a HttpStatusError> {
+    while let Some(err) = source {
+        if let Some(http_status) = err.downcast_ref::<HttpStatusError>() {
+            return Some(http_status);
+        }
+        source = err.source();
+    }
+    None
+}
+
+/// Walks an error source chain to detect HTTP 401/403 authorization challenges.
+pub fn find_auth_error_detail<'a>(
+    mut source: Option<&'a (dyn StdError + 'static)>,
+) -> Option<String> {
+    while let Some(err) = source {
+        if let Some(auth_req) = err.downcast_ref::<AuthRequiredError>() {
+            return Some(format!(
+                "HTTP 401 Unauthorized (WWW-Authenticate: {})",
+                auth_req.www_authenticate_header
+            ));
+        }
+        if let Some(scope_err) = err.downcast_ref::<InsufficientScopeError>() {
+            return Some(format!(
+                "HTTP 403 Insufficient Scope (WWW-Authenticate: {})",
+                scope_err.www_authenticate_header
+            ));
+        }
+        source = err.source();
+    }
+    None
+}
+
+/// Formats a [`ClientInitializeError`] with full transport, `HttpStatusError` (`Retry-After`),
+/// and 401/403 `WWW-Authenticate` challenge details, unwrapping `LegacyFallbackFailed`.
+pub fn format_client_init_error(err: &ClientInitializeError) -> String {
+    if let Some(challenge) = err.auth_challenge() {
+        return format!("Authorization required by MCP server (WWW-Authenticate: {challenge})");
+    }
+    if err.is_authorization_required() {
+        return "Authorization required by MCP server (HTTP 401/403)".to_string();
+    }
+    match err {
+        ClientInitializeError::LegacyFallbackFailed { fallback, .. } => {
+            format_client_init_error(fallback)
+        }
+        ClientInitializeError::TransportError { error, context } => {
+            if let Some(status_err) = find_http_status_error(Some(error.error.as_ref())) {
+                if let Some(retry_after) = &status_err.retry_after {
+                    return format!(
+                        "HTTP {} during {context} (Retry-After: {retry_after})",
+                        status_err.status
+                    );
+                }
+                return format!("HTTP {} during {context}", status_err.status);
+            }
+            if let Some(auth_detail) = find_auth_error_detail(Some(error.error.as_ref())) {
+                return format!("{auth_detail} during {context}");
+            }
+            err.to_string()
+        }
+        _ => err.to_string(),
+    }
+}
+
+/// Formats a [`ServiceError`] from an active MCP session, enriching transport errors
+/// with HTTP 429/5xx `Retry-After` or 401/403 challenge metadata when present.
+pub fn format_service_error(err: &ServiceError) -> String {
+    if let ServiceError::TransportSend(dyn_err) = err {
+        if let Some(status_err) = find_http_status_error(Some(dyn_err.error.as_ref())) {
+            if let Some(retry_after) = &status_err.retry_after {
+                return format!(
+                    "HTTP {} (Retry-After: {retry_after})",
+                    status_err.status
+                );
+            }
+            return format!("HTTP {}", status_err.status);
+        }
+        if let Some(auth_detail) = find_auth_error_detail(Some(dyn_err.error.as_ref())) {
+            return auth_detail;
+        }
+    }
+    err.to_string()
+}
 
 pub async fn build_streamable_http_client(
     handler: BoxxyClientHandler,
@@ -60,6 +178,8 @@ pub async fn build_streamable_http_client(
     }
 
     let http_client = reqwest::Client::builder()
+        .pool_max_idle_per_host(0)
+        .redirect(same_origin_redirect_policy())
         .connect_timeout(Duration::from_secs(10))
         .timeout(request_timeout)
         .build()
@@ -85,7 +205,12 @@ pub async fn build_streamable_http_client(
             request_timeout.as_millis()
         )
     })?
-    .map_err(|e| anyhow::anyhow!("Failed to initialize Streamable HTTP client: {e}"))?;
+    .map_err(|e| {
+        let detail = format_client_init_error(&e);
+        anyhow::Error::new(e).context(format!(
+            "Failed to initialize Streamable HTTP client: {detail}"
+        ))
+    })?;
 
     client
         .peer()

@@ -10,9 +10,8 @@
 //! tell". The user can still disable auto-dreaming in Preferences.
 
 use anyhow::Result;
-use std::collections::HashMap;
 use tokio::sync::watch;
-use zbus::{Connection, OwnedVariant};
+use zbus::Connection;
 
 #[zbus::proxy(
     interface = "org.freedesktop.UPower",
@@ -22,21 +21,6 @@ use zbus::{Connection, OwnedVariant};
 trait UPower {
     #[zbus(property)]
     fn on_battery(&self) -> zbus::Result<bool>;
-}
-
-#[zbus::proxy(
-    interface = "org.freedesktop.DBus.Properties",
-    default_service = "org.freedesktop.UPower",
-    default_path = "/org/freedesktop/UPower"
-)]
-trait Properties {
-    #[zbus(signal)]
-    fn properties_changed(
-        &self,
-        interface_name: String,
-        changed_properties: HashMap<String, OwnedVariant>,
-        invalidated_properties: Vec<String>,
-    ) -> zbus::Result<()>;
 }
 
 /// Observer handle exposing a cheap "are we on battery?" check.
@@ -103,39 +87,16 @@ pub async fn start(conn: &Connection, tx: watch::Sender<bool>) -> Result<()> {
         Err(e) => log::warn!("power: OnBattery read failed: {}", e),
     }
 
-    let props = match PropertiesProxy::new(conn).await {
-        Ok(p) => p,
-        Err(e) => {
-            log::warn!("power: couldn't subscribe to PropertiesChanged: {}", e);
-            return Ok(());
-        }
-    };
-
     let upower_for_task = upower;
     tokio::spawn(async move {
         use futures_util::StreamExt;
-        let mut stream = match props.receive_properties_changed().await {
-            Ok(s) => s,
-            Err(e) => {
-                log::warn!("power: receive_properties_changed failed: {}", e);
-                return;
-            }
-        };
+        let mut stream = upower_for_task.receive_on_battery_changed().await;
 
-        while let Some(signal) = stream.next().await {
+        while let Some(change) = stream.next().await {
             if tx.is_closed() {
                 break;
             }
-            let args = match signal.args() {
-                Ok(a) => a,
-                Err(_) => continue,
-            };
-            if args.interface_name != "org.freedesktop.UPower" {
-                continue;
-            }
-            // Re-read authoritatively; the changed-props map may or may
-            // not include `OnBattery`, and the property is cheap to fetch.
-            if let Ok(b) = upower_for_task.on_battery().await
+            if let Ok(b) = change.get().await
                 && *tx.borrow() != b
             {
                 log::info!("power: transition on_battery={}", b);

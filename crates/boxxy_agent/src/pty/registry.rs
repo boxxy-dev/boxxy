@@ -740,14 +740,16 @@ async fn run_reader(registry: PtyRegistry, pid: u32) {
 
     let owned = unsafe { OwnedFd::from_raw_fd(raw) };
     // SAFETY: `owned` is an `OwnedFd` whose descriptor stays open and unchanged
-    // for the entire lifetime of `async_fd`.
-    let async_fd = match unsafe { AsyncFd::register(owned) } {
-        Ok(f) => f,
-        Err(e) => {
-            log::warn!("run_reader(pid={}): AsyncFd::register failed: {}", pid, e);
-            return;
-        }
-    };
+    // for the entire lifetime of `async_fd`. Register with `Interest::READABLE`
+    // only since the detached ring-buffer task never writes to the master PTY.
+    let async_fd =
+        match unsafe { AsyncFd::register_with_interest(owned, tokio::io::Interest::READABLE) } {
+            Ok(f) => f,
+            Err(e) => {
+                log::warn!("run_reader(pid={}): AsyncFd::register failed: {}", pid, e);
+                return;
+            }
+        };
 
     let mut buf = [0u8; READ_CHUNK];
     loop {

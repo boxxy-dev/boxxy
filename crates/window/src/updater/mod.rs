@@ -196,7 +196,19 @@ impl Updater {
                 .await?;
         }
 
-        if !resp.status().is_success() {
+        let status = resp.status();
+        if !status.is_success() {
+            let err = self_update::Error::http_status_error_with_headers(
+                status.as_u16(),
+                &url,
+                resp.headers(),
+            );
+            if let self_update::Error::RateLimited { .. } = &err {
+                log::warn!(
+                    "GitHub API rate limit reached while resolving tag commit (retry delay: {:?})",
+                    err.rate_limit_delay()
+                );
+            }
             return Ok(None);
         }
 

@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use similar::{Algorithm, ChangeTag, DiffOp, TextDiff};
+use similar::{Algorithm, ChangeTag, DiffOp, InlineChangeOptions, TextDiff};
 use std::path::Path;
 use std::time::Duration;
 
@@ -195,8 +195,9 @@ impl FileDiff {
             };
         }
 
+        // Use Git's Histogram diff algorithm (5x faster and heap-backed in similar 3.2.1).
         let diff = TextDiff::configure()
-            .algorithm(Algorithm::Patience)
+            .algorithm(Algorithm::Histogram)
             .timeout(Duration::from_millis(250))
             .diff_lines(old_norm.as_ref(), new_norm.as_ref());
 
@@ -286,7 +287,11 @@ impl FileDiff {
                         let mut right_cells = Vec::new();
 
                         if enable_inline && matches!(op, DiffOp::Replace { .. }) {
-                            for change in diff.iter_inline_changes(op) {
+                            let mut inline_opts = InlineChangeOptions::new();
+                            inline_opts
+                                .algorithm(Algorithm::Histogram)
+                                .semantic_cleanup(true);
+                            for change in diff.iter_inline_changes_with_options(op, inline_opts) {
                                 let spans = collect_inline_spans(&change);
                                 match change.tag() {
                                     ChangeTag::Delete => {

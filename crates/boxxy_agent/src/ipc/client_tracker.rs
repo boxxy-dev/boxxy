@@ -33,7 +33,9 @@ pub async fn spawn_owner_tracker(
     client_count_tx: watch::Sender<usize>,
 ) -> anyhow::Result<()> {
     let proxy = zbus::fdo::DBusProxy::new(conn).await?;
-    let mut stream = proxy.receive_name_owner_changed().await?;
+    // Filter `arg2=''` (`new_owner == ""`) at the D-Bus broker level via MatchRule so the
+    // daemon is only woken when a bus name is released/disconnected, not on every new connect.
+    let mut stream = proxy.receive_name_owner_changed_with_args(&[(2, "")]).await?;
     let conn_clone = conn.clone();
 
     tokio::spawn(async move {

@@ -153,7 +153,8 @@ where
             };
 
             let async_signals = self.pty.child_event_fd().map(|fd| unsafe {
-                AsyncFd::register(fd).expect("Failed to register AsyncFd for signals")
+                AsyncFd::register_with_interest(fd, tokio::io::Interest::READABLE)
+                    .expect("Failed to register AsyncFd for signals")
             });
 
             let mut pipe = if self.ref_test {

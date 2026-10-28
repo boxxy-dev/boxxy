@@ -1469,4 +1469,28 @@ fn calculate_navigation_sequence_while_scrolled_into_history_does_not_panic() {
     assert_eq!(state.calculate_navigation_sequence(clicked), None);
 }
 
+#[test]
+fn vs16_emoji_presentation_widens_only_standard_emoji_sequences() {
+    use crate::engine::term::cell::Flags;
+
+    let size = TermSize::new(20, 2);
+    let mut term = Term::new(Config::default(), &size, VoidListener);
+
+    // 1. Standard emoji presentation sequence `❤️` (U+2764 + U+FE0F) widens to 2 columns
+    term.input('\u{2764}');
+    term.input('\u{FE0F}');
+    assert!(term.grid[Line(0)][Column(0)].flags.contains(Flags::WIDE_CHAR));
+    assert!(term.grid[Line(0)][Column(1)]
+        .flags
+        .contains(Flags::WIDE_CHAR_SPACER));
+    assert_eq!(term.grid.cursor.point.column, Column(2));
+
+    // 2. Non-emoji box-drawing `─` (U+2500) followed by U+FE0F stays 1 column
+    term.input('\u{2500}');
+    term.input('\u{FE0F}');
+    assert!(!term.grid[Line(0)][Column(2)].flags.contains(Flags::WIDE_CHAR));
+    assert_eq!(term.grid.cursor.point.column, Column(3));
+}
+
+
 

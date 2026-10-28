@@ -8,6 +8,7 @@ use rmcp::model::{
 };
 
 use super::schema::translate_schema;
+use crate::client::http::format_service_error;
 use crate::manager::{McpClientManager, McpClientWrapper};
 
 /// Decoupled observer trait so `boxxy-claw` can surface MCP tool invocations
@@ -119,7 +120,10 @@ impl DynamicMcpTool {
                             }
                         }
                         Ok(Err(e)) => {
-                            let err_msg = format!("MCP tool '{mcp_tool_name}' failed: {e}");
+                            let err_msg = format!(
+                                "MCP tool '{mcp_tool_name}' failed: {}",
+                                format_service_error(&e)
+                            );
                             if let Some(obs) = &observer {
                                 obs.on_tool_result(normalized_name, err_msg.clone()).await;
                             }
@@ -538,6 +542,94 @@ mod tests {
             )]
         );
 
+        server_task.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn dynamic_mcp_tool_timeout_emits_abandoned_request_cancellation() {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+        let (server_io, client_io) = tokio::io::duplex(8192);
+        let (server_read, mut server_write) = tokio::io::split(server_io);
+        let mut reader = BufReader::new(server_read).lines();
+
+        let server_task = tokio::spawn(async move {
+            // 1. Handle `server/discover`
+            let line = reader.next_line().await.unwrap().expect("discover line");
+            let req: serde_json::Value = serde_json::from_str(&line).unwrap();
+            let discover_resp = json!({
+                "jsonrpc": "2.0",
+                "id": req["id"],
+                "result": {
+                    "resultType": "complete",
+                    "supportedVersions": ["2026-07-28"],
+                    "capabilities": { "tools": {} },
+                    "ttlMs": 0,
+                    "cacheScope": "private"
+                }
+            });
+            server_write
+                .write_all(format!("{discover_resp}\n").as_bytes())
+                .await
+                .unwrap();
+            server_write.flush().await.unwrap();
+
+            // 2. Receive `tools/call` and intentionally do not respond so client times out
+            let call_line = reader.next_line().await.unwrap().expect("tools/call line");
+            let call_req: serde_json::Value = serde_json::from_str(&call_line).unwrap();
+            assert_eq!(call_req["method"], "tools/call");
+            let call_id = call_req["id"].clone();
+
+            // 3. Verify `rmcp 3.8.0`'s `AbandonedRequestGuard` sends `notifications/cancelled`
+            let cancel_line = reader
+                .next_line()
+                .await
+                .unwrap()
+                .expect("notifications/cancelled line");
+            let cancel_notif: serde_json::Value = serde_json::from_str(&cancel_line).unwrap();
+            assert_eq!(cancel_notif["method"], "notifications/cancelled");
+            assert_eq!(cancel_notif["params"]["requestId"], call_id);
+        });
+
+        let manager = McpClientManager::new();
+        let handler =
+            crate::client::handler::BoxxyClientHandler::new("demo", Arc::downgrade(&manager));
+        let client = serve_client_with_lifecycle(
+            handler,
+            client_io,
+            ClientLifecycleMode::Discover {
+                preferred_versions: vec![rmcp::model::ProtocolVersion::V_2026_07_28],
+            },
+        )
+        .await
+        .expect("client initialized");
+
+        let schema_obj = json!({ "type": "object", "properties": {} })
+            .as_object()
+            .unwrap()
+            .clone();
+        let mcp_tool = McpToolDefinition::new("slow_op", "Slow tool", Arc::new(schema_obj));
+        let observer = RecordingObserver::new();
+
+        let dyn_mcp_tool = DynamicMcpTool {
+            manager: None,
+            client: Arc::new(client),
+            mcp_tool,
+            server_name: "demo".to_string(),
+            // DynamicMcpTool clamps timeout_ms to at least 1_000ms
+            timeout_ms: 1_000,
+            observer: Some(observer.clone()),
+        };
+
+        let rig_tool = dyn_mcp_tool.to_dynamic_tool().expect("valid dynamic tool");
+        let tool_handle = ToolServer::new().dynamic_tools(vec![rig_tool]).run();
+        let mut ctx = ToolContext::default();
+        let result = tool_handle
+            .toolset()
+            .execute("demo__slow_op", r#"{}"#, &mut ctx)
+            .await;
+
+        assert!(result.is_error());
         server_task.await.unwrap();
     }
 }
