@@ -10,6 +10,12 @@ pub fn provider_family(model: &Option<boxxy_model_selection::ModelProvider>) -> 
         Some(boxxy_model_selection::ModelProvider::OpenAi(_, _)) => "openai",
         Some(boxxy_model_selection::ModelProvider::OpenRouter(_)) => "openrouter",
         Some(boxxy_model_selection::ModelProvider::DeepSeek(_)) => "deepseek",
+        Some(boxxy_model_selection::ModelProvider::Moonshot(_, _)) => "moonshot",
+        Some(boxxy_model_selection::ModelProvider::Xai(_, _)) => "xai",
+        Some(boxxy_model_selection::ModelProvider::Zai(_, _)) => "zai",
+        Some(boxxy_model_selection::ModelProvider::Mistral(_, _)) => "mistral",
+        Some(boxxy_model_selection::ModelProvider::MiniMax(_, _)) => "minimax",
+        Some(boxxy_model_selection::ModelProvider::Groq(_, _)) => "groq",
         Some(boxxy_model_selection::ModelProvider::OpenAiCompatible { .. }) => "openai_compatible",
         None => "unknown",
     }

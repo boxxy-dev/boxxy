@@ -515,7 +515,13 @@ pub fn setup_apis_page(
         group_model_status.set_visible(models_visible);
 
         for (name, row) in &dynamic_rows {
-            if match_row(row.upcast_ref(), &format!("{} api key", name)) {
+            let extra = match name.as_str() {
+                "Moonshot" => " kimi",
+                "xAI" => " grok",
+                "Z.ai" => " zai glm zhipu",
+                _ => "",
+            };
+            if match_row(row.upcast_ref(), &format!("{}{} api key", name, extra)) {
                 any_visible = true;
             }
         }

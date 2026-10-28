@@ -1,7 +1,7 @@
 # boxxy-ai-core Agents & Architecture
 
 ## Responsibilities
-This crate provides the primary interface for AI interactions using the `rig-core` framework. It abstracts away the differences between Gemini, Anthropic, OpenAI, DeepSeek, OpenRouter, Ollama, and custom `OpenAiCompatible` endpoints (OpenCode Go, OpenCode Zen, LiteLLM, vLLM, llama.cpp), offering a unified agent interface for the rest of the application.
+This crate provides the primary interface for AI interactions using the `rig-core` framework. It abstracts away the differences between Gemini, Anthropic, OpenAI, DeepSeek, Moonshot, xAI, Z.ai, Mistral, MiniMax, Groq, OpenRouter, Ollama, and custom `OpenAiCompatible` endpoints (OpenCode Go, OpenCode Zen, LiteLLM, vLLM, llama.cpp), offering a unified agent interface for the rest of the application.
 
 ## Debugging & Observability
 This crate provides a specialized `ModelContextHook` using the `rig::agent::AgentHook` trait. It intercepts and logs all model interactions:

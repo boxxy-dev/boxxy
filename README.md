@@ -45,6 +45,12 @@ curl -O https://boxxy-dev.github.io/boxxy-flatpak-remote/boxxy.gpg && \
 | **Anthropic** | Full Claude model catalog (with configurable thinking levels & native web search) |
 | **OpenAI** | Full OpenAI model catalog (with configurable reasoning effort & native web search) |
 | **DeepSeek** | Full DeepSeek model catalog |
+| **Moonshot (Kimi)** | Full Kimi model catalog (`kimi-k3`, `kimi-k2.7-code`, etc., with configurable thinking levels) |
+| **xAI** | Full Grok model catalog (`grok-4.7`, `grok-4.6`, etc., with configurable reasoning effort) |
+| **Z.ai** | Full GLM model catalog (`glm-5.3`, `glm-5.3-flash`, etc., with configurable thinking levels) |
+| **Mistral** | Full Mistral & Codestral model catalog (`mistral-large-latest`, `codestral-latest`, etc.) |
+| **MiniMax** | Full MiniMax model catalog (`MiniMax-M3`, `MiniMax-M2.7`, etc.) |
+| **Groq** | Ultra-fast Groq model catalog (`gpt-oss-120b`, `qwen3.8-27b`, `llama-3.3-70b`, etc.) |
 | **Ollama** | Any locally installed model (`ollama run ...`) |
 | **OpenRouter** | Any OpenRouter model ID |
 | **OpenAI-Compatible Endpoints** | Any custom `/v1/chat/completions` or `/v1/responses` endpoint (OpenCode Go, OpenCode Zen, LiteLLM, vLLM, llama.cpp, LM Studio, etc.) with live `/models` discovery, configurable context size, and thinking modes |

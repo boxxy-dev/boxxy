@@ -99,6 +99,12 @@ fn main() {
             ("OPENAI_API_KEY", "OpenAI"),
             ("OPENROUTER_API_KEY", "OpenRouter"),
             ("DEEPSEEK_API_KEY", "DeepSeek"),
+            ("MOONSHOT_API_KEY", "Moonshot"),
+            ("XAI_API_KEY", "xAI"),
+            ("ZAI_API_KEY", "Z.ai"),
+            ("MISTRAL_API_KEY", "Mistral"),
+            ("MINIMAX_API_KEY", "MiniMax"),
+            ("GROQ_API_KEY", "Groq"),
         ]
         .into_iter()
         .map(|(k, v)| (k.to_string(), v.to_string()))

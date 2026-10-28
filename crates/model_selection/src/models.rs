@@ -93,6 +93,33 @@ pub fn catalog_models_for_vendor(vendor: &str) -> Vec<&'static ModelSpec> {
     // Catalog::builtin() stores entries in ascending ASCII order by ID (so older versions
     // like 2.5 / 4.5 come before 3.8 / 5.5 / 6.1). Reversing puts the newest generation first.
     specs.reverse();
+
+    // For Moonshot, keep flagship `kimi-*` models ahead of legacy `moonshot-v1-*` models.
+    if vendor == "moonshot" {
+        specs.sort_by_key(|spec| spec.id.starts_with("moonshot-v1-"));
+    } else if vendor == "xai" {
+        specs.sort_by_key(|spec| spec.id.starts_with("grok-build"));
+    } else if vendor == "zai" {
+        specs.sort_by_key(|spec| spec.id.starts_with("glm-5v-"));
+    } else if vendor == "mistral" {
+        specs.sort_by_key(|spec| {
+            if matches!(
+                spec.id.as_str(),
+                "mistral-large-latest"
+                    | "mistral-medium-latest"
+                    | "mistral-small-latest"
+                    | "codestral-latest"
+                    | "magistral-medium-latest"
+            ) {
+                0
+            } else if spec.id.ends_with("-latest") {
+                1
+            } else {
+                2
+            }
+        });
+    }
+
     specs
 }
 
@@ -126,8 +153,10 @@ pub fn thinking_levels_from_spec(spec: &ModelSpec) -> Vec<ThinkingLevel> {
                 }
             }
         }
-    } else {
+    } else if !matches!(spec.provider.vendor(), "moonshot" | "minimax") {
         // `ReasoningSupport::Unknown` — model supports reasoning and refuses no standard level
+        // (except on Moonshot and MiniMax, where only models with listed effort levels accept
+        // `reasoning_effort` and other reasoning models reason automatically).
         for level in [
             ThinkingLevel::None,
             ThinkingLevel::Low,
@@ -138,6 +167,10 @@ pub fn thinking_levels_from_spec(spec: &ModelSpec) -> Vec<ThinkingLevel> {
                 levels.push(level);
             }
         }
+    }
+
+    if levels.as_slice() == [ThinkingLevel::None] {
+        return Vec::new();
     }
 
     levels
@@ -592,6 +625,313 @@ impl fmt::Display for DeepSeekModel {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct MoonshotModel(pub String);
+
+#[allow(non_upper_case_globals)]
+impl MoonshotModel {
+    pub const KimiK3: Self = Self(String::new());
+    pub const KimiK2_7Code: Self = Self(String::new());
+
+    pub fn new(id: impl Into<String>) -> Self {
+        Self(id.into())
+    }
+
+    pub fn all() -> Vec<MoonshotModel> {
+        let models: Vec<MoonshotModel> = catalog_models_for_vendor("moonshot")
+            .into_iter()
+            .map(|spec| MoonshotModel(spec.id.clone()))
+            .collect();
+        if models.is_empty() {
+            vec![MoonshotModel::new("kimi-k3")]
+        } else {
+            models
+        }
+    }
+
+    pub fn api_name(&self) -> &str {
+        if self.0.is_empty() {
+            "kimi-k3"
+        } else {
+            self.0.as_str()
+        }
+    }
+
+    pub fn supports_thinking(&self) -> bool {
+        !self.available_thinking_levels().is_empty()
+    }
+
+    pub fn available_thinking_levels(&self) -> Vec<ThinkingLevel> {
+        catalog_thinking_levels("moonshot", self.api_name())
+    }
+
+    pub fn default_thinking_level(&self) -> Option<ThinkingLevel> {
+        catalog_default_thinking_level("moonshot", self.api_name())
+    }
+}
+
+impl fmt::Display for MoonshotModel {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", catalog_display_name("moonshot", self.api_name()))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct XaiModel(pub String);
+
+#[allow(non_upper_case_globals)]
+impl XaiModel {
+    pub const Grok4_7: Self = Self(String::new());
+
+    pub fn new(id: impl Into<String>) -> Self {
+        Self(id.into())
+    }
+
+    pub fn all() -> Vec<XaiModel> {
+        let models: Vec<XaiModel> = catalog_models_for_vendor("xai")
+            .into_iter()
+            .map(|spec| XaiModel(spec.id.clone()))
+            .collect();
+        if models.is_empty() {
+            vec![XaiModel::new("grok-4.7")]
+        } else {
+            models
+        }
+    }
+
+    pub fn api_name(&self) -> &str {
+        if self.0.is_empty() {
+            "grok-4.7"
+        } else {
+            self.0.as_str()
+        }
+    }
+
+    pub fn supports_thinking(&self) -> bool {
+        !self.available_thinking_levels().is_empty()
+    }
+
+    pub fn available_thinking_levels(&self) -> Vec<ThinkingLevel> {
+        catalog_thinking_levels("xai", self.api_name())
+    }
+
+    pub fn default_thinking_level(&self) -> Option<ThinkingLevel> {
+        catalog_default_thinking_level("xai", self.api_name())
+    }
+}
+
+impl fmt::Display for XaiModel {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", catalog_display_name("xai", self.api_name()))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct ZaiModel(pub String);
+
+#[allow(non_upper_case_globals)]
+impl ZaiModel {
+    pub const Glm5_3: Self = Self(String::new());
+
+    pub fn new(id: impl Into<String>) -> Self {
+        Self(id.into())
+    }
+
+    pub fn all() -> Vec<ZaiModel> {
+        let models: Vec<ZaiModel> = catalog_models_for_vendor("zai")
+            .into_iter()
+            .map(|spec| ZaiModel(spec.id.clone()))
+            .collect();
+        if models.is_empty() {
+            vec![ZaiModel::new("glm-5.3")]
+        } else {
+            models
+        }
+    }
+
+    pub fn api_name(&self) -> &str {
+        if self.0.is_empty() {
+            "glm-5.3"
+        } else {
+            self.0.as_str()
+        }
+    }
+
+    pub fn supports_thinking(&self) -> bool {
+        !self.available_thinking_levels().is_empty()
+    }
+
+    pub fn available_thinking_levels(&self) -> Vec<ThinkingLevel> {
+        catalog_thinking_levels("zai", self.api_name())
+    }
+
+    pub fn default_thinking_level(&self) -> Option<ThinkingLevel> {
+        catalog_default_thinking_level("zai", self.api_name())
+    }
+}
+
+impl fmt::Display for ZaiModel {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", catalog_display_name("zai", self.api_name()))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct MistralModel(pub String);
+
+#[allow(non_upper_case_globals)]
+impl MistralModel {
+    pub const MistralLargeLatest: Self = Self(String::new());
+
+    pub fn new(id: impl Into<String>) -> Self {
+        Self(id.into())
+    }
+
+    pub fn all() -> Vec<MistralModel> {
+        let models: Vec<MistralModel> = catalog_models_for_vendor("mistral")
+            .into_iter()
+            .map(|spec| MistralModel(spec.id.clone()))
+            .collect();
+        if models.is_empty() {
+            vec![MistralModel::new("mistral-large-latest")]
+        } else {
+            models
+        }
+    }
+
+    pub fn api_name(&self) -> &str {
+        if self.0.is_empty() {
+            "mistral-large-latest"
+        } else {
+            self.0.as_str()
+        }
+    }
+
+    pub fn supports_thinking(&self) -> bool {
+        !self.available_thinking_levels().is_empty()
+    }
+
+    pub fn available_thinking_levels(&self) -> Vec<ThinkingLevel> {
+        catalog_thinking_levels("mistral", self.api_name())
+    }
+
+    pub fn default_thinking_level(&self) -> Option<ThinkingLevel> {
+        catalog_default_thinking_level("mistral", self.api_name())
+    }
+}
+
+impl fmt::Display for MistralModel {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", catalog_display_name("mistral", self.api_name()))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct MiniMaxModel(pub String);
+
+#[allow(non_upper_case_globals)]
+impl MiniMaxModel {
+    pub const MiniMaxM3: Self = Self(String::new());
+
+    pub fn new(id: impl Into<String>) -> Self {
+        Self(id.into())
+    }
+
+    pub fn all() -> Vec<MiniMaxModel> {
+        let models: Vec<MiniMaxModel> = catalog_models_for_vendor("minimax")
+            .into_iter()
+            .map(|spec| MiniMaxModel(spec.id.clone()))
+            .collect();
+        if models.is_empty() {
+            vec![MiniMaxModel::new("MiniMax-M3")]
+        } else {
+            models
+        }
+    }
+
+    pub fn api_name(&self) -> &str {
+        if self.0.is_empty() {
+            "MiniMax-M3"
+        } else {
+            self.0.as_str()
+        }
+    }
+
+    pub fn supports_thinking(&self) -> bool {
+        !self.available_thinking_levels().is_empty()
+    }
+
+    pub fn available_thinking_levels(&self) -> Vec<ThinkingLevel> {
+        catalog_thinking_levels("minimax", self.api_name())
+    }
+
+    pub fn default_thinking_level(&self) -> Option<ThinkingLevel> {
+        catalog_default_thinking_level("minimax", self.api_name())
+    }
+}
+
+impl fmt::Display for MiniMaxModel {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", catalog_display_name("minimax", self.api_name()))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct GroqModel(pub String);
+
+#[allow(non_upper_case_globals)]
+impl GroqModel {
+    pub const GptOss120B: Self = Self(String::new());
+
+    pub fn new(id: impl Into<String>) -> Self {
+        Self(id.into())
+    }
+
+    pub fn all() -> Vec<GroqModel> {
+        let models: Vec<GroqModel> = catalog_models_for_vendor("groq")
+            .into_iter()
+            .map(|spec| GroqModel(spec.id.clone()))
+            .collect();
+        if models.is_empty() {
+            vec![GroqModel::new("openai/gpt-oss-120b")]
+        } else {
+            models
+        }
+    }
+
+    pub fn api_name(&self) -> &str {
+        if self.0.is_empty() {
+            "openai/gpt-oss-120b"
+        } else {
+            self.0.as_str()
+        }
+    }
+
+    pub fn supports_thinking(&self) -> bool {
+        !self.available_thinking_levels().is_empty()
+    }
+
+    pub fn available_thinking_levels(&self) -> Vec<ThinkingLevel> {
+        catalog_thinking_levels("groq", self.api_name())
+    }
+
+    pub fn default_thinking_level(&self) -> Option<ThinkingLevel> {
+        catalog_default_thinking_level("groq", self.api_name())
+    }
+}
+
+impl fmt::Display for GroqModel {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", catalog_display_name("groq", self.api_name()))
+    }
+}
+
 fn default_true() -> bool {
     true
 }
@@ -913,6 +1253,12 @@ pub enum ModelProvider {
     OpenAi(OpenAiModel, Option<ThinkingLevel>),
     OpenRouter(String),
     DeepSeek(DeepSeekModel),
+    Moonshot(MoonshotModel, Option<ThinkingLevel>),
+    Xai(XaiModel, Option<ThinkingLevel>),
+    Zai(ZaiModel, Option<ThinkingLevel>),
+    Mistral(MistralModel, Option<ThinkingLevel>),
+    MiniMax(MiniMaxModel, Option<ThinkingLevel>),
+    Groq(GroqModel, Option<ThinkingLevel>),
     OpenAiCompatible {
         provider_name: String,
         model_id: String,
@@ -929,6 +1275,12 @@ impl ModelProvider {
             ModelProvider::OpenAi(_, _) => "OpenAI",
             ModelProvider::OpenRouter(_) => "OpenRouter",
             ModelProvider::DeepSeek(_) => "DeepSeek",
+            ModelProvider::Moonshot(_, _) => "Moonshot",
+            ModelProvider::Xai(_, _) => "xAI",
+            ModelProvider::Zai(_, _) => "Z.ai",
+            ModelProvider::Mistral(_, _) => "Mistral",
+            ModelProvider::MiniMax(_, _) => "MiniMax",
+            ModelProvider::Groq(_, _) => "Groq",
             ModelProvider::OpenAiCompatible { provider_name, .. } => provider_name.as_str(),
         }
     }
@@ -944,6 +1296,12 @@ impl ModelProvider {
             ModelProvider::OpenAi(_, _) => "OpenAI",
             ModelProvider::OpenRouter(_) => "OpenRouter",
             ModelProvider::DeepSeek(_) => "DeepSeek",
+            ModelProvider::Moonshot(_, _) => "Moonshot",
+            ModelProvider::Xai(_, _) => "xAI",
+            ModelProvider::Zai(_, _) => "Z.ai",
+            ModelProvider::Mistral(_, _) => "Mistral",
+            ModelProvider::MiniMax(_, _) => "MiniMax",
+            ModelProvider::Groq(_, _) => "Groq",
             ModelProvider::OpenAiCompatible { .. } => "Custom Endpoints",
         }
     }
@@ -956,6 +1314,12 @@ impl ModelProvider {
             ModelProvider::OpenAi(model, _) => model.api_name(),
             ModelProvider::OpenRouter(model) => model.as_str(),
             ModelProvider::DeepSeek(model) => model.api_name(),
+            ModelProvider::Moonshot(model, _) => model.api_name(),
+            ModelProvider::Xai(model, _) => model.api_name(),
+            ModelProvider::Zai(model, _) => model.api_name(),
+            ModelProvider::Mistral(model, _) => model.api_name(),
+            ModelProvider::MiniMax(model, _) => model.api_name(),
+            ModelProvider::Groq(model, _) => model.api_name(),
             ModelProvider::OpenAiCompatible { model_id, .. } => model_id.as_str(),
         }
     }
@@ -968,6 +1332,12 @@ impl ModelProvider {
             ModelProvider::OpenAi(model, _) => format!("OpenAI/{}", model),
             ModelProvider::OpenRouter(model) => format!("OpenRouter/{}", model),
             ModelProvider::DeepSeek(model) => format!("DeepSeek/{}", model),
+            ModelProvider::Moonshot(model, _) => format!("Moonshot/{}", model),
+            ModelProvider::Xai(model, _) => format!("xAI/{}", model),
+            ModelProvider::Zai(model, _) => format!("Z.ai/{}", model),
+            ModelProvider::Mistral(model, _) => format!("Mistral/{}", model),
+            ModelProvider::MiniMax(model, _) => format!("MiniMax/{}", model),
+            ModelProvider::Groq(model, _) => format!("Groq/{}", model),
             ModelProvider::OpenAiCompatible {
                 provider_name,
                 model_id,
@@ -1068,6 +1438,58 @@ mod tests {
         assert!(deepseek_all
             .iter()
             .any(|m| m.api_name() == "deepseek-v4-pro"));
+
+        // Moonshot catalog orders flagship `kimi-k3` first ahead of legacy `moonshot-v1-*`
+        let moonshot_all = MoonshotModel::all();
+        assert_eq!(moonshot_all.first().map(MoonshotModel::api_name), Some("kimi-k3"));
+        assert!(moonshot_all
+            .iter()
+            .any(|m| m.api_name() == "kimi-k2.7-code"));
+        let kimi_k3 = MoonshotModel::new("kimi-k3");
+        assert_eq!(kimi_k3.to_string(), "Kimi K3");
+        assert!(kimi_k3.supports_thinking());
+        assert_eq!(
+            kimi_k3.available_thinking_levels(),
+            vec![ThinkingLevel::Low, ThinkingLevel::High]
+        );
+        assert_eq!(kimi_k3.default_thinking_level(), Some(ThinkingLevel::Low));
+
+        // xAI catalog orders Grok 4.7 first
+        let xai_all = XaiModel::all();
+        assert_eq!(xai_all.first().map(XaiModel::api_name), Some("grok-4.7"));
+        let grok_47 = XaiModel::new("grok-4.7");
+        assert_eq!(grok_47.to_string(), "Grok 4.7");
+        assert!(grok_47.supports_thinking());
+
+        // Z.ai catalog includes GLM-5.3 and GLM-5.3-Flash
+        let zai_all = ZaiModel::all();
+        assert!(zai_all.iter().any(|m| m.api_name() == "glm-5.3"));
+        assert!(zai_all.iter().any(|m| m.api_name() == "glm-5.3-flash"));
+        let glm_53 = ZaiModel::new("glm-5.3");
+        assert_eq!(glm_53.to_string(), "GLM-5.3");
+        assert!(glm_53.supports_thinking());
+
+        // Mistral catalog includes Codestral and Mistral Large
+        let mistral_all = MistralModel::all();
+        assert!(mistral_all.iter().any(|m| m.api_name() == "codestral-latest"));
+        assert!(mistral_all
+            .iter()
+            .any(|m| m.api_name() == "mistral-large-latest"));
+
+        // MiniMax catalog includes MiniMax-M3 and MiniMax-M2.7
+        let minimax_all = MiniMaxModel::all();
+        assert_eq!(
+            minimax_all.first().map(MiniMaxModel::api_name),
+            Some("MiniMax-M3")
+        );
+        assert!(minimax_all.iter().any(|m| m.api_name() == "MiniMax-M2.7"));
+
+        // Groq catalog includes GPT OSS 120B and Qwen 3.8 27B
+        let groq_all = GroqModel::all();
+        assert!(groq_all
+            .iter()
+            .any(|m| m.api_name() == "openai/gpt-oss-120b"));
+        assert!(groq_all.iter().any(|m| m.api_name() == "qwen/qwen3.8-27b"));
     }
 
     #[test]
@@ -1097,6 +1519,10 @@ mod tests {
         );
         assert!(
             !ModelProvider::DeepSeek(DeepSeekModel::new("deepseek-flash")).supports_native_search()
+        );
+        assert!(
+            !ModelProvider::Moonshot(MoonshotModel::new("kimi-k3"), Some(ThinkingLevel::Low))
+                .supports_native_search()
         );
         assert!(
             !ModelProvider::OpenAiCompatible {

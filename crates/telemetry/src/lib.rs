@@ -135,7 +135,7 @@ pub fn normalize_tool_name(tool_name: &str) -> &'static str {
     }
 }
 
-/// Normalizes a model provider name to one of the 6 built-in providers or `"Custom Endpoints"`,
+/// Normalizes a model provider name to one of the 12 built-in providers or `"Custom Endpoints"`,
 /// ensuring user-defined custom endpoint names never leak into telemetry.
 #[must_use]
 pub fn normalize_provider_name(provider: &str) -> &'static str {
@@ -146,6 +146,12 @@ pub fn normalize_provider_name(provider: &str) -> &'static str {
         "openai" => "OpenAI",
         "openrouter" => "OpenRouter",
         "deepseek" => "DeepSeek",
+        "moonshot" => "Moonshot",
+        "xai" => "xAI",
+        "z.ai" | "zai" => "Z.ai",
+        "mistral" => "Mistral",
+        "minimax" => "MiniMax",
+        "groq" => "Groq",
         _ => CUSTOM_ENDPOINT_PROVIDER_NAME,
     }
 }
@@ -706,6 +712,12 @@ mod tests {
         assert_eq!(normalize_provider_name("OpenAI"), "OpenAI");
         assert_eq!(normalize_provider_name("OpenRouter"), "OpenRouter");
         assert_eq!(normalize_provider_name("DeepSeek"), "DeepSeek");
+        assert_eq!(normalize_provider_name("Moonshot"), "Moonshot");
+        assert_eq!(normalize_provider_name("xAI"), "xAI");
+        assert_eq!(normalize_provider_name("Z.ai"), "Z.ai");
+        assert_eq!(normalize_provider_name("Mistral"), "Mistral");
+        assert_eq!(normalize_provider_name("MiniMax"), "MiniMax");
+        assert_eq!(normalize_provider_name("Groq"), "Groq");
         assert_eq!(normalize_provider_name("Anthropic"), "Anthropic");
         assert_eq!(normalize_provider_name("Ollama"), "Ollama");
         assert_eq!(

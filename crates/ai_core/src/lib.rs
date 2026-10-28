@@ -45,6 +45,12 @@ pub fn native_search_additional_params(provider: &ModelProvider) -> Option<serde
         ModelProvider::Ollama(_)
         | ModelProvider::OpenRouter(_)
         | ModelProvider::DeepSeek(_)
+        | ModelProvider::Moonshot(_, _)
+        | ModelProvider::Xai(_, _)
+        | ModelProvider::Zai(_, _)
+        | ModelProvider::Mistral(_, _)
+        | ModelProvider::MiniMax(_, _)
+        | ModelProvider::Groq(_, _)
         | ModelProvider::OpenAiCompatible { .. } => None,
     }
 }
@@ -229,6 +235,24 @@ pub fn resolve_catalog_spec(provider: &ModelProvider) -> Option<&'static rig::ca
         }
         ModelProvider::DeepSeek(model) => {
             boxxy_model_selection::catalog_get_spec("deepseek", model.api_name())
+        }
+        ModelProvider::Moonshot(model, _) => {
+            boxxy_model_selection::catalog_get_spec("moonshot", model.api_name())
+        }
+        ModelProvider::Xai(model, _) => {
+            boxxy_model_selection::catalog_get_spec("xai", model.api_name())
+        }
+        ModelProvider::Zai(model, _) => {
+            boxxy_model_selection::catalog_get_spec("zai", model.api_name())
+        }
+        ModelProvider::Mistral(model, _) => {
+            boxxy_model_selection::catalog_get_spec("mistral", model.api_name())
+        }
+        ModelProvider::MiniMax(model, _) => {
+            boxxy_model_selection::catalog_get_spec("minimax", model.api_name())
+        }
+        ModelProvider::Groq(model, _) => {
+            boxxy_model_selection::catalog_get_spec("groq", model.api_name())
         }
         ModelProvider::OpenRouter(slug) => resolve_any_catalog_spec(slug),
         ModelProvider::OpenAiCompatible { model_id, .. } => resolve_any_catalog_spec(model_id),
@@ -467,6 +491,78 @@ pub fn build_provider_model(
                 "DeepSeek".to_string(),
                 model.api_name().to_string(),
                 None,
+            )
+        }
+        ModelProvider::Moonshot(model, thinking) => {
+            let key = creds.api_keys.get("Moonshot").cloned().unwrap_or_default();
+            let client = rig::providers::moonshot::new(key.trim());
+            let moonshot_model = client.chat(model.api_name());
+            let reasoning = resolve_model_reasoning(provider, *thinking);
+            (
+                moonshot_model.into(),
+                "Moonshot".to_string(),
+                model.api_name().to_string(),
+                reasoning,
+            )
+        }
+        ModelProvider::Xai(model, thinking) => {
+            let key = creds.api_keys.get("xAI").cloned().unwrap_or_default();
+            let client = rig::providers::xai::new(key.trim());
+            let xai_model = client.completion(model.api_name());
+            let reasoning = resolve_model_reasoning(provider, *thinking);
+            (
+                xai_model.into(),
+                "xAI".to_string(),
+                model.api_name().to_string(),
+                reasoning,
+            )
+        }
+        ModelProvider::Zai(model, thinking) => {
+            let key = creds.api_keys.get("Z.ai").cloned().unwrap_or_default();
+            let client = rig::providers::zai::new(key.trim());
+            let zai_model = client.chat(model.api_name());
+            let reasoning = resolve_model_reasoning(provider, *thinking);
+            (
+                zai_model.into(),
+                "Z.ai".to_string(),
+                model.api_name().to_string(),
+                reasoning,
+            )
+        }
+        ModelProvider::Mistral(model, thinking) => {
+            let key = creds.api_keys.get("Mistral").cloned().unwrap_or_default();
+            let client = rig::providers::mistral::new(key.trim());
+            let mistral_model = client.chat(model.api_name());
+            let reasoning = resolve_model_reasoning(provider, *thinking);
+            (
+                mistral_model.into(),
+                "Mistral".to_string(),
+                model.api_name().to_string(),
+                reasoning,
+            )
+        }
+        ModelProvider::MiniMax(model, thinking) => {
+            let key = creds.api_keys.get("MiniMax").cloned().unwrap_or_default();
+            let client = rig::providers::minimax::new(key.trim());
+            let minimax_model = client.chat(model.api_name());
+            let reasoning = resolve_model_reasoning(provider, *thinking);
+            (
+                minimax_model.into(),
+                "MiniMax".to_string(),
+                model.api_name().to_string(),
+                reasoning,
+            )
+        }
+        ModelProvider::Groq(model, thinking) => {
+            let key = creds.api_keys.get("Groq").cloned().unwrap_or_default();
+            let client = rig::providers::groq::new(key.trim());
+            let groq_model = client.chat(model.api_name());
+            let reasoning = resolve_model_reasoning(provider, *thinking);
+            (
+                groq_model.into(),
+                "Groq".to_string(),
+                model.api_name().to_string(),
+                reasoning,
             )
         }
         ModelProvider::OpenAiCompatible {
@@ -806,7 +902,10 @@ pub fn create_agent_with_options(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use boxxy_model_selection::{AnthropicModel, DeepSeekModel, GeminiModel, OpenAiModel};
+    use boxxy_model_selection::{
+        AnthropicModel, DeepSeekModel, GeminiModel, GroqModel, MiniMaxModel, MistralModel,
+        MoonshotModel, OpenAiModel, XaiModel, ZaiModel,
+    };
 
     #[test]
     fn test_map_thinking_level() {
@@ -877,6 +976,60 @@ mod tests {
         assert_eq!(provider, "DeepSeek");
         assert_eq!(model, "deepseek-flash");
         assert_eq!(reasoning, None);
+
+        // Moonshot (Kimi K3)
+        let (_, provider, model, reasoning) = build_provider_model(
+            &ModelProvider::Moonshot(MoonshotModel::KimiK3, Some(ThinkingLevel::High)),
+            &creds,
+        );
+        assert_eq!(provider, "Moonshot");
+        assert_eq!(model, "kimi-k3");
+        assert_eq!(reasoning, Some(Reasoning::Effort(Effort::High)));
+
+        // xAI (Grok 4.7)
+        let (_, provider, model, reasoning) = build_provider_model(
+            &ModelProvider::Xai(XaiModel::Grok4_7, Some(ThinkingLevel::High)),
+            &creds,
+        );
+        assert_eq!(provider, "xAI");
+        assert_eq!(model, "grok-4.7");
+        assert_eq!(reasoning, Some(Reasoning::Effort(Effort::High)));
+
+        // Z.ai (GLM-5.3)
+        let (_, provider, model, reasoning) = build_provider_model(
+            &ModelProvider::Zai(ZaiModel::Glm5_3, Some(ThinkingLevel::Low)),
+            &creds,
+        );
+        assert_eq!(provider, "Z.ai");
+        assert_eq!(model, "glm-5.3");
+        assert_eq!(reasoning, Some(Reasoning::Effort(Effort::Low)));
+
+        // Mistral (Mistral Large)
+        let (_, provider, model, reasoning) = build_provider_model(
+            &ModelProvider::Mistral(MistralModel::MistralLargeLatest, None),
+            &creds,
+        );
+        assert_eq!(provider, "Mistral");
+        assert_eq!(model, "mistral-large-latest");
+        assert_eq!(reasoning, None);
+
+        // MiniMax (MiniMax-M3)
+        let (_, provider, model, reasoning) = build_provider_model(
+            &ModelProvider::MiniMax(MiniMaxModel::MiniMaxM3, None),
+            &creds,
+        );
+        assert_eq!(provider, "MiniMax");
+        assert_eq!(model, "MiniMax-M3");
+        assert_eq!(reasoning, None);
+
+        // Groq (GPT OSS 120B)
+        let (_, provider, model, reasoning) = build_provider_model(
+            &ModelProvider::Groq(GroqModel::GptOss120B, Some(ThinkingLevel::Medium)),
+            &creds,
+        );
+        assert_eq!(provider, "Groq");
+        assert_eq!(model, "openai/gpt-oss-120b");
+        assert_eq!(reasoning, Some(Reasoning::Effort(Effort::Medium)));
     }
 
     #[test]
@@ -915,6 +1068,13 @@ mod tests {
         );
         assert_eq!(
             native_search_additional_params(&ModelProvider::DeepSeek(DeepSeekModel::V4_1Flash)),
+            None
+        );
+        assert_eq!(
+            native_search_additional_params(&ModelProvider::Moonshot(
+                MoonshotModel::KimiK3,
+                Some(ThinkingLevel::Low)
+            )),
             None
         );
     }
@@ -977,6 +1137,27 @@ mod tests {
 
         let deepseek = Some(ModelProvider::DeepSeek(DeepSeekModel::V4_1Flash));
         assert_eq!(model_context_window(&deepseek), Some(1_000_000));
+
+        let moonshot = Some(ModelProvider::Moonshot(MoonshotModel::KimiK3, None));
+        assert_eq!(model_context_window(&moonshot), Some(1_048_576));
+
+        let xai = Some(ModelProvider::Xai(XaiModel::Grok4_7, None));
+        assert_eq!(model_context_window(&xai), Some(500_000));
+
+        let zai = Some(ModelProvider::Zai(ZaiModel::Glm5_3, None));
+        assert_eq!(model_context_window(&zai), Some(1_000_000));
+
+        let mistral = Some(ModelProvider::Mistral(
+            MistralModel::MistralLargeLatest,
+            None,
+        ));
+        assert_eq!(model_context_window(&mistral), Some(262_144));
+
+        let minimax = Some(ModelProvider::MiniMax(MiniMaxModel::MiniMaxM3, None));
+        assert_eq!(model_context_window(&minimax), Some(1_000_000));
+
+        let groq = Some(ModelProvider::Groq(GroqModel::GptOss120B, None));
+        assert_eq!(model_context_window(&groq), Some(131_072));
 
         // OpenRouter with a base vendor/model slug resolves via fallback
         let openrouter = Some(ModelProvider::OpenRouter(
