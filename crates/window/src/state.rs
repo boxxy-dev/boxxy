@@ -103,6 +103,7 @@ pub enum AppInput {
     OpenApisPreferences,
     OpenBookmarks,
     OpenShortcuts,
+    OpenWhatsNew,
     OpenAbout,
     OpenInFiles,
     ShowAppMenu(f64, f64),

@@ -51,18 +51,7 @@ impl Notification {
             details.push(("ChecksumUrl".to_string(), checksum_url));
         }
 
-        let message = if !current_commit.is_empty()
-            && current_commit != "unknown"
-            && !new_commit.is_empty()
-            && new_commit != "nightly"
-        {
-            format!(
-                "Update available from commit {} to {}.",
-                current_commit, new_commit
-            )
-        } else {
-            format!("Update to {} is available.", new_commit)
-        };
+        let message = "There is a new Boxxy version available".to_string();
 
         Self {
             id: "update-available".to_string(),

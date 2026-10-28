@@ -171,6 +171,12 @@ impl CommandPaletteComponent {
                 shortcut: Some("<Primary><Shift>question".to_string()),
             },
             CommandItem {
+                title: "What's New".to_string(),
+                action: "win.whats-new".to_string(),
+                parameter: None,
+                shortcut: None,
+            },
+            CommandItem {
                 title: "About".to_string(),
                 action: "win.about".to_string(),
                 parameter: None,

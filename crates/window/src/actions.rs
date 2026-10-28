@@ -47,6 +47,7 @@ pub fn setup_actions(
     add_action!("open-apis", AppInput::OpenApisPreferences);
     add_action!("bookmarks", AppInput::OpenBookmarks);
     add_action!("shortcuts", AppInput::OpenShortcuts);
+    add_action!("whats-new", AppInput::OpenWhatsNew);
     add_action!("about", AppInput::OpenAbout);
     add_action!("open-in-files", AppInput::OpenInFiles);
     add_action!("zoom-in", AppInput::ZoomIn);

@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use super::{GITHUB_API_BASE, REPO_NAME, REPO_OWNER, USER_AGENT_VALUE, Updater};
 
 const WHATS_NEW_MARKER_FILE: &str = ".whats_new_pending";
+const WHATS_NEW_LAST_FILE: &str = "whats_new_last.json";
 
 /// Marker persisted across the update restart so the newly launched binary knows
 /// which commit it upgraded from and can present the "What's New" dialog once.
@@ -24,6 +25,14 @@ pub struct CommitEntry {
     pub message: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContributorInfo {
+    pub login: String,
+    pub avatar_url: Option<String>,
+    #[serde(skip)]
+    pub avatar_bytes: Option<Vec<u8>>,
+}
+
 /// Lightweight summary of a GitHub comparison (`{from_commit}...{to_commit}`).
 /// Code patches (`files[].patch`) are intentionally ignored during deserialization
 /// so zero source code diffs are held in memory or sent to the LLM.
@@ -36,6 +45,8 @@ pub struct ChangelogSummary {
     pub additions: usize,
     pub deletions: usize,
     pub commits: Vec<CommitEntry>,
+    #[serde(default)]
+    pub contributors: Vec<ContributorInfo>,
 }
 
 impl ChangelogSummary {
@@ -61,44 +72,17 @@ impl ChangelogSummary {
             self.deletions
         )
     }
+}
 
-    /// Generates a playful, Pango-markup-formatted fun fact from the commit and line statistics.
-    pub fn fun_fact_markup(&self) -> String {
-        let total_lines = self.additions + self.deletions;
-        if self.deletions > self.additions {
-            let net_deleted = self.deletions - self.additions;
-            format!(
-                "🧹 We actually <b>deleted {} more lines</b> than we added! Negative code is the highest form of developer enlightenment.",
-                net_deleted
-            )
-        } else if total_lines >= 1500 {
-            let cups = (total_lines / 350).max(4);
-            let pages = (total_lines / 45).max(10);
-            format!(
-                "☕ <b>{} lines of Rust</b> got a glow-up — that's <b>~{} pages of code</b> and roughly <b>{} cups of virtual espresso</b>!",
-                total_lines, pages, cups
-            )
-        } else if self.files_changed >= 25 {
-            format!(
-                "🦖 <b>{} files renovated</b> across <b>{} commits</b> — Boxxy basically hit the gym and came back stronger!",
-                self.files_changed, self.total_commits
-            )
-        } else if total_lines >= 250 {
-            format!(
-                "🔥 <b>+{} fresh lines</b> were forged in the compiler while <b>-{} old lines</b> were yeeted into the void!",
-                self.additions, self.deletions
-            )
-        } else {
-            let file_word = if self.files_changed == 1 {
-                "file"
-            } else {
-                "files"
-            };
-            format!(
-                "⚡ <b>{} surgical line tweaks</b> across <b>{} {}</b> — tuned for maximum terminal speed and vibes!",
-                total_lines, self.files_changed, file_word
-            )
-        }
+impl CommitEntry {
+    /// Returns the first line of the commit message (the commit subject/title).
+    #[must_use]
+    pub fn title(&self) -> &str {
+        self.message
+            .lines()
+            .next()
+            .unwrap_or(&self.message)
+            .trim()
     }
 }
 
@@ -116,11 +100,27 @@ struct GithubComparePayload {
 struct GithubCompareCommitItem {
     sha: String,
     commit: GithubCompareCommitInner,
+    #[serde(default)]
+    author: Option<GithubCompareUser>,
 }
 
 #[derive(Debug, Deserialize)]
 struct GithubCompareCommitInner {
     message: String,
+    #[serde(default)]
+    author: Option<GithubCompareGitAuthor>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GithubCompareUser {
+    login: String,
+    #[serde(default)]
+    avatar_url: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GithubCompareGitAuthor {
+    name: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -172,7 +172,8 @@ pub(crate) fn write_whats_new_pending_in(
         to_commit: to_short,
     };
     let json = serde_json::to_string(&pending)?;
-    fs::write(app_dir.join(WHATS_NEW_MARKER_FILE), json)?;
+    fs::write(app_dir.join(WHATS_NEW_MARKER_FILE), &json)?;
+    let _ = fs::write(app_dir.join(WHATS_NEW_LAST_FILE), &json);
     Ok(())
 }
 
@@ -204,6 +205,10 @@ pub(crate) fn take_whats_new_pending_in(
         return None;
     }
 
+    if let Ok(json) = serde_json::to_string(&pending) {
+        let _ = fs::write(app_dir.join(WHATS_NEW_LAST_FILE), json);
+    }
+
     Some(pending)
 }
 
@@ -218,11 +223,70 @@ pub fn take_whats_new_pending() -> Option<WhatsNewPending> {
             pending.from_commit,
             pending.to_commit
         );
+        save_last_whats_new(&pending);
         return Some(pending);
     }
 
     let app_dir = Updater::get_app_dir().ok()?;
-    take_whats_new_pending_in(&app_dir, super::CURRENT_COMMIT)
+    let pending = take_whats_new_pending_in(&app_dir, super::CURRENT_COMMIT)?;
+    save_last_whats_new(&pending);
+    Some(pending)
+}
+
+/// Persists the most recently viewed or installed commit range so the Command Palette's
+/// "What's New" action can reopen it at any time.
+pub fn save_last_whats_new(pending: &WhatsNewPending) {
+    let Ok(json) = serde_json::to_string(pending) else {
+        return;
+    };
+    let config_dir = boxxy_sys_utils::get_config_dir();
+    let _ = fs::create_dir_all(&config_dir);
+    let _ = fs::write(config_dir.join(WHATS_NEW_LAST_FILE), &json);
+    if let Ok(app_dir) = Updater::get_app_dir()
+        && app_dir.exists()
+    {
+        let _ = fs::write(app_dir.join(WHATS_NEW_LAST_FILE), &json);
+    }
+}
+
+/// Loads the last update commit range for the "What's New" Command Palette action,
+/// falling back to `BOXXY_SIMULATE_UPDATE` or the latest 5 commits ending at `CURRENT_COMMIT`.
+pub fn load_last_whats_new() -> WhatsNewPending {
+    if let Ok(sim) = std::env::var("BOXXY_SIMULATE_UPDATE")
+        && let Some(pending) = parse_simulate_update_range(&sim)
+    {
+        return pending;
+    }
+
+    let candidates = [
+        Some(boxxy_sys_utils::get_config_dir().join(WHATS_NEW_LAST_FILE)),
+        Updater::get_app_dir()
+            .ok()
+            .map(|d| d.join(WHATS_NEW_LAST_FILE)),
+    ];
+
+    for path in candidates.into_iter().flatten() {
+        if let Ok(raw) = fs::read_to_string(&path)
+            && let Ok(pending) = serde_json::from_str::<WhatsNewPending>(raw.trim())
+            && !pending.from_commit.is_empty()
+            && !pending.to_commit.is_empty()
+        {
+            return pending;
+        }
+    }
+
+    let running = shorten_sha(super::CURRENT_COMMIT);
+    if !running.is_empty() && running != "unknown" {
+        WhatsNewPending {
+            from_commit: format!("{running}~5"),
+            to_commit: running,
+        }
+    } else {
+        WhatsNewPending {
+            from_commit: "HEAD~5".to_string(),
+            to_commit: "HEAD".to_string(),
+        }
+    }
 }
 
 /// Fetches the commit messages and line-change counts between `from_commit` and `to_commit`
@@ -288,7 +352,31 @@ pub async fn fetch_changelog_summary(
     }
 
     let body = resp.text().await?;
-    parse_compare_payload(from, to, &body)
+    let mut summary = parse_compare_payload(from, to, &body)?;
+
+    for contributor in summary.contributors.iter_mut().take(5) {
+        if let Some(ref raw_url) = contributor.avatar_url {
+            let sized_url = if raw_url.contains('?') {
+                format!("{raw_url}&s=64")
+            } else {
+                format!("{raw_url}?s=64")
+            };
+            if let Ok(img_resp) = client
+                .get(&sized_url)
+                .header(USER_AGENT, USER_AGENT_VALUE)
+                .timeout(Duration::from_secs(3))
+                .send()
+                .await
+                && img_resp.status().is_success()
+                && let Ok(bytes) = img_resp.bytes().await
+                && bytes.len() <= 256 * 1024
+            {
+                contributor.avatar_bytes = Some(bytes.to_vec());
+            }
+        }
+    }
+
+    Ok(summary)
 }
 
 pub(crate) fn parse_compare_payload(
@@ -302,6 +390,35 @@ pub(crate) fn parse_compare_payload(
     let additions: usize = payload.files.iter().map(|f| f.additions).sum();
     let deletions: usize = payload.files.iter().map(|f| f.deletions).sum();
     let files_changed = payload.files.len();
+
+    let mut contributors = Vec::new();
+    let mut seen_contributors = std::collections::HashSet::new();
+
+    for item in payload.commits.iter().rev() {
+        let candidate = item
+            .author
+            .as_ref()
+            .and_then(|u| {
+                let login = u.login.trim();
+                (!login.is_empty()).then(|| (login.to_string(), u.avatar_url.clone()))
+            })
+            .or_else(|| {
+                item.commit.author.as_ref().and_then(|a| {
+                    let name = a.name.trim();
+                    (!name.is_empty()).then(|| (name.to_string(), None))
+                })
+            });
+
+        if let Some((login, avatar_url)) = candidate
+            && seen_contributors.insert(login.to_lowercase())
+        {
+            contributors.push(ContributorInfo {
+                login,
+                avatar_url,
+                avatar_bytes: None,
+            });
+        }
+    }
 
     let commits: Vec<CommitEntry> = payload
         .commits
@@ -326,6 +443,7 @@ pub(crate) fn parse_compare_payload(
         additions,
         deletions,
         commits,
+        contributors,
     })
 }
 
@@ -442,12 +560,20 @@ mod tests {
                     "sha": "b111111222222333333444444555555666666777",
                     "commit": {
                         "message": "feat(claw): add side-channel /btw query dialog\n\nAllows quick questions while thinking."
+                    },
+                    "author": {
+                        "login": "alice",
+                        "avatar_url": "https://example.com/alice.png"
                     }
                 },
                 {
                     "sha": "c222222333333444444555555666666777777888",
                     "commit": {
                         "message": "fix(vte): improve scrollback rendering speed"
+                    },
+                    "author": {
+                        "login": "alice",
+                        "avatar_url": "https://example.com/alice.png"
                     }
                 }
             ],
@@ -482,6 +608,12 @@ mod tests {
             .message
             .starts_with("feat(claw): add side-channel /btw query dialog"));
         assert_eq!(summary.commits[1].short_sha, "c222222");
+        assert_eq!(summary.contributors.len(), 1);
+        assert_eq!(summary.contributors[0].login, "alice");
+        assert_eq!(
+            summary.contributors[0].avatar_url.as_deref(),
+            Some("https://example.com/alice.png")
+        );
         assert_eq!(
             summary.stats_badge_line(),
             "2 commits · 2 files changed · +165 lines added, -45 lines removed"
@@ -541,6 +673,11 @@ mod tests {
             commits: vec![CommitEntry {
                 short_sha: "e4f5a6b".to_string(),
                 message: "feat: add what's new dialog on update".to_string(),
+            }],
+            contributors: vec![ContributorInfo {
+                login: "alice".to_string(),
+                avatar_url: None,
+                avatar_bytes: None,
             }],
         };
 
