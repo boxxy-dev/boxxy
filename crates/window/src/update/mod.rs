@@ -678,9 +678,20 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
             }
 
             let commits_stack = builder.object::<gtk4::Stack>("commits_stack");
+            let detail_scrolled_for_back =
+                builder.object::<gtk4::ScrolledWindow>("detail_scrolled");
             if let Some(back_btn) = builder.object::<gtk4::Button>("commit_back_btn") {
                 let stack_weak = commits_stack.as_ref().map(gtk4::prelude::ObjectExt::downgrade);
+                let detail_sc_weak = detail_scrolled_for_back
+                    .as_ref()
+                    .map(gtk4::prelude::ObjectExt::downgrade);
                 back_btn.connect_clicked(move |_| {
+                    if let Some(ref scw) = detail_sc_weak
+                        && let Some(sc) = scw.upgrade()
+                    {
+                        sc.set_min_content_height(-1);
+                        sc.set_height_request(-1);
+                    }
                     if let Some(ref sw) = stack_weak
                         && let Some(stack) = sw.upgrade()
                     {
@@ -848,16 +859,59 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
             }
 
             if let Some(read_btn) = builder.object::<gtk4::Button>("read_btn") {
-                read_btn.set_sensitive(claw_ready);
-                if !claw_ready {
-                    read_btn.set_tooltip_text(Some(
-                        "Configure a Claw AI model in Preferences to let Boxxy read what's new",
-                    ));
-                }
+                let read_btn_label = builder.object::<gtk4::Label>("read_btn_label");
+                let update_read_btn_state = {
+                    let read_btn_c = read_btn.clone();
+                    let read_btn_label_c = read_btn_label.clone();
+                    move || {
+                        let chars_available =
+                            boxxy_claw_protocol::characters::has_available_character(None);
+                        if !claw_ready {
+                            read_btn_c.set_sensitive(false);
+                            if let Some(ref lbl) = read_btn_label_c {
+                                lbl.set_label("Read What's New");
+                            }
+                            read_btn_c.set_tooltip_text(Some(
+                                "Configure a Claw AI model in Preferences to let Boxxy read what's new",
+                            ));
+                        } else if !chars_available {
+                            read_btn_c.set_sensitive(false);
+                            if let Some(ref lbl) = read_btn_label_c {
+                                lbl.set_label("No Characters Free");
+                            }
+                            read_btn_c.set_tooltip_text(Some(
+                                "All characters are currently active in other sessions",
+                            ));
+                        } else {
+                            read_btn_c.set_sensitive(true);
+                            if let Some(ref lbl) = read_btn_label_c {
+                                lbl.set_label("Read What's New");
+                            }
+                            read_btn_c.set_tooltip_text(None);
+                        }
+                    }
+                };
+                update_read_btn_state();
+
+                // Reactively update the button if a character claim is released or taken while the dialog is open.
+                let read_btn_weak = read_btn.downgrade();
+                let mut rx_reg = boxxy_claw_protocol::characters::subscribe_registry_changes();
+                gtk4::glib::spawn_future_local(async move {
+                    while rx_reg.changed().await.is_ok() {
+                        if read_btn_weak.upgrade().is_none() {
+                            break;
+                        }
+                        update_read_btn_state();
+                    }
+                });
+
                 let dialog_weak = dialog.downgrade();
                 let tx_read = inner.tx.clone();
                 let state_read = state_rc.clone();
                 read_btn.connect_clicked(move |_| {
+                    if !boxxy_claw_protocol::characters::has_available_character(None) {
+                        return;
+                    }
                     if let Some(d) = dialog_weak.upgrade() {
                         d.close();
                     }
@@ -873,6 +927,12 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
             dialog.present(Some(&inner.window));
         }
         AppInput::StartWhatsNewClaw(prompt) => {
+            if !boxxy_claw_protocol::characters::has_available_character(None) {
+                let toast = adw::Toast::new("No characters available to read What's New");
+                toast.set_timeout(3);
+                inner.toast_overlay.add_toast(toast);
+                return;
+            }
             if inner.tabs.is_empty() {
                 tabs::new_tab(&mut inner);
             }
@@ -1376,10 +1436,6 @@ fn populate_whats_new_summary(
         let detail_scrolled = builder.object::<gtk4::ScrolledWindow>("detail_scrolled");
 
         if let Some(commits_scrolled) = builder.object::<gtk4::ScrolledWindow>("commits_scrolled") {
-            let visible_rows = s.commits.len().clamp(1, 5) as i32;
-            let target_height = (visible_rows * 44).min(220);
-            commits_scrolled.set_min_content_height(target_height);
-            commits_scrolled.set_max_content_height(target_height);
             commits_scrolled.vadjustment().set_value(0.0);
         }
 
@@ -1472,6 +1528,8 @@ fn populate_whats_new_summary(
                     if let Some(ref scw) = scrolled_weak
                         && let Some(sc) = scw.upgrade()
                     {
+                        sc.set_min_content_height(420);
+                        sc.set_height_request(420);
                         sc.vadjustment().set_value(0.0);
                     }
                     if let Some(ref stw) = stack_weak

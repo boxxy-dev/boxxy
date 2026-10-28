@@ -214,7 +214,7 @@ impl CommandPaletteComponent {
             let mut found = false;
             let all_cmds = inner.all_commands();
             for (i, cmd) in all_cmds.iter().enumerate() {
-                if text.is_empty() || cmd.title.to_lowercase().contains(&text) {
+                if CommandPaletteInner::command_matches(cmd, &text) {
                     if let Some(row) = inner.listbox.row_at_index(i as i32) {
                         inner.listbox.select_row(Some(&row));
                         found = true;
@@ -262,9 +262,8 @@ impl CommandPaletteComponent {
             if index >= all_cmds.len() {
                 return false;
             }
-            let title = all_cmds[index].title.to_lowercase();
             let text = inner.search_entry.text().to_string().to_lowercase();
-            text.is_empty() || title.contains(&text)
+            CommandPaletteInner::command_matches(&all_cmds[index], &text)
         });
 
         let inner_row_act = inner.clone();
@@ -317,7 +316,7 @@ impl CommandPaletteComponent {
                 if idx >= all_cmds.len() {
                     return false;
                 }
-                text.is_empty() || all_cmds[idx].title.to_lowercase().contains(&text)
+                CommandPaletteInner::command_matches(&all_cmds[idx], &text)
             };
 
             match keyval {
@@ -462,6 +461,25 @@ impl CommandPaletteInner {
         let mut all = self.static_commands.clone();
         all.extend(self.dynamic_commands.clone());
         all
+    }
+
+    fn normalize_for_search(s: &str) -> String {
+        s.to_lowercase()
+            .chars()
+            .filter(|&c| c != '\'' && c != '’')
+            .map(|c| if c == '-' || c == '_' || c == '.' { ' ' } else { c })
+            .collect()
+    }
+
+    fn command_matches(cmd: &CommandItem, raw_query: &str) -> bool {
+        let query = Self::normalize_for_search(raw_query);
+        let query = query.trim();
+        if query.is_empty() {
+            return true;
+        }
+        let title_norm = Self::normalize_for_search(&cmd.title);
+        let action_norm = Self::normalize_for_search(&cmd.action);
+        title_norm.contains(query) || action_norm.contains(query)
     }
 }
 

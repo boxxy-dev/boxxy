@@ -5,10 +5,12 @@
   <object class="AdwDialog" id="whats_new_dialog">
     <property name="title">What's New in Boxxy</property>
     <property name="content-width">700</property>
+    <property name="follows-content-size">true</property>
     <property name="default-widget">read_btn</property>
     <property name="focus-widget">close_btn</property>
     <child>
       <object class="GtkStack" id="commits_stack">
+        <property name="width-request">700</property>
         <property name="transition-type">slide-left-right</property>
         <property name="transition-duration">200</property>
         <property name="vhomogeneous">false</property>
@@ -373,7 +375,6 @@
                                 <property name="vscrollbar-policy">automatic</property>
                                 <property name="propagate-natural-height">true</property>
                                 <property name="max-content-height">220</property>
-                                <property name="vexpand">true</property>
                                 <child>
                                   <object class="GtkBox" id="commits_list">
                                     <property name="orientation">vertical</property>
@@ -444,7 +445,7 @@
                                       </object>
                                     </child>
                                     <child>
-                                      <object class="GtkLabel">
+                                      <object class="GtkLabel" id="read_btn_label">
                                         <property name="label">Read What's New</property>
                                       </object>
                                     </child>
@@ -474,7 +475,6 @@
               <object class="GtkBox">
                 <property name="orientation">vertical</property>
                 <property name="spacing">0</property>
-                <property name="vexpand">true</property>
                 <property name="hexpand">true</property>
                 <child>
                   <object class="GtkBox">
@@ -518,8 +518,7 @@
                   <object class="GtkScrolledWindow" id="detail_scrolled">
                     <property name="hscrollbar-policy">never</property>
                     <property name="vscrollbar-policy">automatic</property>
-                    <property name="min-content-height">440</property>
-                    <property name="vexpand">true</property>
+                    <property name="max-content-height">440</property>
                     <property name="hexpand">true</property>
                     <child>
                       <object class="GtkLabel" id="detail_message_label">

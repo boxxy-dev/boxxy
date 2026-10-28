@@ -1063,6 +1063,18 @@ impl TerminalPaneComponent {
             )
         };
 
+        let Some(chosen) =
+            boxxy_claw_protocol::characters::find_first_available_character(Some(&pane_id))
+        else {
+            return false;
+        };
+        let char_id = chosen.config.id.clone();
+        let display_name = if chosen.config.display_name.is_empty() {
+            "Agent".to_string()
+        } else {
+            chosen.config.display_name.clone()
+        };
+
         self.is_claw_active.set(true);
         *self.session_status.borrow_mut() = AgentStatus::Waiting;
         self.claw_indicator.set_visible(true);
@@ -1072,23 +1084,6 @@ impl TerminalPaneComponent {
             self.is_web_search.get(),
         );
         cb(PaneOutput::ClawStateChanged(pane_id.clone(), true, false));
-
-        let catalog = boxxy_claw_protocol::characters::CHARACTER_CACHE.load();
-        let claims = boxxy_claw_protocol::characters::CLAIMS_CACHE.load();
-        let chosen = catalog
-            .iter()
-            .find(|c| !claims.iter().any(|cl| cl.character_id == c.config.id))
-            .or_else(|| catalog.first())
-            .cloned();
-        let char_id = chosen
-            .as_ref()
-            .map(|c| c.config.id.clone())
-            .unwrap_or_default();
-        let display_name = chosen
-            .as_ref()
-            .map(|c| c.config.display_name.clone())
-            .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| "Agent".to_string());
 
         let terminal = self.terminal();
         terminal.set_focusable(false);

@@ -708,7 +708,11 @@ impl TerminalOverlay {
             let mut pending = self.selected_character.borrow_mut();
             if pending.is_empty() || is_taken(&pending) {
                 // Pick the first registry entry that isn't taken elsewhere.
-                let first_free = registry.iter().find(|info| !is_taken(&info.config.id));
+                let first_free = boxxy_claw_protocol::characters::find_first_available_in(
+                    &registry,
+                    &claims,
+                    Some(&host_id),
+                );
                 if let Some(info) = first_free {
                     *pending = info.config.id.clone();
                 } else if pending.is_empty() {

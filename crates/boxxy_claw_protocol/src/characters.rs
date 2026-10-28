@@ -27,6 +27,37 @@ pub fn subscribe_registry_changes() -> watch::Receiver<u64> {
     REGISTRY_REVISION_WATCH.1.clone()
 }
 
+/// Finds the first character in `catalog` that is not claimed in `claims`
+/// (optionally ignoring a claim held by `exclude_holder_id`).
+pub fn find_first_available_in<'a>(
+    catalog: &'a [CharacterInfo],
+    claims: &[CharacterClaim],
+    exclude_holder_id: Option<&str>,
+) -> Option<&'a CharacterInfo> {
+    catalog.iter().find(|info| {
+        !claims.iter().any(|claim| {
+            claim.character_id == info.config.id
+                && exclude_holder_id.is_none_or(|excluded| claim.holder_id != excluded)
+        })
+    })
+}
+
+/// Returns the first unclaimed character from the global `CHARACTER_CACHE` and `CLAIMS_CACHE`,
+/// optionally ignoring a claim held by `exclude_holder_id`.
+pub fn find_first_available_character(exclude_holder_id: Option<&str>) -> Option<CharacterInfo> {
+    let catalog = CHARACTER_CACHE.load();
+    let claims = CLAIMS_CACHE.load();
+    find_first_available_in(&catalog, &claims, exclude_holder_id).cloned()
+}
+
+/// Returns `true` if at least one character in the catalog is currently unclaimed
+/// (optionally ignoring a claim held by `exclude_holder_id`).
+pub fn has_available_character(exclude_holder_id: Option<&str>) -> bool {
+    let catalog = CHARACTER_CACHE.load();
+    let claims = CLAIMS_CACHE.load();
+    find_first_available_in(&catalog, &claims, exclude_holder_id).is_some()
+}
+
 /// Resolves a character from `catalog` by matching `character_id` first, then
 /// falling back to case-insensitive matches on `name` or `display_name` in
 /// `fallback_names`, and finally falling back to the first character in `catalog`.
@@ -276,5 +307,40 @@ mod tests {
         // 3. Fallback to first available character when deleted and no name matches
         let fallback = resolve_character(&catalog, "deleted-uuid", &["deleted-char"]).unwrap();
         assert_eq!(fallback.config.id, "uuid-a");
+    }
+
+    #[test]
+    fn test_find_first_available_in() {
+        let catalog = sample_catalog();
+        let claims = vec![CharacterClaim {
+            holder_id: "pane-1".to_string(),
+            holder_kind: HolderKind::Pane,
+            character_id: "uuid-a".to_string(),
+            session_id: "sess-1".to_string(),
+            petname: "red-pony".to_string(),
+            owner_bus_name: ":1.1".to_string(),
+        }];
+
+        // uuid-a is claimed by pane-1, so uuid-b is returned
+        let free = find_first_available_in(&catalog, &claims, None).unwrap();
+        assert_eq!(free.config.id, "uuid-b");
+
+        // Excluding pane-1 makes uuid-a available to pane-1 itself
+        let free_for_pane1 = find_first_available_in(&catalog, &claims, Some("pane-1")).unwrap();
+        assert_eq!(free_for_pane1.config.id, "uuid-a");
+
+        // When all characters are claimed, returns None
+        let all_claimed = vec![
+            claims[0].clone(),
+            CharacterClaim {
+                holder_id: "pane-2".to_string(),
+                holder_kind: HolderKind::Pane,
+                character_id: "uuid-b".to_string(),
+                session_id: "sess-2".to_string(),
+                petname: "blue-fox".to_string(),
+                owner_bus_name: ":1.1".to_string(),
+            },
+        ];
+        assert!(find_first_available_in(&catalog, &all_claimed, None).is_none());
     }
 }
