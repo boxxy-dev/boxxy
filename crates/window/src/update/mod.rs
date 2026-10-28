@@ -1375,6 +1375,14 @@ fn populate_whats_new_summary(
         let detail_message_label = builder.object::<gtk4::Label>("detail_message_label");
         let detail_scrolled = builder.object::<gtk4::ScrolledWindow>("detail_scrolled");
 
+        if let Some(commits_scrolled) = builder.object::<gtk4::ScrolledWindow>("commits_scrolled") {
+            let visible_rows = s.commits.len().clamp(1, 5) as i32;
+            let target_height = (visible_rows * 44).min(220);
+            commits_scrolled.set_min_content_height(target_height);
+            commits_scrolled.set_max_content_height(target_height);
+            commits_scrolled.vadjustment().set_value(0.0);
+        }
+
         if let Some(commits_list) = builder.object::<gtk4::Box>("commits_list") {
             while let Some(child) = commits_list.first_child() {
                 commits_list.remove(&child);
