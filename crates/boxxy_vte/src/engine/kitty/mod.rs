@@ -157,6 +157,7 @@ static NEXT_LRU_SEQ: AtomicU64 = AtomicU64::new(0);
 pub struct KittyGraphics {
     pub images: HashMap<u32, Arc<KittyImage>>,
     pub placements: Vec<Placement>,
+    pub inactive_placements: Vec<Placement>,
     pub pending_data: Vec<u8>,
     pub pending_command: Option<Command>,
     pub max_image_bytes: usize,
@@ -212,18 +213,63 @@ impl KittyGraphics {
         }
     }
 
+    pub fn rotate_inactive_placements(
+        &mut self,
+        range: &std::ops::Range<crate::engine::index::Line>,
+        delta: i32,
+    ) {
+        if delta == 0 || self.inactive_placements.is_empty() {
+            return;
+        }
+        for placement in &mut self.inactive_placements {
+            let old_line = placement.point.line.0;
+            let range_top = range.start.0;
+            let range_bottom = range.end.0;
+            if (old_line >= range_top || range_top == 0) && old_line < range_bottom {
+                placement.point.line -= delta;
+            }
+        }
+        self.inactive_placements.retain(|p| p.point.line.0 > -50000);
+    }
+
     #[inline]
     pub fn clear_placements(&mut self) {
         if !self.placements.is_empty() {
             self.placements.clear();
+            self.reap_unused_images();
             self.generation = self.generation.wrapping_add(1);
         }
+    }
+
+    #[inline]
+    pub fn clear_all_placements(&mut self) {
+        if !self.placements.is_empty() || !self.inactive_placements.is_empty() {
+            self.placements.clear();
+            self.inactive_placements.clear();
+            self.reap_unused_images();
+            self.generation = self.generation.wrapping_add(1);
+        }
+    }
+
+    /// Swap active and inactive screen placements when entering or leaving `ALT_SCREEN` (`?1049h`/`?1049l`).
+    #[inline]
+    pub fn swap_alt(&mut self, entering_alt: bool) {
+        if entering_alt {
+            self.inactive_placements.clear();
+            std::mem::swap(&mut self.placements, &mut self.inactive_placements);
+        } else {
+            std::mem::swap(&mut self.placements, &mut self.inactive_placements);
+            self.inactive_placements.clear();
+            self.reap_unused_images();
+        }
+        self.generation = self.generation.wrapping_add(1);
     }
 
     pub fn new() -> Self {
         Self {
             images: HashMap::new(),
             placements: Vec::new(),
+            inactive_placements: Vec::new(),
             pending_data: Vec::new(),
             pending_command: None,
             max_image_bytes: 256 * 1024 * 1024,
@@ -244,8 +290,12 @@ impl KittyGraphics {
     }
 
     pub fn reap_unused_images(&mut self) {
-        let used_ids: std::collections::HashSet<u32> =
-            self.placements.iter().map(|p| p.image_id).collect();
+        let used_ids: std::collections::HashSet<u32> = self
+            .placements
+            .iter()
+            .chain(self.inactive_placements.iter())
+            .map(|p| p.image_id)
+            .collect();
 
         self.images
             .retain(|id, img| !img.is_anonymous || used_ids.contains(id));
@@ -273,6 +323,7 @@ impl KittyGraphics {
                     };
                     current_bytes = current_bytes.saturating_sub(bytes);
                     self.placements.retain(|p| p.image_id != id);
+                    self.inactive_placements.retain(|p| p.image_id != id);
                 }
             }
         }

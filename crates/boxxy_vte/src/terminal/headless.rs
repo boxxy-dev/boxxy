@@ -1012,4 +1012,37 @@ mod tests {
         h2.feed(b"\x1bc");
         assert!(h2.term.colors()[1].is_none());
     }
+
+    #[test]
+    fn kitty_placements_isolated_across_alt_screen_swap() {
+        let mut h = HeadlessTerminal::new(40, 10);
+        let mut state = RenderState::default();
+
+        // 1. Display a Kitty image on the primary screen
+        h.feed(b"\x1b_Ga=T,f=24,s=1,v=1,i=10;AAAA\x1b\\");
+        state.update_from(&mut h.term, 1);
+        assert_eq!(state.kitty_placements.len(), 1);
+        assert_eq!(state.kitty_placements[0].image_id, 10);
+
+        // 2. Enter alternate screen (?1049h, e.g. launching btop/nvim):
+        //    primary screen placements must be hidden on the alternate screen,
+        //    even if the TUI clears the alternate screen (CSI 2 J).
+        h.feed(b"\x1b[?1049h\x1b[2J");
+        state.update_from(&mut h.term, 2);
+        assert!(
+            state.kitty_placements.is_empty(),
+            "primary screen Kitty placements must not bleed onto ALT_SCREEN"
+        );
+        assert!(
+            h.term.kitty_graphics.images.contains_key(&10),
+            "primary screen image must remain retained while in ALT_SCREEN"
+        );
+
+        // 3. Leave alternate screen (?1049l, e.g. quitting btop):
+        //    primary screen placements are restored automatically!
+        h.feed(b"\x1b[?1049l");
+        state.update_from(&mut h.term, 3);
+        assert_eq!(state.kitty_placements.len(), 1);
+        assert_eq!(state.kitty_placements[0].image_id, 10);
+    }
 }

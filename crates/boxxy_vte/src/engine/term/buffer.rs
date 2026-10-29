@@ -524,7 +524,7 @@ impl<T> Term<T> {
 
         let is_alt = self.mode.contains(TermMode::ALT_SCREEN);
         let delta = self.grid.resize(!is_alt, num_lines, num_cols);
-        let _inactive_delta = self.inactive_grid.resize(is_alt, num_lines, num_cols);
+        let inactive_delta = self.inactive_grid.resize(is_alt, num_lines, num_cols);
 
         // Move vi mode cursor with the content.
         self.vi_mode_cursor.point.line += delta;
@@ -532,6 +532,8 @@ impl<T> Term<T> {
         let max_lines = cmp::max(num_lines, old_lines) as i32;
         let range = Line(0)..Line(max_lines);
         self.kitty_graphics.rotate_placements(&range, -delta);
+        self.kitty_graphics
+            .rotate_inactive_placements(&range, -inactive_delta);
 
         // Invalidate selection and tabs only when necessary.
         if old_cols != num_cols {
@@ -569,7 +571,8 @@ impl<T> Term<T> {
 
     /// Swap primary and alternate screen buffer.
     pub fn swap_alt(&mut self) {
-        if !self.mode.contains(TermMode::ALT_SCREEN) {
+        let entering_alt = !self.mode.contains(TermMode::ALT_SCREEN);
+        if entering_alt {
             // Set alt screen cursor to the current primary screen cursor.
             self.inactive_grid.cursor = self.grid.cursor.clone();
 
@@ -593,6 +596,7 @@ impl<T> Term<T> {
         self.set_keyboard_mode(keyboard_mode, KeyboardModesApplyBehavior::Replace);
 
         mem::swap(&mut self.grid, &mut self.inactive_grid);
+        self.kitty_graphics.swap_alt(entering_alt);
         self.mode ^= TermMode::ALT_SCREEN;
         self.selection = None;
         self.mark_fully_damaged();

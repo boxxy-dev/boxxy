@@ -1160,6 +1160,7 @@ impl<T: EventListener> Handler for Term<T> {
         self.vi_mode_cursor = Default::default();
         self.keyboard_mode_stack = Default::default();
         self.inactive_keyboard_mode_stack = Default::default();
+        self.kitty_graphics.clear_all_placements();
         self.cl_mode = None;
 
         // Preserve vi mode across resets.
