@@ -110,6 +110,7 @@ pub fn handle_terminal_event(
                     inner.claw_active = active;
                     inner.claw.set_pane_state(
                         &inner.tabs[pos].controller.agent_name(),
+                        inner.tabs[pos].controller.is_sleep(),
                         inner.tabs[pos].controller.is_pinned(),
                         inner.tabs[pos].controller.is_web_search(),
                     );
@@ -146,6 +147,7 @@ pub fn handle_terminal_event(
 
                     inner.claw.set_pane_state(
                         &inner.tabs[pos].controller.agent_name(),
+                        inner.tabs[pos].controller.is_sleep(),
                         inner.tabs[pos].controller.is_pinned(),
                         inner.tabs[pos].controller.is_web_search(),
                     );
@@ -175,6 +177,16 @@ pub fn handle_terminal_event(
                         inner.tabs[pos]
                             .controller
                             .set_session_status_for_pane(&p_id, status);
+                        if let Some(page) = inner.tab_view.selected_page()
+                            && inner.tabs[pos].controller.widget() == &page.child()
+                        {
+                            inner.claw.set_pane_state(
+                                &inner.tabs[pos].controller.agent_name(),
+                                inner.tabs[pos].controller.is_sleep(),
+                                inner.tabs[pos].controller.is_pinned(),
+                                inner.tabs[pos].controller.is_web_search(),
+                            );
+                        }
                     }
                     ClawEngineEvent::Identity {
                         agent_name,
@@ -186,10 +198,11 @@ pub fn handle_terminal_event(
                     {
                         // If we got an identity, ensure the sidebar UI reflects that this pane is now active
                         let active = inner.tabs[pos].controller.is_claw_active();
-                        let _sleep = inner.tabs[pos].controller.is_sleep();
+                        let sleep = inner.tabs[pos].controller.is_sleep();
                         inner.claw_active = active;
                         inner.claw.set_pane_state(
                             &agent_name,
+                            sleep,
                             pinned,
                             web_search_enabled,
                         );
@@ -200,6 +213,7 @@ pub fn handle_terminal_event(
                     {
                         inner.claw.set_pane_state(
                             &inner.tabs[pos].controller.agent_name(),
+                            inner.tabs[pos].controller.is_sleep(),
                             pinned,
                             inner.tabs[pos].controller.is_web_search(),
                         );
@@ -210,6 +224,7 @@ pub fn handle_terminal_event(
                     {
                         inner.claw.set_pane_state(
                             &inner.tabs[pos].controller.agent_name(),
+                            inner.tabs[pos].controller.is_sleep(),
                             inner.tabs[pos].controller.is_pinned(),
                             enabled,
                         );

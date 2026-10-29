@@ -24,6 +24,10 @@ pub struct MsgBarComponent {
     pub sleep_toggle: gtk::Button,
     pub pin_toggle: gtk::Button,
     pub web_search_toggle: gtk::Button,
+    sleep_switch: gtk::Switch,
+    pin_switch: gtk::Switch,
+    web_switch: gtk::Switch,
+    avatar_sleep_badge: gtk::Box,
     pub claw_state: Rc<Cell<bool>>,
     pub sleep_state: Rc<Cell<bool>>,
     pub pin_state: Rc<Cell<bool>>,
@@ -120,15 +124,40 @@ impl MsgBarComponent {
         avatar_stack.add_named(&claw_image, Some("icon"));
         avatar_stack.add_named(&avatar, Some("avatar"));
         avatar_stack.set_visible_child_name("avatar");
+        avatar_stack.set_margin_top(2);
+        avatar_stack.set_margin_bottom(2);
+        avatar_stack.set_margin_start(2);
+        avatar_stack.set_margin_end(2);
+
+        let avatar_sleep_icon = gtk::Image::builder()
+            .icon_name("boxxy-bedtime-symbolic")
+            .pixel_size(10)
+            .hexpand(true)
+            .vexpand(true)
+            .halign(gtk::Align::Center)
+            .valign(gtk::Align::Center)
+            .build();
+        let avatar_sleep_badge = gtk::Box::builder()
+            .halign(gtk::Align::End)
+            .valign(gtk::Align::End)
+            .css_classes(["avatar-sleep-badge", "avatar-sleep-badge-small"])
+            .visible(false)
+            .build();
+        avatar_sleep_badge.append(&avatar_sleep_icon);
+
+        let avatar_overlay = gtk::Overlay::builder()
+            .child(&avatar_stack)
+            .build();
+        avatar_overlay.add_overlay(&avatar_sleep_badge);
 
         let claw_toggle = gtk::Button::builder()
-            .child(&avatar_stack)
+            .child(&avatar_overlay)
             .css_classes(["flat", "image-button"])
+            .tooltip_text("Session Options (/sleep, /pin, /web)")
             .margin_start(4)
-            .margin_end(0)
+            .margin_end(2)
             .valign(gtk::Align::Center)
             .can_focus(false)
-            .can_target(false)
             .build();
 
         let claw_state = Rc::new(Cell::new(false));
@@ -136,71 +165,104 @@ impl MsgBarComponent {
 
         left_badges.append(&claw_toggle);
 
-        let sleep_img = gtk::Image::from_icon_name("boxxy-bedtime-symbolic");
-        let sleep_toggle = gtk::Button::builder()
-            .child(&sleep_img)
-            .css_classes(["flat", "image-button"])
-            .tooltip_text("Sleep Mode (Passive Observer)")
-            .margin_start(0)
-            .margin_end(0)
-            .valign(gtk::Align::Center)
-            .can_focus(false)
+        let status_popover = gtk::Popover::builder()
+            .position(gtk::PositionType::Top)
+            .has_arrow(true)
+            .autohide(true)
             .build();
+        status_popover.set_parent(&claw_toggle);
+        let popover_for_destroy = status_popover.clone();
+        claw_toggle.connect_destroy(move |_| {
+            popover_for_destroy.unparent();
+        });
+
+        let popover_box = gtk::Box::new(gtk::Orientation::Vertical, 2);
+        popover_box.set_margin_top(4);
+        popover_box.set_margin_bottom(4);
+        popover_box.set_margin_start(4);
+        popover_box.set_margin_end(4);
+        status_popover.set_child(Some(&popover_box));
+
+        let popover_for_click = status_popover.clone();
+        claw_toggle.connect_clicked(move |_| {
+            if popover_for_click.is_visible() {
+                popover_for_click.popdown();
+            } else {
+                popover_for_click.popup();
+            }
+        });
+
+        let on_sleep_toggle_rc = Rc::new(on_sleep_toggle);
+        let on_pin_toggle_rc = Rc::new(on_pin_toggle);
+        let on_web_search_toggle_rc = Rc::new(on_web_search_toggle);
+
+        let make_popover_row = |icon_name: &str, title: &str| -> (gtk::Button, gtk::Switch) {
+            let row_box = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+            let img = gtk::Image::from_icon_name(icon_name);
+            img.add_css_class("dim-label");
+            let title_lbl = gtk::Label::builder()
+                .label(title)
+                .xalign(0.0)
+                .hexpand(true)
+                .build();
+            let sw = gtk::Switch::builder()
+                .valign(gtk::Align::Center)
+                .can_focus(false)
+                .can_target(false)
+                .build();
+            row_box.append(&img);
+            row_box.append(&title_lbl);
+            row_box.append(&sw);
+
+            let btn = gtk::Button::builder()
+                .child(&row_box)
+                .css_classes(["flat", "msgbar-popover-row"])
+                .can_focus(false)
+                .build();
+            (btn, sw)
+        };
+
+        let (sleep_toggle, sleep_switch) =
+            make_popover_row("boxxy-bedtime-symbolic", "Sleep Mode");
+        sleep_toggle.set_tooltip_text(Some("Sleep Mode (Passive Observer)"));
 
         let sleep_state = Rc::new(Cell::new(false));
         let sleep_state_clone = sleep_state.clone();
-        let sleep_entry_focus = entry.clone();
+        let on_sleep_cb = on_sleep_toggle_rc.clone();
         sleep_toggle.connect_clicked(move |_| {
             let next = !sleep_state_clone.get();
-            on_sleep_toggle(next);
-            sleep_entry_focus.grab_focus();
+            on_sleep_cb(next);
         });
 
-        left_badges.append(&sleep_toggle);
+        popover_box.append(&sleep_toggle);
 
-        let pin_img = gtk::Image::from_icon_name("boxxy-view-pin-symbolic");
-        let pin_toggle = gtk::Button::builder()
-            .child(&pin_img)
-            .css_classes(["flat", "image-button"])
-            .tooltip_text("Pin this session")
-            .margin_start(0)
-            .margin_end(0)
-            .valign(gtk::Align::Center)
-            .can_focus(false)
-            .build();
+        let (pin_toggle, pin_switch) =
+            make_popover_row("boxxy-view-pin-symbolic", "Pin Session");
+        pin_toggle.set_tooltip_text(Some("Pin this session"));
 
         let pin_state = Rc::new(Cell::new(false));
         let pin_state_clone = pin_state.clone();
-        let pin_entry_focus = entry.clone();
+        let on_pin_cb = on_pin_toggle_rc.clone();
         pin_toggle.connect_clicked(move |_| {
             let next = !pin_state_clone.get();
-            on_pin_toggle(next);
-            pin_entry_focus.grab_focus();
+            on_pin_cb(next);
         });
 
-        left_badges.append(&pin_toggle);
+        popover_box.append(&pin_toggle);
 
-        let web_search_img = gtk::Image::from_icon_name("boxxy-globe-symbolic");
-        let web_search_toggle = gtk::Button::builder()
-            .child(&web_search_img)
-            .css_classes(["flat", "image-button"])
-            .tooltip_text("Enable Web Search")
-            .margin_start(0)
-            .margin_end(0)
-            .valign(gtk::Align::Center)
-            .can_focus(false)
-            .build();
+        let (web_search_toggle, web_switch) =
+            make_popover_row("boxxy-globe-symbolic", "Web Search");
+        web_search_toggle.set_tooltip_text(Some("Enable Web Search"));
 
         let web_search_state = Rc::new(Cell::new(false));
         let web_search_state_clone = web_search_state.clone();
-        let web_search_entry_focus = entry.clone();
+        let on_web_cb = on_web_search_toggle_rc.clone();
         web_search_toggle.connect_clicked(move |_| {
             let next = !web_search_state_clone.get();
-            on_web_search_toggle(next);
-            web_search_entry_focus.grab_focus();
+            on_web_cb(next);
         });
 
-        left_badges.append(&web_search_toggle);
+        popover_box.append(&web_search_toggle);
 
         widget.append(&entry_overlay);
 
@@ -235,8 +297,14 @@ impl MsgBarComponent {
             let history = history.clone();
             let on_submit = on_submit_rc;
             let on_claw_toggle = on_claw_toggle_rc;
+            let on_sleep_toggle = on_sleep_toggle_rc;
+            let on_pin_toggle = on_pin_toggle_rc;
+            let on_web_search_toggle = on_web_search_toggle_rc;
             let claw_state = claw_state.clone();
             let character_id = character_id.clone();
+            let sleep_state = sleep_state.clone();
+            let pin_state = pin_state.clone();
+            let web_search_state = web_search_state.clone();
             let on_submit_hook = on_submit_hook.clone();
             let on_clear_hook = on_clear_hook.clone();
             let embedded = embedded.clone();
@@ -267,6 +335,33 @@ impl MsgBarComponent {
                     buf.set_text("/resume ");
                     let end = buf.end_iter();
                     buf.place_cursor(&end);
+                    return;
+                }
+
+                if original_text.trim() == "/sleep" && attachment_mgr.get_attachments().is_empty() {
+                    buf.set_text("");
+                    if claw_state.get() || character_id.borrow().is_some() {
+                        let next = !sleep_state.get();
+                        on_sleep_toggle(next);
+                    }
+                    return;
+                }
+
+                if original_text.trim() == "/pin" && attachment_mgr.get_attachments().is_empty() {
+                    buf.set_text("");
+                    if claw_state.get() || character_id.borrow().is_some() {
+                        let next = !pin_state.get();
+                        on_pin_toggle(next);
+                    }
+                    return;
+                }
+
+                if original_text.trim() == "/web" && attachment_mgr.get_attachments().is_empty() {
+                    buf.set_text("");
+                    if boxxy_preferences::Settings::load().enable_web_search {
+                        let next = !web_search_state.get();
+                        on_web_search_toggle(next);
+                    }
                     return;
                 }
 
@@ -322,6 +417,9 @@ impl MsgBarComponent {
             Box::new(autocomplete::CommandCompletionProvider::new(
                 claw_state.clone(),
                 character_id.clone(),
+                sleep_state.clone(),
+                pin_state.clone(),
+                web_search_state.clone(),
             )),
             Box::new(autocomplete::ResumeCompletionProvider::new(Some(
                 entry.downgrade(),
@@ -339,9 +437,10 @@ impl MsgBarComponent {
                     .strip_prefix("/resume ")
                     .is_some_and(|s| !s.trim().is_empty());
                 if is_resume_session
-                    || replacement == "/models"
-                    || replacement == "/clear"
-                    || replacement == "/exit"
+                    || matches!(
+                        replacement.as_str(),
+                        "/models" | "/sleep" | "/pin" | "/web" | "/clear" | "/exit"
+                    )
                 {
                     autocomplete_submit();
                 }
@@ -461,6 +560,10 @@ impl MsgBarComponent {
             sleep_toggle,
             pin_toggle,
             web_search_toggle,
+            sleep_switch,
+            pin_switch,
+            web_switch,
+            avatar_sleep_badge,
             claw_state,
             sleep_state,
             pin_state,
@@ -563,22 +666,27 @@ impl MsgBarComponent {
                 self.claw_toggle.add_css_class("status-active");
                 self.sleep_toggle
                     .set_tooltip_text(Some("Sleep Mode (Passive Observer)"));
+                self.sleep_switch.set_active(false);
+                self.avatar_sleep_badge.set_visible(false);
                 self.sleep_state.set(false);
             }
             AgentStatus::Sleep => {
-                // If sleeping, the claw icon gets the sleep color (yellow),
-                // and the sleep icon gets the active color (accent/green).
                 self.claw_toggle.add_css_class("status-sleep");
-                self.sleep_toggle.add_css_class("status-active");
                 self.sleep_toggle
                     .set_tooltip_text(Some("Wake up (Resume from Sleep)"));
+                self.sleep_switch.set_active(true);
+                self.avatar_sleep_badge.set_visible(true);
                 self.sleep_state.set(true);
             }
             AgentStatus::Faulted { .. } => {
                 self.claw_toggle.add_css_class("status-error");
+                self.sleep_switch.set_active(false);
+                self.avatar_sleep_badge.set_visible(false);
             }
             AgentStatus::Off => {
                 self.sleep_state.set(false);
+                self.sleep_switch.set_active(false);
+                self.avatar_sleep_badge.set_visible(false);
                 self.claw_image.add_css_class("grayscale");
             }
         }
@@ -615,28 +723,28 @@ impl MsgBarComponent {
     }
 
     pub fn update_ui(&self, status: AgentStatus, pinned: bool, web_search: bool) {
-        let active = status != AgentStatus::Off;
+        let active = status != AgentStatus::Off || self.character_id.borrow().is_some();
         self.claw_state.set(active);
+        self.sleep_toggle.set_sensitive(active);
+        self.pin_toggle.set_sensitive(active);
         self.set_status(status);
         self.refresh_user_avatar();
 
         self.pin_state.set(pinned);
         self.web_search_state.set(web_search);
+        self.pin_switch.set_active(pinned);
+        self.web_switch.set_active(web_search);
 
         if pinned {
-            self.pin_toggle.add_css_class("status-active");
             self.pin_toggle.set_tooltip_text(Some("Unpin this session"));
         } else {
-            self.pin_toggle.remove_css_class("status-active");
             self.pin_toggle.set_tooltip_text(Some("Pin this session"));
         }
 
         if web_search {
-            self.web_search_toggle.add_css_class("status-active");
             self.web_search_toggle
                 .set_tooltip_text(Some("Disable Web Search"));
         } else {
-            self.web_search_toggle.remove_css_class("status-active");
             self.web_search_toggle
                 .set_tooltip_text(Some("Enable Web Search"));
         }

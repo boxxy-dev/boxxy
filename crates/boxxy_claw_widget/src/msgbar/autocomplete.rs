@@ -155,18 +155,27 @@ impl CompletionProvider for AgentCompletionProvider {
 }
 
 pub struct CommandCompletionProvider {
-    claw_state: std::rc::Rc< std::cell::Cell<bool>>,
+    claw_state: std::rc::Rc<std::cell::Cell<bool>>,
     character_id: std::rc::Rc<std::cell::RefCell<Option<String>>>,
+    sleep_state: std::rc::Rc<std::cell::Cell<bool>>,
+    pin_state: std::rc::Rc<std::cell::Cell<bool>>,
+    web_search_state: std::rc::Rc<std::cell::Cell<bool>>,
 }
 
 impl CommandCompletionProvider {
     pub fn new(
         claw_state: std::rc::Rc<std::cell::Cell<bool>>,
         character_id: std::rc::Rc<std::cell::RefCell<Option<String>>>,
+        sleep_state: std::rc::Rc<std::cell::Cell<bool>>,
+        pin_state: std::rc::Rc<std::cell::Cell<bool>>,
+        web_search_state: std::rc::Rc<std::cell::Cell<bool>>,
     ) -> Self {
         Self {
             claw_state,
             character_id,
+            sleep_state,
+            pin_state,
+            web_search_state,
         }
     }
 }
@@ -183,6 +192,7 @@ impl CompletionProvider for CommandCompletionProvider {
 
         let mut items = Vec::new();
         let query_lower = query.to_lowercase();
+        let has_character = self.claw_state.get() || self.character_id.borrow().is_some();
 
         if "resume".contains(&query_lower) {
             items.push(CompletionItem {
@@ -210,8 +220,62 @@ impl CompletionProvider for CommandCompletionProvider {
             });
         }
 
+        if "sleep".contains(&query_lower) {
+            let subtitle = if self.sleep_state.get() {
+                "Wake character from sleep"
+            } else {
+                "Put character to sleep"
+            };
+            items.push(CompletionItem {
+                display_name: "/sleep".to_string(),
+                replacement_text: "/sleep".to_string(),
+                icon_name: None,
+                icon_path: None,
+                secondary_text: Some(subtitle.to_string()),
+                badge_text: None,
+                badge_color: None,
+                disabled: !has_character,
+            });
+        }
+
+        if "pin".contains(&query_lower) {
+            let subtitle = if self.pin_state.get() {
+                "Unpin conversation"
+            } else {
+                "Pin conversation"
+            };
+            items.push(CompletionItem {
+                display_name: "/pin".to_string(),
+                replacement_text: "/pin".to_string(),
+                icon_name: None,
+                icon_path: None,
+                secondary_text: Some(subtitle.to_string()),
+                badge_text: None,
+                badge_color: None,
+                disabled: !has_character,
+            });
+        }
+
+        if "web".contains(&query_lower) {
+            let allow_web = boxxy_preferences::Settings::load().enable_web_search;
+            let subtitle = if self.web_search_state.get() {
+                "Disable web search"
+            } else {
+                "Enable web search"
+            };
+            items.push(CompletionItem {
+                display_name: "/web".to_string(),
+                replacement_text: "/web".to_string(),
+                icon_name: None,
+                icon_path: None,
+                secondary_text: Some(subtitle.to_string()),
+                badge_text: None,
+                badge_color: None,
+                disabled: !allow_web,
+            });
+        }
+
         if "clear".contains(&query_lower) {
-            let has_character = self.claw_state.get() || self.character_id.borrow().is_some();
             items.push(CompletionItem {
                 display_name: "/clear".to_string(),
                 replacement_text: "/clear".to_string(),
@@ -225,7 +289,6 @@ impl CompletionProvider for CommandCompletionProvider {
         }
 
         if "exit".contains(&query_lower) {
-            let has_character = self.claw_state.get() || self.character_id.borrow().is_some();
             items.push(CompletionItem {
                 display_name: "/exit".to_string(),
                 replacement_text: "/exit".to_string(),

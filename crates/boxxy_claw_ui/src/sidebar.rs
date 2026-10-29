@@ -25,7 +25,9 @@ pub struct ClawSidebarComponent {
     widget: gtk::Box,
     hero_box: gtk::Box,
     hero_icon: gtk::Image,
+    hero_avatar_overlay: gtk::Overlay,
     hero_avatar: adw::Avatar,
+    hero_sleep_badge: gtk::Box,
     hero_title: gtk::Label,
     hero_subtitle: gtk::Label,
     badges_box: gtk::Box,
@@ -83,8 +85,35 @@ impl ClawSidebarComponent {
 
         let hero_avatar = adw::Avatar::new(84, None, true);
         hero_avatar.set_halign(gtk::Align::Center);
-        hero_avatar.set_visible(false);
-        hero_box.append(&hero_avatar);
+        hero_avatar.set_margin_top(4);
+        hero_avatar.set_margin_bottom(4);
+        hero_avatar.set_margin_start(4);
+        hero_avatar.set_margin_end(4);
+
+        let hero_sleep_icon = gtk::Image::builder()
+            .icon_name("boxxy-bedtime-symbolic")
+            .pixel_size(14)
+            .hexpand(true)
+            .vexpand(true)
+            .halign(gtk::Align::Center)
+            .valign(gtk::Align::Center)
+            .build();
+        let hero_sleep_badge = gtk::Box::builder()
+            .halign(gtk::Align::End)
+            .valign(gtk::Align::End)
+            .css_classes(["avatar-sleep-badge", "avatar-sleep-badge-large"])
+            .visible(false)
+            .build();
+        hero_sleep_badge.append(&hero_sleep_icon);
+
+        let hero_avatar_overlay = gtk::Overlay::builder()
+            .halign(gtk::Align::Center)
+            .valign(gtk::Align::Center)
+            .visible(false)
+            .child(&hero_avatar)
+            .build();
+        hero_avatar_overlay.add_overlay(&hero_sleep_badge);
+        hero_box.append(&hero_avatar_overlay);
 
         let hero_title = gtk::Label::builder()
             .label("Claw Mode")
@@ -358,7 +387,9 @@ impl ClawSidebarComponent {
             widget,
             hero_box,
             hero_icon,
+            hero_avatar_overlay,
             hero_avatar,
+            hero_sleep_badge,
             hero_title,
             hero_subtitle,
             badges_box,
@@ -477,7 +508,13 @@ impl ClawSidebarComponent {
         comp
     }
 
-    pub fn set_pane_state(&self, agent_name: &str, pinned: bool, web_search_enabled: bool) {
+    pub fn set_pane_state(
+        &self,
+        agent_name: &str,
+        sleep: bool,
+        pinned: bool,
+        web_search_enabled: bool,
+    ) {
         while let Some(child) = self.badges_box.first_child() {
             self.badges_box.remove(&child);
         }
@@ -520,32 +557,30 @@ impl ClawSidebarComponent {
                         self.hero_avatar.set_custom_image(Some(&texture));
                     }
                 }
-                self.hero_avatar.set_visible(true);
+                self.hero_avatar_overlay.set_visible(true);
+                self.hero_sleep_badge.set_visible(sleep);
                 self.hero_icon.set_visible(false);
             } else {
                 self.hero_title.set_label(agent_name);
                 self.hero_subtitle
                     .set_label("System-eccentric agentic control.");
-                self.hero_avatar.set_visible(false);
+                self.hero_avatar_overlay.set_visible(false);
+                self.hero_sleep_badge.set_visible(false);
                 self.hero_icon.set_visible(true);
             }
 
-            if pinned {
-                let pin_lbl = gtk::Label::builder()
-                    .label("📌 Pinned")
-                    .css_classes(["caption", "dim-label", "monospace"])
-                    .build();
-                self.badges_box.append(&pin_lbl);
-            }
-            let ws_lbl = gtk::Label::builder()
-                .label(if web_search_enabled {
-                    "🌐 Web Search ON"
-                } else {
-                    "🌐 Web Search OFF"
-                })
-                .css_classes(["caption", "dim-label", "monospace"])
+            let sleep_str = if sleep { "Sleep On" } else { "Sleep Off" };
+            let pin_str = if pinned { "Pin On" } else { "Pin Off" };
+            let web_str = if web_search_enabled {
+                "Web On"
+            } else {
+                "Web Off"
+            };
+            let status_line = gtk::Label::builder()
+                .label(format!("{sleep_str}  •  {pin_str}  •  {web_str}"))
+                .css_classes(["caption", "dim-label"])
                 .build();
-            self.badges_box.append(&ws_lbl);
+            self.badges_box.append(&status_line);
             self.hero_title.set_visible(true);
             self.stats_box.set_visible(true);
             self.badges_box.set_visible(true);
@@ -560,7 +595,8 @@ impl ClawSidebarComponent {
             self.hero_title.set_visible(false);
             self.hero_subtitle
                 .set_label("Conversations will appear here");
-            self.hero_avatar.set_visible(false);
+            self.hero_avatar_overlay.set_visible(false);
+            self.hero_sleep_badge.set_visible(false);
             self.hero_icon.set_pixel_size(72);
             self.hero_icon.set_visible(true);
             self.badges_box.set_visible(false);

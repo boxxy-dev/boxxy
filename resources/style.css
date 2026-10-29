@@ -644,16 +644,33 @@ boxxyterminalwidget {
 }
 
 /* Status Indicators for MsgBar Buttons */
-.boxxy-msgbar button.status-active image {
-  color: @accent_bg_color;
+.boxxy-msgbar button.msgbar-popover-row {
+  padding: 6px 8px;
+  border-radius: 6px;
 }
 
-.boxxy-msgbar button.status-sleep image {
-  color: @warning_bg_color;
+.avatar-sleep-badge {
+  border-radius: 9999px;
+  background-color: @window_bg_color;
+  color: @warning_color;
+  border: 1.5px solid alpha(@warning_color, 0.45);
+  box-shadow: 0 1px 4px alpha(black, 0.45);
 }
 
-.boxxy-msgbar button.status-error image {
-  color: @error_bg_color;
+.avatar-sleep-badge image {
+  color: @warning_color;
+}
+
+.avatar-sleep-badge-small {
+  min-width: 16px;
+  min-height: 16px;
+  padding: 0;
+}
+
+.avatar-sleep-badge-large {
+  min-width: 26px;
+  min-height: 26px;
+  padding: 0;
 }
 
 /* For Pin and WebSearch which use 'accent' directly in code currently */

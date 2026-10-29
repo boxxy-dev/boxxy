@@ -782,10 +782,11 @@ pub fn focus_active_terminal(inner: &mut AppWindowInner) {
                 page.set_indicator_icon(None::<&gio::Icon>);
             }
 
-            let _tab_is_sleep = tc.controller.is_sleep();
+            let tab_is_sleep = tc.controller.is_sleep();
 
             inner.claw.set_pane_state(
                 &tc.controller.agent_name(),
+                tab_is_sleep,
                 tc.controller.is_pinned(),
                 tc.controller.is_web_search(),
             );
