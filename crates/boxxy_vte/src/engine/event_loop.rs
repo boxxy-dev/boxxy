@@ -70,6 +70,7 @@ pub enum Msg {
     ClearSelection,
     ClearScrollback,
     ResetState,
+    SetVisible(bool),
     CopySelection(ClipboardType),
     CopyLastCommandOutput(ClipboardType),
     Search(String, Direction, bool),
@@ -317,6 +318,15 @@ where
                                 use crate::engine::ansi::Handler;
                                 self.terminal.reset_state();
                                 needs_render = true;
+                            },
+                            Ok(Msg::SetVisible(visible)) => {
+                                if self.terminal.is_visible != visible {
+                                    self.terminal.is_visible = visible;
+                                    if self.terminal.mode().contains(crate::engine::term::TermMode::VISIBILITY_REPORTS) {
+                                        let report = crate::engine::term::visibility_report(visible);
+                                        state.write_list.push_back(Cow::Borrowed(report.as_bytes()));
+                                    }
+                                }
                             },
                             Ok(Msg::CopySelection(clipboard_type)) => {
                                 if let Some(text) = self

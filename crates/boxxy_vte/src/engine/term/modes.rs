@@ -45,6 +45,7 @@ bitflags! {
         const GRAPHEME_CLUSTERING     = 1 << 26;
         const IN_BAND_RESIZE          = 1 << 27;
         const SYNC_UPDATE             = 1 << 28;
+        const VISIBILITY_REPORTS      = 1 << 29;
         const MOUSE_MODE              = Self::MOUSE_REPORT_CLICK.bits() | Self::MOUSE_MOTION.bits() | Self::MOUSE_DRAG.bits();
         const KITTY_KEYBOARD_PROTOCOL = Self::DISAMBIGUATE_ESC_CODES.bits()
                                       | Self::REPORT_EVENT_TYPES.bits()
@@ -334,6 +335,12 @@ impl<T: EventListener> Term<T> {
             NamedPrivateMode::ColorSchemeUpdates => {
                 self.mode.insert(TermMode::COLOR_SCHEME_UPDATES);
             }
+            NamedPrivateMode::VisibilityReports => {
+                self.mode.insert(TermMode::VISIBILITY_REPORTS);
+                let report = crate::engine::term::visibility_report(self.is_visible);
+                self.event_proxy
+                    .send_event(Event::PtyWrite(report.to_string()));
+            }
             NamedPrivateMode::InBandResize => {
                 self.mode.insert(TermMode::IN_BAND_RESIZE);
                 use crate::engine::grid::Dimensions;
@@ -404,6 +411,9 @@ impl<T: EventListener> Term<T> {
             NamedPrivateMode::ColorSchemeUpdates => {
                 self.mode.remove(TermMode::COLOR_SCHEME_UPDATES);
             }
+            NamedPrivateMode::VisibilityReports => {
+                self.mode.remove(TermMode::VISIBILITY_REPORTS);
+            }
             NamedPrivateMode::InBandResize => {
                 self.mode.remove(TermMode::IN_BAND_RESIZE);
             }
@@ -460,6 +470,9 @@ impl<T: EventListener> Term<T> {
                 }
                 NamedPrivateMode::ColorSchemeUpdates => {
                     self.mode.contains(TermMode::COLOR_SCHEME_UPDATES).into()
+                }
+                NamedPrivateMode::VisibilityReports => {
+                    self.mode.contains(TermMode::VISIBILITY_REPORTS).into()
                 }
                 NamedPrivateMode::InBandResize => {
                     self.mode.contains(TermMode::IN_BAND_RESIZE).into()

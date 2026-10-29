@@ -32,7 +32,7 @@ pub struct RowCacheEpochKey {
     pub char_width_bits: u64,
     pub char_height_bits: u64,
     pub offset_y_bits: u32,
-    pub scale_factor: i32,
+    pub scale_milli: u32,
     pub is_dimmed: bool,
     pub palette_generation: u64,
     pub font_generation: u64,
@@ -110,7 +110,9 @@ pub struct TerminalWidget {
     pub visible_search_matches: RefCell<Vec<crate::engine::selection::SelectionRange>>,
     pub search_viewport_cache: RefCell<SearchViewportCache>,
     pub cached_char_size: Cell<Option<(f64, f64)>>,
-    pub cached_scale_factor: Cell<i32>,
+    pub cached_scale_milli: Cell<u32>,
+    pub surface_scale_handler: RefCell<Option<(gtk4::gdk::Surface, glib::SignalHandlerId)>>,
+    pub surface_state_handler: RefCell<Option<(gtk4::gdk::Surface, glib::SignalHandlerId)>>,
     pub cached_layout: RefCell<Option<gtk4::pango::Layout>>,
     pub frosted_glass: Cell<bool>,
     pub palette_generation: Cell<u64>,
@@ -180,7 +182,9 @@ impl Default for TerminalWidget {
             visible_search_matches: RefCell::new(Vec::new()),
             search_viewport_cache: RefCell::new(SearchViewportCache::default()),
             cached_char_size: Cell::new(None),
-            cached_scale_factor: Cell::new(0),
+            cached_scale_milli: Cell::new(0),
+            surface_scale_handler: RefCell::new(None),
+            surface_state_handler: RefCell::new(None),
             cached_layout: RefCell::new(None),
             frosted_glass: Cell::new(false),
             palette_generation: Cell::new(0),
@@ -280,10 +284,61 @@ impl TerminalWidget {
         self.row_node_cache.borrow_mut().clear();
     }
 
+    #[inline]
+    pub(crate) fn is_effectively_visible(&self, widget: &super::TerminalWidget) -> bool {
+        if !widget.is_mapped() {
+            return false;
+        }
+        if let Some(toplevel) = widget
+            .native()
+            .and_then(|n| n.surface())
+            .and_then(|s| s.downcast::<gtk4::gdk::Toplevel>().ok())
+        {
+            return !toplevel
+                .state()
+                .contains(gtk4::gdk::ToplevelState::SUSPENDED);
+        }
+        true
+    }
+
+    pub(crate) fn sync_visibility(&self, widget: &super::TerminalWidget) {
+        let visible = self.is_effectively_visible(widget);
+        if let Some(b) = self.backend.borrow().as_ref() {
+            b.set_visible(visible);
+        }
+        if visible {
+            if widget.has_focus() {
+                widget.start_cursor_blink();
+            }
+            widget.queue_draw();
+            widget.update_scroll_adjustment();
+        } else {
+            self.stop_autoscroll();
+            widget.stop_cursor_blink();
+            self.kitty_textures.borrow_mut().clear();
+            self.row_node_cache.borrow_mut().clear();
+        }
+    }
+
+    #[inline]
+    pub(crate) fn fractional_scale(&self, widget: &super::TerminalWidget) -> f64 {
+        widget
+            .native()
+            .and_then(|n| n.surface())
+            .map(|s| s.scale())
+            .filter(|&s| s > 0.0)
+            .unwrap_or_else(|| (widget.scale_factor() as f64).max(1.0))
+    }
+
+    #[inline]
+    pub(crate) fn scale_milli(&self, widget: &super::TerminalWidget) -> u32 {
+        (self.fractional_scale(widget) * 1000.0).round() as u32
+    }
+
     pub(crate) fn get_or_create_layout(&self, widget: &super::TerminalWidget) -> gtk4::pango::Layout {
-        let scale = widget.scale_factor();
-        if self.cached_scale_factor.get() != scale {
-            self.cached_scale_factor.set(scale);
+        let scale_milli = self.scale_milli(widget);
+        if self.cached_scale_milli.get() != scale_milli {
+            self.cached_scale_milli.set(scale_milli);
             self.invalidate_font_metrics();
         }
         if let Some(layout) = self.cached_layout.borrow().as_ref() {
@@ -304,9 +359,9 @@ impl TerminalWidget {
     }
 
     pub(crate) fn get_char_size(&self, widget: &super::TerminalWidget) -> (f64, f64) {
-        let scale = widget.scale_factor();
-        if self.cached_scale_factor.get() != scale {
-            self.cached_scale_factor.set(scale);
+        let scale_milli = self.scale_milli(widget);
+        if self.cached_scale_milli.get() != scale_milli {
+            self.cached_scale_milli.set(scale_milli);
             self.invalidate_font_metrics();
         }
         if let Some(cs) = self.cached_char_size.get() {
@@ -316,9 +371,14 @@ impl TerminalWidget {
         layout.set_attributes(None);
         layout.set_text("A");
         let (_, logical) = layout.extents();
+        let raw_w =
+            (logical.width() as f64 / gtk4::pango::SCALE as f64) * self.cell_width_scale.get();
+        let raw_h =
+            (logical.height() as f64 / gtk4::pango::SCALE as f64) * self.cell_height_scale.get();
+        let scale = self.fractional_scale(widget);
         let cs = (
-            (logical.width() as f64 / gtk4::pango::SCALE as f64) * self.cell_width_scale.get(),
-            (logical.height() as f64 / gtk4::pango::SCALE as f64) * self.cell_height_scale.get(),
+            ((raw_w * scale).round() / scale).max(1.0),
+            ((raw_h * scale).round() / scale).max(1.0),
         );
         self.cached_char_size.set(Some(cs));
         cs
@@ -358,8 +418,10 @@ impl TerminalWidget {
                                     backend.scroll_display(crate::engine::grid::Scroll::Bottom);
                                 }
                             }
-                            widget.queue_draw();
-                            widget.update_scroll_adjustment();
+                            if widget.is_mapped() {
+                                widget.queue_draw();
+                                widget.update_scroll_adjustment();
+                            }
                         }
                         Event::PtyWrite(text) => {
                             if let Some(backend) = widget.imp().backend.borrow().as_ref() {
@@ -524,6 +586,7 @@ impl TerminalWidget {
         self.detach_pty();
         let (sender, receiver) = async_channel::unbounded::<Event>();
         let backend = TerminalBackend::from_fd_with_replay(sender, master_fd, replay_bytes);
+        backend.set_visible(self.is_effectively_visible(&self.obj()));
         self.backend.replace(Some(backend));
         let (w, h) = (self.obj().width(), self.obj().height());
         if w > 0 && h > 0 {
@@ -556,6 +619,7 @@ impl TerminalWidget {
             ));
         }
         let backend = TerminalBackend::new(sender, opts);
+        backend.set_visible(self.is_effectively_visible(&self.obj()));
         self.backend.replace(Some(backend));
         self.setup_event_loop(receiver);
         self.obj().queue_draw();
@@ -636,8 +700,38 @@ impl WidgetImpl for TerminalWidget {
         self.paint_snapshot(snapshot);
     }
 
+    fn map(&self) {
+        self.parent_map();
+        self.sync_visibility(&self.obj());
+    }
+
+    fn unmap(&self) {
+        self.parent_unmap();
+        self.sync_visibility(&self.obj());
+    }
+
     fn realize(&self) {
         self.parent_realize();
+        if let Some(surface) = self.obj().native().and_then(|n| n.surface()) {
+            let obj_weak = self.obj().downgrade();
+            let id = surface.connect_notify_local(Some("scale"), move |_, _| {
+                if let Some(widget) = obj_weak.upgrade() {
+                    widget.imp().invalidate_font_metrics();
+                    widget.queue_resize();
+                    widget.queue_draw();
+                }
+            });
+            self.surface_scale_handler
+                .replace(Some((surface.clone(), id)));
+
+            let obj_weak_state = self.obj().downgrade();
+            let state_id = surface.connect_notify_local(Some("state"), move |_, _| {
+                if let Some(widget) = obj_weak_state.upgrade() {
+                    widget.imp().sync_visibility(&widget);
+                }
+            });
+            self.surface_state_handler.replace(Some((surface, state_id)));
+        }
         let im = self.im_context.borrow();
         im.set_client_widget(Some(&*self.obj()));
         if self.obj().has_focus() {
@@ -650,6 +744,12 @@ impl WidgetImpl for TerminalWidget {
     fn unrealize(&self) {
         self.stop_autoscroll();
         self.obj().stop_cursor_blink();
+        if let Some((surface, id)) = self.surface_scale_handler.borrow_mut().take() {
+            surface.disconnect(id);
+        }
+        if let Some((surface, id)) = self.surface_state_handler.borrow_mut().take() {
+            surface.disconnect(id);
+        }
         self.im_context
             .borrow()
             .set_client_widget(None::<&gtk4::Widget>);

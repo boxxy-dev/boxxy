@@ -82,7 +82,7 @@ impl super::TerminalWidget {
                     placement.point.line.0 + display_offset,
                     placement.point.column.0,
                 );
-                let scale = self.obj().scale_factor() as f32;
+                let scale = self.fractional_scale(&self.obj()) as f32;
                 let approx_height_cells = placement
                     .height
                     .unwrap_or_else(|| {

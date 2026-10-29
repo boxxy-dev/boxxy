@@ -931,4 +931,32 @@ mod tests {
         assert_eq!(state.kitty_generation, 1);
         assert_eq!(state.kitty_placements.len(), 1);
     }
+
+    #[test]
+    fn decset_2033_visibility_reports_and_dsr_998_query() {
+        let mut h = HeadlessTerminal::new(80, 24);
+        assert!(h.term.is_visible);
+
+        // 1. DSR ? 998 n query reports visible (`\x1b[?999;1n`) by default
+        h.feed(b"\x1b[?998n");
+        assert_eq!(h.take_pty_writes(), vec!["\x1b[?999;1n"]);
+
+        // 2. When hidden (`is_visible = false`), DSR ? 998 n reports not visible (`\x1b[?999;2n`)
+        h.term.is_visible = false;
+        h.feed(b"\x1b[?998n");
+        assert_eq!(h.take_pty_writes(), vec!["\x1b[?999;2n"]);
+
+        // 3. DECSET 2033 (`?2033h` / `?2033l`) immediately emits current visibility state,
+        //    and DECRQM (`?2033$p`) reports mode state.
+        h.feed(b"\x1b[?2033h\x1b[?2033$p");
+        assert!(h.mode().contains(TermMode::VISIBILITY_REPORTS));
+        assert_eq!(
+            h.take_pty_writes(),
+            vec!["\x1b[?999;2n", "\x1b[?2033;1$y"]
+        );
+
+        h.feed(b"\x1b[?2033l\x1b[?2033$p");
+        assert!(!h.mode().contains(TermMode::VISIBILITY_REPORTS));
+        assert_eq!(h.take_pty_writes(), vec!["\x1b[?2033;2$y"]);
+    }
 }

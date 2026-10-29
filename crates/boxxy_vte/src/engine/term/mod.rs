@@ -28,7 +28,7 @@ pub mod search;
 #[cfg(test)]
 mod tests;
 
-pub use self::handler::{color_scheme_report, is_dark_rgb};
+pub use self::handler::{color_scheme_report, is_dark_rgb, visibility_report};
 pub use self::modes::{ClipboardType, TermMode};
 pub use self::render_state::{RenderState, RenderableContent, RenderableCursor};
 
@@ -216,6 +216,9 @@ pub struct Term<T> {
     /// Terminal focus controlling the cursor shape.
     pub is_focused: bool,
 
+    /// Whether the terminal surface is currently mapped/visible (`DECSET 2033` / `CSI ? 998 n`).
+    pub is_visible: bool,
+
     /// Cursor for keyboard selection.
     pub vi_mode_cursor: ViModeCursor,
 
@@ -377,6 +380,7 @@ impl<T> Term<T> {
             colors: color::Colors::default(),
             title_stack: Default::default(),
             is_focused: Default::default(),
+            is_visible: true,
             selection: Default::default(),
             title: Default::default(),
             mode: Default::default(),

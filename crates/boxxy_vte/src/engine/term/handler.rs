@@ -55,6 +55,16 @@ pub fn color_scheme_report(color: Rgb) -> &'static str {
     }
 }
 
+/// Formats the `CSI ? 999 ; Ps n` visibility status report (`1` = visible, `2` = not visible).
+#[inline]
+pub fn visibility_report(visible: bool) -> &'static str {
+    if visible {
+        "\x1b[?999;1n"
+    } else {
+        "\x1b[?999;2n"
+    }
+}
+
 #[inline]
 fn is_regional_indicator(c: char) -> bool {
     matches!(c, '\u{1F1E6}'..='\u{1F1FF}')
@@ -617,6 +627,13 @@ impl<T: EventListener> Handler for Term<T> {
                         Arc::new(|color| color_scheme_report(color).to_string()),
                     ));
                 }
+            }
+            // Visibility status query (DECSET 2033 / DSR ? 998 n):
+            // Responds with `CSI ? 999 ; 1 n` (visible) or `CSI ? 999 ; 2 n` (hidden).
+            998 => {
+                self.event_proxy.send_event(Event::PtyWrite(
+                    visibility_report(self.is_visible).to_string(),
+                ));
             }
             _ => debug!("unknown private device status query: {arg}"),
         }

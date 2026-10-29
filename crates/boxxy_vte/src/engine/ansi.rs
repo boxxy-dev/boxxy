@@ -962,6 +962,7 @@ impl PrivateMode {
             2026 => Self::Named(NamedPrivateMode::SyncUpdate),
             2027 => Self::Named(NamedPrivateMode::GraphemeClustering),
             2031 => Self::Named(NamedPrivateMode::ColorSchemeUpdates),
+            2033 => Self::Named(NamedPrivateMode::VisibilityReports),
             2048 => Self::Named(NamedPrivateMode::InBandResize),
             _ => Self::Unknown(mode),
         }
@@ -1018,6 +1019,8 @@ pub enum NamedPrivateMode {
     GraphemeClustering = 2027,
     /// Dark/light color scheme change notifications (`DECSET 2031`).
     ColorSchemeUpdates = 2031,
+    /// Terminal surface visibility notifications (`DECSET 2033`).
+    VisibilityReports = 2033,
     /// In-band terminal resize notifications (`DECSET 2048`).
     InBandResize = 2048,
 }

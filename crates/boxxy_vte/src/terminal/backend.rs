@@ -411,6 +411,10 @@ impl TerminalBackend {
         let _ = self.notifier.0.send(Msg::ResetState);
     }
 
+    pub fn set_visible(&self, visible: bool) {
+        let _ = self.notifier.0.send(Msg::SetVisible(visible));
+    }
+
     pub fn copy_selection(&self, clipboard_type: crate::engine::term::ClipboardType) {
         let _ = self.notifier.0.send(Msg::CopySelection(clipboard_type));
     }

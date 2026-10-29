@@ -308,7 +308,7 @@ impl super::TerminalWidget {
                 char_width_bits: cs.0.to_bits(),
                 char_height_bits: cs.1.to_bits(),
                 offset_y_bits: offset_y.to_bits(),
-                scale_factor: self.obj().scale_factor(),
+                scale_milli: self.scale_milli(&self.obj()),
                 is_dimmed: self.is_dimmed.get(),
                 palette_generation: self.palette_generation.get(),
                 font_generation: self.font_generation.get(),
