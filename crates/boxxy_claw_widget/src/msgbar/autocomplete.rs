@@ -154,7 +154,22 @@ impl CompletionProvider for AgentCompletionProvider {
     }
 }
 
-pub struct CommandCompletionProvider;
+pub struct CommandCompletionProvider {
+    claw_state: std::rc::Rc< std::cell::Cell<bool>>,
+    character_id: std::rc::Rc<std::cell::RefCell<Option<String>>>,
+}
+
+impl CommandCompletionProvider {
+    pub fn new(
+        claw_state: std::rc::Rc<std::cell::Cell<bool>>,
+        character_id: std::rc::Rc<std::cell::RefCell<Option<String>>>,
+    ) -> Self {
+        Self {
+            claw_state,
+            character_id,
+        }
+    }
+}
 
 impl CompletionProvider for CommandCompletionProvider {
     fn trigger(&self) -> String {
@@ -192,6 +207,20 @@ impl CompletionProvider for CommandCompletionProvider {
                 badge_text: None,
                 badge_color: None,
                 disabled: false,
+            });
+        }
+
+        if "exit".contains(&query_lower) {
+            let has_character = self.claw_state.get() || self.character_id.borrow().is_some();
+            items.push(CompletionItem {
+                display_name: "/exit".to_string(),
+                replacement_text: "/exit".to_string(),
+                icon_name: None,
+                icon_path: None,
+                secondary_text: Some("Withdraw character from terminal".to_string()),
+                badge_text: None,
+                badge_color: None,
+                disabled: !has_character,
             });
         }
 

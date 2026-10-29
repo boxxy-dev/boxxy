@@ -108,6 +108,17 @@ pub fn handle_terminal_event(
 
                 if Some(&page) == inner.tab_view.selected_page().as_ref() {
                     inner.claw_active = active;
+                    inner.claw.set_pane_state(
+                        &inner.tabs[pos].controller.agent_name(),
+                        inner.tabs[pos].controller.is_pinned(),
+                        inner.tabs[pos].controller.is_web_search(),
+                    );
+                    inner
+                        .claw
+                        .set_session_usage(inner.tabs[pos].controller.get_session_usage());
+                    inner
+                        .claw
+                        .update_tasks(inner.tabs[pos].get_pending_tasks());
                 }
             }
             TerminalEventKind::PaneFocused(_) => {

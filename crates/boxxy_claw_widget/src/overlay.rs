@@ -572,6 +572,17 @@ impl TerminalOverlay {
         self.diagnosis_viewer.set_content("");
     }
 
+    /// Resets the overlay when the active character is withdrawn via `/exit`,
+    /// clearing the session history and active agent identity so the character
+    /// selector reappears the next time the drawer is opened.
+    pub fn reset_for_exit(&self) {
+        *self.active_agent.borrow_mut() = String::new();
+        self.full_history_store.remove_all();
+        self.history_store.remove_all();
+        self.diagnosis_viewer.set_content("");
+        self.hide();
+    }
+
     /// Toggle between the single-message view (latest diagnosis only) and the
     /// full scrollable history. Turning `maintain_overlay_history` back on
     /// restores the full session into the visible store.

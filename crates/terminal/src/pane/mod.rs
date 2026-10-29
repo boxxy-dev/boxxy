@@ -205,6 +205,7 @@ pub(super) struct PaneInner {
     pub(super) claw_subscription:
         std::sync::Arc<parking_lot::Mutex<Option<crate::agent_manager::SubscriptionGuard>>>,
     pub(super) claw_indicator: Option<ClawIndicator>,
+    pub(super) claw_popover: Option<TerminalOverlay>,
     pub(super) msg_bar: Rc<MsgBarComponent>,
     pub(super) callback: std::sync::Arc<dyn Fn(PaneOutput) + Send + Sync + 'static>,
 }
@@ -443,6 +444,9 @@ impl TerminalPaneComponent {
             let session_status_for_active = session_status.clone();
             let is_pinned_for_active = is_pinned.clone();
             let is_web_search_for_active = is_web_search.clone();
+            let agent_name_for_active = agent_name.clone();
+            let session_usage_for_active = session_usage.clone();
+            let pending_tasks_for_active = pending_tasks.clone();
 
             let is_claw_active_for_sleep = is_claw_active.clone();
             let session_status_for_sleep = session_status.clone();
@@ -669,7 +673,7 @@ impl TerminalPaneComponent {
                     }
                 },
                 move |active| {
-                    if is_claw_active_for_active.get() != active {
+                    if is_claw_active_for_active.get() != active || !active {
                         is_claw_active_for_active.set(active);
                         let mut session_refs = None;
                         if let Some(inner_arc) = inner_weak_for_active
@@ -684,6 +688,17 @@ impl TerminalPaneComponent {
                             } else if !active {
                                 status = AgentStatus::Off;
                                 *session_status_for_active.borrow_mut() = status.clone();
+                                is_pinned_for_active.set(false);
+                                *agent_name_for_active.borrow_mut() = String::new();
+                                session_usage_for_active.set(SessionUsage::default());
+                                pending_tasks_for_active.borrow_mut().clear();
+                                inner_arc.borrow().msg_bar.clear_character();
+                                if let Some(popover) = &inner_arc.borrow().claw_popover {
+                                    popover.reset_for_exit();
+                                }
+                                let pane = inner_arc.borrow().terminal.clone();
+                                pane.set_focusable(true);
+                                pane.grab_focus();
                             }
 
                             inner_arc.borrow().msg_bar.update_ui(
@@ -692,6 +707,12 @@ impl TerminalPaneComponent {
                                 is_web_search_for_active.get(),
                             );
                             if let Some(ind) = &inner_arc.borrow().claw_indicator {
+                                if !active {
+                                    ind.set_identity("", "");
+                                    ind.set_has_tasks(false);
+                                    ind.set_mode(AgentStatus::Off);
+                                    ind.hide();
+                                }
                                 ind.set_visible(active);
                             }
                             session_refs = Some((
@@ -705,8 +726,8 @@ impl TerminalPaneComponent {
                             matches!(*session_status_for_active.borrow(), AgentStatus::Sleep),
                         ));
                         let tx = tx_claw_toggle.clone();
+                        let pane_id = id_toggle.clone();
                         if active {
-                            let pane_id = id_toggle.clone();
                             let pending = pending_char_for_toggle.borrow().clone();
                             let event_tx = event_sender_for_toggle.clone();
                             glib::spawn_future_local(async move {
@@ -739,8 +760,18 @@ impl TerminalPaneComponent {
                                 let _ = tx.send(ClawMessage::Initialize).await;
                             });
                         } else {
+                            if let Some((_, ref claw_sub_ref)) = session_refs {
+                                *claw_sub_ref.lock() = None;
+                            }
+                            let cb_after_exit = cb_toggle.clone();
                             glib::spawn_future_local(async move {
-                                let _ = tx.send(ClawMessage::Deactivate).await;
+                                if let Some((session_id_ref, _)) = session_refs {
+                                    let _ = session_id_ref.lock().await.take();
+                                }
+                                let agent = crate::get_agent().await;
+                                let _ = agent.release_holder(pane_id.clone()).await;
+                                boxxy_claw_widget::msgbar::autocomplete::refresh_resume_sessions_async(None);
+                                cb_after_exit(PaneOutput::ClawStateChanged(pane_id, false, false));
                             });
                         }
                     }
@@ -853,6 +884,7 @@ impl TerminalPaneComponent {
                 process_subscriptions: Vec::new(),
                 claw_subscription: std::sync::Arc::new(parking_lot::Mutex::new(None)),
                 claw_indicator: None,
+                claw_popover: None,
                 msg_bar: msg_bar.clone(),
                 callback: callback.clone(),
             }));
@@ -953,6 +985,7 @@ impl TerminalPaneComponent {
         claw_indicator.update_settings(settings.hide_character_badge);
 
         inner.borrow_mut().claw_indicator = Some(claw_indicator.clone());
+        inner.borrow_mut().claw_popover = Some(claw_popover.clone());
 
         // Keep popover height capped to the live pane height.
         let claw_popover_for_resize = claw_popover.clone();

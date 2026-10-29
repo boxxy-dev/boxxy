@@ -123,21 +123,15 @@ impl MsgBarComponent {
         let claw_toggle = gtk::Button::builder()
             .child(&avatar_stack)
             .css_classes(["flat", "image-button"])
-            .tooltip_text("Toggle Claw for this pane")
             .margin_start(4)
             .margin_end(0)
             .valign(gtk::Align::Center)
             .can_focus(false)
+            .can_target(false)
             .build();
 
         let claw_state = Rc::new(Cell::new(false));
-        let claw_state_clone = claw_state.clone();
-        let claw_entry_focus = entry.clone();
-        claw_toggle.connect_clicked(move |_| {
-            let next = !claw_state_clone.get();
-            on_claw_toggle(next);
-            claw_entry_focus.grab_focus();
-        });
+        let character_id: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
 
         left_badges.append(&claw_toggle);
 
@@ -231,12 +225,16 @@ impl MsgBarComponent {
 
         let on_submit_rc = Rc::new(on_submit);
         let on_cancel_rc = Rc::new(on_cancel);
+        let on_claw_toggle_rc = Rc::new(on_claw_toggle);
 
         let submit_action: Rc<dyn Fn()> = {
             let entry = entry.clone();
             let attachment_mgr = attachment_mgr.clone();
             let history = history.clone();
             let on_submit = on_submit_rc;
+            let on_claw_toggle = on_claw_toggle_rc;
+            let claw_state = claw_state.clone();
+            let character_id = character_id.clone();
             let on_submit_hook = on_submit_hook.clone();
             let embedded = embedded.clone();
             let is_active = is_active.clone();
@@ -266,6 +264,14 @@ impl MsgBarComponent {
                     buf.set_text("/resume ");
                     let end = buf.end_iter();
                     buf.place_cursor(&end);
+                    return;
+                }
+
+                if original_text.trim() == "/exit" && attachment_mgr.get_attachments().is_empty() {
+                    buf.set_text("");
+                    if claw_state.get() || character_id.borrow().is_some() {
+                        on_claw_toggle(false);
+                    }
                     return;
                 }
 
@@ -300,7 +306,10 @@ impl MsgBarComponent {
 
         let mut providers: Vec<Box<dyn boxxy_core_widgets::autocomplete::CompletionProvider>> = vec![
             Box::new(autocomplete::AgentCompletionProvider),
-            Box::new(autocomplete::CommandCompletionProvider),
+            Box::new(autocomplete::CommandCompletionProvider::new(
+                claw_state.clone(),
+                character_id.clone(),
+            )),
             Box::new(autocomplete::ResumeCompletionProvider::new(Some(
                 entry.downgrade(),
             ))),
@@ -316,7 +325,7 @@ impl MsgBarComponent {
                 let is_resume_session = replacement
                     .strip_prefix("/resume ")
                     .is_some_and(|s| !s.trim().is_empty());
-                if is_resume_session || replacement == "/models" {
+                if is_resume_session || replacement == "/models" || replacement == "/exit" {
                     autocomplete_submit();
                 }
             })),
@@ -439,7 +448,7 @@ impl MsgBarComponent {
             sleep_state,
             pin_state,
             web_search_state,
-            character_id: Rc::new(RefCell::new(None)),
+            character_id,
             avatar,
             avatar_stack,
             embedded,
@@ -461,6 +470,15 @@ impl MsgBarComponent {
         let profile = boxxy_preferences::user_profile::current();
         boxxy_preferences::user_profile::configure_avatar(&self.avatar, &profile);
         self.avatar_stack.set_visible_child_name("avatar");
+    }
+
+    /// Clears the active character binding and restores the default input placeholder.
+    pub fn clear_character(&self) {
+        *self.character_id.borrow_mut() = None;
+        self.placeholder_label.set_label(
+            "Type your message... (Ctrl+V: attach, @character: direct, /resume: session)",
+        );
+        self.refresh_user_avatar();
     }
 
     /// Update the placeholder text based on the active character UUID and refresh the user avatar.
