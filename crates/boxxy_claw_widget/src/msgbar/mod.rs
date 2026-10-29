@@ -247,6 +247,28 @@ impl MsgBarComponent {
                 let original_text = buf
                     .text(&buf.start_iter(), &buf.end_iter(), false)
                     .to_string();
+
+                if original_text.trim() == "/models" && attachment_mgr.get_attachments().is_empty()
+                {
+                    buf.set_text("");
+                    if let Some(root) = entry.root() {
+                        let _ = gtk::prelude::WidgetExt::activate_action(
+                            &root,
+                            "win.model-selection",
+                            None,
+                        );
+                    }
+                    return;
+                }
+
+                if original_text.trim() == "/resume" && attachment_mgr.get_attachments().is_empty()
+                {
+                    buf.set_text("/resume ");
+                    let end = buf.end_iter();
+                    buf.place_cursor(&end);
+                    return;
+                }
+
                 let (text, images) = attachment_mgr.build_payload(&original_text);
 
                 if !text.trim().is_empty() || !images.is_empty() {
@@ -291,7 +313,10 @@ impl MsgBarComponent {
             &entry,
             providers,
             Some(Box::new(move |replacement| {
-                if replacement.starts_with("/resume ") {
+                let is_resume_session = replacement
+                    .strip_prefix("/resume ")
+                    .is_some_and(|s| !s.trim().is_empty());
+                if is_resume_session || replacement == "/models" {
                     autocomplete_submit();
                 }
             })),

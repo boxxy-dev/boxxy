@@ -277,6 +277,7 @@ impl AutocompleteController {
         }
 
         let mut first_selectable = None;
+        let label_size_group = gtk::SizeGroup::new(gtk::SizeGroupMode::Horizontal);
         for item in items {
             let row = gtk::ListBoxRow::new();
             row.set_widget_name(&item.replacement_text);
@@ -287,7 +288,13 @@ impl AutocompleteController {
                 row.set_selectable(false);
             }
 
-            let hbox = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+            let is_plain_command =
+                item.badge_text.is_none() && item.icon_name.is_none() && item.icon_path.is_none();
+
+            let hbox = gtk::Box::new(
+                gtk::Orientation::Horizontal,
+                if is_plain_command { 12 } else { 8 },
+            );
             hbox.set_margin_top(4);
             hbox.set_margin_bottom(4);
             hbox.set_margin_start(6);
@@ -310,16 +317,24 @@ impl AutocompleteController {
             }
 
             let label = gtk::Label::new(Some(&item.display_name));
-            label.set_hexpand(true);
-            label.set_halign(gtk::Align::Fill);
             label.set_xalign(0.0);
 
             // Only force a wide width for rich items (like session resume)
             // to avoid making simple command suggestions ('/resume') weirdly wide.
             if item.badge_text.is_some() {
+                label.set_hexpand(true);
+                label.set_halign(gtk::Align::Fill);
                 label.set_ellipsize(gtk::pango::EllipsizeMode::End);
                 label.set_width_request(400);
+            } else if is_plain_command {
+                label.set_hexpand(false);
+                label.set_halign(gtk::Align::Start);
+                label.set_ellipsize(gtk::pango::EllipsizeMode::None);
+                label.set_width_request(-1);
+                label_size_group.add_widget(&label);
             } else {
+                label.set_hexpand(true);
+                label.set_halign(gtk::Align::Fill);
                 label.set_ellipsize(gtk::pango::EllipsizeMode::None);
                 label.set_width_request(-1);
             }
@@ -327,17 +342,27 @@ impl AutocompleteController {
             hbox.append(&label);
 
             let right_box = gtk::Box::new(gtk::Orientation::Horizontal, 12);
-            right_box.set_halign(gtk::Align::End);
             right_box.set_valign(gtk::Align::Center);
+            if is_plain_command {
+                right_box.set_hexpand(true);
+                right_box.set_halign(gtk::Align::Start);
+            } else {
+                right_box.set_halign(gtk::Align::End);
+            }
 
             if let Some(secondary) = item.secondary_text {
                 let sec_label = gtk::Label::new(Some(&secondary));
                 sec_label.add_css_class("caption");
                 sec_label.add_css_class("dim-label");
-                // Fixed minimum width and right alignment inside the label for perfect column stacking
-                sec_label.set_width_request(40);
-                sec_label.set_xalign(1.0);
-                sec_label.set_halign(gtk::Align::End);
+                if is_plain_command {
+                    sec_label.set_xalign(0.0);
+                    sec_label.set_halign(gtk::Align::Start);
+                } else {
+                    // Fixed minimum width and right alignment inside the label for perfect column stacking
+                    sec_label.set_width_request(40);
+                    sec_label.set_xalign(1.0);
+                    sec_label.set_halign(gtk::Align::End);
+                }
                 right_box.append(&sec_label);
             }
 

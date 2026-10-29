@@ -171,11 +171,24 @@ impl CompletionProvider for CommandCompletionProvider {
 
         if "resume".contains(&query_lower) {
             items.push(CompletionItem {
-                display_name: "Resume past session".to_string(),
-                replacement_text: "/resume".to_string(),
+                display_name: "/resume".to_string(),
+                replacement_text: "/resume ".to_string(),
                 icon_name: None,
                 icon_path: None,
-                secondary_text: None,
+                secondary_text: Some("Resume a past conversation".to_string()),
+                badge_text: None,
+                badge_color: None,
+                disabled: false,
+            });
+        }
+
+        if "models".contains(&query_lower) {
+            items.push(CompletionItem {
+                display_name: "/models".to_string(),
+                replacement_text: "/models".to_string(),
+                icon_name: None,
+                icon_path: None,
+                secondary_text: Some("Switch model".to_string()),
                 badge_text: None,
                 badge_color: None,
                 disabled: false,
