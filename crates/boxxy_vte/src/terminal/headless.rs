@@ -802,4 +802,133 @@ mod tests {
         h.term.reset_state();
         assert!(!h.mode().intersects(TermMode::ALT_SCREEN | TermMode::MOUSE_MODE));
     }
+
+    #[test]
+    fn bulk_osc_and_apc_chunk_invariance_and_can_sub_abort() {
+        use base64::Engine;
+
+        // 1. Large OSC 52 clipboard payload across arbitrary split chunk sizes
+        let clip_text = "Clipboard test payload ".repeat(120);
+        let clip_b64 = base64::engine::general_purpose::STANDARD.encode(clip_text.as_bytes());
+        let osc52_seq = format!("\x1b]52;c;{clip_b64}\x07");
+
+        for chunk_size in [1, 2, 3, 7, 64, 512] {
+            let mut h = HeadlessTerminal::new(80, 24);
+            h.feed_chunked(osc52_seq.as_bytes(), chunk_size);
+            let stored = h.take_events().into_iter().find_map(|ev| match ev {
+                Event::ClipboardStore(ty, text) => Some((ty, text)),
+                _ => None,
+            });
+            assert_eq!(
+                stored,
+                Some((crate::engine::term::ClipboardType::Clipboard, clip_text.clone())),
+                "OSC 52 mismatch at chunk_size={chunk_size}"
+            );
+        }
+
+        // 2. CAN (0x18) and SUB (0x1A) abort an in-progress OSC or APC sequence without dispatching it
+        let mut h = HeadlessTerminal::new(80, 24);
+        h.feed(b"\x1b]2;Valid Title\x07");
+        h.feed(b"\x1b]2;Aborted By CAN\x18");
+        h.feed(b"\x1b]2;Aborted By SUB\x1a");
+        let titles: Vec<String> = h
+            .take_events()
+            .into_iter()
+            .filter_map(|ev| match ev {
+                Event::Title(t) => Some(t),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(titles, vec!["Valid Title".to_string()]);
+
+        // Aborted Kitty APC sequence must not leave placements or emit a response
+        h.feed(b"\x1b_Ga=T,f=24,s=1,v=1,i=99;AAAA\x18");
+        assert!(h.take_pty_writes().is_empty());
+        assert!(!h.term.kitty_graphics.images.contains_key(&99));
+
+        // Valid Kitty APC sequence split across 3-byte chunks still decodes and places image
+        let valid_apc = b"\x1b_Ga=T,f=24,s=1,v=1,i=42;AAAA\x1b\\";
+        h.feed_chunked(valid_apc, 3);
+        assert_eq!(h.take_pty_writes(), vec!["\x1b_Gi=42;OK\x1b\\"]);
+        assert!(h.term.kitty_graphics.images.contains_key(&42));
+    }
+
+    #[test]
+    fn bulk_ascii_fast_path_wrapping_insert_line_drawing_and_rep() {
+        // 1. Multi-line wrapping, INSERT mode, DEC line drawing, and wide-char overwrite
+        let mut h_whole = HeadlessTerminal::new(12, 6);
+        let stream = concat!(
+            "0123456789abcdefghij\r\n",
+            "wide:🚀end",
+            "\rwide:XY!\r\n",
+            "ins-test\x1b[4D\x1b[4hABCD\x1b[4l\r\n",
+            "\x1b(0lqqqqk\x1b(B\r\n",
+            "X\x1b[5bY"
+        )
+        .as_bytes();
+        h_whole.feed(stream);
+
+        // Compare against 1-byte chunked feed (which exercises single-char print(c))
+        let mut h_char = HeadlessTerminal::new(12, 6);
+        h_char.feed_chunked(stream, 1);
+
+        for r in 0..6 {
+            assert_eq!(
+                h_whole.row_text_trimmed(r),
+                h_char.row_text_trimmed(r),
+                "row {r} mismatch between bulk ASCII and 1-byte feed"
+            );
+        }
+        assert_eq!(h_whole.row_text_trimmed(0), "0123456789ab");
+        assert_eq!(h_whole.row_text_trimmed(1), "cdefghij");
+        assert_eq!(h_whole.row_text_trimmed(2), "wide:XY!nd");
+        assert_eq!(h_whole.row_text_trimmed(3), "ins-ABCDtest");
+        assert_eq!(h_whole.row_text_trimmed(4), "┌────┐");
+        assert_eq!(h_whole.row_text_trimmed(5), "XXXXXXY");
+    }
+
+    #[test]
+    fn zerowidth_combining_cap_and_scrollback_shrink_to_fit() {
+        use crate::engine::ansi::Handler;
+        use crate::engine::term::cell::MAX_ZEROWIDTH_CHARS;
+
+        // 1. Combining mark cap per cell (64 max)
+        let mut h = HeadlessTerminal::new(20, 4);
+        let mut seq = String::from("a");
+        for _ in 0..200 {
+            seq.push('\u{0301}');
+        }
+        h.feed(seq.as_bytes());
+        let zw_len = h.term.grid()[Line(0)][Column(0)]
+            .zerowidth()
+            .map(|z| z.len())
+            .unwrap_or(0);
+        assert_eq!(zw_len, MAX_ZEROWIDTH_CHARS);
+
+        // 2. Scrollback clear shrinks storage capacity back down to visible lines
+        for i in 0..1500 {
+            h.feed(format!("line {i}\r\n").as_bytes());
+        }
+        assert!(h.term.grid().total_lines() > 1000);
+        h.term.clear_screen(ansi::ClearMode::Saved);
+        assert_eq!(h.term.grid().total_lines(), 4);
+    }
+
+    #[test]
+    fn render_state_deduplicates_kitty_and_selection_snapshots() {
+        let mut h = HeadlessTerminal::new(40, 10);
+        let mut state = RenderState::default();
+
+        h.feed(b"\x1b_Ga=T,f=24,s=1,v=1,i=7;AAAA\x1b\\");
+        state.update_from(&mut h.term, 1);
+        assert_eq!(state.kitty_generation, 1);
+        assert_eq!(state.kitty_placements.len(), 1);
+        assert_eq!(state.selection_text, None);
+
+        // Subsequent plain text turns do not bump kitty_generation
+        h.feed(b"hello world");
+        state.update_from(&mut h.term, 2);
+        assert_eq!(state.kitty_generation, 1);
+        assert_eq!(state.kitty_placements.len(), 1);
+    }
 }

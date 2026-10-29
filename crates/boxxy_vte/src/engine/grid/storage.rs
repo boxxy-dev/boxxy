@@ -124,6 +124,7 @@ impl<T> Storage<T> {
         self.rezero();
 
         self.inner.truncate(self.len);
+        self.inner.shrink_to_fit();
     }
 
     /// Dynamically grow the storage buffer at runtime.

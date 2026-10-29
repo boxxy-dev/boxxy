@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
 
 #[inline]
-fn decode_kitty_base64(input: &[u8]) -> Result<Vec<u8>, base64::DecodeError> {
+pub(crate) fn decode_kitty_base64(input: &[u8]) -> Result<Vec<u8>, base64::DecodeError> {
     #[cfg(any(
         target_arch = "x86_64",
         all(target_arch = "aarch64", target_feature = "neon")
@@ -161,6 +161,7 @@ pub struct KittyGraphics {
     pub pending_command: Option<Command>,
     pub max_image_bytes: usize,
     pub max_images: usize,
+    pub generation: u64,
 }
 
 pub type KittyResponse = (Option<String>, Option<(Option<u32>, Option<u32>, u32, u32)>);
@@ -177,6 +178,7 @@ impl KittyGraphics {
         range: &std::ops::Range<crate::engine::index::Line>,
         delta: i32,
     ) {
+        let mut rotated = false;
         for placement in &mut self.placements {
             let old_line = placement.point.line.0;
             let range_top = range.start.0;
@@ -186,6 +188,7 @@ impl KittyGraphics {
                 placement.point.line -= delta;
             }
             if old_line != placement.point.line.0 {
+                rotated = true;
                 log::trace!(
                     "KittyGraphics: Rotated placement {} from line {} to {}",
                     placement.image_id,
@@ -202,6 +205,18 @@ impl KittyGraphics {
 
         if self.placements.len() != old_len {
             self.reap_unused_images();
+            rotated = true;
+        }
+        if rotated {
+            self.generation = self.generation.wrapping_add(1);
+        }
+    }
+
+    #[inline]
+    pub fn clear_placements(&mut self) {
+        if !self.placements.is_empty() {
+            self.placements.clear();
+            self.generation = self.generation.wrapping_add(1);
         }
     }
 
@@ -213,6 +228,7 @@ impl KittyGraphics {
             pending_command: None,
             max_image_bytes: 256 * 1024 * 1024,
             max_images: 1024,
+            generation: 0,
         }
     }
 
@@ -559,6 +575,7 @@ impl KittyGraphics {
             }
 
             self.reap_unused_images();
+            self.generation = self.generation.wrapping_add(1);
 
             let response = if cmd.quiet != 1 && cmd.quiet != 2 {
                 Some("\x1b_G;OK\x1b\\".to_string())
@@ -676,6 +693,7 @@ impl KittyGraphics {
         }
 
         self.reap_unused_images();
+        self.generation = self.generation.wrapping_add(1);
 
         // Return a response if required
         let response = if let Some(err) = error_msg {

@@ -315,7 +315,8 @@ impl<T> Term<T> {
 
     /// Convert range between two points to a String.
     pub fn bounds_to_string(&self, start: Point, end: Point) -> String {
-        let mut res = String::new();
+        let line_count = (end.line.0 - start.line.0).max(0) as usize + 1;
+        let mut res = String::with_capacity(line_count * (self.columns() / 2).max(16));
 
         for line in (start.line.0..=end.line.0).map(Line::from) {
             let start_col = if line == start.line {
@@ -329,10 +330,13 @@ impl<T> Term<T> {
                 self.last_column()
             };
 
-            res += &self.line_to_string(line, start_col..end_col, line == end.line);
+            self.append_line_to_string(&mut res, line, start_col..end_col, line == end.line);
         }
 
-        res.strip_suffix('\n').map(str::to_owned).unwrap_or(res)
+        if res.ends_with('\n') {
+            res.pop();
+        }
+        res
     }
 
     /// Convert range between two points to a String, including semantic boundary tags.
@@ -420,11 +424,22 @@ impl<T> Term<T> {
     fn line_to_string(
         &self,
         line: Line,
-        mut cols: Range<Column>,
+        cols: Range<Column>,
         include_wrapped_wide: bool,
     ) -> String {
-        let mut text = String::new();
+        let mut text = String::with_capacity(cols.end.0.saturating_sub(cols.start.0) + 2);
+        self.append_line_to_string(&mut text, line, cols, include_wrapped_wide);
+        text
+    }
 
+    /// Append a single line in the grid directly into `text` without intermediate allocation.
+    fn append_line_to_string(
+        &self,
+        text: &mut String,
+        line: Line,
+        mut cols: Range<Column>,
+        include_wrapped_wide: bool,
+    ) {
         let grid_line = &self.grid[line];
         let line_length = cmp::min(grid_line.line_length(), cols.end + 1);
 
@@ -486,8 +501,6 @@ impl<T> Term<T> {
         {
             text.push(self.grid[line - 1i32][Column(0)].c);
         }
-
-        text
     }
 
     /// Resize terminal to new dimensions.

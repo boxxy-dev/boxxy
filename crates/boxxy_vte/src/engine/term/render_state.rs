@@ -23,6 +23,7 @@ pub struct RenderState {
     pub cursor_style: Option<CursorStyle>,
     pub selection_range: Option<SelectionRange>,
     pub selection_text: Option<String>,
+    pub kitty_generation: u64,
     pub kitty_placements: Vec<crate::engine::kitty::Placement>,
     pub kitty_images: HashMap<u32, Arc<crate::engine::kitty::KittyImage>>,
     pub cell_width: u16,
@@ -67,6 +68,7 @@ impl RenderState {
             cursor_style: term.cursor_style,
             selection_range,
             selection_text,
+            kitty_generation: term.kitty_graphics.generation,
             kitty_placements: term.kitty_graphics.placements.clone(),
             kitty_images: term.kitty_graphics.images.clone(),
             cell_width: term.cell_width,
@@ -104,11 +106,21 @@ impl RenderState {
         self.cursor_point = term.grid().cursor.point;
         self.cursor_style = term.cursor_style;
         self.selection_range = term.selection.as_ref().and_then(|s| s.to_range(term));
-        self.selection_text = term
-            .selection_to_string()
-            .filter(|s| !s.trim_matches(['\n', '\r']).is_empty());
-        self.kitty_placements.clone_from(&term.kitty_graphics.placements);
-        self.kitty_images.clone_from(&term.kitty_graphics.images);
+        self.selection_text = if self.selection_range.is_some() {
+            term.selection_to_string()
+                .filter(|s| !s.trim_matches(['\n', '\r']).is_empty())
+        } else {
+            None
+        };
+        if self.kitty_generation != term.kitty_graphics.generation {
+            self.kitty_generation = term.kitty_graphics.generation;
+            self.kitty_placements
+                .clone_from(&term.kitty_graphics.placements);
+            self.kitty_images.clone_from(&term.kitty_graphics.images);
+        } else if term.kitty_graphics.placements.is_empty() && !self.kitty_placements.is_empty() {
+            self.kitty_placements.clear();
+            self.kitty_images.clear();
+        }
         self.cell_width = term.cell_width;
         self.cell_height = term.cell_height;
         self.is_alt_screen = is_alt_screen;

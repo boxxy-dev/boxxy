@@ -126,6 +126,9 @@ impl ResetDiscriminant<Color> for Cell {
     }
 }
 
+/// Maximum number of combining/zero-width codepoints stored in a single cell.
+pub const MAX_ZEROWIDTH_CHARS: usize = 64;
+
 /// Dynamically allocated cell content.
 ///
 /// This storage is reserved for cell attributes which are rarely set. This allows reducing the
@@ -174,7 +177,9 @@ impl Cell {
     #[inline]
     pub fn push_zerowidth(&mut self, character: char) {
         let extra = self.extra.get_or_insert(Default::default());
-        Arc::make_mut(extra).zerowidth.push(character);
+        if extra.zerowidth.len() < MAX_ZEROWIDTH_CHARS {
+            Arc::make_mut(extra).zerowidth.push(character);
+        }
     }
 
     /// Remove all wide char data from a cell.

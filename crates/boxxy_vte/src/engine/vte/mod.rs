@@ -16,6 +16,10 @@ pub use params::{Params, ParamsIter};
 const MAX_INTERMEDIATES: usize = 2;
 const MAX_OSC_PARAMS: usize = 16;
 const MAX_OSC_RAW: usize = 1024;
+/// Upper bound on a single OSC payload (8 MiB) to prevent unbounded memory growth.
+const MAX_OSC_LEN: usize = 8 * 1024 * 1024;
+/// Upper bound on a single APC payload (65 MiB, e.g. Kitty graphics) to prevent unbounded memory growth.
+const MAX_APC_LEN: usize = 65 * 1024 * 1024;
 
 /// Parser for raw _VTE_ protocol which delegates actions to a [`Perform`]
 ///
@@ -74,6 +78,8 @@ impl<const OSC_RAW_BUF_SIZE: usize> Parser<OSC_RAW_BUF_SIZE> {
         while i != bytes.len() {
             match self.state {
                 State::Ground => i += self.advance_ground(performer, &bytes[i..]),
+                State::OscString => i += self.advance_osc_string_slice(performer, &bytes[i..]),
+                State::SosPmApcString => i += self.advance_apc_string_slice(performer, &bytes[i..]),
                 _ => {
                     // Inlining it results in worse codegen.
                     let byte = bytes[i];
@@ -109,6 +115,8 @@ impl<const OSC_RAW_BUF_SIZE: usize> Parser<OSC_RAW_BUF_SIZE> {
         while i != bytes.len() && !performer.terminated() {
             match self.state {
                 State::Ground => i += self.advance_ground(performer, &bytes[i..]),
+                State::OscString => i += self.advance_osc_string_slice(performer, &bytes[i..]),
+                State::SosPmApcString => i += self.advance_apc_string_slice(performer, &bytes[i..]),
                 _ => {
                     // Inlining it results in worse codegen.
                     let byte = bytes[i];
@@ -375,7 +383,9 @@ impl<const OSC_RAW_BUF_SIZE: usize> Parser<OSC_RAW_BUF_SIZE> {
                 self.state = State::Ground
             }
             0x18 | 0x1A => {
-                self.osc_end(performer, byte);
+                // CAN / SUB abort the OSC sequence without dispatching it.
+                self.osc_raw.clear();
+                self.osc_num_params = 0;
                 performer.execute(byte);
                 self.state = State::Ground
             }
@@ -389,12 +399,39 @@ impl<const OSC_RAW_BUF_SIZE: usize> Parser<OSC_RAW_BUF_SIZE> {
         }
     }
 
+    /// Bulk-advance `State::OscString` using SIMD `memchr3` scanning for `;`, `BEL`, and `ESC`.
+    #[inline]
+    fn advance_osc_string_slice<P: Perform>(&mut self, performer: &mut P, bytes: &[u8]) -> usize {
+        let delim = memchr::memchr3(b';', 0x07, 0x1B, bytes).unwrap_or(bytes.len());
+        let chunk = &bytes[..delim];
+
+        // Check for any C0 control byte (< 0x20) inside the span prior to the delimiter.
+        if let Some(c0_pos) = chunk.iter().position(|&b| b < 0x20) {
+            if c0_pos > 0 {
+                self.action_osc_put_slice(&chunk[..c0_pos]);
+            }
+            self.advance_osc_string(performer, bytes[c0_pos]);
+            return c0_pos + 1;
+        }
+
+        if !chunk.is_empty() {
+            self.action_osc_put_slice(chunk);
+        }
+
+        if delim < bytes.len() {
+            self.advance_osc_string(performer, bytes[delim]);
+            delim + 1
+        } else {
+            delim
+        }
+    }
+
     #[inline(always)]
     fn anywhere<P: Perform>(&mut self, performer: &mut P, byte: u8) {
         match byte {
             0x18 | 0x1A => {
                 if self.state == State::SosPmApcString {
-                    self.apc_end(performer);
+                    self.apc_raw.clear();
                 }
                 performer.execute(byte);
                 self.state = State::Ground
@@ -407,7 +444,7 @@ impl<const OSC_RAW_BUF_SIZE: usize> Parser<OSC_RAW_BUF_SIZE> {
                 self.state = State::Escape
             }
             _ => {
-                if self.state == State::SosPmApcString {
+                if self.state == State::SosPmApcString && self.apc_raw.len() < MAX_APC_LEN {
                     self.apc_raw.push(byte);
                 }
             }
@@ -517,7 +554,18 @@ impl<const OSC_RAW_BUF_SIZE: usize> Parser<OSC_RAW_BUF_SIZE> {
 
     #[inline(always)]
     fn action_osc_put(&mut self, byte: u8) {
-        self.osc_raw.push(byte);
+        if self.osc_raw.len() < MAX_OSC_LEN {
+            self.osc_raw.push(byte);
+        }
+    }
+
+    #[inline(always)]
+    fn action_osc_put_slice(&mut self, slice: &[u8]) {
+        let avail = MAX_OSC_LEN.saturating_sub(self.osc_raw.len());
+        if avail > 0 {
+            let take = slice.len().min(avail);
+            self.osc_raw.extend_from_slice(&slice[..take]);
+        }
     }
 
     fn osc_end<P: Perform>(&mut self, performer: &mut P, byte: u8) {
@@ -541,7 +589,8 @@ impl<const OSC_RAW_BUF_SIZE: usize> Parser<OSC_RAW_BUF_SIZE> {
     fn advance_apc_string<P: Perform>(&mut self, performer: &mut P, byte: u8) {
         match byte {
             0x18 | 0x1A => {
-                self.apc_end(performer);
+                // CAN / SUB abort the APC sequence without dispatching it.
+                self.apc_raw.clear();
                 performer.execute(byte);
                 self.state = State::Ground
             }
@@ -554,7 +603,33 @@ impl<const OSC_RAW_BUF_SIZE: usize> Parser<OSC_RAW_BUF_SIZE> {
                 self.apc_end(performer);
                 self.state = State::Ground
             }
-            _ => self.apc_raw.push(byte),
+            _ => {
+                if self.apc_raw.len() < MAX_APC_LEN {
+                    self.apc_raw.push(byte);
+                }
+            }
+        }
+    }
+
+    /// Bulk-advance `State::SosPmApcString` using SIMD `memchr` scanning for `ESC`, `ST` (`0x9C`), and `CAN`/`SUB`.
+    #[inline]
+    fn advance_apc_string_slice<P: Perform>(&mut self, performer: &mut P, bytes: &[u8]) -> usize {
+        let stop = memchr::memchr2(0x1B, 0x9C, bytes).unwrap_or(bytes.len());
+        let stop = memchr::memchr2(0x18, 0x1A, &bytes[..stop]).unwrap_or(stop);
+
+        if stop > 0 {
+            let avail = MAX_APC_LEN.saturating_sub(self.apc_raw.len());
+            if avail > 0 {
+                let take = stop.min(avail);
+                self.apc_raw.extend_from_slice(&bytes[..take]);
+            }
+        }
+
+        if stop < bytes.len() {
+            self.advance_apc_string(performer, bytes[stop]);
+            stop + 1
+        } else {
+            stop
         }
     }
 
@@ -715,10 +790,44 @@ impl<const OSC_RAW_BUF_SIZE: usize> Parser<OSC_RAW_BUF_SIZE> {
     /// Handle ground dispatch of print/execute for all characters in a string.
     #[inline]
     fn ground_dispatch<P: Perform>(performer: &mut P, text: &str) {
-        for c in text.chars() {
-            match c {
-                '\x00'..='\x1f' | '\u{80}'..='\u{9f}' => performer.execute(c as u8),
-                _ => performer.print(c),
+        let bytes = text.as_bytes();
+        let mut i = 0;
+        while i < bytes.len() {
+            // Fast-path contiguous runs of printable ASCII (0x20..=0x7E).
+            let run_start = i;
+            while i < bytes.len() && matches!(bytes[i], 0x20..=0x7E) {
+                i += 1;
+            }
+            let run_len = i - run_start;
+            if run_len >= 2 {
+                performer.print_ascii_slice(&bytes[run_start..i]);
+            } else if run_len == 1 {
+                performer.print(bytes[run_start] as char);
+            }
+
+            if i >= bytes.len() {
+                break;
+            }
+
+            let b = bytes[i];
+            if b < 0x20 {
+                performer.execute(b);
+                i += 1;
+            } else if b == 0x7F {
+                performer.print('\x7f');
+                i += 1;
+            } else {
+                let rest = unsafe { str::from_utf8_unchecked(&bytes[i..]) };
+                for c in rest.chars() {
+                    if c.is_ascii() {
+                        break;
+                    }
+                    i += c.len_utf8();
+                    match c {
+                        '\u{80}'..='\u{9f}' => performer.execute(c as u8),
+                        _ => performer.print(c),
+                    }
+                }
             }
         }
     }
@@ -756,6 +865,14 @@ enum State {
 pub trait Perform {
     /// Draw a character to the screen and update states.
     fn print(&mut self, _c: char) {}
+
+    /// Draw a slice of printable ASCII characters (`0x20..=0x7E`) to the screen.
+    #[inline]
+    fn print_ascii_slice(&mut self, bytes: &[u8]) {
+        for &b in bytes {
+            self.print(b as char);
+        }
+    }
 
     /// Execute a C0 or C1 control function.
     fn execute(&mut self, _byte: u8) {}

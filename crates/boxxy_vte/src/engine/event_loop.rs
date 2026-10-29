@@ -627,30 +627,41 @@ where
         let mut eof = false;
         let mut would_block = false;
 
+        let read_limit = buf.len().min(MAX_LOCKED_READ);
+
+        // Drain available PTY bytes into `buf` first so the child process can
+        // continue writing to the kernel PTY buffer while we parse the batch.
         loop {
-            // Read from the PTY.
-            match self.pty.reader().read(&mut buf[unprocessed..]) {
-                Ok(0) if unprocessed == 0 => {
-                    eof = true;
+            match self.pty.reader().read(&mut buf[unprocessed..read_limit]) {
+                Ok(0) => {
+                    if unprocessed == 0 {
+                        eof = true;
+                    }
                     break;
                 }
-                Ok(got) => unprocessed += got,
-                Err(err) => match err.kind() {
-                    ErrorKind::Interrupted => {
-                        if unprocessed == 0 {
-                            continue;
-                        }
+                Ok(got) => {
+                    unprocessed += got;
+                    if unprocessed >= read_limit {
+                        break;
                     }
+                }
+                Err(err) => match err.kind() {
+                    ErrorKind::Interrupted => continue,
                     ErrorKind::WouldBlock => {
                         would_block = true;
-                        if unprocessed == 0 {
-                            break;
-                        }
+                        break;
                     }
-                    _ => return Err(err),
+                    _ => {
+                        if unprocessed == 0 {
+                            return Err(err);
+                        }
+                        break;
+                    }
                 },
             }
+        }
 
+        if unprocessed > 0 {
             if let Some(writer) = &mut writer {
                 writer.write_all(&buf[..unprocessed]).unwrap();
             }
@@ -659,12 +670,7 @@ where
                 .parser
                 .advance(&mut self.terminal, &buf[..unprocessed]);
 
-            processed += unprocessed;
-            unprocessed = 0;
-
-            if would_block || processed >= MAX_LOCKED_READ {
-                break;
-            }
+            processed = unprocessed;
         }
 
         let needs_coalesced_render = state.parser.sync_bytes_count() < processed && processed > 0;

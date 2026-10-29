@@ -383,8 +383,9 @@ impl<T> Grid<T> {
 
     #[inline]
     pub fn clear_history(&mut self) {
-        // Explicitly purge all lines from history.
+        // Explicitly purge all lines from history and release backing capacity.
         self.raw.shrink_lines(self.history_size());
+        self.raw.truncate();
 
         // Reset display offset.
         self.display_offset = 0;

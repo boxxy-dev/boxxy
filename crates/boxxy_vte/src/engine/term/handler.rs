@@ -300,6 +300,90 @@ impl<T: EventListener> Handler for Term<T> {
     }
 
     #[inline]
+    fn input_ascii_slice(&mut self, bytes: &[u8]) {
+        if bytes.is_empty() {
+            return;
+        }
+
+        // Fall back to character-by-character processing when INSERT mode or a
+        // non-ASCII charset (such as DEC Special Character and Line Drawing) is active.
+        if self.mode.contains(TermMode::INSERT)
+            || self.grid.cursor.charsets[self.active_charset] != StandardCharset::Ascii
+        {
+            for &b in bytes {
+                self.input(b as char);
+            }
+            return;
+        }
+
+        let columns = self.columns();
+        if columns == 0 {
+            return;
+        }
+
+        let mut remaining = bytes;
+        while !remaining.is_empty() {
+            if self.grid.cursor.input_needs_wrap {
+                if !self.mode.contains(TermMode::LINE_WRAP) {
+                    let last_b = *remaining.last().unwrap();
+                    self.write_at_cursor(last_b as char);
+                    return;
+                }
+                self.wrapline();
+            }
+
+            let line = self.grid.cursor.point.line;
+            let start_col = self.grid.cursor.point.column.0;
+            let avail = columns.saturating_sub(start_col);
+            if avail == 0 {
+                break;
+            }
+
+            let chunk_len = remaining.len().min(avail);
+            let chunk = &remaining[..chunk_len];
+            remaining = &remaining[chunk_len..];
+
+            let end_col = start_col + chunk_len;
+            let fg = self.grid.cursor.template.fg;
+            let bg = self.grid.cursor.template.bg;
+            let flags = self.grid.cursor.template.flags;
+            let extra = self.grid.cursor.template.extra.clone();
+
+            let row_slice = &self.grid[line][Column(start_col)..Column(end_col)];
+            let has_wide_collision = row_slice
+                .iter()
+                .any(|c| c.flags.intersects(Flags::WIDE_CHAR | Flags::WIDE_CHAR_SPACER));
+
+            if has_wide_collision {
+                for &b in chunk {
+                    self.write_at_cursor(b as char);
+                    if self.grid.cursor.point.column.0 + 1 < columns {
+                        self.grid.cursor.point.column.0 += 1;
+                    } else {
+                        self.grid.cursor.input_needs_wrap = true;
+                    }
+                }
+            } else {
+                let row_mut = &mut self.grid[line][Column(start_col)..Column(end_col)];
+                for (cell, &b) in row_mut.iter_mut().zip(chunk.iter()) {
+                    cell.c = b as char;
+                    cell.fg = fg;
+                    cell.bg = bg;
+                    cell.flags = flags;
+                    cell.extra.clone_from(&extra);
+                }
+
+                if end_col < columns {
+                    self.grid.cursor.point.column = Column(end_col);
+                } else {
+                    self.grid.cursor.point.column = Column(columns - 1);
+                    self.grid.cursor.input_needs_wrap = true;
+                }
+            }
+        }
+    }
+
+    #[inline]
     fn decaln(&mut self) {
         trace!("Decalnning");
 
@@ -894,7 +978,7 @@ impl<T: EventListener> Handler for Term<T> {
             _ => return,
         };
 
-        if let Ok(bytes) = Base64.decode(base64)
+        if let Ok(bytes) = crate::engine::kitty::decode_kitty_base64(base64)
             && let Ok(text) = String::from_utf8(bytes)
         {
             self.event_proxy
@@ -982,7 +1066,7 @@ impl<T: EventListener> Handler for Term<T> {
                 }
 
                 self.selection = None;
-                self.kitty_graphics.placements.clear();
+                self.kitty_graphics.clear_placements();
             }
             ansi::ClearMode::Saved if self.history_size() > 0 => {
                 self.grid.clear_history();

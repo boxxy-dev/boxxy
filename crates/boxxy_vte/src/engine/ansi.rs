@@ -534,6 +534,14 @@ pub trait Handler {
     /// A character to be displayed.
     fn input(&mut self, _c: char) {}
 
+    /// A slice of printable ASCII characters (`0x20..=0x7E`) to be displayed.
+    #[inline]
+    fn input_ascii_slice(&mut self, bytes: &[u8]) {
+        for &b in bytes {
+            self.input(b as char);
+        }
+    }
+
     /// Set cursor to position.
     fn goto(&mut self, _line: i32, _col: usize) {}
 
@@ -1340,6 +1348,14 @@ where
     }
 
     #[inline]
+    fn print_ascii_slice(&mut self, bytes: &[u8]) {
+        if let Some(&last) = bytes.last() {
+            self.handler.input_ascii_slice(bytes);
+            self.state.preceding_char = Some(last as char);
+        }
+    }
+
+    #[inline]
     fn execute(&mut self, byte: u8) {
         match byte {
             C0::HT => self.handler.put_tab(1),
@@ -1721,8 +1737,19 @@ where
             ('B', []) | ('e', []) => handler.move_down(next_param_or(1) as usize),
             ('b', []) => {
                 if let Some(c) = self.state.preceding_char {
-                    for _ in 0..next_param_or(1) {
-                        handler.input(c);
+                    let count = (next_param_or(1) as usize).min(16_384);
+                    if matches!(c as u32, 0x20..=0x7E) && count >= 2 {
+                        let buf = [c as u8; 64];
+                        let mut rem = count;
+                        while rem > 0 {
+                            let step = rem.min(buf.len());
+                            handler.input_ascii_slice(&buf[..step]);
+                            rem -= step;
+                        }
+                    } else {
+                        for _ in 0..count {
+                            handler.input(c);
+                        }
                     }
                 } else {
                     debug!("tried to repeat with no preceding char");
