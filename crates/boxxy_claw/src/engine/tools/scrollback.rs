@@ -27,9 +27,7 @@ impl Tool for ReadScrollbackTool {
     type Output = ReadScrollbackOutput;
 
     fn description(&self) -> String {
-        "Read older lines from your terminal's scrollback history. \
-        IMPORTANT: The last ~100 lines are ALREADY provided in your `Terminal Snapshot` — do NOT call this tool with `offset_lines: 0` unless you need lines further back (`offset_lines >= 100`). \
-        Provides structured semantic blocks (PROMPT, COMMAND, OUTPUT)."
+        "Read older lines from the terminal's scrollback history as structured semantic blocks (PROMPT, COMMAND, OUTPUT). The bottom ~100 lines are already in `Terminal Snapshot`, so pass `offset_lines >= 100` to page further back."
             .to_string()
     }
 

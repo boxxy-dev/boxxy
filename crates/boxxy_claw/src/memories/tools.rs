@@ -37,11 +37,7 @@ impl Tool for MemoryStoreTool {
     type Error = MemoryToolError;
 
     fn description(&self) -> String {
-        "CRITICAL DIRECTIVE: You MUST use this tool immediately if the user explicitly asks you to 'remember', 'save', 'note', or store a fact, preference, command, path, or any other information. Do not just reply 'I will remember'. \
-        Store a fact, preference, or lesson in long-term memory. \
-        Use a concise snake_case key (e.g., 'system_update_command', 'favorite_editor', 'os_type'). \
-        If the key already exists, the memory will be updated (overwritten). \
-        IMPORTANT: Defaults to 'global' (applies across all directories and sessions) unless `project_path` is explicitly provided for project-specific facts."
+        "Store or update a durable fact, user preference, or command in long-term memory under a snake_case key (e.g., 'system_update_command', 'preferred_shell'). Call this immediately when the user asks you to remember, save, or note information. Defaults to 'global' scope unless `project_path` is specified for a project-specific fact."
             .to_string()
     }
 

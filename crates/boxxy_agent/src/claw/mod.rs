@@ -134,7 +134,25 @@ impl ClawEnvironment for ClawSubsystem {
     ) -> anyhow::Result<String> {
         ensure_path_allowed(&path)?;
 
-        let metadata = tokio::fs::metadata(&path).await?;
+        let metadata = match tokio::fs::metadata(&path).await {
+            Ok(m) => m,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                let suggestions = suggest_similar_files(&path).await;
+                if suggestions.is_empty() {
+                    return Err(anyhow::anyhow!("File not found: {path}"));
+                }
+                return Err(anyhow::anyhow!(
+                    "File not found: {path}\n\nDid you mean one of these?\n{}",
+                    suggestions.join("\n")
+                ));
+            }
+            Err(e) => return Err(e.into()),
+        };
+        if metadata.is_dir() {
+            return Err(anyhow::anyhow!(
+                "Path is a directory, not a file: {path} (use `list_directory` instead)"
+            ));
+        }
         if metadata.len() > READ_FILE_MAX_RAW_BYTES {
             return Err(anyhow::anyhow!(
                 "File is too large ({} bytes > 5 MB limit) to read into memory",
@@ -160,7 +178,7 @@ impl ClawEnvironment for ClawSubsystem {
             let total_lines = lines.len() as u32;
 
             if total_lines == 0 {
-                return Ok(String::new());
+                return Ok(format!("[Read file {path}, 0 lines]\n"));
             }
 
             let start = if start_line > 0 {
@@ -193,15 +211,20 @@ impl ClawEnvironment for ClawSubsystem {
                 );
             }
 
-            if start > 0 || end < total_lines {
-                result = format!(
-                    "[Showing lines {}-{} of {}]\n{}",
-                    start + 1,
-                    end,
-                    total_lines,
-                    result
-                );
+            if end < total_lines {
+                result.push_str(&format!(
+                    "\n[Output truncated. Continue reading with start_line: {}]",
+                    end + 1
+                ));
             }
+
+            result = format!(
+                "[Showing lines {}-{} of {}]\n{}",
+                start + 1,
+                end,
+                total_lines,
+                result
+            );
 
             Ok(result)
         }
@@ -209,6 +232,12 @@ impl ClawEnvironment for ClawSubsystem {
 
     async fn write_file(&self, path: String, content: String) -> anyhow::Result<()> {
         ensure_path_allowed(&path)?;
+
+        if let Some(parent) = std::path::Path::new(&path).parent()
+            && !parent.as_os_str().is_empty()
+        {
+            tokio::fs::create_dir_all(parent).await?;
+        }
 
         tokio::fs::write(&path, content).await?;
         Ok(())
@@ -388,6 +417,37 @@ impl ClawSubsystem {
     }
 }
 
+async fn suggest_similar_files(missing_path: &str) -> Vec<String> {
+    let p = std::path::Path::new(missing_path);
+    let Some(parent) = p.parent() else {
+        return Vec::new();
+    };
+    let Some(base) = p
+        .file_name()
+        .map(|n| n.to_string_lossy().to_lowercase())
+        .filter(|s| !s.is_empty())
+    else {
+        return Vec::new();
+    };
+
+    let Ok(mut dir) = tokio::fs::read_dir(parent).await else {
+        return Vec::new();
+    };
+
+    let mut suggestions = Vec::new();
+    while let Ok(Some(entry)) = dir.next_entry().await {
+        let candidate_os = entry.file_name();
+        let candidate_name = candidate_os.to_string_lossy();
+        let candidate_lower = candidate_name.to_lowercase();
+        if candidate_lower.contains(&base) || base.contains(&candidate_lower) {
+            suggestions.push(parent.join(&candidate_os).to_string_lossy().into_owned());
+        }
+    }
+    suggestions.sort();
+    suggestions.truncate(3);
+    suggestions
+}
+
 fn truncate_head_tail(s: &str, max_bytes: usize) -> String {
     if s.len() <= max_bytes {
         return s.to_string();
@@ -563,5 +623,53 @@ mod tests {
         tokio::time::sleep(std::time::Duration::from_millis(300)).await;
         let written = tokio::fs::read_to_string(&marker).await.unwrap_or_default();
         assert_eq!(written, "ok");
+    }
+
+    #[tokio::test]
+    async fn read_file_includes_header_and_suggests_similar_on_not_found_and_write_creates_parents() {
+        let sub = ClawSubsystem::new(AgentState::new());
+        let tmp = tempfile::tempdir().unwrap();
+        let nested_file = tmp.path().join("deep/nested/config_loader.rs");
+
+        // 1. write_file auto-creates missing parent directories
+        ClawEnvironment::write_file(
+            &sub,
+            nested_file.to_string_lossy().into_owned(),
+            "line1\nline2\nline3\n".to_string(),
+        )
+        .await
+        .expect("write_file should auto-create parent dirs");
+
+        // 2. read_file always includes [Showing lines X-Y of Z] header
+        let read_all = ClawEnvironment::read_file(
+            &sub,
+            nested_file.to_string_lossy().into_owned(),
+            1,
+            500,
+        )
+        .await
+        .unwrap();
+        assert!(read_all.starts_with("[Showing lines 1-3 of 3]\nline1\nline2\nline3"));
+
+        // 3. Truncated read includes continuation hint
+        let read_page = ClawEnvironment::read_file(
+            &sub,
+            nested_file.to_string_lossy().into_owned(),
+            1,
+            2,
+        )
+        .await
+        .unwrap();
+        assert!(read_page.contains("[Showing lines 1-2 of 3]"));
+        assert!(read_page.contains("[Output truncated. Continue reading with start_line: 3]"));
+
+        // 4. Missing file suggests similar sibling filename
+        let missing = tmp.path().join("deep/nested/config_loader");
+        let err = ClawEnvironment::read_file(&sub, missing.to_string_lossy().into_owned(), 1, 500)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("Did you mean one of these?"));
+        assert!(err.contains("config_loader.rs"));
     }
 }

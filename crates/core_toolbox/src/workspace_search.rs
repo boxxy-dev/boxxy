@@ -120,6 +120,7 @@ pub struct GrepSearchArgs {
     pub pattern: String,
     pub path: Option<String>,
     pub include: Option<String>,
+    pub literal: Option<bool>,
     pub case_sensitive: Option<bool>,
 }
 
@@ -151,7 +152,7 @@ impl Tool for GrepSearchTool {
     type Output = GrepSearchOutput;
 
     fn description(&self) -> String {
-        "Search file contents using a regular expression across a file or directory (default: current directory). Automatically skips binary files and build/VCS directories (.git, target, node_modules). Returns matching file paths, 1-based line numbers, and line previews (capped at 100 matches). PREFER this tool over running `grep` or `rg` via shell tools.".to_string()
+        "Search file contents using a regular expression or literal text across a file or directory (default: current directory). Automatically skips binary files and build/VCS directories (.git, target, node_modules). Returns matching file paths, 1-based line numbers, and line previews (capped at 100 matches). Prefer this tool over running `grep` or `rg` via shell tools.".to_string()
     }
 
     fn parameters(&self) -> serde_json::Value {
@@ -160,7 +161,7 @@ impl Tool for GrepSearchTool {
             "properties": {
                 "pattern": {
                     "type": "string",
-                    "description": "Regular expression pattern to search for in file contents."
+                    "description": "Regular expression or literal text to search for in file contents."
                 },
                 "path": {
                     "type": "string",
@@ -170,9 +171,13 @@ impl Tool for GrepSearchTool {
                     "type": "string",
                     "description": "Optional file glob filter (e.g. '*.rs', '*.toml', '*.ui')."
                 },
+                "literal": {
+                    "type": "boolean",
+                    "description": "Optional: Treat `pattern` as exact literal text instead of a regular expression (default: false)."
+                },
                 "case_sensitive": {
                     "type": "boolean",
-                    "description": "Optional: Whether the regex search is case-sensitive (default: true)."
+                    "description": "Optional: Whether the search is case-sensitive (default: true)."
                 }
             },
             "required": ["pattern"]
@@ -197,10 +202,17 @@ impl Tool for GrepSearchTool {
         let target_str = resolve_path(&base_dir, args.path.as_deref().unwrap_or(""));
         let pattern = args.pattern;
         let include = args.include;
+        let literal = args.literal.unwrap_or(false);
         let case_sensitive = args.case_sensitive.unwrap_or(true);
 
         let output = tokio::task::spawn_blocking(move || {
-            run_grep_search(&target_str, &pattern, include.as_deref(), case_sensitive)
+            run_grep_search(
+                &target_str,
+                &pattern,
+                include.as_deref(),
+                literal,
+                case_sensitive,
+            )
         })
         .await
         .map_err(|e| std::io::Error::other(format!("Grep search task panicked: {e}")))??;
@@ -371,6 +383,7 @@ fn run_grep_search(
     target_str: &str,
     pattern: &str,
     include: Option<&str>,
+    literal: bool,
     case_sensitive: bool,
 ) -> Result<GrepSearchOutput, std::io::Error> {
     let root = Path::new(if target_str.is_empty() { "." } else { target_str });
@@ -381,10 +394,29 @@ fn run_grep_search(
         ));
     }
 
-    let regex = RegexBuilder::new(pattern)
+    let effective_pattern = if literal {
+        regex::escape(pattern)
+    } else {
+        pattern.to_string()
+    };
+
+    // If `literal` is false and the model passed unescaped code syntax (e.g. `fn foo(a: &str)`
+    // or `vec![1]`), automatically fall back to literal matching so the search succeeds.
+    let regex = match RegexBuilder::new(&effective_pattern)
         .case_insensitive(!case_sensitive)
         .build()
-        .map_err(|e| std::io::Error::other(format!("Invalid regex pattern '{pattern}': {e}")))?;
+    {
+        Ok(re) => re,
+        Err(_) if !literal => RegexBuilder::new(&regex::escape(pattern))
+            .case_insensitive(!case_sensitive)
+            .build()
+            .map_err(|e| std::io::Error::other(format!("Invalid regex pattern '{pattern}': {e}")))?,
+        Err(e) => {
+            return Err(std::io::Error::other(format!(
+                "Invalid regex pattern '{pattern}': {e}"
+            )));
+        }
+    };
 
     let include_matcher = match include.map(str::trim).filter(|s| !s.is_empty()) {
         Some(glob) => Some(glob_to_regex(glob)?),
@@ -569,6 +601,7 @@ mod tests {
                     pattern: "magic".to_string(),
                     path: None,
                     include: Some("*.rs".to_string()),
+                    literal: None,
                     case_sensitive: Some(false),
                 },
             )
@@ -579,5 +612,21 @@ mod tests {
         assert_eq!(grep_out.matches.len(), 2);
         assert!(grep_out.matches.iter().any(|m| m.line_number == 1 && m.line_text.contains("compute_magic_value")));
         assert!(grep_out.matches.iter().any(|m| m.line_number == 1 && m.line_text.contains("MAGIC_TOKEN")));
+
+        // Unescaped invalid regex (unclosed paren) should auto-fallback to literal search
+        let literal_fallback_out = grep_tool
+            .call(
+                &mut ctx,
+                GrepSearchArgs {
+                    pattern: "compute_magic_value(".to_string(),
+                    path: None,
+                    include: Some("*.rs".to_string()),
+                    literal: None,
+                    case_sensitive: Some(true),
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(literal_fallback_out.total_found, 1);
     }
 }

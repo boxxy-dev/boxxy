@@ -17,6 +17,8 @@ pub struct FileReadArgs {
 #[derive(Serialize)]
 pub struct FileReadOutput {
     pub content: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 pub struct FileReadTool {
@@ -77,19 +79,23 @@ impl Tool for FileReadTool {
         let end_line = args
             .end_line
             .unwrap_or_else(|| start_line.saturating_add(DEFAULT_MAX_LINES - 1));
-        match self.env.read_file(path, start_line, end_line).await {
-            Ok(content) => {
-                let out = FileReadOutput { content };
-                self.approval
-                    .report_tool_result(
-                        Self::NAME.to_string(),
-                        serde_json::to_string(&out).unwrap_or_default(),
-                    )
-                    .await;
-                Ok(out)
-            }
-            Err(e) => Err(std::io::Error::other(format!("Environment Error: {e}"))),
-        }
+        let out = match self.env.read_file(path, start_line, end_line).await {
+            Ok(content) => FileReadOutput {
+                content,
+                error: None,
+            },
+            Err(e) => FileReadOutput {
+                content: String::new(),
+                error: Some(e.to_string()),
+            },
+        };
+        self.approval
+            .report_tool_result(
+                Self::NAME.to_string(),
+                serde_json::to_string(&out).unwrap_or_default(),
+            )
+            .await;
+        Ok(out)
     }
 }
 
@@ -113,6 +119,8 @@ pub struct ListDirectoryOutput {
     pub total_entries: usize,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub truncated: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 pub struct ListDirectoryTool {
@@ -160,7 +168,7 @@ impl Tool for ListDirectoryTool {
             .await
             .unwrap_or_else(|| self.current_dir.clone());
         let path = resolve_path(&base_dir, &args.path.unwrap_or_default());
-        match self.env.list_directory(path).await {
+        let output = match self.env.list_directory(path).await {
             Ok(mut entries) => {
                 entries.sort_by(|a, b| {
                     b.1.cmp(&a.1)
@@ -168,7 +176,7 @@ impl Tool for ListDirectoryTool {
                 });
                 let total_entries = entries.len();
                 let truncated = total_entries > MAX_DIR_ENTRIES;
-                let output = ListDirectoryOutput {
+                ListDirectoryOutput {
                     entries: entries
                         .into_iter()
                         .take(MAX_DIR_ENTRIES)
@@ -176,17 +184,23 @@ impl Tool for ListDirectoryTool {
                         .collect(),
                     total_entries,
                     truncated,
-                };
-                self.approval
-                    .report_tool_result(
-                        Self::NAME.to_string(),
-                        serde_json::to_string(&output).unwrap_or_default(),
-                    )
-                    .await;
-                Ok(output)
+                    error: None,
+                }
             }
-            Err(e) => Err(std::io::Error::other(format!("Environment Error: {e}"))),
-        }
+            Err(e) => ListDirectoryOutput {
+                entries: Vec::new(),
+                total_entries: 0,
+                truncated: false,
+                error: Some(e.to_string()),
+            },
+        };
+        self.approval
+            .report_tool_result(
+                Self::NAME.to_string(),
+                serde_json::to_string(&output).unwrap_or_default(),
+            )
+            .await;
+        Ok(output)
     }
 }
 
@@ -222,7 +236,7 @@ impl Tool for FileWriteTool {
     type Output = FileWriteOutput;
 
     fn description(&self) -> String {
-        "Write content to a file on the host system. This will overwrite any existing content. Always prompts the user for approval.".to_string()
+        "Write content to a file on the host system, overwriting if it already exists. Missing parent directories are created automatically (do not run `mkdir -p` beforehand). Always prompts the user for approval. For partial changes to existing files, use `replace_in_file` instead.".to_string()
     }
 
     fn parameters(&self) -> serde_json::Value {
@@ -355,7 +369,7 @@ impl Tool for ReplaceInFileTool {
     type Output = ReplaceInFileOutput;
 
     fn description(&self) -> String {
-        "Surgically edit an existing file by replacing exact text segments. PREFER this tool over `file_write` whenever modifying existing files — it is much faster and avoids rewriting the entire file. For a single change, pass `old_string` and `new_string`. For multiple non-contiguous changes in the same file, pass all of them in `edits` so the user only gets ONE approval prompt. Returns `replacements` and `total_lines`.".to_string()
+        "Surgically edit an existing file by replacing exact text segments. Prefer this over `file_write` when modifying existing files. Pass `old_string` and `new_string` for a single change, or pass `edits` to apply multiple non-contiguous changes in one approval prompt.".to_string()
     }
 
     fn parameters(&self) -> serde_json::Value {
@@ -499,7 +513,8 @@ impl Tool for ReplaceInFileTool {
                 edit.new_string.clone()
             };
 
-            let match_count = working.matches(&target_old).count();
+            let matches = find_match_ranges(&working, &target_old);
+            let match_count = matches.len();
             if match_count == 0 {
                 let out = ReplaceInFileOutput {
                     success: false,
@@ -540,10 +555,13 @@ impl Tool for ReplaceInFileTool {
             }
 
             if replace_all {
-                working = working.replace(&target_old, &target_new);
+                for (start, end) in matches.into_iter().rev() {
+                    working.replace_range(start..end, &target_new);
+                }
                 total_replacements += match_count;
             } else {
-                working = working.replacen(&target_old, &target_new, 1);
+                let (start, end) = matches[0];
+                working.replace_range(start..end, &target_new);
                 total_replacements += 1;
             }
         }
@@ -599,6 +617,140 @@ impl Tool for ReplaceInFileTool {
             Ok(out)
         }
     }
+}
+
+// --- 3-TIER EDIT MATCHING (OPENCODE STYLE) ---
+
+/// Normalizes typographic quotes, dashes, and non-breaking spaces to ASCII equivalents.
+fn normalize_for_match(s: &str) -> String {
+    s.chars()
+        .map(|c| match c {
+            '\u{2018}' | '\u{2019}' | '\u{201A}' | '\u{201B}' => '\'',
+            '\u{201C}' | '\u{201D}' | '\u{201E}' | '\u{201F}' => '"',
+            '\u{2010}' | '\u{2011}' | '\u{2012}' | '\u{2013}' | '\u{2014}' | '\u{2015}'
+            | '\u{2212}' => '-',
+            '\u{00A0}' | '\u{2002}'..='\u{200A}' | '\u{202F}' | '\u{205F}' | '\u{3000}' => ' ',
+            other => other,
+        })
+        .collect()
+}
+
+/// Finds non-overlapping byte ranges `(start, end)` in `content` matching `search`
+/// using a 3-tier fallback strategy:
+/// 1. Exact byte match.
+/// 2. Line-by-line match ignoring trailing horizontal whitespace on each line.
+/// 3. Line-by-line match ignoring both trailing whitespace and typographic quote/dash/space variants.
+fn find_match_ranges(content: &str, search: &str) -> Vec<(usize, usize)> {
+    let exact: Vec<(usize, usize)> = content
+        .match_indices(search)
+        .map(|(start, m)| (start, start + m.len()))
+        .collect();
+    if !exact.is_empty() {
+        return exact;
+    }
+
+    let trailing = find_line_occurrences(content, search, false);
+    if !trailing.is_empty() {
+        return trailing;
+    }
+
+    find_line_occurrences(content, search, true)
+}
+
+fn find_line_occurrences(
+    content: &str,
+    search: &str,
+    normalize_typography: bool,
+) -> Vec<(usize, usize)> {
+    struct LineSpan<'a> {
+        start: usize,
+        end_with_newline: usize,
+        content_end: usize,
+        text: &'a str,
+        has_newline: bool,
+    }
+
+    let trailing_newline = search.ends_with('\n');
+    let search_trimmed = if trailing_newline {
+        search
+            .strip_suffix("\r\n")
+            .or_else(|| search.strip_suffix('\n'))
+            .unwrap_or(search)
+    } else {
+        search
+    };
+    let expected: Vec<&str> = search_trimmed
+        .split('\n')
+        .map(|l| l.strip_suffix('\r').unwrap_or(l))
+        .collect();
+    if expected.is_empty() {
+        return Vec::new();
+    }
+
+    let mut lines = Vec::new();
+    let mut offset = 0;
+    for raw_line in content.split_inclusive('\n') {
+        let start = offset;
+        let end_with_newline = offset + raw_line.len();
+        offset = end_with_newline;
+        let without_lf = raw_line.strip_suffix('\n').unwrap_or(raw_line);
+        let text = without_lf.strip_suffix('\r').unwrap_or(without_lf);
+        let content_end = start + text.len();
+        lines.push(LineSpan {
+            start,
+            end_with_newline,
+            content_end,
+            text,
+            has_newline: raw_line.ends_with('\n'),
+        });
+    }
+    if offset < content.len() {
+        let rem = &content[offset..];
+        let text = rem.strip_suffix('\r').unwrap_or(rem);
+        lines.push(LineSpan {
+            start: offset,
+            end_with_newline: content.len(),
+            content_end: offset + text.len(),
+            text,
+            has_newline: false,
+        });
+    }
+
+    let mut matches: Vec<(usize, usize)> = Vec::new();
+    if lines.len() < expected.len() {
+        return matches;
+    }
+
+    for i in 0..=(lines.len() - expected.len()) {
+        let window = &lines[i..i + expected.len()];
+        let all_eq = window.iter().zip(expected.iter()).all(|(actual, exp)| {
+            let a_trim = actual.text.trim_end_matches([' ', '\t']);
+            let e_trim = exp.trim_end_matches([' ', '\t']);
+            if normalize_typography {
+                normalize_for_match(a_trim) == normalize_for_match(e_trim)
+            } else {
+                a_trim == e_trim
+            }
+        });
+        if !all_eq {
+            continue;
+        }
+        let last = &window[window.len() - 1];
+        if trailing_newline && !last.has_newline {
+            continue;
+        }
+        let start = window[0].start;
+        let end = if trailing_newline {
+            last.end_with_newline
+        } else {
+            last.content_end
+        };
+        if matches.last().is_none_or(|&(_, prev_end)| start >= prev_end) {
+            matches.push((start, end));
+        }
+    }
+
+    matches
 }
 
 // --- FILE DELETE ---
@@ -1080,6 +1232,32 @@ mod tests {
         assert_eq!(
             env.written_content.lock().unwrap().as_deref(),
             Some("fn a() {\r\n    let x = 10;\r\n    let y = 20;\r\n}\r\n")
+        );
+
+        // 4. Tier 2 & Tier 3 fallback: trailing whitespace differences and typographic quotes/dashes
+        *env.file_content.lock().unwrap() =
+            "fn greet() {   \n    let msg = \u{201C}hello \u{2014} world\u{201D};  \n}\n"
+                .to_string();
+        let fuzzy_ok = tool
+            .call(
+                &mut ctx,
+                ReplaceInFileArgs {
+                    path: "main.rs".to_string(),
+                    old_string: Some(
+                        "fn greet() {\n    let msg = \"hello - world\";\n}".to_string(),
+                    ),
+                    new_string: Some("fn greet() {\n    let msg = \"hi\";\n}".to_string()),
+                    replace_all: None,
+                    edits: None,
+                },
+            )
+            .await
+            .unwrap();
+        assert!(fuzzy_ok.success);
+        assert_eq!(fuzzy_ok.replacements, 1);
+        assert_eq!(
+            env.written_content.lock().unwrap().as_deref(),
+            Some("fn greet() {\n    let msg = \"hi\";\n}\n")
         );
     }
 

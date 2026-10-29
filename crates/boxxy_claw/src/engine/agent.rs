@@ -303,10 +303,6 @@ pub async fn create_claw_agent(
             state: state.clone(),
             approval: approval_handler.clone(),
         })
-        .tool(ListProcessesTool {
-            env: (*env).clone(),
-            approval: approval_handler.clone(),
-        })
         .tool(ScheduleTaskTool {
             state: state.clone(),
             tx_ui: tx_ui.clone(),
@@ -413,10 +409,15 @@ pub async fn create_claw_agent(
     }
 
     if config.system_tools_enabled {
-        tool_server = tool_server.tool(GetSystemInfoTool {
-            env: (*env).clone(),
-            approval: approval_handler.clone(),
-        });
+        tool_server = tool_server
+            .tool(GetSystemInfoTool {
+                env: (*env).clone(),
+                approval: approval_handler.clone(),
+            })
+            .tool(ListProcessesTool {
+                env: (*env).clone(),
+                approval: approval_handler.clone(),
+            });
     }
 
     if config.dangerous_tools_enabled {
@@ -506,27 +507,19 @@ pub async fn create_claw_agent(
         ));
     }
 
-    // --- Inject Location & Time Context ---
-    // We only inject OS context if it's currently globally enabled in boxxy_preferences::Settings.
-    // We could add this to AgentConfig, but let's query the live settings for now
+    // --- Inject Location Context (Static Across Turns for Prefix Caching) ---
+    // Exact local time is injected per-turn in `## CURRENT TURN CONTEXT` in the user message,
+    // keeping `final_preamble` byte-stable across turns and panes.
     let settings = boxxy_preferences::Settings::load();
     if settings.enable_os_context {
-        // Trigger fetch (it's cached)
         boxxy_sys_utils::fetch_location_context().await;
 
-        let now = chrono::Local::now();
-        let time_str = now.format("%Y-%m-%d %H:%M:%S").to_string();
-
-        let mut context_block = format!("\n\n[ENVIRONMENT CONTEXT]\nTime: {}", time_str);
-
         if let Some(loc) = boxxy_sys_utils::get_location_context() {
-            context_block.push_str(&format!(
-                "\nLocation: {}, {}\nTimezone: {}",
+            final_preamble.push_str(&format!(
+                "\n\n[ENVIRONMENT CONTEXT]\nLocation: {}, {}\nTimezone: {}",
                 loc.city, loc.country, loc.timezone
             ));
         }
-
-        final_preamble.push_str(&context_block);
     } else {
         let policy = load_prompt_fallback(
             "/dev/boxxy/BoxxyTerminal/prompts/privacy_policy.md",
