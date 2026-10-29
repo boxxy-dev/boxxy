@@ -1,5 +1,5 @@
 use crate::core::state::AgentState;
-use boxxy_claw_protocol::ClawEnvironment;
+use boxxy_claw_protocol::{ClawEnvironment, ProcessSample};
 use std::process::Stdio;
 use tokio::process::Command;
 use zbus::fdo;
@@ -7,16 +7,22 @@ use zbus::interface;
 
 pub mod notifier;
 pub mod registry;
+pub mod sysinfo_sampler;
 
 pub use registry::CharacterRegistry;
+pub use sysinfo_sampler::SystemSampler;
 
 pub struct ClawSubsystem {
     state: AgentState,
+    sampler: SystemSampler,
 }
 
 impl ClawSubsystem {
     pub fn new(state: AgentState) -> Self {
-        Self { state }
+        Self {
+            state,
+            sampler: SystemSampler::new(),
+        }
     }
 }
 
@@ -239,80 +245,13 @@ impl ClawEnvironment for ClawSubsystem {
     }
 
     async fn get_system_info(&self) -> anyhow::Result<String> {
-        tokio::task::spawn_blocking(|| {
-            use sysinfo::{CpuRefreshKind, Disks, MemoryRefreshKind, RefreshKind, System};
-            let mut sys = System::new_with_specifics(
-                RefreshKind::nothing()
-                    .with_cpu(CpuRefreshKind::everything())
-                    .with_memory(MemoryRefreshKind::everything()),
-            );
-            sys.refresh_cpu_all();
-            sys.refresh_memory();
-
-            let disks = Disks::new_with_refreshed_list();
-
-            let info = serde_json::json!({
-                "os": {
-                    "name": System::name(),
-                    "version": System::os_version(),
-                    "kernel": System::kernel_version(),
-                    "hostname": System::host_name(),
-                },
-                "memory": {
-                    "total": sys.total_memory(),
-                    "used": sys.used_memory(),
-                    "free": sys.free_memory(),
-                    "swap_total": sys.total_swap(),
-                    "swap_used": sys.used_swap(),
-                },
-                "cpu": {
-                    "count": sys.cpus().len(),
-                    "brand": sys.cpus().first().map(|c| c.brand().to_string()).unwrap_or_else(|| "Unknown".to_string()),
-                    "load": sys.global_cpu_usage(),
-                },
-                "disks": disks.iter().map(|d| {
-                    serde_json::json!({
-                        "name": d.name().to_string_lossy(),
-                        "mount_point": d.mount_point().to_string_lossy(),
-                        "total_space": d.total_space(),
-                        "available_space": d.available_space(),
-                    })
-                }).collect::<Vec<_>>(),
-            });
-
-            Ok(info.to_string())
-        })
-        .await?
+        let sampler = self.sampler.clone();
+        tokio::task::spawn_blocking(move || sampler.collect_system_info_json()).await?
     }
 
-    async fn list_processes(&self) -> anyhow::Result<Vec<(u32, String, f64, u64, u64, u64)>> {
-        tokio::task::spawn_blocking(|| {
-            use sysinfo::{ProcessRefreshKind, RefreshKind, System};
-            let sys = System::new_with_specifics(
-                RefreshKind::nothing().with_processes(
-                    ProcessRefreshKind::nothing()
-                        .with_cpu()
-                        .with_memory()
-                        .with_disk_usage(),
-                ),
-            );
-
-            let mut processes = Vec::with_capacity(sys.processes().len());
-            for (pid, process) in sys.processes() {
-                let disk_usage = process.disk_usage();
-                processes.push((
-                    pid.as_u32(),
-                    process.name().to_string_lossy().to_string(),
-                    f64::from(process.cpu_usage()),
-                    process.memory(),
-                    disk_usage.total_read_bytes,
-                    disk_usage.total_written_bytes,
-                ));
-            }
-
-            Ok(processes)
-        })
-        .await?
+    async fn list_processes(&self) -> anyhow::Result<Vec<ProcessSample>> {
+        let sampler = self.sampler.clone();
+        tokio::task::spawn_blocking(move || sampler.collect_processes()).await?
     }
 
     async fn kill_process(&self, pid: u32, signal: i32) -> anyhow::Result<()> {
@@ -423,10 +362,11 @@ impl ClawSubsystem {
             .map_err(|e| fdo::Error::Failed(e.to_string()))
     }
 
-    async fn list_processes(&self) -> fdo::Result<Vec<(u32, String, f64, u64, u64, u64)>> {
-        ClawEnvironment::list_processes(self)
+    async fn list_processes(&self) -> fdo::Result<String> {
+        let processes = ClawEnvironment::list_processes(self)
             .await
-            .map_err(|e| fdo::Error::Failed(e.to_string()))
+            .map_err(|e| fdo::Error::Failed(e.to_string()))?;
+        serde_json::to_string(&processes).map_err(|e| fdo::Error::Failed(e.to_string()))
     }
 
     async fn kill_process(&self, pid: u32, signal: i32) -> fdo::Result<()> {

@@ -73,9 +73,9 @@ fn main() {
                                     .to_string()
                             })
                     })
-                    .unwrap_or_else(|| System::name().unwrap_or_else(|| "Unknown".to_string()))
+                    .unwrap_or_else(|| System::name().unwrap_or_else(|_| "Unknown".to_string()))
             } else {
-                System::name().unwrap_or_else(|| "Unknown".to_string())
+                System::name().unwrap_or_else(|_| "Unknown".to_string())
             };
             let arch = System::cpu_arch();
             let version = env!("CARGO_PKG_VERSION");

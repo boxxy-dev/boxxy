@@ -360,7 +360,7 @@ impl Tool for SysShellTool {
     type Output = SysShellOutput;
 
     fn description(&self) -> String {
-        "Execute non-interactive bash commands on the host system (30s timeout) to inspect, build, or test (e.g. `git status`, `git diff`, `cargo check`). Prefer structured tools (`file_read`, `replace_in_file`, `grep_search`, `glob_search`, `list_processes`) whenever possible. DO NOT use interactive commands (like `top` without `-b`, `less`, `vim`) or long-running servers (use `run_background_command` instead).".to_string()
+        "Execute non-interactive bash commands on the host system (30s timeout) to inspect, build, or test (e.g. `git status`, `git diff`, `cargo check`). Prefer structured tools (`file_read`, `replace_in_file`, `grep_search`, `glob_search`, `list_processes`, `get_system_info`) when possible, and only resort to `sys_shell_exec` when no structured tool provides the needed detail. DO NOT use interactive commands (like `top` without `-b`, `less`, `vim`) or long-running servers (use `run_background_command` instead).".to_string()
     }
 
     fn parameters(&self) -> serde_json::Value {
@@ -450,12 +450,6 @@ mod tests {
         }
         async fn delete_file(&self, _: String) -> anyhow::Result<()> {
             Ok(())
-        }
-        async fn get_system_info(&self) -> anyhow::Result<String> {
-            Ok("{}".to_string())
-        }
-        async fn list_processes(&self) -> anyhow::Result<Vec<(u32, String, f64, u64, u64, u64)>> {
-            Ok(vec![])
         }
         async fn kill_process(&self, _: u32, _: i32) -> anyhow::Result<()> {
             Ok(())

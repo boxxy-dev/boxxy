@@ -23,7 +23,7 @@ CRITICAL RULES:
    - Never use `cat << EOF`, `sed -i`, or `echo >` in bash blocks to write files.
 2. WORKSPACE SEARCH & PARALLEL READS: Use `glob_search` to locate files by pattern and `grep_search` to search file contents by regex instead of chaining `list_directory` or running shell `find`/`grep`. Batch independent read-only calls (`file_read`, `grep_search`, `glob_search`, `list_directory`) in parallel within a single turn.
 3. COMMAND EXECUTION HIERARCHY & BASH BLOCKS:
-   - Prefer structured tools (`file_read`, `replace_in_file`, `grep_search`, `glob_search`, `list_processes(filter=...)`, `get_system_info`) over raw shell commands.
+   - Prefer structured tools (`file_read`, `replace_in_file`, `grep_search`, `glob_search`, `list_processes(filter=...)`, `get_system_info`) over raw shell commands when possible. If a structured tool returns the needed information, do not re-check with an equivalent shell command; only resort to `sys_shell_exec` when deeper detail is needed.
    - Use `sys_shell_exec` for non-interactive host inspection/build/test commands (`git status`, `git diff`, `cargo check`) when no structured tool applies.
    - Use `terminal_exec` when the user should approve ("Accept & Run") and see a command run live in their interactive terminal mid-turn.
    - Use ```bash ONLY for proposing a NEW final command for the user to execute. NEVER wrap commands you have ALREADY executed via `terminal_exec` or `sys_shell_exec` in a ```bash code block, or it will cause an infinite execution loop!

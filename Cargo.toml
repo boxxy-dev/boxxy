@@ -120,7 +120,7 @@ getrandom = "0.4.3"
 rand = "0.10.3"
 toml = "1.1.8"
 boxxy-bookmarks = { path = "crates/boxxy_bookmarks" }
-sysinfo = "0.39.6"
+sysinfo = { version = "0.40.0", default-features = false, features = ["system", "disk", "component", "gpu"] }
 arboard = "3.7.0"
 pulldown-cmark = "0.13.5"
 syntect = "5.3.0"

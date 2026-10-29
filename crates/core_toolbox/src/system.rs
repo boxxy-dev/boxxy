@@ -17,8 +17,14 @@ pub struct GetSystemInfoArgs {}
 pub struct OsInfo {
     pub name: Option<String>,
     pub version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub long_version: Option<String>,
     pub kernel: Option<String>,
     pub hostname: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub arch: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uptime_secs: Option<u64>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -26,23 +32,75 @@ pub struct MemoryInfo {
     pub total: u64,
     pub used: u64,
     pub free: u64,
+    #[serde(default)]
+    pub available: u64,
     pub swap_total: u64,
     pub swap_used: u64,
 }
 
 #[derive(Serialize, Deserialize)]
+pub struct LoadAvgInfo {
+    pub one: f64,
+    pub five: f64,
+    pub fifteen: f64,
+}
+
+#[derive(Serialize, Deserialize)]
 pub struct CpuInfo {
     pub count: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub physical_cores: Option<usize>,
     pub brand: String,
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    pub frequency_mhz: u64,
     pub load: f32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub load_average: Option<LoadAvgInfo>,
+}
+
+fn is_zero_u64(v: &u64) -> bool {
+    *v == 0
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct GpuInfo {
+    pub pci: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vendor: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage_percent: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total_vram_bytes: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub used_vram_bytes: Option<u64>,
 }
 
 #[derive(Serialize, Deserialize)]
 pub struct DiskInfo {
     pub name: String,
     pub mount_point: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub file_system: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub kind: String,
     pub total_space: u64,
     pub available_space: u64,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub is_removable: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub is_read_only: bool,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct ThermalSensorInfo {
+    pub label: String,
+    pub temperature_celsius: f32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_celsius: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub critical_celsius: Option<f32>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -50,7 +108,11 @@ pub struct GetSystemInfoOutput {
     pub os: OsInfo,
     pub memory: MemoryInfo,
     pub cpu: CpuInfo,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub gpus: Vec<GpuInfo>,
     pub disks: Vec<DiskInfo>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub temperatures: Vec<ThermalSensorInfo>,
 }
 
 /// Tool for retrieving detailed information about the host system.
@@ -67,7 +129,7 @@ impl Tool for GetSystemInfoTool {
     type Output = GetSystemInfoOutput;
 
     fn description(&self) -> String {
-        "Get a summary of system information, including OS, CPU, RAM, and Disk space. Use this to understand the environment you are operating in.".to_string()
+        "Get a summary of system information, including OS, CPU, RAM, GPUs (model, usage %, VRAM), Disk space, and thermal sensor temperatures. Use this to understand the hardware and environment you are operating in.".to_string()
     }
 
     fn parameters(&self) -> serde_json::Value {
@@ -113,15 +175,7 @@ pub struct ListProcessesArgs {
     pub limit: Option<usize>,
 }
 
-#[derive(Serialize)]
-pub struct ProcessInfo {
-    pub pid: u32,
-    pub name: String,
-    pub cpu_usage: f64,
-    pub memory_bytes: u64,
-    pub read_bytes: u64,
-    pub written_bytes: u64,
-}
+pub type ProcessInfo = boxxy_claw_protocol::ProcessSample;
 
 #[derive(Serialize)]
 pub struct ListProcessesOutput {
@@ -144,7 +198,7 @@ impl Tool for ListProcessesTool {
     type Output = ListProcessesOutput;
 
     fn description(&self) -> String {
-        "List running processes on the system, including PID, name, CPU usage, memory usage, and disk I/O. By default returns the top 30 processes sorted by CPU usage. Pass `filter` to search by process name or `sort_by` ('cpu', 'memory', 'io', 'pid') to rank differently.".to_string()
+        "List running processes on the system, including PID, name, CPU usage, memory usage, disk I/O, and GPU usage / GPU memory (when active). By default returns the top 30 processes sorted by CPU usage. Pass `filter` to search by process name or `sort_by` ('cpu', 'memory', 'gpu', 'gpu_memory', 'io', 'pid') to rank differently.".to_string()
     }
 
     fn parameters(&self) -> serde_json::Value {
@@ -153,11 +207,11 @@ impl Tool for ListProcessesTool {
             "properties": {
                 "filter": {
                     "type": "string",
-                    "description": "Optional case-insensitive substring filter on process name (e.g. 'cargo', 'node', 'firefox')."
+                    "description": "Optional case-insensitive substring filter on process name (e.g. 'cargo', 'node', 'firefox', 'ollama')."
                 },
                 "sort_by": {
                     "type": "string",
-                    "enum": ["cpu", "memory", "io", "pid"],
+                    "enum": ["cpu", "memory", "gpu", "gpu_memory", "io", "pid"],
                     "description": "Sort order for returned processes. Defaults to 'cpu'."
                 },
                 "limit": {
@@ -188,23 +242,11 @@ impl Tool for ListProcessesTool {
 
                 let mut items: Vec<ProcessInfo> = processes
                     .into_iter()
-                    .filter(|(_, name, _, _, _, _)| {
+                    .filter(|p| {
                         filter_lower
                             .as_ref()
-                            .is_none_or(|f| name.to_lowercase().contains(f))
+                            .is_none_or(|f| p.name.to_lowercase().contains(f))
                     })
-                    .map(
-                        |(pid, name, cpu_usage, memory_bytes, read_bytes, written_bytes)| {
-                            ProcessInfo {
-                                pid,
-                                name,
-                                cpu_usage,
-                                memory_bytes,
-                                read_bytes,
-                                written_bytes,
-                            }
-                        },
-                    )
                     .collect();
 
                 match args.sort_by.as_deref().unwrap_or("cpu") {
@@ -214,6 +256,35 @@ impl Tool for ListProcessesTool {
                                 .partial_cmp(&a.cpu_usage)
                                 .unwrap_or(std::cmp::Ordering::Equal)
                         })
+                    }),
+                    "gpu" => items.sort_by(|a, b| {
+                        let gpu_b = b.gpu_usage.unwrap_or(0.0);
+                        let gpu_a = a.gpu_usage.unwrap_or(0.0);
+                        gpu_b
+                            .partial_cmp(&gpu_a)
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                            .then_with(|| {
+                                b.gpu_memory_bytes
+                                    .unwrap_or(0)
+                                    .cmp(&a.gpu_memory_bytes.unwrap_or(0))
+                            })
+                            .then_with(|| {
+                                b.cpu_usage
+                                    .partial_cmp(&a.cpu_usage)
+                                    .unwrap_or(std::cmp::Ordering::Equal)
+                            })
+                    }),
+                    "gpu_memory" => items.sort_by(|a, b| {
+                        b.gpu_memory_bytes
+                            .unwrap_or(0)
+                            .cmp(&a.gpu_memory_bytes.unwrap_or(0))
+                            .then_with(|| {
+                                b.gpu_usage
+                                    .unwrap_or(0.0)
+                                    .partial_cmp(&a.gpu_usage.unwrap_or(0.0))
+                                    .unwrap_or(std::cmp::Ordering::Equal)
+                            })
+                            .then_with(|| b.memory_bytes.cmp(&a.memory_bytes))
                     }),
                     "io" => items.sort_by(|a, b| {
                         let io_b = b.read_bytes.saturating_add(b.written_bytes);
@@ -378,14 +449,107 @@ mod tests {
             Ok(())
         }
         async fn get_system_info(&self) -> anyhow::Result<String> {
-            Ok("{}".to_string())
+            Ok(serde_json::json!({
+                "os": {
+                    "name": "Linux",
+                    "version": "6.12",
+                    "long_version": "Linux 6.12",
+                    "kernel": "6.12.0",
+                    "hostname": "boxxy-host",
+                    "arch": "x86_64",
+                    "uptime_secs": 3600
+                },
+                "memory": {
+                    "total": 16_000_000_000_u64,
+                    "used": 8_000_000_000_u64,
+                    "free": 2_000_000_000_u64,
+                    "available": 8_000_000_000_u64,
+                    "swap_total": 4_000_000_000_u64,
+                    "swap_used": 0_u64
+                },
+                "cpu": {
+                    "count": 16,
+                    "physical_cores": 8,
+                    "brand": "Synthetic CPU",
+                    "frequency_mhz": 4200,
+                    "load": 14.5,
+                    "load_average": { "one": 1.2, "five": 0.8, "fifteen": 0.5 }
+                },
+                "gpus": [
+                    {
+                        "pci": "0000:03:00.0",
+                        "vendor": "AMD",
+                        "model": "Radeon RX Synthetic",
+                        "usage_percent": 32.0,
+                        "total_vram_bytes": 16_000_000_000_u64,
+                        "used_vram_bytes": 4_000_000_000_u64
+                    }
+                ],
+                "disks": [
+                    {
+                        "name": "nvme0n1p2",
+                        "mount_point": "/",
+                        "file_system": "ext4",
+                        "kind": "SSD",
+                        "total_space": 500_000_000_000_u64,
+                        "available_space": 300_000_000_000_u64,
+                        "is_removable": false,
+                        "is_read_only": false
+                    }
+                ],
+                "temperatures": [
+                    {
+                        "label": "k10temp Tctl",
+                        "temperature_celsius": 54.5,
+                        "max_celsius": 70.0,
+                        "critical_celsius": 95.0
+                    }
+                ]
+            })
+            .to_string())
         }
-        async fn list_processes(&self) -> anyhow::Result<Vec<(u32, String, f64, u64, u64, u64)>> {
+        async fn list_processes(&self) -> anyhow::Result<Vec<ProcessInfo>> {
             Ok(vec![
-                (10, "init".to_string(), 0.1, 1024, 0, 0),
-                (20, "cargo-build".to_string(), 85.5, 500_000, 1000, 2000),
-                (30, "cargo-test".to_string(), 42.0, 900_000, 500, 500),
-                (40, "firefox".to_string(), 12.0, 2_000_000, 100, 100),
+                ProcessInfo {
+                    pid: 10,
+                    name: "init".to_string(),
+                    cpu_usage: 0.1,
+                    memory_bytes: 1024,
+                    read_bytes: 0,
+                    written_bytes: 0,
+                    gpu_usage: None,
+                    gpu_memory_bytes: None,
+                },
+                ProcessInfo {
+                    pid: 20,
+                    name: "cargo-build".to_string(),
+                    cpu_usage: 85.5,
+                    memory_bytes: 500_000,
+                    read_bytes: 1000,
+                    written_bytes: 2000,
+                    gpu_usage: None,
+                    gpu_memory_bytes: None,
+                },
+                ProcessInfo {
+                    pid: 30,
+                    name: "cargo-test".to_string(),
+                    cpu_usage: 42.0,
+                    memory_bytes: 900_000,
+                    read_bytes: 500,
+                    written_bytes: 500,
+                    gpu_usage: Some(15.0),
+                    gpu_memory_bytes: Some(256 * 1024 * 1024),
+                },
+                ProcessInfo {
+                    pid: 40,
+                    name: "firefox".to_string(),
+                    cpu_usage: 12.0,
+                    memory_bytes: 2_000_000,
+                    read_bytes: 100,
+                    written_bytes: 100,
+                    gpu_usage: Some(68.5),
+                    gpu_memory_bytes: Some(1024 * 1024 * 1024),
+                },
             ])
         }
         async fn kill_process(&self, _: u32, _: i32) -> anyhow::Result<()> {
@@ -461,5 +625,42 @@ mod tests {
         assert_eq!(out.processes.len(), 1);
         assert_eq!(out.processes[0].name, "cargo-test");
         assert_eq!(out.processes[0].pid, 30);
+
+        // Sort by GPU usage descending across all processes
+        let gpu_out = tool
+            .call(
+                &mut ctx,
+                ListProcessesArgs {
+                    filter: None,
+                    sort_by: Some("gpu".to_string()),
+                    limit: Some(2),
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(gpu_out.processes.len(), 2);
+        assert_eq!(gpu_out.processes[0].name, "firefox");
+        assert_eq!(gpu_out.processes[0].gpu_usage, Some(68.5));
+        assert_eq!(gpu_out.processes[1].name, "cargo-test");
+    }
+
+    #[tokio::test]
+    async fn get_system_info_parses_gpus_thermals_and_extended_fields() {
+        let tool = GetSystemInfoTool {
+            env: Arc::new(MockProcEnv),
+            approval: Arc::new(NoopApproval),
+        };
+        let mut ctx = ToolContext::default();
+        let out = tool.call(&mut ctx, GetSystemInfoArgs {}).await.unwrap();
+
+        assert_eq!(out.os.arch.as_deref(), Some("x86_64"));
+        assert_eq!(out.memory.available, 8_000_000_000);
+        assert_eq!(out.cpu.physical_cores, Some(8));
+        assert_eq!(out.gpus.len(), 1);
+        assert_eq!(out.gpus[0].model.as_deref(), Some("Radeon RX Synthetic"));
+        assert_eq!(out.gpus[0].usage_percent, Some(32.0));
+        assert_eq!(out.disks[0].kind, "SSD");
+        assert_eq!(out.temperatures.len(), 1);
+        assert_eq!(out.temperatures[0].temperature_celsius, 54.5);
     }
 }

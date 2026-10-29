@@ -36,7 +36,7 @@ Latency-critical terminal I/O. Exposes:
 
 ### `claw/` — `dev.boxxy.BoxxyTerminal.Agent.Claw`
 
-Host-side implementation of `ClawEnvironment`: shell execution, file I/O with path blacklisting, list/kill processes, clipboard access, sysinfo. Path blacklist seeds from `~/.config/boxxy-terminal/boxxyclaw/BLACKLIST.md` (falling back to a built-in list that blocks `/etc/shadow`, `.ssh/id_rsa`, etc.).
+Host-side implementation of `ClawEnvironment`: shell execution, file I/O with path blacklisting, list/kill processes, clipboard access, and lazy on-demand `sysinfo 0.40` sampling (`claw::SystemSampler` for CPU/RAM/GPU/disk/thermal system info and per-process CPU/GPU/IO metrics with zero startup overhead). Path blacklist seeds from `~/.config/boxxy-terminal/boxxyclaw/BLACKLIST.md` (falling back to a built-in list that blocks `/etc/shadow`, `.ssh/id_rsa`, etc.).
 
 **`claw::CharacterRegistry`** is the volatile in-memory registry of all live character claims, keyed by `holder_id`. It is the daemon's single source of truth for who holds which character. Claims are never written to disk; they live only for the duration of the daemon process. Key methods: `try_claim(holder_id, holder_kind, character_id, owner_bus_name)` (atomic check-then-set under write lock), `release_holder(holder_id)`, `release_owner(owner_bus_name) -> Vec<CharacterClaim>` (bulk release on client disconnect), `snapshot()`, `subscribe()` (broadcast channel for push updates). The registry also handles orphan character migration at load time: sessions referencing a deleted character UUID are silently mapped to the first catalog entry.
 

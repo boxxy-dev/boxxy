@@ -14,7 +14,7 @@ pub trait AgentClaw {
     async fn list_directory(&self, path: String) -> zbus::Result<Vec<(String, bool, u64)>>;
     async fn delete_file(&self, path: String) -> zbus::Result<()>;
     async fn get_system_info(&self) -> zbus::Result<String>;
-    async fn list_processes(&self) -> zbus::Result<Vec<(u32, String, f64, u64, u64, u64)>>;
+    async fn list_processes(&self) -> zbus::Result<String>;
     async fn kill_process(&self, pid: u32, signal: i32) -> zbus::Result<()>;
     async fn get_clipboard(&self) -> zbus::Result<String>;
     async fn set_clipboard(&self, text: String) -> zbus::Result<()>;

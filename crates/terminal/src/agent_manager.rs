@@ -934,11 +934,13 @@ impl ClawEnvironment for DbusClawEnvironment {
             .context("D-Bus get_system_info failed")
     }
 
-    async fn list_processes(&self) -> Result<Vec<(u32, String, f64, u64, u64, u64)>> {
-        self.proxy
+    async fn list_processes(&self) -> Result<Vec<boxxy_claw_protocol::ProcessSample>> {
+        let json = self
+            .proxy
             .list_processes()
             .await
-            .context("D-Bus list_processes failed")
+            .context("D-Bus list_processes failed")?;
+        serde_json::from_str(&json).context("Failed to deserialize list_processes payload")
     }
 
     async fn kill_process(&self, pid: u32, signal: i32) -> Result<()> {

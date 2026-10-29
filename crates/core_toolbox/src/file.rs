@@ -757,12 +757,6 @@ mod tests {
         async fn delete_file(&self, _path: String) -> anyhow::Result<()> {
             Ok(())
         }
-        async fn get_system_info(&self) -> anyhow::Result<String> {
-            Ok("{}".to_string())
-        }
-        async fn list_processes(&self) -> anyhow::Result<Vec<(u32, String, f64, u64, u64, u64)>> {
-            Ok(vec![])
-        }
         async fn kill_process(&self, _pid: u32, _signal: i32) -> anyhow::Result<()> {
             Ok(())
         }
