@@ -148,19 +148,19 @@ impl ClawSidebarComponent {
 
         let memories_lbl = gtk::Label::builder()
             .label("🧠 0 Memories")
-            .css_classes(["caption", "dim-label", "monospace"])
+            .css_classes(["caption", "dim-label"])
             .build();
         stats_box.append(&memories_lbl);
 
         let stats_sep = gtk::Label::builder()
             .label("•")
-            .css_classes(["caption", "dim-label", "monospace"])
+            .css_classes(["caption", "dim-label"])
             .build();
         stats_box.append(&stats_sep);
 
         let tools_lbl = gtk::Label::builder()
             .label("🛠️ 0 Tools")
-            .css_classes(["caption", "dim-label", "monospace"])
+            .css_classes(["caption", "dim-label"])
             .build();
         stats_box.append(&tools_lbl);
 
@@ -235,7 +235,7 @@ impl ClawSidebarComponent {
 
             let val_lbl = gtk::Label::builder()
                 .label(default_val)
-                .css_classes(["caption", "monospace"])
+                .css_classes(["caption"])
                 .halign(gtk::Align::End)
                 .hexpand(true)
                 .xalign(1.0)
@@ -844,14 +844,14 @@ fn populate_mcp_rows(
 
         let dot_lbl = gtk::Label::builder()
             .label("•")
-            .css_classes(["caption", "success", "monospace"])
+            .css_classes(["caption", "success"])
             .halign(gtk::Align::Start)
             .build();
         row.append(&dot_lbl);
 
         let name_lbl = gtk::Label::builder()
             .label(&srv.name)
-            .css_classes(["caption", "heading", "monospace"])
+            .css_classes(["caption", "heading"])
             .halign(gtk::Align::Start)
             .hexpand(true)
             .xalign(0.0)
@@ -861,7 +861,7 @@ fn populate_mcp_rows(
 
         let status_lbl = gtk::Label::builder()
             .label("Connected")
-            .css_classes(["caption", "dim-label", "monospace"])
+            .css_classes(["caption", "dim-label"])
             .halign(gtk::Align::End)
             .build();
         row.append(&status_lbl);
@@ -1186,7 +1186,7 @@ fn populate_past_sessions(
             if is_active_session {
                 let active_dot = gtk::Label::builder()
                     .label("•")
-                    .css_classes(["caption", "success", "monospace"])
+                    .css_classes(["caption", "success"])
                     .valign(gtk::Align::Center)
                     .build();
                 title_hbox.append(&active_dot);
@@ -1213,7 +1213,7 @@ fn populate_past_sessions(
 
             let sub_lbl = gtk::Label::builder()
                 .label(&subtitle_text)
-                .css_classes(["caption", "dim-label", "monospace"])
+                .css_classes(["caption", "dim-label"])
                 .halign(gtk::Align::Start)
                 .hexpand(true)
                 .xalign(0.0)

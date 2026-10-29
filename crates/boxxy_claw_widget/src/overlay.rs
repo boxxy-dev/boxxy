@@ -10,6 +10,7 @@ use boxxy_viewer::StructuredViewer;
 use gtk::prelude::*;
 use gtk4 as gtk;
 use gtk4::gio;
+use libadwaita as adw;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
@@ -768,24 +769,20 @@ impl TerminalOverlay {
             inner_box.set_margin_top(1);
             inner_box.set_margin_bottom(1);
 
-            let img = gtk::Image::new();
-            if info.has_avatar {
-                if let Ok(dir) = boxxy_claw_protocol::character_loader::get_characters_dir() {
-                    let avatar_path = dir.join(&info.config.name).join("AVATAR.png");
-                    if let Ok(texture) = gtk::gdk::Texture::from_filename(&avatar_path) {
-                        img.set_paintable(Some(&texture));
-                        img.set_pixel_size(20);
-                        img.add_css_class("avatar-icon");
-                    }
+            let avatar = adw::Avatar::new(32, Some(&info.config.display_name), true);
+            avatar.set_valign(gtk::Align::Center);
+            if info.has_avatar
+                && let Ok(dir) = boxxy_claw_protocol::character_loader::get_characters_dir()
+            {
+                let avatar_path = dir.join(&info.config.name).join("AVATAR.png");
+                if let Ok(texture) = gtk::gdk::Texture::from_filename(&avatar_path) {
+                    avatar.set_custom_image(Some(&texture));
                 }
             }
-            if img.paintable().is_none() {
-                img.set_icon_name(Some("boxxy-boxxyclaw-symbolic"));
-                img.set_pixel_size(16);
-            }
-            inner_box.append(&img);
+            inner_box.append(&avatar);
 
             let label = gtk::Label::new(Some(&info.config.display_name.to_uppercase()));
+            label.set_valign(gtk::Align::Center);
             inner_box.append(&label);
 
             // In the pre-selection phase the local `pending` is the sole
@@ -798,6 +795,7 @@ impl TerminalOverlay {
             if is_current {
                 let check_icon = gtk::Image::from_icon_name("boxxy-object-select-2-symbolic");
                 check_icon.set_pixel_size(16);
+                check_icon.set_valign(gtk::Align::Center);
                 inner_box.append(&check_icon);
             }
 
