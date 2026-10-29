@@ -77,6 +77,9 @@ pub fn setup_appearance_page(
     });
 
     // 0.1 Background Image
+    let opacity_adj = gtk::Adjustment::new(settings_rc.borrow().opacity, 0.1, 1.0, 0.05, 0.1, 0.0);
+    opacity_scale.set_adjustment(&opacity_adj);
+
     let update_bg_subtitle = {
         let row = background_image_row.clone();
         let settings = settings_rc.clone();
@@ -108,10 +111,12 @@ pub fn setup_appearance_page(
     let s_rc = settings_rc.clone();
     let cb = on_change.clone();
     let update_subtitle = update_bg_subtitle.clone();
+    let opacity_adj_for_select_bg = opacity_adj.clone();
     select_bg_image_btn.connect_clicked(move |_| {
         let s_rc = s_rc.clone();
         let cb = cb.clone();
         let update_subtitle = update_subtitle.clone();
+        let opacity_adj = opacity_adj_for_select_bg.clone();
         file_dialog.open(
             None::<&gtk::Window>,
             gtk::gio::Cancellable::NONE,
@@ -125,9 +130,18 @@ pub fn setup_appearance_page(
                         boxxy_themes::delete_background_image(old_path);
                     }
                     s.background_image_path = Some(new_path);
+                    let nudged_opacity = if s.opacity >= 0.999 {
+                        s.opacity = 0.80;
+                        Some(0.80)
+                    } else {
+                        None
+                    };
                     s.save();
                     let s_clone = s.clone();
                     drop(s);
+                    if let Some(new_op) = nudged_opacity {
+                        opacity_adj.set_value(new_op);
+                    }
                     cb(s_clone);
                     update_subtitle();
                 }
@@ -138,15 +152,18 @@ pub fn setup_appearance_page(
     let s_rc = settings_rc.clone();
     let cb = on_change.clone();
     let update_subtitle = update_bg_subtitle.clone();
+    let opacity_adj_for_clear_bg = opacity_adj.clone();
     clear_bg_image_btn.connect_clicked(move |_| {
         let mut s = s_rc.borrow_mut();
         if let Some(old_path) = &s.background_image_path {
             boxxy_themes::delete_background_image(old_path);
         }
         s.background_image_path = None;
+        s.opacity = 1.0;
         s.save();
         let s_clone = s.clone();
         drop(s);
+        opacity_adj_for_clear_bg.set_value(1.0);
         cb(s_clone);
         update_subtitle();
     });
@@ -179,9 +196,6 @@ pub fn setup_appearance_page(
     });
 
     // 2. Adjustments
-    let opacity_adj = gtk::Adjustment::new(settings_rc.borrow().opacity, 0.1, 1.0, 0.05, 0.1, 0.0);
-    opacity_scale.set_adjustment(&opacity_adj);
-
     let s_rc = settings_rc.clone();
     let cb = on_change.clone();
     opacity_scale.connect_value_changed(move |scale| {
@@ -205,11 +219,17 @@ pub fn setup_appearance_page(
             s.frosted_glass = active;
             // If the user enables Frosted Glass while Background Tint is at 100% (1.0),
             // nudge tint down to 80% so the blur is immediately visible with one click.
-            let nudged_opacity = if active && s.opacity >= 0.999 {
-                s.opacity = 0.80;
-                Some(0.80)
+            // When disabling Frosted Glass, reset tint back to 100% (1.0) full opaque.
+            let nudged_opacity = if active {
+                if s.opacity >= 0.999 {
+                    s.opacity = 0.80;
+                    Some(0.80)
+                } else {
+                    None
+                }
             } else {
-                None
+                s.opacity = 1.0;
+                Some(1.0)
             };
             s.save();
             let s_clone = s.clone();
