@@ -40,7 +40,6 @@ pub struct TerminalOverlay {
     ok_btn: gtk::Button,
     approve_file_btn: gtk::Button,
     inspect_btn: gtk::Button,
-    clear_history_btn: gtk::Button,
     command_frame: gtk::Frame,
     template_box: gtk::Box,
     file_action_box: gtk::Box,
@@ -84,7 +83,6 @@ impl TerminalOverlay {
         let reject_file_btn: gtk::Button = builder.object("reject_file_btn").unwrap();
         let approve_file_btn: gtk::Button = builder.object("approve_file_btn").unwrap();
         let inspect_btn: gtk::Button = builder.object("inspect_btn").unwrap();
-        let clear_history_btn: gtk::Button = builder.object("clear_history_btn").unwrap();
 
         let command_frame: gtk::Frame = builder.object("command_frame").unwrap();
         let template_box: gtk::Box = builder.object("template_box").unwrap();
@@ -317,7 +315,6 @@ impl TerminalOverlay {
             ok_btn: ok_btn.clone(),
             approve_file_btn: approve_file_btn.clone(),
             inspect_btn: inspect_btn.clone(),
-            clear_history_btn: clear_history_btn.clone(),
             command_frame: command_frame.clone(),
             template_box: template_box.clone(),
             file_action_box: file_action_box.clone(),
@@ -445,14 +442,6 @@ impl TerminalOverlay {
             host_inspect.focus_sidebar();
         });
 
-        // Clear History — temporarily clear visible history from the main overlay view.
-        let history_store_for_clear = history_store.clone();
-        let diag_viewer_for_clear = diagnosis_viewer.clone();
-        clear_history_btn.connect_clicked(move |_| {
-            history_store_for_clear.remove_all();
-            diag_viewer_for_clear.set_content("");
-        });
-
         // Accept: Command proposals inject the (possibly-edited) buffer
         // text; Bookmark proposals expand placeholders from
         // template_entry and hand the expanded script to the host's
@@ -536,6 +525,11 @@ impl TerminalOverlay {
             if !trimmed.starts_with("/resume ") && !trimmed.starts_with("/btw ") {
                 overlay_for_submit.enter_waiting_state();
             }
+        });
+
+        let overlay_for_clear = s.clone();
+        s.msg_bar.set_on_clear_hook(move || {
+            overlay_for_clear.clear_visible_history();
         });
 
         // Reactively refresh the character selector whenever the catalog or claims change.
@@ -1047,7 +1041,6 @@ impl TerminalOverlay {
         self.msg_bar.widget.set_visible(is_claw);
         self.msg_bar.send_btn.set_visible(is_claw);
         self.inspect_btn.set_visible(is_claw);
-        self.clear_history_btn.set_visible(is_claw);
 
         // 3. Character Selector Box logic
         // Only visible if in Claw mode, NOT thinking/pending, and no active agent is set yet.

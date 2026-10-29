@@ -210,6 +210,20 @@ impl CompletionProvider for CommandCompletionProvider {
             });
         }
 
+        if "clear".contains(&query_lower) {
+            let has_character = self.claw_state.get() || self.character_id.borrow().is_some();
+            items.push(CompletionItem {
+                display_name: "/clear".to_string(),
+                replacement_text: "/clear".to_string(),
+                icon_name: None,
+                icon_path: None,
+                secondary_text: Some("Clear conversation history".to_string()),
+                badge_text: None,
+                badge_color: None,
+                disabled: !has_character,
+            });
+        }
+
         if "exit".contains(&query_lower) {
             let has_character = self.claw_state.get() || self.character_id.borrow().is_some();
             items.push(CompletionItem {

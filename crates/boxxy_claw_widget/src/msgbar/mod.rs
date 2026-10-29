@@ -36,6 +36,7 @@ pub struct MsgBarComponent {
     /// enclosing container (e.g. the claw overlay drawer) owns visibility.
     embedded: Rc<Cell<bool>>,
     on_submit_hook: Rc<RefCell<Option<Box<dyn Fn(&str)>>>>,
+    on_clear_hook: Rc<RefCell<Option<Box<dyn Fn()>>>>,
     _autocomplete: Rc<boxxy_core_widgets::autocomplete::AutocompleteController>,
 }
 
@@ -80,7 +81,7 @@ impl MsgBarComponent {
             .build();
 
         let placeholder_label = gtk::Label::builder()
-            .label("Type your message... (Ctrl+V: attach, @character: direct, /resume: session)")
+            .label("Type your message... (/: commands, Ctrl+V: attach, @character: direct)")
             .halign(gtk::Align::Fill)
             .valign(gtk::Align::Center)
             .xalign(0.0)
@@ -222,6 +223,7 @@ impl MsgBarComponent {
         let history = Rc::new(RefCell::new(history::MsgHistory::new()));
         let embedded = Rc::new(Cell::new(false));
         let on_submit_hook: Rc<RefCell<Option<Box<dyn Fn(&str)>>>> = Rc::new(RefCell::new(None));
+        let on_clear_hook: Rc<RefCell<Option<Box<dyn Fn()>>>> = Rc::new(RefCell::new(None));
 
         let on_submit_rc = Rc::new(on_submit);
         let on_cancel_rc = Rc::new(on_cancel);
@@ -236,6 +238,7 @@ impl MsgBarComponent {
             let claw_state = claw_state.clone();
             let character_id = character_id.clone();
             let on_submit_hook = on_submit_hook.clone();
+            let on_clear_hook = on_clear_hook.clone();
             let embedded = embedded.clone();
             let is_active = is_active.clone();
             let widget = widget.clone();
@@ -264,6 +267,16 @@ impl MsgBarComponent {
                     buf.set_text("/resume ");
                     let end = buf.end_iter();
                     buf.place_cursor(&end);
+                    return;
+                }
+
+                if original_text.trim() == "/clear" && attachment_mgr.get_attachments().is_empty() {
+                    buf.set_text("");
+                    if (claw_state.get() || character_id.borrow().is_some())
+                        && let Some(hook) = on_clear_hook.borrow().as_ref()
+                    {
+                        hook();
+                    }
                     return;
                 }
 
@@ -325,7 +338,11 @@ impl MsgBarComponent {
                 let is_resume_session = replacement
                     .strip_prefix("/resume ")
                     .is_some_and(|s| !s.trim().is_empty());
-                if is_resume_session || replacement == "/models" || replacement == "/exit" {
+                if is_resume_session
+                    || replacement == "/models"
+                    || replacement == "/clear"
+                    || replacement == "/exit"
+                {
                     autocomplete_submit();
                 }
             })),
@@ -453,12 +470,17 @@ impl MsgBarComponent {
             avatar_stack,
             embedded,
             on_submit_hook,
+            on_clear_hook,
             _autocomplete: autocomplete_ctrl,
         }
     }
 
     pub fn set_on_submit_hook<F: Fn(&str) + 'static>(&self, hook: F) {
         *self.on_submit_hook.borrow_mut() = Some(Box::new(hook));
+    }
+
+    pub fn set_on_clear_hook<F: Fn() + 'static>(&self, hook: F) {
+        *self.on_clear_hook.borrow_mut() = Some(Box::new(hook));
     }
 
     pub fn set_text(&self, text: &str) {
@@ -476,7 +498,7 @@ impl MsgBarComponent {
     pub fn clear_character(&self) {
         *self.character_id.borrow_mut() = None;
         self.placeholder_label.set_label(
-            "Type your message... (Ctrl+V: attach, @character: direct, /resume: session)",
+            "Type your message... (/: commands, Ctrl+V: attach, @character: direct)",
         );
         self.refresh_user_avatar();
     }
