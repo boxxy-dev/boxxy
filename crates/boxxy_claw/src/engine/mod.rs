@@ -8,6 +8,7 @@ pub mod session;
 pub mod summarization;
 pub mod tools;
 pub mod turn;
+pub mod vibe_guard;
 
 pub use boxxy_claw_protocol::{
     ClawEngineEvent, ClawEnvironment, ClawEvent, ClawMessage, PersistentClawRow, ScheduledTask,

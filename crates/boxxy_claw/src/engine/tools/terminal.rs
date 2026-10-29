@@ -67,9 +67,14 @@ impl Tool for TerminalCommandTool {
         boxxy_telemetry::track_tool_use(Self::NAME).await;
         let (tx, rx) = tokio::sync::oneshot::channel();
 
-        let (agent_name, character_id) = {
+        let (agent_name, character_id, vibe_enabled, home_cwd) = {
             let state = self.state.lock().await;
-            (state.agent_name.clone(), state.character_id.clone())
+            (
+                state.agent_name.clone(),
+                state.character_id.clone(),
+                state.vibe_enabled,
+                state.current_dir.clone(),
+            )
         };
 
         let _ = self
@@ -126,14 +131,33 @@ impl Tool for TerminalCommandTool {
                 Some(format!("terminal_exec `{}` ({})", args.command, args.explanation));
         }
 
-        let _ = self
-            .tx_ui
-            .send(ClawEngineEvent::AgentThinking {
-                agent_name: agent_name.clone(),
-                character_id: character_id.clone(),
-                is_thinking: false,
-            })
-            .await;
+        let target_cwd = if let Some(ref target_id) = resolved_target_id {
+            workspace
+                .get_pane_cwd(target_id.clone())
+                .await
+                .filter(|c| !c.trim().is_empty())
+                .unwrap_or_else(|| home_cwd.clone())
+        } else {
+            home_cwd
+        };
+        let settings = boxxy_preferences::Settings::load();
+        let auto_approve = vibe_enabled
+            && crate::engine::vibe_guard::is_safe_vibe_command(
+                &args.command,
+                &target_cwd,
+                &settings.vibe_trusted_dirs,
+            );
+
+        if !auto_approve {
+            let _ = self
+                .tx_ui
+                .send(ClawEngineEvent::AgentThinking {
+                    agent_name: agent_name.clone(),
+                    character_id: character_id.clone(),
+                    is_thinking: false,
+                })
+                .await;
+        }
 
         let explanation_display = if let Some(ref lbl) = resolved_target_label {
             format!("**[Target: `{lbl}`]** {}", args.explanation)
@@ -148,6 +172,7 @@ impl Tool for TerminalCommandTool {
             explanation: explanation_display,
             target_pane_id: resolved_target_id,
             target_pane_label: resolved_target_label,
+            auto_approve,
             usage: None,
         };
 

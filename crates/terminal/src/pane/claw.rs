@@ -22,6 +22,7 @@ pub(super) fn setup_claw(
     session_usage: Rc<Cell<SessionUsage>>,
     is_pinned: Rc<Cell<bool>>,
     is_web_search: Rc<Cell<bool>>,
+    is_vibe: Rc<Cell<bool>>,
     session_status: Rc<RefCell<AgentStatus>>,
     agent_name: Rc<RefCell<String>>,
     claw_indicator: &ClawIndicator,
@@ -43,6 +44,7 @@ pub(super) fn setup_claw(
         let status_cell = session_status.clone();
         let pin_cell = is_pinned.clone();
         let web_cell = is_web_search.clone();
+        let vibe_cell = is_vibe.clone();
         let ind = claw_indicator.clone();
         let msg_bar_for_intent = msg_bar.clone();
         let cb_for_intent = callback.clone();
@@ -100,6 +102,7 @@ pub(super) fn setup_claw(
                         AgentStatus::Waiting,
                         pin_cell.get(),
                         web_cell.get(),
+                        vibe_cell.get(),
                     );
                     cb_for_intent(PaneOutput::ClawStateChanged(pane_id, true, false));
                     let _ = agent
@@ -203,6 +206,7 @@ pub(super) fn setup_claw(
         session_status,
         is_pinned,
         is_web_search,
+        is_vibe,
         agent_name,
         session_usage,
         pending_tasks,

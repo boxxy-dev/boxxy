@@ -276,6 +276,8 @@ pub struct Settings {
 
     pub hide_character_badge: bool,
     pub web_search_on_by_default: bool,
+    #[serde(default)]
+    pub vibe_trusted_dirs: Vec<String>,
     pub enable_file_tools: bool,
     pub enable_system_tools: bool,
     pub enable_dangerous_tools: bool,
@@ -346,6 +348,7 @@ impl Default for Settings {
             invert_scroll: true,
             hide_character_badge: false,
             web_search_on_by_default: true,
+            vibe_trusted_dirs: vec![],
             enable_file_tools: true,
             enable_system_tools: true,
             enable_dangerous_tools: true,
@@ -754,6 +757,104 @@ You can add your own sensitive paths here. One path per line. Lines starting wit
         matches!(self.resolve_model_state(&self.ai_chat_model), ModelConfigState::Ready(_))
             && matches!(self.resolve_model_state(&self.claw_model), ModelConfigState::Ready(_))
     }
+
+    /// Returns `true` if `cwd` is inside (or equal to) at least one valid directory
+    /// in `self.vibe_trusted_dirs`.
+    pub fn is_dir_vibe_trusted(&self, cwd: &str) -> bool {
+        let Some(cwd_norm) = normalize_vibe_dir_path(cwd) else {
+            return false;
+        };
+        if validate_vibe_trusted_dir(&cwd_norm.to_string_lossy()).is_err() {
+            return false;
+        }
+        let cwd_path = std::path::Path::new(&cwd_norm);
+        self.vibe_trusted_dirs.iter().any(|trusted| {
+            validate_vibe_trusted_dir(trusted)
+                .ok()
+                .is_some_and(|valid_root| cwd_path.starts_with(std::path::Path::new(&valid_root)))
+        })
+    }
+}
+
+/// Expands leading `~` and lexically resolves `.` and `..` components without disk I/O.
+pub fn normalize_vibe_dir_path(raw: &str) -> Option<PathBuf> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let expanded = if trimmed == "~" || trimmed == "~/" {
+        std::env::var_os("HOME").map(PathBuf::from)?
+    } else if let Some(rest) = trimmed.strip_prefix("~/") {
+        let home = std::env::var_os("HOME").map(PathBuf::from)?;
+        home.join(rest)
+    } else {
+        PathBuf::from(trimmed)
+    };
+
+    if !expanded.is_absolute() {
+        return None;
+    }
+
+    let mut clean = PathBuf::new();
+    for comp in expanded.components() {
+        match comp {
+            std::path::Component::RootDir => clean.push(comp.as_os_str()),
+            std::path::Component::Normal(c) => clean.push(c),
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                clean.pop();
+                if clean.as_os_str().is_empty() {
+                    clean.push("/");
+                }
+            }
+            std::path::Component::Prefix(p) => clean.push(p.as_os_str()),
+        }
+    }
+    Some(clean)
+}
+
+/// Validates whether a directory path can be added as a Trusted Vibe Location.
+/// Rejects `/`, top-level system roots, bare `$HOME`, `~/.ssh`, `~/.gnupg`, and Boxxy's config dir.
+pub fn validate_vibe_trusted_dir(raw: &str) -> Result<String, &'static str> {
+    let Some(norm) = normalize_vibe_dir_path(raw) else {
+        return Err("Enter an absolute path or a ~/subfolder (e.g. ~/Projects).");
+    };
+
+    let norm_str = norm.to_string_lossy();
+    if norm_str == "/" {
+        return Err("Cannot trust the filesystem root (/).");
+    }
+
+    const FORBIDDEN_SYSTEM_PREFIXES: &[&str] = &[
+        "/etc", "/usr", "/var", "/bin", "/sbin", "/lib", "/lib64", "/boot", "/proc", "/sys",
+        "/dev", "/run", "/root",
+    ];
+    for sys in FORBIDDEN_SYSTEM_PREFIXES {
+        if norm == std::path::Path::new(sys) || norm.starts_with(sys) {
+            return Err("System directories cannot be trusted for Vibe Mode.");
+        }
+    }
+
+    if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
+        if norm == home {
+            return Err(
+                "Cannot trust your entire Home folder (~). Choose a subfolder like ~/Projects or ~/test.",
+            );
+        }
+        let ssh_dir = home.join(".ssh");
+        let gnupg_dir = home.join(".gnupg");
+        if norm.starts_with(&ssh_dir) || norm.starts_with(&gnupg_dir) {
+            return Err("Sensitive credential folders (~/.ssh, ~/.gnupg) cannot be trusted.");
+        }
+    }
+
+    let config_dir = boxxy_sys_utils::get_config_dir();
+    if norm.starts_with(&config_dir) {
+        return Err("Boxxy's own configuration directory cannot be trusted for Vibe Mode.");
+    }
+
+    Ok(norm_str.into_owned())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

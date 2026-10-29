@@ -14,6 +14,7 @@ pub struct ClawIndicator {
     badge_revealer: gtk::Revealer,
     clock_icon: gtk::Image,
     sleep_icon: gtk::Image,
+    vibe_icon: gtk::Image,
     lock_icon: gtk::Image,
     revealer: gtk::Revealer,
     spinner: gtk::Image,
@@ -220,6 +221,12 @@ impl ClawIndicator {
             .build();
         badge_box.append(&sleep_icon);
 
+        let vibe_icon = gtk::Image::builder()
+            .icon_name("boxxy-vibe-symbolic")
+            .visible(false)
+            .build();
+        badge_box.append(&vibe_icon);
+
         let lock_icon = gtk::Image::builder()
             .icon_name("boxxy-lock-symbolic")
             .visible(false)
@@ -265,6 +272,7 @@ impl ClawIndicator {
             badge_revealer,
             clock_icon,
             sleep_icon,
+            vibe_icon,
             lock_icon,
             revealer,
             spinner,
@@ -355,6 +363,10 @@ impl ClawIndicator {
         } else {
             self.badge_box.remove_css_class("evicted");
         }
+    }
+
+    pub fn set_vibe(&self, vibe: bool) {
+        self.vibe_icon.set_visible(vibe);
     }
 
     pub fn set_mode(&self, status: AgentStatus) {

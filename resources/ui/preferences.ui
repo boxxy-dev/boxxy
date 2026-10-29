@@ -585,6 +585,29 @@
                             </child>
 
                             <child>
+                              <object class="AdwPreferencesGroup" id="group_vibe_locations">
+                                <property name="title" translatable="yes">Vibe Mode Locations</property>
+                                <property name="description" translatable="yes">Folders where Vibe Mode can automatically run safe commands and apply file edits (including subfolders).</property>
+                                <child>
+                                  <object class="AdwEntryRow" id="vibe_location_entry">
+                                    <property name="title" translatable="yes">Add Trusted Folder (e.g. ~/Projects, ~/test)</property>
+                                    <property name="show-apply-button">True</property>
+                                    <child type="suffix">
+                                      <object class="GtkButton" id="vibe_location_browse_btn">
+                                        <property name="icon-name">boxxy-folder-open-symbolic</property>
+                                        <property name="valign">center</property>
+                                        <property name="tooltip-text" translatable="yes">Browse Folder</property>
+                                        <style>
+                                          <class name="flat"/>
+                                        </style>
+                                      </object>
+                                    </child>
+                                  </object>
+                                </child>
+                              </object>
+                            </child>
+
+                            <child>
                               <object class="AdwPreferencesGroup" id="group_toolbox_dreaming">
                                 <property name="title" translatable="yes">Memory Consolidation</property>
                                 <property name="description" translatable="yes">Process short-term interactions into durable facts and patterns.</property>

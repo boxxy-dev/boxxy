@@ -789,6 +789,7 @@ pub fn focus_active_terminal(inner: &mut AppWindowInner) {
                 tab_is_sleep,
                 tc.controller.is_pinned(),
                 tc.controller.is_web_search(),
+                tc.controller.is_vibe(),
             );
             inner
                 .claw

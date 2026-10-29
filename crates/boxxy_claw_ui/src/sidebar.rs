@@ -28,6 +28,7 @@ pub struct ClawSidebarComponent {
     hero_avatar_overlay: gtk::Overlay,
     hero_avatar: adw::Avatar,
     hero_sleep_badge: gtk::Box,
+    hero_vibe_badge: gtk::Box,
     hero_title: gtk::Label,
     hero_subtitle: gtk::Label,
     badges_box: gtk::Box,
@@ -106,12 +107,29 @@ impl ClawSidebarComponent {
             .build();
         hero_sleep_badge.append(&hero_sleep_icon);
 
+        let hero_vibe_icon = gtk::Image::builder()
+            .icon_name("boxxy-vibe-symbolic")
+            .pixel_size(14)
+            .hexpand(true)
+            .vexpand(true)
+            .halign(gtk::Align::Center)
+            .valign(gtk::Align::Center)
+            .build();
+        let hero_vibe_badge = gtk::Box::builder()
+            .halign(gtk::Align::End)
+            .valign(gtk::Align::End)
+            .css_classes(["avatar-vibe-badge", "avatar-sleep-badge-large"])
+            .visible(false)
+            .build();
+        hero_vibe_badge.append(&hero_vibe_icon);
+
         let hero_avatar_overlay = gtk::Overlay::builder()
             .halign(gtk::Align::Center)
             .valign(gtk::Align::Center)
             .visible(false)
             .child(&hero_avatar)
             .build();
+        hero_avatar_overlay.add_overlay(&hero_vibe_badge);
         hero_avatar_overlay.add_overlay(&hero_sleep_badge);
         hero_box.append(&hero_avatar_overlay);
 
@@ -390,6 +408,7 @@ impl ClawSidebarComponent {
             hero_avatar_overlay,
             hero_avatar,
             hero_sleep_badge,
+            hero_vibe_badge,
             hero_title,
             hero_subtitle,
             badges_box,
@@ -514,6 +533,7 @@ impl ClawSidebarComponent {
         sleep: bool,
         pinned: bool,
         web_search_enabled: bool,
+        vibe_enabled: bool,
     ) {
         while let Some(child) = self.badges_box.first_child() {
             self.badges_box.remove(&child);
@@ -559,6 +579,7 @@ impl ClawSidebarComponent {
                 }
                 self.hero_avatar_overlay.set_visible(true);
                 self.hero_sleep_badge.set_visible(sleep);
+                self.hero_vibe_badge.set_visible(vibe_enabled && !sleep);
                 self.hero_icon.set_visible(false);
             } else {
                 self.hero_title.set_label(agent_name);
@@ -566,9 +587,11 @@ impl ClawSidebarComponent {
                     .set_label("System-eccentric agentic control.");
                 self.hero_avatar_overlay.set_visible(false);
                 self.hero_sleep_badge.set_visible(false);
+                self.hero_vibe_badge.set_visible(false);
                 self.hero_icon.set_visible(true);
             }
 
+            let vibe_str = if vibe_enabled { "Vibe On" } else { "Vibe Off" };
             let sleep_str = if sleep { "Sleep On" } else { "Sleep Off" };
             let pin_str = if pinned { "Pin On" } else { "Pin Off" };
             let web_str = if web_search_enabled {
@@ -577,7 +600,7 @@ impl ClawSidebarComponent {
                 "Web Off"
             };
             let status_line = gtk::Label::builder()
-                .label(format!("{sleep_str}  •  {pin_str}  •  {web_str}"))
+                .label(format!("{vibe_str}  •  {sleep_str}  •  {pin_str}  •  {web_str}"))
                 .css_classes(["caption", "dim-label"])
                 .build();
             self.badges_box.append(&status_line);
@@ -597,6 +620,7 @@ impl ClawSidebarComponent {
                 .set_label("Conversations will appear here");
             self.hero_avatar_overlay.set_visible(false);
             self.hero_sleep_badge.set_visible(false);
+            self.hero_vibe_badge.set_visible(false);
             self.hero_icon.set_pixel_size(72);
             self.hero_icon.set_visible(true);
             self.badges_box.set_visible(false);

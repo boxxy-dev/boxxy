@@ -24,14 +24,18 @@ pub struct MsgBarComponent {
     pub sleep_toggle: gtk::Button,
     pub pin_toggle: gtk::Button,
     pub web_search_toggle: gtk::Button,
+    pub vibe_toggle: gtk::Button,
     sleep_switch: gtk::Switch,
     pin_switch: gtk::Switch,
     web_switch: gtk::Switch,
+    vibe_switch: gtk::Switch,
     avatar_sleep_badge: gtk::Box,
+    avatar_vibe_badge: gtk::Box,
     pub claw_state: Rc<Cell<bool>>,
     pub sleep_state: Rc<Cell<bool>>,
     pub pin_state: Rc<Cell<bool>>,
     pub web_search_state: Rc<Cell<bool>>,
+    pub vibe_state: Rc<Cell<bool>>,
     /// Current character UUID for avatar lookup
     pub character_id: Rc<RefCell<Option<String>>>,
     pub avatar: adw::Avatar,
@@ -52,6 +56,7 @@ impl MsgBarComponent {
         T2: Fn(bool) + 'static,
         T3: Fn(bool) + 'static,
         T4: Fn(bool) + 'static,
+        T5: Fn(bool) + 'static,
     >(
         on_submit: F,
         on_cancel: C,
@@ -59,6 +64,7 @@ impl MsgBarComponent {
         on_sleep_toggle: T2,
         on_pin_toggle: T3,
         on_web_search_toggle: T4,
+        on_vibe_toggle: T5,
     ) -> Self {
         let widget = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         widget.set_halign(gtk::Align::Fill);
@@ -145,15 +151,32 @@ impl MsgBarComponent {
             .build();
         avatar_sleep_badge.append(&avatar_sleep_icon);
 
+        let avatar_vibe_icon = gtk::Image::builder()
+            .icon_name("boxxy-vibe-symbolic")
+            .pixel_size(10)
+            .hexpand(true)
+            .vexpand(true)
+            .halign(gtk::Align::Center)
+            .valign(gtk::Align::Center)
+            .build();
+        let avatar_vibe_badge = gtk::Box::builder()
+            .halign(gtk::Align::End)
+            .valign(gtk::Align::End)
+            .css_classes(["avatar-vibe-badge", "avatar-sleep-badge-small"])
+            .visible(false)
+            .build();
+        avatar_vibe_badge.append(&avatar_vibe_icon);
+
         let avatar_overlay = gtk::Overlay::builder()
             .child(&avatar_stack)
             .build();
+        avatar_overlay.add_overlay(&avatar_vibe_badge);
         avatar_overlay.add_overlay(&avatar_sleep_badge);
 
         let claw_toggle = gtk::Button::builder()
             .child(&avatar_overlay)
             .css_classes(["flat", "image-button"])
-            .tooltip_text("Session Options (/sleep, /pin, /web)")
+            .tooltip_text("Session Options (/vibe, /sleep, /pin, /web)")
             .margin_start(4)
             .margin_end(2)
             .valign(gtk::Align::Center)
@@ -195,6 +218,7 @@ impl MsgBarComponent {
         let on_sleep_toggle_rc = Rc::new(on_sleep_toggle);
         let on_pin_toggle_rc = Rc::new(on_pin_toggle);
         let on_web_search_toggle_rc = Rc::new(on_web_search_toggle);
+        let on_vibe_toggle_rc = Rc::new(on_vibe_toggle);
 
         let make_popover_row = |icon_name: &str, title: &str| -> (gtk::Button, gtk::Switch) {
             let row_box = gtk::Box::new(gtk::Orientation::Horizontal, 12);
@@ -264,6 +288,22 @@ impl MsgBarComponent {
 
         popover_box.append(&web_search_toggle);
 
+        let (vibe_toggle, vibe_switch) =
+            make_popover_row("boxxy-vibe-symbolic", "Vibe Mode");
+        vibe_toggle.set_tooltip_text(Some(
+            "Vibe Mode (Auto-run safe commands and workspace edits)",
+        ));
+
+        let vibe_state = Rc::new(Cell::new(false));
+        let vibe_state_clone = vibe_state.clone();
+        let on_vibe_cb = on_vibe_toggle_rc.clone();
+        vibe_toggle.connect_clicked(move |_| {
+            let next = !vibe_state_clone.get();
+            on_vibe_cb(next);
+        });
+
+        popover_box.append(&vibe_toggle);
+
         widget.append(&entry_overlay);
 
         // Send button — mirrors Enter in the entry. Intentionally NOT
@@ -300,11 +340,13 @@ impl MsgBarComponent {
             let on_sleep_toggle = on_sleep_toggle_rc;
             let on_pin_toggle = on_pin_toggle_rc;
             let on_web_search_toggle = on_web_search_toggle_rc;
+            let on_vibe_toggle = on_vibe_toggle_rc;
             let claw_state = claw_state.clone();
             let character_id = character_id.clone();
             let sleep_state = sleep_state.clone();
             let pin_state = pin_state.clone();
             let web_search_state = web_search_state.clone();
+            let vibe_state = vibe_state.clone();
             let on_submit_hook = on_submit_hook.clone();
             let on_clear_hook = on_clear_hook.clone();
             let embedded = embedded.clone();
@@ -335,6 +377,13 @@ impl MsgBarComponent {
                     buf.set_text("/resume ");
                     let end = buf.end_iter();
                     buf.place_cursor(&end);
+                    return;
+                }
+
+                if original_text.trim() == "/vibe" && attachment_mgr.get_attachments().is_empty() {
+                    buf.set_text("");
+                    let next = !vibe_state.get();
+                    on_vibe_toggle(next);
                     return;
                 }
 
@@ -420,6 +469,7 @@ impl MsgBarComponent {
                 sleep_state.clone(),
                 pin_state.clone(),
                 web_search_state.clone(),
+                vibe_state.clone(),
             )),
             Box::new(autocomplete::ResumeCompletionProvider::new(Some(
                 entry.downgrade(),
@@ -439,7 +489,7 @@ impl MsgBarComponent {
                 if is_resume_session
                     || matches!(
                         replacement.as_str(),
-                        "/models" | "/sleep" | "/pin" | "/web" | "/clear" | "/exit"
+                        "/models" | "/vibe" | "/sleep" | "/pin" | "/web" | "/clear" | "/exit"
                     )
                 {
                     autocomplete_submit();
@@ -560,14 +610,18 @@ impl MsgBarComponent {
             sleep_toggle,
             pin_toggle,
             web_search_toggle,
+            vibe_toggle,
             sleep_switch,
             pin_switch,
             web_switch,
+            vibe_switch,
             avatar_sleep_badge,
+            avatar_vibe_badge,
             claw_state,
             sleep_state,
             pin_state,
             web_search_state,
+            vibe_state,
             character_id,
             avatar,
             avatar_stack,
@@ -668,6 +722,7 @@ impl MsgBarComponent {
                     .set_tooltip_text(Some("Sleep Mode (Passive Observer)"));
                 self.sleep_switch.set_active(false);
                 self.avatar_sleep_badge.set_visible(false);
+                self.avatar_vibe_badge.set_visible(self.vibe_state.get());
                 self.sleep_state.set(false);
             }
             AgentStatus::Sleep => {
@@ -676,17 +731,20 @@ impl MsgBarComponent {
                     .set_tooltip_text(Some("Wake up (Resume from Sleep)"));
                 self.sleep_switch.set_active(true);
                 self.avatar_sleep_badge.set_visible(true);
+                self.avatar_vibe_badge.set_visible(false);
                 self.sleep_state.set(true);
             }
             AgentStatus::Faulted { .. } => {
                 self.claw_toggle.add_css_class("status-error");
                 self.sleep_switch.set_active(false);
                 self.avatar_sleep_badge.set_visible(false);
+                self.avatar_vibe_badge.set_visible(self.vibe_state.get());
             }
             AgentStatus::Off => {
                 self.sleep_state.set(false);
                 self.sleep_switch.set_active(false);
                 self.avatar_sleep_badge.set_visible(false);
+                self.avatar_vibe_badge.set_visible(self.vibe_state.get());
                 self.claw_image.add_css_class("grayscale");
             }
         }
@@ -722,11 +780,14 @@ impl MsgBarComponent {
         self.send_btn.set_sensitive(sensitive);
     }
 
-    pub fn update_ui(&self, status: AgentStatus, pinned: bool, web_search: bool) {
+    pub fn update_ui(&self, status: AgentStatus, pinned: bool, web_search: bool, vibe: bool) {
         let active = status != AgentStatus::Off || self.character_id.borrow().is_some();
         self.claw_state.set(active);
         self.sleep_toggle.set_sensitive(active);
         self.pin_toggle.set_sensitive(active);
+        self.vibe_toggle.set_sensitive(true);
+        let is_sleeping = status == AgentStatus::Sleep;
+        self.vibe_state.set(vibe);
         self.set_status(status);
         self.refresh_user_avatar();
 
@@ -734,6 +795,8 @@ impl MsgBarComponent {
         self.web_search_state.set(web_search);
         self.pin_switch.set_active(pinned);
         self.web_switch.set_active(web_search);
+        self.vibe_switch.set_active(vibe);
+        self.avatar_vibe_badge.set_visible(vibe && !is_sleeping);
 
         if pinned {
             self.pin_toggle.set_tooltip_text(Some("Unpin this session"));
@@ -747,6 +810,15 @@ impl MsgBarComponent {
         } else {
             self.web_search_toggle
                 .set_tooltip_text(Some("Enable Web Search"));
+        }
+
+        if vibe {
+            self.vibe_toggle
+                .set_tooltip_text(Some("Disable Vibe Mode"));
+        } else {
+            self.vibe_toggle.set_tooltip_text(Some(
+                "Vibe Mode (Auto-run safe commands and workspace edits)",
+            ));
         }
     }
 

@@ -127,6 +127,7 @@ pub fn spawn_turn(
             persistent_agent,
             mcp_handle,
             web_search_enabled,
+            vibe_enabled,
             history,
             history_len,
             full_prompt,
@@ -141,6 +142,18 @@ pub fn spawn_turn(
 
             let now = chrono::Local::now();
             let identity = format!("Agent Name: **{}**\nUnique ID: `{}`", agent_name, pane_id);
+            let vibe_ctx = if state_lock.vibe_enabled {
+                if crate::engine::vibe_guard::is_cwd_vibe_trusted(
+                    &cwd_clone,
+                    &settings.vibe_trusted_dirs,
+                ) {
+                    "Vibe Mode: `ON` (Trusted folder: safe terminal commands via `terminal_exec` and workspace file edits via `replace_in_file`/`file_write` execute automatically without pausing for user confirmation; destructive or out-of-workspace commands still prompt)"
+                } else {
+                    "Vibe Mode: `ON` (Current folder is not in Trusted Vibe Locations, so commands and edits will still prompt)"
+                }
+            } else {
+                "Vibe Mode: `OFF` (Supervised)"
+            };
 
             let turn_context = format!(
                 "## YOUR IDENTITY\n\
@@ -152,10 +165,12 @@ pub fn spawn_turn(
                 {}\n\
                 {}\n\
                 {}\n\
+                {}\n\
                 {}\n",
                 identity,
                 now.to_rfc3339(),
                 cwd_clone,
+                vibe_ctx,
                 active_skills_text,
                 past_memories,
                 radar,
@@ -176,10 +191,11 @@ pub fn spawn_turn(
             let l = h.len();
             let mcp = state_lock.mcp_handle.clone();
             let web = state_lock.web_search_enabled;
+            let vibe = state_lock.vibe_enabled;
             let agent = state_lock.persistent_agent.take();
             let char_id = state_lock.character_id.clone();
 
-            (agent, mcp, web, h, l, full_prompt, char_id)
+            (agent, mcp, web, vibe, h, l, full_prompt, char_id)
         };
 
         // 4. Resolve Agent (after lock is released to prevent deadlock)
@@ -347,6 +363,13 @@ pub fn spawn_turn(
                         pane_id, agent_name
                     );
                 } else if let Some(command) = command_opt {
+                    let latest_settings = boxxy_preferences::Settings::load();
+                    let auto_approve = vibe_enabled
+                        && crate::engine::vibe_guard::is_safe_vibe_command(
+                            &command,
+                            &cwd_clone,
+                            &latest_settings.vibe_trusted_dirs,
+                        );
                     let event = ClawEngineEvent::InjectCommand {
                         agent_name: agent_name.clone(),
                         character_id: character_id.clone(),
@@ -354,6 +377,7 @@ pub fn spawn_turn(
                         diagnosis: clean_diagnosis,
                         target_pane_id: None,
                         target_pane_label: None,
+                        auto_approve,
                         usage,
                     };
                     state.lock().await.pending_inject_command = true;

@@ -135,10 +135,11 @@ impl ClawSession {
 
         if !matches!(msg, ClawMessage::Initialize) {
             let endpoints = &boxxy_preferences::Settings::load().openai_compatible_endpoints;
-            let (web_search_enabled, char_id, context_window) = {
+            let (web_search_enabled, vibe_enabled, char_id, context_window) = {
                 let state_lock = self.state.lock().await;
                 (
                     state_lock.web_search_enabled,
+                    state_lock.vibe_enabled,
                     state_lock.character_id.clone(),
                     boxxy_ai_core::model_context_window_with_endpoints(
                         &state_lock.current_claw_model,
@@ -153,6 +154,7 @@ impl ClawSession {
                     character_id: char_id,
                     pinned: self.pinned,
                     web_search_enabled,
+                    vibe_enabled,
                     total_tokens: self.total_tokens,
                     context_tokens: self.context_tokens,
                     context_window,
@@ -372,7 +374,10 @@ impl ClawSession {
                 state_lock.total_cost_usd,
             )
         };
-        let web_search_enabled = self.state.lock().await.web_search_enabled;
+        let (web_search_enabled, vibe_enabled) = {
+            let state_lock = self.state.lock().await;
+            (state_lock.web_search_enabled, state_lock.vibe_enabled)
+        };
 
         let model_label = |m: &Option<_>| -> String {
             m.as_ref()
@@ -422,6 +427,7 @@ impl ClawSession {
                     character_id: self.character_id.clone(),
                     pinned: self.pinned,
                     web_search_enabled,
+                    vibe_enabled,
                     total_tokens,
                     context_tokens,
                     context_window: new_context_window,
@@ -449,6 +455,7 @@ impl ClawSession {
                     character_id: self.character_id.clone(),
                     pinned: self.pinned,
                     web_search_enabled,
+                    vibe_enabled,
                     total_tokens,
                     context_tokens,
                     context_window: new_context_window,
@@ -603,6 +610,7 @@ impl ClawSession {
                     let agent_name_clone = state_lock.agent_name.clone();
                     let tasks_clone = state_lock.pending_tasks.clone();
                     let web_search_enabled = state_lock.web_search_enabled;
+                    let vibe_enabled = state_lock.vibe_enabled;
                     drop(state_lock);
 
                     self.clear_ui_history().await;
@@ -687,6 +695,7 @@ impl ClawSession {
                             character_id: self.character_id.clone(),
                             pinned: self.pinned,
                             web_search_enabled,
+                            vibe_enabled,
                             total_tokens: self.total_tokens,
                             context_tokens: self.context_tokens,
                             context_window,
@@ -814,7 +823,10 @@ impl ClawSession {
             &settings.claw_model,
             &settings.openai_compatible_endpoints,
         );
-        let web_search_enabled = self.state.lock().await.web_search_enabled;
+        let (web_search_enabled, vibe_enabled) = {
+            let state_lock = self.state.lock().await;
+            (state_lock.web_search_enabled, state_lock.vibe_enabled)
+        };
         let _ = self
             .tx_ui
             .send(ClawEngineEvent::Identity {
@@ -822,6 +834,7 @@ impl ClawSession {
                 character_id: self.character_id.clone(),
                 pinned: false,
                 web_search_enabled,
+                vibe_enabled,
                 total_tokens: 0,
                 context_tokens: 0,
                 context_window,
@@ -880,6 +893,7 @@ impl ClawSession {
             character_id,
             pinned,
             web_search_enabled,
+            vibe_enabled,
             total_tokens,
             context_tokens,
             total_cost_usd,
@@ -896,6 +910,7 @@ impl ClawSession {
                 state_lock.character_id.clone(),
                 state_lock.pinned,
                 state_lock.web_search_enabled,
+                state_lock.vibe_enabled,
                 state_lock.total_tokens,
                 state_lock.context_tokens,
                 state_lock.total_cost_usd,
@@ -922,6 +937,7 @@ impl ClawSession {
                 character_id: character_id.clone(),
                 pinned,
                 web_search_enabled,
+                vibe_enabled,
                 total_tokens,
                 context_tokens,
                 context_window,

@@ -661,6 +661,18 @@ boxxyterminalwidget {
   color: @warning_color;
 }
 
+.avatar-vibe-badge {
+  border-radius: 9999px;
+  background-color: @window_bg_color;
+  color: @accent_color;
+  border: 1.5px solid alpha(@accent_color, 0.55);
+  box-shadow: 0 1px 4px alpha(black, 0.45);
+}
+
+.avatar-vibe-badge image {
+  color: @accent_color;
+}
+
 .avatar-sleep-badge-small {
   min-width: 16px;
   min-height: 16px;

@@ -746,6 +746,15 @@ impl TerminalComponent {
         }
     }
 
+    pub fn is_vibe(&self) -> bool {
+        let inner = self.inner.borrow();
+        if let Some(pane_data) = inner.panes.get(&inner.active_pane_id) {
+            pane_data.controller.is_vibe()
+        } else {
+            false
+        }
+    }
+
     pub fn agent_name(&self) -> String {
         let inner = self.inner.borrow();
         if let Some(pane_data) = inner.panes.get(&inner.active_pane_id) {

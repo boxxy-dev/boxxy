@@ -113,6 +113,7 @@ pub fn handle_terminal_event(
                         inner.tabs[pos].controller.is_sleep(),
                         inner.tabs[pos].controller.is_pinned(),
                         inner.tabs[pos].controller.is_web_search(),
+                        inner.tabs[pos].controller.is_vibe(),
                     );
                     inner
                         .claw
@@ -150,6 +151,7 @@ pub fn handle_terminal_event(
                         inner.tabs[pos].controller.is_sleep(),
                         inner.tabs[pos].controller.is_pinned(),
                         inner.tabs[pos].controller.is_web_search(),
+                        inner.tabs[pos].controller.is_vibe(),
                     );
                     inner
                         .claw
@@ -185,6 +187,7 @@ pub fn handle_terminal_event(
                                 inner.tabs[pos].controller.is_sleep(),
                                 inner.tabs[pos].controller.is_pinned(),
                                 inner.tabs[pos].controller.is_web_search(),
+                                inner.tabs[pos].controller.is_vibe(),
                             );
                         }
                     }
@@ -192,6 +195,7 @@ pub fn handle_terminal_event(
                         agent_name,
                         pinned,
                         web_search_enabled,
+                        vibe_enabled,
                         ..
                     } if let Some(page) = inner.tab_view.selected_page()
                         && inner.tabs[pos].controller.widget() == &page.child() =>
@@ -205,6 +209,7 @@ pub fn handle_terminal_event(
                             sleep,
                             pinned,
                             web_search_enabled,
+                            vibe_enabled,
                         );
                     }
                     ClawEngineEvent::PinStatusChanged(pinned)
@@ -216,6 +221,7 @@ pub fn handle_terminal_event(
                             inner.tabs[pos].controller.is_sleep(),
                             pinned,
                             inner.tabs[pos].controller.is_web_search(),
+                            inner.tabs[pos].controller.is_vibe(),
                         );
                     }
                     ClawEngineEvent::WebSearchStatusChanged(enabled)
@@ -227,6 +233,19 @@ pub fn handle_terminal_event(
                             inner.tabs[pos].controller.is_sleep(),
                             inner.tabs[pos].controller.is_pinned(),
                             enabled,
+                            inner.tabs[pos].controller.is_vibe(),
+                        );
+                    }
+                    ClawEngineEvent::VibeStatusChanged(vibe)
+                        if let Some(page) = inner.tab_view.selected_page()
+                            && inner.tabs[pos].controller.widget() == &page.child() =>
+                    {
+                        inner.claw.set_pane_state(
+                            &inner.tabs[pos].controller.agent_name(),
+                            inner.tabs[pos].controller.is_sleep(),
+                            inner.tabs[pos].controller.is_pinned(),
+                            inner.tabs[pos].controller.is_web_search(),
+                            vibe,
                         );
                     }
                     ClawEngineEvent::DismissDrawer => {

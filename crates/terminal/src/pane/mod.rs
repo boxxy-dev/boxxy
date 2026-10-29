@@ -91,6 +91,7 @@ pub struct TerminalPaneComponent {
     pub session_status: Rc<RefCell<AgentStatus>>,
     pub is_pinned: Rc<Cell<bool>>,
     is_web_search: Rc<Cell<bool>>,
+    is_vibe: Rc<Cell<bool>>,
     agent_name: Rc<RefCell<String>>,
     msg_bar: Rc<MsgBarComponent>,
     pub session_usage: Rc<Cell<SessionUsage>>,
@@ -411,6 +412,7 @@ impl TerminalPaneComponent {
         let session_status = Rc::new(RefCell::new(AgentStatus::Off));
         let is_pinned = Rc::new(Cell::new(false));
         let is_web_search = Rc::new(Cell::new(settings.web_search_on_by_default));
+        let is_vibe = Rc::new(Cell::new(false));
         let agent_name = Rc::new(RefCell::new(String::new()));
         let claw_indicator = ClawIndicator::new();
         let session_usage = Rc::new(Cell::new(SessionUsage::default()));
@@ -430,6 +432,8 @@ impl TerminalPaneComponent {
             let id_pin = id.clone();
             let cb_web_search = callback.clone();
             let id_web_search = id.clone();
+            let cb_vibe = callback.clone();
+            let id_vibe = id.clone();
 
             // We need a weak ref for the msg_bar callbacks, but inner isn't created yet.
             // We'll use a RefCell<Option<Weak<RefCell<PaneInner>>>> that we fill later.
@@ -441,16 +445,19 @@ impl TerminalPaneComponent {
             let inner_weak_for_sleep = inner_weak_ref.clone();
             let inner_weak_for_pin = inner_weak_ref.clone();
             let inner_weak_for_web_search = inner_weak_ref.clone();
+            let inner_weak_for_vibe = inner_weak_ref.clone();
 
             let is_claw_active_for_msg = is_claw_active.clone();
             let session_status_for_msg = session_status.clone();
             let is_pinned_for_msg = is_pinned.clone();
             let is_web_search_for_msg = is_web_search.clone();
+            let is_vibe_for_msg = is_vibe.clone();
 
             let is_claw_active_for_active = is_claw_active.clone();
             let session_status_for_active = session_status.clone();
             let is_pinned_for_active = is_pinned.clone();
             let is_web_search_for_active = is_web_search.clone();
+            let is_vibe_for_active = is_vibe.clone();
             let agent_name_for_active = agent_name.clone();
             let session_usage_for_active = session_usage.clone();
             let pending_tasks_for_active = pending_tasks.clone();
@@ -459,17 +466,26 @@ impl TerminalPaneComponent {
             let session_status_for_sleep = session_status.clone();
             let is_pinned_for_sleep = is_pinned.clone();
             let is_web_search_for_sleep = is_web_search.clone();
+            let is_vibe_for_sleep = is_vibe.clone();
 
             let session_status_for_pin = session_status.clone();
             let is_pinned_for_pin = is_pinned.clone();
             let is_web_search_for_pin = is_web_search.clone();
+            let is_vibe_for_pin = is_vibe.clone();
 
             let session_status_for_web_search = session_status.clone();
             let is_pinned_for_web_search = is_pinned.clone();
             let is_web_search_for_web_search = is_web_search.clone();
+            let is_vibe_for_web_search = is_vibe.clone();
+
+            let session_status_for_vibe = session_status.clone();
+            let is_pinned_for_vibe = is_pinned.clone();
+            let is_web_search_for_vibe = is_web_search.clone();
+            let is_vibe_for_vibe = is_vibe.clone();
 
             let tx_pin_toggle = claw_sender.clone();
             let tx_web_search_toggle = claw_sender.clone();
+            let tx_vibe_toggle = claw_sender.clone();
             let pending_char_for_toggle = pending_char_for_msgbar.clone();
             let event_sender_for_toggle = event_sender_for_first_msg.clone();
             let msg_bar = Rc::new(MsgBarComponent::new(
@@ -497,6 +513,7 @@ impl TerminalPaneComponent {
                                 session_status_for_msg.borrow().clone(),
                                 is_pinned_for_msg.get(),
                                 is_web_search_for_msg.get(),
+                                is_vibe_for_msg.get(),
                             );
                             cb_msg(PaneOutput::ClawStateChanged(
                                 id_msg.clone(),
@@ -512,6 +529,8 @@ impl TerminalPaneComponent {
                         let event_tx = event_sender_for_first_msg.clone();
                         let cwd = inner_arc.borrow().working_dir.clone().unwrap_or_default();
                         let tx = tx_msg.clone();
+                        let initial_vibe = is_vibe_for_msg.get();
+                        let initial_web = is_web_search_for_msg.get();
 
                         glib::spawn_future_local(async move {
                             let snapshot =
@@ -621,6 +640,20 @@ impl TerminalPaneComponent {
                                     } else {
                                         *claw_sub_ref.lock() = Some(sub_guard);
                                         *session_id_ref.lock().await = Some(session_id.clone());
+                                        if initial_vibe {
+                                            let _ = agent
+                                                .post_claw_message(
+                                                    session_id.clone(),
+                                                    ClawMessage::ToggleVibe(true),
+                                                )
+                                                .await;
+                                        }
+                                        let _ = agent
+                                            .post_claw_message(
+                                                session_id.clone(),
+                                                ClawMessage::ToggleWebSearch(initial_web),
+                                            )
+                                            .await;
                                         let _ = agent
                                             .post_claw_message(
                                                 session_id.clone(),
@@ -696,6 +729,7 @@ impl TerminalPaneComponent {
                                 status = AgentStatus::Off;
                                 *session_status_for_active.borrow_mut() = status.clone();
                                 is_pinned_for_active.set(false);
+                                is_vibe_for_active.set(false);
                                 *agent_name_for_active.borrow_mut() = String::new();
                                 session_usage_for_active.set(SessionUsage::default());
                                 pending_tasks_for_active.borrow_mut().clear();
@@ -712,11 +746,13 @@ impl TerminalPaneComponent {
                                 status.clone(),
                                 is_pinned_for_active.get(),
                                 is_web_search_for_active.get(),
+                                is_vibe_for_active.get(),
                             );
                             if let Some(ind) = &inner_arc.borrow().claw_indicator {
                                 if !active {
                                     ind.set_identity("", "");
                                     ind.set_has_tasks(false);
+                                    ind.set_vibe(false);
                                     ind.set_mode(AgentStatus::Off);
                                     ind.hide();
                                 }
@@ -803,6 +839,7 @@ impl TerminalPaneComponent {
                                 new_status,
                                 is_pinned_for_sleep.get(),
                                 is_web_search_for_sleep.get(),
+                                is_vibe_for_sleep.get(),
                             );
                         }
                         cb_sleep(PaneOutput::ClawStateChanged(
@@ -828,6 +865,7 @@ impl TerminalPaneComponent {
                                 session_status_for_pin.borrow().clone(),
                                 pinned,
                                 is_web_search_for_pin.get(),
+                                is_vibe_for_pin.get(),
                             );
                         }
                         cb_pin(PaneOutput::ClawEvent(
@@ -852,6 +890,7 @@ impl TerminalPaneComponent {
                                 session_status_for_web_search.borrow().clone(),
                                 is_pinned_for_web_search.get(),
                                 enabled,
+                                is_vibe_for_web_search.get(),
                             );
                         }
                         cb_web_search(PaneOutput::ClawEvent(
@@ -862,6 +901,165 @@ impl TerminalPaneComponent {
                         glib::spawn_future_local(async move {
                             let _ = tx.send(ClawMessage::ToggleWebSearch(enabled)).await;
                         });
+                    }
+                },
+                move |enabled| {
+                    if is_vibe_for_vibe.get() == enabled {
+                        return;
+                    }
+                    let Some(inner_arc) = inner_weak_for_vibe
+                        .borrow()
+                        .as_ref()
+                        .and_then(|w| w.upgrade())
+                    else {
+                        return;
+                    };
+
+                    if !enabled {
+                        is_vibe_for_vibe.set(false);
+                        {
+                            let inner_b = inner_arc.borrow();
+                            inner_b.msg_bar.update_ui(
+                                session_status_for_vibe.borrow().clone(),
+                                is_pinned_for_vibe.get(),
+                                is_web_search_for_vibe.get(),
+                                false,
+                            );
+                            if let Some(ind) = &inner_b.claw_indicator {
+                                ind.set_vibe(false);
+                            }
+                            if let Some(pop) = &inner_b.claw_popover {
+                                pop.refresh_character_selector("");
+                            }
+                        }
+                        cb_vibe(PaneOutput::ClawEvent(
+                            id_vibe.clone(),
+                            ClawEngineEvent::VibeStatusChanged(false),
+                        ));
+                        let tx = tx_vibe_toggle.clone();
+                        glib::spawn_future_local(async move {
+                            let _ = tx.send(ClawMessage::ToggleVibe(false)).await;
+                        });
+                        return;
+                    }
+
+                    // Enabling Vibe Mode: check if current working directory is trusted.
+                    let cwd = inner_arc
+                        .borrow()
+                        .working_dir
+                        .clone()
+                        .unwrap_or_default();
+                    let current_settings = boxxy_preferences::Settings::load();
+
+                    if current_settings.is_dir_vibe_trusted(&cwd) {
+                        is_vibe_for_vibe.set(true);
+                        {
+                            let inner_b = inner_arc.borrow();
+                            inner_b.msg_bar.update_ui(
+                                session_status_for_vibe.borrow().clone(),
+                                is_pinned_for_vibe.get(),
+                                is_web_search_for_vibe.get(),
+                                true,
+                            );
+                            if let Some(ind) = &inner_b.claw_indicator {
+                                ind.set_vibe(true);
+                            }
+                            if let Some(pop) = &inner_b.claw_popover {
+                                pop.refresh_character_selector("");
+                            }
+                        }
+                        cb_vibe(PaneOutput::ClawEvent(
+                            id_vibe.clone(),
+                            ClawEngineEvent::VibeStatusChanged(true),
+                        ));
+                        let tx = tx_vibe_toggle.clone();
+                        glib::spawn_future_local(async move {
+                            let _ = tx.send(ClawMessage::ToggleVibe(true)).await;
+                        });
+                        return;
+                    }
+
+                    // CWD is not yet in `vibe_trusted_dirs`. Check if it is eligible to be trusted.
+                    let parent_widget = inner_arc.borrow().terminal.clone();
+                    use libadwaita::prelude::AlertDialogExt;
+                    match boxxy_preferences::config::validate_vibe_trusted_dir(&cwd) {
+                        Err(reason) => {
+                            let dialog = libadwaita::AlertDialog::builder()
+                                .heading("Cannot Enable Vibe Mode Here")
+                                .body(format!(
+                                    "{reason}\n\nNavigate to a project folder (for example, cd ~/Projects or cd ~/test) or manage trusted folders in Preferences → Toolbox & Permissions."
+                                ))
+                                .default_response("ok")
+                                .close_response("ok")
+                                .build();
+                            dialog.add_response("ok", "OK");
+                            libadwaita::prelude::AdwDialogExt::present(&dialog, Some(&parent_widget));
+                        }
+                        Ok(valid_dir) => {
+                            let dialog = libadwaita::AlertDialog::builder()
+                                .heading("Trust Folder for Vibe Mode?")
+                                .body(format!(
+                                    "Allow characters in Vibe Mode to automatically run safe commands and edit files inside:\n\n{valid_dir}\n\n(including its subfolders) without asking each time? You can manage trusted folders anytime in Preferences → Toolbox & Permissions."
+                                ))
+                                .default_response("trust")
+                                .close_response("cancel")
+                                .build();
+                            dialog.add_response("cancel", "Cancel");
+                            dialog.add_response("trust", "Trust & Enable");
+                            dialog.set_response_appearance(
+                                "trust",
+                                libadwaita::ResponseAppearance::Suggested,
+                            );
+
+                            let inner_for_resp = inner_arc.clone();
+                            let is_vibe_resp = is_vibe_for_vibe.clone();
+                            let status_resp = session_status_for_vibe.clone();
+                            let pin_resp = is_pinned_for_vibe.clone();
+                            let web_resp = is_web_search_for_vibe.clone();
+                            let cb_resp = cb_vibe.clone();
+                            let id_resp = id_vibe.clone();
+                            let tx_resp = tx_vibe_toggle.clone();
+
+                            dialog.connect_response(None, move |_, response| {
+                                if response == "trust" {
+                                    let dir_to_save = valid_dir.clone();
+                                    boxxy_preferences::Settings::update(move |s| {
+                                        if !s.vibe_trusted_dirs.contains(&dir_to_save) {
+                                            s.vibe_trusted_dirs.push(dir_to_save.clone());
+                                        }
+                                    });
+
+                                    is_vibe_resp.set(true);
+                                    {
+                                        let inner_b = inner_for_resp.borrow();
+                                        inner_b.msg_bar.update_ui(
+                                            status_resp.borrow().clone(),
+                                            pin_resp.get(),
+                                            web_resp.get(),
+                                            true,
+                                        );
+                                        if let Some(ind) = &inner_b.claw_indicator {
+                                            ind.set_vibe(true);
+                                        }
+                                        if let Some(pop) = &inner_b.claw_popover {
+                                            pop.refresh_character_selector("");
+                                        }
+                                    }
+                                    cb_resp(PaneOutput::ClawEvent(
+                                        id_resp.clone(),
+                                        ClawEngineEvent::VibeStatusChanged(true),
+                                    ));
+                                    let tx = tx_resp.clone();
+                                    glib::spawn_future_local(async move {
+                                        let agent = crate::get_agent().await;
+                                        let _ = agent.notify_settings_invalidated().await;
+                                        let _ = tx.send(ClawMessage::ToggleVibe(true)).await;
+                                    });
+                                }
+                            });
+
+                            libadwaita::prelude::AdwDialogExt::present(&dialog, Some(&parent_widget));
+                        }
                     }
                 },
             ));
@@ -978,6 +1176,7 @@ impl TerminalPaneComponent {
             session_usage.clone(),
             is_pinned.clone(),
             is_web_search.clone(),
+            is_vibe.clone(),
             session_status.clone(),
             agent_name.clone(),
             &claw_indicator,
@@ -1017,6 +1216,7 @@ impl TerminalPaneComponent {
         let session_status_sc = session_status.clone();
         let is_pinned_sc = is_pinned.clone();
         let is_web_search_sc = is_web_search.clone();
+        let is_vibe_sc = is_vibe.clone();
         let agent_name_sc = agent_name.clone();
         let claw_popover_sc = claw_popover.clone();
         let action = gtk::CallbackAction::new(move |_, _| {
@@ -1026,6 +1226,7 @@ impl TerminalPaneComponent {
                 session_status_sc.borrow().clone(),
                 is_pinned_sc.get(),
                 is_web_search_sc.get(),
+                is_vibe_sc.get(),
             );
             let aname = agent_name_sc.borrow().clone();
             claw_popover_sc.show_input_only(&aname);
@@ -1052,6 +1253,7 @@ impl TerminalPaneComponent {
             session_status,
             is_pinned,
             is_web_search,
+            is_vibe,
             agent_name,
             msg_bar,
             session_usage,
@@ -1135,6 +1337,7 @@ impl TerminalPaneComponent {
             AgentStatus::Waiting,
             self.is_pinned.get(),
             self.is_web_search.get(),
+            self.is_vibe.get(),
         );
         cb(PaneOutput::ClawStateChanged(pane_id.clone(), true, false));
 
@@ -1249,6 +1452,7 @@ impl TerminalPaneComponent {
                 status.clone(),
                 self.is_pinned.get(),
                 self.is_web_search.get(),
+                self.is_vibe.get(),
             );
             let (cb, pane_id) = {
                 let inner = self.inner.borrow();
@@ -1338,6 +1542,10 @@ impl TerminalPaneComponent {
 
     pub fn is_web_search(&self) -> bool {
         self.is_web_search.get()
+    }
+
+    pub fn is_vibe(&self) -> bool {
+        self.is_vibe.get()
     }
 
     pub fn agent_name(&self) -> String {
@@ -1430,6 +1638,7 @@ impl TerminalPaneComponent {
         let session_status_cell = self.session_status.clone();
         let is_pinned_cell = self.is_pinned.clone();
         let is_web_search_cell = self.is_web_search.clone();
+        let is_vibe_cell = self.is_vibe.clone();
         let claw_popover_reattach = self.claw_popover.clone();
         let agent_name_reattach = self.agent_name.clone();
 
@@ -1485,6 +1694,7 @@ impl TerminalPaneComponent {
                                     AgentStatus::Waiting,
                                     is_pinned_cell.get(),
                                     is_web_search_cell.get(),
+                                    is_vibe_cell.get(),
                                 );
                                 (inner.callback)(PaneOutput::ClawStateChanged(
                                     id.clone(),
@@ -1952,8 +2162,12 @@ impl TerminalPaneComponent {
         *self.session_status.borrow_mut() = status.clone();
 
         // Sync MsgBar toggle state
-        self.msg_bar
-            .update_ui(status, self.is_pinned.get(), self.is_web_search.get());
+        self.msg_bar.update_ui(
+            status,
+            self.is_pinned.get(),
+            self.is_web_search.get(),
+            self.is_vibe.get(),
+        );
 
         // If turning ON, tell the session to Initialize
         let tx = self.claw_sender.clone();
@@ -2046,6 +2260,7 @@ impl TerminalPaneComponent {
                         self.session_status.borrow().clone(),
                         self.is_pinned.get(),
                         false,
+                        self.is_vibe.get(),
                     );
                 } else {
                     // If enabled, send current local state to ensure it's synced

@@ -769,6 +769,9 @@ impl TerminalOverlay {
             inner_box.set_margin_top(1);
             inner_box.set_margin_bottom(1);
 
+            let is_current = info.config.id == pending;
+            let is_in_use = is_taken(&info.config.id);
+
             let avatar = adw::Avatar::new(32, Some(&info.config.display_name), true);
             avatar.set_valign(gtk::Align::Center);
             if info.has_avatar
@@ -779,18 +782,35 @@ impl TerminalOverlay {
                     avatar.set_custom_image(Some(&texture));
                 }
             }
-            inner_box.append(&avatar);
+
+            if is_current && self.msg_bar.vibe_state.get() {
+                let vibe_icon = gtk::Image::builder()
+                    .icon_name("boxxy-vibe-symbolic")
+                    .pixel_size(10)
+                    .hexpand(true)
+                    .vexpand(true)
+                    .halign(gtk::Align::Center)
+                    .valign(gtk::Align::Center)
+                    .build();
+                let vibe_badge = gtk::Box::builder()
+                    .halign(gtk::Align::End)
+                    .valign(gtk::Align::End)
+                    .css_classes(["avatar-vibe-badge", "avatar-sleep-badge-small"])
+                    .build();
+                vibe_badge.append(&vibe_icon);
+                let avatar_overlay = gtk::Overlay::builder()
+                    .valign(gtk::Align::Center)
+                    .child(&avatar)
+                    .build();
+                avatar_overlay.add_overlay(&vibe_badge);
+                inner_box.append(&avatar_overlay);
+            } else {
+                inner_box.append(&avatar);
+            }
 
             let label = gtk::Label::new(Some(&info.config.display_name.to_uppercase()));
             label.set_valign(gtk::Align::Center);
             inner_box.append(&label);
-
-            // In the pre-selection phase the local `pending` is the sole
-            // source of truth for which character is highlighted. Registry
-            // Active status only tells us whether a character is in use in
-            // *another* pane (and should therefore be dimmed).
-            let is_current = info.config.id == pending;
-            let is_in_use = is_taken(&info.config.id);
 
             if is_current {
                 let check_icon = gtk::Image::from_icon_name("boxxy-object-select-2-symbolic");

@@ -160,6 +160,7 @@ pub struct CommandCompletionProvider {
     sleep_state: std::rc::Rc<std::cell::Cell<bool>>,
     pin_state: std::rc::Rc<std::cell::Cell<bool>>,
     web_search_state: std::rc::Rc<std::cell::Cell<bool>>,
+    vibe_state: std::rc::Rc<std::cell::Cell<bool>>,
 }
 
 impl CommandCompletionProvider {
@@ -169,6 +170,7 @@ impl CommandCompletionProvider {
         sleep_state: std::rc::Rc<std::cell::Cell<bool>>,
         pin_state: std::rc::Rc<std::cell::Cell<bool>>,
         web_search_state: std::rc::Rc<std::cell::Cell<bool>>,
+        vibe_state: std::rc::Rc<std::cell::Cell<bool>>,
     ) -> Self {
         Self {
             claw_state,
@@ -176,6 +178,7 @@ impl CommandCompletionProvider {
             sleep_state,
             pin_state,
             web_search_state,
+            vibe_state,
         }
     }
 }
@@ -214,6 +217,24 @@ impl CompletionProvider for CommandCompletionProvider {
                 icon_name: None,
                 icon_path: None,
                 secondary_text: Some("Switch model".to_string()),
+                badge_text: None,
+                badge_color: None,
+                disabled: false,
+            });
+        }
+
+        if "vibe".contains(&query_lower) {
+            let subtitle = if self.vibe_state.get() {
+                "Disable Vibe Mode"
+            } else {
+                "Enable Vibe Mode (auto-run safe tasks)"
+            };
+            items.push(CompletionItem {
+                display_name: "/vibe".to_string(),
+                replacement_text: "/vibe".to_string(),
+                icon_name: None,
+                icon_path: None,
+                secondary_text: Some(subtitle.to_string()),
                 badge_text: None,
                 badge_color: None,
                 disabled: false,

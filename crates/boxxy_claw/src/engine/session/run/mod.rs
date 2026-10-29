@@ -273,6 +273,19 @@ impl ClawSession {
                         .await;
                 }
             }
+            ClawMessage::ToggleVibe(enabled) => {
+                if enabled {
+                    boxxy_preferences::Settings::reload();
+                }
+                let mut state_lock = self.state.lock().await;
+                if state_lock.vibe_enabled != enabled {
+                    state_lock.vibe_enabled = enabled;
+                    let _ = self
+                        .tx_ui
+                        .send(ClawEngineEvent::VibeStatusChanged(enabled))
+                        .await;
+                }
+            }
             ClawMessage::ForegroundProcessChanged { process_name } => {
                 let status = if process_name.is_empty() {
                     None

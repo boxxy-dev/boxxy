@@ -394,6 +394,7 @@ pub enum ClawMessage {
     },
     TogglePin(bool),
     ToggleWebSearch(bool),
+    ToggleVibe(bool),
     CancelTask {
         task_id: Uuid,
     },
@@ -420,6 +421,8 @@ pub enum ClawEngineEvent {
         character_id: String,
         pinned: bool,
         web_search_enabled: bool,
+        #[serde(default)]
+        vibe_enabled: bool,
         total_tokens: u64,
         #[serde(default)]
         context_tokens: u64,
@@ -463,6 +466,8 @@ pub enum ClawEngineEvent {
         target_pane_id: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         target_pane_label: Option<String>,
+        #[serde(default)]
+        auto_approve: bool,
         usage: Option<UsageWrapper>,
     },
     ProposeFileWrite {
@@ -472,6 +477,8 @@ pub enum ClawEngineEvent {
         content: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         diff: Option<FileDiff>,
+        #[serde(default)]
+        auto_approve: bool,
         usage: Option<UsageWrapper>,
     },
     ProposeFileDelete {
@@ -514,6 +521,8 @@ pub enum ClawEngineEvent {
         target_pane_id: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         target_pane_label: Option<String>,
+        #[serde(default)]
+        auto_approve: bool,
         usage: Option<UsageWrapper>,
     },
     ProposalResolved {
@@ -583,6 +592,7 @@ pub enum ClawEngineEvent {
     },
     PinStatusChanged(bool),
     WebSearchStatusChanged(bool),
+    VibeStatusChanged(bool),
     TaskStatusChanged {
         tasks: Vec<ScheduledTask>,
         agent_name: String,

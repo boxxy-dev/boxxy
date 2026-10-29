@@ -43,6 +43,7 @@ pub fn spawn_dispatch(
     session_status: Rc<RefCell<AgentStatus>>,
     is_pinned: Rc<Cell<bool>>,
     is_web_search: Rc<Cell<bool>>,
+    is_vibe: Rc<Cell<bool>>,
     agent_name: Rc<RefCell<String>>,
     session_usage: Rc<Cell<SessionUsage>>,
     pending_tasks: Rc<RefCell<Vec<boxxy_claw_protocol::ScheduledTask>>>,
@@ -132,6 +133,7 @@ pub fn spawn_dispatch(
                     character_id,
                     target_pane_id,
                     target_pane_label,
+                    auto_approve,
                     usage,
                 } => {
                     if let Some(usage) = usage {
@@ -154,17 +156,35 @@ pub fn spawn_dispatch(
                         command,
                         |_| {},
                     );
-                    overlay.show(
-                        OverlayMode::Claw,
-                        agent_name,
-                        Some("Propose Command"),
-                        diagnosis,
-                        crate::Proposal::Command {
-                            command: command.clone(),
-                            target_pane_id: target_pane_id.clone(),
-                            target_pane_label: target_pane_label.clone(),
-                        },
-                    );
+                    if *auto_approve {
+                        if let Some(target_id) = target_pane_id
+                            .as_deref()
+                            .filter(|tid| !tid.is_empty() && *tid != id.as_str())
+                        {
+                            host.inject_line_to_pane(target_id, command.clone());
+                        } else {
+                            host.inject_line(command.clone());
+                        }
+                        overlay.show(
+                            OverlayMode::Claw,
+                            agent_name,
+                            Some("Diagnosis"),
+                            diagnosis,
+                            crate::Proposal::None,
+                        );
+                    } else {
+                        overlay.show(
+                            OverlayMode::Claw,
+                            agent_name,
+                            Some("Propose Command"),
+                            diagnosis,
+                            crate::Proposal::Command {
+                                command: command.clone(),
+                                target_pane_id: target_pane_id.clone(),
+                                target_pane_label: target_pane_label.clone(),
+                            },
+                        );
+                    }
                 }
                 ClawEngineEvent::ProposeFileWrite {
                     path,
@@ -172,6 +192,7 @@ pub fn spawn_dispatch(
                     diff,
                     agent_name,
                     character_id,
+                    auto_approve,
                     usage,
                 } => {
                     if let Some(usage) = usage {
@@ -187,17 +208,19 @@ pub fn spawn_dispatch(
                         Some(character_id.clone()),
                         resolved_diff.clone(),
                     );
-                    overlay.show(
-                        OverlayMode::Claw,
-                        agent_name,
-                        Some("Propose File Edit"),
-                        "",
-                        crate::Proposal::FileWrite {
-                            path: path.clone(),
-                            content: content.clone(),
-                            diff: Some(resolved_diff),
-                        },
-                    );
+                    if !*auto_approve {
+                        overlay.show(
+                            OverlayMode::Claw,
+                            agent_name,
+                            Some("Propose File Edit"),
+                            "",
+                            crate::Proposal::FileWrite {
+                                path: path.clone(),
+                                content: content.clone(),
+                                diff: Some(resolved_diff),
+                            },
+                        );
+                    }
                 }
                 ClawEngineEvent::ProposeFileDelete {
                     path,
@@ -342,6 +365,7 @@ pub fn spawn_dispatch(
                     character_id,
                     target_pane_id,
                     target_pane_label,
+                    auto_approve,
                     usage,
                 } => {
                     if let Some(usage) = usage {
@@ -364,23 +388,42 @@ pub fn spawn_dispatch(
                         command,
                         |_| {},
                     );
-                    overlay.show(
-                        OverlayMode::Claw,
-                        agent_name,
-                        Some("Terminal Command"),
-                        explanation,
-                        crate::Proposal::Command {
-                            command: command.clone(),
-                            target_pane_id: target_pane_id.clone(),
-                            target_pane_label: target_pane_label.clone(),
-                        },
-                    );
+                    if *auto_approve {
+                        if let Some(target_id) = target_pane_id
+                            .as_deref()
+                            .filter(|tid| !tid.is_empty() && *tid != id.as_str())
+                        {
+                            host.inject_line_to_pane(target_id, command.clone());
+                            host.send_claw(ClawMessage::TerminalCommandAccepted {
+                                target_pane_id: Some(target_id.to_string()),
+                            });
+                        } else {
+                            host.inject_line(command.clone());
+                            host.send_claw(ClawMessage::TerminalCommandAccepted {
+                                target_pane_id: None,
+                            });
+                        }
+                        overlay.enter_waiting_state();
+                    } else {
+                        overlay.show(
+                            OverlayMode::Claw,
+                            agent_name,
+                            Some("Terminal Command"),
+                            explanation,
+                            crate::Proposal::Command {
+                                command: command.clone(),
+                                target_pane_id: target_pane_id.clone(),
+                                target_pane_label: target_pane_label.clone(),
+                            },
+                        );
+                    }
                 }
                 ClawEngineEvent::Identity {
                     agent_name: name,
                     character_id,
                     pinned,
                     web_search_enabled,
+                    vibe_enabled,
                     total_tokens: total,
                     context_tokens,
                     context_window,
@@ -388,13 +431,15 @@ pub fn spawn_dispatch(
                 } => {
                     overlay.set_active_character(name, character_id);
                     indicator.set_identity(name, character_id);
+                    indicator.set_vibe(*vibe_enabled);
                     is_pinned.set(*pinned);
                     is_web_search.set(*web_search_enabled);
+                    is_vibe.set(*vibe_enabled);
                     *agent_name.borrow_mut() = name.clone();
 
                     let status = session_status.borrow().clone();
                     msg_bar.set_character(character_id);
-                    msg_bar.update_ui(status, *pinned, *web_search_enabled);
+                    msg_bar.update_ui(status, *pinned, *web_search_enabled, *vibe_enabled);
                     let prev_tools =
                         if *total == 0 && *context_tokens == 0 && *total_cost_usd == 0.0 {
                             0
@@ -415,15 +460,38 @@ pub fn spawn_dispatch(
                 ClawEngineEvent::PinStatusChanged(pinned) => {
                     is_pinned.set(*pinned);
                     let status = session_status.borrow().clone();
-                    msg_bar.update_ui(status, *pinned, msg_bar.web_search_state.get());
+                    msg_bar.update_ui(
+                        status,
+                        *pinned,
+                        msg_bar.web_search_state.get(),
+                        msg_bar.vibe_state.get(),
+                    );
                 }
                 ClawEngineEvent::WebSearchStatusChanged(enabled) => {
                     is_web_search.set(*enabled);
                     let status = session_status.borrow().clone();
-                    msg_bar.update_ui(status, msg_bar.pin_state.get(), *enabled);
+                    msg_bar.update_ui(
+                        status,
+                        msg_bar.pin_state.get(),
+                        *enabled,
+                        msg_bar.vibe_state.get(),
+                    );
+                }
+                ClawEngineEvent::VibeStatusChanged(enabled) => {
+                    is_vibe.set(*enabled);
+                    indicator.set_vibe(*enabled);
+                    let status = session_status.borrow().clone();
+                    msg_bar.update_ui(
+                        status,
+                        msg_bar.pin_state.get(),
+                        msg_bar.web_search_state.get(),
+                        *enabled,
+                    );
+                    overlay.refresh_character_selector("");
                 }
                 ClawEngineEvent::Evicted => {
                     *pending_tasks.borrow_mut() = Vec::new();
+                    indicator.set_vibe(false);
                     indicator.set_evicted(true);
                     indicator.hide();
                     overlay.set_indicator_slot_visible(false);

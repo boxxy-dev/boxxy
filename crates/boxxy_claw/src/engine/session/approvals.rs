@@ -95,6 +95,7 @@ mod pending_drain_tests {
             current_dir: String::new(),
             pinned: false,
             web_search_enabled: false,
+            vibe_enabled: false,
             total_tokens: 0,
             context_tokens: 0,
             total_cost_usd: 0.0,

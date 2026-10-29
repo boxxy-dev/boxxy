@@ -63,6 +63,7 @@ fn main() {
     <file compressed="true" alias="icons/boxxy-window-new-symbolic.svg">icons/boxxy-window-new-symbolic.svg</file>
     <file compressed="true" alias="icons/boxxy-chat-none-symbolic.svg">icons/boxxy-chat-none-symbolic.svg</file>
     <file compressed="true" alias="icons/boxxy-view-pin-symbolic.svg">icons/boxxy-view-pin-symbolic.svg</file>
+    <file compressed="true" alias="icons/boxxy-vibe-symbolic.svg">icons/boxxy-vibe-symbolic.svg</file>
     <file compressed="true" alias="icons/boxxy-lock-symbolic.svg">icons/boxxy-lock-symbolic.svg</file>
     <file compressed="true" alias="icons/boxxy-spinner.gpa">icons/boxxy-spinner.gpa</file>
     <file compressed="true" alias="prompts/ai_chat.md">prompts/ai_chat.md</file>
@@ -112,6 +113,7 @@ fn main() {
     println!("cargo:rerun-if-changed=../../resources/icons/boxxy-chat-none-symbolic.svg");
     println!("cargo:rerun-if-changed=../../resources/icons/boxxy-comic-bubble-symbolic.svg");
     println!("cargo:rerun-if-changed=../../resources/icons/boxxy-view-pin-symbolic.svg");
+    println!("cargo:rerun-if-changed=../../resources/icons/boxxy-vibe-symbolic.svg");
     println!("cargo:rerun-if-changed=../../resources/icons/boxxy-lock-symbolic.svg");
     println!("cargo:rerun-if-changed=../../resources/icons/boxxy-spinner.gpa");
     println!("cargo:rerun-if-changed=../../resources/icons/boxxyclaw.svg");

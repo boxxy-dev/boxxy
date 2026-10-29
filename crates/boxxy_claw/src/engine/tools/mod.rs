@@ -47,12 +47,47 @@ impl ApprovalHandler for ClawApprovalHandler {
         content: String,
         diff: boxxy_claw_protocol::FileDiff,
     ) -> ApprovalOutcome {
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        let (agent_name, character_id) = {
+        let (agent_name, character_id, vibe_enabled, cwd) = {
             let state = self.state.lock().await;
-            (state.agent_name.clone(), state.character_id.clone())
+            (
+                state.agent_name.clone(),
+                state.character_id.clone(),
+                state.vibe_enabled,
+                state.current_dir.clone(),
+            )
         };
 
+        let settings = boxxy_preferences::Settings::load();
+        let auto_approve = vibe_enabled
+            && crate::engine::vibe_guard::is_safe_vibe_path(
+                &path,
+                &cwd,
+                &settings.vibe_trusted_dirs,
+            );
+
+        if auto_approve {
+            let event = ClawEngineEvent::ProposeFileWrite {
+                agent_name,
+                character_id,
+                path,
+                content,
+                diff: Some(diff),
+                auto_approve: true,
+                usage: None,
+            };
+
+            crate::engine::persist_visual_event(
+                self.db.clone(),
+                self.session_id.clone(),
+                self.pane_id.clone(),
+                &event,
+            );
+
+            let _ = self.tx_ui.send(event).await;
+            return ApprovalOutcome::Approved;
+        }
+
+        let (tx, rx) = tokio::sync::oneshot::channel();
         {
             let mut state = self.state.lock().await;
             state.pending_file_reply = Some(tx);
@@ -67,6 +102,7 @@ impl ApprovalHandler for ClawApprovalHandler {
             path,
             content,
             diff: Some(diff),
+            auto_approve: false,
             usage: None,
         };
 
