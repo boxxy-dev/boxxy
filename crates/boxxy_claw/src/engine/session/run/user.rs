@@ -106,10 +106,18 @@ impl ClawSession {
 
         // Resolve any waiting tool approval channel with the user's new instruction
         // so an in-flight turn can immediately steer without tearing down and restarting.
-        let fulfilled = {
+        let mut fulfilled = {
             let mut state_lock = self.state.lock().await;
             state_lock.drain_pending_with_interruption(&query)
         };
+        let outcome = boxxy_core_toolbox::ApprovalOutcome::Interrupted(query.clone());
+        if ctx
+            .workspace
+            .drain_pending_commands_for_source(&self.pane_id, outcome.rejection_message())
+            .await
+        {
+            fulfilled = true;
+        }
 
         if fulfilled {
             debug!(
@@ -211,7 +219,16 @@ impl ClawSession {
             .await;
 
         let mut state_lock = self.state.lock().await;
-        let fulfilled = state_lock.drain_pending_with_interruption(&message);
+        let mut fulfilled = state_lock.drain_pending_with_interruption(&message);
+        drop(state_lock);
+        let outcome = boxxy_core_toolbox::ApprovalOutcome::Interrupted(message.clone());
+        if ctx
+            .workspace
+            .drain_pending_commands_for_source(&self.pane_id, outcome.rejection_message())
+            .await
+        {
+            fulfilled = true;
+        }
 
         if fulfilled {
             debug!(
@@ -219,7 +236,6 @@ impl ClawSession {
                 self.pane_id, self.name
             );
         } else {
-            drop(state_lock);
             if let Some(handle) = ctx.current_turn.take() {
                 handle.abort();
                 let _ = self

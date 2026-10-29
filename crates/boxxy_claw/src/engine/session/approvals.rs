@@ -111,6 +111,7 @@ mod pending_drain_tests {
             pending_set_clipboard_reply: None,
             pending_proposal_summary: None,
             pending_scrollbacks: HashMap::new(),
+            pending_spawns: HashMap::new(),
             pending_delegations: HashMap::new(),
             history: Vec::new(),
             flushed_watermark: 0,

@@ -221,6 +221,7 @@ impl Tool for DelegateTaskAsyncTool {
 
 #[derive(Deserialize)]
 pub struct SendKeystrokesArgs {
+    #[serde(alias = "target", alias = "target_pane")]
     pub agent_name: String,
     pub keys: String,
 }
@@ -245,7 +246,7 @@ impl Tool for SendKeystrokesTool {
     type Output = SendKeystrokesOutput;
 
     fn description(&self) -> String {
-        "Send raw keystrokes directly into another agent's (or your own) terminal pane. \
+        "Send raw keystrokes directly into another terminal pane (by alias like 'pane-2', petname, character name, or pane ID) or your own pane. \
         Crucial for controlling interactive applications like vim, nano, htop, or terminating stuck processes. \
         To send special keys, use escape sequences: '\\e' or '\\u001b' for Escape, '\\r' or '\\n' for Enter, '\\x03' for Ctrl+C (SIGINT), '\\x04' for Ctrl+D. \
         DO NOT output these sequences in a ```bash block. ONLY pass them via this tool."
@@ -258,7 +259,7 @@ impl Tool for SendKeystrokesTool {
             "properties": {
                 "agent_name": {
                     "type": "string",
-                    "description": "The name (petname, character name, or pane ID) of the agent to send keystrokes to."
+                    "description": "The alias (e.g. 'pane-2'), petname, character name, or pane ID of the pane to send keystrokes to."
                 },
                 "keys": {
                     "type": "string",
@@ -282,10 +283,14 @@ impl Tool for SendKeystrokesTool {
             args.keys
         );
 
+        let workspace = global_workspace().await;
+        let target_pane_id = workspace.resolve_pane_id_by_name(&args.agent_name).await;
+
         if let Err(e) = self
             .tx_ui
             .send(ClawEngineEvent::InjectKeystrokes {
                 target_agent_name: args.agent_name.clone(),
+                target_pane_id,
                 keys: args.keys.clone(),
             })
             .await
@@ -298,7 +303,7 @@ impl Tool for SendKeystrokesTool {
 
         let out = SendKeystrokesOutput {
             success: true,
-            message: format!("Keystrokes sent to agent '{}'.", args.agent_name),
+            message: format!("Keystrokes sent to pane '{}'.", args.agent_name),
         };
         self.approval.finish_tool(Self::NAME, &out).await;
         Ok(out)

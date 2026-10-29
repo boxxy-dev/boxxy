@@ -404,6 +404,31 @@ pub trait Agent {
     /// Cancels a pending scheduled task (`task_id`) in `pane_id`.
     async fn cancel_pending_task(&self, pane_id: String, task_id: String) -> zbus::Result<()>;
 
+    /// Updates a live terminal pane's state in the daemon's `WorkspaceRegistry`
+    /// (used for both plain shells and agent-attached panes) and returns its short alias (e.g. `pane-2`).
+    async fn update_workspace_pane(
+        &self,
+        pane_id: String,
+        cwd: String,
+        last_command: String,
+        snapshot: String,
+        status: String,
+    ) -> zbus::Result<String>;
+
+    /// Unregisters a closed terminal pane from the daemon's `WorkspaceRegistry`.
+    async fn unregister_workspace_pane(&self, pane_id: String) -> zbus::Result<()>;
+
+    /// Notifies the daemon's `WorkspaceRegistry` that a shell command finished (`OSC 133;D`)
+    /// in `pane_id`, resolving any cross-pane `terminal_exec` waiter and publishing `ProcessExited`
+    /// to `subscribe_to_pane` listeners.
+    async fn notify_pane_command_finished(
+        &self,
+        pane_id: String,
+        exit_code: i32,
+        snapshot: String,
+        cwd: String,
+    ) -> zbus::Result<()>;
+
     #[zbus(signal)]
     async fn claw_event(&self, session_id: String, event_json: String) -> zbus::Result<()>;
 
@@ -688,6 +713,59 @@ impl AgentInterface {
             workspace.update_pane_tasks(pane_id, remaining).await;
             emit_pending_tasks_changed(conn, &self.core.state.pty_registry).await;
         }
+    }
+
+    async fn update_workspace_pane(
+        &self,
+        pane_id: String,
+        cwd: String,
+        last_command: String,
+        snapshot: String,
+        status: String,
+    ) -> String {
+        let workspace = boxxy_claw::registry::workspace::global_workspace().await;
+        let cmd_opt = (!last_command.is_empty()).then_some(last_command);
+        let snap_opt = (!snapshot.is_empty()).then_some(snapshot);
+        let alias = workspace
+            .update_pane_state(pane_id.clone(), None, None, cwd, cmd_opt, snap_opt)
+            .await;
+        if !status.is_empty() {
+            let status_opt = (status != "Idle").then_some(status);
+            workspace.set_pane_status(pane_id, status_opt).await;
+        }
+        alias
+    }
+
+    async fn unregister_workspace_pane(&self, pane_id: String) {
+        let workspace = boxxy_claw::registry::workspace::global_workspace().await;
+        workspace.unregister_pane(pane_id).await;
+    }
+
+    async fn notify_pane_command_finished(
+        &self,
+        pane_id: String,
+        exit_code: i32,
+        snapshot: String,
+        cwd: String,
+    ) {
+        let workspace = boxxy_claw::registry::workspace::global_workspace().await;
+        let last_cmd = snapshot.lines().next().unwrap_or("").to_string();
+        let cmd_opt = (!last_cmd.is_empty()).then_some(last_cmd);
+        let snap_opt = (!snapshot.is_empty()).then_some(snapshot.clone());
+        workspace
+            .update_pane_state(pane_id.clone(), None, None, cwd, cmd_opt, snap_opt)
+            .await;
+
+        let _ = workspace
+            .complete_pending_command(&pane_id, exit_code, snapshot)
+            .await;
+
+        workspace
+            .publish_event(boxxy_claw_protocol::ClawEvent::ProcessExited {
+                pane_id,
+                exit_code,
+            })
+            .await;
     }
 
     async fn resolve_peer(&self, query_json: String) -> String {

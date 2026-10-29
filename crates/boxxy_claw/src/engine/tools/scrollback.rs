@@ -6,6 +6,8 @@ use serde::{Deserialize, Serialize};
 pub struct ReadScrollbackArgs {
     pub max_lines: usize,
     pub offset_lines: usize,
+    #[serde(alias = "target")]
+    pub target_pane: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -27,7 +29,7 @@ impl Tool for ReadScrollbackTool {
     type Output = ReadScrollbackOutput;
 
     fn description(&self) -> String {
-        "Read older lines from the terminal's scrollback history as structured semantic blocks (PROMPT, COMMAND, OUTPUT). The bottom ~100 lines are already in `Terminal Snapshot`, so pass `offset_lines >= 100` to page further back."
+        "Read older lines from a terminal's scrollback history as structured semantic blocks (PROMPT, COMMAND, OUTPUT). The bottom ~100 lines of your own pane are already in `Terminal Snapshot`, so pass `offset_lines >= 100` to page further back. You can also pass `target_pane` (e.g. 'pane-2') to page scrollback from another workspace pane."
             .to_string()
     }
 
@@ -41,7 +43,11 @@ impl Tool for ReadScrollbackTool {
                 },
                 "offset_lines": {
                     "type": "integer",
-                    "description": "How many lines back from the bottom to start reading (use >= 100 since the bottom 100 lines are already in Terminal Snapshot)."
+                    "description": "How many lines back from the bottom to start reading (use >= 100 for your own pane since the bottom 100 lines are already in Terminal Snapshot)."
+                },
+                "target_pane": {
+                    "type": "string",
+                    "description": "Optional alias (e.g. 'pane-2'), petname, character name, or pane ID of another workspace pane to read scrollback from."
                 }
             },
             "required": ["max_lines", "offset_lines"]
@@ -54,6 +60,15 @@ impl Tool for ReadScrollbackTool {
         args: Self::Args,
     ) -> Result<Self::Output, Self::Error> {
         self.approval.begin_tool(Self::NAME).await;
+        let target_pane_id = if let Some(ref target) = args.target_pane
+            && !target.trim().is_empty()
+        {
+            let workspace = crate::registry::workspace::global_workspace().await;
+            workspace.resolve_pane_id_by_name(target).await
+        } else {
+            None
+        };
+
         let request_id = uuid::Uuid::new_v4();
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
 
@@ -66,6 +81,7 @@ impl Tool for ReadScrollbackTool {
         let req = ClawEngineEvent::RequestScrollback {
             agent_name,
             character_id,
+            target_pane_id,
             max_lines: args.max_lines,
             offset_lines: args.offset_lines,
             request_id,

@@ -105,10 +105,18 @@ pub fn spawn_turn(
         if let Some(me) = all_agents.iter().find(|a| a.id == pane_id) {
             let status = &me.status;
             if status.starts_with("Running: ") {
-                tui_warning = format!(
+                tui_warning.push_str(&format!(
                     "\n--- TUI WARNING ---\nYour pane is currently running an interactive application: {}.\nYou cannot run standard bash commands or delegate tasks to yourself to run bash commands. To interact with this application, you MUST use `send_keystrokes_to_pane` with your own agent name ('{}'). Note: You do not know the exact internal state (e.g. insert mode vs normal mode in vim), so send escape characters (\\e) first if necessary.\n-------------------\n",
                     status, me.name
-                );
+                ));
+            }
+        }
+        for peer in all_agents.iter().filter(|a| a.id != pane_id) {
+            if peer.status.starts_with("Running: ") {
+                tui_warning.push_str(&format!(
+                    "\n--- COMPANION PANE TUI / ACTIVE PROCESS NOTICE ---\nPane `{}` (ID: `{}`) is currently `{}`. If it is running an interactive TUI (`top`, `htop`, `vim`, `less`, etc.) or you need to quit/interrupt it, use `send_keystrokes_to_pane(agent_name=\"{}\", keys=\"q\")` (or `\\x03` for Ctrl+C) instead of `terminal_exec`.\n--------------------------------------------------\n",
+                    peer.alias, peer.id, peer.status, peer.alias
+                ));
             }
         }
 
@@ -344,6 +352,8 @@ pub fn spawn_turn(
                         character_id: character_id.clone(),
                         command,
                         diagnosis: clean_diagnosis,
+                        target_pane_id: None,
+                        target_pane_label: None,
                         usage,
                     };
                     state.lock().await.pending_inject_command = true;

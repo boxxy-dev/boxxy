@@ -48,6 +48,19 @@ impl ClawSession {
             )
             .await;
 
+        let resolved_cross_pane = workspace
+            .complete_pending_command(&self.pane_id, exit_code, snapshot.clone())
+            .await;
+        workspace
+            .publish_event(crate::engine::ClawEvent::ProcessExited {
+                pane_id: self.pane_id.clone(),
+                exit_code,
+            })
+            .await;
+        if resolved_cross_pane {
+            return;
+        }
+
         let mut state_lock = self.state.lock().await;
         if let Some(reply) = state_lock.pending_terminal_reply.take() {
             state_lock.pending_proposal_summary = None;

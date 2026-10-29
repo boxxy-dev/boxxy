@@ -7,7 +7,11 @@
 #[derive(Debug, Clone)]
 pub enum Proposal {
     None,
-    Command(String),
+    Command {
+        command: String,
+        target_pane_id: Option<String>,
+        target_pane_label: Option<String>,
+    },
     Bookmark {
         filename: String,
         script: String,

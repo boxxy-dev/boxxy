@@ -16,7 +16,11 @@ impl From<TerminalProposal> for Proposal {
     fn from(p: TerminalProposal) -> Self {
         match p {
             TerminalProposal::None => Proposal::None,
-            TerminalProposal::Command(cmd) => Proposal::Command(cmd),
+            TerminalProposal::Command(cmd) => Proposal::Command {
+                command: cmd,
+                target_pane_id: None,
+                target_pane_label: None,
+            },
             TerminalProposal::Bookmark(filename, script, placeholders) => Proposal::Bookmark {
                 filename,
                 script,

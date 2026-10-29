@@ -18,6 +18,7 @@ pub(super) fn setup_claw(
     msg_bar: Rc<MsgBarComponent>,
     callback: std::sync::Arc<dyn Fn(PaneOutput) + Send + Sync + 'static>,
     spawn_intent: Option<String>,
+    is_claw_active: Rc<Cell<bool>>,
     session_usage: Rc<Cell<SessionUsage>>,
     is_pinned: Rc<Cell<bool>>,
     is_web_search: Rc<Cell<bool>>,
@@ -31,12 +32,22 @@ pub(super) fn setup_claw(
         Rc::new(RefCell::new(None::<(String, crate::TerminalProposal)>));
     let pending_diag_clone = pending_proactive_diagnosis.clone();
 
-    // Provide the initial intent if one was passed in
-    if let Some(intent) = spawn_intent {
+    // Provide the initial intent if one was passed in (peer agent spawn).
+    // Plain terminal spawns pass `spawn_intent: None` so no character is claimed.
+    if let Some(intent) = spawn_intent.filter(|s| !s.trim().is_empty()) {
         let tx = claw_sender.clone();
         let inner_weak = Rc::downgrade(inner);
+        let pane_id = id.clone();
+        let event_tx = claw_sender_for_host.clone();
+        let active_cell = is_claw_active.clone();
+        let status_cell = session_status.clone();
+        let pin_cell = is_pinned.clone();
+        let web_cell = is_web_search.clone();
+        let ind = claw_indicator.clone();
+        let msg_bar_for_intent = msg_bar.clone();
+        let cb_for_intent = callback.clone();
 
-        // Wait for PID to ensure PTY is ready
+        // Wait for PID to ensure PTY is ready, then claim an available character
         gtk::glib::spawn_future_local(async move {
             let mut check_count = 0;
             loop {
@@ -50,7 +61,6 @@ pub(super) fn setup_claw(
                 }
                 check_count += 1;
                 if check_count > 50 {
-                    // Timeout after 5 seconds
                     break;
                 }
                 tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -59,19 +69,65 @@ pub(super) fn setup_claw(
             let Some(inner_rc) = inner_weak.upgrade() else {
                 return;
             };
-            let pane = inner_rc.borrow().terminal.clone();
-            let cwd = inner_rc.borrow().working_dir.clone().unwrap_or_default();
-            drop(inner_rc);
-            if let Some(snapshot) = pane.get_text_snapshot(100, 0).await {
-                let _ = tx
-                    .send(ClawMessage::UserMessage {
-                        message: intent,
-                        snapshot,
-                        cwd,
-                        image_attachments: vec![],
-                    })
-                    .await;
+            let (pane, cwd, session_id_ref, claw_sub_ref) = {
+                let inner_borrow = inner_rc.borrow();
+                (
+                    inner_borrow.terminal.clone(),
+                    inner_borrow.working_dir.clone().unwrap_or_default(),
+                    inner_borrow.session_id.clone(),
+                    inner_borrow.claw_subscription.clone(),
+                )
+            };
+
+            let snapshot = pane.get_text_snapshot(100, 0).await.unwrap_or_default();
+
+            if session_id_ref.lock().await.is_none()
+                && let Some(chosen) =
+                    boxxy_claw_protocol::characters::find_first_available_character(Some(&pane_id))
+            {
+                let agent = crate::get_agent().await;
+                if let Ok((sid, sub_guard)) = agent
+                    .create_claw_session_with_sender(pane_id.clone(), chosen.config.id, event_tx)
+                    .await
+                    && !sid.is_empty()
+                {
+                    *claw_sub_ref.lock() = Some(sub_guard);
+                    *session_id_ref.lock().await = Some(sid.clone());
+                    active_cell.set(true);
+                    *status_cell.borrow_mut() = AgentStatus::Waiting;
+                    ind.set_visible(true);
+                    msg_bar_for_intent.update_ui(
+                        AgentStatus::Waiting,
+                        pin_cell.get(),
+                        web_cell.get(),
+                    );
+                    cb_for_intent(PaneOutput::ClawStateChanged(pane_id, true, false));
+                    let _ = agent
+                        .post_claw_message(sid.clone(), ClawMessage::Initialize)
+                        .await;
+                    let _ = agent
+                        .post_claw_message(
+                            sid,
+                            ClawMessage::UserMessage {
+                                message: intent,
+                                snapshot,
+                                cwd,
+                                image_attachments: vec![],
+                            },
+                        )
+                        .await;
+                    return;
+                }
             }
+
+            let _ = tx
+                .send(ClawMessage::UserMessage {
+                    message: intent,
+                    snapshot,
+                    cwd,
+                    image_attachments: vec![],
+                })
+                .await;
         });
     }
 

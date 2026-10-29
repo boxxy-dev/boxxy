@@ -32,6 +32,12 @@ pub trait ClawHost: 'static {
     /// The typical use is a user-accepted command going to the shell.
     fn inject_line(&self, text: String);
 
+    /// Inject a line of text into another pane by its `pane_id` (appends `\r`).
+    /// Defaults to `inject_line(text)` if not overridden.
+    fn inject_line_to_pane(&self, _target_pane_id: &str, text: String) {
+        self.inject_line(text);
+    }
+
     /// Execute a (possibly multi-line) named script. The host decides
     /// how — the terminal impl writes to an ephemeral file under
     /// `$XDG_CONFIG_HOME/boxxy-terminal/cache/bookmarks/runs/`, chmods
@@ -47,6 +53,17 @@ pub trait ClawHost: 'static {
         max_lines: usize,
         offset_lines: usize,
     ) -> Pin<Box<dyn Future<Output = Option<String>> + 'static>>;
+
+    /// Capture the last `max_lines` lines of a specific pane's output (if `target_pane_id` is `Some`),
+    /// or this host's output when `None`.
+    fn snapshot_pane(
+        &self,
+        _target_pane_id: Option<String>,
+        max_lines: usize,
+        offset_lines: usize,
+    ) -> Pin<Box<dyn Future<Output = Option<String>> + 'static>> {
+        self.snapshot(max_lines, offset_lines)
+    }
 
     /// Return keyboard focus to the host (e.g. the terminal). Called
     /// after the drawer hides or when the user dismisses a proposal.

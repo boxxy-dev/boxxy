@@ -348,6 +348,10 @@ pub enum ClawMessage {
     BackgroundCommandReply {
         approved: bool,
     },
+    TerminalCommandAccepted {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        target_pane_id: Option<String>,
+    },
     KillProcessReply {
         approved: bool,
     },
@@ -375,6 +379,12 @@ pub enum ClawMessage {
     ScrollbackReply {
         request_id: Uuid,
         content: String,
+    },
+    /// Response to a RequestSpawnAgent event with the newly created pane's ID and alias
+    SpawnAgentReply {
+        request_id: Uuid,
+        pane_id: String,
+        alias: String,
     },
     ForegroundProcessChanged {
         process_name: String,
@@ -449,6 +459,10 @@ pub enum ClawEngineEvent {
         character_id: String,
         command: String,
         diagnosis: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        target_pane_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        target_pane_label: Option<String>,
         usage: Option<UsageWrapper>,
     },
     ProposeFileWrite {
@@ -496,6 +510,10 @@ pub enum ClawEngineEvent {
         character_id: String,
         command: String,
         explanation: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        target_pane_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        target_pane_label: Option<String>,
         usage: Option<UsageWrapper>,
     },
     ProposalResolved {
@@ -510,9 +528,13 @@ pub enum ClawEngineEvent {
         source_agent_name: String,
         location: SpawnLocation,
         intent: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        request_id: Option<Uuid>,
     },
     RequestCloseAgent {
         target_agent_name: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        target_pane_id: Option<String>,
     },
     RequestReattachShell {
         pid: u32,
@@ -522,6 +544,8 @@ pub enum ClawEngineEvent {
     RequestScrollback {
         agent_name: String,
         character_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        target_pane_id: Option<String>,
         max_lines: usize,
         offset_lines: usize,
         request_id: Uuid,
@@ -533,6 +557,8 @@ pub enum ClawEngineEvent {
     },
     InjectKeystrokes {
         target_agent_name: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        target_pane_id: Option<String>,
         keys: String,
     },
     RequestCwdSwitch {

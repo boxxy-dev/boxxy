@@ -482,7 +482,7 @@ impl PtySubsystem {
         let pty_registry = self.state.pty_registry.clone();
 
         tokio::spawn(async move {
-            let mut interval = tokio::time::interval(std::time::Duration::from_millis(1500));
+            let mut interval = tokio::time::interval(std::time::Duration::from_millis(500));
             let mut last_process_name = String::new();
 
             loop {
@@ -505,12 +505,22 @@ impl PtySubsystem {
                         if is_tracked {
                             if let Ok(current_process) = Self::get_foreground_process_internal(pid) {
                                 if current_process != last_process_name {
+                                    if let Some(orig_pane_id) = pty_registry.get_original_pane_id(pid).await {
+                                        let status_opt = (!current_process.is_empty())
+                                            .then(|| format!("Running: {current_process}"));
+                                        let workspace = boxxy_claw::registry::workspace::global_workspace().await;
+                                        workspace.set_pane_status(orig_pane_id, status_opt).await;
+                                    }
                                     let _ = PtySubsystem::foreground_process_changed(&emitter, pid, current_process.clone()).await;
                                     last_process_name = current_process;
                                 }
                             }
                         } else if !last_process_name.is_empty() {
                             last_process_name = String::new();
+                            if let Some(orig_pane_id) = pty_registry.get_original_pane_id(pid).await {
+                                let workspace = boxxy_claw::registry::workspace::global_workspace().await;
+                                workspace.set_pane_status(orig_pane_id, None).await;
+                            }
                             let _ = PtySubsystem::foreground_process_changed(&emitter, pid, String::new()).await;
                         }
                     }

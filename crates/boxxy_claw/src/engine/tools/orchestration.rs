@@ -8,7 +8,9 @@ use tokio::sync::Mutex;
 
 #[derive(Deserialize)]
 pub struct SubscribeArgs {
+    #[serde(alias = "target", alias = "target_pane")]
     pub agent_name: String,
+    #[serde(alias = "wait_for")]
     pub event_type: String,
     pub regex: Option<String>,
 }
@@ -35,8 +37,8 @@ impl Tool for SubscribeToPaneTool {
     type Output = SubscribeOutput;
 
     fn description(&self) -> String {
-        "Subscribe to events from another agent's pane. \
-        CRITICAL: Use this tool to passively wait for events (like errors) in other panes instead of actively running 'watch' commands or parsing logs yourself. \
+        "Subscribe to events from another terminal pane (by alias like 'pane-2', petname, character name, or pane ID). \
+        CRITICAL: Use this tool to passively wait for events (like command completion or errors) in other panes instead of actively running 'watch' commands or polling logs yourself. \
         When you call this, your agent will enter a 'Suspended' (0 token) state and will be automatically woken up when the event occurs."
             .to_string()
     }
@@ -47,11 +49,11 @@ impl Tool for SubscribeToPaneTool {
             "properties": {
                 "agent_name": {
                     "type": "string",
-                    "description": "The name of the agent to subscribe to (e.g. 'plentiful bream')."
+                    "description": "The alias (e.g. 'pane-2'), petname, character name, or pane ID of the pane to subscribe to."
                 },
                 "event_type": {
                     "type": "string",
-                    "description": "Type of event to listen for. Options: 'process_exit', 'output_match'."
+                    "description": "Type of event to listen for. Options: 'process_exit' (or 'command_exit'), 'output_match'."
                 },
                 "regex": {
                     "type": "string",
@@ -75,7 +77,7 @@ impl Tool for SubscribeToPaneTool {
         let target_pane_id = workspace.resolve_pane_id_by_name(&args.agent_name).await;
 
         let filter = match args.event_type.as_str() {
-            "process_exit" => EventFilter::ProcessExited {
+            "process_exit" | "command_exit" => EventFilter::ProcessExited {
                 pane_id: target_pane_id,
             },
             "output_match" => {
@@ -98,7 +100,7 @@ impl Tool for SubscribeToPaneTool {
             }
         };
 
-        workspace.subscribe(self.pane_id.clone(), filter).await;
+        let is_new = workspace.subscribe(self.pane_id.clone(), filter).await;
 
         // Auto-suspend when subscribing (single lock acquisition — prevents deadlock)
         let (agent_name, character_id) = {
@@ -117,11 +119,20 @@ impl Tool for SubscribeToPaneTool {
             })
             .await;
 
-        let res = SubscribeOutput {
-            message: format!(
-                "Successfully subscribed to '{}' events from '{}'. You are now suspended until this event occurs.",
-                args.event_type, args.agent_name
-            ),
+        let res = if is_new {
+            SubscribeOutput {
+                message: format!(
+                    "Successfully subscribed to '{}' events from '{}'. Do NOT call any more tools now — end your turn with a brief message to the user so your session suspends and wakes automatically when the event occurs.",
+                    args.event_type, args.agent_name
+                ),
+            }
+        } else {
+            SubscribeOutput {
+                message: format!(
+                    "Already subscribed to '{}' events from '{}'. Stop calling tools and output your final response now so your session can suspend.",
+                    args.event_type, args.agent_name
+                ),
+            }
         };
         self.approval
             .report_tool_result(

@@ -65,10 +65,33 @@ impl ClawSession {
                 .get_pane_snapshot(self.pane_id.clone())
                 .await
                 .unwrap_or_default();
-            let prompt = format!(
-                "WAKEUP: An event you subscribed to has occurred: {:?}",
-                event
-            );
+            let prompt = match &event {
+                crate::engine::ClawEvent::ProcessExited { pane_id, exit_code } => {
+                    let alias = ctx
+                        .workspace
+                        .get_pane_alias(pane_id)
+                        .await
+                        .unwrap_or_else(|| pane_id.clone());
+                    let peer_snap = ctx
+                        .workspace
+                        .get_pane_snapshot(pane_id.clone())
+                        .await
+                        .unwrap_or_default();
+                    if peer_snap.is_empty() {
+                        format!(
+                            "WAKEUP: Process in pane `{alias}` (ID: `{pane_id}`) finished with exit code {exit_code}."
+                        )
+                    } else {
+                        format!(
+                            "WAKEUP: Process in pane `{alias}` (ID: `{pane_id}`) finished with exit code {exit_code}.\nLatest output from `{alias}`:\n```\n{peer_snap}\n```"
+                        )
+                    }
+                }
+                _ => format!(
+                    "WAKEUP: An event you subscribed to has occurred: {:?}",
+                    event
+                ),
+            };
 
             if ctx.current_turn.is_some() {
                 ctx.backlog

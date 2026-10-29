@@ -161,6 +161,7 @@ impl PersistentClawRowExt {
                 agent_name,
                 character_id,
                 usage,
+                ..
             } => Some(PersistentClawRow::Suggested {
                 pane_id,
                 agent_name: Some(agent_name.clone()),

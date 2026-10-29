@@ -252,18 +252,51 @@ pub fn handle_terminal_event(
                         inner.claw.refresh_visibility();
                     }
                     ClawEngineEvent::RequestSpawnAgent {
-                        location, intent, ..
-                    } => match location {
-                        SpawnLocation::NewTab => {
-                            super::tabs::new_tab_with_intent(inner, intent);
+                        location,
+                        intent,
+                        request_id,
+                        ..
+                    } => {
+                        let source_ctrl = inner.tabs[pos].controller.clone();
+                        let source_pane_id = p_id.clone();
+                        let cwd = source_ctrl.working_dir().unwrap_or_default();
+                        let new_pane_id = match location {
+                            SpawnLocation::NewTab => {
+                                let new_ctrl = super::tabs::new_tab_with_intent(inner, intent);
+                                new_ctrl.active_pane_id()
+                            }
+                            SpawnLocation::VerticalSplit => {
+                                source_ctrl.split_vertical(intent)
+                            }
+                            SpawnLocation::HorizontalSplit => {
+                                source_ctrl.split_horizontal(intent)
+                            }
+                        };
+
+                        if let Some(req_id) = request_id {
+                            gtk4::glib::spawn_future_local(async move {
+                                let agent = boxxy_terminal::get_agent().await;
+                                let alias = agent
+                                    .update_workspace_pane(
+                                        new_pane_id.clone(),
+                                        cwd,
+                                        String::new(),
+                                        String::new(),
+                                        "Idle".to_string(),
+                                    )
+                                    .await
+                                    .unwrap_or_else(|_| new_pane_id.clone());
+                                source_ctrl.send_claw_to_pane(
+                                    &source_pane_id,
+                                    ClawMessage::SpawnAgentReply {
+                                        request_id: req_id,
+                                        pane_id: new_pane_id,
+                                        alias,
+                                    },
+                                );
+                            });
                         }
-                        SpawnLocation::VerticalSplit => {
-                            inner.tabs[pos].controller.split_vertical(intent);
-                        }
-                        SpawnLocation::HorizontalSplit => {
-                            inner.tabs[pos].controller.split_horizontal(intent);
-                        }
-                    },
+                    }
                     ClawEngineEvent::RequestReattachShell { pid, cwd } => {
                         if pid == 0 {
                             let tx = inner.tx.clone();
@@ -282,46 +315,65 @@ pub fn handle_terminal_event(
                                 .send_blocking(AppInput::ReattachDetachedSession(pid, cwd));
                         }
                     }
-                    ClawEngineEvent::RequestCloseAgent { target_agent_name } => {
-                        let inner_clone = _inner_ref.clone();
-                        let target_name = target_agent_name.clone();
-                        gtk4::glib::spawn_future_local(async move {
-                            let workspace =
-                                boxxy_claw::registry::workspace::global_workspace().await;
-                            if let Some(pane_id) =
-                                workspace.resolve_pane_id_by_name(&target_name).await
-                            {
+                    ClawEngineEvent::RequestCloseAgent {
+                        target_agent_name,
+                        target_pane_id,
+                    } => {
+                        if let Some(pane_id) = target_pane_id {
+                            for tab in &inner.tabs {
+                                if tab.controller.close_pane_by_id(&pane_id) {
+                                    break;
+                                }
+                            }
+                        } else {
+                            let inner_clone = _inner_ref.clone();
+                            let target_name = target_agent_name.clone();
+                            gtk4::glib::spawn_future_local(async move {
+                                let workspace =
+                                    boxxy_claw::registry::workspace::global_workspace().await;
+                                let resolved = workspace
+                                    .resolve_pane_id_by_name(&target_name)
+                                    .await
+                                    .unwrap_or(target_name);
                                 let inner = inner_clone.borrow_mut();
-                                // Search all tabs for this pane
                                 for tab in &inner.tabs {
-                                    if tab.controller.close_pane_by_id(&pane_id) {
+                                    if tab.controller.close_pane_by_id(&resolved) {
                                         break;
                                     }
                                 }
-                            }
-                        });
+                            });
+                        }
                     }
                     ClawEngineEvent::InjectKeystrokes {
                         target_agent_name,
+                        target_pane_id,
                         keys,
                     } => {
-                        let inner_clone = _inner_ref.clone();
-                        let target_name = target_agent_name.clone();
-                        let keys = keys.clone();
-                        gtk4::glib::spawn_future_local(async move {
-                            let workspace =
-                                boxxy_claw::registry::workspace::global_workspace().await;
-                            if let Some(pane_id) =
-                                workspace.resolve_pane_id_by_name(&target_name).await
-                            {
+                        if let Some(pane_id) = target_pane_id {
+                            for tab in &inner.tabs {
+                                if tab.controller.inject_keystrokes_by_id(&pane_id, &keys) {
+                                    break;
+                                }
+                            }
+                        } else {
+                            let inner_clone = _inner_ref.clone();
+                            let target_name = target_agent_name.clone();
+                            let keys = keys.clone();
+                            gtk4::glib::spawn_future_local(async move {
+                                let workspace =
+                                    boxxy_claw::registry::workspace::global_workspace().await;
+                                let resolved = workspace
+                                    .resolve_pane_id_by_name(&target_name)
+                                    .await
+                                    .unwrap_or(target_name);
                                 let inner = inner_clone.borrow();
                                 for tab in &inner.tabs {
-                                    if tab.controller.inject_keystrokes_by_id(&pane_id, &keys) {
+                                    if tab.controller.inject_keystrokes_by_id(&resolved, &keys) {
                                         break;
                                     }
                                 }
-                            }
-                        });
+                            });
+                        }
                     }
                     ClawEngineEvent::TaskStatusChanged { tasks, .. } => {
                         let has_pending = tasks.iter().any(|t| t.status == TaskStatus::Pending);

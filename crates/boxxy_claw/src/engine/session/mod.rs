@@ -43,6 +43,8 @@ pub struct SessionState {
     pub pending_proposal_summary: Option<String>,
     pub pending_scrollbacks:
         std::collections::HashMap<uuid::Uuid, tokio::sync::oneshot::Sender<String>>,
+    pub pending_spawns:
+        std::collections::HashMap<uuid::Uuid, tokio::sync::oneshot::Sender<(String, String)>>,
     pub pending_delegations:
         std::collections::HashMap<uuid::Uuid, tokio::sync::oneshot::Sender<String>>,
     pub history: Vec<Message>,
@@ -138,6 +140,7 @@ impl ClawSession {
                 pending_set_clipboard_reply: None,
                 pending_proposal_summary: None,
                 pending_scrollbacks: std::collections::HashMap::new(),
+                pending_spawns: std::collections::HashMap::new(),
                 pending_delegations: std::collections::HashMap::new(),
                 history: Vec::new(),
                 flushed_watermark: 0,
@@ -235,9 +238,11 @@ impl ClawSession {
                 | ClawMessage::FileDeleteReply { .. }
                 | ClawMessage::KillProcessReply { .. }
                 | ClawMessage::BackgroundCommandReply { .. }
+                | ClawMessage::TerminalCommandAccepted { .. }
                 | ClawMessage::GetClipboardReply { .. }
                 | ClawMessage::SetClipboardReply { .. }
                 | ClawMessage::ScrollbackReply { .. }
+                | ClawMessage::SpawnAgentReply { .. }
                 | ClawMessage::TaskCompletedEvent { .. }
                 | ClawMessage::CommandFinished { .. }
                 | ClawMessage::RebindPane { .. }

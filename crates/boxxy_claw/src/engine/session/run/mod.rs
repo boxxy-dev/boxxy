@@ -362,6 +362,108 @@ impl ClawSession {
                     self.handle_cancel_pending(ctx).await;
                 }
             }
+            ClawMessage::TerminalCommandAccepted { target_pane_id } => {
+                let effective_target = target_pane_id
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or_else(|| self.pane_id.clone());
+                let is_remote = effective_target != self.pane_id;
+                let state = self.state.clone();
+                let workspace = ctx.workspace.clone();
+                let tx_ui = self.tx_ui.clone();
+                let agent_name = self.name.clone();
+                let char_id = self.character_id.clone();
+
+                tokio::spawn(async move {
+                    // Wait 800ms (past the daemon's 500ms foreground-process poll tick).
+                    // If the command hasn't emitted OSC 133;D yet AND the target pane is still
+                    // running a foreground process (e.g. `top`, `htop`, `vim`, `make`), resolve
+                    // the tool call as "launched and running" so the character is immediately free.
+                    tokio::time::sleep(std::time::Duration::from_millis(800)).await;
+
+                    if is_remote {
+                        if !workspace.has_pending_command(&effective_target).await {
+                            return;
+                        }
+                        let fg_status = workspace.get_pane_status(&effective_target).await;
+                        let is_running = fg_status
+                            .as_deref()
+                            .is_some_and(|s| s.starts_with("Running: "));
+                        let proc_name = fg_status
+                            .as_deref()
+                            .and_then(|s| s.strip_prefix("Running: "))
+                            .unwrap_or("command")
+                            .to_string();
+
+                        // Capture a fresh live snapshot of the target pane to include in the result.
+                        let req_id = uuid::Uuid::new_v4();
+                        let (snap_tx, snap_rx) = tokio::sync::oneshot::channel();
+                        state.lock().await.pending_scrollbacks.insert(req_id, snap_tx);
+                        let _ = tx_ui
+                            .send(ClawEngineEvent::RequestScrollback {
+                                agent_name,
+                                character_id: char_id,
+                                target_pane_id: Some(effective_target.clone()),
+                                max_lines: 50,
+                                offset_lines: 0,
+                                request_id: req_id,
+                            })
+                            .await;
+                        let live_snap = tokio::time::timeout(
+                            std::time::Duration::from_millis(500),
+                            snap_rx,
+                        )
+                        .await
+                        .ok()
+                        .and_then(|r| r.ok())
+                        .unwrap_or_default();
+                        state.lock().await.pending_scrollbacks.remove(&req_id);
+
+                        let alias = workspace
+                            .get_pane_alias(&effective_target)
+                            .await
+                            .unwrap_or_else(|| effective_target.clone());
+                        let msg = if is_running {
+                            if live_snap.is_empty() {
+                                format!(
+                                    "Command launched and is currently running (`{proc_name}`) in `{alias}`. Use `read_pane_buffer(agent_name=\"{alias}\")`, `send_keystrokes_to_pane(agent_name=\"{alias}\", keys=...)`, or `subscribe_to_pane(agent_name=\"{alias}\", event_type=\"process_exit\")` if you need to interact with or wait for it."
+                                )
+                            } else {
+                                format!(
+                                    "Command launched and is currently running (`{proc_name}`) in `{alias}`.\nLive snapshot:\n{live_snap}"
+                                )
+                            }
+                        } else if !live_snap.is_empty() {
+                            format!(
+                                "Command launched in `{alias}`.\nLive snapshot:\n{live_snap}"
+                            )
+                        } else {
+                            format!("Command launched in `{alias}`.")
+                        };
+
+                        let _ = workspace
+                            .complete_pending_command(&effective_target, 0, msg)
+                            .await;
+                    } else {
+                        let has_local_pending = state.lock().await.pending_terminal_reply.is_some();
+                        if !has_local_pending {
+                            return;
+                        }
+                        let fg_status = workspace.get_pane_status(&effective_target).await;
+                        if let Some(proc_name) = fg_status
+                            .as_deref()
+                            .and_then(|s| s.strip_prefix("Running: "))
+                        {
+                            let mut state_lock = state.lock().await;
+                            if let Some(reply) = state_lock.pending_terminal_reply.take() {
+                                state_lock.pending_proposal_summary = None;
+                                let _ = reply.send(Ok(format!(
+                                    "Command launched and is currently running (`{proc_name}`) in your terminal."
+                                )));
+                            }
+                        }
+                    }
+                });
+            }
             ClawMessage::GetClipboardReply { approved } => {
                 if approved {
                     let mut state_lock = self.state.lock().await;
@@ -432,6 +534,16 @@ impl ClawSession {
                 let mut state = self.state.lock().await;
                 if let Some(tx) = state.pending_scrollbacks.remove(&request_id) {
                     let _ = tx.send(content);
+                }
+            }
+            ClawMessage::SpawnAgentReply {
+                request_id,
+                pane_id,
+                alias,
+            } => {
+                let mut state = self.state.lock().await;
+                if let Some(tx) = state.pending_spawns.remove(&request_id) {
+                    let _ = tx.send((pane_id, alias));
                 }
             }
             ClawMessage::TaskCompletedEvent { task_id, result } => {

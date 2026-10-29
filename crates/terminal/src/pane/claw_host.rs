@@ -40,6 +40,16 @@ impl ClawHost for PaneClawHost {
         inner.borrow().terminal.write_all(bytes);
     }
 
+    fn inject_line_to_pane(&self, target_pane_id: &str, text: String) {
+        if let Some(target_inner) = crate::find_live_pane(target_pane_id) {
+            let mut bytes = text.into_bytes();
+            bytes.push(b'\r');
+            target_inner.borrow().terminal.write_all(bytes);
+        } else {
+            self.inject_line(text);
+        }
+    }
+
     fn execute_script(&self, filename: &str, script: String) {
         // Ephemeral execution file: write the expanded script to a
         // bookmark-runs cache dir, make it executable, then inject the
@@ -91,6 +101,30 @@ impl ClawHost for PaneClawHost {
             .inner_weak
             .upgrade()
             .map(|i| i.borrow().terminal.clone());
+        Box::pin(async move {
+            match terminal {
+                Some(term) => term.get_text_snapshot(max_lines, offset_lines).await,
+                None => None,
+            }
+        })
+    }
+
+    fn snapshot_pane(
+        &self,
+        target_pane_id: Option<String>,
+        max_lines: usize,
+        offset_lines: usize,
+    ) -> Pin<Box<dyn Future<Output = Option<String>> + 'static>> {
+        let terminal = if let Some(ref tid) = target_pane_id
+            && !tid.is_empty()
+            && tid != &self.id
+        {
+            crate::find_live_pane(tid).map(|i| i.borrow().terminal.clone())
+        } else {
+            self.inner_weak
+                .upgrade()
+                .map(|i| i.borrow().terminal.clone())
+        };
         Box::pin(async move {
             match terminal {
                 Some(term) => term.get_text_snapshot(max_lines, offset_lines).await,

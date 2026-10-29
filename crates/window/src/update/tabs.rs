@@ -72,8 +72,8 @@ pub fn new_tab_in_dir(inner: &mut AppWindowInner, working_dir: Option<String>) {
     let _ = new_tab_internal(inner, None, working_dir, None);
 }
 
-pub fn new_tab_with_intent(inner: &mut AppWindowInner, intent: Option<String>) {
-    let _ = new_tab_internal(inner, intent, None, None);
+pub fn new_tab_with_intent(inner: &mut AppWindowInner, intent: Option<String>) -> TerminalComponent {
+    new_tab_internal(inner, intent, None, None)
 }
 
 pub fn new_tab_reattach(

@@ -100,9 +100,11 @@ pub(super) fn wire_terminal_events(
             let pane_id = id_clone.clone();
             gtk::glib::spawn_future_local(async move {
                 let sid = session_arc.lock().await.take();
+                let agent = crate::get_agent().await;
                 if sid.is_some() {
-                    let agent = crate::get_agent().await;
                     let _ = agent.release_holder(pane_id).await;
+                } else {
+                    let _ = agent.unregister_workspace_pane(pane_id).await;
                 }
             });
         }
@@ -116,6 +118,20 @@ pub(super) fn wire_terminal_events(
         if let Some(inner_rc) = inner_for_cwd.upgrade() {
             inner_rc.borrow_mut().working_dir = Some(dir.clone());
         }
+        let pane_id = id_clone.clone();
+        let cwd_for_agent = dir.clone();
+        gtk::glib::spawn_future_local(async move {
+            let agent = crate::get_agent().await;
+            let _ = agent
+                .update_workspace_pane(
+                    pane_id,
+                    cwd_for_agent,
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                )
+                .await;
+        });
         cb_clone(PaneOutput::DirectoryChanged(id_clone.clone(), dir));
     });
 
@@ -140,15 +156,15 @@ pub(super) fn wire_terminal_events(
     let tx_osc_clone = claw_sender.clone();
     let inner_for_osc = Rc::downgrade(inner);
     let active_clone_for_osc = is_claw_active.clone();
+    let id_for_osc = id.clone();
     terminal.on_osc_133_d(move |exit_code| {
-        if !active_clone_for_osc.get() {
-            return;
-        }
         if let Some(code) = exit_code {
             let Some(inner_rc) = inner_for_osc.upgrade() else {
                 return;
             };
+            let is_active = active_clone_for_osc.get();
             let tx = tx_osc_clone.clone();
+            let pane_id = id_for_osc.clone();
             let pane = inner_rc.borrow().terminal.clone();
             let cwd = inner_rc
                 .borrow()
@@ -157,13 +173,20 @@ pub(super) fn wire_terminal_events(
                 .unwrap_or_default();
             gtk::glib::spawn_future_local(async move {
                 if let Some(snapshot) = pane.get_text_snapshot(100, 0).await {
-                    let _ = tx
-                        .send(ClawMessage::CommandFinished {
-                            exit_code: code,
-                            snapshot,
-                            cwd,
-                        })
-                        .await;
+                    if is_active {
+                        let _ = tx
+                            .send(ClawMessage::CommandFinished {
+                                exit_code: code,
+                                snapshot,
+                                cwd,
+                            })
+                            .await;
+                    } else {
+                        let agent = crate::get_agent().await;
+                        let _ = agent
+                            .notify_pane_command_finished(pane_id, code, snapshot, cwd)
+                            .await;
+                    }
                 }
             });
         }

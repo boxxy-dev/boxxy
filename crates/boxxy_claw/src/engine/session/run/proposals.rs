@@ -23,6 +23,11 @@ impl ClawSession {
         let mut state_lock = self.state.lock().await;
         state_lock.status = crate::engine::AgentStatus::Waiting;
         state_lock.drain_pending_cancel();
+        drop(state_lock);
+        let _ = ctx
+            .workspace
+            .drain_pending_commands_for_source(&self.pane_id, "[USER_EXPLICIT_REJECT]".to_string())
+            .await;
     }
 
     pub(super) async fn handle_cancel_pending(&mut self, ctx: &mut RunContext) {
@@ -43,6 +48,10 @@ impl ClawSession {
         state_lock.status = crate::engine::AgentStatus::Waiting;
         state_lock.drain_pending_cancel();
         drop(state_lock);
+        let _ = ctx
+            .workspace
+            .drain_pending_commands_for_source(&self.pane_id, "[USER_EXPLICIT_REJECT]".to_string())
+            .await;
 
         debug!("Pane {}: User cancelled pending proposals.", self.pane_id);
         let character_id = self.character_id.clone();

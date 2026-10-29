@@ -130,6 +130,8 @@ pub fn spawn_dispatch(
                     diagnosis,
                     agent_name,
                     character_id,
+                    target_pane_id,
+                    target_pane_label,
                     usage,
                 } => {
                     if let Some(usage) = usage {
@@ -157,7 +159,11 @@ pub fn spawn_dispatch(
                         agent_name,
                         Some("Propose Command"),
                         diagnosis,
-                        crate::Proposal::Command(command.clone()),
+                        crate::Proposal::Command {
+                            command: command.clone(),
+                            target_pane_id: target_pane_id.clone(),
+                            target_pane_label: target_pane_label.clone(),
+                        },
                     );
                 }
                 ClawEngineEvent::ProposeFileWrite {
@@ -334,6 +340,8 @@ pub fn spawn_dispatch(
                     explanation,
                     agent_name,
                     character_id,
+                    target_pane_id,
+                    target_pane_label,
                     usage,
                 } => {
                     if let Some(usage) = usage {
@@ -361,7 +369,11 @@ pub fn spawn_dispatch(
                         agent_name,
                         Some("Terminal Command"),
                         explanation,
-                        crate::Proposal::Command(command.clone()),
+                        crate::Proposal::Command {
+                            command: command.clone(),
+                            target_pane_id: target_pane_id.clone(),
+                            target_pane_label: target_pane_label.clone(),
+                        },
                     );
                 }
                 ClawEngineEvent::Identity {
@@ -437,6 +449,7 @@ pub fn spawn_dispatch(
                     max_lines,
                     offset_lines,
                     request_id,
+                    target_pane_id,
                     character_id: _,
                     ..
                 } => {
@@ -448,7 +461,10 @@ pub fn spawn_dispatch(
                     let max_lines = *max_lines;
                     let offset_lines = *offset_lines;
                     let request_id = *request_id;
-                    let snapshot = host.snapshot(max_lines, offset_lines);
+                    let target_pane = target_pane_id
+                        .clone()
+                        .filter(|tid| !tid.is_empty() && tid != &id);
+                    let snapshot = host.snapshot_pane(target_pane, max_lines, offset_lines);
                     let host_for_reply = host.clone();
                     gtk::glib::spawn_future_local(async move {
                         let content = snapshot

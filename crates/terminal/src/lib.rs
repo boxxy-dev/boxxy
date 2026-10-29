@@ -17,8 +17,34 @@ pub use component::{Direction, TerminalComponent};
 pub use events::*;
 
 use crate::agent_manager::AgentManager;
+use std::collections::HashMap;
+use std::rc::Weak;
 use std::sync::LazyLock;
 use tokio::sync::broadcast;
+
+thread_local! {
+    static LIVE_PANES: std::cell::RefCell<HashMap<String, Weak<std::cell::RefCell<pane::PaneInner>>>> =
+        std::cell::RefCell::new(HashMap::new());
+}
+
+pub(crate) fn register_live_pane(
+    id: String,
+    inner: Weak<std::cell::RefCell<pane::PaneInner>>,
+) {
+    LIVE_PANES.with(|map| {
+        map.borrow_mut().insert(id, inner);
+    });
+}
+
+pub(crate) fn unregister_live_pane(id: &str) {
+    LIVE_PANES.with(|map| {
+        map.borrow_mut().remove(id);
+    });
+}
+
+pub(crate) fn find_live_pane(id: &str) -> Option<std::rc::Rc<std::cell::RefCell<pane::PaneInner>>> {
+    LIVE_PANES.with(|map| map.borrow().get(id).and_then(|w| w.upgrade()))
+}
 
 /// Global broadcast channel — every TerminalComponent writes here;
 /// every AppWindow subscribes and filters by the IDs it owns.

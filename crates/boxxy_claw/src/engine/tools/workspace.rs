@@ -14,6 +14,10 @@ pub struct SpawnAgentArgs {
 
 #[derive(Serialize)]
 pub struct SpawnAgentOutput {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pane_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub alias: Option<String>,
     pub message: String,
 }
 
@@ -31,8 +35,7 @@ impl Tool for SpawnAgentTool {
     type Output = SpawnAgentOutput;
 
     fn description(&self) -> String {
-        "Spawn a new agent in a new terminal pane or tab. \
-        Use this to create additional environments to delegate tasks to."
+        "Spawn a new terminal pane or tab (either as a plain companion terminal that you can control directly via `terminal_exec(..., target_pane=...)`, `read_pane_buffer`, and `send_keystrokes_to_pane`, or with an `intent` for a peer agent). Returns the newly created `pane_id` and `alias` (e.g. `pane-2`) immediately so you can use it in the same turn."
             .to_string()
     }
 
@@ -42,11 +45,11 @@ impl Tool for SpawnAgentTool {
             "properties": {
                 "location": {
                     "type": "string",
-                    "description": "Where to spawn the new agent. Must be exactly one of: 'vertical', 'horizontal', or 'tab'."
+                    "description": "Where to spawn the new pane. Must be exactly one of: 'vertical', 'horizontal', or 'tab'."
                 },
                 "intent": {
                     "type": "string",
-                    "description": "An optional initial instruction or task for the new agent to immediately start working on."
+                    "description": "Optional: omit this when spawning a plain companion terminal that you will drive yourself via `terminal_exec(..., target_pane=...)`. Only pass `intent` if you want a separate peer AI character to be claimed on the new pane."
                 }
             },
             "required": ["location"]
@@ -59,7 +62,6 @@ impl Tool for SpawnAgentTool {
         args: Self::Args,
     ) -> Result<Self::Output, Self::Error> {
         self.approval.begin_tool(Self::NAME).await;
-        let my_name = self.state.lock().await.agent_name.clone();
 
         let loc = match args.location.to_lowercase().as_str() {
             "vertical" => SpawnLocation::VerticalSplit,
@@ -67,6 +69,8 @@ impl Tool for SpawnAgentTool {
             "tab" => SpawnLocation::NewTab,
             _ => {
                 let out = SpawnAgentOutput {
+                    pane_id: None,
+                    alias: None,
                     message: "Error: location must be 'vertical', 'horizontal', or 'tab'."
                         .to_string(),
                 };
@@ -75,22 +79,57 @@ impl Tool for SpawnAgentTool {
             }
         };
 
+        let request_id = uuid::Uuid::new_v4();
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        let my_name = {
+            let mut state = self.state.lock().await;
+            state.pending_spawns.insert(request_id, reply_tx);
+            state.agent_name.clone()
+        };
+
         if let Err(e) = self
             .tx_ui
             .send(ClawEngineEvent::RequestSpawnAgent {
                 source_agent_name: my_name,
                 location: loc,
                 intent: args.intent,
+                request_id: Some(request_id),
             })
             .await
         {
+            self.state.lock().await.pending_spawns.remove(&request_id);
             return Err(std::io::Error::other(format!(
                 "Failed to send spawn request: {e}"
             )));
         }
 
-        let out = SpawnAgentOutput {
-            message: "Successfully requested to spawn a new agent. It will take a few seconds to boot up and appear on your Workspace Radar.".to_string(),
+        let out = match tokio::time::timeout(std::time::Duration::from_secs(3), reply_rx).await {
+            Ok(Ok((pane_id, alias))) => {
+                let workspace = global_workspace().await;
+                let resolved_alias = if alias.is_empty() {
+                    workspace
+                        .get_pane_alias(&pane_id)
+                        .await
+                        .unwrap_or_else(|| pane_id.clone())
+                } else {
+                    alias
+                };
+                SpawnAgentOutput {
+                    pane_id: Some(pane_id.clone()),
+                    alias: Some(resolved_alias.clone()),
+                    message: format!(
+                        "Spawned new terminal pane '{resolved_alias}' (pane_id: {pane_id}). You can now pass `target_pane: \"{resolved_alias}\"` to `terminal_exec`, `read_pane_buffer`, `send_keystrokes_to_pane`, or `subscribe_to_pane`."
+                    ),
+                }
+            }
+            _ => {
+                self.state.lock().await.pending_spawns.remove(&request_id);
+                SpawnAgentOutput {
+                    pane_id: None,
+                    alias: None,
+                    message: "Successfully requested to spawn a new pane.".to_string(),
+                }
+            }
         };
         self.approval.finish_tool(Self::NAME, &out).await;
         Ok(out)
@@ -121,7 +160,7 @@ impl Tool for CloseAgentTool {
     type Output = CloseAgentOutput;
 
     fn description(&self) -> String {
-        "Close another agent's terminal pane. Use this to clean up the workspace when an agent's task is fully complete."
+        "Close another terminal pane (by alias like 'pane-2', petname, character name, or pane ID). Use this to clean up the workspace when a task in another pane is complete."
             .to_string()
     }
 
@@ -131,7 +170,7 @@ impl Tool for CloseAgentTool {
             "properties": {
                 "agent_name": {
                     "type": "string",
-                    "description": "The name (petname, character name, or pane ID) of the agent to close."
+                    "description": "The alias (e.g. 'pane-2'), petname, character name, or pane ID of the pane to close."
                 }
             },
             "required": ["agent_name"]
@@ -144,11 +183,14 @@ impl Tool for CloseAgentTool {
         args: Self::Args,
     ) -> Result<Self::Output, Self::Error> {
         self.approval.begin_tool(Self::NAME).await;
+        let workspace = global_workspace().await;
+        let target_pane_id = workspace.resolve_pane_id_by_name(&args.agent_name).await;
 
         if let Err(e) = self
             .tx_ui
             .send(ClawEngineEvent::RequestCloseAgent {
                 target_agent_name: args.agent_name.clone(),
+                target_pane_id,
             })
             .await
         {
@@ -159,7 +201,7 @@ impl Tool for CloseAgentTool {
 
         let out = CloseAgentOutput {
             message: format!(
-                "Successfully requested to close agent '{}'.",
+                "Successfully requested to close pane '{}'.",
                 args.agent_name
             ),
         };
@@ -170,7 +212,9 @@ impl Tool for CloseAgentTool {
 
 #[derive(Deserialize)]
 pub struct ReadPaneArgs {
+    #[serde(alias = "target", alias = "target_pane")]
     pub agent_name: String,
+    pub lines: Option<usize>,
 }
 
 #[derive(Serialize)]
@@ -192,8 +236,8 @@ impl Tool for ReadPaneTool {
     type Output = ReadPaneOutput;
 
     fn description(&self) -> String {
-        "Read the terminal snapshot (last ~50 lines) of another agent in the same workspace. \
-        Use this to coordinate with what's happening in other terminals.".to_string()
+        "Read the live terminal snapshot of another pane in the workspace (either a plain companion terminal like 'pane-2' or another agent's pane). \
+        Use this to inspect compiler output, logs, or command results in other terminals.".to_string()
     }
 
     fn parameters(&self) -> serde_json::Value {
@@ -202,7 +246,11 @@ impl Tool for ReadPaneTool {
             "properties": {
                 "agent_name": {
                     "type": "string",
-                    "description": "The name (petname, character name, or pane ID) of the agent to read (e.g. 'red-pony')."
+                    "description": "The alias (e.g. 'pane-2'), petname, character name, or pane ID of the pane to read."
+                },
+                "lines": {
+                    "type": "integer",
+                    "description": "Optional number of lines to read from the bottom of the pane (defaults to 100)."
                 }
             },
             "required": ["agent_name"]
@@ -218,16 +266,59 @@ impl Tool for ReadPaneTool {
 
         let workspace = global_workspace().await;
         let out = if let Some(pane_id) = workspace.resolve_pane_id_by_name(&args.agent_name).await {
-            match workspace.get_pane_snapshot(pane_id).await {
-                Some(content) => ReadPaneOutput { content },
-                None => ReadPaneOutput {
-                    content: format!("Agent '{}' has no active snapshot.", args.agent_name),
-                },
+            let max_lines = args.lines.unwrap_or(100).clamp(1, 500);
+            let request_id = uuid::Uuid::new_v4();
+            let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+            let (my_name, my_char_id) = {
+                let mut state = self.state.lock().await;
+                state.pending_scrollbacks.insert(request_id, reply_tx);
+                (state.agent_name.clone(), state.character_id.clone())
+            };
+
+            let _ = self
+                .tx_ui
+                .send(ClawEngineEvent::RequestScrollback {
+                    agent_name: my_name,
+                    character_id: my_char_id,
+                    target_pane_id: Some(pane_id.clone()),
+                    max_lines,
+                    offset_lines: 0,
+                    request_id,
+                })
+                .await;
+
+            match tokio::time::timeout(std::time::Duration::from_millis(1500), reply_rx).await {
+                Ok(Ok(live_content))
+                    if !live_content.starts_with("Error:") && !live_content.is_empty() =>
+                {
+                    workspace
+                        .update_pane_state(
+                            pane_id,
+                            None,
+                            None,
+                            String::new(),
+                            None,
+                            Some(live_content.clone()),
+                        )
+                        .await;
+                    ReadPaneOutput {
+                        content: live_content,
+                    }
+                }
+                _ => {
+                    self.state.lock().await.pending_scrollbacks.remove(&request_id);
+                    match workspace.get_pane_snapshot(pane_id).await {
+                        Some(content) => ReadPaneOutput { content },
+                        None => ReadPaneOutput {
+                            content: format!("Pane '{}' has no active snapshot.", args.agent_name),
+                        },
+                    }
+                }
             }
         } else {
             ReadPaneOutput {
                 content: format!(
-                    "Agent '{}' not found in workspace registry.",
+                    "Pane '{}' not found in workspace registry.",
                     args.agent_name
                 ),
             }
@@ -248,6 +339,7 @@ pub struct ListAgentsOutput {
 #[derive(Serialize)]
 pub struct AgentInfo {
     pub name: String,
+    pub alias: String,
     pub id: String,
     pub cwd: String,
     pub last_command: String,

@@ -454,6 +454,7 @@ impl TerminalOverlay {
         let state_for_accept = state.clone();
         let template_entry_clone = template_entry.clone();
         let dismiss_accept = dismiss_and_refocus.clone();
+        let overlay_for_accept = s.clone();
         accept_btn.connect_clicked(move |_| {
             let proposal = if let OverlayState::Action(p) = &*state_for_accept.borrow() {
                 p.clone()
@@ -478,6 +479,32 @@ impl TerminalOverlay {
                         }
                     }
                     host_accept.execute_script(&filename, expanded);
+                    dismiss_accept();
+                }
+                Proposal::Command {
+                    target_pane_id,
+                    ..
+                } => {
+                    let buffer = cmd_view_clone.buffer();
+                    let start = buffer.start_iter();
+                    let end = buffer.end_iter();
+                    let cmd = buffer.text(&start, &end, false).to_string();
+                    if let Some(target_id) = target_pane_id
+                        .as_deref()
+                        .filter(|tid| !tid.is_empty() && *tid != host_accept.host_id())
+                    {
+                        host_accept.inject_line_to_pane(target_id, cmd);
+                        host_accept.send_claw(ClawMessage::TerminalCommandAccepted {
+                            target_pane_id: Some(target_id.to_string()),
+                        });
+                        overlay_for_accept.enter_waiting_state();
+                    } else {
+                        host_accept.inject_line(cmd);
+                        host_accept.send_claw(ClawMessage::TerminalCommandAccepted {
+                            target_pane_id: None,
+                        });
+                        dismiss_accept();
+                    }
                 }
                 _ => {
                     let buffer = cmd_view_clone.buffer();
@@ -485,9 +512,9 @@ impl TerminalOverlay {
                     let end = buffer.end_iter();
                     let cmd = buffer.text(&start, &end, false).to_string();
                     host_accept.inject_line(cmd);
+                    dismiss_accept();
                 }
             }
-            dismiss_accept();
         });
 
         let accept_btn_clone = accept_btn.clone();
@@ -847,7 +874,7 @@ impl TerminalOverlay {
         }
 
         match proposal {
-            Proposal::Command(cmd) => {
+            Proposal::Command { command: cmd, .. } => {
                 self.command_view.buffer().set_text(&cmd);
                 self.command_view.set_editable(mode == OverlayMode::Claw);
             }
@@ -1091,11 +1118,21 @@ impl TerminalOverlay {
                 self.indicator_slot.set_visible(false);
                 self.tips_cycle.stop();
                 match proposal {
-                    Proposal::Command(_) | Proposal::Bookmark { .. } => {
+                    Proposal::Command { .. } | Proposal::Bookmark { .. } => {
                         self.command_frame.set_visible(true);
                         self.action_box.set_visible(true);
                         self.accept_btn.set_visible(true);
                         self.reject_btn.set_visible(true);
+                        if let Proposal::Command {
+                            target_pane_label: Some(ref lbl),
+                            ..
+                        } = proposal
+                            && !lbl.is_empty()
+                        {
+                            self.accept_btn.set_label(&format!("Accept & Run in {lbl}"));
+                        } else {
+                            self.accept_btn.set_label("Accept & Run");
+                        }
                         if matches!(proposal, Proposal::Bookmark { .. }) {
                             self.reject_btn.set_label("Close");
                             self.reject_btn.remove_css_class("destructive-action");

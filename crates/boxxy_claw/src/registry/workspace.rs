@@ -5,6 +5,7 @@ use tokio::sync::{OnceCell, RwLock};
 #[derive(Clone, Debug)]
 pub struct PaneState {
     pub id: String,
+    pub alias: String,
     pub session_id: Option<String>,
     pub name: String,
     pub cwd: String,
@@ -16,9 +17,15 @@ pub struct PaneState {
     pub active_skills: Vec<String>,
 }
 
+type PendingCommandWaiter = (
+    Option<String>,
+    tokio::sync::oneshot::Sender<Result<String, String>>,
+);
+
 pub struct WorkspaceRegistry {
     // Map of pane_id -> PaneState
     panes: Arc<RwLock<HashMap<String, PaneState>>>,
+    next_alias_index: std::sync::atomic::AtomicU64,
     // Map of pane_id -> Vec<ScheduledTask>
     tasks: Arc<RwLock<HashMap<String, Vec<crate::engine::ScheduledTask>>>>,
     tasks_changed_tx: tokio::sync::broadcast::Sender<()>,
@@ -28,9 +35,11 @@ pub struct WorkspaceRegistry {
     subscriptions: Arc<RwLock<HashMap<String, Vec<EventFilter>>>>,
     // Resource locks: resource_path -> holder_pane_id
     locks: Arc<RwLock<HashMap<String, String>>>,
+    // Pending cross-pane terminal_exec waiters: target_pane_id -> (source_pane_id, reply_tx)
+    pending_commands: Arc<RwLock<HashMap<String, PendingCommandWaiter>>>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EventFilter {
     ProcessExited {
         pane_id: Option<String>,
@@ -65,12 +74,34 @@ impl WorkspaceRegistry {
         let (tasks_changed_tx, _) = tokio::sync::broadcast::channel(32);
         Self {
             panes: Arc::new(RwLock::new(HashMap::new())),
+            next_alias_index: std::sync::atomic::AtomicU64::new(1),
             tasks: Arc::new(RwLock::new(HashMap::new())),
             tasks_changed_tx,
             global_intent: Arc::new(RwLock::new(None)),
             subscriptions: Arc::new(RwLock::new(HashMap::new())),
             locks: Arc::new(RwLock::new(HashMap::new())),
+            pending_commands: Arc::new(RwLock::new(HashMap::new())),
         }
+    }
+
+    fn mint_alias(&self, existing: &HashMap<String, PaneState>) -> String {
+        for idx in 1..10_000u64 {
+            let candidate = format!("pane-{idx}");
+            if !existing
+                .values()
+                .any(|p| p.alias.eq_ignore_ascii_case(&candidate))
+            {
+                let _ = self.next_alias_index.fetch_max(
+                    idx + 1,
+                    std::sync::atomic::Ordering::Relaxed,
+                );
+                return candidate;
+            }
+        }
+        let n = self
+            .next_alias_index
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        format!("pane-{n}")
     }
 
     pub fn subscribe_tasks(&self) -> tokio::sync::broadcast::Receiver<()> {
@@ -108,9 +139,14 @@ impl WorkspaceRegistry {
         locks.retain(|_, holder| holder != pane_id);
     }
 
-    pub async fn subscribe(&self, subscriber_id: String, filter: EventFilter) {
+    pub async fn subscribe(&self, subscriber_id: String, filter: EventFilter) -> bool {
         let mut subs = self.subscriptions.write().await;
-        subs.entry(subscriber_id).or_default().push(filter);
+        let list = subs.entry(subscriber_id).or_default();
+        if list.contains(&filter) {
+            return false;
+        }
+        list.push(filter);
+        true
     }
 
     pub async fn unsubscribe_all(&self, subscriber_id: &str) {
@@ -119,13 +155,14 @@ impl WorkspaceRegistry {
     }
 
     pub async fn publish_event(&self, event: crate::engine::ClawEvent) {
-        let subs = self.subscriptions.read().await;
+        let mut subs = self.subscriptions.write().await;
         let panes = self.panes.read().await;
+        let mut to_notify = Vec::new();
 
-        for (subscriber_id, filters) in subs.iter() {
+        for (subscriber_id, filters) in subs.iter_mut() {
             let mut matched = false;
-            for filter in filters {
-                matched = match (&event, filter) {
+            filters.retain(|filter| {
+                let m = match (&event, filter) {
                     (
                         crate::engine::ClawEvent::ProcessExited { pane_id, .. },
                         EventFilter::ProcessExited {
@@ -157,22 +194,29 @@ impl WorkspaceRegistry {
                     }
                     _ => false,
                 };
-                if matched {
-                    break;
+                if m {
+                    matched = true;
                 }
-            }
+                !m
+            });
 
-            if matched {
-                if let Some(pane) = panes.get(subscriber_id) {
-                    if let Some(tx) = &pane.tx {
-                        let _ = tx
-                            .send(crate::engine::ClawMessage::SubscriptionEvent {
-                                event: event.clone(),
-                            })
-                            .await;
-                    }
-                }
+            if matched
+                && let Some(pane) = panes.get(subscriber_id)
+                && let Some(tx) = &pane.tx
+            {
+                to_notify.push(tx.clone());
             }
+        }
+        subs.retain(|_, list| !list.is_empty());
+        drop(panes);
+        drop(subs);
+
+        for tx in to_notify {
+            let _ = tx
+                .send(crate::engine::ClawMessage::SubscriptionEvent {
+                    event: event.clone(),
+                })
+                .await;
         }
     }
 
@@ -288,6 +332,81 @@ impl WorkspaceRegistry {
                 }
             }
         }
+        {
+            let mut pending = self.pending_commands.write().await;
+            if let Some(waiter) = pending.remove(old_id) {
+                pending.insert(new_id, waiter);
+            }
+        }
+    }
+
+    pub async fn register_pending_command(
+        &self,
+        target_pane_id: String,
+        source_pane_id: Option<String>,
+        reply_tx: tokio::sync::oneshot::Sender<Result<String, String>>,
+    ) {
+        let mut pending = self.pending_commands.write().await;
+        pending.insert(target_pane_id, (source_pane_id, reply_tx));
+    }
+
+    pub async fn complete_pending_command(
+        &self,
+        target_pane_id: &str,
+        exit_code: i32,
+        snapshot: String,
+    ) -> bool {
+        let waiter = self.pending_commands.write().await.remove(target_pane_id);
+        if let Some((_source_pane, reply_tx)) = waiter {
+            if exit_code == 0 {
+                let _ = reply_tx.send(Ok(snapshot));
+            } else {
+                let _ = reply_tx.send(Err(format!(
+                    "Command failed with exit code {exit_code}:\n{snapshot}"
+                )));
+            }
+            true
+        } else {
+            false
+        }
+    }
+
+    pub async fn drain_pending_commands_for_source(
+        &self,
+        source_pane_id: &str,
+        err_msg: String,
+    ) -> bool {
+        let mut pending = self.pending_commands.write().await;
+        let matching_targets: Vec<String> = pending
+            .iter()
+            .filter_map(|(target_id, (src_opt, _))| {
+                if src_opt.as_deref() == Some(source_pane_id) {
+                    Some(target_id.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        let mut fulfilled = false;
+        for target_id in matching_targets {
+            if let Some((_, reply_tx)) = pending.remove(&target_id) {
+                let _ = reply_tx.send(Err(err_msg.clone()));
+                fulfilled = true;
+            }
+        }
+        fulfilled
+    }
+
+    pub async fn has_pending_command(&self, target_pane_id: &str) -> bool {
+        self.pending_commands
+            .read()
+            .await
+            .contains_key(target_pane_id)
+    }
+
+    pub async fn get_pane_status(&self, id: &str) -> Option<String> {
+        let panes = self.panes.read().await;
+        panes.get(id).and_then(|p| p.status.clone())
     }
 
     pub async fn register_pane_tx(
@@ -296,8 +415,14 @@ impl WorkspaceRegistry {
         tx: async_channel::Sender<crate::engine::ClawMessage>,
     ) {
         let mut panes = self.panes.write().await;
+        let alias = if let Some(existing) = panes.get(&id) {
+            existing.alias.clone()
+        } else {
+            self.mint_alias(&panes)
+        };
         let entry = panes.entry(id.clone()).or_insert_with(|| PaneState {
             id,
+            alias,
             session_id: None,
             name: "Unknown Agent".to_string(),
             cwd: "/".to_string(),
@@ -309,6 +434,11 @@ impl WorkspaceRegistry {
             active_skills: Vec::new(),
         });
         entry.tx = Some(tx);
+    }
+
+    pub async fn get_pane_alias(&self, id: &str) -> Option<String> {
+        let panes = self.panes.read().await;
+        panes.get(id).map(|p| p.alias.clone())
     }
 
     pub async fn get_pane_tx_by_name(
@@ -335,12 +465,19 @@ impl WorkspaceRegistry {
         cwd: String,
         last_command: Option<String>,
         snapshot: Option<String>,
-    ) {
+    ) -> String {
         let mut panes = self.panes.write().await;
+        let alias = if let Some(existing) = panes.get(&id) {
+            existing.alias.clone()
+        } else {
+            self.mint_alias(&panes)
+        };
+        let default_name = alias.clone();
         let entry = panes.entry(id.clone()).or_insert_with(|| PaneState {
             id,
+            alias: alias.clone(),
             session_id: session_id.clone(),
-            name: name.clone().unwrap_or_else(|| "Unknown Agent".to_string()),
+            name: name.clone().unwrap_or(default_name),
             cwd: cwd.clone(),
             last_command: None,
             last_snapshot: None,
@@ -354,17 +491,22 @@ impl WorkspaceRegistry {
             entry.session_id = Some(s);
         }
 
-        if let Some(n) = name {
+        if let Some(n) = name
+            && !n.is_empty()
+        {
             entry.name = n;
         }
 
-        entry.cwd = cwd;
+        if !cwd.is_empty() {
+            entry.cwd = cwd;
+        }
         if last_command.is_some() {
             entry.last_command = last_command;
         }
         if snapshot.is_some() {
             entry.last_snapshot = snapshot;
         }
+        entry.alias.clone()
     }
 
     pub async fn update_pane_session(&self, id: String, session_id: String) {
@@ -456,19 +598,21 @@ impl WorkspaceRegistry {
         let query_norm = normalize_agent_key(trimmed);
         let panes = self.panes.read().await;
 
-        // 1. Exact ID or case-insensitive name match
-        if let Some(pane) = panes
-            .values()
-            .find(|p| p.id.eq_ignore_ascii_case(trimmed) || p.name.eq_ignore_ascii_case(trimmed))
-        {
+        // 1. Exact ID, alias, or case-insensitive name match
+        if let Some(pane) = panes.values().find(|p| {
+            p.id.eq_ignore_ascii_case(trimmed)
+                || p.alias.eq_ignore_ascii_case(trimmed)
+                || p.name.eq_ignore_ascii_case(trimmed)
+        }) {
             return Some(pane.id.clone());
         }
 
-        // 2. Normalized name match (e.g. "red-pony" == "Red Pony" == "red_pony")
+        // 2. Normalized name or alias match (e.g. "red-pony" == "Red Pony" == "red_pony", "pane-2" == "pane 2")
         if !query_norm.is_empty()
-            && let Some(pane) = panes
-                .values()
-                .find(|p| normalize_agent_key(&p.name) == query_norm)
+            && let Some(pane) = panes.values().find(|p| {
+                normalize_agent_key(&p.name) == query_norm
+                    || normalize_agent_key(&p.alias) == query_norm
+            })
         {
             return Some(pane.id.clone());
         }
@@ -505,9 +649,9 @@ impl WorkspaceRegistry {
         let peers: Vec<_> = panes.values().filter(|p| p.id != current_pane_id).collect();
 
         if !peers.is_empty() {
-            radar.push_str("\n--- GLOBAL RADAR (Other Active Agents) ---\n");
+            radar.push_str("\n--- GLOBAL RADAR (Other Workspace Panes & Active Agents) ---\n");
             radar.push_str(
-                "You can read these panes using `read_pane_buffer(agent_name)` or delegate tasks using `delegate_task(agent_name, prompt)`.\n",
+                "You can target any open pane by its alias (e.g. `pane-2`), ID, or agent name using `terminal_exec(..., target_pane=...)`, `read_pane_buffer(agent_name)`, `send_keystrokes_to_pane(agent_name, keys)`, or `subscribe_to_pane(agent_name, event_type)`. For panes with an attached peer agent, you can also delegate tasks using `delegate_task(agent_name, prompt)`.\n",
             );
 
             let mut sorted_peers = peers.clone();
@@ -515,7 +659,7 @@ impl WorkspaceRegistry {
             // 1. Waiting + Full Context (Best)
             // 2. Sleep + Full Context
             // 3. Waiting + Degraded
-            // 4. Others (Working, Locking, Faulted)
+            // 4. Others (Working, Locking, Faulted, Plain Terminals)
             sorted_peers.sort_by_key(|p| {
                 let is_waiting = p.status.as_deref() == Some("Waiting");
                 let is_sleep = p.status.as_deref() == Some("Sleep");
@@ -537,17 +681,26 @@ impl WorkspaceRegistry {
 
             for peer in sorted_peers {
                 let cmd = peer.last_command.as_deref().unwrap_or("idle");
-                let status = peer.status.as_deref().unwrap_or("Unknown");
-                let quality = match peer.context_quality {
-                    Some(crate::engine::ContextQuality::Full) => "Full Context",
-                    Some(crate::engine::ContextQuality::Degraded) => "Degraded Context",
-                    None => "Unknown Context",
-                };
+                let is_agent = peer.tx.is_some() || peer.session_id.is_some();
+                if is_agent {
+                    let status = peer.status.as_deref().unwrap_or("Unknown");
+                    let quality = match peer.context_quality {
+                        Some(crate::engine::ContextQuality::Full) => "Full Context",
+                        Some(crate::engine::ContextQuality::Degraded) => "Degraded Context",
+                        None => "Unknown Context",
+                    };
 
-                radar.push_str(&format!(
-                    "- Agent '{}' (ID: {}): in {} | Last command `{}` | Status: {} [{}]\n",
-                    peer.name, peer.id, peer.cwd, cmd, status, quality
-                ));
+                    radar.push_str(&format!(
+                        "- [Agent: '{}' | Alias: `{}` | ID: `{}`]: in `{}` | Last command `{}` | Status: {} [{}]\n",
+                        peer.name, peer.alias, peer.id, peer.cwd, cmd, status, quality
+                    ));
+                } else {
+                    let status = peer.status.as_deref().unwrap_or("Idle");
+                    radar.push_str(&format!(
+                        "- [Plain Terminal: `{}` | ID: `{}`]: in `{}` | Last command `{}` | Status: {}\n",
+                        peer.alias, peer.id, peer.cwd, cmd, status
+                    ));
+                }
             }
         }
 
@@ -568,6 +721,7 @@ impl WorkspaceRegistry {
             .values()
             .map(|p| crate::engine::tools::workspace::AgentInfo {
                 name: p.name.clone(),
+                alias: p.alias.clone(),
                 id: p.id.clone(),
                 cwd: p.cwd.clone(),
                 last_command: p.last_command.clone().unwrap_or_else(|| "idle".to_string()),
@@ -590,4 +744,101 @@ fn normalize_agent_key(s: &str) -> String {
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn plain_pane_registration_alias_resolution_and_radar_formatting() {
+        let reg = WorkspaceRegistry::new();
+
+        let alias1 = reg
+            .update_pane_state(
+                "uuid-home".to_string(),
+                Some("sess-1".to_string()),
+                Some("niko".to_string()),
+                "/tmp/project".to_string(),
+                None,
+                None,
+            )
+            .await;
+        assert_eq!(alias1, "pane-1");
+
+        let alias2 = reg
+            .update_pane_state(
+                "uuid-companion".to_string(),
+                None,
+                None,
+                "/tmp/linux".to_string(),
+                Some("make defconfig".to_string()),
+                Some("configuration written to .config".to_string()),
+            )
+            .await;
+        assert_eq!(alias2, "pane-2");
+
+        // Resolve by alias, normalized alias ("pane 2"), or exact UUID
+        assert_eq!(
+            reg.resolve_pane_id_by_name("pane-2").await.as_deref(),
+            Some("uuid-companion")
+        );
+        assert_eq!(
+            reg.resolve_pane_id_by_name("pane 2").await.as_deref(),
+            Some("uuid-companion")
+        );
+        assert_eq!(
+            reg.resolve_pane_id_by_name("uuid-companion")
+                .await
+                .as_deref(),
+            Some("uuid-companion")
+        );
+
+        // Radar from home pane must show companion pane as a Plain Terminal with alias & CWD
+        let radar = reg.get_global_radar("uuid-home".to_string()).await;
+        assert!(radar.contains("[Plain Terminal: `pane-2` | ID: `uuid-companion`]"));
+        assert!(radar.contains("/tmp/linux"));
+        assert!(radar.contains("make defconfig"));
+    }
+
+    #[tokio::test]
+    async fn cross_pane_pending_command_completes_and_drains_cleanly() {
+        let reg = WorkspaceRegistry::new();
+
+        let (tx1, rx1) = tokio::sync::oneshot::channel();
+        reg.register_pending_command(
+            "uuid-pane-2".to_string(),
+            Some("uuid-pane-1".to_string()),
+            tx1,
+        )
+        .await;
+
+        let completed = reg
+            .complete_pending_command(
+                "uuid-pane-2",
+                0,
+                "Kernel: arch/x86/boot/bzImage is ready".to_string(),
+            )
+            .await;
+        assert!(completed);
+        assert_eq!(
+            rx1.await.unwrap().unwrap(),
+            "Kernel: arch/x86/boot/bzImage is ready"
+        );
+
+        // Test rejection/interruption drain by source pane
+        let (tx2, rx2) = tokio::sync::oneshot::channel();
+        reg.register_pending_command(
+            "uuid-pane-2".to_string(),
+            Some("uuid-pane-1".to_string()),
+            tx2,
+        )
+        .await;
+
+        let drained = reg
+            .drain_pending_commands_for_source("uuid-pane-1", "[USER_EXPLICIT_REJECT]".to_string())
+            .await;
+        assert!(drained);
+        assert_eq!(rx2.await.unwrap().unwrap_err(), "[USER_EXPLICIT_REJECT]");
+    }
 }

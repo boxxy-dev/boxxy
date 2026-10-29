@@ -100,6 +100,7 @@ pub struct TerminalPaneComponent {
 
 impl Drop for PaneInner {
     fn drop(&mut self) {
+        crate::unregister_live_pane(&self.id);
         // Close per-pane channels immediately so `spawn_dispatch` (which holds
         // strong references to `PaneClawHost`, `TerminalOverlay`, and `MsgBarComponent`)
         // and the UI-to-agent forwarder task exit right away.
@@ -125,13 +126,15 @@ impl Drop for PaneInner {
         let pane_id = self.id.clone();
         glib::spawn_future_local(async move {
             let sid = session_arc.lock().await.take();
+            let agent = crate::get_agent().await;
             if sid.is_some() {
-                let agent = crate::get_agent().await;
                 if persist {
                     let _ = agent.detach_holder(pane_id).await;
                 } else {
                     let _ = agent.release_holder(pane_id).await;
                 }
+            } else if !persist {
+                let _ = agent.unregister_workspace_pane(pane_id).await;
             }
         });
 
@@ -181,7 +184,7 @@ impl Drop for PaneInner {
     }
 }
 
-pub(super) struct PaneInner {
+pub(crate) struct PaneInner {
     pub terminal: TerminalWidget,
     pub(super) scrolled_window: gtk::ScrolledWindow,
     pub(super) working_dir: Option<String>,
@@ -319,9 +322,11 @@ impl TerminalPaneComponent {
         };
         glib::spawn_future_local(async move {
             let sid = session_arc.lock().await.take();
+            let agent = crate::get_agent().await;
             if sid.is_some() {
-                let agent = crate::get_agent().await;
                 let _ = agent.release_holder(pane_id).await;
+            } else {
+                let _ = agent.unregister_workspace_pane(pane_id).await;
             }
         });
     }
@@ -332,9 +337,11 @@ impl TerminalPaneComponent {
             (inner.session_id.clone(), inner.id.clone())
         };
         let sid = session_arc.lock().await.take();
+        let agent = crate::get_agent().await;
         if sid.is_some() {
-            let agent = crate::get_agent().await;
             let _ = agent.release_holder(pane_id).await;
+        } else {
+            let _ = agent.unregister_workspace_pane(pane_id).await;
         }
     }
 
@@ -890,6 +897,7 @@ impl TerminalPaneComponent {
             }));
 
             *inner_weak_ref.borrow_mut() = Some(Rc::downgrade(&inner));
+            crate::register_live_pane(id.clone(), Rc::downgrade(&inner));
             (msg_bar, inner)
         };
 
@@ -966,6 +974,7 @@ impl TerminalPaneComponent {
             msg_bar.clone(),
             callback.clone(),
             init.spawn_intent,
+            is_claw_active.clone(),
             session_usage.clone(),
             is_pinned.clone(),
             is_web_search.clone(),
@@ -1075,6 +1084,17 @@ impl TerminalPaneComponent {
         if !aname.is_empty() && !self.claw_popover.is_visible() {
             self.claw_popover.show_chat_only(&aname);
         }
+    }
+
+    pub fn is_claw_drawer_visible(&self) -> bool {
+        self.claw_popover.is_visible()
+    }
+
+    pub fn send_claw_message(&self, msg: ClawMessage) {
+        let tx = self.claw_sender.clone();
+        glib::spawn_future_local(async move {
+            let _ = tx.send(msg).await;
+        });
     }
 
     /// Starts the Claw overlay with the default character and submits `query`,
@@ -1412,7 +1432,6 @@ impl TerminalPaneComponent {
         let is_web_search_cell = self.is_web_search.clone();
         let claw_popover_reattach = self.claw_popover.clone();
         let agent_name_reattach = self.agent_name.clone();
-        let is_claw_active_spawn = self.is_claw_active.get();
 
         glib::spawn_future_local(async move {
             let (reattach_pid, layout_tag) = {
@@ -1449,12 +1468,10 @@ impl TerminalPaneComponent {
                                 inner.claw_subscription.clone(),
                             )
                         };
-                        let mut reattached_claw = false;
                         if let Ok(Some((sid, sub_guard))) = agent
                             .reattach_holder_by_pid_with_sender(pid, id.clone(), event_tx)
                             .await
                         {
-                            reattached_claw = true;
                             *claw_sub_ref.lock() = Some(sub_guard);
                             *session_id_ref.lock().await = Some(sid);
                             is_claw_active_cell.set(true);
@@ -1511,11 +1528,30 @@ impl TerminalPaneComponent {
                                 {
                                     format!("~{}", &cwd[home.len()..])
                                 } else {
-                                    cwd
+                                    cwd.clone()
                                 };
                                 inner_rc.borrow_mut().last_title = Some(pretty_cwd.clone());
                                 cb(PaneOutput::TitleChanged(id.clone(), pretty_cwd));
                             }
+                            let _ = agent
+                                .update_workspace_pane(
+                                    id.clone(),
+                                    cwd,
+                                    String::new(),
+                                    String::new(),
+                                    String::new(),
+                                )
+                                .await;
+                        } else {
+                            let _ = agent
+                                .update_workspace_pane(
+                                    id.clone(),
+                                    working_dir.clone().unwrap_or_default(),
+                                    String::new(),
+                                    String::new(),
+                                    String::new(),
+                                )
+                                .await;
                         }
 
                         let (exit_rx, exit_guard) = agent.subscribe_process_exit(pid).await;
@@ -1544,9 +1580,11 @@ impl TerminalPaneComponent {
                                 let pane_id = id_for_exit.clone();
                                 glib::spawn_future_local(async move {
                                     let sid = session_arc.lock().await.take();
+                                    let agent = crate::get_agent().await;
                                     if sid.is_some() {
-                                        let agent = crate::get_agent().await;
                                         let _ = agent.release_holder(pane_id).await;
+                                    } else {
+                                        let _ = agent.unregister_workspace_pane(pane_id).await;
                                     }
                                 });
                                 cb(PaneOutput::Exited(id_for_exit, exit_code));
@@ -1556,16 +1594,38 @@ impl TerminalPaneComponent {
                         let inner_weak_fg = Rc::downgrade(&inner_rc);
                         let claw_tx = claw_sender.clone();
                         let id_for_fg = id.clone();
+                        let active_for_fg = is_claw_active_cell.clone();
                         glib::spawn_future_local(async move {
                             while let Ok(process_name) = fg_rx.recv().await {
                                 let Some(inner) = inner_weak_fg.upgrade() else {
                                     break;
                                 };
-                                let _ = claw_tx
-                                    .send(ClawMessage::ForegroundProcessChanged {
-                                        process_name: process_name.clone(),
-                                    })
-                                    .await;
+                                if active_for_fg.get() {
+                                    let _ = claw_tx
+                                        .send(ClawMessage::ForegroundProcessChanged {
+                                            process_name: process_name.clone(),
+                                        })
+                                        .await;
+                                } else {
+                                    let status = if process_name.is_empty() {
+                                        "Idle".to_string()
+                                    } else {
+                                        format!("Running: {process_name}")
+                                    };
+                                    let pane_id = id_for_fg.clone();
+                                    glib::spawn_future_local(async move {
+                                        let agent = crate::get_agent().await;
+                                        let _ = agent
+                                            .update_workspace_pane(
+                                                pane_id,
+                                                String::new(),
+                                                String::new(),
+                                                String::new(),
+                                                status,
+                                            )
+                                            .await;
+                                    });
+                                }
                                 let cb = inner.borrow().callback.clone();
                                 cb(PaneOutput::ForegroundProcessChanged(
                                     id_for_fg.clone(),
@@ -1574,9 +1634,7 @@ impl TerminalPaneComponent {
                             }
                         });
 
-                        if is_claw_active_spawn || reattached_claw {
-                            let _ = agent.set_foreground_tracking(pid, true).await;
-                        }
+                        let _ = agent.set_foreground_tracking(pid, true).await;
                         return;
                     }
                     Err(e) => {
@@ -1634,7 +1692,7 @@ impl TerminalPaneComponent {
 
                     env.push(("VTE_VERSION".to_string(), "7600".to_string()));
 
-                    let (cols, rows) = {
+                     let (cols, rows) = {
                         let inner = inner_rc.borrow();
                         let c = if inner.n_columns > 0 {
                             inner.n_columns as u16
@@ -1649,8 +1707,9 @@ impl TerminalPaneComponent {
                         (c, r)
                     };
 
+                    let initial_cwd = working_dir.unwrap_or_default();
                     let options = boxxy_agent::ipc::pty::SpawnOptions {
-                        cwd: working_dir.unwrap_or_default(),
+                        cwd: initial_cwd.clone(),
                         argv: cmd,
                         env,
                         cols,
@@ -1671,6 +1730,15 @@ impl TerminalPaneComponent {
                                 inner.pid = Some(pid);
                             }
                             let _ = agent.set_pane_id(pid, layout_tag).await;
+                            let _ = agent
+                                .update_workspace_pane(
+                                    id.clone(),
+                                    initial_cwd,
+                                    String::new(),
+                                    String::new(),
+                                    String::new(),
+                                )
+                                .await;
 
                             inner_rc.borrow().terminal.attach_pty(master_fd);
 
@@ -1700,9 +1768,11 @@ impl TerminalPaneComponent {
                                     let pane_id = id_for_exit.clone();
                                     glib::spawn_future_local(async move {
                                         let sid = session_arc.lock().await.take();
+                                        let agent = crate::get_agent().await;
                                         if sid.is_some() {
-                                            let agent = crate::get_agent().await;
                                             let _ = agent.release_holder(pane_id).await;
+                                        } else {
+                                            let _ = agent.unregister_workspace_pane(pane_id).await;
                                         }
                                     });
                                     cb(PaneOutput::Exited(id_for_exit, exit_code));
@@ -1712,17 +1782,39 @@ impl TerminalPaneComponent {
                             let inner_weak_fg = Rc::downgrade(&inner_rc);
                             let claw_tx = claw_sender.clone();
                             let id_for_fg = id.clone();
+                            let active_for_fg = is_claw_active_cell.clone();
                             glib::spawn_future_local(async move {
                                 while let Ok(process_name) = fg_rx.recv().await {
                                     let Some(inner) = inner_weak_fg.upgrade() else {
                                         break;
                                     };
-                                    // Update AI Engine immediately
-                                    let _ = claw_tx
-                                        .send(ClawMessage::ForegroundProcessChanged {
-                                            process_name: process_name.clone(),
-                                        })
-                                        .await;
+                                    if active_for_fg.get() {
+                                        // Update AI Engine immediately
+                                        let _ = claw_tx
+                                            .send(ClawMessage::ForegroundProcessChanged {
+                                                process_name: process_name.clone(),
+                                            })
+                                            .await;
+                                    } else {
+                                        let status = if process_name.is_empty() {
+                                            "Idle".to_string()
+                                        } else {
+                                            format!("Running: {process_name}")
+                                        };
+                                        let pane_id = id_for_fg.clone();
+                                        glib::spawn_future_local(async move {
+                                            let agent = crate::get_agent().await;
+                                            let _ = agent
+                                                .update_workspace_pane(
+                                                    pane_id,
+                                                    String::new(),
+                                                    String::new(),
+                                                    String::new(),
+                                                    status,
+                                                )
+                                                .await;
+                                        });
+                                    }
 
                                     // Notify UI for overlays/indicators
                                     let cb = inner.borrow().callback.clone();
@@ -1736,10 +1828,9 @@ impl TerminalPaneComponent {
                             // CWD tracking is now handled entirely via OSC 7 events
                             // registered in events::setup_terminal_events.
 
-                            // Initialize tracking state based on current claw activity
-                            if is_claw_active_spawn {
-                                let _ = agent.set_foreground_tracking(pid, true).await;
-                            }
+                            // Enable foreground process tracking on all open panes so GLOBAL RADAR
+                            // knows when a companion pane is running `make`, `vim`, etc.
+                            let _ = agent.set_foreground_tracking(pid, true).await;
                         }
                         Err(e) => log::error!("Failed to spawn process via agent: {:#}", e),
                     }
@@ -1846,7 +1937,7 @@ impl TerminalPaneComponent {
         if let Some(pid) = pid {
             glib::spawn_future_local(async move {
                 let agent = crate::get_agent().await;
-                let _ = agent.set_foreground_tracking(pid, active).await;
+                let _ = agent.set_foreground_tracking(pid, true).await;
             });
         }
 

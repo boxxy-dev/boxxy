@@ -1001,12 +1001,22 @@ impl TerminalComponent {
         true
     }
 
-    pub fn split_vertical(&self, intent: Option<String>) {
-        self.split_internal(true, intent, None, None);
+    pub fn send_claw_to_pane(&self, pane_id: &str, msg: boxxy_claw_protocol::ClawMessage) -> bool {
+        let inner = self.inner.borrow();
+        if let Some(pane_data) = inner.panes.get(pane_id) {
+            pane_data.controller.send_claw_message(msg);
+            true
+        } else {
+            false
+        }
     }
 
-    pub fn split_horizontal(&self, intent: Option<String>) {
-        self.split_internal(false, intent, None, None);
+    pub fn split_vertical(&self, intent: Option<String>) -> String {
+        self.split_internal(true, intent, None, None)
+    }
+
+    pub fn split_horizontal(&self, intent: Option<String>) -> String {
+        self.split_internal(false, intent, None, None)
     }
 
     pub fn split_reattach(
@@ -1014,8 +1024,8 @@ impl TerminalComponent {
         is_vertical: bool,
         reattach_pid: u32,
         working_dir: Option<String>,
-    ) {
-        self.split_internal(is_vertical, None, Some(reattach_pid), working_dir);
+    ) -> String {
+        self.split_internal(is_vertical, None, Some(reattach_pid), working_dir)
     }
 
     fn split_internal(
@@ -1024,7 +1034,7 @@ impl TerminalComponent {
         intent: Option<String>,
         reattach_pid: Option<u32>,
         working_dir_override: Option<String>,
-    ) {
+    ) -> String {
         if self.inner.borrow().is_maximized {
             self.toggle_maximize();
         }
@@ -1110,6 +1120,12 @@ impl TerminalComponent {
         paned.set_start_child(Some(&active_wrapper));
         paned.set_end_child(Some(&new_wrapper));
 
+        let prev_active_id = inner.active_pane_id.clone();
+        let keep_source_focus = inner
+            .panes
+            .get(&prev_active_id)
+            .is_some_and(|p| p.controller.is_claw_drawer_visible());
+
         inner.panes.insert(
             new_id.clone(),
             PaneData {
@@ -1119,10 +1135,20 @@ impl TerminalComponent {
             },
         );
 
-        inner.active_pane_id = new_id.clone();
-        inner.panes.get(&new_id).unwrap().controller.grab_focus();
+        if keep_source_focus {
+            inner
+                .panes
+                .get(&prev_active_id)
+                .unwrap()
+                .controller
+                .grab_focus();
+        } else {
+            inner.active_pane_id = new_id.clone();
+            inner.panes.get(&new_id).unwrap().controller.grab_focus();
+        }
         drop(inner);
         self.update_dimming();
+        new_id
     }
 
     pub fn close_split(&self) {

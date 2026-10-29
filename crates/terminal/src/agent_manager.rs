@@ -713,6 +713,40 @@ impl AgentManager {
             .context("Failed to cancel pending task via Agent")
     }
 
+    pub async fn update_workspace_pane(
+        &self,
+        pane_id: String,
+        cwd: String,
+        last_command: String,
+        snapshot: String,
+        status: String,
+    ) -> Result<String> {
+        self.agent_proxy
+            .update_workspace_pane(pane_id, cwd, last_command, snapshot, status)
+            .await
+            .context("Failed to update workspace pane via Agent")
+    }
+
+    pub async fn unregister_workspace_pane(&self, pane_id: String) -> Result<()> {
+        self.agent_proxy
+            .unregister_workspace_pane(pane_id)
+            .await
+            .context("Failed to unregister workspace pane via Agent")
+    }
+
+    pub async fn notify_pane_command_finished(
+        &self,
+        pane_id: String,
+        exit_code: i32,
+        snapshot: String,
+        cwd: String,
+    ) -> Result<()> {
+        self.agent_proxy
+            .notify_pane_command_finished(pane_id, exit_code, snapshot, cwd)
+            .await
+            .context("Failed to notify pane command finished via Agent")
+    }
+
     pub async fn resolve_peer(
         &self,
         query: boxxy_claw_protocol::characters::PeerQuery,
