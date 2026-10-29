@@ -145,8 +145,9 @@ pub fn translate_key_event(
                 if alt {
                     bytes.push(0x1b);
                 }
-                if ctrl {
-                    bytes.push(0x08); // BS (^H) for Ctrl+Backspace
+                let bs_mode = mode.contains(TermMode::BACKARROW_BS);
+                if ctrl ^ bs_mode {
+                    bytes.push(0x08); // BS (^H)
                 } else {
                     bytes.push(0x7f); // DEL
                 }
@@ -435,6 +436,19 @@ mod tests {
         assert_eq!(
             translate_key(Key::Escape, ModifierType::empty(), false),
             Some(vec![0x1b])
+        );
+        // DECBKM (mode 67): BackSpace sends BS (0x08), Ctrl+BackSpace sends DEL (0x7f)
+        assert_eq!(
+            translate_key_with_mode(Key::BackSpace, ModifierType::empty(), TermMode::BACKARROW_BS),
+            Some(vec![0x08])
+        );
+        assert_eq!(
+            translate_key_with_mode(
+                Key::BackSpace,
+                ModifierType::CONTROL_MASK,
+                TermMode::BACKARROW_BS
+            ),
+            Some(vec![0x7f])
         );
     }
 

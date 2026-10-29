@@ -959,4 +959,57 @@ mod tests {
         assert!(!h.mode().contains(TermMode::VISIBILITY_REPORTS));
         assert_eq!(h.take_pty_writes(), vec!["\x1b[?2033;2$y"]);
     }
+
+    #[test]
+    fn decstr_soft_reset_decxcpr_csi_19t_decbkm_and_wrap_hygiene() {
+        use crate::engine::ansi::{Color, NamedColor};
+        use crate::engine::term::cell::Flags;
+
+        let mut h = HeadlessTerminal::new(20, 6);
+
+        // 1. DECXCPR (CSI ? 6 n) and CSI 19 t (report screen size in chars)
+        h.feed(b"\x1b[3;7H\x1b[?6n\x1b[19t");
+        assert_eq!(
+            h.take_pty_writes(),
+            vec!["\x1b[?3;7;1R", "\x1b[9;6;20t"]
+        );
+
+        // 2. DECBKM (Private Mode 67): enable, query via DECRQM, disable
+        h.feed(b"\x1b[?67h\x1b[?67$p\x1b[?67l\x1b[?67$p");
+        assert_eq!(
+            h.take_pty_writes(),
+            vec!["\x1b[?67;1$y", "\x1b[?67;2$y"]
+        );
+
+        // 3. DECSTR (CSI ! p): resets modes (INSERT, ORIGIN, APP_CURSOR, SHOW_CURSOR, LINE_WRAP),
+        //    scroll margins, and SGR template attributes without clearing screen text!
+        h.feed(b"\x1b[1;1HKeptText\x1b[2;4r\x1b[?6h\x1b[4h\x1b[?1h\x1b[?25l\x1b[?7l\x1b[1;31m");
+        assert!(h.mode().contains(TermMode::ORIGIN | TermMode::INSERT | TermMode::APP_CURSOR));
+        assert!(!h.mode().contains(TermMode::SHOW_CURSOR | TermMode::LINE_WRAP));
+
+        h.feed(b"\x1b[!p");
+        assert!(!h.mode().intersects(TermMode::ORIGIN | TermMode::INSERT | TermMode::APP_CURSOR));
+        assert!(h.mode().contains(TermMode::SHOW_CURSOR | TermMode::LINE_WRAP));
+        assert_eq!(h.term.grid().cursor.template.flags, Flags::empty());
+        assert_eq!(
+            h.term.grid().cursor.template.fg,
+            Color::Named(NamedColor::Foreground)
+        );
+        assert_eq!(h.row_text_trimmed(0), "KeptText");
+
+        // 4. Printing at the last column with autowrap (?7l) disabled must not leave a
+        //    stale pending wrap when autowrap (?7h) is re-enabled.
+        let mut h2 = HeadlessTerminal::new(5, 3);
+        h2.feed(b"\x1b[?7l123456\x1b[?7hA");
+        // '6' overwrote col 4 on row 0 and cleared pending wrap; 'A' overwrote col 4 on row 0
+        // rather than spuriously wrapping to row 1 before printing 'A'.
+        assert_eq!(h2.row_text_trimmed(0), "1234A");
+        assert_eq!(h2.row_text_trimmed(1), "");
+
+        // 5. RIS (\x1bc) restores palette colors modified via OSC 4
+        h2.feed(b"\x1b]4;1;rgb:ff/00/00\x07");
+        assert!(h2.term.colors()[1].is_some());
+        h2.feed(b"\x1bc");
+        assert!(h2.term.colors()[1].is_none());
+    }
 }

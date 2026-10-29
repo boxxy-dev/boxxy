@@ -277,7 +277,7 @@ impl<T: EventListener> Handler for Term<T> {
                     self.wrapline();
                 } else {
                     // Prevent out of bounds crash when linewrapping is disabled.
-                    self.grid.cursor.input_needs_wrap = true;
+                    self.grid.cursor.input_needs_wrap = false;
                     return;
                 }
             }
@@ -305,7 +305,7 @@ impl<T: EventListener> Handler for Term<T> {
         if self.grid.cursor.point.column + 1 < columns {
             self.grid.cursor.point.column += 1;
         } else {
-            self.grid.cursor.input_needs_wrap = true;
+            self.grid.cursor.input_needs_wrap = self.mode.contains(TermMode::LINE_WRAP);
         }
     }
 
@@ -331,10 +331,12 @@ impl<T: EventListener> Handler for Term<T> {
             return;
         }
 
+        let line_wrap = self.mode.contains(TermMode::LINE_WRAP);
         let mut remaining = bytes;
         while !remaining.is_empty() {
             if self.grid.cursor.input_needs_wrap {
-                if !self.mode.contains(TermMode::LINE_WRAP) {
+                if !line_wrap {
+                    self.grid.cursor.input_needs_wrap = false;
                     let last_b = *remaining.last().unwrap();
                     self.write_at_cursor(last_b as char);
                     return;
@@ -370,7 +372,7 @@ impl<T: EventListener> Handler for Term<T> {
                     if self.grid.cursor.point.column.0 + 1 < columns {
                         self.grid.cursor.point.column.0 += 1;
                     } else {
-                        self.grid.cursor.input_needs_wrap = true;
+                        self.grid.cursor.input_needs_wrap = line_wrap;
                     }
                 }
             } else {
@@ -387,7 +389,7 @@ impl<T: EventListener> Handler for Term<T> {
                     self.grid.cursor.point.column = Column(end_col);
                 } else {
                     self.grid.cursor.point.column = Column(columns - 1);
-                    self.grid.cursor.input_needs_wrap = true;
+                    self.grid.cursor.input_needs_wrap = line_wrap;
                 }
             }
         }
@@ -615,6 +617,19 @@ impl<T: EventListener> Handler for Term<T> {
     fn private_device_status(&mut self, arg: usize) {
         trace!("Reporting private device status: {arg}");
         match arg {
+            // Extended Cursor Position Report (DECXCPR, CSI ? 6 n):
+            // Responds with `CSI ? row ; col ; 1 R` (respecting ORIGIN mode).
+            6 => {
+                let pos = self.grid.cursor.point;
+                let line = if self.mode.contains(TermMode::ORIGIN) {
+                    (pos.line - self.scroll_region.start).0.max(0) as usize + 1
+                } else {
+                    pos.line.0.max(0) as usize + 1
+                };
+                let col = pos.column.0 + 1;
+                self.event_proxy
+                    .send_event(Event::PtyWrite(format!("\x1b[?{line};{col};1R")));
+            }
             // Color scheme query (DECSET 2031 / DSR ? 996 n):
             // Responds with `CSI ? 997 ; 1 n` (dark) or `CSI ? 997 ; 2 n` (light).
             996 => {
@@ -920,7 +935,14 @@ impl<T: EventListener> Handler for Term<T> {
         let point = cursor.point;
 
         let (left, right) = match mode {
-            ansi::LineClearMode::Right if cursor.input_needs_wrap => return,
+            ansi::LineClearMode::Right if cursor.input_needs_wrap => {
+                let last_col = self.last_column();
+                let line = point.line;
+                self.grid[line][last_col] = bg.into();
+                self.damage
+                    .damage_line(line.0 as usize, last_col.0, last_col.0);
+                return;
+            }
             ansi::LineClearMode::Right => (point.column, Column(self.columns())),
             ansi::LineClearMode::Left => (Column(0), point.column + 1),
             ansi::LineClearMode::All => (Column(0), Column(self.columns())),
@@ -1127,6 +1149,7 @@ impl<T: EventListener> Handler for Term<T> {
         }
         self.active_charset = Default::default();
         self.cursor_style = None;
+        self.colors = crate::engine::term::color::Colors::default();
         self.grid.reset();
         self.inactive_grid.reset();
         self.scroll_region = Line(0)..Line(self.screen_lines() as i32);
@@ -1144,6 +1167,28 @@ impl<T: EventListener> Handler for Term<T> {
         self.mode.insert(TermMode::default());
 
         self.event_proxy.send_event(Event::CursorBlinkingChange);
+        self.mark_fully_damaged();
+    }
+
+    /// Soft terminal reset (`DECSTR`, `CSI ! p`): resets modes, scrolling margins,
+    /// saved cursor, charsets, and SGR attributes without clearing the screen.
+    #[inline]
+    fn soft_reset(&mut self) {
+        trace!("Soft terminal reset (DECSTR)");
+        self.active_charset = Default::default();
+        self.grid.cursor.charsets = Default::default();
+        self.grid.cursor.template = Cell::default();
+        self.grid.cursor.input_needs_wrap = false;
+        self.grid.saved_cursor = crate::engine::grid::Cursor::default();
+        self.scroll_region = Line(0)..Line(self.screen_lines() as i32);
+        self.mode.remove(
+            TermMode::INSERT
+                | TermMode::ORIGIN
+                | TermMode::APP_CURSOR
+                | TermMode::APP_KEYPAD,
+        );
+        self.mode
+            .insert(TermMode::SHOW_CURSOR | TermMode::LINE_WRAP);
         self.mark_fully_damaged();
     }
 
@@ -1524,6 +1569,12 @@ impl<T: EventListener> Handler for Term<T> {
     #[inline]
     fn text_area_size_chars(&mut self) {
         let text = format!("\x1b[8;{};{}t", self.screen_lines(), self.columns());
+        self.event_proxy.send_event(Event::PtyWrite(text));
+    }
+
+    #[inline]
+    fn screen_size_chars(&mut self) {
+        let text = format!("\x1b[9;{};{}t", self.screen_lines(), self.columns());
         self.event_proxy.send_event(Event::PtyWrite(text));
     }
 

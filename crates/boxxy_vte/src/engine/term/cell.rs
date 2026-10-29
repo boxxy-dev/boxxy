@@ -298,11 +298,12 @@ impl LineLength for grid::Row<Cell> {
             return Column(self.len());
         }
 
-        for (index, cell) in self[..].iter().rev().enumerate() {
+        let bound = self.occ.min(self.len());
+        for (index, cell) in self[..Column(bound)].iter().rev().enumerate() {
             if cell.c != ' '
                 || cell.extra.as_ref().map(|extra| extra.zerowidth.is_empty()) == Some(false)
             {
-                length = Column(self.len() - index);
+                length = Column(bound - index);
                 break;
             }
         }

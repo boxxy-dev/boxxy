@@ -162,6 +162,7 @@ impl<T> Term<T> {
         T: EventListener,
     {
         if !self.mode.contains(TermMode::LINE_WRAP) {
+            self.grid.cursor.input_needs_wrap = false;
             return;
         }
 

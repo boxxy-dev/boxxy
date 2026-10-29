@@ -658,6 +658,9 @@ pub trait Handler {
     /// Reset terminal state.
     fn reset_state(&mut self) {}
 
+    /// Soft terminal reset (`DECSTR`, `CSI ! p`).
+    fn soft_reset(&mut self) {}
+
     /// Reverse Index.
     ///
     /// Move the active position to the same horizontal position on the
@@ -739,6 +742,9 @@ pub trait Handler {
 
     /// Report text area size in characters.
     fn text_area_size_chars(&mut self) {}
+
+    /// Report screen size in characters (`CSI 19 t`).
+    fn screen_size_chars(&mut self) {}
 
     /// Set hyperlink.
     fn set_hyperlink(&mut self, _: Option<Hyperlink>) {}
@@ -949,6 +955,7 @@ impl PrivateMode {
             7 => Self::Named(NamedPrivateMode::LineWrap),
             12 => Self::Named(NamedPrivateMode::BlinkingCursor),
             25 => Self::Named(NamedPrivateMode::ShowCursor),
+            67 => Self::Named(NamedPrivateMode::BackarrowKey),
             1000 => Self::Named(NamedPrivateMode::ReportMouseClicks),
             1002 => Self::Named(NamedPrivateMode::ReportCellMouseMotion),
             1003 => Self::Named(NamedPrivateMode::ReportAllMouseMotion),
@@ -1003,6 +1010,8 @@ pub enum NamedPrivateMode {
     LineWrap = 7,
     BlinkingCursor = 12,
     ShowCursor = 25,
+    /// Backarrow key sends BS (`0x08`) instead of DEL (`0x7f`) (`DECBKM`).
+    BackarrowKey = 67,
     ReportMouseClicks = 1000,
     ReportCellMouseMotion = 1002,
     ReportAllMouseMotion = 1003,
@@ -1604,10 +1613,14 @@ where
 
             // Set mouse cursor shape.
             b"22" if params.len() == 2 => {
-                let shape = String::from_utf8_lossy(params[1]);
-                match CursorIcon::from_str(&shape) {
-                    Ok(cursor_icon) => self.handler.set_mouse_cursor_icon(cursor_icon),
-                    Err(_) => debug!("[osc 22] unrecognized cursor icon shape: {shape:?}"),
+                if params[1].is_empty() {
+                    self.handler.set_mouse_cursor_icon(CursorIcon::Text);
+                } else {
+                    let shape = String::from_utf8_lossy(params[1]);
+                    match CursorIcon::from_str(&shape) {
+                        Ok(cursor_icon) => self.handler.set_mouse_cursor_icon(cursor_icon),
+                        Err(_) => debug!("[osc 22] unrecognized cursor icon shape: {shape:?}"),
+                    }
                 }
             }
 
@@ -1897,6 +1910,7 @@ where
             ('n', []) => handler.device_status(next_param_or(0) as usize),
             ('n', [b'?']) => handler.private_device_status(next_param_or(0) as usize),
             ('P', []) => handler.delete_chars(next_param_or(1) as usize),
+            ('p', [b'!']) => handler.soft_reset(),
             ('p', [b'$']) => {
                 let mode = next_param_or(0);
                 handler.report_mode(Mode::new(mode));
@@ -1941,6 +1955,7 @@ where
                 14 => handler.text_area_size_pixels(),
                 16 => handler.cell_size_pixels(),
                 18 => handler.text_area_size_chars(),
+                19 => handler.screen_size_chars(),
                 22 => handler.push_title(),
                 23 => handler.pop_title(),
                 _ => unhandled!(),

@@ -46,6 +46,7 @@ bitflags! {
         const IN_BAND_RESIZE          = 1 << 27;
         const SYNC_UPDATE             = 1 << 28;
         const VISIBILITY_REPORTS      = 1 << 29;
+        const BACKARROW_BS            = 1 << 30;
         const MOUSE_MODE              = Self::MOUSE_REPORT_CLICK.bits() | Self::MOUSE_MOTION.bits() | Self::MOUSE_DRAG.bits();
         const KITTY_KEYBOARD_PROTOCOL = Self::DISAMBIGUATE_ESC_CODES.bits()
                                       | Self::REPORT_EVENT_TYPES.bits()
@@ -284,6 +285,7 @@ impl<T: EventListener> Term<T> {
                 }
             }
             NamedPrivateMode::ShowCursor => self.mode.insert(TermMode::SHOW_CURSOR),
+            NamedPrivateMode::BackarrowKey => self.mode.insert(TermMode::BACKARROW_BS),
             NamedPrivateMode::CursorKeys => self.mode.insert(TermMode::APP_CURSOR),
             // Mouse protocols are mutually exclusive.
             NamedPrivateMode::ReportMouseClicks => {
@@ -374,6 +376,7 @@ impl<T: EventListener> Term<T> {
                 }
             }
             NamedPrivateMode::ShowCursor => self.mode.remove(TermMode::SHOW_CURSOR),
+            NamedPrivateMode::BackarrowKey => self.mode.remove(TermMode::BACKARROW_BS),
             NamedPrivateMode::CursorKeys => self.mode.remove(TermMode::APP_CURSOR),
             NamedPrivateMode::ReportMouseClicks => {
                 self.mode.remove(TermMode::MOUSE_REPORT_CLICK);
@@ -435,6 +438,9 @@ impl<T: EventListener> Term<T> {
                     style.blinking.into()
                 }
                 NamedPrivateMode::ShowCursor => self.mode.contains(TermMode::SHOW_CURSOR).into(),
+                NamedPrivateMode::BackarrowKey => {
+                    self.mode.contains(TermMode::BACKARROW_BS).into()
+                }
                 NamedPrivateMode::ReportMouseClicks => {
                     self.mode.contains(TermMode::MOUSE_REPORT_CLICK).into()
                 }

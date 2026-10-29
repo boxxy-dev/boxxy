@@ -76,21 +76,31 @@ impl<T: Default> Row<T> {
             return None;
         }
 
-        // Split off cells for a new row.
-        let mut new_row = self.inner.split_off(columns);
-        let index = new_row
-            .iter()
-            .rposition(|c| !c.is_empty())
-            .map_or(0, |i| i + 1);
-        new_row.truncate(index);
-
-        self.occ = min(self.occ, columns);
-
-        if new_row.is_empty() {
-            None
+        // Check if any trailing cells beyond `columns` are non-empty before
+        // allocating a new Vec via `split_off`. When `self.occ <= columns` and the
+        // template cell at the end of the row is empty, all cells in `columns..`
+        // are guaranteed empty in O(1).
+        let trailing_len = if self.occ <= columns
+            && self.inner.last().is_some_and(GridCell::is_empty)
+        {
+            0
         } else {
-            Some(new_row)
+            self.inner[columns..]
+                .iter()
+                .rposition(|c| !c.is_empty())
+                .map_or(0, |i| i + 1)
+        };
+
+        if trailing_len == 0 {
+            self.inner.truncate(columns);
+            self.occ = min(self.occ, columns);
+            return None;
         }
+
+        self.inner.truncate(columns + trailing_len);
+        let new_row = self.inner.split_off(columns);
+        self.occ = min(self.occ, columns);
+        Some(new_row)
     }
 
     /// Reset all cells in the row to the `template` cell.
@@ -163,7 +173,15 @@ impl<T> Row<T> {
     where
         T: GridCell,
     {
-        self.inner.iter().all(GridCell::is_empty)
+        // All cells at `>= self.occ` are identical to the last cell in the row.
+        let Some(last) = self.inner.last() else {
+            return true;
+        };
+        if !last.is_empty() {
+            return false;
+        }
+        let bound = self.occ.min(self.inner.len());
+        self.inner[..bound].iter().all(GridCell::is_empty)
     }
 
     #[inline]
