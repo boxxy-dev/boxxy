@@ -63,6 +63,7 @@ impl<T: Default> Row<T> {
         }
 
         self.inner.resize_with(columns, T::default);
+        self.occ = columns;
     }
 
     /// Reduce the number of columns in the row.
@@ -110,20 +111,33 @@ impl<T: Default> Row<T> {
         T: ResetDiscriminant<D> + GridCell,
         D: PartialEq,
     {
+        self.reset_after(0, template);
+    }
+
+    /// Reset cells in `keep_prefix..self.occ` to `template`, leaving `0..keep_prefix`
+    /// to be immediately overwritten by the caller.
+    #[inline]
+    pub fn reset_after<D>(&mut self, keep_prefix: usize, template: &T)
+    where
+        T: ResetDiscriminant<D> + GridCell,
+        D: PartialEq,
+    {
         debug_assert!(!self.inner.is_empty());
 
         // Mark all cells as dirty if template cell changed.
+        // All cells in `self.occ..len` are identical, so checking `self.occ.min(len - 1)`
+        // stays in the active cache line instead of fetching the far end of the row.
         let len = self.inner.len();
-        if self.inner[len - 1].discriminant() != template.discriminant() {
+        if self.inner[min(self.occ, len - 1)].discriminant() != template.discriminant() {
             self.occ = len;
         }
 
-        // Reset every dirty cell in the row.
-        for item in &mut self.inner[0..self.occ] {
+        let start = min(keep_prefix, self.occ);
+        for item in &mut self.inner[start..self.occ] {
             item.reset(template);
         }
 
-        self.occ = 0;
+        self.occ = start;
     }
 }
 
@@ -132,6 +146,11 @@ impl<T> Row<T> {
     #[inline]
     pub fn from_vec(vec: Vec<T>, occ: usize) -> Row<T> {
         Row { inner: vec, occ }
+    }
+
+    #[inline]
+    pub fn slice_mut_with_occ(&mut self) -> (&mut [T], &mut usize) {
+        (&mut self.inner[..], &mut self.occ)
     }
 
     #[inline]

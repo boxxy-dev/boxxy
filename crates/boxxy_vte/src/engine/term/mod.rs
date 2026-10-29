@@ -202,7 +202,9 @@ impl TermDamageState {
     /// Expand `line`'s damage to span at least `left` to `right` column.
     #[inline]
     pub(super) fn damage_line(&mut self, line: usize, left: usize, right: usize) {
-        self.lines[line].expand(left, right);
+        if !self.full {
+            self.lines[line].expand(left, right);
+        }
     }
 
     /// Reset information about terminal damage.
@@ -286,6 +288,11 @@ pub struct Term<T> {
     config: Config,
 
     pub cl_mode: Option<String>,
+
+    /// Whether any cell in the terminal has ever allocated `CellExtra` (`zerowidth`,
+    /// `underline_color`, or `hyperlink`) since the last reset. When `false`, bulk ASCII
+    /// and reset loops can skip per-cell `Option<Arc<CellExtra>>` drop checks.
+    pub(super) has_any_extra: bool,
 }
 
 /// Configuration options for the [`Term`].
@@ -388,6 +395,7 @@ impl<T> Term<T> {
             cell_width: dimensions.cell_width(),
             cell_height: dimensions.cell_height(),
             cl_mode: None,
+            has_any_extra: false,
         }
     }
 

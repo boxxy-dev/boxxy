@@ -179,7 +179,15 @@ impl<T> Storage<T> {
         debug_assert!(count.unsigned_abs() <= self.inner.len());
 
         let len = self.inner.len();
-        self.zero = (self.zero as isize + count + len as isize) as usize % len;
+        if count == -1 {
+            self.zero = if self.zero == 0 {
+                len - 1
+            } else {
+                self.zero - 1
+            };
+        } else {
+            self.zero = (self.zero as isize + count + len as isize) as usize % len;
+        }
     }
 
     /// Rotate all existing lines down in history.
@@ -189,7 +197,9 @@ impl<T> Storage<T> {
     /// [`rotate_left`]: https://doc.rust-lang.org/std/vec/struct.Vec.html#method.rotate_left
     #[inline]
     pub fn rotate_down(&mut self, count: usize) {
-        self.zero = (self.zero + count) % self.inner.len();
+        let len = self.inner.len();
+        let zeroed = self.zero + count;
+        self.zero = if zeroed >= len { zeroed % len } else { zeroed };
     }
 
     /// Update the raw storage buffer.

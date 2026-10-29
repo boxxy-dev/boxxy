@@ -251,15 +251,37 @@ impl<T: GridCell + Default + PartialEq> Grid<T> {
     /// Move lines at the bottom toward the top.
     ///
     /// This is the performance-sensitive part of scrolling.
+    #[inline]
     pub fn scroll_up<D>(&mut self, region: &Range<Line>, positions: usize)
     where
+        T: ResetDiscriminant<D>,
+        D: PartialEq,
+    {
+        self.scroll_up_keep(region, positions, 0);
+    }
+
+    /// Move lines at the bottom toward the top, leaving the first `keep_bottom_cols`
+    /// of the bottommost newly exposed line un-reset when the caller is about to
+    /// immediately overwrite `0..keep_bottom_cols`.
+    #[inline]
+    pub fn scroll_up_keep<D>(
+        &mut self,
+        region: &Range<Line>,
+        positions: usize,
+        keep_bottom_cols: usize,
+    ) where
         T: ResetDiscriminant<D>,
         D: PartialEq,
     {
         // When rotating the entire region with fixed lines at the top, just reset everything.
         if region.end - region.start <= positions && region.start != 0 {
             for i in (region.start.0..region.end.0).map(Line::from) {
-                self.raw[i].reset(&self.cursor.template);
+                let keep = if i.0 == region.end.0 - 1 {
+                    keep_bottom_cols
+                } else {
+                    0
+                };
+                self.raw[i].reset_after(keep, &self.cursor.template);
             }
 
             return;
@@ -274,18 +296,6 @@ impl<T: GridCell + Default + PartialEq> Grid<T> {
         if region.start == 0 {
             // Create scrollback for the new lines.
             self.increase_scroll_limit(positions);
-
-            // Swap the lines fixed at the top to their target positions after rotation.
-            //
-            // Since we've made sure that the rotation will never rotate away the entire region, we
-            // know that the position of the fixed lines before the rotation must already be
-            // visible.
-            //
-            // We need to start from the bottom, to make sure the fixed lines aren't swapped with
-            // each other.
-            for i in (0..region.start.0).rev().map(Line::from) {
-                self.raw.swap(i, i + positions);
-            }
 
             // Rotate the entire line buffer upward.
             self.raw.rotate(-(positions as isize));
@@ -302,9 +312,14 @@ impl<T: GridCell + Default + PartialEq> Grid<T> {
             }
         }
 
-        // Ensure all new lines are fully cleared.
+        // Ensure all new lines are cleared (skipping `0..keep_bottom_cols` on the bottom line).
         for i in (region.end.0 - positions as i32..region.end.0).map(Line::from) {
-            self.raw[i].reset(&self.cursor.template);
+            let keep = if i.0 == region.end.0 - 1 {
+                keep_bottom_cols
+            } else {
+                0
+            };
+            self.raw[i].reset_after(keep, &self.cursor.template);
         }
     }
 

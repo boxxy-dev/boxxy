@@ -1045,4 +1045,60 @@ mod tests {
         assert_eq!(state.kitty_placements.len(), 1);
         assert_eq!(state.kitty_placements[0].image_id, 10);
     }
+
+    #[test]
+    fn fast_crlf_unicode_str_consecutive_csi_and_render_state_copy_invariance() {
+        // Exercises:
+        // - `crlf_and_input_ascii_slice` & `Row::reset_after` when a shorter line follows
+        //   a longer line after scrolling, and when background color changes before `\r\n`
+        // - `crlf_and_input_str` / `input_str` across mixed ASCII, CJK, Box Drawing, Math
+        //   combining marks (`B⃗`), Emoji ZWJ (`👩‍💻`), VS16 (`🏳️‍🌈`), and Regional Indicators (`🇺🇸`)
+        // - `advance_csi_slice` back-to-back CSI sequences (`\x1b[38;2;...m\x1b[48;2;...m\x1b[1m`)
+        // - `RenderState::update_from` bitwise copy path (`!has_any_extra`) transitioning to
+        //   `has_any_extra = true` when combining marks / hyperlinks / underline colors appear
+        let mut payload = Vec::new();
+        for i in 0..25usize {
+            use std::io::Write;
+            let _ = write!(
+                payload,
+                "Long ASCII line number {i:04} with trailing characters to fill columns!\r\n"
+            );
+            let _ = write!(payload, "Short {i:02}\r\n");
+            let _ = write!(
+                payload,
+                "\x1b[38;2;10;20;30m\x1b[48;2;40;50;60m\x1b[1mColor {i:02}\x1b[0m\r\n"
+            );
+            let _ = write!(
+                payload,
+                "[{i:04}] ⚡ 🚀 🦀 測試 🔥 👩‍💻 日本語 🏳️‍🌈 🇺🇸 ∀x ∈ ℝ: B⃗ café ┌─┬┐\r\n"
+            );
+        }
+
+        let mut h_bulk = HeadlessTerminal::new(50, 8);
+        let mut state = RenderState::default();
+        // First feed pure ASCII to exercise `!has_any_extra` fast copy in `RenderState::update_from`
+        h_bulk.feed(b" Pure ASCII line 1\r\nPure ASCII line 2\r\n");
+        state.update_from(&mut h_bulk.term, 1);
+        assert!(!state.has_any_extra);
+
+        // Now feed the full mixed payload in one bulk chunk vs 1-byte chunks
+        h_bulk.feed(&payload);
+        state.update_from(&mut h_bulk.term, 2);
+        assert!(state.has_any_extra);
+
+        let mut h_byte = HeadlessTerminal::new(50, 8);
+        h_byte.feed_chunked(b" Pure ASCII line 1\r\nPure ASCII line 2\r\n", 1);
+        h_byte.feed_chunked(&payload, 1);
+        let state_byte = h_byte.render_state();
+
+        for r in 0..8 {
+            assert_eq!(
+                h_bulk.row_text_trimmed(r),
+                h_byte.row_text_trimmed(r),
+                "row {r} text mismatch between bulk and 1-byte feed"
+            );
+        }
+        assert_eq!(state.cells, state_byte.cells);
+        assert_eq!(state.cursor_point, state_byte.cursor_point);
+    }
 }

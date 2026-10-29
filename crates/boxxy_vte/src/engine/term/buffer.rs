@@ -644,7 +644,17 @@ impl<T> Term<T> {
     /// Text moves up; clear at top
     /// Expects origin to be in scroll range.
     #[inline]
-    pub(super) fn scroll_up_relative(&mut self, origin: Line, mut lines: usize) {
+    pub(super) fn scroll_up_relative(&mut self, origin: Line, lines: usize) {
+        self.scroll_up_relative_keep(origin, lines, 0);
+    }
+
+    #[inline]
+    pub(super) fn scroll_up_relative_keep(
+        &mut self,
+        origin: Line,
+        mut lines: usize,
+        keep_bottom_cols: usize,
+    ) {
         trace!("Scrolling up relative: origin={origin}, lines={lines}");
 
         lines = cmp::min(
@@ -655,15 +665,19 @@ impl<T> Term<T> {
         let region = origin..self.scroll_region.end;
 
         // Scroll selection.
-        self.selection = self
-            .selection
-            .take()
-            .and_then(|s| s.rotate(self, &region, lines as i32));
+        if self.selection.is_some() {
+            self.selection = self
+                .selection
+                .take()
+                .and_then(|s| s.rotate(self, &region, lines as i32));
+        }
 
         // Scroll kitty placements.
-        self.kitty_graphics.rotate_placements(&region, lines as i32);
+        if !self.kitty_graphics.placements.is_empty() {
+            self.kitty_graphics.rotate_placements(&region, lines as i32);
+        }
 
-        self.grid.scroll_up(&region, lines);
+        self.grid.scroll_up_keep(&region, lines, keep_bottom_cols);
 
         // Scroll vi mode cursor.
         let viewport_top = Line(-(self.grid.display_offset() as i32));

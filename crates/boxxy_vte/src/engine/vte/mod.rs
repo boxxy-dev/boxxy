@@ -78,6 +78,9 @@ impl<const OSC_RAW_BUF_SIZE: usize> Parser<OSC_RAW_BUF_SIZE> {
         while i != bytes.len() {
             match self.state {
                 State::Ground => i += self.advance_ground(performer, &bytes[i..]),
+                State::CsiEntry | State::CsiParam => {
+                    i += self.advance_csi_slice(performer, &bytes[i..])
+                }
                 State::OscString => i += self.advance_osc_string_slice(performer, &bytes[i..]),
                 State::SosPmApcString => i += self.advance_apc_string_slice(performer, &bytes[i..]),
                 _ => {
@@ -115,6 +118,9 @@ impl<const OSC_RAW_BUF_SIZE: usize> Parser<OSC_RAW_BUF_SIZE> {
         while i != bytes.len() && !performer.terminated() {
             match self.state {
                 State::Ground => i += self.advance_ground(performer, &bytes[i..]),
+                State::CsiEntry | State::CsiParam => {
+                    i += self.advance_csi_slice(performer, &bytes[i..])
+                }
                 State::OscString => i += self.advance_osc_string_slice(performer, &bytes[i..]),
                 State::SosPmApcString => i += self.advance_apc_string_slice(performer, &bytes[i..]),
                 _ => {
@@ -215,6 +221,112 @@ impl<const OSC_RAW_BUF_SIZE: usize> Parser<OSC_RAW_BUF_SIZE> {
             0x40..=0x7E => self.action_csi_dispatch(performer, byte),
             0x7F => (),
             _ => self.anywhere(performer, byte),
+        }
+    }
+
+    /// Bulk-advance `State::CsiEntry` and `State::CsiParam`, including consecutive `\x1b[` CSI sequences.
+    #[inline]
+    fn advance_csi_slice<P: Perform>(&mut self, performer: &mut P, bytes: &[u8]) -> usize {
+        let mut idx = 0;
+        loop {
+            if self.state == State::CsiEntry {
+                if idx >= bytes.len() {
+                    return idx;
+                }
+                let b = bytes[idx];
+                idx += 1;
+                match b {
+                    0x30..=0x39 => {
+                        self.param = (b - b'0') as u16;
+                        self.state = State::CsiParam;
+                    }
+                    0x3B => {
+                        self.action_param();
+                        self.state = State::CsiParam;
+                    }
+                    0x3A => {
+                        self.action_subparam();
+                        self.state = State::CsiParam;
+                    }
+                    0x3C..=0x3F => {
+                        self.action_collect(b);
+                        self.state = State::CsiParam;
+                    }
+                    0x40..=0x7E => {
+                        self.action_csi_dispatch(performer, b);
+                        if !performer.terminated()
+                            && idx + 1 < bytes.len()
+                            && bytes[idx] == 0x1B
+                            && bytes[idx + 1] == b'['
+                        {
+                            self.reset_params();
+                            self.state = State::CsiEntry;
+                            idx += 2;
+                            continue;
+                        }
+                        return idx;
+                    }
+                    _ => {
+                        self.advance_csi_entry(performer, b);
+                        return idx;
+                    }
+                }
+            }
+
+            while idx < bytes.len() {
+                let b = bytes[idx];
+                idx += 1;
+                match b {
+                    0x30..=0x39 => {
+                        if self.params.is_full() {
+                            self.ignoring = true;
+                        } else {
+                            self.param = self
+                                .param
+                                .saturating_mul(10)
+                                .saturating_add((b - b'0') as u16);
+                        }
+                    }
+                    0x3B => {
+                        if self.params.is_full() {
+                            self.ignoring = true;
+                        } else {
+                            self.params.push(self.param);
+                            self.param = 0;
+                        }
+                    }
+                    0x3A => {
+                        if self.params.is_full() {
+                            self.ignoring = true;
+                        } else {
+                            self.params.extend(self.param);
+                            self.param = 0;
+                        }
+                    }
+                    0x40..=0x7E => {
+                        self.action_csi_dispatch(performer, b);
+                        if !performer.terminated()
+                            && idx + 1 < bytes.len()
+                            && bytes[idx] == 0x1B
+                            && bytes[idx + 1] == b'['
+                        {
+                            self.reset_params();
+                            self.state = State::CsiEntry;
+                            idx += 2;
+                            break;
+                        }
+                        return idx;
+                    }
+                    _ => {
+                        self.advance_csi_param(performer, b);
+                        return idx;
+                    }
+                }
+            }
+
+            if self.state != State::CsiEntry {
+                return idx;
+            }
         }
     }
 
@@ -671,8 +783,12 @@ impl<const OSC_RAW_BUF_SIZE: usize> Parser<OSC_RAW_BUF_SIZE> {
 
         // If the next character is ESC, just process it and short-circuit.
         if plain_chars == 0 {
-            self.state = State::Escape;
             self.reset_params();
+            if num_bytes >= 2 && bytes[1] == b'[' {
+                self.state = State::CsiEntry;
+                return 2;
+            }
+            self.state = State::Escape;
             return 1;
         }
 
@@ -683,9 +799,14 @@ impl<const OSC_RAW_BUF_SIZE: usize> Parser<OSC_RAW_BUF_SIZE> {
 
                 // If there's another character, it must be escape so process it directly.
                 if processed < num_bytes {
-                    self.state = State::Escape;
                     self.reset_params();
-                    processed += 1;
+                    if processed + 1 < num_bytes && bytes[processed + 1] == b'[' {
+                        self.state = State::CsiEntry;
+                        processed += 2;
+                    } else {
+                        self.state = State::Escape;
+                        processed += 1;
+                    }
                 }
 
                 processed
@@ -787,6 +908,47 @@ impl<const OSC_RAW_BUF_SIZE: usize> Parser<OSC_RAW_BUF_SIZE> {
         }
     }
 
+    /// Fast SWAR scan returning the length of the leading run of printable ASCII (`0x20..=0x7E`).
+    #[inline(always)]
+    fn scan_printable_ascii(bytes: &[u8]) -> usize {
+        const HI: u64 = 0x8080_8080_8080_8080;
+        const LO: u64 = 0x2020_2020_2020_2020;
+        const ONE: u64 = 0x0101_0101_0101_0101;
+
+        let mut i = 0;
+        #[cfg(target_endian = "little")]
+        while i + 8 <= bytes.len() {
+            let w = u64::from_ne_bytes(bytes[i..i + 8].try_into().unwrap());
+            let mask = (w | w.wrapping_sub(LO) | w.wrapping_add(ONE)) & HI;
+            if mask != 0 {
+                return i + (mask.trailing_zeros() >> 3) as usize;
+            }
+            i += 8;
+        }
+        while i < bytes.len() && matches!(bytes[i], 0x20..=0x7E) {
+            i += 1;
+        }
+        i
+    }
+
+    /// Scan a valid UTF-8 byte slice starting at `ascii_prefix` for the end of a
+    /// printable span (stopping before C0 `< 0x20`, DEL `0x7F`, or C1 `U+0080..=U+009F`).
+    #[inline(always)]
+    fn scan_printable_utf8(bytes: &[u8], ascii_prefix: usize) -> usize {
+        let mut j = ascii_prefix;
+        while j < bytes.len() {
+            let b = bytes[j];
+            if b < 0x20 || b == 0x7F {
+                break;
+            }
+            if b == 0xC2 && j + 1 < bytes.len() && bytes[j + 1] <= 0x9F {
+                break;
+            }
+            j += 1;
+        }
+        j
+    }
+
     /// Handle ground dispatch of print/execute for all characters in a string.
     #[inline]
     fn ground_dispatch<P: Perform>(performer: &mut P, text: &str) {
@@ -794,15 +956,30 @@ impl<const OSC_RAW_BUF_SIZE: usize> Parser<OSC_RAW_BUF_SIZE> {
         let mut i = 0;
         while i < bytes.len() {
             // Fast-path contiguous runs of printable ASCII (0x20..=0x7E).
-            let run_start = i;
-            while i < bytes.len() && matches!(bytes[i], 0x20..=0x7E) {
-                i += 1;
-            }
-            let run_len = i - run_start;
-            if run_len >= 2 {
-                performer.print_ascii_slice(&bytes[run_start..i]);
+            let run_len = Self::scan_printable_ascii(&bytes[i..]);
+            let stop_idx = i + run_len;
+            if stop_idx < bytes.len() && bytes[stop_idx] >= 0x80 {
+                let utf8_len = Self::scan_printable_utf8(&bytes[i..], run_len);
+                if utf8_len > run_len {
+                    let sub = unsafe { str::from_utf8_unchecked(&bytes[i..i + utf8_len]) };
+                    performer.print_str(sub);
+                    i += utf8_len;
+                    if i >= bytes.len() {
+                        break;
+                    }
+                } else if run_len >= 2 {
+                    performer.print_ascii_slice(&bytes[i..stop_idx]);
+                    i = stop_idx;
+                } else if run_len == 1 {
+                    performer.print(bytes[i] as char);
+                    i += 1;
+                }
+            } else if run_len >= 2 {
+                performer.print_ascii_slice(&bytes[i..stop_idx]);
+                i = stop_idx;
             } else if run_len == 1 {
-                performer.print(bytes[run_start] as char);
+                performer.print(bytes[i] as char);
+                i += 1;
             }
 
             if i >= bytes.len() {
@@ -810,6 +987,28 @@ impl<const OSC_RAW_BUF_SIZE: usize> Parser<OSC_RAW_BUF_SIZE> {
             }
 
             let b = bytes[i];
+            if b == b'\r' && i + 1 < bytes.len() && bytes[i + 1] == b'\n' {
+                let next_start = i + 2;
+                let next_ascii = Self::scan_printable_ascii(&bytes[next_start..]);
+                let next_stop = next_start + next_ascii;
+                if next_stop < bytes.len() && bytes[next_stop] >= 0x80 {
+                    let next_utf8 = Self::scan_printable_utf8(&bytes[next_start..], next_ascii);
+                    if next_utf8 > next_ascii {
+                        let sub = unsafe {
+                            str::from_utf8_unchecked(&bytes[next_start..next_start + next_utf8])
+                        };
+                        performer.crlf_and_print_str(sub);
+                        i = next_start + next_utf8;
+                        continue;
+                    }
+                }
+                if next_ascii >= 2 {
+                    performer.crlf_and_print_ascii(&bytes[next_start..next_stop]);
+                    i = next_stop;
+                    continue;
+                }
+            }
+
             if b < 0x20 {
                 performer.execute(b);
                 i += 1;
@@ -818,15 +1017,11 @@ impl<const OSC_RAW_BUF_SIZE: usize> Parser<OSC_RAW_BUF_SIZE> {
                 i += 1;
             } else {
                 let rest = unsafe { str::from_utf8_unchecked(&bytes[i..]) };
-                for c in rest.chars() {
-                    if c.is_ascii() {
-                        break;
-                    }
-                    i += c.len_utf8();
-                    match c {
-                        '\u{80}'..='\u{9f}' => performer.execute(c as u8),
-                        _ => performer.print(c),
-                    }
+                let c = unsafe { rest.chars().next().unwrap_unchecked() };
+                i += c.len_utf8();
+                match c {
+                    '\u{80}'..='\u{9f}' => performer.execute(c as u8),
+                    _ => performer.print(c),
                 }
             }
         }
@@ -872,6 +1067,30 @@ pub trait Perform {
         for &b in bytes {
             self.print(b as char);
         }
+    }
+
+    /// Execute `\r\n` followed immediately by a slice of printable ASCII characters (`0x20..=0x7E`).
+    #[inline]
+    fn crlf_and_print_ascii(&mut self, bytes: &[u8]) {
+        self.execute(b'\r');
+        self.execute(b'\n');
+        self.print_ascii_slice(bytes);
+    }
+
+    /// Draw a UTF-8 string slice of printable characters to the screen.
+    #[inline]
+    fn print_str(&mut self, s: &str) {
+        for c in s.chars() {
+            self.print(c);
+        }
+    }
+
+    /// Execute `\r\n` followed immediately by a UTF-8 string slice of printable characters.
+    #[inline]
+    fn crlf_and_print_str(&mut self, s: &str) {
+        self.execute(b'\r');
+        self.execute(b'\n');
+        self.print_str(s);
     }
 
     /// Execute a C0 or C1 control function.

@@ -31,6 +31,7 @@ pub struct RenderState {
     pub is_alt_screen: bool,
     pub cl_mode: Option<String>,
     pub mode: TermMode,
+    pub(crate) has_any_extra: bool,
 }
 
 impl RenderState {
@@ -76,6 +77,7 @@ impl RenderState {
             is_alt_screen,
             cl_mode,
             mode,
+            has_any_extra: term.has_any_extra,
         }
     }
 
@@ -88,15 +90,36 @@ impl RenderState {
         let total_lines = grid.total_lines();
         let display_offset = grid.display_offset() as i32;
         let is_alt_screen = term.mode.contains(TermMode::ALT_SCREEN);
+        let total_cells = columns * screen_lines;
 
-        self.cells.clear();
-        self.cells.reserve(columns * screen_lines);
-        for row in 0..screen_lines {
-            let line = Line(row as i32 - display_offset);
-            self.cells.extend_from_slice(&grid[line][..Column(columns)]);
+        if !self.has_any_extra && !term.has_any_extra {
+            // SAFETY: Neither `self.cells` nor `term.grid` contains any `Cell` with
+            // `extra: Some(Arc<CellExtra>)`, so no destructors need to run and cells
+            // can be bitwise-copied directly.
+            unsafe {
+                self.cells.set_len(0);
+                self.cells.reserve(total_cells);
+                let dst_base = self.cells.as_mut_ptr();
+                for row in 0..screen_lines {
+                    let line = Line(row as i32 - display_offset);
+                    let src = &grid[line][..Column(columns)];
+                    std::ptr::copy_nonoverlapping(
+                        src.as_ptr(),
+                        dst_base.add(row * columns),
+                        columns,
+                    );
+                }
+                self.cells.set_len(total_cells);
+            }
+        } else {
+            self.cells.clear();
+            self.cells.reserve(total_cells);
+            for row in 0..screen_lines {
+                let line = Line(row as i32 - display_offset);
+                self.cells.extend_from_slice(&grid[line][..Column(columns)]);
+            }
+            self.has_any_extra = term.has_any_extra;
         }
-
-        term.reset_damage();
 
         self.generation = generation;
         self.columns = columns;

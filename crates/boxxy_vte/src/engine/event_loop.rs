@@ -22,11 +22,11 @@ use arc_swap::ArcSwap;
 use log::error;
 use tokio::io::unix::AsyncFd;
 
-/// Max bytes to read from the PTY before forced terminal synchronization.
-pub(crate) const READ_BUFFER_SIZE: usize = 0x10_0000;
+/// Max bytes to read in a single `read()` syscall from the PTY.
+pub(crate) const READ_BUFFER_SIZE: usize = 0x1_0000;
 
-/// Max bytes to read from the PTY while the terminal is locked.
-const MAX_LOCKED_READ: usize = u16::MAX as usize;
+/// Max cumulative bytes to process from the PTY before yielding to check UI messages.
+const MAX_LOCKED_READ: usize = 0x4_0000;
 
 /// Minimum interval between coalesced (parser-driven) snapshots (~120 Hz).
 /// Interactive UI events (scrolling, selection, search, resize) bypass this
@@ -173,6 +173,11 @@ where
             let mut last_snapshot_at: Option<tokio::time::Instant> = None;
             let mut pending_coalesced_render = false;
 
+            let resize_sleep = tokio::time::sleep(Duration::from_millis(25));
+            tokio::pin!(resize_sleep);
+            let coalesce_sleep = tokio::time::sleep(MIN_SNAPSHOT_INTERVAL);
+            tokio::pin!(coalesce_sleep);
+
             'event_loop: loop {
                 let sync_timeout = state.parser.sync_timeout().sync_timeout();
                 let needs_write = state.needs_write();
@@ -195,7 +200,7 @@ where
                 // The timeout for resize coalescing
                 let resize_sleep_fut = async {
                     if resize_pending.is_some() {
-                        tokio::time::sleep(Duration::from_millis(25)).await;
+                        resize_sleep.as_mut().await;
                     } else {
                         std::future::pending::<()>().await;
                     }
@@ -204,9 +209,7 @@ where
                 // Trailing flush timer for coalesced PTY parser updates
                 let coalesce_sleep_fut = async {
                     if pending_coalesced_render {
-                        if let Some(last) = last_snapshot_at {
-                            tokio::time::sleep_until(last + MIN_SNAPSHOT_INTERVAL).await;
-                        }
+                        coalesce_sleep.as_mut().await;
                     } else {
                         std::future::pending::<()>().await;
                     }
@@ -241,6 +244,11 @@ where
                             },
                             Ok(Msg::Resize(window_size, resize_grid)) => {
                                 // Coalesce resize
+                                if resize_pending.is_none() {
+                                    resize_sleep
+                                        .as_mut()
+                                        .reset(tokio::time::Instant::now() + Duration::from_millis(25));
+                                }
                                 resize_pending = Some((window_size, resize_grid));
                             },
                             Ok(Msg::Scroll(scroll)) => {
@@ -453,7 +461,9 @@ where
                         let Ok(mut guard) = read_guard else {
                             break 'event_loop;
                         };
-                        match self.pty_read(&mut state, &mut buf, pipe.as_mut()) {
+                        let in_coalesce_window = last_snapshot_at
+                            .is_some_and(|last| last.elapsed() < MIN_SNAPSHOT_INTERVAL);
+                        match self.pty_read(&mut state, &mut buf, pipe.as_mut(), in_coalesce_window) {
                             Ok((false, _, _)) => {
                                 // EOF Reached
                                 guard.clear_ready();
@@ -468,11 +478,20 @@ where
                             }
                             Ok((true, needs_coalesced_render, would_block)) => {
                                 if needs_coalesced_render {
+                                    let was_pending = pending_coalesced_render;
                                     self.publish_render_state(
                                         RenderPriority::Coalesced,
                                         &mut last_snapshot_at,
                                         &mut pending_coalesced_render,
                                     );
+                                    if !was_pending
+                                        && pending_coalesced_render
+                                        && let Some(last) = last_snapshot_at
+                                    {
+                                        coalesce_sleep
+                                            .as_mut()
+                                            .reset(last + MIN_SNAPSHOT_INTERVAL);
+                                    }
                                 }
                                 // Only clear edge-triggered readable readiness if we actually
                                 // drained until WouldBlock; if we paused at MAX_LOCKED_READ to
@@ -523,7 +542,7 @@ where
                                 self.event_proxy.send_event(Event::ChildExit(status));
                             }
                             if self.drain_on_exit {
-                                let _ = self.pty_read(&mut state, &mut buf, pipe.as_mut());
+                                let _ = self.pty_read(&mut state, &mut buf, pipe.as_mut(), false);
                             }
                             self.terminal.exit();
                             self.publish_render_state(
@@ -628,59 +647,73 @@ where
         state: &mut State,
         buf: &mut [u8],
         mut writer: Option<&mut X>,
+        in_coalesce_window: bool,
     ) -> io::Result<(bool, bool, bool)>
     where
         X: Write,
     {
-        let mut unprocessed = 0;
         let mut processed = 0;
         let mut eof = false;
         let mut would_block = false;
+        let mut empty_retries = 0u32;
 
-        let read_limit = buf.len().min(MAX_LOCKED_READ);
-
-        // Drain available PTY bytes into `buf` first so the child process can
-        // continue writing to the kernel PTY buffer while we parse the batch.
         loop {
-            match self.pty.reader().read(&mut buf[unprocessed..read_limit]) {
+            match self.pty.reader().read(buf) {
                 Ok(0) => {
-                    if unprocessed == 0 {
+                    if processed == 0 {
                         eof = true;
                     }
                     break;
                 }
                 Ok(got) => {
-                    unprocessed += got;
-                    if unprocessed >= read_limit {
+                    empty_retries = 0;
+                    if let Some(writer) = &mut writer {
+                        writer.write_all(&buf[..got]).unwrap();
+                    }
+
+                    state.parser.advance(&mut self.terminal, &buf[..got]);
+                    processed += got;
+
+                    if processed >= MAX_LOCKED_READ {
                         break;
+                    }
+
+                    // If `read()` returned only a single `n_tty` page or less (< 4095 bytes)
+                    // while streaming, briefly pacing before the next `read()` lets
+                    // `n_tty_write` get ahead so the next `read()` drains a multi-page batch
+                    // in a single syscall without `ldata->output_lock` contention.
+                    if got < 4095 && (in_coalesce_window || processed >= 4095) && self.rx.is_empty()
+                    {
+                        for _ in 0..1024 {
+                            std::hint::spin_loop();
+                        }
                     }
                 }
                 Err(err) => match err.kind() {
                     ErrorKind::Interrupted => continue,
                     ErrorKind::WouldBlock => {
+                        if (in_coalesce_window || processed > 0)
+                            && processed < MAX_LOCKED_READ
+                            && empty_retries < 16
+                            && self.rx.is_empty()
+                        {
+                            empty_retries += 1;
+                            for _ in 0..(128 * empty_retries) {
+                                std::hint::spin_loop();
+                            }
+                            continue;
+                        }
                         would_block = true;
                         break;
                     }
                     _ => {
-                        if unprocessed == 0 {
+                        if processed == 0 {
                             return Err(err);
                         }
                         break;
                     }
                 },
             }
-        }
-
-        if unprocessed > 0 {
-            if let Some(writer) = &mut writer {
-                writer.write_all(&buf[..unprocessed]).unwrap();
-            }
-
-            state
-                .parser
-                .advance(&mut self.terminal, &buf[..unprocessed]);
-
-            processed = unprocessed;
         }
 
         let needs_coalesced_render = state.parser.sync_bytes_count() < processed && processed > 0;

@@ -151,29 +151,336 @@ impl<T> Term<T> {
         self.damage
             .damage_line(line.0 as usize, base_col.0, base_col.0 + 1);
     }
+
+    #[inline]
+    fn input_str_impl(&mut self, s: &str, mut unreset_row: bool)
+    where
+        T: EventListener,
+    {
+        if s.is_empty() {
+            if unreset_row {
+                let line = self.grid.cursor.point.line;
+                let template = self.grid.cursor.template.clone();
+                self.grid[line].reset(&template);
+            }
+            return;
+        }
+
+        let columns = self.columns();
+        if columns == 0
+            || self.mode.contains(TermMode::INSERT)
+            || self.grid.cursor.charsets[self.active_charset] != StandardCharset::Ascii
+            || self.grid.cursor.template.extra.is_some()
+        {
+            if unreset_row {
+                let line = self.grid.cursor.point.line;
+                let template = self.grid.cursor.template.clone();
+                self.grid[line].reset(&template);
+            }
+            for c in s.chars() {
+                self.input(c);
+            }
+            return;
+        }
+
+        let line_wrap = self.mode.contains(TermMode::LINE_WRAP);
+        let grapheme_clustering = self.mode.contains(TermMode::GRAPHEME_CLUSTERING);
+        let fg = self.grid.cursor.template.fg;
+        let bg = self.grid.cursor.template.bg;
+        let flags = self.grid.cursor.template.flags;
+
+        let mut chars = s.chars();
+        while let Some(mut c) = chars.next() {
+            if !self.grid.cursor.input_needs_wrap {
+                let line = self.grid.cursor.point.line;
+                let mut col = self.grid.cursor.point.column.0;
+                let (row_cells, row_occ) = self.grid[line].slice_mut_with_occ();
+
+                if unreset_row || col >= *row_occ {
+                    let mut prev_has_zwj = false;
+                    if grapheme_clustering && col > 0 {
+                        let mut prev_c = col - 1;
+                        if row_cells[prev_c].flags.contains(Flags::WIDE_CHAR_SPACER) {
+                            prev_c = prev_c.saturating_sub(1);
+                        }
+                        if let Some(extra) = row_cells[prev_c].extra.as_ref() {
+                            prev_has_zwj = extra.zerowidth.last() == Some(&'\u{200D}');
+                        }
+                    }
+
+                    if !prev_has_zwj {
+                        let mut pending_char = true;
+                        loop {
+                            let u = c as u32;
+                            if u < 0x80 {
+                                let cell = &mut row_cells[col];
+                                cell.c = c;
+                                cell.fg = fg;
+                                cell.bg = bg;
+                                cell.flags = flags;
+                                if cell.extra.is_some() {
+                                    core::hint::cold_path();
+                                    cell.extra = None;
+                                }
+                                col += 1;
+                            } else {
+                                if grapheme_clustering
+                                    && (u == 0xFE0F || (0x1F1E6..=0x1F3FF).contains(&u))
+                                    && col > 0
+                                {
+                                    let prev_is_ri = is_regional_indicator(row_cells[col - 1].c)
+                                        || (col >= 2
+                                            && row_cells[col - 1]
+                                                .flags
+                                                .contains(Flags::WIDE_CHAR_SPACER)
+                                            && is_regional_indicator(row_cells[col - 2].c));
+                                    if u == 0xFE0F
+                                        || (0x1F3FB..=0x1F3FF).contains(&u)
+                                        || prev_is_ri
+                                    {
+                                        break;
+                                    }
+                                }
+
+                                let width = match fast_char_width(c) {
+                                    Some(w) => w,
+                                    None => {
+                                        if let Some(next_c) = chars.next() {
+                                            c = next_c;
+                                            continue;
+                                        } else {
+                                            pending_char = false;
+                                            break;
+                                        }
+                                    }
+                                };
+
+                                if width == 1 {
+                                    let cell = &mut row_cells[col];
+                                    cell.c = c;
+                                    cell.fg = fg;
+                                    cell.bg = bg;
+                                    cell.flags = flags;
+                                    if cell.extra.is_some() {
+                                        core::hint::cold_path();
+                                        cell.extra = None;
+                                    }
+                                    col += 1;
+                                } else if width == 2 {
+                                    if col + 1 >= columns {
+                                        break;
+                                    }
+                                    let cell0 = &mut row_cells[col];
+                                    cell0.c = c;
+                                    cell0.fg = fg;
+                                    cell0.bg = bg;
+                                    cell0.flags = flags | Flags::WIDE_CHAR;
+                                    if cell0.extra.is_some() {
+                                        core::hint::cold_path();
+                                        cell0.extra = None;
+                                    }
+
+                                    let cell1 = &mut row_cells[col + 1];
+                                    cell1.c = ' ';
+                                    cell1.fg = fg;
+                                    cell1.bg = bg;
+                                    cell1.flags = flags | Flags::WIDE_CHAR_SPACER;
+                                    if cell1.extra.is_some() {
+                                        core::hint::cold_path();
+                                        cell1.extra = None;
+                                    }
+                                    col += 2;
+                                } else if u != 0x200D && col > 0 {
+                                    self.has_any_extra = true;
+                                    let mut target_col = col - 1;
+                                    if row_cells[target_col].flags.contains(Flags::WIDE_CHAR_SPACER)
+                                    {
+                                        target_col = target_col.saturating_sub(1);
+                                    }
+                                    row_cells[target_col].push_zerowidth(c);
+                                    if let Some(next_c) = chars.next() {
+                                        c = next_c;
+                                        continue;
+                                    } else {
+                                        pending_char = false;
+                                        break;
+                                    }
+                                } else {
+                                    break;
+                                }
+                            }
+
+                            if col >= columns {
+                                pending_char = false;
+                                break;
+                            }
+                            if let Some(next_c) = chars.next() {
+                                c = next_c;
+                            } else {
+                                pending_char = false;
+                                break;
+                            }
+                        }
+
+                        if unreset_row {
+                            unreset_row = false;
+                            let prev_occ = *row_occ;
+                            if col < prev_occ {
+                                for item in &mut row_cells[col..prev_occ] {
+                                    item.c = ' ';
+                                    item.fg = Color::Named(NamedColor::Foreground);
+                                    item.bg = bg;
+                                    item.flags = Flags::empty();
+                                    if item.extra.is_some() {
+                                        core::hint::cold_path();
+                                        item.extra = None;
+                                    }
+                                }
+                            }
+                            *row_occ = col.min(columns);
+                        } else {
+                            *row_occ = (*row_occ).max(col.min(columns));
+                        }
+
+                        if col < columns {
+                            self.grid.cursor.point.column = Column(col);
+                        } else {
+                            self.grid.cursor.point.column = Column(columns - 1);
+                            self.grid.cursor.input_needs_wrap = line_wrap;
+                        }
+
+                        if !pending_char {
+                            continue;
+                        }
+                    }
+                }
+            }
+
+            if unreset_row {
+                unreset_row = false;
+                let line = self.grid.cursor.point.line;
+                let col = self.grid.cursor.point.column.0;
+                let template = self.grid.cursor.template.clone();
+                self.grid[line].reset_after(col, &template);
+            }
+            self.input(c);
+        }
+    }
+}
+
+#[inline(always)]
+fn fast_char_width(c: char) -> Option<usize> {
+    let u = c as u32;
+    if u < 0x80 {
+        return Some(1);
+    }
+    // Fast-path common width-1 Unicode blocks:
+    // - Latin-1 Supplement & Latin Extended (U+00A1..=U+02FF, excluding U+00AD soft hyphen)
+    // - Greek & Coptic (U+0370..=U+03FF)
+    // - Mathematical Operators (U+2200..=U+22FF)
+    // - Box Drawing & Block Elements (U+2500..=U+259F)
+    if ((0x00A1..=0x02FF).contains(&u) && u != 0x00AD)
+        || (0x0370..=0x03FF).contains(&u)
+        || (0x2200..=0x22FF).contains(&u)
+        || (0x2500..=0x259F).contains(&u)
+    {
+        return Some(1);
+    }
+    // Fast-path common width-2 CJK Unified Ideographs & Hangul Syllables
+    if (0x4E00..=0x9FFF).contains(&u) || (0xAC00..=0xD7A3).contains(&u) {
+        return Some(2);
+    }
+    c.width()
 }
 
 impl<T: EventListener> Handler for Term<T> {
     /// A character to be displayed.
-    #[inline(never)]
+    #[inline]
     fn input(&mut self, c: char) {
+        let columns = self.columns();
+        if columns == 0 {
+            return;
+        }
+
+        // Fast path for single ASCII character in standard mode.
+        if c.is_ascii() {
+            if !self.mode.contains(TermMode::INSERT)
+                && self.grid.cursor.charsets[self.active_charset] == StandardCharset::Ascii
+                && self.grid.cursor.template.extra.is_none()
+            {
+                let line_wrap = self.mode.contains(TermMode::LINE_WRAP);
+                let mut freshly_scrolled = false;
+                if self.grid.cursor.input_needs_wrap {
+                    if !line_wrap {
+                        self.grid.cursor.input_needs_wrap = false;
+                        self.write_at_cursor(c);
+                        return;
+                    }
+                    freshly_scrolled = self.wrapline_keep(1);
+                }
+                let line = self.grid.cursor.point.line;
+                let col = self.grid.cursor.point.column.0;
+                let fg = self.grid.cursor.template.fg;
+                let bg = self.grid.cursor.template.bg;
+                let flags = self.grid.cursor.template.flags;
+                let row = &mut self.grid[line];
+                if freshly_scrolled || col >= row.occ {
+                    let cell = &mut row[Column(col)];
+                    cell.c = c;
+                    cell.fg = fg;
+                    cell.bg = bg;
+                    cell.flags = flags;
+                    if cell.extra.is_some() {
+                        core::hint::cold_path();
+                        cell.extra = None;
+                    }
+                    if col + 1 < columns {
+                        self.grid.cursor.point.column.0 = col + 1;
+                    } else {
+                        self.grid.cursor.input_needs_wrap = line_wrap;
+                    }
+                    return;
+                }
+            }
+            if self.grid.cursor.input_needs_wrap {
+                self.wrapline();
+            }
+            if self.mode.contains(TermMode::INSERT) && self.grid.cursor.point.column + 1 < columns {
+                let line = self.grid.cursor.point.line;
+                let col = self.grid.cursor.point.column;
+                let row = &mut self.grid[line][..];
+                for col in (col.0..(columns - 1)).rev() {
+                    row.swap(col + 1, col);
+                }
+            }
+            self.write_at_cursor(c);
+            if self.grid.cursor.point.column + 1 < columns {
+                self.grid.cursor.point.column += 1;
+            } else {
+                self.grid.cursor.input_needs_wrap = self.mode.contains(TermMode::LINE_WRAP);
+            }
+            return;
+        }
+
         // Unicode Grapheme Clustering (DECSET 2027) for non-ASCII sequences:
         // handles ZWJ sequences, VS16 emoji presentation widening, Fitzpatrick
         // skin-tone modifiers, and Regional Indicator flag pairs.
-        if !c.is_ascii()
-            && self.mode.contains(TermMode::GRAPHEME_CLUSTERING)
+        if self.mode.contains(TermMode::GRAPHEME_CLUSTERING)
             && let Some(prev_col) = self.prev_cluster_col()
         {
             let line = self.grid.cursor.point.line;
+            let prev_has_extra = self.grid[line][prev_col].extra.is_some();
 
             // 1. Continuation after Zero-Width Joiner (U+200D)
-            if self.grid[line][prev_col]
-                .zerowidth()
-                .and_then(|zw| zw.last())
-                == Some(&'\u{200D}')
+            if prev_has_extra
+                && self.grid[line][prev_col]
+                    .zerowidth()
+                    .and_then(|zw| zw.last())
+                    == Some(&'\u{200D}')
             {
+                self.has_any_extra = true;
                 self.grid[line][prev_col].push_zerowidth(c);
-                if c.width() == Some(2) {
+                if fast_char_width(c) == Some(2) {
                     self.widen_cell_at(line, prev_col);
                 }
                 return;
@@ -182,6 +489,7 @@ impl<T: EventListener> Handler for Term<T> {
             // 2. Variation Selector-16 (U+FE0F) upgrading text symbol to 2-cell emoji
             if c == '\u{FE0F}' {
                 let base_c = self.grid[line][prev_col].c;
+                self.has_any_extra = true;
                 self.grid[line][prev_col].push_zerowidth(c);
                 if can_widen_with_vs16(base_c) {
                     self.widen_cell_at(line, prev_col);
@@ -191,6 +499,7 @@ impl<T: EventListener> Handler for Term<T> {
 
             // 3. Emoji Fitzpatrick skin-tone modifiers (U+1F3FB..=U+1F3FF)
             if is_emoji_modifier(c) && !self.grid[line][prev_col].c.is_ascii() {
+                self.has_any_extra = true;
                 self.grid[line][prev_col].push_zerowidth(c);
                 self.widen_cell_at(line, prev_col);
                 return;
@@ -199,10 +508,12 @@ impl<T: EventListener> Handler for Term<T> {
             // 4. Regional Indicator pair forming a 2-column flag (U+1F1E6..=U+1F1FF)
             if is_regional_indicator(c)
                 && is_regional_indicator(self.grid[line][prev_col].c)
-                && !self.grid[line][prev_col]
-                    .zerowidth()
-                    .is_some_and(|zw| zw.iter().copied().any(is_regional_indicator))
+                && (!prev_has_extra
+                    || !self.grid[line][prev_col]
+                        .zerowidth()
+                        .is_some_and(|zw| zw.iter().copied().any(is_regional_indicator)))
             {
+                self.has_any_extra = true;
                 self.grid[line][prev_col].push_zerowidth(c);
                 self.widen_cell_at(line, prev_col);
                 return;
@@ -210,13 +521,9 @@ impl<T: EventListener> Handler for Term<T> {
         }
 
         // Number of cells the char will occupy.
-        let width = if c.is_ascii() {
-            1
-        } else {
-            match c.width() {
-                Some(width) => width,
-                None => return,
-            }
+        let width = match fast_char_width(c) {
+            Some(width) => width,
+            None => return,
         };
 
         // Handle zero-width characters.
@@ -236,17 +543,18 @@ impl<T: EventListener> Handler for Term<T> {
                 column.0 = column.saturating_sub(1);
             }
 
+            self.has_any_extra = true;
             self.grid[line][column].push_zerowidth(c);
             return;
         }
 
         // Move cursor to next line.
+        let mut freshly_scrolled = false;
         if self.grid.cursor.input_needs_wrap {
-            self.wrapline();
+            freshly_scrolled = self.wrapline_keep(width);
         }
 
         // If in insert mode, first shift cells to the right.
-        let columns = self.columns();
         if self.mode.contains(TermMode::INSERT) && self.grid.cursor.point.column + width < columns {
             let line = self.grid.cursor.point.line;
             let col = self.grid.cursor.point.column;
@@ -257,10 +565,31 @@ impl<T: EventListener> Handler for Term<T> {
             }
         }
 
+        let line = self.grid.cursor.point.line;
+        let col = self.grid.cursor.point.column.0;
+        let fast_append = !self.mode.contains(TermMode::INSERT)
+            && self.grid.cursor.template.extra.is_none()
+            && (freshly_scrolled || col >= self.grid[line].occ);
+
         if width == 1 {
-            self.write_at_cursor(c);
+            if fast_append {
+                let fg = self.grid.cursor.template.fg;
+                let bg = self.grid.cursor.template.bg;
+                let flags = self.grid.cursor.template.flags;
+                let cell = &mut self.grid[line][Column(col)];
+                cell.c = c;
+                cell.fg = fg;
+                cell.bg = bg;
+                cell.flags = flags;
+                if cell.extra.is_some() {
+                    core::hint::cold_path();
+                    cell.extra = None;
+                }
+            } else {
+                self.write_at_cursor(c);
+            }
         } else {
-            if self.grid.cursor.point.column + 1 >= columns {
+            if col + 1 >= columns {
                 if self.mode.contains(TermMode::LINE_WRAP) {
                     // Insert placeholder before wide char if glyph does not fit in this row.
                     self.grid
@@ -274,7 +603,7 @@ impl<T: EventListener> Handler for Term<T> {
                         .template
                         .flags
                         .remove(Flags::LEADING_WIDE_CHAR_SPACER);
-                    self.wrapline();
+                    freshly_scrolled = self.wrapline_keep(2);
                 } else {
                     // Prevent out of bounds crash when linewrapping is disabled.
                     self.grid.cursor.input_needs_wrap = false;
@@ -282,24 +611,54 @@ impl<T: EventListener> Handler for Term<T> {
                 }
             }
 
-            // Write full width glyph to current cursor cell.
-            self.grid.cursor.template.flags.insert(Flags::WIDE_CHAR);
-            self.write_at_cursor(c);
-            self.grid.cursor.template.flags.remove(Flags::WIDE_CHAR);
+            let line = self.grid.cursor.point.line;
+            let col = self.grid.cursor.point.column.0;
+            if !self.mode.contains(TermMode::INSERT)
+                && self.grid.cursor.template.extra.is_none()
+                && (freshly_scrolled || col >= self.grid[line].occ)
+                && col + 1 < columns
+            {
+                let fg = self.grid.cursor.template.fg;
+                let bg = self.grid.cursor.template.bg;
+                let flags = self.grid.cursor.template.flags;
+                let pair = &mut self.grid[line][Column(col)..Column(col + 2)];
+                pair[0].c = c;
+                pair[0].fg = fg;
+                pair[0].bg = bg;
+                pair[0].flags = flags | Flags::WIDE_CHAR;
+                if pair[0].extra.is_some() {
+                    core::hint::cold_path();
+                    pair[0].extra = None;
+                }
+                pair[1].c = ' ';
+                pair[1].fg = fg;
+                pair[1].bg = bg;
+                pair[1].flags = flags | Flags::WIDE_CHAR_SPACER;
+                if pair[1].extra.is_some() {
+                    core::hint::cold_path();
+                    pair[1].extra = None;
+                }
+                self.grid.cursor.point.column.0 = col + 1;
+            } else {
+                // Write full width glyph to current cursor cell.
+                self.grid.cursor.template.flags.insert(Flags::WIDE_CHAR);
+                self.write_at_cursor(c);
+                self.grid.cursor.template.flags.remove(Flags::WIDE_CHAR);
 
-            // Write spacer to cell following the wide glyph.
-            self.grid.cursor.point.column += 1;
-            self.grid
-                .cursor
-                .template
-                .flags
-                .insert(Flags::WIDE_CHAR_SPACER);
-            self.write_at_cursor(' ');
-            self.grid
-                .cursor
-                .template
-                .flags
-                .remove(Flags::WIDE_CHAR_SPACER);
+                // Write spacer to cell following the wide glyph.
+                self.grid.cursor.point.column += 1;
+                self.grid
+                    .cursor
+                    .template
+                    .flags
+                    .insert(Flags::WIDE_CHAR_SPACER);
+                self.write_at_cursor(' ');
+                self.grid
+                    .cursor
+                    .template
+                    .flags
+                    .remove(Flags::WIDE_CHAR_SPACER);
+            }
         }
 
         if self.grid.cursor.point.column + 1 < columns {
@@ -333,6 +692,7 @@ impl<T: EventListener> Handler for Term<T> {
 
         let line_wrap = self.mode.contains(TermMode::LINE_WRAP);
         let mut remaining = bytes;
+        let mut freshly_scrolled = false;
         while !remaining.is_empty() {
             if self.grid.cursor.input_needs_wrap {
                 if !line_wrap {
@@ -341,7 +701,8 @@ impl<T: EventListener> Handler for Term<T> {
                     self.write_at_cursor(last_b as char);
                     return;
                 }
-                self.wrapline();
+                let keep_cols = remaining.len().min(columns);
+                freshly_scrolled = self.wrapline_keep(keep_cols);
             }
 
             let line = self.grid.cursor.point.line;
@@ -359,12 +720,17 @@ impl<T: EventListener> Handler for Term<T> {
             let fg = self.grid.cursor.template.fg;
             let bg = self.grid.cursor.template.bg;
             let flags = self.grid.cursor.template.flags;
-            let extra = self.grid.cursor.template.extra.clone();
+            let has_template_extra = self.grid.cursor.template.extra.is_some();
 
-            let row_slice = &self.grid[line][Column(start_col)..Column(end_col)];
-            let has_wide_collision = row_slice
-                .iter()
-                .any(|c| c.flags.intersects(Flags::WIDE_CHAR | Flags::WIDE_CHAR_SPACER));
+            let row = &mut self.grid[line];
+            let old_occ = row.occ;
+            let check_end = end_col.min(old_occ);
+            let has_wide_collision = !freshly_scrolled
+                && start_col < check_end
+                && row[Column(start_col)..Column(check_end)]
+                    .iter()
+                    .any(|c| c.flags.intersects(Flags::WIDE_CHAR | Flags::WIDE_CHAR_SPACER));
+            freshly_scrolled = false;
 
             if has_wide_collision {
                 for &b in chunk {
@@ -376,13 +742,38 @@ impl<T: EventListener> Handler for Term<T> {
                     }
                 }
             } else {
-                let row_mut = &mut self.grid[line][Column(start_col)..Column(end_col)];
-                for (cell, &b) in row_mut.iter_mut().zip(chunk.iter()) {
-                    cell.c = b as char;
-                    cell.fg = fg;
-                    cell.bg = bg;
-                    cell.flags = flags;
-                    cell.extra.clone_from(&extra);
+                if !has_template_extra {
+                    let has_any_extra = self.has_any_extra;
+                    let row_mut = &mut row[Column(start_col)..Column(end_col)];
+                    if !has_any_extra {
+                        for (cell, &b) in row_mut.iter_mut().zip(chunk.iter()) {
+                            cell.c = b as char;
+                            cell.fg = fg;
+                            cell.bg = bg;
+                            cell.flags = flags;
+                        }
+                    } else {
+                        for (cell, &b) in row_mut.iter_mut().zip(chunk.iter()) {
+                            cell.c = b as char;
+                            cell.fg = fg;
+                            cell.bg = bg;
+                            cell.flags = flags;
+                            if cell.extra.is_some() {
+                                core::hint::cold_path();
+                                cell.extra = None;
+                            }
+                        }
+                    }
+                } else {
+                    let extra = self.grid.cursor.template.extra.clone();
+                    let row_mut = &mut self.grid[line][Column(start_col)..Column(end_col)];
+                    for (cell, &b) in row_mut.iter_mut().zip(chunk.iter()) {
+                        cell.c = b as char;
+                        cell.fg = fg;
+                        cell.bg = bg;
+                        cell.flags = flags;
+                        cell.extra.clone_from(&extra);
+                    }
                 }
 
                 if end_col < columns {
@@ -392,6 +783,131 @@ impl<T: EventListener> Handler for Term<T> {
                     self.grid.cursor.input_needs_wrap = line_wrap;
                 }
             }
+        }
+    }
+
+    #[inline]
+    fn crlf_and_input_ascii_slice(&mut self, bytes: &[u8]) {
+        let columns = self.columns();
+        if columns == 0
+            || self.mode.contains(TermMode::INSERT)
+            || self.grid.cursor.charsets[self.active_charset] != StandardCharset::Ascii
+        {
+            self.carriage_return();
+            self.linefeed();
+            self.input_ascii_slice(bytes);
+            return;
+        }
+
+        let line = self.grid.cursor.point.line.0 as usize;
+        self.damage
+            .damage_line(line, 0, self.grid.cursor.point.column.0);
+        self.grid.cursor.point.column = Column(0);
+        self.grid.cursor.input_needs_wrap = false;
+
+        let next = self.grid.cursor.point.line + 1;
+        if next == self.scroll_region.end {
+            let keep_cols = bytes.len().min(columns);
+            let origin = self.scroll_region.start;
+            self.scroll_up_relative_keep(origin, 1, keep_cols);
+
+            let fg = self.grid.cursor.template.fg;
+            let bg = self.grid.cursor.template.bg;
+            let flags = self.grid.cursor.template.flags;
+            let cur_line = self.grid.cursor.point.line;
+            let chunk = &bytes[..keep_cols];
+
+            if self.grid.cursor.template.extra.is_none() {
+                let has_any_extra = self.has_any_extra;
+                let row_mut = &mut self.grid[cur_line][Column(0)..Column(keep_cols)];
+                if !has_any_extra {
+                    for (cell, &b) in row_mut.iter_mut().zip(chunk.iter()) {
+                        cell.c = b as char;
+                        cell.fg = fg;
+                        cell.bg = bg;
+                        cell.flags = flags;
+                    }
+                } else {
+                    for (cell, &b) in row_mut.iter_mut().zip(chunk.iter()) {
+                        cell.c = b as char;
+                        cell.fg = fg;
+                        cell.bg = bg;
+                        cell.flags = flags;
+                        if cell.extra.is_some() {
+                            core::hint::cold_path();
+                            cell.extra = None;
+                        }
+                    }
+                }
+            } else {
+                let extra = self.grid.cursor.template.extra.clone();
+                let row_mut = &mut self.grid[cur_line][Column(0)..Column(keep_cols)];
+                for (cell, &b) in row_mut.iter_mut().zip(chunk.iter()) {
+                    cell.c = b as char;
+                    cell.fg = fg;
+                    cell.bg = bg;
+                    cell.flags = flags;
+                    cell.extra.clone_from(&extra);
+                }
+            }
+
+            if keep_cols < columns {
+                self.grid.cursor.point.column = Column(keep_cols);
+            } else {
+                self.grid.cursor.point.column = Column(columns - 1);
+                self.grid.cursor.input_needs_wrap = self.mode.contains(TermMode::LINE_WRAP);
+            }
+
+            if bytes.len() > keep_cols {
+                self.input_ascii_slice(&bytes[keep_cols..]);
+            }
+        } else {
+            if next < self.screen_lines() {
+                self.damage_cursor();
+                self.grid.cursor.point.line += 1;
+                self.damage_cursor();
+            }
+            self.input_ascii_slice(bytes);
+        }
+    }
+
+    #[inline]
+    fn input_str(&mut self, s: &str) {
+        self.input_str_impl(s, false);
+    }
+
+    #[inline]
+    fn crlf_and_input_str(&mut self, s: &str) {
+        let columns = self.columns();
+        if columns == 0
+            || self.mode.contains(TermMode::INSERT)
+            || self.grid.cursor.charsets[self.active_charset] != StandardCharset::Ascii
+            || self.grid.cursor.template.extra.is_some()
+        {
+            self.carriage_return();
+            self.linefeed();
+            self.input_str(s);
+            return;
+        }
+
+        let line = self.grid.cursor.point.line.0 as usize;
+        self.damage
+            .damage_line(line, 0, self.grid.cursor.point.column.0);
+        self.grid.cursor.point.column = Column(0);
+        self.grid.cursor.input_needs_wrap = false;
+
+        let next = self.grid.cursor.point.line + 1;
+        if next == self.scroll_region.end {
+            let origin = self.scroll_region.start;
+            self.scroll_up_relative_keep(origin, 1, columns);
+            self.input_str_impl(s, true);
+        } else {
+            if next < self.screen_lines() {
+                self.damage_cursor();
+                self.grid.cursor.point.line += 1;
+                self.damage_cursor();
+            }
+            self.input_str_impl(s, false);
         }
     }
 
@@ -1209,6 +1725,9 @@ impl<T: EventListener> Handler for Term<T> {
     #[inline]
     fn set_hyperlink(&mut self, hyperlink: Option<Hyperlink>) {
         trace!("Setting hyperlink: {hyperlink:?}");
+        if hyperlink.is_some() {
+            self.has_any_extra = true;
+        }
         self.grid
             .cursor
             .template
@@ -1223,7 +1742,12 @@ impl<T: EventListener> Handler for Term<T> {
         match attr {
             Attr::Foreground(color) => cursor.template.fg = color,
             Attr::Background(color) => cursor.template.bg = color,
-            Attr::UnderlineColor(color) => cursor.template.set_underline_color(color),
+            Attr::UnderlineColor(color) => {
+                if color.is_some() {
+                    self.has_any_extra = true;
+                }
+                cursor.template.set_underline_color(color);
+            }
             Attr::Reset => {
                 cursor.template.fg = Color::Named(NamedColor::Foreground);
                 cursor.template.bg = Color::Named(NamedColor::Background);

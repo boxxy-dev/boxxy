@@ -161,25 +161,45 @@ impl<T> Term<T> {
     where
         T: EventListener,
     {
+        self.wrapline_keep(0);
+    }
+
+    /// Insert a linebreak at the current cursor position, keeping `keep_bottom_cols`
+    /// un-reset if scrolling up so the caller can immediately overwrite `0..keep_bottom_cols`.
+    #[inline]
+    pub(super) fn wrapline_keep(&mut self, keep_bottom_cols: usize) -> bool
+    where
+        T: EventListener,
+    {
         if !self.mode.contains(TermMode::LINE_WRAP) {
             self.grid.cursor.input_needs_wrap = false;
-            return;
+            return false;
         }
 
         trace!("Wrapping input");
 
         self.grid.cursor_cell().flags.insert(Flags::WRAPLINE);
 
-        if self.grid.cursor.point.line + 1 >= self.scroll_region.end {
-            self.linefeed();
+        let scrolled = if self.grid.cursor.point.line + 1 >= self.scroll_region.end {
+            let next = self.grid.cursor.point.line + 1;
+            if next == self.scroll_region.end {
+                let origin = self.scroll_region.start;
+                self.scroll_up_relative_keep(origin, 1, keep_bottom_cols);
+                true
+            } else {
+                self.linefeed();
+                false
+            }
         } else {
             self.damage_cursor();
             self.grid.cursor.point.line += 1;
-        }
+            false
+        };
 
         self.grid.cursor.point.column = Column(0);
         self.grid.cursor.input_needs_wrap = false;
         self.damage_cursor();
+        scrolled
     }
 
     /// Write `c` to the cell at the cursor position.
@@ -229,6 +249,9 @@ impl<T> Term<T> {
 
     #[inline]
     pub(super) fn damage_cursor(&mut self) {
+        if self.damage.full {
+            return;
+        }
         // The normal cursor coordinates are always in viewport.
         let point = Point::new(
             self.grid.cursor.point.line.0 as usize,

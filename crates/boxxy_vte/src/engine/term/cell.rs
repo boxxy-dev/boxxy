@@ -143,7 +143,8 @@ pub struct CellExtra {
 }
 
 /// Content and attributes of a single cell in the terminal grid.
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+#[repr(C)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct Cell {
     pub c: char,
@@ -151,6 +152,20 @@ pub struct Cell {
     pub bg: Color,
     pub flags: Flags,
     pub extra: Option<Arc<CellExtra>>,
+}
+
+impl std::hash::Hash for Cell {
+    #[inline(always)]
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        let word0 = (self.c as u64) | ((self.flags.bits() as u64) << 32);
+        let word1 = (self.fg.pack_u32() as u64) | ((self.bg.pack_u32() as u64) << 32);
+        state.write_u64(word0);
+        state.write_u64(word1);
+        if let Some(ref extra) = self.extra {
+            core::hint::cold_path();
+            extra.hash(state);
+        }
+    }
 }
 
 impl Default for Cell {
@@ -267,10 +282,14 @@ impl GridCell for Cell {
 
     #[inline]
     fn reset(&mut self, template: &Self) {
-        *self = Cell {
-            bg: template.bg,
-            ..Cell::default()
-        };
+        self.c = ' ';
+        self.fg = Color::Named(NamedColor::Foreground);
+        self.bg = template.bg;
+        self.flags = Flags::empty();
+        if self.extra.is_some() {
+            core::hint::cold_path();
+            self.extra = None;
+        }
     }
 }
 

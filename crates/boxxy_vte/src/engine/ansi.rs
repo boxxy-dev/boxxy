@@ -542,6 +542,30 @@ pub trait Handler {
         }
     }
 
+    /// Execute `\r\n` followed immediately by a slice of printable ASCII characters (`0x20..=0x7E`).
+    #[inline]
+    fn crlf_and_input_ascii_slice(&mut self, bytes: &[u8]) {
+        self.carriage_return();
+        self.linefeed();
+        self.input_ascii_slice(bytes);
+    }
+
+    /// A UTF-8 string slice of printable characters (no C0/C1 control chars or DEL) to be displayed.
+    #[inline]
+    fn input_str(&mut self, s: &str) {
+        for c in s.chars() {
+            self.input(c);
+        }
+    }
+
+    /// Execute `\r\n` followed immediately by a printable UTF-8 string slice.
+    #[inline]
+    fn crlf_and_input_str(&mut self, s: &str) {
+        self.carriage_return();
+        self.linefeed();
+        self.input_str(s);
+    }
+
     /// Set cursor to position.
     fn goto(&mut self, _line: i32, _col: usize) {}
 
@@ -1198,6 +1222,19 @@ pub enum Color {
     Indexed(u8),
 }
 
+impl Color {
+    #[inline(always)]
+    pub const fn pack_u32(self) -> u32 {
+        match self {
+            Color::Named(n) => n as u32,
+            Color::Indexed(i) => 0x0100_0000 | (i as u32),
+            Color::Spec(rgb) => {
+                0x0200_0000 | ((rgb.r as u32) << 16) | ((rgb.g as u32) << 8) | (rgb.b as u32)
+            }
+        }
+    }
+}
+
 /// Terminal character attributes.
 #[derive(Debug, Eq, PartialEq)]
 pub enum Attr {
@@ -1364,6 +1401,36 @@ where
         if let Some(&last) = bytes.last() {
             self.handler.input_ascii_slice(bytes);
             self.state.preceding_char = Some(last as char);
+        }
+    }
+
+    #[inline]
+    fn crlf_and_print_ascii(&mut self, bytes: &[u8]) {
+        if let Some(&last) = bytes.last() {
+            self.handler.crlf_and_input_ascii_slice(bytes);
+            self.state.preceding_char = Some(last as char);
+        } else {
+            self.handler.carriage_return();
+            self.handler.linefeed();
+        }
+    }
+
+    #[inline]
+    fn print_str(&mut self, s: &str) {
+        if let Some(last) = s.chars().next_back() {
+            self.handler.input_str(s);
+            self.state.preceding_char = Some(last);
+        }
+    }
+
+    #[inline]
+    fn crlf_and_print_str(&mut self, s: &str) {
+        if let Some(last) = s.chars().next_back() {
+            self.handler.crlf_and_input_str(s);
+            self.state.preceding_char = Some(last);
+        } else {
+            self.handler.carriage_return();
+            self.handler.linefeed();
         }
     }
 

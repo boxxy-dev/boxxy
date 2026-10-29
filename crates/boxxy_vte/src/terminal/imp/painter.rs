@@ -538,7 +538,7 @@ impl super::TerminalWidget {
                     let mut current_fg = fg_color_default;
                     let mut current_flags = Flags::empty();
                     let mut current_ucolor: Option<crate::engine::ansi::Color> = None;
-                    let mut line_str = String::new();
+                    let mut line_str = String::with_capacity(state.columns);
                     let mut run_cells = 0usize;
                     start_col = 0.0_f32;
 
@@ -637,7 +637,7 @@ impl super::TerminalWidget {
                         {
                             if !line_str.is_empty() {
                                 if !current_flags.contains(Flags::HIDDEN) {
-                                    if line_str.chars().any(|c| c != ' ')
+                                    if line_str.bytes().any(|b| b != b' ')
                                         || current_flags.contains(Flags::STRIKEOUT)
                                     {
                                         apply_pango_style(&layout, current_flags);
@@ -766,7 +766,7 @@ impl super::TerminalWidget {
                         }
                     }
                     if !line_str.is_empty() && !current_flags.contains(Flags::HIDDEN) {
-                        if line_str.chars().any(|c| c != ' ')
+                        if line_str.bytes().any(|b| b != b' ')
                             || current_flags.contains(Flags::STRIKEOUT)
                         {
                             apply_pango_style(&layout, current_flags);
