@@ -15,6 +15,7 @@ pub struct MsgBarComponent {
     pub widget: gtk::Box,
     pub entry: gtk::TextView,
     placeholder_label: gtk::Label,
+    default_placeholder: Rc<RefCell<String>>,
     pub send_btn: gtk::Button,
     pub is_active: Rc<Cell<bool>>,
     pub attachment_mgr: AttachmentManager,
@@ -90,8 +91,11 @@ impl MsgBarComponent {
             .accepts_tab(false)
             .build();
 
+        let default_placeholder_str =
+            "Type your message... (/: commands, Ctrl+V: attach, @character: direct)";
+        let default_placeholder = Rc::new(RefCell::new(default_placeholder_str.to_string()));
         let placeholder_label = gtk::Label::builder()
-            .label("Type your message... (/: commands, Ctrl+V: attach, @character: direct)")
+            .label(default_placeholder_str)
             .halign(gtk::Align::Fill)
             .valign(gtk::Align::Center)
             .xalign(0.0)
@@ -614,6 +618,7 @@ impl MsgBarComponent {
             widget,
             entry,
             placeholder_label,
+            default_placeholder,
             send_btn,
             is_active,
             attachment_mgr,
@@ -667,9 +672,12 @@ impl MsgBarComponent {
     /// Clears the active character binding and restores the default input placeholder.
     pub fn clear_character(&self) {
         *self.character_id.borrow_mut() = None;
-        self.placeholder_label.set_label(
-            "Type your message... (/: commands, Ctrl+V: attach, @character: direct)",
-        );
+        let text =
+            "Type your message... (/: commands, Ctrl+V: attach, @character: direct)".to_string();
+        *self.default_placeholder.borrow_mut() = text.clone();
+        if self.entry.is_sensitive() {
+            self.placeholder_label.set_label(&text);
+        }
         self.refresh_user_avatar();
     }
 
@@ -693,8 +701,11 @@ impl MsgBarComponent {
                 .collect::<Vec<String>>()
                 .join(" ");
 
-            self.placeholder_label
-                .set_label(&format!("Message {}...", formatted_name));
+            let text = format!("Message {}...", formatted_name);
+            *self.default_placeholder.borrow_mut() = text.clone();
+            if self.entry.is_sensitive() {
+                self.placeholder_label.set_label(&text);
+            }
         }
 
         self.refresh_user_avatar();
@@ -791,6 +802,12 @@ impl MsgBarComponent {
         }
         self.entry.set_sensitive(sensitive);
         self.send_btn.set_sensitive(sensitive);
+        if sensitive {
+            self.placeholder_label
+                .set_label(&self.default_placeholder.borrow());
+        } else {
+            self.placeholder_label.set_label("Esc to interrupt");
+        }
     }
 
     pub fn update_ui(&self, status: AgentStatus, pinned: bool, web_search: bool, vibe: bool) {

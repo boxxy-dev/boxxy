@@ -52,6 +52,9 @@ pub struct TerminalOverlay {
     history_sticky: Rc<Cell<bool>>,
     is_auto_scrolling: Rc<Cell<bool>>,
     tips_cycle: TipsCycle,
+    esc_interrupt_label: gtk::Label,
+    esc_interrupt_armed: Rc<Cell<bool>>,
+    esc_interrupt_timer: Rc<RefCell<Option<gtk::glib::SourceId>>>,
     /// Character name pre-selected in the picker before any session starts.
     selected_character: Rc<RefCell<String>>,
     host: Rc<dyn ClawHost>,
@@ -71,6 +74,17 @@ impl TerminalOverlay {
         let character_selector_box: gtk::Box = builder.object("character_selector_box").unwrap();
 
         indicator_slot.append(indicator.widget());
+        let esc_interrupt_label = gtk::Label::builder()
+            .label("Press Escape again to interrupt")
+            .valign(gtk::Align::Center)
+            .margin_start(6)
+            .visible(false)
+            .css_classes(["warning", "caption"])
+            .build();
+        indicator_slot.append(&esc_interrupt_label);
+        let esc_interrupt_armed = Rc::new(Cell::new(false));
+        let esc_interrupt_timer: Rc<RefCell<Option<gtk::glib::SourceId>>> =
+            Rc::new(RefCell::new(None));
         let single_scroll: gtk::ScrolledWindow = builder.object("single_scroll").unwrap();
         let history_scroll: gtk::ScrolledWindow = builder.object("history_scroll").unwrap();
 
@@ -327,6 +341,9 @@ impl TerminalOverlay {
             history_sticky: history_sticky.clone(),
             is_auto_scrolling: is_auto_scrolling.clone(),
             tips_cycle: tips_cycle.clone(),
+            esc_interrupt_label: esc_interrupt_label.clone(),
+            esc_interrupt_armed: esc_interrupt_armed.clone(),
+            esc_interrupt_timer: esc_interrupt_timer.clone(),
             selected_character: pending_character,
             history_list: history_list.clone(),
             history_store: history_store.clone(),
@@ -525,21 +542,68 @@ impl TerminalOverlay {
             }
         });
 
-        // Esc == Okay. Installed on the revealer (an ancestor of every
-        // focusable widget inside the drawer) at Capture phase so it
-        // fires *before* the msgbar's own Escape controller — we want
-        // a global "close the drawer" semantic, not the msgbar's
-        // "clear input text" default. We only fire when the Okay
-        // button is visible; if a pending proposal (accept/reject,
-        // approve-file, …) is on screen, Esc falls through so the
-        // user has to explicitly decide rather than silently skip.
+        // Esc handling on the revealer (Capture phase):
+        // - In `OverlayState::Thinking`: 1st Esc hides any active tip and shows yellow
+        //   "Press Escape again to interrupt" next to the thinking pill for 3 seconds;
+        //   2nd Esc within 3 seconds interrupts the agent and re-focuses the input bar.
+        // - When `ok_btn` is visible (`OverlayState::Idle` / `Pending`): Esc closes the drawer.
         let ok_btn_for_esc = ok_btn.clone();
+        let state_for_esc = state.clone();
+        let esc_armed_for_ctrl = esc_interrupt_armed.clone();
+        let esc_timer_for_ctrl = esc_interrupt_timer.clone();
+        let esc_label_for_ctrl = esc_interrupt_label.clone();
+        let tips_for_esc = tips_cycle.clone();
+        let indicator_for_esc = indicator.clone();
+        let overlay_for_esc = s.clone();
+        let revealer_for_esc = revealer.clone();
         let esc_controller = gtk::EventControllerKey::new();
         esc_controller.set_propagation_phase(gtk::PropagationPhase::Capture);
         esc_controller.connect_key_pressed(move |_, key, _, _| {
-            if key == gtk::gdk::Key::Escape && ok_btn_for_esc.is_visible() {
-                ok_btn_for_esc.emit_clicked();
-                return gtk::glib::Propagation::Stop;
+            if key == gtk::gdk::Key::Escape {
+                if matches!(*state_for_esc.borrow(), OverlayState::Thinking) {
+                    if esc_armed_for_ctrl.get() {
+                        esc_armed_for_ctrl.set(false);
+                        if let Some(tid) = esc_timer_for_ctrl.borrow_mut().take() {
+                            tid.remove();
+                        }
+                        esc_label_for_ctrl.set_visible(false);
+                        indicator_for_esc.trigger_cancel();
+                        overlay_for_esc.grab_input_focus();
+                    } else {
+                        esc_armed_for_ctrl.set(true);
+                        tips_for_esc.hide_immediately();
+                        esc_label_for_ctrl.set_visible(true);
+                        if let Some(old_tid) = esc_timer_for_ctrl.borrow_mut().take() {
+                            old_tid.remove();
+                        }
+                        let armed_timeout = esc_armed_for_ctrl.clone();
+                        let label_timeout = esc_label_for_ctrl.clone();
+                        let timer_slot = esc_timer_for_ctrl.clone();
+                        let state_timeout = state_for_esc.clone();
+                        let tips_timeout = tips_for_esc.clone();
+                        let rev_timeout = revealer_for_esc.clone();
+                        let tid = gtk::glib::timeout_add_local_once(
+                            std::time::Duration::from_secs(3),
+                            move || {
+                                let _ = timer_slot.borrow_mut().take();
+                                armed_timeout.set(false);
+                                label_timeout.set_visible(false);
+                                if matches!(*state_timeout.borrow(), OverlayState::Thinking)
+                                    && tips_timeout.is_enabled()
+                                    && rev_timeout.reveals_child()
+                                {
+                                    tips_timeout.start();
+                                }
+                            },
+                        );
+                        *esc_timer_for_ctrl.borrow_mut() = Some(tid);
+                    }
+                    return gtk::glib::Propagation::Stop;
+                }
+                if ok_btn_for_esc.is_visible() {
+                    ok_btn_for_esc.emit_clicked();
+                    return gtk::glib::Propagation::Stop;
+                }
             }
             gtk::glib::Propagation::Proceed
         });
@@ -1103,6 +1167,16 @@ impl TerminalOverlay {
         // If the picker shouldn't be shown, we don't need to poll the registry.
         if !show_picker {}
 
+        let overlay_had_focus = self.revealer.focus_child().is_some();
+
+        if !matches!(state, OverlayState::Thinking) {
+            self.esc_interrupt_armed.set(false);
+            if let Some(tid) = self.esc_interrupt_timer.borrow_mut().take() {
+                tid.remove();
+            }
+            self.esc_interrupt_label.set_visible(false);
+        }
+
         // 4. Pure state machine mapping
         match state {
             OverlayState::Idle => {
@@ -1112,14 +1186,22 @@ impl TerminalOverlay {
                 self.action_box.set_visible(true);
                 self.ok_btn.set_visible(true);
                 self.tips_cycle.stop();
+                if overlay_had_focus && self.revealer.reveals_child() && is_claw {
+                    self.msg_bar.entry.grab_focus();
+                }
             }
             OverlayState::Thinking => {
                 self.msg_bar.set_input_sensitive(false);
                 self.indicator_slot.set_visible(true);
-                let should_tip = self.tips_cycle.is_enabled() && self.revealer.reveals_child();
+                if overlay_had_focus && self.revealer.reveals_child() {
+                    self.indicator.grab_cancel_focus();
+                }
+                let should_tip = self.tips_cycle.is_enabled()
+                    && self.revealer.reveals_child()
+                    && !self.esc_interrupt_armed.get();
                 if should_tip {
                     self.tips_cycle.start();
-                } else {
+                } else if !self.esc_interrupt_armed.get() {
                     self.tips_cycle.stop();
                 }
             }

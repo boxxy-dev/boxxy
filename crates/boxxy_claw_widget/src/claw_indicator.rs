@@ -341,6 +341,14 @@ impl ClawIndicator {
         });
     }
 
+    pub fn trigger_cancel(&self) {
+        self.cancel_btn.emit_clicked();
+    }
+
+    pub fn grab_cancel_focus(&self) {
+        self.cancel_btn.grab_focus();
+    }
+
     pub fn set_visible(&self, visible: bool) {
         self.is_claw_active.set(visible);
         self.update_visibility();

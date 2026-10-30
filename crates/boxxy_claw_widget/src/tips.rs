@@ -158,6 +158,16 @@ impl TipsCycle {
         *self.timer_id.borrow_mut() = Some(source_id);
     }
 
+    pub fn hide_immediately(&self) {
+        self.is_active.set(false);
+        self.cancel_show_timer();
+        self.cancel_hide_timer();
+        if let Some(source_id) = self.timer_id.borrow_mut().take() {
+            let _ = source_id.remove();
+        }
+        self.revealer.set_reveal_child(false);
+    }
+
     pub fn stop(&self) {
         if !self.is_active.get() {
             return;
