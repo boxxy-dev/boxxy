@@ -462,11 +462,10 @@ impl MsgBarComponent {
         });
 
         let mut providers: Vec<Box<dyn boxxy_core_widgets::autocomplete::CompletionProvider>> = vec![
-            Box::new(autocomplete::AgentCompletionProvider),
-            Box::new(autocomplete::DebateCompletionProvider::new(
+            Box::new(autocomplete::AgentCompletionProvider::new(
                 character_id.clone(),
             )),
-            Box::new(autocomplete::DramaCompletionProvider::new(
+            Box::new(autocomplete::DebateCompletionProvider::new(
                 character_id.clone(),
             )),
             Box::new(autocomplete::CommandCompletionProvider::new(
@@ -503,6 +502,7 @@ impl MsgBarComponent {
                             | "/clear"
                             | "/exit"
                             | "/stop"
+                            | "/drama"
                     )
                 {
                     autocomplete_submit();

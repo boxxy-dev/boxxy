@@ -126,6 +126,15 @@ impl ClawSession {
                 }
             }
             UserRoundtableIntent::Drama { guests, topic } => {
+                if guests.is_empty() {
+                    // Single-character Drama Mode: chat 1-on-1 with the Host character in
+                    // Visual Novel style (1-2 sentences + typewriter) and wait for the user!
+                    state_lock.roundtable.clear();
+                    state_lock.roundtable.drama_mode = true;
+                    state_lock.active_speaker = None;
+                    return Ok(topic);
+                }
+
                 let resolved_guests: Vec<SpeakerIdentity> = guests
                     .into_iter()
                     .map(|mut g| {

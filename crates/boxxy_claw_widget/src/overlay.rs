@@ -662,6 +662,7 @@ impl TerminalOverlay {
         *self.active_agent.borrow_mut() = agent_name.to_string();
         if !character_id.is_empty() {
             *self.selected_character.borrow_mut() = character_id.to_string();
+            *self.msg_bar.character_id.borrow_mut() = Some(character_id.to_string());
         }
         self.sync_action_state();
     }
@@ -760,6 +761,9 @@ impl TerminalOverlay {
             }
         }
         let pending = self.selected_character.borrow().clone();
+        if !pending.is_empty() {
+            *self.msg_bar.character_id.borrow_mut() = Some(pending.clone());
+        }
 
         for info in registry.iter() {
             let btn = gtk::Button::new();

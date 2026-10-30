@@ -579,32 +579,13 @@ pub fn parse_user_roundtable_intent(
             topic_words.push(word);
         }
 
-        if guests.is_empty() && !topic_words.is_empty() {
-            if let Some(mut spk) =
-                resolve_speaker_token(topic_words[0], &host.character_id, "", catalog)
-                && spk.character_id != host.character_id
-            {
-                spk.is_guest = true;
-                guests.push(spk);
-                topic_words.remove(0);
-            }
-        }
-
-        if guests.is_empty() {
-            if let Some(other) = catalog.iter().find(|c| c.config.id != host.character_id) {
-                guests.push(speaker_from_info(other, &host.character_id, ""));
-            }
-        }
-
         let topic = if topic_words.is_empty() {
             "Start a lively, dramatic in-character visual-novel banter scene together!".to_string()
         } else {
             topic_words.join(" ")
         };
 
-        if !guests.is_empty() {
-            return UserRoundtableIntent::Drama { guests, topic };
-        }
+        return UserRoundtableIntent::Drama { guests, topic };
     }
 
     // 3. `/debate` command: `/debate [@char1] [@char2] <topic>`
@@ -854,6 +835,16 @@ mod tests {
             assert_eq!(topic, "cursed kernel");
         } else {
             panic!("Expected Drama intent");
+        }
+
+        // `/drama <prompt>` without `@character` stays single-character (no auto-picked guest)
+        let solo_drama =
+            parse_user_roundtable_intent("/drama hello Rikka!", &host, false, &cat);
+        if let UserRoundtableIntent::Drama { guests, topic } = solo_drama {
+            assert!(guests.is_empty());
+            assert_eq!(topic, "hello Rikka!");
+        } else {
+            panic!("Expected single-character Drama intent");
         }
     }
 
