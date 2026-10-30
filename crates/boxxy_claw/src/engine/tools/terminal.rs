@@ -69,9 +69,10 @@ impl Tool for TerminalCommandTool {
 
         let (agent_name, character_id, vibe_enabled, home_cwd) = {
             let state = self.state.lock().await;
+            let (name, cid) = state.effective_speaker();
             (
-                state.agent_name.clone(),
-                state.character_id.clone(),
+                name,
+                cid,
                 state.vibe_enabled,
                 state.current_dir.clone(),
             )

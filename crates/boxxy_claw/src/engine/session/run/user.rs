@@ -81,6 +81,114 @@ async fn cache_user_attachment_thumbnails_in_dir(
 }
 
 impl ClawSession {
+    /// Evaluates the user's message for `/stop`, `/debate`, `@character` mentions, or
+    /// participation in an active roundtable. Returns `None` if the user explicitly stopped
+    /// the conversation so the caller can halt without spawning an LLM turn.
+    async fn prepare_user_roundtable_turn(&self, raw_input: &str) -> Option<String> {
+        use crate::engine::session::roundtable::{
+            SpeakerIdentity, UserRoundtableIntent, get_active_catalog, parse_user_roundtable_intent,
+        };
+
+        let catalog = get_active_catalog();
+        let host_slug = catalog
+            .iter()
+            .find(|c| c.config.id == self.character_id)
+            .map(|c| c.config.name.clone())
+            .unwrap_or_else(|| self.name.to_lowercase().replace(' ', "-"));
+
+        let host = SpeakerIdentity {
+            character_id: self.character_id.clone(),
+            display_name: crate::engine::session::roundtable::format_character_title(&host_slug),
+            slug: host_slug,
+            is_guest: false,
+            home_pane_id: None,
+        };
+
+        let mut state_lock = self.state.lock().await;
+        state_lock.next_roundtable_turn = None;
+        let was_active = state_lock.roundtable.is_active()
+            || state_lock.roundtable.auto_alternate
+            || state_lock.active_speaker.is_some();
+
+        match parse_user_roundtable_intent(raw_input, &host, was_active, &catalog) {
+            UserRoundtableIntent::Stop => {
+                state_lock.roundtable.clear();
+                state_lock.active_speaker = None;
+                None
+            }
+            UserRoundtableIntent::Debate { guests, topic } => {
+                // Re-resolve guests with `self.pane_id` so active swarm peers get their `home_pane_id` populated
+                let resolved_guests: Vec<SpeakerIdentity> = guests
+                    .into_iter()
+                    .map(|mut g| {
+                        if let Some(info) =
+                            catalog.iter().find(|c| c.config.id == g.character_id)
+                        {
+                            g = crate::engine::session::roundtable::speaker_from_info(
+                                info,
+                                &self.character_id,
+                                &self.pane_id,
+                            );
+                        }
+                        g
+                    })
+                    .collect();
+
+                state_lock
+                    .roundtable
+                    .start_debate(host, resolved_guests, topic.clone());
+                state_lock.active_speaker = state_lock.roundtable.speaker_queue.pop_front();
+                Some(format!(
+                    "[ROUNDTABLE DEBATE STARTED]\nTopic: {topic}\n\
+                    Kick off the discussion in your character's voice and directly engage the other participant(s) and the user!"
+                ))
+            }
+            UserRoundtableIntent::Mention {
+                mentioned,
+                multi_turn,
+                prompt,
+            } => {
+                let resolved_mentions: Vec<SpeakerIdentity> = mentioned
+                    .into_iter()
+                    .map(|mut m| {
+                        if let Some(info) =
+                            catalog.iter().find(|c| c.config.id == m.character_id)
+                        {
+                            m = crate::engine::session::roundtable::speaker_from_info(
+                                info,
+                                &self.character_id,
+                                &self.pane_id,
+                            );
+                        }
+                        m
+                    })
+                    .collect();
+
+                state_lock.roundtable.start_mention_turn(
+                    host,
+                    resolved_mentions,
+                    multi_turn,
+                    prompt.clone(),
+                );
+                state_lock.active_speaker = state_lock.roundtable.speaker_queue.pop_front();
+                Some(prompt)
+            }
+            UserRoundtableIntent::None => {
+                if state_lock.roundtable.participants.len() >= 2 {
+                    // User is interjecting / participating in an active roundtable conversation —
+                    // queue Host + Guest(s) and reset the 20-round budget!
+                    state_lock
+                        .roundtable
+                        .resume_after_interjection(host, raw_input.to_string());
+                    state_lock.active_speaker = state_lock.roundtable.speaker_queue.pop_front();
+                } else {
+                    state_lock.active_speaker = None;
+                }
+                Some(raw_input.to_string())
+            }
+        }
+    }
+
     pub(super) async fn handle_claw_query(
         &mut self,
         ctx: &mut RunContext,
@@ -139,16 +247,29 @@ impl ClawSession {
 
         if let Some(handle) = ctx.current_turn.take() {
             handle.abort();
+            let (thinking_name, thinking_cid) = self.state.lock().await.effective_speaker();
             let _ = self
                 .tx_ui
                 .send(ClawEngineEvent::AgentThinking {
-                    agent_name: self.name.clone(),
-                    character_id: self.character_id.clone(),
+                    agent_name: thinking_name,
+                    character_id: thinking_cid,
                     is_thinking: false,
                 })
                 .await;
         }
         ctx.backlog.clear();
+
+        let Some(effective_query) = self.prepare_user_roundtable_turn(&query).await else {
+            self.send_ui(ClawEngineEvent::DiagnosisComplete {
+                agent_name: self.name.clone(),
+                character_id: self.character_id.clone(),
+                diagnosis: "*Multi-character debate paused. Let me know what you'd like to do next!*".to_string(),
+                usage: None,
+            })
+            .await;
+            let _ = self.tx_self.send(ClawMessage::TurnFinished).await;
+            return;
+        };
 
         ctx.workspace
             .update_pane_state(
@@ -156,20 +277,20 @@ impl ClawSession {
                 Some(self.session_id.clone()),
                 Some(self.name.clone()),
                 ctx.current_dir.clone(),
-                Some(query.clone()),
+                Some(effective_query.clone()),
                 Some(snapshot.clone()),
             )
             .await;
 
         debug!(
-            "Pane {} ({}): Direct Claw query: {query}. Starting analysis.",
+            "Pane {} ({}): Direct Claw query: {effective_query}. Starting analysis.",
             self.pane_id, self.name
         );
         ctx.current_turn = Some(spawn_turn(
             self.pane_id.clone(),
             self.session_id.clone(),
             self.name.clone(),
-            &query,
+            &effective_query,
             &snapshot,
             session_ctx,
             cwd,
@@ -238,21 +359,35 @@ impl ClawSession {
         } else {
             if let Some(handle) = ctx.current_turn.take() {
                 handle.abort();
+                let (thinking_name, thinking_cid) = self.state.lock().await.effective_speaker();
                 let _ = self
                     .tx_ui
                     .send(ClawEngineEvent::AgentThinking {
-                        agent_name: self.name.clone(),
-                        character_id: self.character_id.clone(),
+                        agent_name: thinking_name,
+                        character_id: thinking_cid,
                         is_thinking: false,
                     })
                     .await;
             }
             ctx.backlog.clear();
+
+            let Some(effective_message) = self.prepare_user_roundtable_turn(&message).await else {
+                self.send_ui(ClawEngineEvent::DiagnosisComplete {
+                    agent_name: self.name.clone(),
+                    character_id: self.character_id.clone(),
+                    diagnosis: "*Multi-character debate paused. Let me know what you'd like to do next!*".to_string(),
+                    usage: None,
+                })
+                .await;
+                let _ = self.tx_self.send(ClawMessage::TurnFinished).await;
+                return;
+            };
+
             ctx.current_turn = Some(spawn_turn(
                 self.pane_id.clone(),
                 self.session_id.clone(),
                 self.name.clone(),
-                &message,
+                &effective_message,
                 &snapshot,
                 session_ctx,
                 cwd,

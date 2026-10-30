@@ -210,6 +210,32 @@ impl CompletionProvider for CommandCompletionProvider {
             });
         }
 
+        if "debate".contains(&query_lower) {
+            items.push(CompletionItem {
+                display_name: "/debate".to_string(),
+                replacement_text: "/debate ".to_string(),
+                icon_name: None,
+                icon_path: None,
+                secondary_text: Some("Start a multi-character debate or chat".to_string()),
+                badge_text: None,
+                badge_color: None,
+                disabled: false,
+            });
+        }
+
+        if "stop".contains(&query_lower) {
+            items.push(CompletionItem {
+                display_name: "/stop".to_string(),
+                replacement_text: "/stop".to_string(),
+                icon_name: None,
+                icon_path: None,
+                secondary_text: Some("Stop an ongoing multi-character debate".to_string()),
+                badge_text: None,
+                badge_color: None,
+                disabled: !has_character,
+            });
+        }
+
         if "models".contains(&query_lower) {
             items.push(CompletionItem {
                 display_name: "/models".to_string(),
@@ -358,6 +384,82 @@ fn get_relative_age(updated_at: &str) -> String {
         }
     } else {
         "unknown".to_string()
+    }
+}
+
+pub struct DebateCompletionProvider {
+    character_id: std::rc::Rc<std::cell::RefCell<Option<String>>>,
+}
+
+impl DebateCompletionProvider {
+    pub fn new(character_id: std::rc::Rc<std::cell::RefCell<Option<String>>>) -> Self {
+        Self { character_id }
+    }
+}
+
+impl CompletionProvider for DebateCompletionProvider {
+    fn trigger(&self) -> String {
+        "/debate ".to_string()
+    }
+
+    fn get_completions(&self, query: &str) -> Vec<CompletionItem> {
+        let query_trimmed = query.trim_start_matches('@').to_lowercase();
+        // Once the user has already typed a space after the @character (entering the topic),
+        // hide the character picker so they can type their debate topic freely.
+        if query.trim_start().contains(' ') {
+            return Vec::new();
+        }
+
+        let mut items = Vec::new();
+        let registry = boxxy_claw_protocol::characters::CHARACTER_CACHE.load();
+        let claims = boxxy_claw_protocol::characters::CLAIMS_CACHE.load();
+        let chars_dir = boxxy_claw_protocol::character_loader::get_characters_dir().ok();
+        let current_cid = self.character_id.borrow().clone();
+
+        for info in registry.iter() {
+            if current_cid.as_deref() == Some(info.config.id.as_str()) {
+                continue;
+            }
+            if info.config.name.to_lowercase().contains(&query_trimmed)
+                || info
+                    .config
+                    .display_name
+                    .to_lowercase()
+                    .contains(&query_trimmed)
+            {
+                let is_taken = claims
+                    .iter()
+                    .any(|claim| claim.character_id == info.config.id);
+                let secondary_text = if is_taken {
+                    "Active Peer (Swarm)".to_string()
+                } else {
+                    "Available Guest".to_string()
+                };
+                let avatar_path = if info.has_avatar {
+                    chars_dir.as_ref().map(|d| {
+                        d.join(&info.config.name)
+                            .join("AVATAR.png")
+                            .to_string_lossy()
+                            .into_owned()
+                    })
+                } else {
+                    None
+                };
+
+                items.push(CompletionItem {
+                    display_name: info.config.display_name.clone(),
+                    replacement_text: format!("/debate @{} ", info.config.name),
+                    icon_name: Some("boxxy-chat-symbolic".to_string()),
+                    icon_path: avatar_path,
+                    secondary_text: Some(secondary_text),
+                    badge_text: None,
+                    badge_color: Some(info.config.color.clone()),
+                    disabled: false,
+                });
+            }
+        }
+
+        items
     }
 }
 

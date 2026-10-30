@@ -207,8 +207,6 @@ pub async fn perform_persistence(ctx: PersistenceContext, state: Arc<Mutex<Sessi
             }
         }
     });
-
-    let _ = ctx.tx_self.send(ClawMessage::TurnFinished).await;
 }
 
 #[cfg(test)]

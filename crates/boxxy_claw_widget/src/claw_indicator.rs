@@ -410,10 +410,16 @@ impl ClawIndicator {
     pub fn show_thinking(&self, agent_name: &str, tool_name: Option<&str>) {
         self.is_active.set(true);
 
-        let label_text = if let Some(tool) = tool_name {
-            format!("{}..", self.pretty_tool_name(tool))
-        } else {
-            "Drinking Water..".to_string()
+        let host_badge = self.badge_label.text();
+        let is_guest = !agent_name.is_empty()
+            && !host_badge.is_empty()
+            && !host_badge.eq_ignore_ascii_case(agent_name);
+
+        let label_text = match (is_guest, tool_name) {
+            (true, Some(tool)) => format!("{agent_name}: {}..", self.pretty_tool_name(tool)),
+            (true, None) => format!("{agent_name} is thinking.."),
+            (false, Some(tool)) => format!("{}..", self.pretty_tool_name(tool)),
+            (false, None) => "Drinking Water..".to_string(),
         };
 
         self.label.set_label(&label_text);
@@ -427,7 +433,10 @@ impl ClawIndicator {
         let registry = boxxy_claw_protocol::characters::CHARACTER_CACHE.load();
         let color = registry
             .iter()
-            .find(|c| c.config.name == agent_name || c.config.display_name == agent_name)
+            .find(|c| {
+                c.config.name.eq_ignore_ascii_case(agent_name)
+                    || c.config.display_name.eq_ignore_ascii_case(agent_name)
+            })
             .map(|c| c.config.color.clone())
             .unwrap_or_else(|| "rgba(38, 162, 105, 0.85)".to_string()); // Fallback green
 
@@ -478,6 +487,7 @@ impl ClawIndicator {
             "release_lock" => "Releasing lock".to_string(),
             "publish_custom_event" => "Publishing event".to_string(),
             "orchestrate_agent" => "Orchestrating peer".to_string(),
+            "invite_character" => "Inviting character".to_string(),
             "set_agent_state" => "Updating agent state".to_string(),
             "summon_headless_worker" => "Summoning worker".to_string(),
             _ => tool.replace('_', " "),

@@ -22,6 +22,9 @@ impl ClawSession {
 
         let mut state_lock = self.state.lock().await;
         state_lock.status = crate::engine::AgentStatus::Waiting;
+        state_lock.active_speaker = None;
+        state_lock.next_roundtable_turn = None;
+        state_lock.roundtable.pause_for_interjection();
         state_lock.drain_pending_cancel();
         drop(state_lock);
         let _ = ctx
@@ -46,6 +49,9 @@ impl ClawSession {
 
         let mut state_lock = self.state.lock().await;
         state_lock.status = crate::engine::AgentStatus::Waiting;
+        state_lock.active_speaker = None;
+        state_lock.next_roundtable_turn = None;
+        state_lock.roundtable.pause_for_interjection();
         state_lock.drain_pending_cancel();
         drop(state_lock);
         let _ = ctx

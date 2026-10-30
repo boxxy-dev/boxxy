@@ -560,6 +560,139 @@ impl Tool for OrchestrateAgentTool {
     }
 }
 
+#[derive(Deserialize)]
+pub struct InviteCharacterArgs {
+    #[serde(alias = "agent_name", alias = "target")]
+    pub character: String,
+    pub topic: String,
+    #[serde(default)]
+    pub debate: bool,
+}
+
+#[derive(Serialize)]
+pub struct InviteCharacterOutput {
+    pub success: bool,
+    pub message: String,
+}
+
+pub struct InviteCharacterTool {
+    pub pane_id: String,
+    pub state: Arc<Mutex<crate::engine::session::SessionState>>,
+    pub approval: Arc<ClawApprovalHandler>,
+}
+
+impl Tool for InviteCharacterTool {
+    const NAME: &'static str = "invite_character";
+
+    type Error = std::io::Error;
+    type Args = InviteCharacterArgs;
+    type Output = InviteCharacterOutput;
+
+    fn description(&self) -> String {
+        "Invite another character (e.g. 'levi-kujo', 'kuro', 'niko-una') into your current overlay conversation so you can chat, collaborate, or debate directly in front of the user. \
+        If the invited character is active in another terminal pane in the swarm, they will automatically bring their live pane awareness into this conversation. \
+        Set `debate: true` when you want a multi-round back-and-forth exchange with them."
+            .to_string()
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "character": {
+                    "type": "string",
+                    "description": "The character name, slug (e.g. 'levi-kujo', 'kuro'), or swarm petname to invite into the overlay."
+                },
+                "topic": {
+                    "type": "string",
+                    "description": "The topic, question, or context you are inviting them to discuss or debate."
+                },
+                "debate": {
+                    "type": "boolean",
+                    "description": "Set to true if you want to engage in a multi-round back-and-forth conversation/debate with this character."
+                }
+            },
+            "required": ["character", "topic"]
+        })
+    }
+
+    async fn call(
+        &self,
+        _context: &mut ToolContext,
+        args: Self::Args,
+    ) -> Result<Self::Output, Self::Error> {
+        self.approval.begin_tool(Self::NAME).await;
+        let catalog = crate::engine::session::roundtable::get_active_catalog();
+
+        let (host_identity, current_speaker_id) = {
+            let state = self.state.lock().await;
+            let host_slug = catalog
+                .iter()
+                .find(|c| c.config.id == state.character_id)
+                .map(|c| c.config.name.clone())
+                .unwrap_or_else(|| state.agent_name.to_lowercase().replace(' ', "-"));
+            let host = crate::engine::session::roundtable::SpeakerIdentity {
+                character_id: state.character_id.clone(),
+                display_name: state.agent_name.clone(),
+                slug: host_slug,
+                is_guest: false,
+                home_pane_id: None,
+            };
+            let (_, active_id) = state.effective_speaker();
+            (host, active_id)
+        };
+
+        let out = if let Some(guest) = crate::engine::session::roundtable::resolve_speaker_token(
+            &args.character,
+            &host_identity.character_id,
+            &self.pane_id,
+            &catalog,
+        ) {
+            if guest.character_id == current_speaker_id {
+                InviteCharacterOutput {
+                    success: false,
+                    message: "You cannot invite yourself to the conversation.".to_string(),
+                }
+            } else {
+                let guest_name = guest.display_name.clone();
+                let guest_slug = guest.slug.clone();
+                {
+                    let mut state = self.state.lock().await;
+                    state
+                        .roundtable
+                        .invite_guest(host_identity, guest, args.topic.clone());
+                    if args.debate {
+                        state.roundtable.auto_alternate = true;
+                    }
+                }
+                InviteCharacterOutput {
+                    success: true,
+                    message: format!(
+                        "Invited {} (@{}) to the overlay conversation. Conclude your current message addressing {} so they can immediately take the next turn in the overlay.",
+                        guest_name, guest_slug, guest_name
+                    ),
+                }
+            }
+        } else {
+            let available: Vec<String> = catalog
+                .iter()
+                .map(|c| format!("{} (@{})", c.config.display_name, c.config.name))
+                .collect();
+            InviteCharacterOutput {
+                success: false,
+                message: format!(
+                    "Character '{}' not found. Available characters: {}",
+                    args.character,
+                    available.join(", ")
+                ),
+            }
+        };
+
+        self.approval.finish_tool(Self::NAME, &out).await;
+        Ok(out)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -463,6 +463,9 @@ impl MsgBarComponent {
 
         let mut providers: Vec<Box<dyn boxxy_core_widgets::autocomplete::CompletionProvider>> = vec![
             Box::new(autocomplete::AgentCompletionProvider),
+            Box::new(autocomplete::DebateCompletionProvider::new(
+                character_id.clone(),
+            )),
             Box::new(autocomplete::CommandCompletionProvider::new(
                 claw_state.clone(),
                 character_id.clone(),
@@ -475,7 +478,7 @@ impl MsgBarComponent {
                 entry.downgrade(),
             ))),
         ];
-        // Sort by trigger length descending to ensure "/resume " matches before "/"
+        // Sort by trigger length descending to ensure "/resume " and "/debate " match before "/"
         providers.sort_by(|a, b| b.trigger().len().cmp(&a.trigger().len()));
 
         let autocomplete_submit = submit_action.clone();
@@ -489,7 +492,14 @@ impl MsgBarComponent {
                 if is_resume_session
                     || matches!(
                         replacement.as_str(),
-                        "/models" | "/vibe" | "/sleep" | "/pin" | "/web" | "/clear" | "/exit"
+                        "/models"
+                            | "/vibe"
+                            | "/sleep"
+                            | "/pin"
+                            | "/web"
+                            | "/clear"
+                            | "/exit"
+                            | "/stop"
                     )
                 {
                     autocomplete_submit();

@@ -132,6 +132,9 @@ mod pending_drain_tests {
             awaiting_tasks: Vec::new(),
             tx_self: tx,
             mcp_handle: None,
+            active_speaker: None,
+            roundtable: crate::engine::session::roundtable::RoundtableState::default(),
+            next_roundtable_turn: None,
         }
     }
 

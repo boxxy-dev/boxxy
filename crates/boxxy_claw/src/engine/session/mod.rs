@@ -8,6 +8,7 @@ use tokio::sync::Mutex;
 mod approvals;
 mod diagnostics;
 mod lifecycle;
+pub mod roundtable;
 pub mod run;
 
 pub struct SessionState {
@@ -67,6 +68,33 @@ pub struct SessionState {
     pub awaiting_tasks: Vec<uuid::Uuid>,
     pub tx_self: async_channel::Sender<ClawMessage>,
     pub mcp_handle: Option<std::sync::Arc<boxxy_mcp::manager::McpClientManager>>,
+    pub active_speaker: Option<roundtable::SpeakerIdentity>,
+    pub roundtable: roundtable::RoundtableState,
+    pub next_roundtable_turn: Option<(roundtable::SpeakerIdentity, String)>,
+}
+
+impl SessionState {
+    /// Returns `(agent_name, character_id)` of the character currently speaking in this turn
+    /// (falling back to the pane's Host character).
+    pub fn effective_speaker(&self) -> (String, String) {
+        if let Some(ref spk) = self.active_speaker {
+            (spk.display_name.clone(), spk.character_id.clone())
+        } else {
+            (self.agent_name.clone(), self.character_id.clone())
+        }
+    }
+
+    /// Returns true if any tool approval channel or command injection is currently waiting for user action.
+    pub fn has_pending_approval(&self) -> bool {
+        self.pending_inject_command
+            || self.pending_terminal_reply.is_some()
+            || self.pending_file_reply.is_some()
+            || self.pending_file_delete_reply.is_some()
+            || self.pending_kill_process_reply.is_some()
+            || self.pending_background_reply.is_some()
+            || self.pending_get_clipboard_reply.is_some()
+            || self.pending_set_clipboard_reply.is_some()
+    }
 }
 
 pub struct ClawSession {
@@ -166,6 +194,9 @@ impl ClawSession {
                 awaiting_tasks: Vec::new(),
                 tx_self: tx.clone(),
                 mcp_handle: None,
+                active_speaker: None,
+                roundtable: roundtable::RoundtableState::default(),
+                next_roundtable_turn: None,
             })),
         };
 

@@ -37,15 +37,32 @@ pub fn spawn_turn(
     let session_ctx_clone = _session_ctx.to_string();
 
     tokio::spawn(async move {
-        let character_id = {
+        let (speaker, host_agent_name, _host_character_id) = {
             let state_lock = state.lock().await;
-            state_lock.character_id.clone()
+            let host_name = if state_lock.agent_name.is_empty() {
+                agent_name.clone()
+            } else {
+                state_lock.agent_name.clone()
+            };
+            let host_cid = state_lock.character_id.clone();
+            let spk = state_lock.active_speaker.clone().unwrap_or_else(|| {
+                crate::engine::session::roundtable::SpeakerIdentity {
+                    character_id: host_cid.clone(),
+                    display_name: host_name.clone(),
+                    slug: host_name.to_lowercase().replace(' ', "-"),
+                    is_guest: false,
+                    home_pane_id: None,
+                }
+            });
+            (spk, host_name, host_cid)
         };
+        let agent_name = speaker.display_name.clone();
+        let character_id = speaker.character_id.clone();
 
         let _ = tx_ui
             .send(ClawEngineEvent::AgentThinking {
                 agent_name: agent_name.clone(),
-                character_id,
+                character_id: character_id.clone(),
                 is_thinking: true,
             })
             .await;
@@ -120,6 +137,35 @@ pub fn spawn_turn(
             }
         }
 
+        // 2b. Swarm Peer Home-Pane Context Bridge (if Guest character is claimed in another pane)
+        let mut guest_home_context = String::new();
+        if let Some(ref home_pane_id) = speaker.home_pane_id {
+            let alias = workspace
+                .get_pane_alias(home_pane_id)
+                .await
+                .unwrap_or_else(|| home_pane_id.clone());
+            let home_cwd = workspace
+                .get_pane_cwd(home_pane_id.clone())
+                .await
+                .unwrap_or_default();
+            let home_snap = workspace
+                .get_pane_snapshot(home_pane_id.clone())
+                .await
+                .unwrap_or_default();
+            let home_status = all_agents
+                .iter()
+                .find(|a| &a.id == home_pane_id)
+                .map(|a| a.status.as_str())
+                .unwrap_or("Idle");
+            guest_home_context = format!(
+                "\n--- YOUR HOME PANE CONTEXT (SWARM PEER BRIDGE) ---\n\
+                You are actively claimed in your own home terminal pane `{alias}` (ID: `{home_pane_id}`, CWD: `{home_cwd}`, Status: `{home_status}`).\n\
+                You are currently participating as a Guest in **{host_agent_name}**'s overlay in pane `{pane_id}`.\n\
+                Latest terminal snapshot from YOUR home pane (`{alias}`):\n```\n{home_snap}\n```\n\
+                --------------------------------------------------\n"
+            );
+        }
+
         // --- ATOMIC STATE SNAPSHOT ---
         // Lock state once to extract ALL needed fields and update history/hash.
         // CRITICAL: Do NOT call create_claw_agent while holding this lock!
@@ -140,8 +186,42 @@ pub fn spawn_turn(
             let final_snapshot_text =
                 snapshot::process_snapshot(&snapshot_clone, &mut state_lock.last_snapshot_hash);
 
+            let mut roundtable_context = String::new();
+            if speaker.is_guest || state_lock.roundtable.participants.len() >= 2 {
+                let roster: Vec<String> = state_lock
+                    .roundtable
+                    .participants
+                    .iter()
+                    .map(|p| {
+                        let role = if p.is_guest { "Guest" } else { "Host" };
+                        format!("{} (@{}) [{}]", p.display_name, p.slug, role)
+                    })
+                    .collect();
+                roundtable_context = format!(
+                    "\n--- ROUNDTABLE / MULTI-CHARACTER OVERLAY CHAT ---\n\
+                    You are speaking as **{agent_name}** (`@{slug}`) in a live multi-character conversation inside **{host_agent_name}**'s overlay.\n\
+                    Participants ALREADY in this room: {}.\n\
+                    CRITICAL RULES FOR MULTI-CHARACTER CHAT:\n\
+                    1. Speak ONLY as **{agent_name}** in your own distinct personality, tone, and technical role. NEVER write dialogue lines on behalf of other characters or prefix your reply with `[Character ... said]:`.\n\
+                    2. The participants listed above are ALREADY in the room and queued to speak right after you — do NOT call `invite_character` for them!\n\
+                    3. Directly engage with the other character(s) and the user — agree, challenge their arguments, banter in-character, or collaborate on the problem.\n\
+                    4. Use inline code or plain ` ```text ` blocks for example commands during a roundtable discussion instead of ` ```bash ` blocks unless the user explicitly asked you to execute a command right now (since ` ```bash ` blocks pause the roundtable for command approval).\n\
+                    5. End your message by directly addressing the other character(s) in the room (e.g. `@niko-una`, `@levi-kujo`, `@kuro`) with a sharp question, take, or counter-argument so they can reply to you immediately on the next turn!\n\
+                    -------------------------------------------------\n",
+                    if roster.is_empty() {
+                        format!("{host_agent_name} [Host], {agent_name} [Guest]")
+                    } else {
+                        roster.join(", ")
+                    },
+                    slug = speaker.slug,
+                );
+            }
+
             let now = chrono::Local::now();
-            let identity = format!("Agent Name: **{}**\nUnique ID: `{}`", agent_name, pane_id);
+            let identity = format!(
+                "Agent Name: **{}** (`@{}`)\nUnique ID: `{}`",
+                agent_name, speaker.slug, pane_id
+            );
             let vibe_ctx = if state_lock.vibe_enabled {
                 if crate::engine::vibe_guard::is_cwd_vibe_trusted(
                     &cwd_clone,
@@ -166,11 +246,15 @@ pub fn spawn_turn(
                 {}\n\
                 {}\n\
                 {}\n\
+                {}\n\
+                {}\n\
                 {}\n",
                 identity,
                 now.to_rfc3339(),
                 cwd_clone,
                 vibe_ctx,
+                roundtable_context,
+                guest_home_context,
                 active_skills_text,
                 past_memories,
                 radar,
@@ -192,17 +276,26 @@ pub fn spawn_turn(
             let mcp = state_lock.mcp_handle.clone();
             let web = state_lock.web_search_enabled;
             let vibe = state_lock.vibe_enabled;
-            let agent = state_lock.persistent_agent.take();
-            let char_id = state_lock.character_id.clone();
+            let agent = if speaker.is_guest {
+                None
+            } else {
+                state_lock.persistent_agent.take()
+            };
+            let char_id = character_id.clone();
 
             (agent, mcp, web, vibe, h, l, full_prompt, char_id)
         };
 
         // 4. Resolve Agent (after lock is released to prevent deadlock)
+        let effective_preamble = if speaker.is_guest {
+            crate::engine::context::load_session_context(&character_id)
+        } else {
+            session_ctx_clone.clone()
+        };
         let config = crate::engine::agent_config::AgentConfig::from_env(
             &settings,
             web_search_enabled,
-            session_ctx_clone.clone(),
+            effective_preamble,
         );
         let agent = match persistent_agent {
             Some(agent) if agent.matches_config(&config) => agent,
@@ -221,8 +314,13 @@ pub fn spawn_turn(
             .expect("Failed to create claw agent"),
         };
 
-        // 5. Prepare History
-        let final_history = history::prepare_query_history(history, history_len);
+        // 5. Prepare History (Perspective-flipped for the current speaker)
+        let final_history = history::prepare_query_history_for_speaker(
+            history,
+            history_len,
+            &character_id,
+            &host_agent_name,
+        );
 
         let query_for_chat = if !images_clone.is_empty() {
             let mut contents = vec![rig::message::UserContent::text(full_prompt.clone())];
@@ -296,24 +394,49 @@ pub fn spawn_turn(
                         .await;
                 }
 
+                let display_response = history::strip_speaker_tag(&response)
+                    .replace(
+                        crate::engine::session::roundtable::YIELD_TO_USER_MARKER,
+                        "",
+                    )
+                    .trim()
+                    .to_string();
+
                 {
                     let mut state_lock = state.lock().await;
-                    state_lock.persistent_agent = Some(agent.clone());
+                    if !speaker.is_guest {
+                        state_lock.persistent_agent = Some(agent.clone());
+                    }
 
                     if let Some(msgs) = messages {
                         // `PromptResponse::messages` in Rig 0.44 contains only the messages
                         // committed by this run (its prompt + tool calls/results + final assistant turn).
                         // Since we already pushed the user prompt to `state_lock.history` before the run,
                         // skip the leading user prompt and append the remaining committed turns.
-                        let new_tail: Vec<rig::message::Message> = msgs
+                        let mut new_tail: Vec<rig::message::Message> = msgs
                             .into_iter()
                             .skip_while(|m| matches!(m, rig::message::Message::User { .. }))
                             .collect();
+                        if let Some(rig::message::Message::Assistant(turn)) = new_tail.last_mut() {
+                            for item in turn.content.iter_mut() {
+                                if let rig::message::AssistantContent::Text(t) = item {
+                                    t.text = history::tag_assistant_text(
+                                        &character_id,
+                                        &agent_name,
+                                        &display_response,
+                                    );
+                                }
+                            }
+                        }
                         state_lock.history.extend(new_tail);
                     } else {
-                        state_lock
-                            .history
-                            .push(rig::message::Message::assistant(response.clone()));
+                        state_lock.history.push(rig::message::Message::assistant(
+                            history::tag_assistant_text(
+                                &character_id,
+                                &agent_name,
+                                &display_response,
+                            ),
+                        ));
                     }
 
                     if let Some(ref usage) = usage {
@@ -333,7 +456,7 @@ pub fn spawn_turn(
 
                 let p_ctx = persistence::PersistenceContext {
                     session_id: session_id_clone.clone(),
-                    agent_name: agent_name.clone(),
+                    agent_name: host_agent_name.clone(),
                     user_query: prompt_clone.clone(),
                     cwd: cwd_clone.clone(),
                     settings: (*settings).clone(),
@@ -343,19 +466,21 @@ pub fn spawn_turn(
                 persistence::perform_persistence(p_ctx, state.clone()).await;
 
                 let mut command_opt = None;
-                let mut clean_diagnosis = response.clone();
+                let mut clean_diagnosis = display_response.clone();
 
-                let extracted = extract_command_and_clean(&response);
+                let extracted = extract_command_and_clean(&display_response);
                 if extracted.0.is_some() {
                     command_opt = extracted.0;
                     clean_diagnosis = extracted.1;
                 }
 
+                let mut had_blocking_proposal = false;
                 if clean_diagnosis.trim() == "[SILENT_ACK]" {
                     info!(
                         "Pane {} ({}): Agent acknowledged rejection silently.",
                         pane_id, agent_name
                     );
+                    had_blocking_proposal = true;
                     let _ = tx_ui.send(ClawEngineEvent::DismissDrawer).await;
                 } else if clean_diagnosis.trim().is_empty() && command_opt.is_none() {
                     info!(
@@ -370,6 +495,7 @@ pub fn spawn_turn(
                             &cwd_clone,
                             &latest_settings.vibe_trusted_dirs,
                         );
+                    had_blocking_proposal = !auto_approve;
                     let event = ClawEngineEvent::InjectCommand {
                         agent_name: agent_name.clone(),
                         character_id: character_id.clone(),
@@ -408,10 +534,44 @@ pub fn spawn_turn(
                     let _ = tx_ui
                         .send(ClawEngineEvent::DelegatedTaskReply {
                             request_id,
-                            result: response.clone(),
+                            result: display_response.clone(),
                         })
                         .await;
                 }
+
+                // Evaluate multi-character roundtable / debate handoff
+                let next_thinking_speaker = {
+                    let catalog = crate::engine::session::roundtable::get_active_catalog();
+                    let mut state_lock = state.lock().await;
+                    state_lock.active_speaker = None;
+                    let blocking = had_blocking_proposal || state_lock.has_pending_approval();
+                    state_lock.next_roundtable_turn = state_lock.roundtable.on_turn_completed(
+                        &speaker,
+                        &response,
+                        blocking,
+                        &pane_id,
+                        &catalog,
+                    );
+                    state_lock
+                        .next_roundtable_turn
+                        .as_ref()
+                        .map(|(next_spk, _)| (next_spk.display_name.clone(), next_spk.character_id.clone()))
+                };
+
+                // If another character is queued to speak next, immediately transition the UI
+                // back into Thinking for the next speaker so the input bar stays inactive and
+                // the Cancel (×) button remains available to interrupt the conversation.
+                if let Some((next_name, next_cid)) = next_thinking_speaker {
+                    let _ = tx_ui
+                        .send(ClawEngineEvent::AgentThinking {
+                            agent_name: next_name,
+                            character_id: next_cid,
+                            is_thinking: true,
+                        })
+                        .await;
+                }
+
+                let _ = tx_self.send(ClawMessage::TurnFinished).await;
             }
             Err(e) => {
                 let duration = start_time.elapsed();
@@ -435,7 +595,15 @@ pub fn spawn_turn(
                         .await;
                 }
 
-                state.lock().await.persistent_agent = Some(agent);
+                {
+                    let mut state_lock = state.lock().await;
+                    if !speaker.is_guest {
+                        state_lock.persistent_agent = Some(agent);
+                    }
+                    state_lock.active_speaker = None;
+                    state_lock.next_roundtable_turn = None;
+                    state_lock.roundtable.clear();
+                }
 
                 log::error!(
                     "Pane {} ({}): Boxxy-Claw agent failed: {e}",

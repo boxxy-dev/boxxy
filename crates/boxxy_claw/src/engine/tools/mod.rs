@@ -49,9 +49,10 @@ impl ApprovalHandler for ClawApprovalHandler {
     ) -> ApprovalOutcome {
         let (agent_name, character_id, vibe_enabled, cwd) = {
             let state = self.state.lock().await;
+            let (name, cid) = state.effective_speaker();
             (
-                state.agent_name.clone(),
-                state.character_id.clone(),
+                name,
+                cid,
                 state.vibe_enabled,
                 state.current_dir.clone(),
             )
@@ -124,7 +125,7 @@ impl ApprovalHandler for ClawApprovalHandler {
         let (tx, rx) = tokio::sync::oneshot::channel();
         let (agent_name, character_id) = {
             let state = self.state.lock().await;
-            (state.agent_name.clone(), state.character_id.clone())
+            state.effective_speaker()
         };
 
         {
@@ -158,7 +159,7 @@ impl ApprovalHandler for ClawApprovalHandler {
         let (tx, rx) = tokio::sync::oneshot::channel();
         let (agent_name, character_id) = {
             let state = self.state.lock().await;
-            (state.agent_name.clone(), state.character_id.clone())
+            state.effective_speaker()
         };
 
         {
@@ -198,7 +199,7 @@ impl ApprovalHandler for ClawApprovalHandler {
         let (tx, rx) = tokio::sync::oneshot::channel();
         let (agent_name, character_id) = {
             let state = self.state.lock().await;
-            (state.agent_name.clone(), state.character_id.clone())
+            state.effective_speaker()
         };
 
         {
@@ -234,7 +235,7 @@ impl ApprovalHandler for ClawApprovalHandler {
         let (tx, rx) = tokio::sync::oneshot::channel();
         let (agent_name, character_id) = {
             let state = self.state.lock().await;
-            (state.agent_name.clone(), state.character_id.clone())
+            state.effective_speaker()
         };
 
         {
@@ -267,7 +268,7 @@ impl ApprovalHandler for ClawApprovalHandler {
         let (tx, rx) = tokio::sync::oneshot::channel();
         let (agent_name, character_id) = {
             let state = self.state.lock().await;
-            (state.agent_name.clone(), state.character_id.clone())
+            state.effective_speaker()
         };
 
         {
@@ -300,7 +301,7 @@ impl ApprovalHandler for ClawApprovalHandler {
     async fn report_tool_result(&self, tool_name: String, result: String) {
         let (agent_name, character_id) = {
             let state = self.state.lock().await;
-            (state.agent_name.clone(), state.character_id.clone())
+            state.effective_speaker()
         };
 
         let event = ClawEngineEvent::ToolResult {
@@ -324,7 +325,7 @@ impl ApprovalHandler for ClawApprovalHandler {
     async fn report_tool_started(&self, tool_name: String) {
         let (agent_name, character_id) = {
             let state = self.state.lock().await;
-            (state.agent_name.clone(), state.character_id.clone())
+            state.effective_speaker()
         };
         let _ = self
             .tx_ui
@@ -339,7 +340,7 @@ impl ApprovalHandler for ClawApprovalHandler {
     async fn set_thinking(&self, thinking: bool) {
         let (agent_name, character_id) = {
             let state = self.state.lock().await;
-            (state.agent_name.clone(), state.character_id.clone())
+            state.effective_speaker()
         };
         let _ = self
             .tx_ui

@@ -58,6 +58,59 @@ impl ClawSession {
             ClawMessage::TurnFinished => {
                 ctx.current_turn = None;
 
+                // If the user sent an urgent interrupt/message while the turn was finishing,
+                // prioritize it immediately over any queued roundtable handoff.
+                if let Some(next_msg) = ctx.urgent_backlog.pop_front() {
+                    {
+                        let mut state_lock = self.state.lock().await;
+                        state_lock.next_roundtable_turn = None;
+                        state_lock.active_speaker = None;
+                    }
+                    let _ = self.tx_self.send(next_msg).await;
+                    return;
+                }
+
+                // Check if a multi-character roundtable / debate handoff is queued
+                let next_roundtable = {
+                    let mut state_lock = self.state.lock().await;
+                    if state_lock.status == crate::engine::AgentStatus::Sleep {
+                        state_lock.next_roundtable_turn = None;
+                        None
+                    } else {
+                        state_lock.next_roundtable_turn.take()
+                    }
+                };
+
+                if let Some((next_speaker, handoff_prompt)) = next_roundtable {
+                    {
+                        let mut state_lock = self.state.lock().await;
+                        state_lock.active_speaker = Some(next_speaker);
+                    }
+                    let snapshot = ctx
+                        .workspace
+                        .get_pane_snapshot(self.pane_id.clone())
+                        .await
+                        .unwrap_or_default();
+                    ctx.current_turn = Some(crate::engine::turn::spawn_turn(
+                        self.pane_id.clone(),
+                        self.session_id.clone(),
+                        self.name.clone(),
+                        &handoff_prompt,
+                        &snapshot,
+                        &session_ctx,
+                        ctx.current_dir.clone(),
+                        false,
+                        ctx.env.clone(),
+                        self.db.clone(),
+                        self.state.clone(),
+                        self.tx_ui.clone(),
+                        self.tx_self.clone(),
+                        None,
+                        vec![],
+                    ));
+                    return;
+                }
+
                 // Preserve Sleep status if a tool in the turn (`subscribe_to_pane`, `await_tasks`)
                 // already suspended the agent to wait for external events or delegated tasks.
                 let is_sleeping =
@@ -71,9 +124,7 @@ impl ClawSession {
                         .await;
                 }
 
-                if let Some(next_msg) = ctx.urgent_backlog.pop_front() {
-                    let _ = self.tx_self.send(next_msg).await;
-                } else if let Some(next_msg) = ctx.backlog.pop_front() {
+                if let Some(next_msg) = ctx.backlog.pop_front() {
                     let _ = self.tx_self.send(next_msg).await;
                 }
             }

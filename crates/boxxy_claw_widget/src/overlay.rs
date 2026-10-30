@@ -882,7 +882,9 @@ impl TerminalOverlay {
         self.refresh_character_selector(title);
 
         self.diagnosis_viewer.set_content(diagnosis);
-        self.msg_bar.set_text("");
+        if mode == OverlayMode::Bookmark {
+            self.msg_bar.set_text("");
+        }
         self.template_entry.set_text("");
 
         *self.current_mode.borrow_mut() = mode;

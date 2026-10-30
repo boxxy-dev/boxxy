@@ -368,6 +368,13 @@ pub async fn create_claw_agent(
             crate::engine::tools::orchestration::OrchestrateAgentTool {
                 approval: approval_handler.clone(),
             },
+        )
+        .tool(
+            crate::engine::tools::orchestration::InviteCharacterTool {
+                pane_id: pane_id.clone(),
+                state: state.clone(),
+                approval: approval_handler.clone(),
+            },
         );
 
     // Conditional Core Toolbox tools
