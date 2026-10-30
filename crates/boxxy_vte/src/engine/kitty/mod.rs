@@ -88,6 +88,7 @@ pub struct Command {
     pub size: Option<u32>,
     pub delete_mode: Option<u8>,
     pub cursor_movement: CursorMovement,
+    pub unicode_placeholder: bool,
     pub quiet: u8,
     pub more: bool,
     // Add more fields as needed
@@ -107,6 +108,7 @@ pub struct Placement {
     pub z_index: i32,
     pub visible_width: u32,  // in pixels
     pub visible_height: u32, // in pixels
+    pub unicode_placeholder: bool,
 }
 
 #[derive(Clone)]
@@ -146,6 +148,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 pub struct KittyImage {
     pub id: u32,
+    pub unique_id: u64,
     pub data: KittyImageData,
     pub texture: Option<gtk4::gdk::Texture>,
     pub is_anonymous: bool,
@@ -234,8 +237,11 @@ impl KittyGraphics {
 
     #[inline]
     pub fn clear_placements(&mut self) {
-        if !self.placements.is_empty() {
-            self.placements.clear();
+        let before = self.placements.len();
+        // Retain virtual (`U=1` Unicode placeholder) placements across screen clears (`CSI 2 J`),
+        // since their visibility is governed by `\u{10EEEE}` cells in the grid.
+        self.placements.retain(|p| p.unicode_placeholder);
+        if self.placements.len() != before {
             self.reap_unused_images();
             self.generation = self.generation.wrapping_add(1);
         }
@@ -356,6 +362,8 @@ impl KittyGraphics {
         let mut cmd = Command::default();
         let mut data_only = false;
 
+        let mut has_explicit_action = false;
+
         for param in control.split(|&b| b == b',') {
             if param.is_empty() {
                 continue;
@@ -366,6 +374,7 @@ impl KittyGraphics {
 
             match key {
                 b"a" => {
+                    has_explicit_action = true;
                     cmd.action = match value {
                         b"T" => Action::TransmitAndDisplay,
                         b"p" => Action::DisplayExisting,
@@ -415,6 +424,19 @@ impl KittyGraphics {
                 b"O" => cmd.offset = std::str::from_utf8(value).ok().and_then(|s| s.parse().ok()),
                 b"S" => cmd.size = std::str::from_utf8(value).ok().and_then(|s| s.parse().ok()),
                 b"d" => cmd.delete_mode = value.first().copied(),
+                b"C" => {
+                    cmd.cursor_movement = if value == b"1" {
+                        CursorMovement::DoNotMove
+                    } else {
+                        CursorMovement::Move
+                    };
+                }
+                b"U" => {
+                    if value == b"1" {
+                        cmd.unicode_placeholder = true;
+                        cmd.cursor_movement = CursorMovement::DoNotMove;
+                    }
+                }
                 b"q" => {
                     cmd.quiet = std::str::from_utf8(value)
                         .ok()
@@ -426,8 +448,13 @@ impl KittyGraphics {
             }
         }
 
-        // If it's a chunk of data for a previous command
-        if cmd.image_id.is_none() && cmd.image_number.is_none() && self.pending_command.is_some() {
+        // If it's a continuation chunk for an in-progress multi-chunk command (`m=1`)
+        if let Some(ref pending) = self.pending_command
+            && pending.more
+            && (!has_explicit_action || cmd.action == pending.action)
+            && (cmd.image_id.is_none() || cmd.image_id == pending.image_id)
+            && (cmd.image_number.is_none() || cmd.image_number == pending.image_number)
+        {
             data_only = true;
         }
 
@@ -437,6 +464,7 @@ impl KittyGraphics {
                 pending.more = cmd.more;
             }
         } else {
+            self.pending_data.clear();
             self.pending_command = Some(cmd.clone());
         }
 
@@ -692,12 +720,14 @@ impl KittyGraphics {
                         data_len
                     );
                 } else {
+                    let seq = NEXT_LRU_SEQ.fetch_add(1, Ordering::Relaxed);
                     let kitty_img = Arc::new(KittyImage {
                         id: image_id,
+                        unique_id: seq,
                         data: img_data,
                         texture: None,
                         is_anonymous,
-                        last_used: AtomicU64::new(NEXT_LRU_SEQ.fetch_add(1, Ordering::Relaxed)),
+                        last_used: AtomicU64::new(seq),
                     });
                     self.images.insert(image_id, kitty_img);
                     log::trace!("KittyGraphics: Loaded image {}", image_id);
@@ -717,20 +747,27 @@ impl KittyGraphics {
                 );
 
                 let z_idx = cmd.z.unwrap_or(0);
-                self.placements
-                    .retain(|p| !(p.point == cursor_point && p.z_index == z_idx));
+                let pid = cmd.placement_id.unwrap_or(0);
+                self.placements.retain(|p| {
+                    !(p.image_id == image_id && p.placement_id == pid && (pid != 0 || cmd.unicode_placeholder))
+                        && !(!cmd.unicode_placeholder
+                            && !p.unicode_placeholder
+                            && p.point == cursor_point
+                            && p.z_index == z_idx)
+                });
 
                 let placement = Placement {
                     image_id,
-                    placement_id: cmd.placement_id.unwrap_or(0),
+                    placement_id: pid,
                     point: cursor_point,
                     width: cmd.columns,
                     height: cmd.rows,
                     x_offset: 0,
                     y_offset: 0,
-                    z_index: cmd.z.unwrap_or(0),
+                    z_index: z_idx,
                     visible_width: img.data.width(),
                     visible_height: img.data.height(),
+                    unicode_placeholder: cmd.unicode_placeholder,
                 };
                 self.placements.push(placement);
                 log::trace!(
@@ -760,7 +797,7 @@ impl KittyGraphics {
                 None
             }
         } else {
-            if cmd.quiet == 1 {
+            if cmd.quiet == 1 || cmd.quiet == 2 {
                 None
             } else if let Some(id) = cmd.image_id {
                 if let Some(pid) = cmd.placement_id {
@@ -809,6 +846,7 @@ mod tests {
             };
             let img = Arc::new(KittyImage {
                 id,
+                unique_id: id as u64,
                 data,
                 texture: None,
                 is_anonymous: true,
@@ -826,6 +864,7 @@ mod tests {
                 z_index: 0,
                 visible_width: 1,
                 visible_height: 1,
+                unicode_placeholder: false,
             });
         }
 
@@ -841,6 +880,7 @@ mod tests {
             id,
             Arc::new(KittyImage {
                 id,
+                unique_id: id as u64,
                 data,
                 texture: None,
                 is_anonymous: true,
@@ -858,6 +898,7 @@ mod tests {
             z_index: 0,
             visible_width: 1,
             visible_height: 1,
+            unicode_placeholder: false,
         });
 
         kg.reap_unused_images();
@@ -886,6 +927,7 @@ mod tests {
                 id,
                 Arc::new(KittyImage {
                     id,
+                    unique_id: id as u64,
                     data,
                     texture: None,
                     is_anonymous: false,
@@ -915,6 +957,7 @@ mod tests {
             id,
             Arc::new(KittyImage {
                 id,
+                unique_id: id as u64,
                 data,
                 texture: None,
                 is_anonymous: false,
@@ -944,6 +987,7 @@ mod tests {
             1,
             Arc::new(KittyImage {
                 id: 1,
+                unique_id: 1,
                 data: data1,
                 texture: None,
                 is_anonymous: false,
@@ -960,6 +1004,7 @@ mod tests {
             2,
             Arc::new(KittyImage {
                 id: 2,
+                unique_id: 2,
                 data: data2,
                 texture: None,
                 is_anonymous: false,

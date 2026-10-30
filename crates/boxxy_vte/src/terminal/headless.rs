@@ -1101,4 +1101,37 @@ mod tests {
         assert_eq!(state.cells, state_byte.cells);
         assert_eq!(state.cursor_point, state_byte.cursor_point);
     }
+
+    #[test]
+    fn kitty_unicode_placeholder_u1_c1_q2_and_unique_id_invalidation() {
+        let mut h = HeadlessTerminal::new(40, 10);
+
+        // 1. Move cursor to (row 2, col 5 -> 1-based 3;6H) and emit Yazi-style
+        //    `q=2,a=T,C=1,U=1,f=24,s=1,v=1,i=0x0F8A74;AAAA` (image_id = 1018484 = 0x0F8A74 -> RGB 15, 138, 116).
+        h.feed(b"\x1b[3;6H\x1b_Gq=2,a=T,C=1,U=1,f=24,s=1,v=1,i=1018484;AAAA\x1b\\");
+
+        // `q=2` must suppress the `OK` response, and `C=1`/`U=1` must not move the cursor.
+        assert!(h.take_pty_writes().is_empty());
+        assert_eq!(h.term.grid().cursor.point, Point::new(Line(2), Column(5)));
+
+        let uid1 = h.term.kitty_graphics.images.get(&1018484).unwrap().unique_id;
+
+        // 2. Emit a 3x2 grid of `\u{10EEEE}` placeholder cells with 24-bit fg `rgb(15, 138, 116)`
+        //    and row/column diacritics (`\u{0305}\u{0305}`), then clear screen (`CSI 2 J`) and
+        //    redraw the `\u{10EEEE}` cells at (row 4, col 10 -> 1-based 5;11H).
+        h.feed(
+            "\x1b[2J\x1b[38;2;15;138;116m\x1b[5;11H\u{10EEEE}\u{0305}\u{0305}\u{10EEEE}\u{0305}\u{030D}\u{10EEEE}\u{0305}\u{030E}\x1b[6;11H\u{10EEEE}\u{030D}\u{0305}\u{10EEEE}\u{030D}\u{030D}\u{10EEEE}\u{030D}\u{030E}\x1b[0m"
+                .as_bytes(),
+        );
+
+        let state = h.render_state();
+        // Virtual (`U=1`) placement survived `CSI 2 J`
+        assert_eq!(state.kitty_placements.len(), 1);
+        assert!(state.kitty_placements[0].unicode_placeholder);
+
+        // Replacing the same `image_id` (1018484) bumps `unique_id` so the GPU texture cache invalidates
+        h.feed(b"\x1b_Gq=2,a=T,C=1,U=1,f=24,s=1,v=1,i=1018484;////\x1b\\");
+        let uid2 = h.term.kitty_graphics.images.get(&1018484).unwrap().unique_id;
+        assert_ne!(uid1, uid2);
+    }
 }

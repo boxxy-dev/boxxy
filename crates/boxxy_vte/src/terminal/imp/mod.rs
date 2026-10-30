@@ -104,7 +104,7 @@ pub struct TerminalWidget {
     pub context_menu_callback: RefCell<Option<ContextMenuCallback>>,
     pub last_cwd: RefCell<Option<String>>,
     pub im_context: RefCell<gtk4::IMContext>,
-    pub kitty_textures: RefCell<HashMap<u32, gtk4::gdk::Texture>>,
+    pub kitty_textures: RefCell<HashMap<u32, (u64, gtk4::gdk::Texture)>>,
     pub is_dimmed: Cell<bool>,
     pub cached_search_regex: RefCell<Option<(String, bool, regex::Regex)>>,
     pub visible_search_matches: RefCell<Vec<crate::engine::selection::SelectionRange>>,

@@ -619,14 +619,24 @@ impl super::TerminalWidget {
                                 }
                             };
                         }
+                        let is_kitty_placeholder =
+                            cell.c == super::kitty::KITTY_UNICODE_PLACEHOLDER;
                         let is_wide = cell.flags.contains(Flags::WIDE_CHAR);
                         let is_spacer = cell
                             .flags
                             .intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER);
                         let is_filling = is_cell_filling_char(cell.c);
 
-                        let style_flags = cell.flags & STYLE_FLAGS;
-                        let ucolor = cell.underline_color();
+                        let style_flags = if is_kitty_placeholder {
+                            (cell.flags & STYLE_FLAGS) - Flags::ALL_UNDERLINES
+                        } else {
+                            cell.flags & STYLE_FLAGS
+                        };
+                        let ucolor = if is_kitty_placeholder {
+                            None
+                        } else {
+                            cell.underline_color()
+                        };
 
                         if fg != current_fg
                             || style_flags != current_flags
@@ -674,10 +684,17 @@ impl super::TerminalWidget {
                             if line_str.is_empty() {
                                 start_col = col as f32 * char_width;
                             }
-                            line_str.push(if cell.c == '\0' { ' ' } else { cell.c });
-                            if let Some(zw) = cell.zerowidth() {
-                                for &c in zw {
-                                    line_str.push(c);
+                            if is_kitty_placeholder {
+                                // Kitty Graphics Unicode Placeholder (`U+10EEEE`):
+                                // emit a blank space and skip its row/column index diacritics
+                                // so Pango never draws fallback `[10EE]` hex boxes or overlines.
+                                line_str.push(' ');
+                            } else {
+                                line_str.push(if cell.c == '\0' { ' ' } else { cell.c });
+                                if let Some(zw) = cell.zerowidth() {
+                                    for &c in zw {
+                                        line_str.push(c);
+                                    }
                                 }
                             }
                             run_cells += if is_wide { 2 } else { 1 };
