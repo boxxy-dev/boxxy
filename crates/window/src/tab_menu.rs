@@ -153,7 +153,7 @@ impl TabContextMenu {
                 .build();
 
             let css = format!(
-                "button.{class_name} {{ background-color: {hex}; min-width: 22px; min-height: 22px; padding: 0; margin: 2px; border-radius: 6px; border: 2px solid transparent; transition: border-color 0.15s; opacity: 1.0; }} button.{class_name}:hover {{ border-color: rgba(255,255,255,0.5); }}"
+                "button.{class_name} {{ background-color: {hex}; min-width: 22px; min-height: 22px; padding: 0; margin: 2px; border-radius: 9999px; border: 2px solid transparent; transition: border-color 0.15s; opacity: 1.0; }} button.{class_name}:hover {{ border-color: rgba(255,255,255,0.5); }}"
             );
             let provider = gtk4::CssProvider::new();
             provider.load_from_string(&css);

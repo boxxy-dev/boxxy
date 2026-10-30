@@ -32,6 +32,19 @@ pub fn find_tab_nodes(widget: &gtk4::Widget, tabs: &mut Vec<gtk4::Widget>) {
     }
 }
 
+fn ensure_tab_label_halign(widget: &gtk4::Widget) {
+    if let Some(label) = widget.downcast_ref::<gtk4::Label>()
+        && label.halign() != gtk4::Align::Center
+    {
+        label.set_halign(gtk4::Align::Center);
+    }
+    let mut child = widget.first_child();
+    while let Some(c) = child {
+        ensure_tab_label_halign(&c);
+        child = c.next_sibling();
+    }
+}
+
 pub fn sync_tab_colors(inner: &mut AppWindowInner) {
     let mut tab_nodes = Vec::new();
     find_tab_nodes(inner.tab_bar.upcast_ref(), &mut tab_nodes);
@@ -43,6 +56,8 @@ pub fn sync_tab_colors(inner: &mut AppWindowInner) {
         // We look for the corresponding tab widget.
         // AdwTabBar might have internal layout widgets, but find_tab_nodes filters for "tab".
         if let Some(tab_widget) = tab_nodes.get(i as usize) {
+            ensure_tab_label_halign(tab_widget);
+
             let mut color_to_apply = crate::state::TabColor::Default;
             if let Some(tc) = inner
                 .tabs

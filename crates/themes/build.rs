@@ -266,14 +266,14 @@ window.frosted-glass-active .terminal-header tabbar tab {{
 window:not(.frosted-glass-active) .terminal-header tabbar tab:selected {{
     background-color: {surface};
     color: {fg};
-    font-weight: bold;
+    font-weight: normal;
     border-color: transparent;
 }}
 
 window.frosted-glass-active .terminal-header tabbar tab:selected {{
     background-color: color-mix(in srgb, currentColor 15%, transparent);
     color: {fg};
-    font-weight: bold;
+    font-weight: normal;
     border-color: transparent;
 }}
 

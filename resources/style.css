@@ -13,7 +13,13 @@ tabbar tab label,
 tab label.title {
     /* Try to keep the title centered or just left-aligned after the auto margin */
     margin-left: 0;
+    padding-left: 5px;
+    min-height: 20px;
     font-size: 0.9em;
+    font-weight: normal;
+    background-size: 18px 18px;
+    background-position: 0px center;
+    background-repeat: no-repeat;
 }
 
 headerbar {
@@ -56,32 +62,15 @@ tab > separator {
 	opacity: 0;
 }
 
-tabbar tab.tab-blue { background-image: linear-gradient(0deg, alpha(#3584e4, 0.25), alpha(#3584e4, 0.25)); }
-tabbar tab.tab-blue:selected { background-image: linear-gradient(0deg, alpha(#3584e4, 0.4), alpha(#3584e4, 0.4)); }
-
-tabbar tab.tab-teal { background-image: linear-gradient(0deg, alpha(#2190a4, 0.25), alpha(#2190a4, 0.25)); }
-tabbar tab.tab-teal:selected { background-image: linear-gradient(0deg, alpha(#2190a4, 0.4), alpha(#2190a4, 0.4)); }
-
-tabbar tab.tab-green { background-image: linear-gradient(0deg, alpha(#3a944a, 0.25), alpha(#3a944a, 0.25)); }
-tabbar tab.tab-green:selected { background-image: linear-gradient(0deg, alpha(#3a944a, 0.4), alpha(#3a944a, 0.4)); }
-
-tabbar tab.tab-yellow { background-image: linear-gradient(0deg, alpha(#c88800, 0.25), alpha(#c88800, 0.25)); }
-tabbar tab.tab-yellow:selected { background-image: linear-gradient(0deg, alpha(#c88800, 0.4), alpha(#c88800, 0.4)); }
-
-tabbar tab.tab-orange { background-image: linear-gradient(0deg, alpha(#ed5b00, 0.25), alpha(#ed5b00, 0.25)); }
-tabbar tab.tab-orange:selected { background-image: linear-gradient(0deg, alpha(#ed5b00, 0.4), alpha(#ed5b00, 0.4)); }
-
-tabbar tab.tab-red { background-image: linear-gradient(0deg, alpha(#e62d42, 0.25), alpha(#e62d42, 0.25)); }
-tabbar tab.tab-red:selected { background-image: linear-gradient(0deg, alpha(#e62d42, 0.4), alpha(#e62d42, 0.4)); }
-
-tabbar tab.tab-pink { background-image: linear-gradient(0deg, alpha(#d56199, 0.25), alpha(#d56199, 0.25)); }
-tabbar tab.tab-pink:selected { background-image: linear-gradient(0deg, alpha(#d56199, 0.4), alpha(#d56199, 0.4)); }
-
-tabbar tab.tab-purple { background-image: linear-gradient(0deg, alpha(#9141ac, 0.25), alpha(#9141ac, 0.25)); }
-tabbar tab.tab-purple:selected { background-image: linear-gradient(0deg, alpha(#9141ac, 0.4), alpha(#9141ac, 0.4)); }
-
-tabbar tab.tab-slate { background-image: linear-gradient(0deg, alpha(#6f8396, 0.25), alpha(#6f8396, 0.25)); }
-tabbar tab.tab-slate:selected { background-image: linear-gradient(0deg, alpha(#6f8396, 0.4), alpha(#6f8396, 0.4)); }
+tabbar tab.tab-blue label { background-image: radial-gradient(circle, alpha(#3584e4, 0.85) 62%, transparent 70%); }
+tabbar tab.tab-teal label { background-image: radial-gradient(circle, alpha(#2190a4, 0.85) 62%, transparent 70%); }
+tabbar tab.tab-green label { background-image: radial-gradient(circle, alpha(#3a944a, 0.85) 62%, transparent 70%); }
+tabbar tab.tab-yellow label { background-image: radial-gradient(circle, alpha(#c88800, 0.85) 62%, transparent 70%); }
+tabbar tab.tab-orange label { background-image: radial-gradient(circle, alpha(#ed5b00, 0.85) 62%, transparent 70%); }
+tabbar tab.tab-red label { background-image: radial-gradient(circle, alpha(#e62d42, 0.85) 62%, transparent 70%); }
+tabbar tab.tab-pink label { background-image: radial-gradient(circle, alpha(#d56199, 0.85) 62%, transparent 70%); }
+tabbar tab.tab-purple label { background-image: radial-gradient(circle, alpha(#9141ac, 0.85) 62%, transparent 70%); }
+tabbar tab.tab-slate label { background-image: radial-gradient(circle, alpha(#6f8396, 0.85) 62%, transparent 70%); }
 
 /* Start and End elements in headerbar */
 
