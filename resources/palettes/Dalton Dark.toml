@@ -1,0 +1,33 @@
+# Colors (Dalton Dark)
+
+[colors.bright]
+black = '#494949'
+blue = '#97b1f1'
+cyan = '#6691a7'
+green = '#88b97d'
+magenta = '#c070f0'
+red = '#f07068'
+white = '#d8d8d8'
+yellow = '#eded02'
+
+[colors.cursor]
+cursor = '#9a9a9a'
+text = '#1b1b1b'
+
+[colors.normal]
+black = '#282828'
+blue = '#7aa2f7'
+cyan = '#56717f'
+green = '#5b914e'
+magenta = '#a050d0'
+red = '#d85050'
+white = '#b8b8b8'
+yellow = '#c4c40c'
+
+[colors.primary]
+background = '#1b1b1b'
+foreground = '#c8c9cc'
+
+[colors.selection]
+background = '#c8c9cc'
+text = '#1b1b1b'

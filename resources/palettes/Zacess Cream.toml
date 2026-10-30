@@ -1,0 +1,33 @@
+# Colors (Zacess Cream)
+
+[colors.bright]
+black = '#484848'
+blue = '#0069e3'
+cyan = '#027b7b'
+green = '#008120'
+magenta = '#c500bf'
+red = '#df0010'
+white = '#000000'
+yellow = '#966501'
+
+[colors.cursor]
+cursor = '#000000'
+text = '#fdf6e3'
+
+[colors.normal]
+black = '#000000'
+blue = '#015ac2'
+cyan = '#016969'
+green = '#016f1b'
+magenta = '#a901a6'
+red = '#c1000a'
+white = '#434343'
+yellow = '#815601'
+
+[colors.primary]
+background = '#fdf6e3'
+foreground = '#000000'
+
+[colors.selection]
+background = '#7401ca'
+text = '#fdf6e3'

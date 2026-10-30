@@ -1,0 +1,33 @@
+# Colors (Noctis Bordo)
+
+[colors.bright]
+black = '#69545b'
+blue = '#60b6eb'
+cyan = '#60dbeb'
+green = '#60ebb1'
+magenta = '#e798b3'
+red = '#e97749'
+white = '#cbbec2'
+yellow = '#e69533'
+
+[colors.cursor]
+cursor = '#cbbec2'
+text = '#322a2d'
+
+[colors.normal]
+black = '#47393e'
+blue = '#49ace9'
+cyan = '#49d6e9'
+green = '#49e9a6'
+magenta = '#df769b'
+red = '#e66533'
+white = '#b9acb0'
+yellow = '#e4b781'
+
+[colors.primary]
+background = '#322a2d'
+foreground = '#cbbec2'
+
+[colors.selection]
+background = '#4a3339'
+text = '#cbbec2'

@@ -1,0 +1,33 @@
+# Colors (Pierre Dark)
+
+[colors.bright]
+black = '#6c6c71'
+blue = '#69b1ff'
+cyan = '#68cdf2'
+green = '#5ecc71'
+magenta = '#d568ea'
+red = '#ff6762'
+white = '#fbfbfb'
+yellow = '#ffd452'
+
+[colors.cursor]
+cursor = '#009fff'
+text = '#070707'
+
+[colors.normal]
+black = '#141415'
+blue = '#009fff'
+cyan = '#08c0ef'
+green = '#0dbe4e'
+magenta = '#c635e4'
+red = '#ff2e3f'
+white = '#c6c6c8'
+yellow = '#ffca00'
+
+[colors.primary]
+background = '#070707'
+foreground = '#fbfbfb'
+
+[colors.selection]
+background = '#19283c'
+text = '#fbfbfb'

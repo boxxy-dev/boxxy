@@ -1,0 +1,33 @@
+# Colors (Dogxi Misty)
+
+[colors.bright]
+black = '#686868'
+blue = '#99ecfe'
+cyan = '#87e0f0'
+green = '#94e362'
+magenta = '#ff6ac1'
+red = '#ff5c57'
+white = '#f1f1f0'
+yellow = '#efc781'
+
+[colors.cursor]
+cursor = '#eaeaea'
+text = '#282a36'
+
+[colors.normal]
+black = '#000000'
+blue = '#99ecfe'
+cyan = '#5fdeed'
+green = '#94e362'
+magenta = '#ff6ac1'
+red = '#ff5c57'
+white = '#f1f1f0'
+yellow = '#eebd70'
+
+[colors.primary]
+background = '#282a36'
+foreground = '#eff0eb'
+
+[colors.selection]
+background = '#92bcd0'
+text = '#000000'

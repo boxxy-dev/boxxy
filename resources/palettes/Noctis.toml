@@ -1,0 +1,33 @@
+# Colors (Noctis)
+
+[colors.bright]
+black = '#47686c'
+blue = '#60b6eb'
+cyan = '#60dbeb'
+green = '#60ebb1'
+magenta = '#e798b3'
+red = '#e97749'
+white = '#c1d4d7'
+yellow = '#e69533'
+
+[colors.cursor]
+cursor = '#b2cacd'
+text = '#052529'
+
+[colors.normal]
+black = '#324a4d'
+blue = '#49ace9'
+cyan = '#49d6e9'
+green = '#49e9a6'
+magenta = '#df769b'
+red = '#e66533'
+white = '#b2cacd'
+yellow = '#e4b781'
+
+[colors.primary]
+background = '#052529'
+foreground = '#b2cacd'
+
+[colors.selection]
+background = '#0f3a3f'
+text = '#b2cacd'

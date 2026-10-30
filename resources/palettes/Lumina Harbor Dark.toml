@@ -1,0 +1,33 @@
+# Colors (Lumina Harbor Dark)
+
+[colors.bright]
+black = '#808599'
+blue = '#b1deff'
+cyan = '#aae9f0'
+green = '#b9f1d0'
+magenta = '#ebc4f5'
+red = '#de968e'
+white = '#dde1eb'
+yellow = '#ffe5a9'
+
+[colors.cursor]
+cursor = '#dde1eb'
+text = '#0d111d'
+
+[colors.normal]
+black = '#111523'
+blue = '#91c5ea'
+cyan = '#91cfd6'
+green = '#9bd8b4'
+magenta = '#d3a9dd'
+red = '#d0756c'
+white = '#bdc1ca'
+yellow = '#eace8c'
+
+[colors.primary]
+background = '#0d111d'
+foreground = '#dde1eb'
+
+[colors.selection]
+background = '#423139'
+text = '#dde1eb'

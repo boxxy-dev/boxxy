@@ -322,7 +322,17 @@ window.frosted-glass-active .terminal-header tabbar tab:selected {{
     )
 }
 
+fn xml_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&apos;")
+}
+
 fn generate_sourceview_xml(v: &PaletteVariant, id: &str, name: &str) -> String {
+    let id_esc = xml_escape(id);
+    let name_esc = xml_escape(name);
     let bg = &v.background;
     let fg = &v.foreground;
     let surface_owned = if is_dark(bg) {
@@ -341,8 +351,8 @@ fn generate_sourceview_xml(v: &PaletteVariant, id: &str, name: &str) -> String {
 
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
-<style-scheme id="{id}" _name="{name}" version="1.0">
-  <description>Generated from {name} terminal palette</description>
+<style-scheme id="{id_esc}" _name="{name_esc}" version="1.0">
+  <description>Generated from {name_esc} terminal palette</description>
 
   <color name="bg"      value="{bg}"/>
   <color name="fg"      value="{fg}"/>

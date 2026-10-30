@@ -1,0 +1,33 @@
+# Colors (Pierre Light)
+
+[colors.bright]
+black = '#8e8e95'
+blue = '#009fff'
+cyan = '#08c0ef'
+green = '#0dbe4e'
+magenta = '#c635e4'
+red = '#ff2e3f'
+white = '#dbdbdd'
+yellow = '#d5a910'
+
+[colors.cursor]
+cursor = '#009fff'
+text = '#ffffff'
+
+[colors.normal]
+black = '#1f1f21'
+blue = '#216cab'
+cyan = '#2182a1'
+green = '#1d8138'
+magenta = '#a631be'
+red = '#d52c36'
+white = '#79797f'
+yellow = '#ac8816'
+
+[colors.primary]
+background = '#ffffff'
+foreground = '#070707'
+
+[colors.selection]
+background = '#dfebff'
+text = '#070707'

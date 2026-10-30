@@ -1,0 +1,33 @@
+# Colors (SeedFlip Glacier)
+
+[colors.bright]
+black = '#8dadce'
+blue = '#2b7cee'
+cyan = '#12d4d4'
+green = '#12d452'
+magenta = '#ee2bee'
+red = '#ee2b2b'
+white = '#0f172a'
+yellow = '#d4b312'
+
+[colors.cursor]
+cursor = '#0ea5e9'
+text = '#0f172a'
+
+[colors.normal]
+black = '#c2d4e5'
+blue = '#0f58bd'
+cyan = '#0fbdbd'
+green = '#0fbd49'
+magenta = '#bd0fbd'
+red = '#bd0f0f'
+white = '#080d17'
+yellow = '#bda00f'
+
+[colors.primary]
+background = '#f8fafc'
+foreground = '#0f172a'
+
+[colors.selection]
+background = '#ffffff'
+text = '#0f172a'

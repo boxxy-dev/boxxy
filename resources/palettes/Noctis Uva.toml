@@ -1,0 +1,33 @@
+# Colors (Noctis Uva)
+
+[colors.bright]
+black = '#504e65'
+blue = '#60b6eb'
+cyan = '#60dbeb'
+green = '#60ebb1'
+magenta = '#e798b3'
+red = '#e97749'
+white = '#c5c2d6'
+yellow = '#e69533'
+
+[colors.cursor]
+cursor = '#c5c2d6'
+text = '#292640'
+
+[colors.normal]
+black = '#302f3d'
+blue = '#49ace9'
+cyan = '#49d6e9'
+green = '#49e9a6'
+magenta = '#df769b'
+red = '#e66533'
+white = '#b6b3cc'
+yellow = '#e4b781'
+
+[colors.primary]
+background = '#292640'
+foreground = '#c5c2d6'
+
+[colors.selection]
+background = '#35325a'
+text = '#c5c2d6'

@@ -1,0 +1,33 @@
+# Colors (SeedFlip Ultraviolet)
+
+[colors.bright]
+black = '#5b2687'
+blue = '#89b6f5'
+cyan = '#89f5f5'
+green = '#89f5ad'
+magenta = '#f589f5'
+red = '#f58989'
+white = '#ffffff'
+yellow = '#f5e389'
+
+[colors.cursor]
+cursor = '#c77dff'
+text = '#0b0014'
+
+[colors.normal]
+black = '#05000a'
+blue = '#428bf0'
+cyan = '#42f0f0'
+green = '#42f07c'
+magenta = '#f042f0'
+red = '#f04242'
+white = '#f6f3fb'
+yellow = '#f0d342'
+
+[colors.primary]
+background = '#0b0014'
+foreground = '#e8e0f5'
+
+[colors.selection]
+background = '#13082a'
+text = '#e8e0f5'

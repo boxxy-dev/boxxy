@@ -1,0 +1,33 @@
+# Colors (SeedFlip Ember)
+
+[colors.bright]
+black = '#3d3d3d'
+blue = '#89b6f5'
+cyan = '#89f5f5'
+green = '#89f5ad'
+magenta = '#f589f5'
+red = '#f58989'
+white = '#ffffff'
+yellow = '#f5e389'
+
+[colors.cursor]
+cursor = '#ff6b3d'
+text = '#0a0a0a'
+
+[colors.normal]
+black = '#050505'
+blue = '#428bf0'
+cyan = '#42f0f0'
+green = '#42f07c'
+magenta = '#f042f0'
+red = '#f04242'
+white = '#fafafa'
+yellow = '#f0d342'
+
+[colors.primary]
+background = '#0a0a0a'
+foreground = '#ededed'
+
+[colors.selection]
+background = '#141414'
+text = '#ededed'

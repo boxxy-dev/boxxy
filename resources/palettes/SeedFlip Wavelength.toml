@@ -1,0 +1,33 @@
+# Colors (SeedFlip Wavelength)
+
+[colors.bright]
+black = '#364255'
+blue = '#9ab9e5'
+cyan = '#9ae5e5'
+green = '#9ae5b3'
+magenta = '#e59ae5'
+red = '#e59a9a'
+white = '#ffffff'
+yellow = '#e5d89a'
+
+[colors.cursor]
+cursor = '#238636'
+text = '#0d1117'
+
+[colors.normal]
+black = '#090c10'
+blue = '#5d8fd5'
+cyan = '#5dd5d5'
+green = '#5dd585'
+magenta = '#d55dd5'
+red = '#d55d5d'
+white = '#f7f9fb'
+yellow = '#d5c15d'
+
+[colors.primary]
+background = '#0d1117'
+foreground = '#e6edf3'
+
+[colors.selection]
+background = '#161b22'
+text = '#e6edf3'

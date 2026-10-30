@@ -1,0 +1,33 @@
+# Colors (Lumina Lagoon Dark)
+
+[colors.bright]
+black = '#7d9ba2'
+blue = '#badcff'
+cyan = '#9fe6e8'
+green = '#b8efc2'
+magenta = '#ffcaf9'
+red = '#e0938c'
+white = '#d7e6e7'
+yellow = '#ffe6a7'
+
+[colors.cursor]
+cursor = '#d7e6e7'
+text = '#042930'
+
+[colors.normal]
+black = '#042e36'
+blue = '#8ec3f9'
+cyan = '#5ad3d6'
+green = '#9fd4a9'
+magenta = '#e5b0df'
+red = '#d3726a'
+white = '#b7c5c6'
+yellow = '#e7cf94'
+
+[colors.primary]
+background = '#042930'
+foreground = '#d7e6e7'
+
+[colors.selection]
+background = '#0e535a'
+text = '#d7e6e7'

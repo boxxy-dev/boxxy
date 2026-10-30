@@ -1,0 +1,33 @@
+# Colors (SeedFlip Amethyst)
+
+[colors.bright]
+black = '#b5aba0'
+blue = '#2b7cee'
+cyan = '#05c8c8'
+green = '#12d452'
+magenta = '#ee2bee'
+red = '#ee2b2b'
+white = '#1a0a2e'
+yellow = '#d4b312'
+
+[colors.cursor]
+cursor = '#635bff'
+text = '#1a0a2e'
+
+[colors.normal]
+black = '#d7d1cb'
+blue = '#0f58bd'
+cyan = '#0fbdbd'
+green = '#0fbd49'
+magenta = '#bd0fbd'
+red = '#bd0f0f'
+white = '#0e0519'
+yellow = '#bda00f'
+
+[colors.primary]
+background = '#f8f7f6'
+foreground = '#1a0a2e'
+
+[colors.selection]
+background = '#ffffff'
+text = '#1a0a2e'

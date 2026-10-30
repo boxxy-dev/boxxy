@@ -1,0 +1,33 @@
+# Colors (Noctis Viola)
+
+[colors.bright]
+black = '#594e65'
+blue = '#60b6eb'
+cyan = '#60dbeb'
+green = '#60ebb1'
+magenta = '#e798b3'
+red = '#e97749'
+white = '#ccbfd9'
+yellow = '#e69533'
+
+[colors.cursor]
+cursor = '#ccbfd9'
+text = '#30243d'
+
+[colors.normal]
+black = '#362f3d'
+blue = '#49ace9'
+cyan = '#49d6e9'
+green = '#49e9a6'
+magenta = '#df769b'
+red = '#e66533'
+white = '#bfafcf'
+yellow = '#e4b781'
+
+[colors.primary]
+background = '#30243d'
+foreground = '#ccbfd9'
+
+[colors.selection]
+background = '#3e3352'
+text = '#ccbfd9'

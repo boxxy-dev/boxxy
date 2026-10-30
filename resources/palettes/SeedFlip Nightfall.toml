@@ -1,0 +1,33 @@
+# Colors (SeedFlip Nightfall)
+
+[colors.bright]
+black = '#424256'
+blue = '#89b6f5'
+cyan = '#89f5f5'
+green = '#89f5ad'
+magenta = '#f589f5'
+red = '#f58989'
+white = '#ffffff'
+yellow = '#f5e389'
+
+[colors.cursor]
+cursor = '#818cf8'
+text = '#0a0a0f'
+
+[colors.normal]
+black = '#060609'
+blue = '#428bf0'
+cyan = '#42f0f0'
+green = '#42f07c'
+magenta = '#f042f0'
+red = '#f04242'
+white = '#f2f2f3'
+yellow = '#f0d342'
+
+[colors.primary]
+background = '#0a0a0f'
+foreground = '#e4e4e7'
+
+[colors.selection]
+background = '#12121a'
+text = '#e4e4e7'

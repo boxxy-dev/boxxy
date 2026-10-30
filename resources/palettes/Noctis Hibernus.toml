@@ -1,0 +1,33 @@
+# Colors (Noctis Hibernus)
+
+[colors.bright]
+black = '#004d57'
+blue = '#0fa3ff'
+cyan = '#00cbe6'
+green = '#00d17a'
+magenta = '#ff6b9f'
+red = '#ff4000'
+white = '#bbc3c4'
+yellow = '#ff8c00'
+
+[colors.cursor]
+cursor = '#005661'
+text = '#f4f6f6'
+
+[colors.normal]
+black = '#003b42'
+blue = '#0094f0'
+cyan = '#00bdd6'
+green = '#00b368'
+magenta = '#ff5792'
+red = '#e34e1c'
+white = '#8ca6a6'
+yellow = '#f49725'
+
+[colors.primary]
+background = '#f4f6f6'
+foreground = '#005661'
+
+[colors.selection]
+background = '#d9e0e0'
+text = '#005661'

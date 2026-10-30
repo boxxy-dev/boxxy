@@ -1,0 +1,33 @@
+# Colors (Lumina Quartz Dark)
+
+[colors.bright]
+black = '#868b90'
+blue = '#d6e8ff'
+cyan = '#c1eff6'
+green = '#c2edd5'
+magenta = '#ffd7fa'
+red = '#d59a93'
+white = '#ccd0d3'
+yellow = '#ffe5b1'
+
+[colors.cursor]
+cursor = '#ccd0d3'
+text = '#161719'
+
+[colors.normal]
+black = '#1a1c1e'
+blue = '#b6ceed'
+cyan = '#a8d5db'
+green = '#9dd7b7'
+magenta = '#e4bddf'
+red = '#c57c74'
+white = '#acb0b3'
+yellow = '#dfcfb0'
+
+[colors.primary]
+background = '#161719'
+foreground = '#ccd0d3'
+
+[colors.selection]
+background = '#44474a'
+text = '#ccd0d3'

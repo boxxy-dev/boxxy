@@ -1,0 +1,33 @@
+# Colors (SeedFlip Pulse)
+
+[colors.bright]
+black = '#454545'
+blue = '#91b8ee'
+cyan = '#91eeee'
+green = '#91eeb0'
+magenta = '#ee91ee'
+red = '#ee9191'
+white = '#ffffff'
+yellow = '#eede91'
+
+[colors.cursor]
+cursor = '#1db954'
+text = '#121212'
+
+[colors.normal]
+black = '#0d0d0d'
+blue = '#4f8de3'
+cyan = '#4fe3e3'
+green = '#4fe380'
+magenta = '#e34fe3'
+red = '#e34f4f'
+white = '#ffffff'
+yellow = '#e3cb4f'
+
+[colors.primary]
+background = '#121212'
+foreground = '#ffffff'
+
+[colors.selection]
+background = '#1a1a1a'
+text = '#ffffff'

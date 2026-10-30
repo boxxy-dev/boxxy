@@ -1,20 +1,49 @@
 use crate::preview::ThemePreview;
 use crate::{ParsedPaletteStatic, THEMES};
+use gtk::gdk;
 use gtk::gio;
 use gtk::glib;
 use gtk::prelude::*;
 use gtk::subclass::prelude::*;
 use gtk4 as gtk;
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
+
+/// Zero-allocation case-insensitive ASCII substring check.
+#[inline]
+fn contains_ignore_ascii_case(haystack: &str, needle_lower: &str) -> bool {
+    let h = haystack.as_bytes();
+    let n = needle_lower.as_bytes();
+    if n.is_empty() {
+        return true;
+    }
+    if n.len() > h.len() {
+        return false;
+    }
+    h.windows(n.len())
+        .any(|w| w.iter().zip(n).all(|(a, b)| a.to_ascii_lowercase() == *b))
+}
 
 mod imp {
     use super::*;
     use std::cell::Cell;
 
-    #[derive(Default)]
     pub struct PaletteObject {
         pub palette: Cell<Option<ParsedPaletteStatic>>,
+        pub bg: Cell<gdk::RGBA>,
+        pub fg: Cell<gdk::RGBA>,
+        pub swatches: Cell<[gdk::RGBA; 6]>,
+    }
+
+    impl Default for PaletteObject {
+        fn default() -> Self {
+            Self {
+                palette: Cell::new(None),
+                bg: Cell::new(gdk::RGBA::BLACK),
+                fg: Cell::new(gdk::RGBA::WHITE),
+                swatches: Cell::new([gdk::RGBA::BLACK; 6]),
+            }
+        }
     }
 
     #[glib::object_subclass]
@@ -34,12 +63,36 @@ glib::wrapper! {
 impl PaletteObject {
     pub fn new(palette: ParsedPaletteStatic) -> Self {
         let obj: Self = glib::Object::builder().build();
-        obj.imp().palette.set(Some(palette));
+        let imp = obj.imp();
+        imp.palette.set(Some(palette));
+        imp.bg.set(
+            gdk::RGBA::parse(palette.light.background).unwrap_or(gdk::RGBA::BLACK),
+        );
+        imp.fg.set(
+            gdk::RGBA::parse(palette.light.foreground).unwrap_or(gdk::RGBA::WHITE),
+        );
+        let swatches = std::array::from_fn(|i| {
+            gdk::RGBA::parse(palette.light.colors[i + 1]).unwrap_or(gdk::RGBA::BLACK)
+        });
+        imp.swatches.set(swatches);
         obj
     }
 
+    #[inline]
     pub fn get_palette(&self) -> Option<ParsedPaletteStatic> {
         self.imp().palette.get()
+    }
+
+    #[inline]
+    pub fn preview_data(&self) -> Option<(&'static str, gdk::RGBA, gdk::RGBA, [gdk::RGBA; 6])> {
+        let imp = self.imp();
+        let palette = imp.palette.get()?;
+        Some((
+            palette.name,
+            imp.bg.get(),
+            imp.fg.get(),
+            imp.swatches.get(),
+        ))
     }
 }
 
@@ -52,12 +105,25 @@ impl ThemeSelectorComponent {
     pub fn new<F: Fn(ParsedPaletteStatic) + 'static>(on_select: F) -> Self {
         let store = gio::ListStore::new::<PaletteObject>();
 
-        for theme in THEMES.iter() {
-            store.append(&PaletteObject::new(*theme));
-        }
+        // Batch-insert all palettes in a single GListModel emission.
+        let items: Vec<PaletteObject> = THEMES.iter().map(|t| PaletteObject::new(*t)).collect();
+        store.extend_from_slice(&items);
 
-        let filter = gtk::CustomFilter::new(|_item| {
-            true // Initial state accepts all
+        let query_state: Rc<RefCell<String>> = Rc::new(RefCell::new(String::new()));
+        let query_for_filter = query_state.clone();
+
+        let filter = gtk::CustomFilter::new(move |item| {
+            let q = query_for_filter.borrow();
+            if q.is_empty() {
+                return true;
+            }
+            if let Some(obj) = item.downcast_ref::<PaletteObject>()
+                && let Some(palette) = obj.get_palette()
+            {
+                return contains_ignore_ascii_case(palette.name, &q)
+                    || contains_ignore_ascii_case(palette.id, &q);
+            }
+            false
         });
 
         let filter_model = gtk::FilterListModel::new(Some(store.clone()), Some(filter.clone()));
@@ -90,19 +156,8 @@ impl ThemeSelectorComponent {
                 .unwrap()
                 .downcast::<PaletteObject>()
                 .unwrap();
-            if let Some(palette) = item.get_palette() {
-                let bg = gtk::gdk::RGBA::parse(palette.light.background)
-                    .unwrap_or(gtk::gdk::RGBA::BLACK);
-                let fg = gtk::gdk::RGBA::parse(palette.light.foreground)
-                    .unwrap_or(gtk::gdk::RGBA::WHITE);
-
-                let mut colors = Vec::new();
-                for i in 1..=6 {
-                    if let Ok(c) = gtk::gdk::RGBA::parse(palette.light.colors[i]) {
-                        colors.push(c);
-                    }
-                }
-                preview.set_theme(palette.name.to_string(), bg, fg, colors);
+            if let Some((name, bg, fg, colors)) = item.preview_data() {
+                preview.set_theme(name, bg, fg, colors);
             }
         });
         let list_view = gtk::ListView::builder()
@@ -166,19 +221,23 @@ impl ThemeSelectorComponent {
             .build();
 
         search_entry.connect_search_changed(move |entry| {
-            let query = entry.text().to_string().to_lowercase();
-            filter.set_filter_func(move |item| {
-                if query.is_empty() {
-                    return true;
+            let new_query = entry.text().to_ascii_lowercase();
+            let change = {
+                let mut prev = query_state.borrow_mut();
+                if *prev == new_query {
+                    return;
                 }
-                if let Some(obj) = item.downcast_ref::<PaletteObject>()
-                    && let Some(palette) = obj.get_palette()
-                {
-                    return palette.name.to_lowercase().contains(&query)
-                        || palette.id.to_lowercase().contains(&query);
-                }
-                false
-            });
+                let change = if new_query.starts_with(prev.as_str()) {
+                    gtk::FilterChange::MoreStrict
+                } else if prev.starts_with(new_query.as_str()) {
+                    gtk::FilterChange::LessStrict
+                } else {
+                    gtk::FilterChange::Different
+                };
+                *prev = new_query;
+                change
+            };
+            filter.changed(change);
         });
 
         let widget = gtk::Box::builder()

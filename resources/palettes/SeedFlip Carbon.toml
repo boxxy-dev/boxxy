@@ -1,0 +1,33 @@
+# Colors (SeedFlip Carbon)
+
+[colors.bright]
+black = '#aeaeae'
+blue = '#5383c6'
+cyan = '#53c6c6'
+green = '#53c679'
+magenta = '#c653c6'
+red = '#c65353'
+white = '#000000'
+yellow = '#c6b353'
+
+[colors.cursor]
+cursor = '#000000'
+text = '#404040'
+
+[colors.normal]
+black = '#d4d4d4'
+blue = '#335d99'
+cyan = '#339999'
+green = '#339955'
+magenta = '#993399'
+red = '#993333'
+white = '#000000'
+yellow = '#998833'
+
+[colors.primary]
+background = '#fafafa'
+foreground = '#000000'
+
+[colors.selection]
+background = '#ffffff'
+text = '#000000'

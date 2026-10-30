@@ -1,0 +1,33 @@
+# Colors (SeedFlip Canopy)
+
+[colors.bright]
+black = '#2d453c'
+blue = '#99b9e6'
+cyan = '#99e6e6'
+green = '#99e6b2'
+magenta = '#e699e6'
+red = '#e69999'
+white = '#ffffff'
+yellow = '#e6d999'
+
+[colors.cursor]
+cursor = '#3ecf8e'
+text = '#0f1714'
+
+[colors.normal]
+black = '#0b110f'
+blue = '#5c8fd6'
+cyan = '#5cd6d6'
+green = '#5cd685'
+magenta = '#d65cd6'
+red = '#d65c5c'
+white = '#fafafa'
+yellow = '#d6c25c'
+
+[colors.primary]
+background = '#0f1714'
+foreground = '#ededed'
+
+[colors.selection]
+background = '#171f1b'
+text = '#ededed'

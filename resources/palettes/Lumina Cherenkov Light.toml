@@ -1,0 +1,33 @@
+# Colors (Lumina Cherenkov Light)
+
+[colors.bright]
+black = '#5b6b89'
+blue = '#1d448f'
+cyan = '#005c69'
+green = '#07652c'
+magenta = '#793474'
+red = '#792825'
+white = '#7c90bc'
+yellow = '#874e00'
+
+[colors.cursor]
+cursor = '#1f2e53'
+text = '#f5f8ff'
+
+[colors.normal]
+black = '#1f2e53'
+blue = '#0a4fcc'
+cyan = '#087181'
+green = '#227a3e'
+magenta = '#90478a'
+red = '#a32224'
+white = '#5e709b'
+yellow = '#a35f00'
+
+[colors.primary]
+background = '#f5f8ff'
+foreground = '#1f2e53'
+
+[colors.selection]
+background = '#b3d0f4'
+text = '#1f2e53'

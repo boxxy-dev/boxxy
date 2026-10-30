@@ -1,0 +1,33 @@
+# Colors (Lumina Aurora Dark)
+
+[colors.bright]
+black = '#789091'
+blue = '#d7eaff'
+cyan = '#9decf6'
+green = '#a7eac2'
+magenta = '#ffc9f9'
+red = '#e59289'
+white = '#d6e3e2'
+yellow = '#ffe791'
+
+[colors.cursor]
+cursor = '#d6e3e2'
+text = '#041212'
+
+[colors.normal]
+black = '#061717'
+blue = '#c5d8ed'
+cyan = '#84d2db'
+green = '#6cd79d'
+magenta = '#e7ade1'
+red = '#d86f66'
+white = '#b6c3c2'
+yellow = '#e9d487'
+
+[colors.primary]
+background = '#041212'
+foreground = '#d6e3e2'
+
+[colors.selection]
+background = '#1a3e32'
+text = '#d6e3e2'

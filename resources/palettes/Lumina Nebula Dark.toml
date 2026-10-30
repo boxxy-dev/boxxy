@@ -1,0 +1,33 @@
+# Colors (Lumina Nebula Dark)
+
+[colors.bright]
+black = '#838ba5'
+blue = '#d8eaff'
+cyan = '#a1ecf5'
+green = '#b0f5d5'
+magenta = '#ffc8f9'
+red = '#e2928a'
+white = '#dde1ec'
+yellow = '#ffdfba'
+
+[colors.cursor]
+cursor = '#dde1ec'
+text = '#161826'
+
+[colors.normal]
+black = '#1a1c2c'
+blue = '#c6d6e8'
+cyan = '#88d2da'
+green = '#8fdcba'
+magenta = '#e5aedf'
+red = '#d57068'
+white = '#bdc1cb'
+yellow = '#f3c085'
+
+[colors.primary]
+background = '#161826'
+foreground = '#dde1ec'
+
+[colors.selection]
+background = '#393856'
+text = '#dde1ec'

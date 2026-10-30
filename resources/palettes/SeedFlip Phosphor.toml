@@ -1,0 +1,33 @@
+# Colors (SeedFlip Phosphor)
+
+[colors.bright]
+black = '#3f3f3f'
+blue = '#89b6f5'
+cyan = '#89f5f5'
+green = '#89f5ad'
+magenta = '#f589f5'
+red = '#f58989'
+white = '#ffffff'
+yellow = '#f5e389'
+
+[colors.cursor]
+cursor = '#00ff88'
+text = '#0c0c0c'
+
+[colors.normal]
+black = '#070707'
+blue = '#428bf0'
+cyan = '#42f0f0'
+green = '#42f07c'
+magenta = '#f042f0'
+red = '#f04242'
+white = '#cdffcd'
+yellow = '#f0d342'
+
+[colors.primary]
+background = '#0c0c0c'
+foreground = '#b3ffb3'
+
+[colors.selection]
+background = '#141414'
+text = '#b3ffb3'

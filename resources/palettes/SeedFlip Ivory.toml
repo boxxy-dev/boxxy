@@ -1,0 +1,33 @@
+# Colors (SeedFlip Ivory)
+
+[colors.bright]
+black = '#b3b3b3'
+blue = '#2b7cee'
+cyan = '#12d4d4'
+green = '#12d452'
+magenta = '#ee2bee'
+red = '#ee2b2b'
+white = '#0a2540'
+yellow = '#e1c01e'
+
+[colors.cursor]
+cursor = '#635bff'
+text = '#0a2540'
+
+[colors.normal]
+black = '#d9d9d9'
+blue = '#0f58bd'
+cyan = '#0fbdbd'
+green = '#0fbd49'
+magenta = '#bd0fbd'
+red = '#bd0f0f'
+white = '#07182a'
+yellow = '#bda00f'
+
+[colors.primary]
+background = '#ffffff'
+foreground = '#0a2540'
+
+[colors.selection]
+background = '#f6f9fc'
+text = '#0a2540'
