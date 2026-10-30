@@ -458,7 +458,12 @@ pub fn build_provider_model(
         ModelProvider::OpenAi(model, thinking) => {
             let key = creds.api_keys.get("OpenAI").cloned().unwrap_or_default();
             let client = rig::providers::openai::OpenAI::new(key.trim());
-            let openai_model = client.completion(model.api_name());
+            let mut openai_model = client.completion(model.api_name());
+            if let Some(spec) = resolve_catalog_spec(provider) {
+                openai_model.wire = openai_model
+                    .wire
+                    .with_facts(rig::catalog::ModelFacts::new(spec.clone()));
+            }
             let reasoning = resolve_model_reasoning(provider, *thinking);
             (
                 openai_model.into(),
@@ -1134,6 +1139,18 @@ mod tests {
 
         let openai = Some(ModelProvider::OpenAi(OpenAiModel::Gpt6Astra, None));
         assert_eq!(model_context_window(&openai), Some(1_050_000));
+
+        let terra_61 = Some(ModelProvider::OpenAi(
+            OpenAiModel::new("gpt-6.1-terra"),
+            Some(ThinkingLevel::Medium),
+        ));
+        assert_eq!(model_context_window(&terra_61), Some(1_050_000));
+        let terra_usage = rig::completion::Usage::new()
+            .input_tokens(1_000_000)
+            .output_tokens(200_000);
+        let terra_priced = enrich_usage_with_catalog_cost(terra_usage, &terra_61);
+        // GPT-6.1 Terra: $1/1M input ($1.00) + $5/1M output ($1.00) = $2.00
+        assert!((terra_priced.cost.expect("priced").total - 2.00).abs() < 1e-6);
 
         let deepseek = Some(ModelProvider::DeepSeek(DeepSeekModel::V4_1Flash));
         assert_eq!(model_context_window(&deepseek), Some(1_000_000));

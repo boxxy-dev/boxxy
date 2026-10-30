@@ -79,10 +79,72 @@ fn is_selectable_chat_model(catalog: &Catalog, _vendor: &str, spec: &ModelSpec) 
     true
 }
 
-/// Returns all selectable [`ModelSpec`]s for `vendor` from [`Catalog::builtin`],
+/// Returns Boxxy's effective [`Catalog`], layering temporary model overrides on top of
+/// [`Catalog::builtin`] for newly released models that have not yet landed in `rig-core`'s
+/// embedded `models.json`.
+#[must_use]
+pub fn boxxy_catalog() -> &'static Catalog {
+    static BOXXY_CATALOG: std::sync::LazyLock<Catalog> = std::sync::LazyLock::new(|| {
+        let mut catalog = Catalog::builtin().clone();
+
+        // TODO(rig-catalog): Remove this temporary `gpt-6.1-terra` override once `rig-core`
+        // updates its embedded `models.json` catalog with `openai/gpt-6.1-terra`.
+        // Source: https://models.dev/api.json (`openai.models["gpt-6.1-terra"]`).
+        if let Some(openai) = rig::providers::registry::ProviderId::catalog("openai")
+            && catalog.get_exact(openai, "gpt-6.1-terra").is_none()
+        {
+            const OVERRIDE_JSON: &str = r#"{
+                "openai": {
+                    "models": {
+                        "gpt-6.1-terra": {
+                            "name": "GPT-6.1 Terra",
+                            "reasoning": true,
+                            "reasoning_options": [
+                                {
+                                    "type": "effort",
+                                    "values": ["none", "low", "medium", "high", "xhigh", "max"]
+                                }
+                            ],
+                            "tool_call": true,
+                            "structured_output": true,
+                            "temperature": false,
+                            "modalities": {
+                                "input": ["text", "image", "pdf"]
+                            },
+                            "limit": {
+                                "context": 1050000,
+                                "output": 128000
+                            },
+                            "cost": {
+                                "input": 1.0,
+                                "output": 5.0,
+                                "cache_read": 0.05,
+                                "cache_write": 1.25
+                            },
+                            "rig": {
+                                "cache": ["none", "short", "long"],
+                                "prompt_cache_options": true,
+                                "reasoning_default": "medium",
+                                "sampling": "reasoning_off"
+                            }
+                        }
+                    }
+                }
+            }"#;
+            if let Ok(overrides) = Catalog::from_overrides(OVERRIDE_JSON, &catalog) {
+                catalog = catalog.with_overrides(&overrides);
+            }
+        }
+
+        catalog
+    });
+    &BOXXY_CATALOG
+}
+
+/// Returns all selectable [`ModelSpec`]s for `vendor` from [`boxxy_catalog`],
 /// ordered with the newest / flagship generations first.
 pub fn catalog_models_for_vendor(vendor: &str) -> Vec<&'static ModelSpec> {
-    let catalog = Catalog::builtin();
+    let catalog = boxxy_catalog();
     let mut specs: Vec<&'static ModelSpec> = catalog
         .iter()
         .filter(|spec| {
@@ -176,15 +238,15 @@ pub fn thinking_levels_from_spec(spec: &ModelSpec) -> Vec<ThinkingLevel> {
     levels
 }
 
-/// Helper that looks up `(vendor, model_id)` in [`Catalog::builtin`] using O(log N) binary search
+/// Helper that looks up `(vendor, model_id)` in [`boxxy_catalog`] using O(log N) binary search
 /// (`Catalog::get`) without triggering `Catalog::resolve`'s expensive Levenshtein suggestion scan on a miss.
 #[must_use]
 pub fn catalog_get_spec(vendor: &str, model_id: &str) -> Option<&'static ModelSpec> {
     let pid = rig::providers::registry::ProviderId::catalog(vendor)?;
-    Catalog::builtin().get(pid, model_id).map(|r| r.spec)
+    boxxy_catalog().get(pid, model_id).map(|r| r.spec)
 }
 
-/// Computes the available [`ThinkingLevel`]s for a model from its [`ModelSpec`] in [`Catalog::builtin`].
+/// Computes the available [`ThinkingLevel`]s for a model from its [`ModelSpec`] in [`boxxy_catalog`].
 pub fn catalog_thinking_levels(vendor: &str, model_id: &str) -> Vec<ThinkingLevel> {
     let Some(spec) = catalog_get_spec(vendor, model_id) else {
         return Vec::new();
@@ -192,12 +254,12 @@ pub fn catalog_thinking_levels(vendor: &str, model_id: &str) -> Vec<ThinkingLeve
     thinking_levels_from_spec(spec)
 }
 
-/// O(1) lookup index over [`Catalog::builtin`] by lowercase `"vendor/id"` and bare `"id"` so
+/// O(1) lookup index over [`boxxy_catalog`] by lowercase `"vendor/id"` and bare `"id"` so
 /// [`resolve_any_catalog_spec`] is a single `HashMap` lookup (~30ns) and never blocks the UI thread.
 static CATALOG_LOOKUP_INDEX: std::sync::LazyLock<
     std::collections::HashMap<String, &'static ModelSpec>,
 > = std::sync::LazyLock::new(|| {
-    let catalog = Catalog::builtin();
+    let catalog = boxxy_catalog();
     let mut map = std::collections::HashMap::with_capacity(3200);
 
     for spec in catalog.iter() {
@@ -1398,10 +1460,25 @@ mod tests {
             .available_thinking_levels()
             .contains(&ThinkingLevel::Minimal));
 
-        // OpenAI catalog includes GPT-6.1 Sol and GPT-6 Astra
+        // OpenAI catalog includes GPT-6.1 Terra, GPT-6.1 Sol, and GPT-6 Astra
         let openai_all = OpenAiModel::all();
+        assert!(openai_all.iter().any(|m| m.api_name() == "gpt-6.1-terra"));
         assert!(openai_all.iter().any(|m| m.api_name() == "gpt-6.1-sol"));
         assert!(openai_all.iter().any(|m| m.api_name() == "gpt-6-astra"));
+        let terra_61 = OpenAiModel::new("gpt-6.1-terra");
+        assert_eq!(terra_61.to_string(), "GPT-6.1 Terra");
+        assert!(terra_61.supports_thinking());
+        assert_eq!(
+            terra_61.available_thinking_levels(),
+            vec![
+                ThinkingLevel::None,
+                ThinkingLevel::Low,
+                ThinkingLevel::Medium,
+                ThinkingLevel::High,
+                ThinkingLevel::XHigh,
+            ]
+        );
+        assert_eq!(terra_61.default_thinking_level(), Some(ThinkingLevel::Medium));
         let sol_61 = OpenAiModel::new("gpt-6.1-sol");
         assert_eq!(sol_61.to_string(), "GPT-6.1 Sol");
         assert!(sol_61.supports_thinking());
