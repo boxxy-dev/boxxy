@@ -107,16 +107,18 @@ pub fn spawn_dispatch(
                     agent_name,
                     character_id,
                     usage,
+                    typewriter,
                 } => {
                     if let Some(usage) = usage {
                         record_usage(&session_usage, usage);
                     }
-                    boxxy_claw_ui::add_diagnosis_row(
+                    boxxy_claw_ui::add_diagnosis_row_with_typewriter(
                         &overlay_store,
                         id.clone(),
                         Some(agent_name.clone()),
                         Some(character_id.clone()),
                         diagnosis,
+                        *typewriter,
                     );
                     overlay.show(
                         OverlayMode::Claw,

@@ -451,6 +451,8 @@ pub enum ClawEngineEvent {
         character_id: String,
         diagnosis: String,
         usage: Option<UsageWrapper>,
+        #[serde(default)]
+        typewriter: bool,
     },
     /// Forces the UI to cleanly close the Claw drawer and reset action states.
     /// Emitted when the agent silently acknowledges a user rejection ([SILENT_ACK]).

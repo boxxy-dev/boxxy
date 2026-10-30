@@ -81,10 +81,10 @@ async fn cache_user_attachment_thumbnails_in_dir(
 }
 
 impl ClawSession {
-    /// Evaluates the user's message for `/stop`, `/debate`, `@character` mentions, or
-    /// participation in an active roundtable. Returns `None` if the user explicitly stopped
-    /// the conversation so the caller can halt without spawning an LLM turn.
-    async fn prepare_user_roundtable_turn(&self, raw_input: &str) -> Option<String> {
+    /// Evaluates the user's message for `/stop`, `/drama`, `/debate`, `@character` mentions, or
+    /// participation in an active roundtable. Returns `Err(status_msg)` if the command was handled
+    /// locally (like `/stop` or `/drama` toggle) without needing an immediate LLM turn.
+    async fn prepare_user_roundtable_turn(&self, raw_input: &str) -> Result<String, String> {
         use crate::engine::session::roundtable::{
             SpeakerIdentity, UserRoundtableIntent, get_active_catalog, parse_user_roundtable_intent,
         };
@@ -114,7 +114,43 @@ impl ClawSession {
             UserRoundtableIntent::Stop => {
                 state_lock.roundtable.clear();
                 state_lock.active_speaker = None;
-                None
+                Err("*Multi-character conversation paused. Let me know what you'd like to do next!*".to_string())
+            }
+            UserRoundtableIntent::ToggleDrama => {
+                let next = !state_lock.roundtable.drama_mode;
+                state_lock.roundtable.drama_mode = next;
+                if next {
+                    Err("🎭 **Drama Mode enabled!** Characters will now speak in short, casual 1-sentence Visual Novel lines with a typewriter effect.".to_string())
+                } else {
+                    Err("🎭 **Drama Mode disabled.** Characters will return to full technical responses.".to_string())
+                }
+            }
+            UserRoundtableIntent::Drama { guests, topic } => {
+                let resolved_guests: Vec<SpeakerIdentity> = guests
+                    .into_iter()
+                    .map(|mut g| {
+                        if let Some(info) =
+                            catalog.iter().find(|c| c.config.id == g.character_id)
+                        {
+                            g = crate::engine::session::roundtable::speaker_from_info(
+                                info,
+                                &self.character_id,
+                                &self.pane_id,
+                            );
+                        }
+                        g
+                    })
+                    .collect();
+
+                state_lock
+                    .roundtable
+                    .start_debate(host, resolved_guests, topic.clone());
+                state_lock.roundtable.drama_mode = true;
+                state_lock.active_speaker = state_lock.roundtable.speaker_queue.pop_front();
+                Ok(format!(
+                    "[VISUAL NOVEL DRAMA MODE STARTED]\nTopic: {topic}\n\
+                    Reply in ONLY 1 to 2 short, expressive spoken sentences (NO bullet points, NO lists, NO headers) and directly address the other participant(s)!"
+                ))
             }
             UserRoundtableIntent::Debate { guests, topic } => {
                 // Re-resolve guests with `self.pane_id` so active swarm peers get their `home_pane_id` populated
@@ -138,7 +174,7 @@ impl ClawSession {
                     .roundtable
                     .start_debate(host, resolved_guests, topic.clone());
                 state_lock.active_speaker = state_lock.roundtable.speaker_queue.pop_front();
-                Some(format!(
+                Ok(format!(
                     "[ROUNDTABLE DEBATE STARTED]\nTopic: {topic}\n\
                     Kick off the discussion in your character's voice and directly engage the other participant(s) and the user!"
                 ))
@@ -171,7 +207,7 @@ impl ClawSession {
                     prompt.clone(),
                 );
                 state_lock.active_speaker = state_lock.roundtable.speaker_queue.pop_front();
-                Some(prompt)
+                Ok(prompt)
             }
             UserRoundtableIntent::None => {
                 if state_lock.roundtable.participants.len() >= 2 {
@@ -184,7 +220,7 @@ impl ClawSession {
                 } else {
                     state_lock.active_speaker = None;
                 }
-                Some(raw_input.to_string())
+                Ok(raw_input.to_string())
             }
         }
     }
@@ -259,16 +295,20 @@ impl ClawSession {
         }
         ctx.backlog.clear();
 
-        let Some(effective_query) = self.prepare_user_roundtable_turn(&query).await else {
-            self.send_ui(ClawEngineEvent::DiagnosisComplete {
-                agent_name: self.name.clone(),
-                character_id: self.character_id.clone(),
-                diagnosis: "*Multi-character debate paused. Let me know what you'd like to do next!*".to_string(),
-                usage: None,
-            })
-            .await;
-            let _ = self.tx_self.send(ClawMessage::TurnFinished).await;
-            return;
+        let effective_query = match self.prepare_user_roundtable_turn(&query).await {
+            Ok(q) => q,
+            Err(status_msg) => {
+                self.send_ui(ClawEngineEvent::DiagnosisComplete {
+                    agent_name: self.name.clone(),
+                    character_id: self.character_id.clone(),
+                    diagnosis: status_msg,
+                    usage: None,
+                    typewriter: false,
+                })
+                .await;
+                let _ = self.tx_self.send(ClawMessage::TurnFinished).await;
+                return;
+            }
         };
 
         ctx.workspace
@@ -371,16 +411,20 @@ impl ClawSession {
             }
             ctx.backlog.clear();
 
-            let Some(effective_message) = self.prepare_user_roundtable_turn(&message).await else {
-                self.send_ui(ClawEngineEvent::DiagnosisComplete {
-                    agent_name: self.name.clone(),
-                    character_id: self.character_id.clone(),
-                    diagnosis: "*Multi-character debate paused. Let me know what you'd like to do next!*".to_string(),
-                    usage: None,
-                })
-                .await;
-                let _ = self.tx_self.send(ClawMessage::TurnFinished).await;
-                return;
+            let effective_message = match self.prepare_user_roundtable_turn(&message).await {
+                Ok(m) => m,
+                Err(status_msg) => {
+                    self.send_ui(ClawEngineEvent::DiagnosisComplete {
+                        agent_name: self.name.clone(),
+                        character_id: self.character_id.clone(),
+                        diagnosis: status_msg,
+                        usage: None,
+                        typewriter: false,
+                    })
+                    .await;
+                    let _ = self.tx_self.send(ClawMessage::TurnFinished).await;
+                    return;
+                }
             };
 
             ctx.current_turn = Some(spawn_turn(

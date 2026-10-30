@@ -174,6 +174,7 @@ pub fn spawn_turn(
             mcp_handle,
             web_search_enabled,
             vibe_enabled,
+            drama_mode,
             history,
             history_len,
             full_prompt,
@@ -181,6 +182,7 @@ pub fn spawn_turn(
         ) = {
             let mut state_lock = state.lock().await;
             state_lock.current_dir = cwd_clone.clone();
+            let drama_mode = state_lock.roundtable.drama_mode;
 
             // 3. Process Snapshot
             let final_snapshot_text =
@@ -197,6 +199,18 @@ pub fn spawn_turn(
                         format!("{} (@{}) [{}]", p.display_name, p.slug, role)
                     })
                     .collect();
+                let other_mentions: Vec<String> = state_lock
+                    .roundtable
+                    .participants
+                    .iter()
+                    .filter(|p| p.character_id != character_id)
+                    .map(|p| format!("`@{}`", p.slug))
+                    .collect();
+                let other_mentions_str = if other_mentions.is_empty() {
+                    "their `@character-slug`".to_string()
+                } else {
+                    other_mentions.join(", ")
+                };
                 roundtable_context = format!(
                     "\n--- ROUNDTABLE / MULTI-CHARACTER OVERLAY CHAT ---\n\
                     You are speaking as **{agent_name}** (`@{slug}`) in a live multi-character conversation inside **{host_agent_name}**'s overlay.\n\
@@ -206,7 +220,7 @@ pub fn spawn_turn(
                     2. The participants listed above are ALREADY in the room and queued to speak right after you — do NOT call `invite_character` for them!\n\
                     3. Directly engage with the other character(s) and the user — agree, challenge their arguments, banter in-character, or collaborate on the problem.\n\
                     4. Use inline code or plain ` ```text ` blocks for example commands during a roundtable discussion instead of ` ```bash ` blocks unless the user explicitly asked you to execute a command right now (since ` ```bash ` blocks pause the roundtable for command approval).\n\
-                    5. End your message by directly addressing the other character(s) in the room (e.g. `@niko-una`, `@levi-kujo`, `@kuro`) with a sharp question, take, or counter-argument so they can reply to you immediately on the next turn!\n\
+                    5. End your message by directly addressing the other character(s) in the room ({other_mentions_str}) with a sharp question, take, or counter-argument so they can reply to you immediately on the next turn!\n\
                     -------------------------------------------------\n",
                     if roster.is_empty() {
                         format!("{host_agent_name} [Host], {agent_name} [Guest]")
@@ -214,6 +228,17 @@ pub fn spawn_turn(
                         roster.join(", ")
                     },
                     slug = speaker.slug,
+                );
+            }
+
+            if drama_mode {
+                roundtable_context.push_str(
+                    "\n--- VISUAL NOVEL / DRAMA MODE ACTIVE (OVERRIDE ALL LENGTH & LIST FORMATTING) ---\n\
+                    1. Speak in ONLY 1 to 2 short, punchy spoken sentences (maximum ~35 words total)!\n\
+                    2. STRICTLY FORBIDDEN: Do NOT use bullet points, numbered lists, markdown headers, or multi-paragraph essays!\n\
+                    3. Do NOT call routine inspection tools (`get_system_info`, `list_processes`, `sys_shell_exec`) unless the user explicitly asked you to execute a command or inspect a file right now.\n\
+                    4. Write pure, dramatic, casual spoken dialogue as if in an anime / visual novel scene or fast group chat!\n\
+                    --------------------------------------------------------------------------------\n",
                 );
             }
 
@@ -283,7 +308,17 @@ pub fn spawn_turn(
             };
             let char_id = character_id.clone();
 
-            (agent, mcp, web, vibe, h, l, full_prompt, char_id)
+            (
+                agent,
+                mcp,
+                web,
+                vibe,
+                drama_mode,
+                h,
+                l,
+                full_prompt,
+                char_id,
+            )
         };
 
         // 4. Resolve Agent (after lock is released to prevent deadlock)
@@ -500,7 +535,7 @@ pub fn spawn_turn(
                         agent_name: agent_name.clone(),
                         character_id: character_id.clone(),
                         command,
-                        diagnosis: clean_diagnosis,
+                        diagnosis: clean_diagnosis.clone(),
                         target_pane_id: None,
                         target_pane_label: None,
                         auto_approve,
@@ -518,8 +553,9 @@ pub fn spawn_turn(
                     let event = ClawEngineEvent::DiagnosisComplete {
                         agent_name: agent_name.clone(),
                         character_id: character_id.clone(),
-                        diagnosis: clean_diagnosis,
+                        diagnosis: clean_diagnosis.clone(),
                         usage,
+                        typewriter: drama_mode,
                     };
                     persist_visual_event(
                         db.clone(),
@@ -562,6 +598,13 @@ pub fn spawn_turn(
                 // back into Thinking for the next speaker so the input bar stays inactive and
                 // the Cancel (×) button remains available to interrupt the conversation.
                 if let Some((next_name, next_cid)) = next_thinking_speaker {
+                    if drama_mode {
+                        // In Visual Novel Drama Mode, wait for the current character's typewriter
+                        // animation to finish revealing on screen before the next character speaks!
+                        let char_count = clean_diagnosis.chars().count() as u64;
+                        let delay_ms = (char_count * 16 + 550).clamp(1100, 3400);
+                        tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+                    }
                     let _ = tx_ui
                         .send(ClawEngineEvent::AgentThinking {
                             agent_name: next_name,
@@ -623,6 +666,7 @@ pub fn spawn_turn(
                     character_id: character_id.clone(),
                     diagnosis: friendly_msg,
                     usage: None,
+                    typewriter: false,
                 };
                 persist_visual_event(
                     db.clone(),

@@ -26,6 +26,13 @@ pub struct SpeakerIdentity {
 pub enum UserRoundtableIntent {
     /// User explicitly asked to stop the ongoing multi-character conversation/debate.
     Stop,
+    /// User invoked `/drama` with no arguments to toggle Visual Novel Drama Mode ON/OFF.
+    ToggleDrama,
+    /// User invoked `/drama [@char1] [@char2] [topic]` to start a Visual Novel Drama Mode chat.
+    Drama {
+        guests: Vec<SpeakerIdentity>,
+        topic: String,
+    },
     /// User invoked `/debate` (with optional `@character` mentions and a topic).
     Debate {
         guests: Vec<SpeakerIdentity>,
@@ -54,6 +61,8 @@ pub struct RoundtableState {
     pub remaining_rounds: u8,
     /// True when characters should automatically alternate turns (e.g. `/debate` or "talk to each other").
     pub auto_alternate: bool,
+    /// True when Visual Novel Drama Mode is enabled (1-2 sentence casual spoken dialogue + typewriter effect).
+    pub drama_mode: bool,
     /// The original user prompt or debate topic that started the current roundtable.
     pub topic: String,
     /// Last character ID that spoke, used to pick the next participant in `auto_alternate` mode.
@@ -66,10 +75,12 @@ impl RoundtableState {
     }
 
     pub fn clear(&mut self) {
+        let keep_drama = self.drama_mode;
         self.participants.clear();
         self.speaker_queue.clear();
         self.remaining_rounds = 0;
         self.auto_alternate = false;
+        self.drama_mode = keep_drama;
         self.topic.clear();
         self.last_speaker_id = None;
     }
@@ -312,6 +323,16 @@ impl RoundtableState {
             .map(|p| format!("{} (@{})", p.display_name, p.slug))
             .collect();
 
+        let style_instructions = if self.drama_mode {
+            "- DRAMA / VISUAL NOVEL MODE IS ACTIVE: Reply in ONLY 1 to 2 short, punchy spoken sentences (under 35 words max)!\n\
+            - STRICTLY FORBIDDEN: NO bullet points, NO numbered lists, NO markdown headers, NO multi-paragraph essays, and NO routine tool calls!\n\
+            - Speak like a live anime / visual novel character reacting directly to what was just said, and end with a quick hook or reaction to the other character!"
+        } else {
+            "- Challenge, agree, banter, or build on the previous speaker's specific points from your own technical perspective and personality.\n\
+            - Do NOT re-run system inspection commands that were already executed in the previous turn unless checking a brand-new fact.\n\
+            - End your message by addressing the other character with a sharp counter-point or follow-up question so the conversation continues naturally!"
+        };
+
         let prompt = format!(
             "[ROUNDTABLE TURN — Round {}/{}]\n\
             **{}** (`@{}`) just spoke in the overlay conversation (see their latest message in history).\n\
@@ -319,9 +340,7 @@ impl RoundtableState {
             Original Topic / Context: {}\n\
             INSTRUCTIONS FOR YOUR TURN:\n\
             - Respond directly in your own character's voice (**{}**) to **{}** (`@{}`) and the user.\n\
-            - Challenge, agree, banter, or build on **{}**'s specific points from your own technical perspective and personality.\n\
-            - Do NOT re-run system inspection commands that were already executed in the previous turn unless checking a brand-new fact.\n\
-            - End your message by addressing **{}** (`@{}`) with a sharp counter-point or follow-up question so the conversation continues naturally!",
+            {}",
             MAX_ROUNDTABLE_ROUNDS.saturating_sub(self.remaining_rounds),
             MAX_ROUNDTABLE_ROUNDS,
             speaker.display_name,
@@ -339,9 +358,7 @@ impl RoundtableState {
             next_speaker.display_name,
             speaker.display_name,
             speaker.slug,
-            speaker.display_name,
-            speaker.display_name,
-            speaker.slug,
+            style_instructions,
         );
 
         Some((next_speaker, prompt))
@@ -534,7 +551,63 @@ pub fn parse_user_roundtable_intent(
         return UserRoundtableIntent::Stop;
     }
 
-    // 2. `/debate` command: `/debate [@char1] [@char2] <topic>`
+    // 2. `/drama` command: `/drama` (toggle) or `/drama [@char1] [@char2] [topic]`
+    if lower == "/drama" || lower.starts_with("/drama ") {
+        let rest = trimmed.get("/drama".len()..).unwrap_or("").trim();
+        if rest.is_empty() {
+            return UserRoundtableIntent::ToggleDrama;
+        }
+
+        let mut guests = Vec::new();
+        let mut topic_words = Vec::new();
+
+        for word in rest.split_whitespace() {
+            if word.starts_with('@')
+                && let Some(mut spk) =
+                    resolve_speaker_token(word, &host.character_id, "", catalog)
+            {
+                spk.is_guest = spk.character_id != host.character_id;
+                if spk.character_id != host.character_id
+                    && !guests
+                        .iter()
+                        .any(|g: &SpeakerIdentity| g.character_id == spk.character_id)
+                {
+                    guests.push(spk);
+                }
+                continue;
+            }
+            topic_words.push(word);
+        }
+
+        if guests.is_empty() && !topic_words.is_empty() {
+            if let Some(mut spk) =
+                resolve_speaker_token(topic_words[0], &host.character_id, "", catalog)
+                && spk.character_id != host.character_id
+            {
+                spk.is_guest = true;
+                guests.push(spk);
+                topic_words.remove(0);
+            }
+        }
+
+        if guests.is_empty() {
+            if let Some(other) = catalog.iter().find(|c| c.config.id != host.character_id) {
+                guests.push(speaker_from_info(other, &host.character_id, ""));
+            }
+        }
+
+        let topic = if topic_words.is_empty() {
+            "Start a lively, dramatic in-character visual-novel banter scene together!".to_string()
+        } else {
+            topic_words.join(" ")
+        };
+
+        if !guests.is_empty() {
+            return UserRoundtableIntent::Drama { guests, topic };
+        }
+    }
+
+    // 3. `/debate` command: `/debate [@char1] [@char2] <topic>`
     if lower == "/debate" || lower.starts_with("/debate ") {
         let rest = trimmed.get("/debate".len()..).unwrap_or("").trim();
         let mut guests = Vec::new();
@@ -767,6 +840,21 @@ mod tests {
         // Stop detection when active
         let stop = parse_user_roundtable_intent("stop", &host, true, &cat);
         assert_eq!(stop, UserRoundtableIntent::Stop);
+
+        // `/drama` with no arguments toggles drama mode
+        let toggle = parse_user_roundtable_intent("/drama", &host, false, &cat);
+        assert_eq!(toggle, UserRoundtableIntent::ToggleDrama);
+
+        // `/drama @levi-kujo` starts Drama mode with Levi
+        let drama =
+            parse_user_roundtable_intent("/drama @levi-kujo cursed kernel", &host, false, &cat);
+        if let UserRoundtableIntent::Drama { guests, topic } = drama {
+            assert_eq!(guests.len(), 1);
+            assert_eq!(guests[0].character_id, "id-levi");
+            assert_eq!(topic, "cursed kernel");
+        } else {
+            panic!("Expected Drama intent");
+        }
     }
 
     #[test]

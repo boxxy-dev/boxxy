@@ -11,6 +11,7 @@ mod imp {
     #[derive(Default)]
     pub struct ClawRowObject {
         pub row: RefCell<Option<PersistentClawRow>>,
+        pub typewriter: std::cell::Cell<bool>,
     }
 
     #[glib::object_subclass]
@@ -61,6 +62,16 @@ impl ClawRowObject {
         let obj: Self = glib::Object::builder().build();
         obj.imp().row.replace(Some(row));
         obj
+    }
+
+    pub fn new_with_typewriter(row: PersistentClawRow, typewriter: bool) -> Self {
+        let obj = Self::new(row);
+        obj.imp().typewriter.set(typewriter);
+        obj
+    }
+
+    pub fn take_typewriter(&self) -> bool {
+        self.imp().typewriter.replace(false)
     }
 
     pub fn get_row(&self) -> PersistentClawRow {

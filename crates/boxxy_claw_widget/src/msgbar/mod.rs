@@ -466,6 +466,9 @@ impl MsgBarComponent {
             Box::new(autocomplete::DebateCompletionProvider::new(
                 character_id.clone(),
             )),
+            Box::new(autocomplete::DramaCompletionProvider::new(
+                character_id.clone(),
+            )),
             Box::new(autocomplete::CommandCompletionProvider::new(
                 claw_state.clone(),
                 character_id.clone(),

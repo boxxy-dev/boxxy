@@ -253,6 +253,9 @@ pub fn create_claw_message_list() -> (gtk::ListView, gio::ListStore) {
         cmd_label.set_visible(false);
         vbox.append(&cmd_label);
 
+        let typewriter_timer: Rc< std::cell::RefCell<Option<glib::SourceId>> > =
+            Rc::new(std::cell::RefCell::new(None));
+
         hbox.set_safe_data("left_col", left_col);
         hbox.set_safe_data("header", header);
         hbox.set_safe_data("thumbs_box", thumbs_box);
@@ -262,6 +265,7 @@ pub fn create_claw_message_list() -> (gtk::ListView, gio::ListStore) {
         hbox.set_safe_data("pane_lbl", pane_lbl);
         hbox.set_safe_data("viewer", viewer);
         hbox.set_safe_data("cmd_label", cmd_label);
+        hbox.set_safe_data("typewriter_timer", typewriter_timer);
 
         list_item.set_child(Some(&hbox));
     });
@@ -279,6 +283,13 @@ pub fn create_claw_message_list() -> (gtk::ListView, gio::ListStore) {
         let pane_lbl = hbox.get_safe_data::<gtk::Label>("pane_lbl").unwrap();
         let viewer = hbox.get_safe_data::<StructuredViewer>("viewer").unwrap();
         let cmd_label = hbox.get_safe_data::<gtk::Label>("cmd_label").unwrap();
+        let typewriter_timer = hbox
+            .get_safe_data::<Rc<std::cell::RefCell<Option<glib::SourceId>>>>("typewriter_timer")
+            .unwrap();
+
+        if let Some(old_source) = typewriter_timer.borrow_mut().take() {
+            old_source.remove();
+        }
 
         let Some(obj) = list_item.item().and_downcast::<ClawRowObject>() else {
             return;
@@ -425,9 +436,41 @@ pub fn create_claw_message_list() -> (gtk::ListView, gio::ListStore) {
                 pane_lbl.set_visible(false);
                 hbox.add_css_class("claw-row-diagnosis");
 
-                viewer.set_content(&content);
                 viewer.widget().set_visible(true);
                 cmd_label.set_visible(false);
+
+                if obj.take_typewriter() && !content.is_empty() {
+                    let char_ends: Vec<usize> = content
+                        .char_indices()
+                        .map(|(i, c)| i + c.len_utf8())
+                        .collect();
+                    if char_ends.len() <= 2 {
+                        viewer.set_content(&content);
+                    } else {
+                        viewer.set_content(&content[..char_ends[1]]);
+                        let idx = std::cell::Cell::new(1usize);
+                        let viewer_for_tick = viewer.clone();
+                        let timer_slot = typewriter_timer.clone();
+                        let source_id = glib::timeout_add_local(
+                            std::time::Duration::from_millis(22),
+                            move || {
+                                let next_idx = (idx.get() + 2).min(char_ends.len() - 1);
+                                idx.set(next_idx);
+                                let byte_end = char_ends[next_idx];
+                                viewer_for_tick.set_content(&content[..byte_end]);
+                                if next_idx + 1 >= char_ends.len() {
+                                    let _ = timer_slot.borrow_mut().take();
+                                    glib::ControlFlow::Break
+                                } else {
+                                    glib::ControlFlow::Continue
+                                }
+                            },
+                        );
+                        *typewriter_timer.borrow_mut() = Some(source_id);
+                    }
+                } else {
+                    viewer.set_content(&content);
+                }
             }
             PersistentClawRow::User {
                 content, images, ..
@@ -559,6 +602,12 @@ pub fn create_claw_message_list() -> (gtk::ListView, gio::ListStore) {
     factory.connect_unbind(move |_, list_item| {
         let list_item = list_item.downcast_ref::<gtk::ListItem>().unwrap();
         let hbox = list_item.child().and_downcast::<gtk::Box>().unwrap();
+        if let Some(timer_slot) =
+            hbox.get_safe_data::<Rc<std::cell::RefCell<Option<glib::SourceId>>>>("typewriter_timer")
+            && let Some(old_source) = timer_slot.borrow_mut().take()
+        {
+            old_source.remove();
+        }
         if let Some(viewer) = hbox.get_safe_data::<StructuredViewer>("viewer") {
             viewer.clear();
         }
@@ -596,13 +645,27 @@ pub fn add_diagnosis_row(
     character_id: Option<String>,
     content: &str,
 ) {
-    store.append(&ClawRowObject::new(PersistentClawRow::Diagnosis {
-        pane_id,
-        agent_name,
-        character_id,
-        content: content.to_string(),
-        usage: None,
-    }));
+    add_diagnosis_row_with_typewriter(store, pane_id, agent_name, character_id, content, false);
+}
+
+pub fn add_diagnosis_row_with_typewriter(
+    store: &gio::ListStore,
+    pane_id: String,
+    agent_name: Option<String>,
+    character_id: Option<String>,
+    content: &str,
+    typewriter: bool,
+) {
+    store.append(&ClawRowObject::new_with_typewriter(
+        PersistentClawRow::Diagnosis {
+            pane_id,
+            agent_name,
+            character_id,
+            content: content.to_string(),
+            usage: None,
+        },
+        typewriter,
+    ));
 }
 
 pub fn add_user_row(
