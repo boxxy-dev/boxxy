@@ -310,8 +310,9 @@ window.frosted-glass-active .terminal-header tabbar tab:selected {{
 }}
 
 /* Inner fields (diagnosis viewer, command preview, template form)
-   lift above the base by one surface step for visual grouping. */
+   and character selector pills lift above the base by one surface step. */
 .claw-drawer frame.view,
+.claw-drawer .character-btn,
 .claw-drawer .claw-row-diagnosis .viewer-block,
 .claw-drawer .claw-row-tool-call .viewer-block,
 .claw-drawer .claw-row-process-list .viewer-block {{

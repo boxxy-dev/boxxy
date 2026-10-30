@@ -810,6 +810,7 @@ impl TerminalOverlay {
 
             let label = gtk::Label::new(Some(&info.config.display_name.to_uppercase()));
             label.set_valign(gtk::Align::Center);
+            label.set_halign(gtk::Align::Center);
             inner_box.append(&label);
 
             if is_current {
@@ -834,10 +835,10 @@ impl TerminalOverlay {
             btn.add_css_class(&class_name);
 
             let css = format!(
-                ".{} {{ background-color: {}; color: white; }}\n\
-                 .{} *:not(image) {{ color: white; }}\n\
-                 .{}:hover {{ filter: brightness(1.1); transform: scale(1.02); }}\n",
-                class_name, info.config.color, class_name, class_name
+                ".{class_name} label {{\n\
+                     background-image: radial-gradient(circle, alpha({}, 0.85) 62%, transparent 70%);\n\
+                 }}\n",
+                info.config.color
             );
             let provider = gtk::CssProvider::new();
             provider.load_from_string(&css);

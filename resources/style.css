@@ -789,28 +789,35 @@ spinrow button.down image {
 
 /* --- Character Selector --- */
 .character-btn {
+    background-color: color-mix(in srgb, currentColor 10%, transparent);
+    background-image: none;
     border-radius: 8px;
     padding: 2px 8px;
     font-weight: 500;
     font-size: 0.75rem;
     border: 1px solid transparent;
-    transition: all 0.2s ease;
+    transition: opacity 150ms ease, border-color 150ms ease;
     box-shadow: none;
-    opacity: 0.9;
+    opacity: 0.8;
 }
 
 .character-btn label {
     margin-right: 4px;
+    padding-left: 5px;
+    min-height: 20px;
+    background-size: 18px 18px;
+    background-position: 0px center;
+    background-repeat: no-repeat;
 }
 
 .character-btn.selected-character {
-    border-color: rgba(255, 255, 255, 0.4);
-    box-shadow: 0 2px 8px rgba(0,0,0,0.3);
-    transform: scale(1.02);
+    border-color: color-mix(in srgb, currentColor 28%, transparent);
+    box-shadow: none;
     opacity: 1.0;
 }
 
 .character-btn:hover {
+    border-color: color-mix(in srgb, currentColor 18%, transparent);
     opacity: 1.0;
 }
 
