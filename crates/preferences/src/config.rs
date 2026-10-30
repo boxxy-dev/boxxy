@@ -247,6 +247,8 @@ pub struct Settings {
     pub cursor_color_override: bool,
     pub cursor_color: String,
     pub cursor_blinking: bool,
+    #[serde(default)]
+    pub mouse_autohide: bool,
     pub hide_scrollbars: bool,
     pub dim_inactive_panes: bool,
     pub fixed_width_tabs: bool,
@@ -328,6 +330,7 @@ impl Default for Settings {
             cursor_color_override: false,
             cursor_color: "rgb(255,255,255)".to_string(),
             cursor_blinking: true,
+            mouse_autohide: false,
             hide_scrollbars: true,
             dim_inactive_panes: true,
             fixed_width_tabs: true,

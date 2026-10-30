@@ -28,7 +28,7 @@ pub(super) fn build_ui() -> (
     terminal.set_hexpand(true);
     terminal.set_vexpand(true);
     terminal.set_cursor_blink_mode(true);
-    terminal.set_mouse_autohide(true);
+    terminal.set_mouse_autohide(false);
     terminal.set_scroll_on_output(false);
     terminal.set_scroll_on_keystroke(true);
 

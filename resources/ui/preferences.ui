@@ -356,6 +356,12 @@
                                     <property name="subtitle" translatable="yes">Cursor fades in and out when focused.</property>
                                   </object>
                                 </child>
+                                <child>
+                                  <object class="AdwSwitchRow" id="mouse_autohide_switch">
+                                    <property name="title" translatable="yes">Hide Mouse When Typing</property>
+                                    <property name="subtitle" translatable="yes">Hide the mouse pointer while typing and restore it on movement</property>
+                                  </object>
+                                </child>
                               </object>
                             </child>
                             <child>

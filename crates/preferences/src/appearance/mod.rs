@@ -35,6 +35,7 @@ pub fn setup_appearance_page(
     let cursor_color_switch: gtk::Switch = builder.object("cursor_color_switch").unwrap();
     let cursor_color_row: adw::ActionRow = builder.object("cursor_color_row").unwrap();
     let cursor_blinking_switch: adw::SwitchRow = builder.object("cursor_blinking_switch").unwrap();
+    let mouse_autohide_switch: adw::SwitchRow = builder.object("mouse_autohide_switch").unwrap();
     let enable_progress_bar_switch: adw::SwitchRow =
         builder.object("enable_progress_bar_switch").unwrap();
     let hide_scrollbars_switch: adw::SwitchRow = builder.object("hide_scrollbars_switch").unwrap();
@@ -497,6 +498,18 @@ pub fn setup_appearance_page(
         }
     });
 
+    mouse_autohide_switch.set_active(settings_rc.borrow().mouse_autohide);
+    let s_rc = settings_rc.clone();
+    let cb = on_change.clone();
+    mouse_autohide_switch.connect_active_notify(move |row| {
+        let mut s = s_rc.borrow_mut();
+        if s.mouse_autohide != row.is_active() {
+            s.mouse_autohide = row.is_active();
+            s.save();
+            cb(s.clone());
+        }
+    });
+
     let font_row_clone = font_row.clone();
     let theme_row_clone = theme_row.clone();
     let padding_spin_clone = padding_spin.clone();
@@ -506,6 +519,7 @@ pub fn setup_appearance_page(
     let cursor_shape_combo_clone = cursor_shape_combo.clone();
     let cursor_color_row_clone = cursor_color_row.clone();
     let cursor_blinking_switch_clone = cursor_blinking_switch.clone();
+    let mouse_autohide_switch_clone = mouse_autohide_switch.clone();
     let enable_progress_bar_switch_clone = enable_progress_bar_switch.clone();
     let hide_scrollbars_switch_clone = hide_scrollbars_switch.clone();
     let invert_scroll_switch_clone = invert_scroll_switch.clone();
@@ -566,6 +580,10 @@ pub fn setup_appearance_page(
             cursor_blinking_switch_clone.upcast_ref(),
             "blinking cursor fades in out",
         );
+        let c5 = match_row(
+            mouse_autohide_switch_clone.upcast_ref(),
+            "hide mouse when typing pointer cursor autohide restore movement",
+        );
         let pb = match_row(
             enable_progress_bar_switch_clone.upcast_ref(),
             "progress bars show visual osc 9 4 flatpak cargo",
@@ -593,7 +611,7 @@ pub fn setup_appearance_page(
 
         group_appearance.set_visible(s1 || f1 || t_bg || t1 || t_op || f_glass || c_tabs);
         group_terminal.set_visible(t2 || t3 || t4 || t5);
-        group_cursor.set_visible(c1 || c3 || c4);
+        group_cursor.set_visible(c1 || c3 || c4 || c5);
         group_layout.set_visible(pb || l1 || l2 || l3 || l5 || l6);
 
         group_appearance.is_visible()

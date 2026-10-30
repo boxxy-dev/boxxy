@@ -2245,6 +2245,8 @@ impl TerminalPaneComponent {
         let mut needs_show_grid = true;
         let mut needs_invert_scroll = true;
         let mut needs_frosted_glass = true;
+        let mut needs_cursor_blink = true;
+        let mut needs_mouse_autohide = true;
         if let Some(ref p) = inner.current_settings {
             if p.enable_web_search != settings.enable_web_search {
                 self.msg_bar
@@ -2276,6 +2278,8 @@ impl TerminalPaneComponent {
             needs_cell = (p.cell_height_scale - settings.cell_height_scale).abs() > 1e-6
                 || (p.cell_width_scale - settings.cell_width_scale).abs() > 1e-6;
             needs_cursor_shape = p.cursor_shape != settings.cursor_shape;
+            needs_cursor_blink = p.cursor_blinking != settings.cursor_blinking;
+            needs_mouse_autohide = p.mouse_autohide != settings.mouse_autohide;
             needs_palette =
                 p.theme != settings.theme || (p.opacity - settings.opacity).abs() > 1e-4;
             needs_cursor_color = p.cursor_color_override != settings.cursor_color_override
@@ -2353,9 +2357,18 @@ impl TerminalPaneComponent {
                         boxxy_vte::terminal::CursorShape::Underline
                     }
                 });
+        }
+
+        if needs_cursor_blink {
             inner
                 .terminal
                 .set_cursor_blink_mode(settings.cursor_blinking);
+        }
+
+        if needs_mouse_autohide {
+            inner
+                .terminal
+                .set_mouse_autohide(settings.mouse_autohide);
         }
 
         if needs_palette && let Some(palette) = palette_opt {

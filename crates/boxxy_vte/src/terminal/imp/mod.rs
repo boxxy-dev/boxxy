@@ -159,7 +159,7 @@ impl Default for TerminalWidget {
             autoscroll_source_id: RefCell::new(None),
             hovered_hyperlink: RefCell::new(None),
             hovered_regex_match: Cell::new(None),
-            mouse_autohide: Cell::new(true),
+            mouse_autohide: Cell::new(false),
             pointer_hidden_by_typing: Cell::new(false),
             scroll_on_keystroke: Cell::new(true),
             scroll_on_output: Cell::new(false),
