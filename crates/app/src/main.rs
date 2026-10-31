@@ -105,6 +105,8 @@ fn main() {
             ("MISTRAL_API_KEY", "Mistral"),
             ("MINIMAX_API_KEY", "MiniMax"),
             ("GROQ_API_KEY", "Groq"),
+            ("OPENCODE_API_KEY", "OpenCode Zen"),
+            ("OPENCODE_API_KEY", "OpenCode Go"),
         ]
         .into_iter()
         .map(|(k, v)| (k.to_string(), v.to_string()))

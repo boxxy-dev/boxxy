@@ -73,7 +73,7 @@ gtk4 = { version = "0.11", features = ["v4_22"] }
 libadwaita = { version = "0.9", features = ["v1_9"] }
 reqwest = { version = "0.13.5", default-features = false, features = ["rustls", "json", "stream"] }
 serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
+serde_json = { version = "1.0", features = ["preserve_order", "float_roundtrip"] }
 sourceview5 = "0.11"
 chrono = { version = "0.4", features = ["serde"] }
 async-channel = "2.5.0"
@@ -82,8 +82,7 @@ futures-channel = "0.3.34"
 futures-util = "0.3.34"
 log = { version = "0.4.34", features = ["std", "serde", "release_max_level_info"] }
 env_logger = "0.11.11"
-rig = { version = "0.45.0", default-features = true }
-rig-memory = "0.45.0"
+rig = { version = "0.46.0", default-features = true }
 nix = { version = "0.31.3", features = ["process", "term", "fs", "signal", "ioctl", "user"] }
 zbus = { version = "6.1.0", features = ["tokio", "p2p"] }
 libc = "0.2"

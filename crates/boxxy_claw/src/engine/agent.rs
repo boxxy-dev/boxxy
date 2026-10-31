@@ -445,18 +445,14 @@ pub async fn create_claw_agent(
         });
     }
 
-    let native_search_params = if config.web_search_local_enabled
+    let use_native_search = config.web_search_local_enabled
         && config.web_search_master_enabled
         && config.use_native_search
-    {
-        boxxy_ai_core::native_search_additional_params(provider)
-    } else {
-        None
-    };
+        && provider.supports_native_search();
 
     if config.web_search_local_enabled
         && config.web_search_master_enabled
-        && native_search_params.is_none()
+        && !use_native_search
     {
         let tavily_key = creds.api_keys.get("Tavily").cloned().unwrap_or_default();
         if !tavily_key.is_empty() {
@@ -550,8 +546,8 @@ pub async fn create_claw_agent(
         builder = builder.reasoning(reasoning);
     }
 
-    if let Some(params) = native_search_params {
-        builder = builder.additional_params(params);
+    if use_native_search {
+        builder = boxxy_ai_core::attach_native_search(builder, provider);
     }
 
     let agent = builder.build();

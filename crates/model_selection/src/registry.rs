@@ -1,7 +1,8 @@
 use crate::models::{
     AnthropicModel, CustomModelConfig, DeepSeekModel, GeminiModel, GroqModel, MiniMaxModel,
     MistralModel, ModelProvider, MoonshotModel, OpenAiCompatibleEndpoint, OpenAiModel,
-    ThinkingLevel, XaiModel, ZaiModel, catalog_thinking_levels_for_any_slug,
+    OpenCodeGoModel, OpenCodeZenModel, ThinkingLevel, XaiModel, ZaiModel,
+    catalog_thinking_levels_for_any_slug,
 };
 use gtk4 as gtk;
 use gtk4::prelude::*;
@@ -197,6 +198,20 @@ impl_catalog_provider!(
     GroqModel,
     Groq,
     "openai/gpt-oss-120b"
+);
+impl_catalog_provider!(
+    OpenCodeZenProviderImpl,
+    "OpenCode Zen",
+    OpenCodeZenModel,
+    OpenCodeZen,
+    "claude-sonnet-5-5"
+);
+impl_catalog_provider!(
+    OpenCodeGoProviderImpl,
+    "OpenCode Go",
+    OpenCodeGoModel,
+    OpenCodeGo,
+    "glm-5.3"
 );
 
 struct OllamaProviderImpl;
@@ -459,10 +474,16 @@ pub fn get_providers_with_custom(
         Box::new(MistralProviderImpl),
         Box::new(MiniMaxProviderImpl),
         Box::new(GroqProviderImpl),
+        Box::new(OpenCodeZenProviderImpl),
+        Box::new(OpenCodeGoProviderImpl),
     ];
 
     for ep in custom_endpoints {
-        if ep.enabled && !ep.name.trim().is_empty() && !ep.base_url.trim().is_empty() {
+        let trimmed_name = ep.name.trim();
+        let collides_with_builtin = providers
+            .iter()
+            .any(|p| p.name().eq_ignore_ascii_case(trimmed_name));
+        if ep.enabled && !trimmed_name.is_empty() && !ep.base_url.trim().is_empty() && !collides_with_builtin {
             providers.push(Box::new(OpenAiCompatibleProviderImpl {
                 endpoint: ep.clone(),
             }));

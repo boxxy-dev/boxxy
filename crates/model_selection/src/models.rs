@@ -79,72 +79,10 @@ fn is_selectable_chat_model(catalog: &Catalog, _vendor: &str, spec: &ModelSpec) 
     true
 }
 
-/// Returns Boxxy's effective [`Catalog`], layering temporary model overrides on top of
-/// [`Catalog::builtin`] for newly released models that have not yet landed in `rig-core`'s
-/// embedded `models.json`.
-#[must_use]
-pub fn boxxy_catalog() -> &'static Catalog {
-    static BOXXY_CATALOG: std::sync::LazyLock<Catalog> = std::sync::LazyLock::new(|| {
-        let mut catalog = Catalog::builtin().clone();
-
-        // TODO(rig-catalog): Remove this temporary `gpt-6.1-terra` override once `rig-core`
-        // updates its embedded `models.json` catalog with `openai/gpt-6.1-terra`.
-        // Source: https://models.dev/api.json (`openai.models["gpt-6.1-terra"]`).
-        if let Some(openai) = rig::providers::registry::ProviderId::catalog("openai")
-            && catalog.get_exact(openai, "gpt-6.1-terra").is_none()
-        {
-            const OVERRIDE_JSON: &str = r#"{
-                "openai": {
-                    "models": {
-                        "gpt-6.1-terra": {
-                            "name": "GPT-6.1 Terra",
-                            "reasoning": true,
-                            "reasoning_options": [
-                                {
-                                    "type": "effort",
-                                    "values": ["none", "low", "medium", "high", "xhigh", "max"]
-                                }
-                            ],
-                            "tool_call": true,
-                            "structured_output": true,
-                            "temperature": false,
-                            "modalities": {
-                                "input": ["text", "image", "pdf"]
-                            },
-                            "limit": {
-                                "context": 1050000,
-                                "output": 128000
-                            },
-                            "cost": {
-                                "input": 1.0,
-                                "output": 5.0,
-                                "cache_read": 0.05,
-                                "cache_write": 1.25
-                            },
-                            "rig": {
-                                "cache": ["none", "short", "long"],
-                                "prompt_cache_options": true,
-                                "reasoning_default": "medium",
-                                "sampling": "reasoning_off"
-                            }
-                        }
-                    }
-                }
-            }"#;
-            if let Ok(overrides) = Catalog::from_overrides(OVERRIDE_JSON, &catalog) {
-                catalog = catalog.with_overrides(&overrides);
-            }
-        }
-
-        catalog
-    });
-    &BOXXY_CATALOG
-}
-
-/// Returns all selectable [`ModelSpec`]s for `vendor` from [`boxxy_catalog`],
+/// Returns all selectable [`ModelSpec`]s for `vendor` from [`Catalog::builtin`],
 /// ordered with the newest / flagship generations first.
 pub fn catalog_models_for_vendor(vendor: &str) -> Vec<&'static ModelSpec> {
-    let catalog = boxxy_catalog();
+    let catalog = Catalog::builtin();
     let mut specs: Vec<&'static ModelSpec> = catalog
         .iter()
         .filter(|spec| {
@@ -179,6 +117,13 @@ pub fn catalog_models_for_vendor(vendor: &str) -> Vec<&'static ModelSpec> {
             } else {
                 2
             }
+        });
+    } else if matches!(vendor, "opencode" | "opencode-go") {
+        // Keep flagship paid/subscription models ahead of free/stealth preview tiers
+        specs.sort_by_key(|spec| {
+            spec.id.ends_with("-free")
+                || spec.id == "big-pickle"
+                || spec.id.starts_with("iceman-")
         });
     }
 
@@ -238,15 +183,15 @@ pub fn thinking_levels_from_spec(spec: &ModelSpec) -> Vec<ThinkingLevel> {
     levels
 }
 
-/// Helper that looks up `(vendor, model_id)` in [`boxxy_catalog`] using O(log N) binary search
+/// Helper that looks up `(vendor, model_id)` in [`Catalog::builtin`] using O(log N) binary search
 /// (`Catalog::get`) without triggering `Catalog::resolve`'s expensive Levenshtein suggestion scan on a miss.
 #[must_use]
 pub fn catalog_get_spec(vendor: &str, model_id: &str) -> Option<&'static ModelSpec> {
     let pid = rig::providers::registry::ProviderId::catalog(vendor)?;
-    boxxy_catalog().get(pid, model_id).map(|r| r.spec)
+    Catalog::builtin().get(pid, model_id).map(|r| r.spec)
 }
 
-/// Computes the available [`ThinkingLevel`]s for a model from its [`ModelSpec`] in [`boxxy_catalog`].
+/// Computes the available [`ThinkingLevel`]s for a model from its [`ModelSpec`] in [`Catalog::builtin`].
 pub fn catalog_thinking_levels(vendor: &str, model_id: &str) -> Vec<ThinkingLevel> {
     let Some(spec) = catalog_get_spec(vendor, model_id) else {
         return Vec::new();
@@ -254,12 +199,12 @@ pub fn catalog_thinking_levels(vendor: &str, model_id: &str) -> Vec<ThinkingLeve
     thinking_levels_from_spec(spec)
 }
 
-/// O(1) lookup index over [`boxxy_catalog`] by lowercase `"vendor/id"` and bare `"id"` so
+/// O(1) lookup index over [`Catalog::builtin`] by lowercase `"vendor/id"` and bare `"id"` so
 /// [`resolve_any_catalog_spec`] is a single `HashMap` lookup (~30ns) and never blocks the UI thread.
 static CATALOG_LOOKUP_INDEX: std::sync::LazyLock<
     std::collections::HashMap<String, &'static ModelSpec>,
 > = std::sync::LazyLock::new(|| {
-    let catalog = boxxy_catalog();
+    let catalog = Catalog::builtin();
     let mut map = std::collections::HashMap::with_capacity(3200);
 
     for spec in catalog.iter() {
@@ -994,6 +939,112 @@ impl fmt::Display for GroqModel {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct OpenCodeZenModel(pub String);
+
+#[allow(non_upper_case_globals)]
+impl OpenCodeZenModel {
+    pub const ClaudeSonnet5_5: Self = Self(String::new());
+
+    pub fn new(id: impl Into<String>) -> Self {
+        Self(id.into())
+    }
+
+    pub fn all() -> Vec<OpenCodeZenModel> {
+        let models: Vec<OpenCodeZenModel> = catalog_models_for_vendor("opencode")
+            .into_iter()
+            .map(|spec| OpenCodeZenModel(spec.id.clone()))
+            .collect();
+        if models.is_empty() {
+            vec![OpenCodeZenModel::new("claude-sonnet-5-5")]
+        } else {
+            models
+        }
+    }
+
+    pub fn api_name(&self) -> &str {
+        if self.0.is_empty() {
+            "claude-sonnet-5-5"
+        } else {
+            self.0.as_str()
+        }
+    }
+
+    pub fn supports_thinking(&self) -> bool {
+        !self.available_thinking_levels().is_empty()
+    }
+
+    pub fn available_thinking_levels(&self) -> Vec<ThinkingLevel> {
+        catalog_thinking_levels("opencode", self.api_name())
+    }
+
+    pub fn default_thinking_level(&self) -> Option<ThinkingLevel> {
+        catalog_default_thinking_level("opencode", self.api_name())
+    }
+}
+
+impl fmt::Display for OpenCodeZenModel {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", catalog_display_name("opencode", self.api_name()))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct OpenCodeGoModel(pub String);
+
+#[allow(non_upper_case_globals)]
+impl OpenCodeGoModel {
+    pub const Glm5_3: Self = Self(String::new());
+
+    pub fn new(id: impl Into<String>) -> Self {
+        Self(id.into())
+    }
+
+    pub fn all() -> Vec<OpenCodeGoModel> {
+        let models: Vec<OpenCodeGoModel> = catalog_models_for_vendor("opencode-go")
+            .into_iter()
+            .map(|spec| OpenCodeGoModel(spec.id.clone()))
+            .collect();
+        if models.is_empty() {
+            vec![OpenCodeGoModel::new("glm-5.3")]
+        } else {
+            models
+        }
+    }
+
+    pub fn api_name(&self) -> &str {
+        if self.0.is_empty() {
+            "glm-5.3"
+        } else {
+            self.0.as_str()
+        }
+    }
+
+    pub fn supports_thinking(&self) -> bool {
+        !self.available_thinking_levels().is_empty()
+    }
+
+    pub fn available_thinking_levels(&self) -> Vec<ThinkingLevel> {
+        catalog_thinking_levels("opencode-go", self.api_name())
+    }
+
+    pub fn default_thinking_level(&self) -> Option<ThinkingLevel> {
+        catalog_default_thinking_level("opencode-go", self.api_name())
+    }
+}
+
+impl fmt::Display for OpenCodeGoModel {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{}",
+            catalog_display_name("opencode-go", self.api_name())
+        )
+    }
+}
+
 fn default_true() -> bool {
     true
 }
@@ -1019,8 +1070,9 @@ impl OpenAiApiRoute {
             .map_or_else(|| model_id.trim(), |(_, m)| m.trim())
             .to_ascii_lowercase();
         let url_lower = base_url.to_ascii_lowercase();
-        if url_lower.contains("opencode.ai/zen")
-            && (bare.starts_with("gpt-") || bare.starts_with("grok-"))
+        if bare == "gpt-6.1-terra"
+            || (url_lower.contains("opencode.ai/zen")
+                && (bare.starts_with("gpt-") || bare.starts_with("grok-")))
         {
             Self::Responses
         } else {
@@ -1207,6 +1259,7 @@ impl OpenAiCompatibleEndpoint {
     pub fn preset_opencode_zen() -> Self {
         let base_url = "https://opencode.ai/zen/v1".to_string();
         let default_slugs = [
+            "gpt-6.1-terra",
             "gpt-6.1-sol",
             "gpt-6-astra",
             "gpt-6-sol",
@@ -1321,6 +1374,8 @@ pub enum ModelProvider {
     Mistral(MistralModel, Option<ThinkingLevel>),
     MiniMax(MiniMaxModel, Option<ThinkingLevel>),
     Groq(GroqModel, Option<ThinkingLevel>),
+    OpenCodeZen(OpenCodeZenModel, Option<ThinkingLevel>),
+    OpenCodeGo(OpenCodeGoModel, Option<ThinkingLevel>),
     OpenAiCompatible {
         provider_name: String,
         model_id: String,
@@ -1343,6 +1398,8 @@ impl ModelProvider {
             ModelProvider::Mistral(_, _) => "Mistral",
             ModelProvider::MiniMax(_, _) => "MiniMax",
             ModelProvider::Groq(_, _) => "Groq",
+            ModelProvider::OpenCodeZen(_, _) => "OpenCode Zen",
+            ModelProvider::OpenCodeGo(_, _) => "OpenCode Go",
             ModelProvider::OpenAiCompatible { provider_name, .. } => provider_name.as_str(),
         }
     }
@@ -1364,6 +1421,8 @@ impl ModelProvider {
             ModelProvider::Mistral(_, _) => "Mistral",
             ModelProvider::MiniMax(_, _) => "MiniMax",
             ModelProvider::Groq(_, _) => "Groq",
+            ModelProvider::OpenCodeZen(_, _) => "OpenCode Zen",
+            ModelProvider::OpenCodeGo(_, _) => "OpenCode Go",
             ModelProvider::OpenAiCompatible { .. } => "Custom Endpoints",
         }
     }
@@ -1382,6 +1441,8 @@ impl ModelProvider {
             ModelProvider::Mistral(model, _) => model.api_name(),
             ModelProvider::MiniMax(model, _) => model.api_name(),
             ModelProvider::Groq(model, _) => model.api_name(),
+            ModelProvider::OpenCodeZen(model, _) => model.api_name(),
+            ModelProvider::OpenCodeGo(model, _) => model.api_name(),
             ModelProvider::OpenAiCompatible { model_id, .. } => model_id.as_str(),
         }
     }
@@ -1400,6 +1461,8 @@ impl ModelProvider {
             ModelProvider::Mistral(model, _) => format!("Mistral/{}", model),
             ModelProvider::MiniMax(model, _) => format!("MiniMax/{}", model),
             ModelProvider::Groq(model, _) => format!("Groq/{}", model),
+            ModelProvider::OpenCodeZen(model, _) => format!("OpenCode Zen/{}", model),
+            ModelProvider::OpenCodeGo(model, _) => format!("OpenCode Go/{}", model),
             ModelProvider::OpenAiCompatible {
                 provider_name,
                 model_id,
@@ -1443,6 +1506,7 @@ mod tests {
     #[test]
     fn test_dynamic_catalog_models_and_thinking_levels() {
         let gemini_all = GeminiModel::all();
+        assert!(gemini_all.iter().any(|m| m.api_name() == "gemini-4-argon"));
         assert!(gemini_all.iter().any(|m| m.api_name() == "gemini-3.8-flash"));
         assert!(gemini_all.iter().any(|m| m.api_name() == "gemini-3.6-flash"));
 
@@ -1516,9 +1580,14 @@ mod tests {
             .iter()
             .any(|m| m.api_name() == "deepseek-v4-pro"));
 
-        // Moonshot catalog orders flagship `kimi-k3` first ahead of legacy `moonshot-v1-*`
+        // Moonshot catalog orders flagship `kimi-*` models first ahead of legacy `moonshot-v1-*`
         let moonshot_all = MoonshotModel::all();
-        assert_eq!(moonshot_all.first().map(MoonshotModel::api_name), Some("kimi-k3"));
+        assert!(
+            moonshot_all
+                .first()
+                .is_some_and(|m| m.api_name().starts_with("kimi-k3"))
+        );
+        assert!(moonshot_all.iter().any(|m| m.api_name() == "kimi-k3"));
         assert!(moonshot_all
             .iter()
             .any(|m| m.api_name() == "kimi-k2.7-code"));
@@ -1553,13 +1622,19 @@ mod tests {
             .iter()
             .any(|m| m.api_name() == "mistral-large-latest"));
 
-        // MiniMax catalog includes MiniMax-M3 and MiniMax-M2.7
+        // MiniMax catalog includes MiniMax-M3.1-Flash and MiniMax-M3
         let minimax_all = MiniMaxModel::all();
-        assert_eq!(
-            minimax_all.first().map(MiniMaxModel::api_name),
-            Some("MiniMax-M3")
+        assert!(
+            minimax_all
+                .first()
+                .is_some_and(|m| m.api_name().starts_with("MiniMax-M3"))
         );
-        assert!(minimax_all.iter().any(|m| m.api_name() == "MiniMax-M2.7"));
+        assert!(minimax_all.iter().any(|m| m.api_name() == "MiniMax-M3"));
+        assert!(
+            minimax_all
+                .iter()
+                .any(|m| m.api_name() == "MiniMax-M3.1-Flash")
+        );
 
         // Groq catalog includes GPT OSS 120B and Qwen 3.8 27B
         let groq_all = GroqModel::all();
@@ -1567,6 +1642,27 @@ mod tests {
             .iter()
             .any(|m| m.api_name() == "openai/gpt-oss-120b"));
         assert!(groq_all.iter().any(|m| m.api_name() == "qwen/qwen3.8-27b"));
+
+        // OpenCode Zen (`opencode`) and OpenCode Go (`opencode-go`) catalog models
+        let zen_all = OpenCodeZenModel::all();
+        assert!(zen_all.iter().any(|m| m.api_name() == "claude-sonnet-5-5"));
+        assert!(zen_all.iter().any(|m| m.api_name() == "gpt-6.1-sol"));
+        assert!(zen_all.iter().any(|m| m.api_name() == "glm-5.3"));
+        assert!(
+            zen_all
+                .first()
+                .is_some_and(|m| !m.api_name().ends_with("-free"))
+        );
+
+        let go_all = OpenCodeGoModel::all();
+        assert!(go_all.iter().any(|m| m.api_name() == "glm-5.3"));
+        assert!(go_all.iter().any(|m| m.api_name() == "deepseek-v4-pro"));
+        assert!(go_all.iter().any(|m| m.api_name() == "qwen3.8-max"));
+        assert!(
+            go_all
+                .first()
+                .is_some_and(|m| !m.api_name().ends_with("-free"))
+        );
     }
 
     #[test]
@@ -1639,10 +1735,16 @@ mod tests {
         // DeepSeek on OpenCode Go uses ChatCompletions, GPT-6 Luna uses Responses
         let ds = go.find_model("deepseek-v4-pro").expect("deepseek-v4-pro");
         assert_eq!(ds.route, OpenAiApiRoute::ChatCompletions);
-        assert_eq!(ds.effective_context_window(), Some(1_000_000));
+        assert_eq!(ds.effective_context_window(), Some(1_048_576));
 
         let gpt = go.find_model("gpt-6-luna").expect("gpt-6-luna");
         assert_eq!(gpt.route, OpenAiApiRoute::Responses);
+
+        // GPT-6.1 Terra always infers Responses (tools refused on Chat Completions in rig 0.46)
+        assert_eq!(
+            OpenAiApiRoute::infer_for_model("http://localhost:4000/v1", "gpt-6.1-terra"),
+            OpenAiApiRoute::Responses
+        );
 
         // Verify all preset models resolve metadata in < 1ms without any slow misses
         let start = std::time::Instant::now();
@@ -1661,8 +1763,15 @@ mod tests {
             start.elapsed().as_millis() < 50,
             "Preset metadata resolution should be sub-millisecond after catalog init"
         );
+        // In rig 0.46, `opencode-go` is a native vendor in Catalog::builtin(), so
+        // `opencode-go/deepseek-v4.1-flash` resolves directly to its catalog entry,
+        // while an unlisted prefix falls back to the bare alias (`deepseek-flash`).
         let prefixed = resolve_any_catalog_spec("opencode-go/deepseek-v4.1-flash")
             .expect("should resolve prefixed deepseek flash");
-        assert_eq!(prefixed.id, "deepseek-flash");
+        assert_eq!(prefixed.id, "deepseek-v4.1-flash");
+
+        let fallback = resolve_any_catalog_spec("custom-gateway/deepseek-v4.1-flash")
+            .expect("should resolve bare alias for unlisted gateway prefix");
+        assert_eq!(fallback.id, "deepseek-flash");
     }
 }

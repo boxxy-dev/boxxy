@@ -25,20 +25,21 @@ pub async fn perform_persistence(ctx: PersistenceContext, state: Arc<Mutex<Sessi
     )
     .with_custom_endpoints(ctx.settings.openai_compatible_endpoints.clone());
 
-    // Token-budget & exchange-boundary compaction (OpenCode V2 pattern):
-    // Only compact when context usage approaches 75% of the model's context window
-    // (or leaves < 16k headroom on smaller windows), or when raw history reaches 80 messages.
+    // Token-budget & exchange-boundary compaction (OpenCode V2 + rig 0.46 pattern):
+    // Measure against the model's `input_limit` (`limit.input` in rig 0.46, falling back to `context_window`)
+    // so models with dedicated output reserves (like GPT-6.1's 922k input limit inside its 1.05M window)
+    // compact at 75% (or < 16k headroom) before exceeding the API's maximum input limit.
     // Never cut inside a tool-call loop (`find_safe_exchange_cut`), and always retain at least
     // the newest 6 full user exchanges plus a rolling `[SESSION_CHECKPOINT]` pair at index 0..2.
-    let context_window = boxxy_ai_core::model_context_window_with_endpoints(
+    let input_limit = boxxy_ai_core::model_input_limit_with_endpoints(
         &ctx.settings.claw_model,
         &ctx.settings.openai_compatible_endpoints,
     );
-    let token_budget_exceeded = context_window.is_some_and(|win| {
-        win > 0
+    let token_budget_exceeded = input_limit.is_some_and(|limit| {
+        limit > 0
             && state_lock.context_tokens > 0
-            && (state_lock.context_tokens >= (win * 75 / 100)
-                || state_lock.context_tokens.saturating_add(16_000) >= win)
+            && (state_lock.context_tokens >= (limit * 75 / 100)
+                || state_lock.context_tokens.saturating_add(16_000) >= limit)
     });
     let should_compact = token_budget_exceeded || state_lock.history.len() >= 80;
 

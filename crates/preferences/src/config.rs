@@ -645,6 +645,16 @@ You can add your own sensitive paths here. One path per line. Lines starting wit
         {
             return env_key;
         }
+        if matches!(provider, "OpenCode Zen" | "OpenCode Go") {
+            if let Some(k) = Self::get_env_api_key("OPENCODE_API_KEY").filter(|k| !k.trim().is_empty()) {
+                return k;
+            }
+            if let Ok(k) = std::env::var("OPENCODE_API_KEY")
+                && !k.trim().is_empty()
+            {
+                return k;
+            }
+        }
         if let Some(ep) = self
             .openai_compatible_endpoints
             .iter()

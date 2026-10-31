@@ -6,7 +6,9 @@ use rig::agent::hook::{
     AgentHook, CompletionCallAction, CompletionCallEvent, DispatchAction, DispatchEvent,
     HookContext,
 };
-use rig::completion::{CacheRetention, Effort, OnUnsupported, Reasoning};
+use rig::completion::{
+    CacheRetention, Effort, OnUnsupported, ProviderToolDefinition, Reasoning,
+};
 use rig::message::Message;
 use rig::wasm_compat::WasmCompatSend;
 use std::future::Future;
@@ -22,27 +24,19 @@ pub fn map_thinking_level(level: ThinkingLevel) -> Reasoning {
     }
 }
 
-/// Returns the provider-specific `additional_params` JSON payload to enable
-/// built-in server-side web search in `rig-core 0.44.0`, or `None` if the
-/// provider does not support native search.
-///
-/// Each supported wire encoder in `rig-core 0.44.0` merges `additional_params.tools`
-/// alongside standard function tools rather than overwriting them.
-pub fn native_search_additional_params(provider: &ModelProvider) -> Option<serde_json::Value> {
+/// Returns the typed [`ProviderToolDefinition`] (`AgentBuilder::provider_tool` in `rig 0.46`)
+/// to enable built-in server-side web search on providers whose hosted tool uses a `"type"` discriminator
+/// (OpenAI Responses `web_search` and Anthropic `web_search_20250305`).
+#[must_use]
+pub fn native_search_provider_tool(provider: &ModelProvider) -> Option<ProviderToolDefinition> {
     match provider {
-        ModelProvider::Gemini(_, _) => Some(serde_json::json!({
-            "tools": [{ "googleSearch": {} }],
-            "toolConfig": {
-                "includeServerSideToolInvocations": true
-            }
-        })),
-        ModelProvider::OpenAi(_, _) => Some(serde_json::json!({
-            "tools": [{ "type": "web_search" }]
-        })),
-        ModelProvider::Anthropic(_, _) => Some(serde_json::json!({
-            "tools": [{ "type": "web_search_20250305", "name": "web_search" }]
-        })),
-        ModelProvider::Ollama(_)
+        ModelProvider::OpenAi(_, _) => Some(ProviderToolDefinition::new("web_search")),
+        ModelProvider::Anthropic(_, _) => Some(
+            ProviderToolDefinition::new("web_search_20250305")
+                .with_config("name", serde_json::json!("web_search")),
+        ),
+        ModelProvider::Gemini(_, _)
+        | ModelProvider::Ollama(_)
         | ModelProvider::OpenRouter(_)
         | ModelProvider::DeepSeek(_)
         | ModelProvider::Moonshot(_, _)
@@ -51,8 +45,55 @@ pub fn native_search_additional_params(provider: &ModelProvider) -> Option<serde
         | ModelProvider::Mistral(_, _)
         | ModelProvider::MiniMax(_, _)
         | ModelProvider::Groq(_, _)
+        | ModelProvider::OpenCodeZen(_, _)
+        | ModelProvider::OpenCodeGo(_, _)
         | ModelProvider::OpenAiCompatible { .. } => None,
     }
+}
+
+/// Returns the provider-specific `additional_params` JSON payload required for built-in
+/// server-side web search when the wire requires non-`ProviderToolDefinition` fields
+/// (Gemini `googleSearch` + `toolConfig.includeServerSideToolInvocations`).
+#[must_use]
+pub fn native_search_additional_params(provider: &ModelProvider) -> Option<serde_json::Value> {
+    match provider {
+        ModelProvider::Gemini(_, _) => Some(serde_json::json!({
+            "tools": [{ "googleSearch": {} }],
+            "toolConfig": {
+                "includeServerSideToolInvocations": true
+            }
+        })),
+        ModelProvider::OpenAi(_, _)
+        | ModelProvider::Anthropic(_, _)
+        | ModelProvider::Ollama(_)
+        | ModelProvider::OpenRouter(_)
+        | ModelProvider::DeepSeek(_)
+        | ModelProvider::Moonshot(_, _)
+        | ModelProvider::Xai(_, _)
+        | ModelProvider::Zai(_, _)
+        | ModelProvider::Mistral(_, _)
+        | ModelProvider::MiniMax(_, _)
+        | ModelProvider::Groq(_, _)
+        | ModelProvider::OpenCodeZen(_, _)
+        | ModelProvider::OpenCodeGo(_, _)
+        | ModelProvider::OpenAiCompatible { .. } => None,
+    }
+}
+
+/// Attaches built-in server-side web search to `builder` for `provider` using `rig 0.46`'s
+/// [`rig::agent::AgentBuilder::provider_tool`] (OpenAI, Anthropic) or `additional_params` (Gemini).
+#[must_use]
+pub fn attach_native_search(
+    mut builder: rig::agent::AgentBuilder,
+    provider: &ModelProvider,
+) -> rig::agent::AgentBuilder {
+    if let Some(tool) = native_search_provider_tool(provider) {
+        builder = builder.provider_tool(tool);
+    }
+    if let Some(params) = native_search_additional_params(provider) {
+        builder = builder.additional_params(params);
+    }
+    builder
 }
 
 /// Collects unique `(title, url)` pairs from `Text::citations()` across assistant turns in `messages`.
@@ -254,6 +295,14 @@ pub fn resolve_catalog_spec(provider: &ModelProvider) -> Option<&'static rig::ca
         ModelProvider::Groq(model, _) => {
             boxxy_model_selection::catalog_get_spec("groq", model.api_name())
         }
+        ModelProvider::OpenCodeZen(model, _) => {
+            boxxy_model_selection::catalog_get_spec("opencode", model.api_name())
+                .or_else(|| resolve_any_catalog_spec(model.api_name()))
+        }
+        ModelProvider::OpenCodeGo(model, _) => {
+            boxxy_model_selection::catalog_get_spec("opencode-go", model.api_name())
+                .or_else(|| resolve_any_catalog_spec(model.api_name()))
+        }
         ModelProvider::OpenRouter(slug) => resolve_any_catalog_spec(slug),
         ModelProvider::OpenAiCompatible { model_id, .. } => resolve_any_catalog_spec(model_id),
         ModelProvider::Ollama(name) => {
@@ -297,6 +346,41 @@ pub fn model_context_window_with_endpoints(
         .map(u64::from)
 }
 
+/// Returns the model's maximum input token limit (`ModelSpec::input_limit` in `rig 0.46`)
+/// from [`rig::catalog::Catalog::builtin`], if known.
+#[must_use]
+pub fn model_input_limit(provider: &Option<ModelProvider>) -> Option<u64> {
+    model_input_limit_with_endpoints(provider, &[])
+}
+
+/// Returns the model's maximum input token limit (`ModelSpec::input_limit`), checking custom
+/// endpoint overrides first and falling back to [`rig::catalog::Catalog::builtin`].
+///
+/// Used by context compaction so models with dedicated output reserves (e.g. GPT-6.1's 922k input
+/// limit inside its 1.05M context window) compact before exceeding `limit.input`.
+#[must_use]
+pub fn model_input_limit_with_endpoints(
+    provider: &Option<ModelProvider>,
+    endpoints: &[OpenAiCompatibleEndpoint],
+) -> Option<u64> {
+    let p = provider.as_ref()?;
+    if let ModelProvider::OpenAiCompatible {
+        provider_name,
+        model_id,
+        ..
+    } = p
+        && let Some(ep) = endpoints.iter().find(|e| e.name == *provider_name)
+        && let Some(custom_model) = ep.find_model(model_id)
+        && let Some(ctx) = custom_model.context_window.filter(|&w| w > 0)
+    {
+        return Some(ctx);
+    }
+
+    resolve_catalog_spec(p)
+        .and_then(rig::catalog::ModelSpec::input_limit)
+        .map(u64::from)
+}
+
 /// Ensures `usage.cost` is populated when the model's pricing is known in [`rig::catalog::Catalog::builtin`]
 /// (e.g., for OpenRouter models resolved via base-vendor fallback). Local `Ollama` models are never priced.
 pub fn enrich_usage_with_catalog_cost(
@@ -318,7 +402,7 @@ pub fn enrich_usage_with_endpoints_cost(
     let Some(p) = provider.as_ref() else {
         return usage;
     };
-    if matches!(p, ModelProvider::Ollama(_)) {
+    if matches!(p, ModelProvider::Ollama(_) | ModelProvider::OpenCodeGo(_, _)) {
         return usage;
     }
 
@@ -458,12 +542,7 @@ pub fn build_provider_model(
         ModelProvider::OpenAi(model, thinking) => {
             let key = creds.api_keys.get("OpenAI").cloned().unwrap_or_default();
             let client = rig::providers::openai::OpenAI::new(key.trim());
-            let mut openai_model = client.completion(model.api_name());
-            if let Some(spec) = resolve_catalog_spec(provider) {
-                openai_model.wire = openai_model
-                    .wire
-                    .with_facts(rig::catalog::ModelFacts::new(spec.clone()));
-            }
+            let openai_model = client.completion(model.api_name());
             let reasoning = resolve_model_reasoning(provider, *thinking);
             (
                 openai_model.into(),
@@ -566,6 +645,60 @@ pub fn build_provider_model(
             (
                 groq_model.into(),
                 "Groq".to_string(),
+                model.api_name().to_string(),
+                reasoning,
+            )
+        }
+        ModelProvider::OpenCodeZen(model, thinking) => {
+            let key = creds
+                .api_keys
+                .get("OpenCode Zen")
+                .cloned()
+                .filter(|k| !k.trim().is_empty())
+                .or_else(|| std::env::var("OPENCODE_API_KEY").ok())
+                .unwrap_or_default();
+            let reference = format!("opencode/{}", model.api_name());
+            let dyn_model = rig::catalog::Catalog::builtin()
+                .connect_with(
+                    &reference,
+                    rig::providers::registry::ConnectOptions::new().api_key(key.trim()),
+                )
+                .unwrap_or_else(|_| {
+                    rig::providers::opencode::new(key.trim())
+                        .completion(model.api_name())
+                        .into()
+                });
+            let reasoning = resolve_model_reasoning(provider, *thinking);
+            (
+                dyn_model,
+                "OpenCode Zen".to_string(),
+                model.api_name().to_string(),
+                reasoning,
+            )
+        }
+        ModelProvider::OpenCodeGo(model, thinking) => {
+            let key = creds
+                .api_keys
+                .get("OpenCode Go")
+                .cloned()
+                .filter(|k| !k.trim().is_empty())
+                .or_else(|| std::env::var("OPENCODE_API_KEY").ok())
+                .unwrap_or_default();
+            let reference = format!("opencode-go/{}", model.api_name());
+            let dyn_model = rig::catalog::Catalog::builtin()
+                .connect_with(
+                    &reference,
+                    rig::providers::registry::ConnectOptions::new().api_key(key.trim()),
+                )
+                .unwrap_or_else(|_| {
+                    rig::providers::opencode::go_new(key.trim())
+                        .completion(model.api_name())
+                        .into()
+                });
+            let reasoning = resolve_model_reasoning(provider, *thinking);
+            (
+                dyn_model,
+                "OpenCode Go".to_string(),
                 model.api_name().to_string(),
                 reasoning,
             )
@@ -890,10 +1023,8 @@ pub fn create_agent_with_options(
         builder = builder.reasoning(reasoning);
     }
 
-    if enable_native_search
-        && let Some(params) = native_search_additional_params(provider)
-    {
-        builder = builder.additional_params(params);
+    if enable_native_search {
+        builder = attach_native_search(builder, provider);
     }
 
     BoxxyAgent {
@@ -909,7 +1040,7 @@ mod tests {
     use super::*;
     use boxxy_model_selection::{
         AnthropicModel, DeepSeekModel, GeminiModel, GroqModel, MiniMaxModel, MistralModel,
-        MoonshotModel, OpenAiModel, XaiModel, ZaiModel,
+        MoonshotModel, OpenAiModel, OpenCodeGoModel, OpenCodeZenModel, XaiModel, ZaiModel,
     };
 
     #[test]
@@ -1035,6 +1166,27 @@ mod tests {
         assert_eq!(provider, "Groq");
         assert_eq!(model, "openai/gpt-oss-120b");
         assert_eq!(reasoning, Some(Reasoning::Effort(Effort::Medium)));
+
+        // OpenCode Zen (Claude Sonnet 5.5 via Anthropic Messages wire)
+        let (_, provider, model, reasoning) = build_provider_model(
+            &ModelProvider::OpenCodeZen(
+                OpenCodeZenModel::ClaudeSonnet5_5,
+                Some(ThinkingLevel::Medium),
+            ),
+            &creds,
+        );
+        assert_eq!(provider, "OpenCode Zen");
+        assert_eq!(model, "claude-sonnet-5-5");
+        assert_eq!(reasoning, Some(Reasoning::Effort(Effort::Medium)));
+
+        // OpenCode Go (GLM-5.3 via OpenAI Chat wire with x-opencode-session)
+        let (_, provider, model, reasoning) = build_provider_model(
+            &ModelProvider::OpenCodeGo(OpenCodeGoModel::Glm5_3, Some(ThinkingLevel::High)),
+            &creds,
+        );
+        assert_eq!(provider, "OpenCode Go");
+        assert_eq!(model, "glm-5.3");
+        assert_eq!(reasoning, Some(Reasoning::Effort(Effort::High)));
     }
 
     #[test]
@@ -1049,34 +1201,57 @@ mod tests {
             }))
         );
         assert_eq!(
+            native_search_provider_tool(&ModelProvider::Gemini(GeminiModel::Flash3_8, None)),
+            None
+        );
+
+        assert_eq!(
+            native_search_provider_tool(&ModelProvider::OpenAi(OpenAiModel::Gpt6Astra, None)),
+            Some(ProviderToolDefinition::new("web_search"))
+        );
+        assert_eq!(
             native_search_additional_params(&ModelProvider::OpenAi(OpenAiModel::Gpt6Astra, None)),
-            Some(serde_json::json!({ "tools": [{ "type": "web_search" }] }))
+            None
+        );
+
+        assert_eq!(
+            native_search_provider_tool(&ModelProvider::Anthropic(
+                AnthropicModel::ClaudeSonnet5,
+                None
+            )),
+            Some(
+                ProviderToolDefinition::new("web_search_20250305")
+                    .with_config("name", serde_json::json!("web_search"))
+            )
         );
         assert_eq!(
             native_search_additional_params(&ModelProvider::Anthropic(
                 AnthropicModel::ClaudeSonnet5,
                 None
             )),
-            Some(serde_json::json!({
-                "tools": [{ "type": "web_search_20250305", "name": "web_search" }]
-            }))
+            None
+        );
+
+        assert_eq!(
+            native_search_provider_tool(&ModelProvider::Ollama("llama3.2".to_string())),
+            None
         );
         assert_eq!(
             native_search_additional_params(&ModelProvider::Ollama("llama3.2".to_string())),
             None
         );
         assert_eq!(
-            native_search_additional_params(&ModelProvider::OpenRouter(
+            native_search_provider_tool(&ModelProvider::OpenRouter(
                 "anthropic/claude-sonnet-4".to_string()
             )),
             None
         );
         assert_eq!(
-            native_search_additional_params(&ModelProvider::DeepSeek(DeepSeekModel::V4_1Flash)),
+            native_search_provider_tool(&ModelProvider::DeepSeek(DeepSeekModel::V4_1Flash)),
             None
         );
         assert_eq!(
-            native_search_additional_params(&ModelProvider::Moonshot(
+            native_search_provider_tool(&ModelProvider::Moonshot(
                 MoonshotModel::KimiK3,
                 Some(ThinkingLevel::Low)
             )),
@@ -1145,6 +1320,7 @@ mod tests {
             Some(ThinkingLevel::Medium),
         ));
         assert_eq!(model_context_window(&terra_61), Some(1_050_000));
+        assert_eq!(model_input_limit(&terra_61), Some(922_000));
         let terra_usage = rig::completion::Usage::new()
             .input_tokens(1_000_000)
             .output_tokens(200_000);
@@ -1153,7 +1329,7 @@ mod tests {
         assert!((terra_priced.cost.expect("priced").total - 2.00).abs() < 1e-6);
 
         let deepseek = Some(ModelProvider::DeepSeek(DeepSeekModel::V4_1Flash));
-        assert_eq!(model_context_window(&deepseek), Some(1_000_000));
+        assert_eq!(model_context_window(&deepseek), Some(1_048_576));
 
         let moonshot = Some(ModelProvider::Moonshot(MoonshotModel::KimiK3, None));
         assert_eq!(model_context_window(&moonshot), Some(1_048_576));
@@ -1190,10 +1366,27 @@ mod tests {
         // Claude Sonnet 5: $2/1M input ($0.20) + $10/1M output ($0.10) = $0.30
         assert!((priced.cost.unwrap().total - 0.30).abs() < 1e-6);
 
-        // Local Ollama models are never priced
+        // Local Ollama and subscription OpenCode Go models are never priced per token
         let ollama = Some(ModelProvider::Ollama("llama3.2:latest".to_string()));
         let ollama_priced = enrich_usage_with_catalog_cost(usage, &ollama);
         assert!(ollama_priced.cost.is_none());
+
+        let opencode_go_native = Some(ModelProvider::OpenCodeGo(
+            OpenCodeGoModel::Glm5_3,
+            Some(ThinkingLevel::Low),
+        ));
+        assert_eq!(model_context_window(&opencode_go_native), Some(1_000_000));
+        let opencode_go_priced = enrich_usage_with_catalog_cost(usage, &opencode_go_native);
+        assert!(opencode_go_priced.cost.is_none());
+
+        let opencode_zen_native = Some(ModelProvider::OpenCodeZen(
+            OpenCodeZenModel::ClaudeSonnet5_5,
+            Some(ThinkingLevel::Medium),
+        ));
+        assert_eq!(model_context_window(&opencode_zen_native), Some(1_000_000));
+        let opencode_zen_priced = enrich_usage_with_catalog_cost(usage, &opencode_zen_native);
+        assert!(opencode_zen_priced.cost.is_some());
+        assert!((opencode_zen_priced.cost.unwrap().total - 0.30).abs() < 1e-6);
 
         // OpenAiCompatible: OpenCode Go (zero_cost = true) vs OpenCode Zen (catalog fallback) vs custom override
         let go_ep = OpenAiCompatibleEndpoint::preset_opencode_go();
@@ -1223,7 +1416,7 @@ mod tests {
         });
         assert_eq!(
             model_context_window_with_endpoints(&go_prov, &endpoints),
-            Some(1_000_000)
+            Some(1_048_576)
         );
         let go_priced = enrich_usage_with_endpoints_cost(usage, &go_prov, &endpoints);
         assert!(

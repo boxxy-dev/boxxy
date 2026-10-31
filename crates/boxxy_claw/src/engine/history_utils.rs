@@ -16,6 +16,8 @@ pub fn provider_family(model: &Option<boxxy_model_selection::ModelProvider>) -> 
         Some(boxxy_model_selection::ModelProvider::Mistral(_, _)) => "mistral",
         Some(boxxy_model_selection::ModelProvider::MiniMax(_, _)) => "minimax",
         Some(boxxy_model_selection::ModelProvider::Groq(_, _)) => "groq",
+        Some(boxxy_model_selection::ModelProvider::OpenCodeZen(_, _)) => "opencode",
+        Some(boxxy_model_selection::ModelProvider::OpenCodeGo(_, _)) => "opencode_go",
         Some(boxxy_model_selection::ModelProvider::OpenAiCompatible { .. }) => "openai_compatible",
         None => "unknown",
     }
