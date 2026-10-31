@@ -85,7 +85,12 @@ pub async fn flush_history(
                 for c in content.iter() {
                     if let rig::message::UserContent::Text(text) = c {
                         let cleaned = clean_user_text_for_flush(&text.text).trim();
-                        if !cleaned.is_empty() && !cleaned.starts_with("[WHILE_YOU_SLEPT]") {
+                        if !cleaned.is_empty()
+                            && !cleaned.starts_with("[WHILE_YOU_SLEPT]")
+                            && !cleaned.starts_with(
+                                crate::engine::turn::history::SESSION_CHECKPOINT_PREFIX,
+                            )
+                        {
                             text_to_summarize.push_str(&format!("USER: {}\n", cleaned));
                         }
                     }
@@ -98,6 +103,7 @@ pub async fn flush_history(
                         if !trimmed.is_empty()
                             && trimmed != "[SILENT_ACK]"
                             && trimmed != "[Previous task was interrupted by the user]"
+                            && trimmed != crate::engine::turn::history::SESSION_CHECKPOINT_ACK
                         {
                             text_to_summarize.push_str(&format!("ASSISTANT: {}\n", trimmed));
                         }

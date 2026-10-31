@@ -148,10 +148,33 @@ impl<'a> Store<'a> {
     }
 
     pub async fn get_recent_active_sessions(&self, limit: i64) -> Result<Vec<Session>> {
+        // Omit `history_json` and `pending_tasks_json` when listing sessions for the
+        // sidebar and `/resume` autocomplete so multi-hour sessions with large message
+        // histories do not allocate megabytes of unused JSON on every UI refresh.
+        // Full payloads are fetched on demand via `get_session(id)` during resumption.
         let records = sqlx::query_as::<_, Session>(
             r"
             SELECT * FROM (
-                SELECT s.*, COUNT(e.id) as message_count 
+                SELECT
+                    s.id,
+                    s.name,
+                    NULL AS history_json,
+                    NULL AS pending_tasks_json,
+                    s.agent_name,
+                    s.character_id,
+                    s.character_display_name,
+                    s.last_cwd,
+                    s.title,
+                    s.model_id,
+                    s.pinned,
+                    s.cleared_at,
+                    s.total_tokens,
+                    s.context_tokens,
+                    s.total_cost_usd,
+                    s.last_dream_at,
+                    s.created_at,
+                    s.updated_at,
+                    COUNT(e.id) as message_count 
                 FROM sessions s
                 JOIN claw_events e ON s.id = e.session_id
                 WHERE s.pinned = true
@@ -160,7 +183,26 @@ impl<'a> Store<'a> {
             )
             UNION ALL
             SELECT * FROM (
-                SELECT s.*, COUNT(e.id) as message_count 
+                SELECT
+                    s.id,
+                    s.name,
+                    NULL AS history_json,
+                    NULL AS pending_tasks_json,
+                    s.agent_name,
+                    s.character_id,
+                    s.character_display_name,
+                    s.last_cwd,
+                    s.title,
+                    s.model_id,
+                    s.pinned,
+                    s.cleared_at,
+                    s.total_tokens,
+                    s.context_tokens,
+                    s.total_cost_usd,
+                    s.last_dream_at,
+                    s.created_at,
+                    s.updated_at,
+                    COUNT(e.id) as message_count 
                 FROM sessions s
                 JOIN claw_events e ON s.id = e.session_id
                 WHERE s.pinned = false
@@ -1650,6 +1692,13 @@ mod tests {
         assert_eq!(recent.len(), 2);
         assert_eq!(recent[0].id, "sess_pin_1");
         assert!(recent[0].pinned);
+        assert!(recent[0].history_json.is_none());
+        assert!(recent[0].pending_tasks_json.is_none());
+
+        // Full session lookup still preserves history_json and pending_tasks_json
+        let full_s1 = store.get_session("sess_pin_1").await.unwrap().unwrap();
+        assert_eq!(full_s1.history_json.as_deref(), Some("[]"));
+        assert_eq!(full_s1.pending_tasks_json.as_deref(), Some("[]"));
 
         // Unpin sess_pin_1
         store.set_session_pinned("sess_pin_1", false).await.unwrap();

@@ -203,12 +203,13 @@ pub fn spawn_dispatch(
                     let resolved_diff = diff
                         .clone()
                         .unwrap_or_else(|| boxxy_claw_protocol::FileDiff::fallback_new(path, content));
-                    boxxy_claw_ui::add_file_diff_row(
+                    boxxy_claw_ui::add_file_diff_row_with_mode(
                         &overlay_store,
                         id.clone(),
                         Some(agent_name.clone()),
                         Some(character_id.clone()),
                         resolved_diff.clone(),
+                        *auto_approve,
                     );
                     if !*auto_approve {
                         overlay.show(

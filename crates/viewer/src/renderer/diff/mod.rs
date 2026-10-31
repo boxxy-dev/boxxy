@@ -18,13 +18,21 @@ pub struct DiffRenderer;
 
 impl BlockRenderer for DiffRenderer {
     fn can_render(&self, block: &ContentBlock) -> bool {
-        matches!(block, ContentBlock::Custom { schema, .. } if schema == "file_diff")
+        matches!(
+            block,
+            ContentBlock::Custom { schema, .. }
+                if schema == "file_diff" || schema == "file_diff_compact"
+        )
     }
 
     fn render(&self, block: &ContentBlock, _registry: &ViewerRegistry) -> gtk::Widget {
         ensure_diff_css_loaded();
 
-        let ContentBlock::Custom { raw_payload, .. } = block else {
+        let ContentBlock::Custom {
+            schema,
+            raw_payload,
+        } = block
+        else {
             return gtk::Box::new(gtk::Orientation::Vertical, 0).upcast();
         };
 
@@ -35,12 +43,28 @@ impl BlockRenderer for DiffRenderer {
             return err_lbl.upcast();
         };
 
-        build_diff_card(&prepared, is_dark).upcast()
+        let allow_auto_collapse = schema == "file_diff_compact";
+        build_diff_card_with_mode(&prepared, is_dark, allow_auto_collapse).upcast()
     }
 }
 
 #[must_use]
 pub fn build_diff_card(prepared: &PreparedDiff, is_dark: bool) -> ResponsiveDiffContainer {
+    build_diff_card_with_mode(prepared, is_dark, false)
+}
+
+#[must_use]
+pub fn build_diff_card_with_mode(
+    prepared: &PreparedDiff,
+    is_dark: bool,
+    allow_auto_collapse: bool,
+) -> ResponsiveDiffContainer {
+    // Safeguard 2:
+    // - Pending approval diffs (`allow_auto_collapse == false`) ALWAYS start expanded.
+    // - Small diffs (`<= 12` changed lines) ALWAYS start expanded.
+    // - Only auto-approved / history diffs with `> 12` changed lines start collapsed.
+    let total_changed_lines = prepared.stats.added_lines + prepared.stats.removed_lines;
+    let initial_expanded = !allow_auto_collapse || total_changed_lines <= 12;
     let frame = gtk::Frame::new(None);
     frame.add_css_class("view");
     frame.add_css_class("viewer-diff-card");
@@ -131,7 +155,7 @@ pub fn build_diff_card(prepared: &PreparedDiff, is_dark: bool) -> ResponsiveDiff
         .tooltip_text("Switch between Two-Column Split and Compact Drawer view")
         .css_classes(["flat", "circular"])
         .valign(gtk::Align::Center)
-        .visible(prepared.kind == DiffPayloadKind::Modified)
+        .visible(prepared.kind == DiffPayloadKind::Modified && initial_expanded)
         .build();
     header.append(&mode_toggle_btn);
 
@@ -160,28 +184,91 @@ pub fn build_diff_card(prepared: &PreparedDiff, is_dark: bool) -> ResponsiveDiff
         header.append(&copy_btn);
     }
 
+    // Expand / Collapse chevron button
+    let collapse_btn = gtk::Button::builder()
+        .icon_name(if initial_expanded {
+            "boxxy-pan-down-symbolic"
+        } else {
+            "boxxy-pan-end-symbolic"
+        })
+        .tooltip_text(if initial_expanded {
+            "Collapse diff"
+        } else {
+            "Expand diff"
+        })
+        .css_classes(["flat", "circular"])
+        .valign(gtk::Align::Center)
+        .build();
+    header.append(&collapse_btn);
+
     card_vbox.append(&header);
 
     // -----------------------------------------------------------------------
     // 2. Body Viewport (Modified 2-Col/Drawer Stack, Created, Binary, Unchanged)
     // -----------------------------------------------------------------------
     let container = ResponsiveDiffContainer::new(&frame);
+    let body_revealer = gtk::Revealer::builder()
+        .transition_type(gtk::RevealerTransitionType::SlideDown)
+        .transition_duration(180)
+        .reveal_child(initial_expanded)
+        .hexpand(true)
+        .build();
+
+    let is_modified = prepared.kind == DiffPayloadKind::Modified;
+    let body_rev_for_btn = body_revealer.clone();
+    let mode_btn_for_collapse = mode_toggle_btn.clone();
+    let peek_btn_for_collapse = peek_drawer_btn.clone();
+    let container_for_collapse = container.downgrade();
+    collapse_btn.connect_clicked(move |btn| {
+        let next = !body_rev_for_btn.reveals_child();
+        body_rev_for_btn.set_reveal_child(next);
+        btn.set_icon_name(if next {
+            "boxxy-pan-down-symbolic"
+        } else {
+            "boxxy-pan-end-symbolic"
+        });
+        btn.set_tooltip_text(Some(if next {
+            "Collapse diff"
+        } else {
+            "Expand diff"
+        }));
+        mode_btn_for_collapse.set_visible(is_modified && next);
+        if !next {
+            peek_btn_for_collapse.set_visible(false);
+        } else if let Some(c) = container_for_collapse.upgrade()
+            && is_modified
+            && c.current_mode() == DiffLayoutMode::Drawer
+        {
+            peek_btn_for_collapse.set_visible(true);
+        }
+        if let Some(c) = container_for_collapse.upgrade() {
+            c.queue_resize();
+        }
+    });
+
+    // Also allow clicking the file path label in the header to toggle expand/collapse
+    let collapse_btn_for_path = collapse_btn.clone();
+    let path_click = gtk::GestureClick::new();
+    path_click.connect_released(move |_, _, _, _| {
+        collapse_btn_for_path.emit_clicked();
+    });
+    path_lbl.add_controller(path_click);
 
     match prepared.kind {
         DiffPayloadKind::Binary => {
             let notice = build_info_banner(
                 "Binary or non-text file detected — line-by-line text diff skipped.",
             );
-            card_vbox.append(&notice);
+            body_revealer.set_child(Some(&notice));
         }
         DiffPayloadKind::Unchanged => {
             let notice = build_info_banner("No textual changes between original and new file.");
-            card_vbox.append(&notice);
+            body_revealer.set_child(Some(&notice));
         }
         DiffPayloadKind::Created => {
             let created_box =
                 build_created_view(&prepared.hunks, prepared.stats.omitted_lines, is_dark);
-            card_vbox.append(&created_box);
+            body_revealer.set_child(Some(&created_box));
         }
         DiffPayloadKind::Modified => {
             let stack = gtk::Stack::builder()
@@ -238,8 +325,10 @@ pub fn build_diff_card(prepared: &PreparedDiff, is_dark: bool) -> ResponsiveDiff
             let peek_btn_for_mode = peek_drawer_btn;
             let rev_for_mode = drawer_revealer;
             let toggle_for_mode = mode_toggle_btn;
+            let body_rev_for_mode = body_revealer.clone();
             let container_for_resize = container.downgrade();
             container.connect_mode_changed(move |mode, _is_narrow| {
+                let is_expanded = body_rev_for_mode.reveals_child();
                 match mode {
                     DiffLayoutMode::Split => {
                         rev_for_mode.set_reveal_child(false);
@@ -251,7 +340,7 @@ pub fn build_diff_card(prepared: &PreparedDiff, is_dark: bool) -> ResponsiveDiff
                         ));
                     }
                     DiffLayoutMode::Drawer => {
-                        peek_btn_for_mode.set_visible(true);
+                        peek_btn_for_mode.set_visible(is_expanded);
                         stack_for_mode.set_visible_child_name("drawer");
                         toggle_for_mode.set_tooltip_text(Some(
                             "Compact Drawer View active (click for Two-Column Split View)",
@@ -263,9 +352,11 @@ pub fn build_diff_card(prepared: &PreparedDiff, is_dark: bool) -> ResponsiveDiff
                 }
             });
 
-            card_vbox.append(&stack);
+            body_revealer.set_child(Some(&stack));
         }
     }
+
+    card_vbox.append(&body_revealer);
 
     frame.set_child(Some(&card_vbox));
     container

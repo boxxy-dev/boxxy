@@ -81,6 +81,88 @@ async fn cache_user_attachment_thumbnails_in_dir(
 }
 
 impl ClawSession {
+    /// Executes `/undo` if `raw_input` is `/undo`, restoring all files modified in the
+    /// most recent turn (and deleting newly created files) without spending an LLM turn.
+    async fn try_handle_undo(
+        &self,
+        raw_input: &str,
+        env: &std::sync::Arc<dyn crate::engine::ClawEnvironment>,
+    ) -> Option<String> {
+        if !raw_input.trim().eq_ignore_ascii_case("/undo") {
+            return None;
+        }
+
+        let snapshots = {
+            let mut state_lock = self.state.lock().await;
+            if !state_lock.current_turn_snapshots.is_empty() {
+                std::mem::take(&mut state_lock.current_turn_snapshots)
+            } else {
+                std::mem::take(&mut state_lock.last_turn_snapshots)
+            }
+        };
+
+        if snapshots.is_empty() {
+            return Some(
+                "Nothing to undo — no file edits have been recorded in the recent turn.".to_string(),
+            );
+        }
+
+        let mut restored_lines = Vec::new();
+        let mut updated_hashes = Vec::new();
+        for (path, prev_opt) in snapshots.into_iter().rev() {
+            match prev_opt {
+                Some(prev_content) => {
+                    let h = boxxy_core_toolbox::hash_file_content(&prev_content);
+                    match env.write_file(path.clone(), prev_content).await {
+                        Ok(()) => {
+                            restored_lines.push(format!("- Restored `{path}`"));
+                            updated_hashes.push((path, Some(h)));
+                        }
+                        Err(e) => {
+                            restored_lines.push(format!("- Failed to restore `{path}`: {e}"));
+                        }
+                    }
+                }
+                None => match env.delete_file(path.clone()).await {
+                    Ok(()) => {
+                        restored_lines.push(format!("- Removed newly created file `{path}`"));
+                        updated_hashes.push((path, None));
+                    }
+                    Err(e) => {
+                        restored_lines.push(format!("- Failed to remove `{path}`: {e}"));
+                    }
+                },
+            }
+        }
+
+        let summary = format!(
+            "↩️ **Reverted file changes from the last turn:**\n{}",
+            restored_lines.join("\n")
+        );
+
+        {
+            let mut state_lock = self.state.lock().await;
+            for (path, hash_opt) in updated_hashes {
+                match hash_opt {
+                    Some(h) => {
+                        state_lock.read_file_hashes.insert(path, h);
+                    }
+                    None => {
+                        state_lock.read_file_hashes.remove(&path);
+                    }
+                }
+            }
+            state_lock
+                .history
+                .push(rig::message::Message::user("/undo".to_string()));
+            state_lock
+                .history
+                .push(rig::message::Message::assistant(summary.clone()));
+        }
+
+        Some(summary)
+    }
+
     /// Evaluates the user's message for `/stop`, `/drama`, `/debate`, `@character` mentions, or
     /// participation in an active roundtable. Returns `Err(status_msg)` if the command was handled
     /// locally (like `/stop` or `/drama` toggle) without needing an immediate LLM turn.
@@ -304,6 +386,19 @@ impl ClawSession {
         }
         ctx.backlog.clear();
 
+        if let Some(undo_msg) = self.try_handle_undo(&query, &ctx.env).await {
+            self.send_ui(ClawEngineEvent::DiagnosisComplete {
+                agent_name: self.name.clone(),
+                character_id: self.character_id.clone(),
+                diagnosis: undo_msg,
+                usage: None,
+                typewriter: false,
+            })
+            .await;
+            let _ = self.tx_self.send(ClawMessage::TurnFinished).await;
+            return;
+        }
+
         let effective_query = match self.prepare_user_roundtable_turn(&query).await {
             Ok(q) => q,
             Err(status_msg) => {
@@ -419,6 +514,19 @@ impl ClawSession {
                     .await;
             }
             ctx.backlog.clear();
+
+            if let Some(undo_msg) = self.try_handle_undo(&message, &ctx.env).await {
+                self.send_ui(ClawEngineEvent::DiagnosisComplete {
+                    agent_name: self.name.clone(),
+                    character_id: self.character_id.clone(),
+                    diagnosis: undo_msg,
+                    usage: None,
+                    typewriter: false,
+                })
+                .await;
+                let _ = self.tx_self.send(ClawMessage::TurnFinished).await;
+                return;
+            }
 
             let effective_message = match self.prepare_user_roundtable_turn(&message).await {
                 Ok(m) => m,

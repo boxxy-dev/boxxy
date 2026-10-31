@@ -581,6 +581,7 @@ pub fn create_claw_message_list() -> (gtk::ListView, gio::ListStore) {
                 agent_name,
                 character_id,
                 diff,
+                auto_approved,
                 ..
             } => {
                 set_agent_header(&character_id, &agent_name, "boxxyclaw", Some("accent"));
@@ -589,7 +590,12 @@ pub fn create_claw_message_list() -> (gtk::ListView, gio::ListStore) {
 
                 viewer.clear();
                 if let Ok(diff_json) = serde_json::to_string(&diff) {
-                    viewer.append_custom_block("file_diff", &diff_json);
+                    let schema = if auto_approved {
+                        "file_diff_compact"
+                    } else {
+                        "file_diff"
+                    };
+                    viewer.append_custom_block(schema, &diff_json);
                 }
                 viewer.widget().set_visible(true);
                 cmd_label.set_visible(false);
@@ -761,11 +767,23 @@ pub fn add_file_diff_row(
     character_id: Option<String>,
     diff: boxxy_claw_protocol::FileDiff,
 ) {
+    add_file_diff_row_with_mode(store, pane_id, agent_name, character_id, diff, false);
+}
+
+pub fn add_file_diff_row_with_mode(
+    store: &gio::ListStore,
+    pane_id: String,
+    agent_name: Option<String>,
+    character_id: Option<String>,
+    diff: boxxy_claw_protocol::FileDiff,
+    auto_approved: bool,
+) {
     store.append(&ClawRowObject::new(PersistentClawRow::FileDiff {
         pane_id,
         agent_name,
         character_id,
         diff,
+        auto_approved,
         usage: None,
     }));
 }

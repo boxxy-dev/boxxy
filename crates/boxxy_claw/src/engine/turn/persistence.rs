@@ -25,27 +25,44 @@ pub async fn perform_persistence(ctx: PersistenceContext, state: Arc<Mutex<Sessi
     )
     .with_custom_endpoints(ctx.settings.openai_compatible_endpoints.clone());
 
-    let evicted_messages = if state_lock.history.len() >= 15 {
-        let shared: Vec<Arc<rig::message::Message>> = state_lock
-            .history
-            .iter()
-            .cloned()
-            .map(Arc::new)
-            .collect();
-        let kept_view =
-            rig_memory::recent::view(&shared, &rig_memory::recent::LastMessages(10));
-        let cut = shared.len().saturating_sub(kept_view.len());
-        if cut > 0 {
-            let kept = state_lock.history.split_off(cut);
-            let demoted = std::mem::replace(&mut state_lock.history, kept);
-            let demoted_len = demoted.len();
-            let already_flushed = state_lock.flushed_watermark.min(demoted_len);
-            state_lock.flushed_watermark =
-                state_lock.flushed_watermark.saturating_sub(demoted_len);
-            demoted.into_iter().skip(already_flushed).collect()
-        } else {
-            vec![]
+    // Token-budget & exchange-boundary compaction (OpenCode V2 pattern):
+    // Only compact when context usage approaches 75% of the model's context window
+    // (or leaves < 16k headroom on smaller windows), or when raw history reaches 80 messages.
+    // Never cut inside a tool-call loop (`find_safe_exchange_cut`), and always retain at least
+    // the newest 6 full user exchanges plus a rolling `[SESSION_CHECKPOINT]` pair at index 0..2.
+    let context_window = boxxy_ai_core::model_context_window_with_endpoints(
+        &ctx.settings.claw_model,
+        &ctx.settings.openai_compatible_endpoints,
+    );
+    let token_budget_exceeded = context_window.is_some_and(|win| {
+        win > 0
+            && state_lock.context_tokens > 0
+            && (state_lock.context_tokens >= (win * 75 / 100)
+                || state_lock.context_tokens.saturating_add(16_000) >= win)
+    });
+    let should_compact = token_budget_exceeded || state_lock.history.len() >= 80;
+
+    let evicted_messages = if should_compact
+        && let Some(cut) = super::history::find_safe_exchange_cut(&state_lock.history, 6)
+    {
+        let mut kept = state_lock.history.split_off(cut);
+        let demoted = std::mem::replace(&mut state_lock.history, Vec::new());
+        let demoted_len = demoted.len();
+        let already_flushed = state_lock.flushed_watermark.min(demoted_len);
+        let mut new_watermark = state_lock.flushed_watermark.saturating_sub(demoted_len);
+
+        if let Some((chk_user, chk_asst)) = super::history::build_checkpoint_pair(&demoted) {
+            let mut with_checkpoint = Vec::with_capacity(kept.len() + 2);
+            with_checkpoint.push(chk_user);
+            with_checkpoint.push(chk_asst);
+            with_checkpoint.append(&mut kept);
+            kept = with_checkpoint;
+            new_watermark += 2;
         }
+
+        state_lock.history = kept;
+        state_lock.flushed_watermark = new_watermark;
+        demoted.into_iter().skip(already_flushed).collect()
     } else {
         vec![]
     };
@@ -137,7 +154,10 @@ pub async fn perform_persistence(ctx: PersistenceContext, state: Arc<Mutex<Sessi
                     if let rig::message::UserContent::Text(t) = c {
                         let cleaned = crate::engine::summarization::history::clean_user_text_for_flush(&t.text);
                         let trimmed = cleaned.trim();
-                        if !trimmed.is_empty() && !trimmed.starts_with("[WHILE_YOU_SLEPT]") {
+                        if !trimmed.is_empty()
+                            && !trimmed.starts_with("[WHILE_YOU_SLEPT]")
+                            && !trimmed.starts_with(super::history::SESSION_CHECKPOINT_PREFIX)
+                        {
                             return Some(trimmed.to_string());
                         }
                     }

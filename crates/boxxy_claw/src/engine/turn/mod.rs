@@ -182,6 +182,10 @@ pub fn spawn_turn(
         ) = {
             let mut state_lock = state.lock().await;
             state_lock.current_dir = cwd_clone.clone();
+            if !state_lock.current_turn_snapshots.is_empty() {
+                state_lock.last_turn_snapshots =
+                    std::mem::take(&mut state_lock.current_turn_snapshots);
+            }
             let drama_mode = state_lock.roundtable.drama_mode;
 
             // 3. Process Snapshot

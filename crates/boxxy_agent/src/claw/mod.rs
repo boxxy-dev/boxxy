@@ -26,10 +26,34 @@ impl ClawSubsystem {
     }
 }
 
-const EXEC_SHELL_TIMEOUT_SECS: u64 = 30;
-const EXEC_SHELL_MAX_OUTPUT_BYTES: usize = 32 * 1024;
+const EXEC_SHELL_TIMEOUT_SECS: u64 = 180;
+const EXEC_SHELL_MAX_OUTPUT_BYTES: usize = 50 * 1024;
+const EXEC_SHELL_MAX_LINES: usize = 2_000;
 const READ_FILE_MAX_RAW_BYTES: u64 = 5 * 1024 * 1024;
 const READ_FILE_MAX_SLICE_BYTES: usize = 64 * 1024;
+
+/// Ensures an entire spawned process group (`-pgid`) is terminated with `SIGKILL`
+/// if `exec_shell` times out or its future is dropped (e.g. user presses `Esc` twice),
+/// preventing orphaned `cargo` / `rustc` / `pytest` child processes.
+struct ProcessGroupKillGuard(Option<i32>);
+
+impl ProcessGroupKillGuard {
+    fn disarm(&mut self) {
+        self.0 = None;
+    }
+}
+
+impl Drop for ProcessGroupKillGuard {
+    fn drop(&mut self) {
+        if let Some(pgid) = self.0.take()
+            && pgid > 1
+        {
+            unsafe {
+                let _ = libc::kill(-pgid, libc::SIGKILL);
+            }
+        }
+    }
+}
 
 #[async_trait::async_trait]
 impl ClawEnvironment for ClawSubsystem {
@@ -40,8 +64,11 @@ impl ClawEnvironment for ClawSubsystem {
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
+            .process_group(0)
             .kill_on_drop(true)
             .spawn()?;
+
+        let mut pg_guard = ProcessGroupKillGuard(child.id().and_then(|pid| i32::try_from(pid).ok()));
 
         match tokio::time::timeout(
             std::time::Duration::from_secs(EXEC_SHELL_TIMEOUT_SECS),
@@ -50,6 +77,7 @@ impl ClawEnvironment for ClawSubsystem {
         .await
         {
             Ok(Ok(output)) => {
+                pg_guard.disarm();
                 let stdout = truncate_head_tail(
                     &String::from_utf8_lossy(&output.stdout),
                     EXEC_SHELL_MAX_OUTPUT_BYTES,
@@ -66,7 +94,7 @@ impl ClawEnvironment for ClawSubsystem {
                 124,
                 String::new(),
                 format!(
-                    "[ERROR: Command timed out after {EXEC_SHELL_TIMEOUT_SECS} seconds and was terminated. Do not run interactive or blocking commands via sys_shell_exec.]"
+                    "[ERROR: Command timed out after {EXEC_SHELL_TIMEOUT_SECS} seconds and its process group was terminated. Pass specific test filters or use run_background_command for long-running servers.]"
                 ),
             )),
         }
@@ -448,17 +476,60 @@ async fn suggest_similar_files(missing_path: &str) -> Vec<String> {
     suggestions
 }
 
+fn spill_truncated_output_to_disk(full_output: &str) -> Option<String> {
+    let dir = std::env::temp_dir().join("boxxy-tool-output");
+    let _ = std::fs::create_dir_all(&dir);
+
+    // Safeguard 3: Opportunistically sweep spillover logs older than 24 hours
+    // so `/tmp/boxxy-tool-output` never accumulates stale files over time.
+    if let Ok(entries) = std::fs::read_dir(&dir) {
+        let cutoff =
+            std::time::SystemTime::now().checked_sub(std::time::Duration::from_secs(24 * 3600));
+        for entry in entries.flatten() {
+            if let (Some(cutoff), Ok(meta)) = (cutoff, entry.metadata())
+                && let Ok(modified) = meta.modified()
+                && modified < cutoff
+            {
+                let _ = std::fs::remove_file(entry.path());
+            }
+        }
+    }
+
+    let file_path = dir.join(format!("shell-{}.log", uuid::Uuid::new_v4()));
+    std::fs::write(&file_path, full_output).ok()?;
+    Some(file_path.to_string_lossy().into_owned())
+}
+
 fn truncate_head_tail(s: &str, max_bytes: usize) -> String {
-    if s.len() <= max_bytes {
+    let line_count = s.lines().count();
+    if s.len() <= max_bytes && line_count <= EXEC_SHELL_MAX_LINES {
         return s.to_string();
     }
-    let head_budget = max_bytes / 4;
-    let tail_budget = max_bytes.saturating_sub(head_budget);
-    let head_end = s.floor_char_boundary(head_budget);
-    let tail_start = s.ceil_char_boundary(s.len().saturating_sub(tail_budget));
+
+    let effective_budget = if s.len() > max_bytes {
+        max_bytes
+    } else {
+        // Triggered by line count (> 2,000 lines); cap to ~80% of byte budget
+        (s.len() * 3 / 4).min(max_bytes).max(1024)
+    };
+
+    let head_budget = effective_budget / 4;
+    let tail_budget = effective_budget.saturating_sub(head_budget);
+    let head_end = s.floor_char_boundary(head_budget.min(s.len()));
+    let tail_start = s
+        .ceil_char_boundary(s.len().saturating_sub(tail_budget))
+        .max(head_end);
     let omitted = tail_start.saturating_sub(head_end);
+
+    let spillover_hint = match spill_truncated_output_to_disk(s) {
+        Some(path) => format!(
+            "\nFull untruncated output saved to: {path}\nUse `grep_search` or `file_read` (with `start_line`/`end_line`) on `{path}` to inspect specific sections."
+        ),
+        None => String::new(),
+    };
+
     format!(
-        "{}\n\n...[truncated {omitted} bytes of output]...\n\n{}",
+        "{}\n\n...[truncated {omitted} bytes of middle output]{spillover_hint}...\n\n{}",
         &s[..head_end],
         &s[tail_start..]
     )
@@ -561,6 +632,7 @@ mod tests {
         assert!(truncated.starts_with("START_MARKER_"));
         assert!(truncated.ends_with("_END_MARKER"));
         assert!(truncated.contains("...[truncated "));
+        assert!(truncated.contains("Full untruncated output saved to:"));
     }
 
     #[test]

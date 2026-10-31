@@ -71,7 +71,10 @@ impl ApprovalHandler for ClawApprovalHandler {
                 agent_name,
                 character_id,
                 path,
-                content,
+                // In auto-approve (/vibe) mode, the write is executed immediately by the tool
+                // and the UI only renders `diff`; omit full file `content` to avoid cloning
+                // multi-megabyte strings across the event channel during long sessions.
+                content: String::new(),
                 diff: Some(diff),
                 auto_approve: true,
                 usage: None,
@@ -356,6 +359,63 @@ impl ApprovalHandler for ClawApprovalHandler {
         let dir = self.state.lock().await.current_dir.clone();
         if dir.is_empty() { None } else { Some(dir) }
     }
+
+    async fn record_file_read(&self, path: String, content_hash: u64) {
+        let mut state = self.state.lock().await;
+        state.read_file_hashes.insert(path, content_hash);
+    }
+
+    async fn check_stale_file_before_write(
+        &self,
+        path: &str,
+        disk_content: Option<&str>,
+    ) -> Option<String> {
+        let Some(disk) = disk_content else {
+            return None;
+        };
+        let state = self.state.lock().await;
+        let Some(&known_hash) = state.read_file_hashes.get(path) else {
+            return None;
+        };
+        let current_hash = boxxy_core_toolbox::hash_file_content(disk);
+        if current_hash != known_hash {
+            Some(format!(
+                "File `{path}` has been modified on disk since you last read or edited it. Call `file_read` on `{path}` first so you do not overwrite manual user changes."
+            ))
+        } else {
+            None
+        }
+    }
+
+    async fn record_file_snapshot_before_write(
+        &self,
+        path: String,
+        previous_content: Option<String>,
+        new_content_hash: u64,
+    ) {
+        const MAX_SNAPSHOT_BYTES: usize = 8 * 1024 * 1024;
+        let mut state = self.state.lock().await;
+        state.read_file_hashes.insert(path.clone(), new_content_hash);
+
+        // Only capture the pre-turn state of `path` the first time it is modified in a turn
+        // so multiple edits to the same file within one turn roll back all the way to the
+        // pre-turn baseline on `/undo`.
+        if !state
+            .current_turn_snapshots
+            .iter()
+            .any(|(p, _)| p == &path)
+        {
+            let current_bytes: usize = state
+                .current_turn_snapshots
+                .iter()
+                .map(|(_, c)| c.as_ref().map_or(0, String::len))
+                .sum();
+            let add_bytes = previous_content.as_ref().map_or(0, String::len);
+            if current_bytes.saturating_add(add_bytes) <= MAX_SNAPSHOT_BYTES {
+                state.current_turn_snapshots.push((path, previous_content));
+            }
+        }
+    }
 }
 
 #[async_trait::async_trait]
@@ -373,6 +433,7 @@ impl boxxy_mcp::rig_bridge::tool::McpToolObserver for ClawApprovalHandler {
 #[derive(Deserialize)]
 pub struct SysShellArgs {
     pub command: String,
+    pub timeout_secs: Option<u64>,
 }
 
 #[derive(Serialize)]
@@ -397,7 +458,7 @@ impl Tool for SysShellTool {
     type Output = SysShellOutput;
 
     fn description(&self) -> String {
-        "Execute non-interactive bash commands on the host system (30s timeout) to inspect, build, or test (e.g. `git status`, `git diff`, `cargo check`). Prefer structured tools (`file_read`, `replace_in_file`, `grep_search`, `glob_search`, `list_processes`, `get_system_info`) when possible, and only resort to `sys_shell_exec` when no structured tool provides the needed detail. DO NOT use interactive commands (like `top` without `-b`, `less`, `vim`) or long-running servers (use `run_background_command` instead).".to_string()
+        "Execute non-interactive bash commands in the background on the host system (default 120s timeout, up to 180s) to inspect, build, or test (e.g. `git status`, `git diff`, `cargo check`, `cargo test`, `pytest`) without polluting the user's interactive terminal. Prefer structured tools (`file_read`, `replace_in_file`, `grep_search`, `glob_search`, `list_processes`, `get_system_info`) when possible, and only resort to `sys_shell_exec` when no structured tool provides the needed detail. DO NOT use interactive commands (like `top` without `-b`, `less`, `vim`) or long-running servers (use `run_background_command` instead).".to_string()
     }
 
     fn parameters(&self) -> serde_json::Value {
@@ -407,6 +468,10 @@ impl Tool for SysShellTool {
                 "command": {
                     "type": "string",
                     "description": "The exact bash command to execute."
+                },
+                "timeout_secs": {
+                    "type": "integer",
+                    "description": "Optional timeout in seconds (default: 120, max: 180)."
                 }
             },
             "required": ["command"]
@@ -418,6 +483,7 @@ impl Tool for SysShellTool {
         _context: &mut ToolContext,
         args: Self::Args,
     ) -> Result<Self::Output, Self::Error> {
+        let timeout_secs = args.timeout_secs.unwrap_or(120).clamp(5, 180);
         self.approval
             .report_tool_started(Self::NAME.to_string())
             .await;
@@ -436,8 +502,13 @@ impl Tool for SysShellTool {
                 args.command
             )
         };
-        match self.env.exec_shell(command).await {
-            Ok((exit_code, stdout, stderr)) => {
+        match tokio::time::timeout(
+            std::time::Duration::from_secs(timeout_secs),
+            self.env.exec_shell(command),
+        )
+        .await
+        {
+            Ok(Ok((exit_code, stdout, stderr))) => {
                 let out = SysShellOutput {
                     stdout,
                     stderr,
@@ -451,7 +522,23 @@ impl Tool for SysShellTool {
                     .await;
                 Ok(out)
             }
-            Err(e) => Err(std::io::Error::other(format!("Environment Error: {e}"))),
+            Ok(Err(e)) => Err(std::io::Error::other(format!("Environment Error: {e}"))),
+            Err(_) => {
+                let out = SysShellOutput {
+                    stdout: String::new(),
+                    stderr: format!(
+                        "[ERROR: Command timed out after {timeout_secs} seconds. Pass a higher `timeout_secs` (up to 180) or narrow the test/build target.]"
+                    ),
+                    exit_code: 124,
+                };
+                self.approval
+                    .report_tool_result(
+                        Self::NAME.to_string(),
+                        serde_json::to_string(&out).unwrap_or_default(),
+                    )
+                    .await;
+                Ok(out)
+            }
         }
     }
 }
@@ -528,6 +615,7 @@ mod tests {
             &mut ctx,
             SysShellArgs {
                 command: "cargo check".to_string(),
+                timeout_secs: None,
             },
         )
         .await
@@ -539,6 +627,7 @@ mod tests {
             &mut ctx,
             SysShellArgs {
                 command: "cargo test".to_string(),
+                timeout_secs: Some(60),
             },
         )
         .await
@@ -552,5 +641,64 @@ mod tests {
                 "cd '/turn2/new_dir' && cargo test".to_string(),
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn stale_file_guard_and_snapshot_ledger_preserve_baseline() {
+        let (session, _tx, _rx_ui) = ClawSession::new("pane_undo".to_string());
+        let state = session.state.clone();
+        let (tx_ui, _rx) = async_channel::unbounded();
+        let approval = ClawApprovalHandler {
+            tx_ui,
+            state: state.clone(),
+            db: Arc::new(Mutex::new(None)),
+            session_id: session.session_id.clone(),
+            pane_id: "pane_undo".to_string(),
+        };
+
+        let path = "/tmp/example_project/main.rs".to_string();
+        let v1 = "fn main() { println!(\"v1\"); }";
+        let v2 = "fn main() { println!(\"v2\"); }";
+        let v3 = "fn main() { println!(\"v3\"); }";
+
+        // 1. Agent reads v1
+        approval
+            .record_file_read(path.clone(), boxxy_core_toolbox::hash_file_content(v1))
+            .await;
+
+        // 2. Disk still has v1 -> not stale
+        assert!(
+            approval
+                .check_stale_file_before_write(&path, Some(v1))
+                .await
+                .is_none()
+        );
+
+        // 3. User externally edits file to "manual edit" -> stale!
+        let stale_err = approval
+            .check_stale_file_before_write(&path, Some("fn main() { /* manual */ }"))
+            .await;
+        assert!(stale_err.is_some());
+
+        // 4. Agent edits v1 -> v2, then v2 -> v3 in the same turn; snapshot must keep v1 as baseline
+        approval
+            .record_file_snapshot_before_write(
+                path.clone(),
+                Some(v1.to_string()),
+                boxxy_core_toolbox::hash_file_content(v2),
+            )
+            .await;
+        approval
+            .record_file_snapshot_before_write(
+                path.clone(),
+                Some(v2.to_string()),
+                boxxy_core_toolbox::hash_file_content(v3),
+            )
+            .await;
+
+        let lock = state.lock().await;
+        assert_eq!(lock.current_turn_snapshots.len(), 1);
+        assert_eq!(lock.current_turn_snapshots[0].0, path);
+        assert_eq!(lock.current_turn_snapshots[0].1.as_deref(), Some(v1));
     }
 }

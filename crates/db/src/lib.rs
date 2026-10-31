@@ -173,6 +173,7 @@ impl Db {
             );
 
             CREATE INDEX IF NOT EXISTS idx_claw_events_session_id ON claw_events(session_id);
+            CREATE INDEX IF NOT EXISTS idx_sessions_pinned_updated ON sessions(pinned DESC, updated_at DESC);
 
             CREATE TABLE IF NOT EXISTS interactions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,

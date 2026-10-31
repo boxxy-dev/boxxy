@@ -79,11 +79,18 @@ impl Tool for FileReadTool {
         let end_line = args
             .end_line
             .unwrap_or_else(|| start_line.saturating_add(DEFAULT_MAX_LINES - 1));
-        let out = match self.env.read_file(path, start_line, end_line).await {
-            Ok(content) => FileReadOutput {
-                content,
-                error: None,
-            },
+        let out = match self.env.read_file(path.clone(), start_line, end_line).await {
+            Ok(content) => {
+                if let Ok(full_raw) = self.env.read_file(path.clone(), 0, 0).await {
+                    self.approval
+                        .record_file_read(path, crate::hash_file_content(&full_raw))
+                        .await;
+                }
+                FileReadOutput {
+                    content,
+                    error: None,
+                }
+            }
             Err(e) => FileReadOutput {
                 content: String::new(),
                 error: Some(e.to_string()),
@@ -273,6 +280,27 @@ impl Tool for FileWriteTool {
         let path = resolve_path(&base_dir, &args.path);
 
         let existing_res = self.env.read_file(path.clone(), 0, 0).await;
+        let previous_content = existing_res.as_ref().ok().cloned();
+        if let Some(ref existing) = previous_content
+            && let Some(stale_err) = self
+                .approval
+                .check_stale_file_before_write(&path, Some(existing))
+                .await
+        {
+            let out = FileWriteOutput {
+                success: false,
+                total_lines: 0,
+                error: Some(stale_err),
+            };
+            self.approval
+                .report_tool_result(
+                    Self::NAME.to_string(),
+                    serde_json::to_string(&out).unwrap_or_default(),
+                )
+                .await;
+            return Ok(out);
+        }
+
         let path_for_diff = path.clone();
         let content_for_diff = args.content.clone();
         let diff = tokio::task::spawn_blocking(move || match existing_res {
@@ -294,6 +322,10 @@ impl Tool for FileWriteTool {
 
         if outcome.is_approved() {
             let total_lines = args.content.lines().count();
+            let new_hash = crate::hash_file_content(&args.content);
+            self.approval
+                .record_file_snapshot_before_write(path.clone(), previous_content, new_hash)
+                .await;
             match self.env.write_file(path, args.content).await {
                 Ok(()) => {
                     let out = FileWriteOutput {
@@ -567,6 +599,7 @@ impl Tool for ReplaceInFileTool {
         }
 
         let total_lines = working.lines().count();
+        let prev_for_undo = original_for_diff.clone();
         let path_for_diff = path.clone();
         let working_for_diff = working.clone();
         let diff = tokio::task::spawn_blocking(move || {
@@ -583,6 +616,10 @@ impl Tool for ReplaceInFileTool {
         self.approval.set_thinking(true).await;
 
         if outcome.is_approved() {
+            let new_hash = crate::hash_file_content(&working);
+            self.approval
+                .record_file_snapshot_before_write(path.clone(), Some(prev_for_undo), new_hash)
+                .await;
             match self.env.write_file(path, working).await {
                 Ok(()) => {
                     let out = ReplaceInFileOutput {

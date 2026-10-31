@@ -71,6 +71,14 @@ pub struct SessionState {
     pub active_speaker: Option<roundtable::SpeakerIdentity>,
     pub roundtable: roundtable::RoundtableState,
     pub next_roundtable_turn: Option<(roundtable::SpeakerIdentity, String)>,
+    /// Tracks the latest known FNV-1a content hash of files read or written in this session
+    /// so `file_write` can refuse to clobber manual user edits made externally on disk.
+    pub read_file_hashes: std::collections::HashMap<String, u64>,
+    /// Pre-edit file snapshots `(path, previous_content)` captured during the current turn.
+    pub current_turn_snapshots: Vec<(String, Option<String>)>,
+    /// Pre-edit file snapshots from the most recently completed turn that modified files,
+    /// used when `current_turn_snapshots` is empty at the time the user invokes `/undo`.
+    pub last_turn_snapshots: Vec<(String, Option<String>)>,
 }
 
 impl SessionState {
@@ -197,6 +205,9 @@ impl ClawSession {
                 active_speaker: None,
                 roundtable: roundtable::RoundtableState::default(),
                 next_roundtable_turn: None,
+                read_file_hashes: std::collections::HashMap::new(),
+                current_turn_snapshots: Vec::new(),
+                last_turn_snapshots: Vec::new(),
             })),
         };
 

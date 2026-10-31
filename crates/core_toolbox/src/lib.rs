@@ -80,4 +80,36 @@ pub trait ApprovalHandler: Send + Sync {
     async fn current_dir(&self) -> Option<String> {
         None
     }
+    /// Record the content hash of a file read by `file_read` so subsequent writes can
+    /// detect external manual modifications on disk.
+    async fn record_file_read(&self, _path: String, _content_hash: u64) {}
+    /// Check if `path` has been modified externally on disk since the session last
+    /// read or wrote it. Returns `Some(error_message)` if the file is stale.
+    async fn check_stale_file_before_write(
+        &self,
+        _path: &str,
+        _disk_content: Option<&str>,
+    ) -> Option<String> {
+        None
+    }
+    /// Record the pre-write content of `path` (or `None` if newly created) for `/undo`
+    /// rollback and update the session's known content hash to `new_content_hash`.
+    async fn record_file_snapshot_before_write(
+        &self,
+        _path: String,
+        _previous_content: Option<String>,
+        _new_content_hash: u64,
+    ) {
+    }
+}
+
+/// Computes a deterministic 64-bit FNV-1a hash of file content for stale-file detection.
+#[must_use]
+pub fn hash_file_content(content: &str) -> u64 {
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for byte in content.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    hash
 }

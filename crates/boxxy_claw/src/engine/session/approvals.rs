@@ -135,6 +135,9 @@ mod pending_drain_tests {
             active_speaker: None,
             roundtable: crate::engine::session::roundtable::RoundtableState::default(),
             next_roundtable_turn: None,
+            read_file_hashes: HashMap::new(),
+            current_turn_snapshots: Vec::new(),
+            last_turn_snapshots: Vec::new(),
         }
     }
 

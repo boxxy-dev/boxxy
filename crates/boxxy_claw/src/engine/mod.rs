@@ -92,8 +92,8 @@ impl PersistentClawRowExt {
                 path,
                 content,
                 diff,
+                auto_approve,
                 usage,
-                ..
             } => {
                 let resolved_diff = diff
                     .clone()
@@ -103,6 +103,7 @@ impl PersistentClawRowExt {
                     agent_name: Some(agent_name.clone()),
                     character_id: Some(character_id.clone()),
                     diff: resolved_diff,
+                    auto_approved: *auto_approve,
                     usage: usage.clone(),
                 })
             }

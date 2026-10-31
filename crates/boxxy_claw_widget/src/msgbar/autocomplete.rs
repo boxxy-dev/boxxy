@@ -263,6 +263,19 @@ impl CompletionProvider for CommandCompletionProvider {
             });
         }
 
+        if "undo".contains(&query_lower) {
+            items.push(CompletionItem {
+                display_name: "/undo".to_string(),
+                replacement_text: "/undo".to_string(),
+                icon_name: None,
+                icon_path: None,
+                secondary_text: Some("Revert file edits from the last turn".to_string()),
+                badge_text: None,
+                badge_color: None,
+                disabled: !has_character,
+            });
+        }
+
         if "models".contains(&query_lower) {
             items.push(CompletionItem {
                 display_name: "/models".to_string(),

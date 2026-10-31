@@ -507,6 +507,7 @@ impl MsgBarComponent {
                             | "/exit"
                             | "/stop"
                             | "/drama"
+                            | "/undo"
                     )
                 {
                     autocomplete_submit();

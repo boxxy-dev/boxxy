@@ -293,6 +293,8 @@ pub enum PersistentClawRow {
         agent_name: Option<String>,
         character_id: Option<String>,
         diff: FileDiff,
+        #[serde(default)]
+        auto_approved: bool,
         usage: Option<UsageWrapper>,
     },
 }
