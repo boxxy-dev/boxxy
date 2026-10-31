@@ -114,9 +114,10 @@ tabbar tab.tab-slate label { background-image: radial-gradient(circle, alpha(#6f
 }
 
 /* Strip all interactive states from ListView row wrappers — double-click flash (active),
-   focus ring, and selection highlight all come from listview > row pseudo-classes
-   and must be zeroed here so the inner .claw-virtual-row card handles visuals. */
+   focus ring, hover, and selection highlight all come from listview > row pseudo-classes
+   and must be zeroed here. */
 .virtual-history > row,
+.virtual-history > row:hover,
 .virtual-history > row:focus,
 .virtual-history > row:focus-within,
 .virtual-history > row:selected,
@@ -130,19 +131,66 @@ tabbar tab.tab-slate label { background-image: radial-gradient(circle, alpha(#6f
     outline: none;
 }
 
-/* ── Claw Sidebar Virtual Rows ─────────────────────────────────────────── */
-.claw-virtual-row {
+/* ── Claw Virtual Rows ─────────────────────────────────────────────────── */
+.claw-virtual-row,
+.claw-virtual-row:hover {
+    background: transparent;
     background-color: transparent;
     border-radius: 4px;
     margin: 4px 6px;
     padding: 6px 8px;
-    transition: background-color 0.15s ease;
 }
 
-/* Hover highlight */
-.virtual-history > row:hover .claw-virtual-row,
-.claw-virtual-row:hover {
-    background-color: alpha(@window_fg_color, 0.05);
+/* Copy exchange button in the top-right of the row header */
+button.claw-row-copy-btn {
+    min-width: 28px;
+    min-height: 28px;
+    padding: 0;
+    opacity: 0;
+    transition: opacity 150ms ease, background-color 150ms ease;
+}
+
+button.claw-row-copy-btn image {
+    -gtk-icon-size: 16px;
+}
+
+.virtual-history > row:hover button.claw-row-copy-btn,
+.claw-virtual-row:hover button.claw-row-copy-btn {
+    opacity: 0.65;
+}
+
+.virtual-history > row:hover button.claw-row-copy-btn:hover,
+.claw-virtual-row:hover button.claw-row-copy-btn:hover,
+button.claw-row-copy-btn:hover {
+    opacity: 1.0;
+    background-color: alpha(currentColor, 0.08);
+}
+
+/* Character & user avatar animated border/glow highlight on row hover */
+@keyframes claw-avatar-pulse {
+    0% {
+        box-shadow: 0 0 0 0px alpha(currentColor, 0.45), 0 0 8px 1px alpha(currentColor, 0.35);
+    }
+    50% {
+        box-shadow: 0 0 0 3.5px alpha(currentColor, 0.0), 0 0 14px 3px alpha(currentColor, 0.65);
+    }
+    100% {
+        box-shadow: 0 0 0 0px alpha(currentColor, 0.45), 0 0 8px 1px alpha(currentColor, 0.35);
+    }
+}
+
+.claw-avatar-frame {
+    border-radius: 9999px;
+    padding: 2px;
+    border: 2px solid transparent;
+    transition: border-color 200ms ease, transform 200ms cubic-bezier(0.22, 1, 0.36, 1), box-shadow 200ms ease;
+}
+
+.virtual-history > row:hover .claw-avatar-frame,
+.claw-virtual-row:hover .claw-avatar-frame {
+    border-color: alpha(currentColor, 0.85);
+    transform: scale(1.06);
+    animation: claw-avatar-pulse 1.8s ease-in-out infinite;
 }
 
 .claw-virtual-row .heading {
@@ -788,15 +836,12 @@ spinrow button.down image {
 }
 
 /* System Message Row for Models/Config */
-.system-message {
-	/* background-color: rgba(200, 136, 0, 0.1);
-    border-radius: 8px;
-    padding: 6px;
-    margin: 4px; */
+.claw-virtual-row.system-message,
+.claw-virtual-row.system-message:hover {
     background: none;
     font-size: 0.9em;
-    padding:0px;
-    margin:0px 8px;
+    padding: 0px;
+    margin: 0px 8px;
 }
 
 

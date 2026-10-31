@@ -18,6 +18,7 @@ use gtk4::gdk;
 use gtk4::gio;
 use gtk4::glib;
 use libadwaita as adw;
+use std::cell::Cell;
 use std::rc::Rc;
 
 pub mod row_object;
@@ -184,16 +185,22 @@ pub fn get_claw_viewer_registry() -> Rc<ViewerRegistry> {
 /// widgets per visible slot, not per item.
 pub fn create_claw_message_list() -> (gtk::ListView, gio::ListStore) {
     let store = gio::ListStore::new::<ClawRowObject>();
+    let store_for_factory = store.clone();
     let factory = gtk::SignalListItemFactory::new();
 
     factory.connect_setup(move |_, list_item| {
         let list_item = list_item.downcast_ref::<gtk::ListItem>().unwrap();
 
+        static AVATAR_RING_COUNTER: std::sync::atomic::AtomicUsize =
+            std::sync::atomic::AtomicUsize::new(0);
+        let slot_id = AVATAR_RING_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let avatar_ring_class = format!("claw-avatar-ring-{slot_id}");
+
         // Discord-style layout:
         // hbox (root)
         // ├── left_col (vertical box for avatar/icon)
         // └── vbox (content column)
-        //     ├── header (hbox for title, pane_lbl)
+        //     ├── header (hbox for copy_btn, title, pane_lbl)
         //     ├── viewer
         //     └── cmd_label
         let hbox = gtk::Box::new(gtk::Orientation::Horizontal, 16);
@@ -212,24 +219,62 @@ pub fn create_claw_message_list() -> (gtk::ListView, gio::ListStore) {
         icon.set_pixel_size(42);
         left_col.append(&icon);
 
+        let avatar_frame = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        avatar_frame.set_halign(gtk::Align::Center);
+        avatar_frame.set_valign(gtk::Align::Start);
+        avatar_frame.add_css_class("claw-avatar-frame");
+        avatar_frame.add_css_class(&avatar_ring_class);
+        avatar_frame.set_visible(false);
+
         let avatar = adw::Avatar::new(42, None, true);
-        avatar.set_visible(false);
-        left_col.append(&avatar);
+        avatar_frame.append(&avatar);
+        left_col.append(&avatar_frame);
+
+        let avatar_provider = gtk::CssProvider::new();
+        if let Some(display) = gdk::Display::default() {
+            gtk::style_context_add_provider_for_display(
+                &display,
+                &avatar_provider,
+                gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+            );
+            let provider_cleanup = avatar_provider.clone();
+            avatar_frame.connect_destroy(move |_| {
+                if let Some(display) = gdk::Display::default() {
+                    gtk::style_context_remove_provider_for_display(&display, &provider_cleanup);
+                }
+            });
+        }
 
         let vbox = gtk::Box::new(gtk::Orientation::Vertical, 2);
         vbox.set_hexpand(true);
         hbox.append(&vbox);
 
         let header = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        header.set_hexpand(true);
+        header.set_valign(gtk::Align::Center);
+
         let title = gtk::Label::new(None);
         title.add_css_class("heading");
         title.set_halign(gtk::Align::Start);
+        title.set_valign(gtk::Align::Center);
         header.append(&title);
 
         let pane_lbl = gtk::Label::new(None);
         pane_lbl.add_css_class("caption");
         pane_lbl.add_css_class("dim-label");
+        pane_lbl.set_valign(gtk::Align::Center);
         header.append(&pane_lbl);
+
+        let copy_btn = gtk::Button::builder()
+            .icon_name("boxxy-edit-copy-symbolic")
+            .css_classes(["flat", "circular", "claw-row-copy-btn"])
+            .tooltip_text("Copy prompt and response")
+            .halign(gtk::Align::End)
+            .hexpand(true)
+            .valign(gtk::Align::Center)
+            .focus_on_click(false)
+            .build();
+        header.append(&copy_btn);
 
         vbox.append(&header);
 
@@ -253,14 +298,46 @@ pub fn create_claw_message_list() -> (gtk::ListView, gio::ListStore) {
         cmd_label.set_visible(false);
         vbox.append(&cmd_label);
 
-        let typewriter_timer: Rc< std::cell::RefCell<Option<glib::SourceId>> > =
+        let typewriter_timer: Rc<std::cell::RefCell<Option<glib::SourceId>>> =
             Rc::new(std::cell::RefCell::new(None));
+        let bound_pos: Rc<Cell<u32>> = Rc::new(Cell::new(gtk::INVALID_LIST_POSITION));
+
+        {
+            let store_for_copy = store_for_factory.clone();
+            let pos_for_copy = bound_pos.clone();
+            copy_btn.connect_clicked(move |btn| {
+                let pos = pos_for_copy.get();
+                if pos == gtk::INVALID_LIST_POSITION {
+                    return;
+                }
+                let text = format_exchange_for_copy(&store_for_copy, pos);
+                if text.is_empty() {
+                    return;
+                }
+                if let Some(display) = gdk::Display::default() {
+                    display.clipboard().set_text(&text);
+                    btn.set_icon_name("boxxy-object-select-symbolic");
+                    let b = btn.clone();
+                    glib::timeout_add_local_once(
+                        std::time::Duration::from_millis(1500),
+                        move || {
+                            b.set_icon_name("boxxy-edit-copy-symbolic");
+                        },
+                    );
+                }
+            });
+        }
 
         hbox.set_safe_data("left_col", left_col);
         hbox.set_safe_data("header", header);
         hbox.set_safe_data("thumbs_box", thumbs_box);
         hbox.set_safe_data("icon", icon);
+        hbox.set_safe_data("avatar_frame", avatar_frame);
         hbox.set_safe_data("avatar", avatar);
+        hbox.set_safe_data("avatar_provider", avatar_provider);
+        hbox.set_safe_data("avatar_ring_class", avatar_ring_class);
+        hbox.set_safe_data("copy_btn", copy_btn);
+        hbox.set_safe_data("bound_pos", bound_pos);
         hbox.set_safe_data("title", title);
         hbox.set_safe_data("pane_lbl", pane_lbl);
         hbox.set_safe_data("viewer", viewer);
@@ -278,7 +355,14 @@ pub fn create_claw_message_list() -> (gtk::ListView, gio::ListStore) {
         let header = hbox.get_safe_data::<gtk::Box>("header").unwrap();
         let thumbs_box = hbox.get_safe_data::<gtk::Box>("thumbs_box").unwrap();
         let icon = hbox.get_safe_data::<gtk::Image>("icon").unwrap();
+        let avatar_frame = hbox.get_safe_data::<gtk::Box>("avatar_frame").unwrap();
         let avatar = hbox.get_safe_data::<adw::Avatar>("avatar").unwrap();
+        let avatar_provider = hbox
+            .get_safe_data::<gtk::CssProvider>("avatar_provider")
+            .unwrap();
+        let avatar_ring_class = hbox.get_safe_data::<String>("avatar_ring_class").unwrap();
+        let copy_btn = hbox.get_safe_data::<gtk::Button>("copy_btn").unwrap();
+        let bound_pos = hbox.get_safe_data::<Rc<Cell<u32>>>("bound_pos").unwrap();
         let title = hbox.get_safe_data::<gtk::Label>("title").unwrap();
         let pane_lbl = hbox.get_safe_data::<gtk::Label>("pane_lbl").unwrap();
         let viewer = hbox.get_safe_data::<StructuredViewer>("viewer").unwrap();
@@ -295,6 +379,10 @@ pub fn create_claw_message_list() -> (gtk::ListView, gio::ListStore) {
             return;
         };
 
+        bound_pos.set(list_item.position());
+        copy_btn.set_icon_name("boxxy-edit-copy-symbolic");
+        copy_btn.set_visible(true);
+
         // Reset per-row state that specific variants may mutate.
         left_col.set_visible(true);
         header.set_visible(true);
@@ -303,7 +391,8 @@ pub fn create_claw_message_list() -> (gtk::ListView, gio::ListStore) {
         }
         thumbs_box.set_visible(false);
         icon.set_visible(true);
-        avatar.set_visible(false);
+        avatar_frame.set_visible(false);
+        avatar.set_visible(true);
         avatar.set_custom_image(None::<&gdk::Texture>);
         pane_lbl.set_visible(true);
         title.set_visible(true);
@@ -327,6 +416,21 @@ pub fn create_claw_message_list() -> (gtk::ListView, gio::ListStore) {
         ] {
             hbox.remove_css_class(cls);
         }
+
+        let update_avatar_ring_color = |raw_color: &str| {
+            let safe_color = if raw_color
+                .chars()
+                .all(|c| c.is_ascii_hexdigit() || c == '#')
+                && !raw_color.is_empty()
+            {
+                raw_color
+            } else {
+                "@accent_color"
+            };
+            avatar_provider.load_from_string(&format!(
+                ".{avatar_ring_class} {{ color: {safe_color}; }}"
+            ));
+        };
 
         let agent_or_unknown = |name: Option<String>| -> String {
             name.unwrap_or_else(|| "Unknown Agent".to_string())
@@ -367,6 +471,7 @@ pub fn create_claw_message_list() -> (gtk::ListView, gio::ListStore) {
                     "<span foreground=\"{}\"><b>{}</b></span>",
                     info.config.color, formatted_name
                 ));
+                update_avatar_ring_color(&info.config.color);
                 avatar.set_text(Some(&formatted_name));
                 if info.has_avatar
                     && let Ok(dir) = boxxy_claw_protocol::character_loader::get_characters_dir()
@@ -376,7 +481,7 @@ pub fn create_claw_message_list() -> (gtk::ListView, gio::ListStore) {
                         avatar.set_custom_image(Some(&texture));
                     }
                 }
-                avatar.set_visible(true);
+                avatar_frame.set_visible(true);
                 icon.set_visible(false);
                 name_set = true;
             }
@@ -384,7 +489,7 @@ pub fn create_claw_message_list() -> (gtk::ListView, gio::ListStore) {
             if !name_set {
                 let name = agent_or_unknown(fallback_name.clone());
                 title.set_markup(&format!("<b>{}</b>", name));
-                avatar.set_visible(false);
+                avatar_frame.set_visible(false);
                 icon.set_visible(true);
             }
 
@@ -401,7 +506,8 @@ pub fn create_claw_message_list() -> (gtk::ListView, gio::ListStore) {
 
             icon.set_visible(false);
             user_profile::configure_avatar(&avatar, &profile);
-            avatar.set_visible(true);
+            update_avatar_ring_color(&profile.color);
+            avatar_frame.set_visible(true);
             title.set_markup(&format!(
                 "<span foreground=\"{}\"><b>{}</b></span>",
                 glib::markup_escape_text(&profile.color),
@@ -414,8 +520,9 @@ pub fn create_claw_message_list() -> (gtk::ListView, gio::ListStore) {
             PersistentClawRow::SystemMessage { content, .. } => {
                 left_col.set_visible(false);
                 header.set_visible(false);
+                copy_btn.set_visible(false);
                 icon.set_visible(false);
-                avatar.set_visible(false);
+                avatar_frame.set_visible(false);
                 pane_lbl.set_visible(false);
                 title.set_visible(false);
                 hbox.add_css_class("system-message");
@@ -608,6 +715,9 @@ pub fn create_claw_message_list() -> (gtk::ListView, gio::ListStore) {
     factory.connect_unbind(move |_, list_item| {
         let list_item = list_item.downcast_ref::<gtk::ListItem>().unwrap();
         let hbox = list_item.child().and_downcast::<gtk::Box>().unwrap();
+        if let Some(bound_pos) = hbox.get_safe_data::<Rc<Cell<u32>>>("bound_pos") {
+            bound_pos.set(gtk::INVALID_LIST_POSITION);
+        }
         if let Some(timer_slot) =
             hbox.get_safe_data::<Rc<std::cell::RefCell<Option<glib::SourceId>>>>("typewriter_timer")
             && let Some(old_source) = timer_slot.borrow_mut().take()
@@ -625,6 +735,145 @@ pub fn create_claw_message_list() -> (gtk::ListView, gio::ListStore) {
     list_view.add_css_class("virtual-history");
 
     (list_view, store)
+}
+
+fn format_row_speaker_and_body(row: &PersistentClawRow) -> Option<(String, String)> {
+    let resolve_agent_display = |char_id: &Option<String>, fallback: &Option<String>| -> String {
+        let cache = boxxy_claw_protocol::characters::CHARACTER_CACHE.load();
+        let id_str = char_id.as_deref().unwrap_or_default();
+        let fb_str = fallback.as_deref().unwrap_or_default();
+        let fallback_names = [fb_str];
+        if (!id_str.is_empty() || !fb_str.is_empty())
+            && let Some(info) = boxxy_claw_protocol::characters::resolve_character(
+                &cache,
+                id_str,
+                &fallback_names,
+            )
+        {
+            return info
+                .config
+                .name
+                .split('-')
+                .map(|word| {
+                    let mut c = word.chars();
+                    match c.next() {
+                        None => String::new(),
+                        Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+                    }
+                })
+                .collect::<Vec<String>>()
+                .join(" ");
+        }
+        fallback
+            .clone()
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "Agent".to_string())
+    };
+
+    match row {
+        PersistentClawRow::User { content, .. } => {
+            let profile = user_profile::current();
+            Some((profile.display_name, content.clone()))
+        }
+        PersistentClawRow::Diagnosis {
+            agent_name,
+            character_id,
+            content,
+            ..
+        } => {
+            let speaker = resolve_agent_display(character_id, agent_name);
+            Some((speaker, content.clone()))
+        }
+        PersistentClawRow::Suggested {
+            agent_name,
+            character_id,
+            diagnosis,
+            command,
+            ..
+        } => {
+            let speaker = resolve_agent_display(character_id, agent_name);
+            let body = if diagnosis.trim().is_empty() {
+                format!("```bash\n{command}\n```")
+            } else if command.trim().is_empty() {
+                diagnosis.clone()
+            } else {
+                format!("{diagnosis}\n\n```bash\n{command}\n```")
+            };
+            Some((speaker, body))
+        }
+        PersistentClawRow::Command { command, .. } => {
+            let profile = user_profile::current();
+            Some((profile.display_name, command.clone()))
+        }
+        PersistentClawRow::FileDiff {
+            agent_name,
+            character_id,
+            diff,
+            ..
+        } => {
+            let speaker = resolve_agent_display(character_id, agent_name);
+            let body = format!(
+                "File: `{}` (+{} -{})",
+                diff.path, diff.stats.added_lines, diff.stats.removed_lines
+            );
+            Some((speaker, body))
+        }
+        PersistentClawRow::SystemMessage { .. }
+        | PersistentClawRow::ProcessList { .. }
+        | PersistentClawRow::ToolCall { .. } => None,
+    }
+}
+
+/// Formats the full exchange (user prompt + agent response) surrounding `pos`
+/// in `store` so clicking Copy on either the prompt or the response copies both.
+pub fn format_exchange_for_copy(store: &gio::ListStore, pos: u32) -> String {
+    let n = store.n_items();
+    if pos >= n {
+        return String::new();
+    }
+
+    let get_row_at = |idx: u32| -> Option<PersistentClawRow> {
+        store
+            .item(idx)
+            .and_downcast::<ClawRowObject>()
+            .map(|o| o.get_row())
+    };
+
+    let Some(clicked_row) = get_row_at(pos) else {
+        return String::new();
+    };
+
+    // Walk backward from `pos` to find the User prompt that initiated this turn.
+    let mut start_idx = pos;
+    if !matches!(clicked_row, PersistentClawRow::User { .. }) {
+        let mut cursor = pos;
+        while cursor > 0 {
+            cursor -= 1;
+            if let Some(PersistentClawRow::User { .. }) = get_row_at(cursor) {
+                start_idx = cursor;
+                break;
+            }
+        }
+    }
+
+    // Collect the prompt (if present at `start_idx`) and all subsequent non-system rows
+    // up to the next User prompt.
+    let mut sections = Vec::new();
+    for idx in start_idx..n {
+        let Some(row) = get_row_at(idx) else {
+            continue;
+        };
+        if idx > start_idx && matches!(row, PersistentClawRow::User { .. }) {
+            break;
+        }
+        if let Some((speaker, body)) = format_row_speaker_and_body(&row)
+            && !body.trim().is_empty()
+        {
+            sections.push(format!("{speaker}:\n{}", body.trim()));
+        }
+    }
+
+    sections.join("\n\n")
 }
 
 // ---------------------------------------------------------------------------
@@ -877,4 +1126,56 @@ pub fn add_clipboard_set_approval_row(
         character_id,
         &format!("Proposed writing to clipboard:\n```\n{text}\n```"),
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_format_exchange_for_copy_pairs_prompt_and_response() {
+        let store = gio::ListStore::new::<ClawRowObject>();
+        add_user_row(
+            &store,
+            "pane-1".to_string(),
+            "Explain the parser module.",
+            Vec::new(),
+        );
+        add_system_message_row(&store, "pane-1".to_string(), "Claw: Model A");
+        add_diagnosis_row(
+            &store,
+            "pane-1".to_string(),
+            Some("Niko Una".to_string()),
+            None,
+            "The parser converts source tokens into an AST.",
+        );
+        add_user_row(
+            &store,
+            "pane-1".to_string(),
+            "What about errors?",
+            Vec::new(),
+        );
+        add_diagnosis_row(
+            &store,
+            "pane-1".to_string(),
+            Some("Niko Una".to_string()),
+            None,
+            "Errors are collected into a diagnostic list.",
+        );
+
+        let user_name = user_profile::current().display_name;
+        let expected_first = format!(
+            "{user_name}:\nExplain the parser module.\n\nNiko Una:\nThe parser converts source tokens into an AST."
+        );
+
+        // Copying from the user row (index 0) or the response row (index 2) yields the full first exchange.
+        assert_eq!(format_exchange_for_copy(&store, 0), expected_first);
+        assert_eq!(format_exchange_for_copy(&store, 2), expected_first);
+
+        let expected_second = format!(
+            "{user_name}:\nWhat about errors?\n\nNiko Una:\nErrors are collected into a diagnostic list."
+        );
+        assert_eq!(format_exchange_for_copy(&store, 3), expected_second);
+        assert_eq!(format_exchange_for_copy(&store, 4), expected_second);
+    }
 }
