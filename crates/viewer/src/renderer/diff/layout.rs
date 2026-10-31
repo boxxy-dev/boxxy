@@ -79,13 +79,7 @@ mod imp {
             if width > 0
                 && let Some(ref panel) = *self.drawer_panel.borrow()
             {
-                // Give the slide-over drawer ~58% of the card width (at least 300px,
-                // never exceeding card width minus a 40px peek margin).
-                let max_allowed = (width - 40).max(200);
-                let target_drawer_w = ((width * 58) / 100).clamp(300.min(max_allowed), max_allowed);
-                if panel.width_request() != target_drawer_w {
-                    panel.set_width_request(target_drawer_w);
-                }
+                update_drawer_panel_width(panel, width);
             }
 
             if let Some(child) = self.obj().first_child() {
@@ -148,7 +142,12 @@ impl ResponsiveDiffContainer {
     }
 
     pub fn set_drawer_panel(&self, panel: &impl IsA<gtk::Widget>) {
-        *self.imp().drawer_panel.borrow_mut() = Some(panel.clone().upcast());
+        let widget: gtk::Widget = panel.clone().upcast();
+        let w = self.width();
+        if w > 0 {
+            update_drawer_panel_width(&widget, w);
+        }
+        *self.imp().drawer_panel.borrow_mut() = Some(widget);
     }
 
     pub fn connect_mode_changed(&self, cb: impl Fn(DiffLayoutMode, bool) + 'static) {
@@ -174,5 +173,15 @@ impl ResponsiveDiffContainer {
             cb(target, narrow);
         }
         self.queue_resize();
+    }
+}
+
+fn update_drawer_panel_width(panel: &gtk::Widget, width: i32) {
+    // Give the slide-over drawer ~58% of the card width (at least 300px,
+    // never exceeding card width minus a 40px peek margin).
+    let max_allowed = (width - 40).max(200);
+    let target_drawer_w = ((width * 58) / 100).clamp(300.min(max_allowed), max_allowed);
+    if panel.width_request() != target_drawer_w {
+        panel.set_width_request(target_drawer_w);
     }
 }

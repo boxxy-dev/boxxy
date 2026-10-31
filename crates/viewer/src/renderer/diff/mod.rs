@@ -12,7 +12,9 @@ use gtk4::pango;
 use gtk4::prelude::*;
 use layout::{DiffLayoutMode, ResponsiveDiffContainer};
 use markup::{DiffPayloadKind, PreparedDiff, get_or_prepare_diff};
-use std::sync::Once;
+use std::cell::RefCell;
+use std::rc::Rc;
+use std::sync::{Arc, Once};
 
 pub struct DiffRenderer;
 
@@ -49,13 +51,13 @@ impl BlockRenderer for DiffRenderer {
 }
 
 #[must_use]
-pub fn build_diff_card(prepared: &PreparedDiff, is_dark: bool) -> ResponsiveDiffContainer {
+pub fn build_diff_card(prepared: &Arc<PreparedDiff>, is_dark: bool) -> ResponsiveDiffContainer {
     build_diff_card_with_mode(prepared, is_dark, false)
 }
 
 #[must_use]
 pub fn build_diff_card_with_mode(
-    prepared: &PreparedDiff,
+    prepared: &Arc<PreparedDiff>,
     is_dark: bool,
     allow_auto_collapse: bool,
 ) -> ResponsiveDiffContainer {
@@ -184,13 +186,9 @@ pub fn build_diff_card_with_mode(
         header.append(&copy_btn);
     }
 
-    // Expand / Collapse chevron button
+    // Expand / Collapse button
     let collapse_btn = gtk::Button::builder()
-        .icon_name(if initial_expanded {
-            "boxxy-pan-down-symbolic"
-        } else {
-            "boxxy-pan-end-symbolic"
-        })
+        .icon_name("boxxy-expand-vertical-symbolic")
         .tooltip_text(if initial_expanded {
             "Collapse diff"
         } else {
@@ -222,11 +220,6 @@ pub fn build_diff_card_with_mode(
     collapse_btn.connect_clicked(move |btn| {
         let next = !body_rev_for_btn.reveals_child();
         body_rev_for_btn.set_reveal_child(next);
-        btn.set_icon_name(if next {
-            "boxxy-pan-down-symbolic"
-        } else {
-            "boxxy-pan-end-symbolic"
-        });
         btn.set_tooltip_text(Some(if next {
             "Collapse diff"
         } else {
@@ -280,32 +273,25 @@ pub fn build_diff_card_with_mode(
                 .build();
 
             let split_box = build_split_view(prepared, is_dark);
-            let (drawer_overlay, drawer_revealer, drawer_panel) =
-                build_drawer_view(prepared, is_dark);
-            container.set_drawer_panel(&drawer_panel);
-
             stack.add_named(&split_box, Some("split"));
-            stack.add_named(&drawer_overlay, Some("drawer"));
             stack.set_visible_child_name("split");
 
-            // Wire the "Original" drawer button in the header
-            let rev_for_btn = drawer_revealer.clone();
-            peek_drawer_btn.connect_clicked(move |btn| {
-                let next = !rev_for_btn.reveals_child();
-                if next {
-                    rev_for_btn.set_visible(true);
-                }
-                rev_for_btn.set_reveal_child(next);
-                btn.set_label(if next { "Hide Original" } else { "Original" });
-            });
+            // Lazily instantiated only when the pane narrows below `SPLIT_VIEW_BREAKPOINT`
+            // or the user clicks the Split <-> Drawer toggle button, cutting initial widget
+            // and Pango layout construction in half for standard wide panes.
+            let drawer_rev_slot: Rc<RefCell<Option<gtk::Revealer>>> = Rc::new(RefCell::new(None));
 
-            let peek_btn_for_notify = peek_drawer_btn.clone();
-            drawer_revealer.connect_reveal_child_notify(move |rev| {
-                peek_btn_for_notify.set_label(if rev.reveals_child() {
-                    "Hide Original"
-                } else {
-                    "Original"
-                });
+            // Wire the "Original" drawer button in the header
+            let rev_slot_for_btn = drawer_rev_slot.clone();
+            peek_drawer_btn.connect_clicked(move |btn| {
+                if let Some(ref rev) = *rev_slot_for_btn.borrow() {
+                    let next = !rev.reveals_child();
+                    if next {
+                        rev.set_visible(true);
+                    }
+                    rev.set_reveal_child(next);
+                    btn.set_label(if next { "Hide Original" } else { "Original" });
+                }
             });
 
             // Wire manual Split <-> Drawer mode toggle button
@@ -323,16 +309,19 @@ pub fn build_diff_card_with_mode(
             // React to automatic width breakpoint or manual override changes
             let stack_for_mode = stack.clone();
             let peek_btn_for_mode = peek_drawer_btn;
-            let rev_for_mode = drawer_revealer;
+            let rev_slot_for_mode = drawer_rev_slot;
             let toggle_for_mode = mode_toggle_btn;
             let body_rev_for_mode = body_revealer.clone();
             let container_for_resize = container.downgrade();
+            let prepared_for_drawer = Arc::clone(prepared);
             container.connect_mode_changed(move |mode, _is_narrow| {
                 let is_expanded = body_rev_for_mode.reveals_child();
                 match mode {
                     DiffLayoutMode::Split => {
-                        rev_for_mode.set_reveal_child(false);
-                        rev_for_mode.set_visible(false);
+                        if let Some(ref rev) = *rev_slot_for_mode.borrow() {
+                            rev.set_reveal_child(false);
+                            rev.set_visible(false);
+                        }
                         peek_btn_for_mode.set_visible(false);
                         stack_for_mode.set_visible_child_name("split");
                         toggle_for_mode.set_tooltip_text(Some(
@@ -340,6 +329,23 @@ pub fn build_diff_card_with_mode(
                         ));
                     }
                     DiffLayoutMode::Drawer => {
+                        if rev_slot_for_mode.borrow().is_none() {
+                            let (drawer_overlay, drawer_revealer, drawer_panel) =
+                                build_drawer_view(&prepared_for_drawer, is_dark);
+                            if let Some(c) = container_for_resize.upgrade() {
+                                c.set_drawer_panel(&drawer_panel);
+                            }
+                            let peek_btn_for_notify = peek_btn_for_mode.clone();
+                            drawer_revealer.connect_reveal_child_notify(move |rev| {
+                                peek_btn_for_notify.set_label(if rev.reveals_child() {
+                                    "Hide Original"
+                                } else {
+                                    "Original"
+                                });
+                            });
+                            stack_for_mode.add_named(&drawer_overlay, Some("drawer"));
+                            *rev_slot_for_mode.borrow_mut() = Some(drawer_revealer);
+                        }
                         peek_btn_for_mode.set_visible(is_expanded);
                         stack_for_mode.set_visible_child_name("drawer");
                         toggle_for_mode.set_tooltip_text(Some(
@@ -430,20 +436,8 @@ fn ensure_diff_css_loaded() {
                     padding: 6px 10px;
                     border-bottom: 1px solid rgba(128, 128, 128, 0.16);
                 }
-                .diff-column-headers {
-                    background-color: rgba(128, 128, 128, 0.05);
-                    border-bottom: 1px solid rgba(128, 128, 128, 0.14);
-                }
-                .diff-col-title {
-                    font-weight: 700;
-                    font-size: 0.85em;
-                    letter-spacing: 0.4px;
-                }
-                .diff-hunk-header {
-                    background-color: rgba(56, 139, 253, 0.08);
-                    border-top: 1px solid rgba(128, 128, 128, 0.12);
-                    border-bottom: 1px solid rgba(128, 128, 128, 0.12);
-                    padding: 3px 10px;
+                .diff-hunk-divider {
+                    opacity: 0.45;
                 }
                 .diff-col-left {
                     border-right: 1px solid rgba(128, 128, 128, 0.18);
@@ -509,16 +503,6 @@ fn ensure_diff_css_loaded() {
                     border-left: 2px solid @accent_bg_color;
                     box-shadow: -6px 0 18px rgba(0, 0, 0, 0.35);
                 }
-                .diff-drawer-header {
-                    padding: 2px 10px;
-                    background-color: rgba(128, 128, 128, 0.10);
-                    border-bottom: 1px solid rgba(128, 128, 128, 0.18);
-                }
-                .diff-drawer-close {
-                    min-height: 20px;
-                    min-width: 20px;
-                    padding: 0;
-                }
                 .diff-truncation-banner {
                     padding: 4px 12px;
                     border-top: 1px dashed rgba(128, 128, 128, 0.22);
@@ -533,4 +517,91 @@ fn ensure_diff_css_loaded() {
             );
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn modified_diff_lazily_instantiates_drawer_view_on_mode_switch() {
+        if gtk::init().is_err() {
+            return;
+        }
+
+        let json = r#"{
+            "path": "src/module.rs",
+            "language": "rs",
+            "kind": "Modified",
+            "stats": {
+                "added_lines": 1,
+                "removed_lines": 1,
+                "hunk_count": 1,
+                "old_total_lines": 4,
+                "new_total_lines": 4,
+                "truncated": false,
+                "omitted_lines": 0
+            },
+            "hunks": [{
+                "header": "@@ -1,2 +1,2 @@",
+                "old_start": 1,
+                "old_count": 2,
+                "new_start": 1,
+                "new_count": 2,
+                "rows": [{
+                    "left": {
+                        "line_no": 1,
+                        "kind": "Delete",
+                        "spans": [{"emphasized": true, "text": "let x = 1;"}]
+                    },
+                    "right": {
+                        "line_no": 1,
+                        "kind": "Insert",
+                        "spans": [{"emphasized": true, "text": "let x = 2;"}]
+                    }
+                }]
+            }]
+        }"#;
+
+        let prepared = get_or_prepare_diff(json, true).expect("valid diff json");
+        let card = build_diff_card(&prepared, true);
+        assert_eq!(card.current_mode(), DiffLayoutMode::Split);
+
+        // Locate the inner GtkStack inside Frame -> Box -> Revealer -> Stack
+        let frame = card
+            .first_child()
+            .and_then(|w| w.downcast::<gtk::Frame>().ok())
+            .expect("frame");
+        let vbox = frame
+            .child()
+            .and_then(|w| w.downcast::<gtk::Box>().ok())
+            .expect("vbox");
+        let revealer = vbox
+            .last_child()
+            .and_then(|w| w.downcast::<gtk::Revealer>().ok())
+            .expect("body revealer");
+        let stack = revealer
+            .child()
+            .and_then(|w| w.downcast::<gtk::Stack>().ok())
+            .expect("mode stack");
+
+        // Initially only "split" exists; "drawer" is not yet instantiated.
+        assert!(stack.child_by_name("split").is_some());
+        assert!(stack.child_by_name("drawer").is_none());
+        assert_eq!(stack.visible_child_name().as_deref(), Some("split"));
+
+        // Switching to Drawer mode lazily builds and activates "drawer".
+        card.set_user_override(Some(DiffLayoutMode::Drawer));
+        assert_eq!(card.current_mode(), DiffLayoutMode::Drawer);
+        let drawer_child = stack
+            .child_by_name("drawer")
+            .expect("drawer built on demand");
+        assert_eq!(stack.visible_child_name().as_deref(), Some("drawer"));
+
+        // Switching back to Split mode and then to Drawer again reuses the existing widget.
+        card.set_user_override(Some(DiffLayoutMode::Split));
+        assert_eq!(stack.visible_child_name().as_deref(), Some("split"));
+        card.set_user_override(Some(DiffLayoutMode::Drawer));
+        assert_eq!(stack.child_by_name("drawer").as_ref(), Some(&drawer_child));
+    }
 }

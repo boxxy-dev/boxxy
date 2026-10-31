@@ -9,43 +9,10 @@ pub fn build_split_view(prepared: &PreparedDiff, is_dark: bool) -> gtk::Box {
     let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
     root.set_hexpand(true);
 
-    // Column titles bar: ORIGINAL | CHANGES
-    let col_headers = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-    col_headers.add_css_class("diff-column-headers");
-    col_headers.set_homogeneous(true);
-
-    let left_hdr = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-    left_hdr.set_margin_start(12);
-    left_hdr.set_margin_end(12);
-    left_hdr.set_margin_top(5);
-    left_hdr.set_margin_bottom(5);
-    let left_dot = gtk::Label::new(Some("−"));
-    left_dot.add_css_class("diff-stat-del");
-    let left_title = gtk::Label::new(Some("ORIGINAL"));
-    left_title.add_css_class("dim-label");
-    left_title.add_css_class("diff-col-title");
-    left_hdr.append(&left_dot);
-    left_hdr.append(&left_title);
-
-    let right_hdr = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-    right_hdr.set_margin_start(12);
-    right_hdr.set_margin_end(12);
-    right_hdr.set_margin_top(5);
-    right_hdr.set_margin_bottom(5);
-    let right_dot = gtk::Label::new(Some("+"));
-    right_dot.add_css_class("diff-stat-add");
-    let right_title = gtk::Label::new(Some("CHANGES"));
-    right_title.add_css_class("dim-label");
-    right_title.add_css_class("diff-col-title");
-    right_hdr.append(&right_dot);
-    right_hdr.append(&right_title);
-
-    col_headers.append(&left_hdr);
-    col_headers.append(&right_hdr);
-    root.append(&col_headers);
-
-    for hunk in &prepared.hunks {
-        root.append(&build_hunk_header_bar(&hunk.header));
+    for (idx, hunk) in prepared.hunks.iter().enumerate() {
+        if idx > 0 {
+            root.append(&build_hunk_divider());
+        }
 
         let pair_grid = gtk::Grid::new();
         pair_grid.set_column_homogeneous(true);
@@ -97,8 +64,10 @@ pub fn build_drawer_view(
     let base_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
     base_box.set_hexpand(true);
 
-    for hunk in &prepared.hunks {
-        base_box.append(&build_hunk_header_bar(&hunk.header));
+    for (idx, hunk) in prepared.hunks.iter().enumerate() {
+        if idx > 0 {
+            base_box.append(&build_hunk_divider());
+        }
         let canvas = if prepared.kind == DiffPayloadKind::Created {
             DiffHunkCanvas::new(
                 &hunk.right_gutter_markup,
@@ -148,34 +117,8 @@ pub fn build_drawer_view(
     });
 
     for (idx, hunk) in prepared.hunks.iter().enumerate() {
-        if idx == 0 {
-            // For the first hunk, combine the drawer title ("ORIGINAL") and hunk header into a
-            // single top bar so lines in the drawer align horizontally with the base view and
-            // never get pushed down off the bottom edge.
-            let drawer_header = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-            drawer_header.add_css_class("diff-drawer-header");
-
-            let drawer_title = gtk::Label::new(Some(&format!("ORIGINAL  {}", hunk.header)));
-            drawer_title.add_css_class("diff-col-title");
-            drawer_title.add_css_class("dim-label");
-            drawer_title.set_hexpand(true);
-            drawer_title.set_halign(gtk::Align::Start);
-            drawer_header.append(&drawer_title);
-
-            let close_btn = gtk::Button::builder()
-                .icon_name("boxxy-cross-small-symbolic")
-                .tooltip_text("Close Original Drawer")
-                .css_classes(["flat", "circular", "diff-drawer-close"])
-                .valign(gtk::Align::Center)
-                .build();
-            let rev_for_close = drawer_revealer.clone();
-            close_btn.connect_clicked(move |_| {
-                rev_for_close.set_reveal_child(false);
-            });
-            drawer_header.append(&close_btn);
-            drawer_panel.append(&drawer_header);
-        } else {
-            drawer_panel.append(&build_hunk_header_bar(&hunk.header));
+        if idx > 0 {
+            drawer_panel.append(&build_hunk_divider());
         }
 
         let orig_canvas = DiffHunkCanvas::new(
@@ -217,21 +160,10 @@ pub fn build_created_view(hunks: &[PreparedHunk], omitted_lines: usize, is_dark:
     root
 }
 
-fn build_hunk_header_bar(header_text: &str) -> gtk::Box {
-    let bar = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-    bar.add_css_class("diff-hunk-header");
-
-    let icon_lbl = gtk::Label::new(Some("⋯"));
-    icon_lbl.add_css_class("dim-label");
-    bar.append(&icon_lbl);
-
-    let lbl = gtk::Label::new(Some(header_text));
-    lbl.add_css_class("dim-label");
-    lbl.set_halign(gtk::Align::Start);
-    lbl.set_hexpand(true);
-    bar.append(&lbl);
-
-    bar
+fn build_hunk_divider() -> gtk::Separator {
+    let sep = gtk::Separator::new(gtk::Orientation::Horizontal);
+    sep.add_css_class("diff-hunk-divider");
+    sep
 }
 
 fn build_truncation_banner(omitted_lines: usize) -> gtk::Box {
