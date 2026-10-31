@@ -1201,11 +1201,17 @@ button.editable-avatar-remove-badge {
     color: @window_fg_color;
     border: 1.5px solid alpha(currentColor, 0.24);
     box-shadow: 0 1px 4px alpha(black, 0.45);
-    transition: background-color 150ms ease, color 150ms ease, border-color 150ms ease;
+    opacity: 0;
+    transition: opacity 150ms ease, background-color 150ms ease, color 150ms ease, border-color 150ms ease;
+}
+
+.editable-avatar-container:hover button.editable-avatar-remove-badge {
+    opacity: 1.0;
 }
 
 button.editable-avatar-remove-badge:hover,
 button.editable-avatar-remove-badge:active {
+    opacity: 1.0;
     background-color: @error_bg_color;
     background-image: none;
     color: @error_fg_color;

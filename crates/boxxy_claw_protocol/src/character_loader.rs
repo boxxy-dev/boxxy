@@ -13,6 +13,7 @@ struct CharacterToml {
     id: Option<String>,
     display_name: String,
     color: String,
+    default_color: Option<String>,
     duties: String,
     personality: String,
 }
@@ -47,28 +48,121 @@ pub fn bundled_default_avatar(slug: &str) -> Option<&'static [u8]> {
     }
 }
 
-/// Returns `true` if the character at `char_dir` currently has a user-customised avatar
-/// that can be reset (either a modified `AVATAR.png` on a bundled character, or any
-/// `AVATAR.png` on a custom character).
+/// Returns the bundled default hex color for the three built-in characters
+/// (`niko-una`, `levi-kujo`, `kuro`), or `None` for user-created characters.
 #[must_use]
-pub fn has_custom_character_avatar(slug: &str, char_dir: &Path) -> bool {
-    let avatar_path = char_dir.join("AVATAR.png");
-    let Ok(disk_bytes) = fs::read(&avatar_path) else {
-        return false;
-    };
-    match bundled_default_avatar(slug) {
-        Some(default_bytes) => disk_bytes.as_slice() != default_bytes,
-        None => true,
+pub fn bundled_default_color(slug: &str) -> Option<&'static str> {
+    match slug {
+        "niko-una" => Some("#8035D4"),
+        "levi-kujo" => Some("#204A87"),
+        "kuro" => Some("#B31825"),
+        _ => None,
     }
 }
 
-/// Resets a character's avatar to its default state:
+/// Returns the original/default hex color for a character:
+/// - For the three built-in characters (`niko-una`, `levi-kujo`, `kuro`), returns their bundled color.
+/// - For custom characters, returns `default_color` from `CHARACTER.toml` if present, otherwise their current `color`.
+#[must_use]
+pub fn character_default_color(slug: &str, char_dir: &Path) -> Option<String> {
+    if let Some(bundled) = bundled_default_color(slug) {
+        return Some(bundled.to_string());
+    }
+    let toml_str = fs::read_to_string(char_dir.join("CHARACTER.toml")).ok()?;
+    let parsed = toml::from_str::<CharacterToml>(&toml_str).ok()?;
+    Some(parsed.default_color.unwrap_or(parsed.color))
+}
+
+/// Updates the `color = "..."` line inside `char_dir/CHARACTER.toml` in-place,
+/// preserving comments, ordering, and multi-line strings. For custom characters,
+/// records `default_color = "<original>"` on first edit so `reset_character_avatar`
+/// can restore the original color.
+pub fn save_character_color(char_dir: &Path, new_color: &str) -> Result<()> {
+    let toml_path = char_dir.join("CHARACTER.toml");
+    let content = fs::read_to_string(&toml_path)
+        .with_context(|| format!("Failed to read CHARACTER.toml at {toml_path:?}"))?;
+
+    let slug = char_dir
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or_default();
+    let is_bundled = bundled_default_color(slug).is_some();
+    let parsed_existing = toml::from_str::<CharacterToml>(&content).ok();
+    let needs_default_color_line = !is_bundled
+        && parsed_existing
+            .as_ref()
+            .is_some_and(|p| p.default_color.is_none());
+    let original_color = parsed_existing.map(|p| p.color);
+
+    let mut replaced = false;
+    let mut lines: Vec<String> = Vec::new();
+    for line in content.lines() {
+        let trimmed = line.trim_start();
+        if !replaced && trimmed.starts_with("color") && trimmed[5..].trim_start().starts_with('=') {
+            replaced = true;
+            lines.push(format!("color = \"{new_color}\""));
+            if needs_default_color_line
+                && let Some(ref orig) = original_color
+            {
+                lines.push(format!("default_color = \"{orig}\""));
+            }
+        } else {
+            lines.push(line.to_string());
+        }
+    }
+
+    if !replaced {
+        lines.insert(0, format!("color = \"{new_color}\""));
+    }
+
+    let mut out = lines.join("\n");
+    if content.ends_with('\n') {
+        out.push('\n');
+    }
+    fs::write(&toml_path, out)
+        .with_context(|| format!("Failed to write CHARACTER.toml at {toml_path:?}"))?;
+    Ok(())
+}
+
+/// Returns `true` if the character at `char_dir` currently has a user-customised avatar
+/// or color that can be reset (either a modified `AVATAR.png` or modified `color` on a
+/// bundled character, or an `AVATAR.png` / modified `color` on a custom character).
+#[must_use]
+pub fn has_custom_character_avatar(slug: &str, char_dir: &Path) -> bool {
+    let avatar_path = char_dir.join("AVATAR.png");
+    let avatar_custom = match (fs::read(&avatar_path), bundled_default_avatar(slug)) {
+        (Ok(disk_bytes), Some(default_bytes)) => disk_bytes.as_slice() != default_bytes,
+        (Ok(_), None) => true,
+        (Err(_), _) => false,
+    };
+    if avatar_custom {
+        return true;
+    }
+    if let Ok(toml_str) = fs::read_to_string(char_dir.join("CHARACTER.toml"))
+        && let Ok(parsed) = toml::from_str::<CharacterToml>(&toml_str)
+    {
+        if let Some(default_color) = bundled_default_color(slug) {
+            return !parsed.color.eq_ignore_ascii_case(default_color);
+        }
+        if let Some(default_color) = parsed.default_color {
+            return !parsed.color.eq_ignore_ascii_case(&default_color);
+        }
+    }
+    false
+}
+
+/// Resets a character's avatar and color to their default state:
 /// - For the three bundled characters (`niko-una`, `levi-kujo`, `kuro`), restores the
-///   bundled default `AVATAR.png` and returns `Ok(Some(default_bytes))`.
+///   bundled default `AVATAR.png` and default `color` in `CHARACTER.toml`, returning `Ok(Some(default_bytes))`.
 /// - For custom characters (4th+), removes `AVATAR.png` so the UI falls back to standard
-///   Adwaita initials and returns `Ok(None)`.
+///   Adwaita initials, restores `default_color` if one was saved, and returns `Ok(None)`.
 pub fn reset_character_avatar(slug: &str, char_dir: &Path) -> Result<Option<&'static [u8]>> {
     let avatar_path = char_dir.join("AVATAR.png");
+    if let Some(default_color) = character_default_color(slug, char_dir)
+        && char_dir.join("CHARACTER.toml").exists()
+    {
+        let _ = save_character_color(char_dir, &default_color);
+    }
     if let Some(default_bytes) = bundled_default_avatar(slug) {
         fs::create_dir_all(char_dir)
             .with_context(|| format!("Failed to create character directory {char_dir:?}"))?;
@@ -359,6 +453,30 @@ mod tests {
         let restored_custom = reset_character_avatar("my-custom-agent", &custom_dir).unwrap();
         assert!(restored_custom.is_none());
         assert!(!custom_dir.join("AVATAR.png").exists());
+        assert!(!has_custom_character_avatar("my-custom-agent", &custom_dir));
+
+        // 3. Color customization and reset on bundled and custom characters
+        fs::write(niko_dir.join("CHARACTER.toml"), NIKO_TOML).unwrap();
+        assert!(!has_custom_character_avatar("niko-una", &niko_dir));
+        save_character_color(&niko_dir, "#123456").unwrap();
+        assert!(has_custom_character_avatar("niko-una", &niko_dir));
+        reset_character_avatar("niko-una", &niko_dir).unwrap();
+        assert!(!has_custom_character_avatar("niko-una", &niko_dir));
+        assert_eq!(
+            character_default_color("niko-una", &niko_dir).as_deref(),
+            Some("#8035D4")
+        );
+
+        let custom_toml = "id = \"00000004-0000-4000-8000-000000000004\"\ndisplay_name = \"custom\"\ncolor = \"#abcdef\"\nduties = \"Helper\"\npersonality = \"Friendly\"\n";
+        fs::write(custom_dir.join("CHARACTER.toml"), custom_toml).unwrap();
+        assert!(!has_custom_character_avatar("my-custom-agent", &custom_dir));
+        save_character_color(&custom_dir, "#fedcba").unwrap();
+        assert!(has_custom_character_avatar("my-custom-agent", &custom_dir));
+        assert_eq!(
+            character_default_color("my-custom-agent", &custom_dir).as_deref(),
+            Some("#abcdef")
+        );
+        reset_character_avatar("my-custom-agent", &custom_dir).unwrap();
         assert!(!has_custom_character_avatar("my-custom-agent", &custom_dir));
     }
 }

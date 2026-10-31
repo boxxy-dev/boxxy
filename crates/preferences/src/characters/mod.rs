@@ -88,7 +88,10 @@ pub fn setup_characters_page(
             });
         }
         Err(err) => {
-            add_preferences_toast(&avatar_btn_toast, &format!("Failed to process avatar: {err}"));
+            add_preferences_toast(
+                &avatar_btn_toast,
+                &format!("Failed to process avatar: {err}"),
+            );
         }
     });
 
@@ -118,32 +121,22 @@ pub fn setup_characters_page(
         });
     });
 
-    let color_dialog = gtk::ColorDialog::builder().with_alpha(false).build();
-    let color_btn = gtk::ColorDialogButton::new(Some(color_dialog));
-    color_btn.set_valign(gtk::Align::Center);
-    color_btn.set_tooltip_text(Some("Profile Color"));
-    user_profile::set_default_color_button(&color_btn, &settings_rc.borrow());
-    display_name_row.add_suffix(&color_btn);
-
-    let s_rc2 = settings_rc;
-    let cb2 = on_change;
-    let avatar_color_clone = user_avatar.avatar().clone();
-    color_btn.connect_rgba_notify(move |cb_btn| {
-        let rgba = cb_btn.rgba();
-        let hex = format!(
-            "#{:02x}{:02x}{:02x}",
-            (rgba.red() * 255.0) as u8,
-            (rgba.green() * 255.0) as u8,
-            (rgba.blue() * 255.0) as u8
-        );
-        let mut s = s_rc2.borrow_mut();
-        if s.user_profile.color.as_deref() != Some(&hex) {
-            s.user_profile.color = Some(hex);
-            s.save();
-            user_profile::configure_avatar(&avatar_color_clone, &user_profile::effective(&s));
-            cb2(s.clone());
+    let initial_user_color = user_profile::effective(&settings_rc.borrow()).color;
+    let color_btn = make_color_dot(&initial_user_color, "Profile Color", {
+        let s_rc2 = settings_rc;
+        let cb2 = on_change;
+        let avatar_color_clone = user_avatar.avatar().clone();
+        move |hex| {
+            let mut s = s_rc2.borrow_mut();
+            if s.user_profile.color.as_deref() != Some(&hex) {
+                s.user_profile.color = Some(hex);
+                s.save();
+                user_profile::configure_avatar(&avatar_color_clone, &user_profile::effective(&s));
+                cb2(s.clone());
+            }
         }
     });
+    display_name_row.add_suffix(&color_btn);
 
     user_group.add(&display_name_row);
     page.add(&user_group);
@@ -160,8 +153,8 @@ pub fn setup_characters_page(
     let chars_group = adw::PreferencesGroup::new();
     chars_group.set_title("Available Characters");
     chars_group.set_description(Some(
-        "Characters available for assignment to terminal panes. \
-        Edits to CHARACTER.toml or AVATAR.png take effect immediately on the next interaction.\n\n\
+        "Edits to CHARACTER.toml or AVATAR.png take effect immediately on the next interaction. \
+        You can also ask Boxxy directly to create new characters or remove existing ones.\n\n\
         Note: If a character is removed, any of their past sessions \
         will automatically be reassigned to the first available character.",
     ));
@@ -332,11 +325,15 @@ fn render_characters(
             row.set_subtitle(&glib::markup_escape_text(&character.config.duties));
 
             // Editable Avatar with pencil + hover reset/remove badges
-            let editable_avatar =
-                boxxy_core_widgets::EditableAvatar::new(52, Some(&character.config.display_name), true);
-            let is_bundled =
-                boxxy_claw_protocol::character_loader::bundled_default_avatar(&character.config.name)
-                    .is_some();
+            let editable_avatar = boxxy_core_widgets::EditableAvatar::new(
+                52,
+                Some(&character.config.display_name),
+                true,
+            );
+            let is_bundled = boxxy_claw_protocol::character_loader::bundled_default_avatar(
+                &character.config.name,
+            )
+            .is_some();
             editable_avatar.set_remove_tooltip(if is_bundled {
                 "Reset to default avatar"
             } else {
@@ -407,6 +404,40 @@ fn render_characters(
                 }
             });
 
+            // Editable color swatch
+            let char_name_color = character.config.name.clone();
+            let chars_dir_color = chars_dir.clone();
+            let editable_avatar_color = editable_avatar.clone();
+            let swatch_tooltip = format!("Click to change {formatted_name}'s color");
+            let (swatch, set_swatch_color) =
+                make_editable_color_dot(&character.config.color, &swatch_tooltip, move |new_hex| {
+                    let Some(base_dir) = &chars_dir_color else {
+                        return;
+                    };
+                    let char_dir = base_dir.join(&char_name_color);
+                    if let Err(e) = boxxy_claw_protocol::character_loader::save_character_color(
+                        &char_dir, &new_hex,
+                    ) {
+                        log::error!("Failed to save character color: {e}");
+                        add_preferences_toast(
+                            editable_avatar_color.widget(),
+                            "Failed to save character color.",
+                        );
+                        return;
+                    }
+                    editable_avatar_color.set_removable(
+                        boxxy_claw_protocol::character_loader::has_custom_character_avatar(
+                            &char_name_color,
+                            &char_dir,
+                        ),
+                    );
+                    if let Ok(reloaded) = boxxy_claw_protocol::character_loader::load_characters() {
+                        boxxy_claw_protocol::characters::CHARACTER_CACHE
+                            .store(std::sync::Arc::new(reloaded));
+                    }
+                });
+            row.add_suffix(&swatch);
+
             let char_name_reset = character.config.name.clone();
             let chars_dir_reset = chars_dir.clone();
             let editable_avatar_reset = editable_avatar.clone();
@@ -415,6 +446,10 @@ fn render_characters(
                     return;
                 };
                 let char_dir = base_dir.join(&char_name_reset);
+                let restored_color = boxxy_claw_protocol::character_loader::character_default_color(
+                    &char_name_reset,
+                    &char_dir,
+                );
                 match boxxy_claw_protocol::character_loader::reset_character_avatar(
                     &char_name_reset,
                     &char_dir,
@@ -426,20 +461,38 @@ fn render_characters(
                                 .avatar()
                                 .set_custom_image(Some(&texture));
                         }
+                        if let Some(ref c) = restored_color {
+                            set_swatch_color(c);
+                        }
                         editable_avatar_reset.set_removable(false);
+                        if let Ok(reloaded) =
+                            boxxy_claw_protocol::character_loader::load_characters()
+                        {
+                            boxxy_claw_protocol::characters::CHARACTER_CACHE
+                                .store(std::sync::Arc::new(reloaded));
+                        }
                         add_preferences_toast(
                             editable_avatar_reset.widget(),
-                            "Avatar reset to default.",
+                            "Avatar and color reset to default.",
                         );
                     }
                     Ok(None) => {
                         editable_avatar_reset
                             .avatar()
                             .set_custom_image(None::<&gdk::Texture>);
+                        if let Some(ref c) = restored_color {
+                            set_swatch_color(c);
+                        }
                         editable_avatar_reset.set_removable(false);
+                        if let Ok(reloaded) =
+                            boxxy_claw_protocol::character_loader::load_characters()
+                        {
+                            boxxy_claw_protocol::characters::CHARACTER_CACHE
+                                .store(std::sync::Arc::new(reloaded));
+                        }
                         add_preferences_toast(
                             editable_avatar_reset.widget(),
-                            "Custom avatar removed.",
+                            "Custom avatar and color reset.",
                         );
                     }
                     Err(e) => {
@@ -506,10 +559,6 @@ fn render_characters(
             });
             row.add_controller(drop_target);
 
-            // Color swatch
-            let swatch = make_color_dot(&character.config.color);
-            row.add_suffix(&swatch);
-
             chars_group.add(&row);
             new_rows.push(RowData {
                 char_id: character.config.id.clone(),
@@ -568,10 +617,7 @@ fn show_final_confirmation(parent: &gtk::Button) {
             if let Err(e) = boxxy_claw_protocol::character_loader::reset_to_defaults() {
                 log::error!("Failed to reset characters to defaults: {}", e);
             } else {
-                add_preferences_toast(
-                    &parent_clone,
-                    "Characters reset to defaults.",
-                );
+                add_preferences_toast(&parent_clone, "Characters reset to defaults.");
             }
         }
     });
@@ -588,47 +634,36 @@ fn add_preferences_toast(widget: &impl IsA<gtk::Widget>, message: &str) {
     }
 }
 
-fn make_color_dot(color_hex: &str) -> gtk::Button {
-    // Validate: only allow characters safe for use in a CSS value.
-    let safe_color: &str = if color_hex.chars().all(|c| c.is_ascii_hexdigit() || c == '#') {
-        color_hex
-    } else {
-        "#808080"
-    };
+fn make_color_dot<F>(color_hex: &str, tooltip: &str, on_color_chosen: F) -> gtk::Button
+where
+    F: Fn(String) + 'static,
+{
+    make_editable_color_dot(color_hex, tooltip, on_color_chosen).0
+}
 
+fn make_editable_color_dot<F>(
+    color_hex: &str,
+    tooltip: &str,
+    on_color_chosen: F,
+) -> (gtk::Button, Rc<dyn Fn(&str)>)
+where
+    F: Fn(String) + 'static,
+{
     // Unique class per dot to ensure styles don't bleed between rows.
     static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
     let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let class = format!("pref-color-dot-{n}");
 
     let dot = gtk::Button::new();
-    dot.set_size_request(16, 16);
+    dot.set_size_request(22, 22);
     dot.set_valign(gtk::Align::Center);
     dot.set_halign(gtk::Align::Center);
-    dot.set_focusable(false);
-    dot.set_sensitive(false);
+    dot.set_focus_on_click(false);
+    dot.set_cursor_from_name(Some("pointer"));
+    dot.set_tooltip_text(Some(tooltip));
     dot.add_css_class(&class);
 
-    // We use a specific selector and override background-image to prevent
-    // libadwaita themes from applying gradients or hover effects.
-    let css = format!(
-        "button.{class} {{ \
-            background-color: {safe_color}; \
-            background-image: none; \
-            border-radius: 12px; \
-            min-width: 16px; \
-            min-height: 16px; \
-            padding: 0; \
-            border: none; \
-            box-shadow: none; \
-        }} \
-        button.{class}:hover, button.{class}:active {{ \
-            background-color: {safe_color}; \
-            background-image: none; \
-        }}"
-    );
     let provider = gtk::CssProvider::new();
-    provider.load_from_string(&css);
     if let Some(display) = gtk::gdk::Display::default() {
         gtk::style_context_add_provider_for_display(
             &display,
@@ -643,5 +678,77 @@ fn make_color_dot(color_hex: &str) -> gtk::Button {
         });
     }
 
-    dot
+    let current_hex = Rc::new(RefCell::new(String::new()));
+    let apply_color: Rc<dyn Fn(&str)> = {
+        let provider = provider.clone();
+        let class = class.clone();
+        let current_hex = current_hex.clone();
+        Rc::new(move |raw_hex: &str| {
+            let safe_color: &str = if raw_hex.chars().all(|c| c.is_ascii_hexdigit() || c == '#')
+                && !raw_hex.is_empty()
+            {
+                raw_hex
+            } else {
+                "#808080"
+            };
+            *current_hex.borrow_mut() = safe_color.to_string();
+            let css = format!(
+                "button.{class} {{ \
+                    background-color: {safe_color}; \
+                    background-image: none; \
+                    border-radius: 9999px; \
+                    min-width: 22px; \
+                    min-height: 22px; \
+                    padding: 0; \
+                    border: 2px solid alpha(currentColor, 0.22); \
+                    box-shadow: none; \
+                    transition: transform 150ms ease, border-color 150ms ease; \
+                }} \
+                button.{class}:hover {{ \
+                    background-color: {safe_color}; \
+                    background-image: none; \
+                    border-color: alpha(currentColor, 0.55); \
+                    transform: scale(1.1); \
+                }} \
+                button.{class}:active {{ \
+                    background-color: {safe_color}; \
+                    background-image: none; \
+                    border-color: currentColor; \
+                }}"
+            );
+            provider.load_from_string(&css);
+        })
+    };
+
+    apply_color(color_hex);
+
+    let on_color_chosen = Rc::new(on_color_chosen);
+    let apply_for_click = apply_color.clone();
+    let current_hex_for_click = current_hex;
+    dot.connect_clicked(move |btn| {
+        let dialog = gtk::ColorDialog::builder().with_alpha(false).build();
+        let initial_rgba = gdk::RGBA::parse(&*current_hex_for_click.borrow()).ok();
+        let window = btn.root().and_downcast::<gtk::Window>();
+        let apply_cb = apply_for_click.clone();
+        let chosen_cb = on_color_chosen.clone();
+        dialog.choose_rgba(
+            window.as_ref(),
+            initial_rgba.as_ref(),
+            None::<&gtk::gio::Cancellable>,
+            move |res| {
+                if let Ok(rgba) = res {
+                    let hex = format!(
+                        "#{:02x}{:02x}{:02x}",
+                        (rgba.red() * 255.0).round() as u8,
+                        (rgba.green() * 255.0).round() as u8,
+                        (rgba.blue() * 255.0).round() as u8
+                    );
+                    apply_cb(&hex);
+                    chosen_cb(hex);
+                }
+            },
+        );
+    });
+
+    (dot, apply_color)
 }
