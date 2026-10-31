@@ -408,7 +408,13 @@ impl ClawSession {
             &after.openai_compatible_endpoints,
         );
 
-        self.state.lock().await.persistent_agent = None;
+        {
+            let mut state_lock = self.state.lock().await;
+            state_lock.persistent_agent = None;
+            state_lock
+                .roundtable
+                .sync_max_rounds(after.max_roundtable_turns.clamp(1, 100) as u8);
+        }
 
         if character_changed {
             let db_guard = self.db.lock().await;

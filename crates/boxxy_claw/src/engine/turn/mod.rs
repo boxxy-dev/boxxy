@@ -226,6 +226,21 @@ pub fn spawn_turn(
                 } else {
                     other_mentions.join(", ")
                 };
+                let max_rounds = state_lock.roundtable.max_rounds.max(1);
+                let rounds_taken = state_lock.roundtable.rounds_taken;
+                let remaining_rounds = state_lock.roundtable.remaining_rounds;
+                let is_final_round =
+                    rounds_taken > 0 && (remaining_rounds == 0 || rounds_taken >= max_rounds);
+                let turn_limit_rule = if is_final_round {
+                    format!(
+                        "5. FINAL TURN ({rounds_taken}/{max_rounds} — TURN LIMIT REACHED): You have reached the configured Character Chat Turn Limit ({max_rounds} turns). Deliver your concluding point and address the user directly — do NOT ask {other_mentions_str} another follow-up question and do NOT call `invite_character`."
+                    )
+                } else {
+                    format!(
+                        "5. Turn Limit ({rounds_taken}/{max_rounds} autonomous turns used, {remaining_rounds} remaining): Strictly respect the turn limit (and if the user asked for fewer turns or the discussion has reached a natural conclusion, append `{}` at the end of your message to stop early). Otherwise, end your message by directly addressing the other character(s) in the room ({other_mentions_str}) with a sharp question, take, or counter-argument so they can reply immediately on the next turn!",
+                        crate::engine::session::roundtable::YIELD_TO_USER_MARKER
+                    )
+                };
                 roundtable_context = format!(
                     "\n--- ROUNDTABLE / MULTI-CHARACTER OVERLAY CHAT ---\n\
                     You are speaking as **{agent_name}** (`@{slug}`) in a live multi-character conversation inside **{host_agent_name}**'s overlay.\n\
@@ -235,7 +250,7 @@ pub fn spawn_turn(
                     2. The participants listed above are ALREADY in the room and queued to speak right after you — do NOT call `invite_character` for them!\n\
                     3. Directly engage with the other character(s) and the user — agree, challenge their arguments, banter in-character, or collaborate on the problem.\n\
                     4. Use inline code or plain ` ```text ` blocks for example commands during a roundtable discussion instead of ` ```bash ` blocks unless the user explicitly asked you to execute a command right now (since ` ```bash ` blocks pause the roundtable for command approval).\n\
-                    5. End your message by directly addressing the other character(s) in the room ({other_mentions_str}) with a sharp question, take, or counter-argument so they can reply to you immediately on the next turn!\n\
+                    {turn_limit_rule}\n\
                     -------------------------------------------------\n",
                     if roster.is_empty() {
                         format!("{host_agent_name} [Host], {agent_name} [Guest]")

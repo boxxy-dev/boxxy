@@ -587,6 +587,13 @@
                                     <property name="subtitle" translatable="yes">Start every new terminal with web search enabled (if allowed).</property>
                                   </object>
                                 </child>
+                                <child>
+                                  <object class="AdwSpinRow" id="max_roundtable_turns_spin">
+                                    <property name="title" translatable="yes">Character Chat Turn Limit</property>
+                                    <property name="subtitle" translatable="yes">Maximum number of autonomous turns when characters chat or debate with each other.</property>
+                                    <property name="numeric">True</property>
+                                  </object>
+                                </child>
                               </object>
                             </child>
 

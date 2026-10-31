@@ -1,9 +1,38 @@
 use boxxy_claw_protocol::characters::{CHARACTER_CACHE, CLAIMS_CACHE, CharacterInfo, HolderKind};
 use std::collections::VecDeque;
 
-/// Maximum number of autonomous character-to-character turns allowed before
+/// Default maximum number of autonomous character-to-character turns allowed before
 /// automatically pausing for user input.
 pub const MAX_ROUNDTABLE_ROUNDS: u8 = 20;
+
+/// Returns the user-configured maximum number of autonomous character-to-character
+/// roundtable turns from `Settings`, clamped to `1..=100` (defaulting to `20`).
+pub fn configured_max_roundtable_rounds() -> u8 {
+    boxxy_preferences::Settings::load()
+        .max_roundtable_turns
+        .clamp(1, 100) as u8
+}
+
+/// Extracts an explicit turn/round count requested in a user prompt (e.g. `"for 3 turns"`, `"4 rounds"`),
+/// capped at the user's configured global permission limit.
+pub fn resolve_turn_limit_for_prompt(prompt: &str) -> u8 {
+    let configured_max = configured_max_roundtable_rounds();
+    let words: Vec<&str> = prompt.split_whitespace().collect();
+    for pair in words.windows(2) {
+        let unit = pair[1]
+            .trim_matches(|c: char| !c.is_ascii_alphabetic())
+            .to_ascii_lowercase();
+        if matches!(unit.as_str(), "turn" | "turns" | "round" | "rounds") {
+            let num_str = pair[0].trim_matches(|c: char| !c.is_ascii_digit());
+            if let Ok(n) = num_str.parse::<u8>()
+                && (1..=100).contains(&n)
+            {
+                return n.min(configured_max);
+            }
+        }
+    }
+    configured_max
+}
 
 /// Marker a character can emit at the end of its response when a debate/discussion
 /// has reached a natural conclusion or requires user input to proceed.
@@ -51,14 +80,18 @@ pub enum UserRoundtableIntent {
 }
 
 /// Per-session state tracking active multi-character roundtable / debate turns.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct RoundtableState {
     /// Ordered roster of participants (Host + invited Guests) in the current roundtable.
     pub participants: Vec<SpeakerIdentity>,
     /// Queue of speakers scheduled to take the next turn(s).
     pub speaker_queue: VecDeque<SpeakerIdentity>,
-    /// Remaining autonomous character-to-character turns (capped at `MAX_ROUNDTABLE_ROUNDS`).
+    /// Remaining autonomous character-to-character turns (capped at `max_rounds`).
     pub remaining_rounds: u8,
+    /// Configured maximum autonomous character-to-character turns for the current exchange.
+    pub max_rounds: u8,
+    /// Number of autonomous character-to-character handoff turns taken in the current exchange.
+    pub rounds_taken: u8,
     /// True when characters should automatically alternate turns (e.g. `/debate` or "talk to each other").
     pub auto_alternate: bool,
     /// True when Visual Novel Drama Mode is enabled (1-2 sentence casual spoken dialogue + typewriter effect).
@@ -69,9 +102,36 @@ pub struct RoundtableState {
     pub last_speaker_id: Option<String>,
 }
 
+impl Default for RoundtableState {
+    fn default() -> Self {
+        Self {
+            participants: Vec::new(),
+            speaker_queue: VecDeque::new(),
+            remaining_rounds: 0,
+            max_rounds: configured_max_roundtable_rounds(),
+            rounds_taken: 0,
+            auto_alternate: false,
+            drama_mode: false,
+            topic: String::new(),
+            last_speaker_id: None,
+        }
+    }
+}
+
 impl RoundtableState {
     pub fn is_active(&self) -> bool {
         self.remaining_rounds > 0 && (!self.speaker_queue.is_empty() || self.auto_alternate)
+    }
+
+    /// Updates `max_rounds` (e.g., when Preferences change or in tests) and clamps `remaining_rounds`
+    /// so an active roundtable immediately respects the updated limit.
+    pub fn sync_max_rounds(&mut self, new_max: u8) {
+        let clamped = new_max.clamp(1, 100);
+        self.max_rounds = clamped;
+        let allowed_remaining = clamped.saturating_sub(self.rounds_taken);
+        if self.remaining_rounds > allowed_remaining {
+            self.remaining_rounds = allowed_remaining;
+        }
     }
 
     pub fn clear(&mut self) {
@@ -79,6 +139,8 @@ impl RoundtableState {
         self.participants.clear();
         self.speaker_queue.clear();
         self.remaining_rounds = 0;
+        self.max_rounds = configured_max_roundtable_rounds();
+        self.rounds_taken = 0;
         self.auto_alternate = false;
         self.drama_mode = keep_drama;
         self.topic.clear();
@@ -95,9 +157,12 @@ impl RoundtableState {
 
     /// Resumes an active roundtable after the user interjects a follow-up message.
     pub fn resume_after_interjection(&mut self, host: SpeakerIdentity, user_input: String) {
+        let max_rounds = resolve_turn_limit_for_prompt(&user_input);
         self.speaker_queue.clear();
         self.topic = user_input;
-        self.remaining_rounds = MAX_ROUNDTABLE_ROUNDS;
+        self.max_rounds = max_rounds;
+        self.remaining_rounds = max_rounds;
+        self.rounds_taken = 0;
         self.auto_alternate = true;
 
         if !self
@@ -125,8 +190,11 @@ impl RoundtableState {
         topic: String,
     ) {
         self.clear();
+        let max_rounds = resolve_turn_limit_for_prompt(&topic);
         self.topic = topic;
-        self.remaining_rounds = MAX_ROUNDTABLE_ROUNDS;
+        self.max_rounds = max_rounds;
+        self.remaining_rounds = max_rounds;
+        self.rounds_taken = 0;
         self.auto_alternate = true;
 
         // Build deduplicated participant roster: Host + Guests
@@ -158,15 +226,19 @@ impl RoundtableState {
         multi_turn: bool,
         prompt: String,
     ) {
+        let max_rounds = resolve_turn_limit_for_prompt(&prompt);
         self.speaker_queue.clear();
         self.topic = prompt.clone();
         self.auto_alternate = multi_turn;
+        self.max_rounds = max_rounds;
+        self.rounds_taken = 0;
         self.remaining_rounds = if multi_turn {
-            MAX_ROUNDTABLE_ROUNDS
+            max_rounds
         } else {
             // Even in a standard `@character` mention, allow a natural follow-up handoff
-            // if the guest explicitly `@mentions` another character in its reply.
-            4
+            // if the guest explicitly `@mentions` another character in its reply,
+            // strictly capped at `max_rounds`.
+            4.min(max_rounds)
         };
 
         if self.participants.is_empty() {
@@ -205,12 +277,21 @@ impl RoundtableState {
 
     /// Invites a guest character mid-turn (e.g., via the `invite_character` tool)
     /// so they speak immediately after the current speaker finishes.
+    /// Returns `false` if the configured character chat turn limit has already been reached.
     pub fn invite_guest(
         &mut self,
         host: SpeakerIdentity,
         guest: SpeakerIdentity,
         topic_or_prompt: String,
-    ) {
+    ) -> bool {
+        if self.rounds_taken == 0 && self.remaining_rounds == 0 {
+            self.max_rounds = resolve_turn_limit_for_prompt(&topic_or_prompt);
+        }
+        let max_rounds = self.max_rounds.max(1);
+        if self.rounds_taken >= max_rounds {
+            return false;
+        }
+
         if self.participants.is_empty() {
             self.participants.push(host.clone());
         }
@@ -224,8 +305,15 @@ impl RoundtableState {
         if self.topic.is_empty() {
             self.topic = topic_or_prompt;
         }
-        if self.remaining_rounds == 0 {
-            self.remaining_rounds = MAX_ROUNDTABLE_ROUNDS;
+        // Only initialize `remaining_rounds` if no handoff turns have been taken yet;
+        // never refill an active or exhausted turn budget mid-conversation!
+        if self.remaining_rounds == 0 && self.rounds_taken == 0 {
+            self.remaining_rounds = max_rounds;
+        } else {
+            let allowed = max_rounds.saturating_sub(self.rounds_taken);
+            if self.remaining_rounds > allowed {
+                self.remaining_rounds = allowed;
+            }
         }
         // Push to the front of the queue so the invited character speaks next
         if !self
@@ -235,6 +323,7 @@ impl RoundtableState {
         {
             self.speaker_queue.push_front(guest);
         }
+        true
     }
 
     /// Called when a turn finishes. Evaluates the speaker's response and determines
@@ -249,10 +338,24 @@ impl RoundtableState {
     ) -> Option<(SpeakerIdentity, String)> {
         self.last_speaker_id = Some(speaker.character_id.clone());
 
+        let max_rounds = self.max_rounds.max(1);
+        let allowed_remaining = max_rounds.saturating_sub(self.rounds_taken);
+        if self.remaining_rounds > allowed_remaining {
+            self.remaining_rounds = allowed_remaining;
+        }
+
         // If the turn proposed a command/file edit waiting on user approval, or
         // the speaker explicitly yielded to the user, pause autonomous turns
         // (while keeping `participants` and `auto_alternate` so the roundtable can resume).
         if had_blocking_proposal || response.contains(YIELD_TO_USER_MARKER) {
+            self.speaker_queue.clear();
+            self.remaining_rounds = 0;
+            return None;
+        }
+
+        // Hard guard: if we have already reached the configured turn limit, stop immediately
+        // before inspecting `@mentions` in the response so characters can never bypass the limit.
+        if self.rounds_taken >= max_rounds {
             self.speaker_queue.clear();
             self.remaining_rounds = 0;
             return None;
@@ -284,8 +387,10 @@ impl RoundtableState {
                 {
                     self.speaker_queue.push_front(target);
                 }
-                if self.remaining_rounds == 0 {
-                    self.remaining_rounds = 2;
+                // Only seed a small follow-up budget if no autonomous handoffs have happened yet
+                // in this user exchange; never refill an exhausted turn budget!
+                if self.remaining_rounds == 0 && self.rounds_taken == 0 && !self.auto_alternate {
+                    self.remaining_rounds = 2.min(max_rounds);
                 }
             }
         }
@@ -315,6 +420,8 @@ impl RoundtableState {
         }?;
 
         self.remaining_rounds = self.remaining_rounds.saturating_sub(1);
+        self.rounds_taken = self.rounds_taken.saturating_add(1);
+        let is_final_round = self.remaining_rounds == 0 || self.rounds_taken >= max_rounds;
 
         let other_names: Vec<String> = self
             .participants
@@ -323,26 +430,50 @@ impl RoundtableState {
             .map(|p| format!("{} (@{})", p.display_name, p.slug))
             .collect();
 
-        let style_instructions = if self.drama_mode {
-            "- DRAMA / VISUAL NOVEL MODE IS ACTIVE: Reply in ONLY 1 to 2 short, punchy spoken sentences (under 35 words max)!\n\
-            - STRICTLY FORBIDDEN: NO bullet points, NO numbered lists, NO markdown headers, NO multi-paragraph essays, and NO routine tool calls!\n\
-            - Speak like a live anime / visual novel character reacting directly to what was just said, and end with a quick hook or reaction to the other character!"
+        let style_instructions = match (self.drama_mode, is_final_round) {
+            (true, true) => {
+                "- DRAMA / VISUAL NOVEL MODE IS ACTIVE: Reply in ONLY 1 to 2 short, punchy spoken sentences (under 35 words max)!\n\
+                - STRICTLY FORBIDDEN: NO bullet points, NO numbered lists, NO markdown headers, NO multi-paragraph essays, and NO routine tool calls!\n\
+                - FINAL TURN (TURN LIMIT REACHED): Deliver a punchy closing line that wraps up the scene for the user — do NOT ask another follow-up question to continue the loop!"
+            }
+            (true, false) => {
+                "- DRAMA / VISUAL NOVEL MODE IS ACTIVE: Reply in ONLY 1 to 2 short, punchy spoken sentences (under 35 words max)!\n\
+                - STRICTLY FORBIDDEN: NO bullet points, NO numbered lists, NO markdown headers, NO multi-paragraph essays, and NO routine tool calls!\n\
+                - Speak like a live anime / visual novel character reacting directly to what was just said, and end with a quick hook or reaction to the other character (or append `[YIELD_TO_USER]` if the scene has concluded)!"
+            }
+            (false, true) => {
+                "- Challenge, agree, banter, or build on the previous speaker's specific points from your own technical perspective and personality.\n\
+                - Do NOT re-run system inspection commands that were already executed in the previous turn unless checking a brand-new fact.\n\
+                - FINAL TURN (TURN LIMIT REACHED): Deliver your concluding take and wrap up the discussion for the user — do NOT ask another follow-up question to continue the loop!"
+            }
+            (false, false) => {
+                "- Challenge, agree, banter, or build on the previous speaker's specific points from your own technical perspective and personality.\n\
+                - Do NOT re-run system inspection commands that were already executed in the previous turn unless checking a brand-new fact.\n\
+                - End your message by addressing the other character with a sharp counter-point or follow-up question so the conversation continues naturally (or append `[YIELD_TO_USER]` if the discussion has reached a natural conclusion)!"
+            }
+        };
+
+        let round_badge = if is_final_round {
+            format!(
+                "[ROUNDTABLE TURN — Round {}/{} (FINAL TURN — LIMIT REACHED)]",
+                self.rounds_taken, max_rounds
+            )
         } else {
-            "- Challenge, agree, banter, or build on the previous speaker's specific points from your own technical perspective and personality.\n\
-            - Do NOT re-run system inspection commands that were already executed in the previous turn unless checking a brand-new fact.\n\
-            - End your message by addressing the other character with a sharp counter-point or follow-up question so the conversation continues naturally!"
+            format!(
+                "[ROUNDTABLE TURN — Round {}/{}]",
+                self.rounds_taken, max_rounds
+            )
         };
 
         let prompt = format!(
-            "[ROUNDTABLE TURN — Round {}/{}]\n\
+            "{}\n\
             **{}** (`@{}`) just spoke in the overlay conversation (see their latest message in history).\n\
             Other participants in this conversation: {}.\n\
             Original Topic / Context: {}\n\
             INSTRUCTIONS FOR YOUR TURN:\n\
             - Respond directly in your own character's voice (**{}**) to **{}** (`@{}`) and the user.\n\
             {}",
-            MAX_ROUNDTABLE_ROUNDS.saturating_sub(self.remaining_rounds),
-            MAX_ROUNDTABLE_ROUNDS,
+            round_badge,
             speaker.display_name,
             speaker.slug,
             if other_names.is_empty() {
@@ -919,7 +1050,7 @@ mod tests {
         assert_eq!(rt.remaining_rounds, 0);
 
         // Yield marker stops immediately
-        rt.start_debate(host, vec![levi], "Test yield".into());
+        rt.start_debate(host.clone(), vec![levi.clone()], "Test yield".into());
         let first = rt.speaker_queue.pop_front().unwrap();
         let next = rt.on_turn_completed(
             &first,
@@ -930,5 +1061,41 @@ mod tests {
         );
         assert!(next.is_none());
         assert_eq!(rt.remaining_rounds, 0);
+
+        // Custom turn limit (e.g. 4 turns) is strictly respected even when characters
+        // @mention each other in every single reply or attempt to call invite_guest.
+        rt.start_debate(host.clone(), vec![levi.clone()], "Memory models".into());
+        rt.sync_max_rounds(4);
+        assert_eq!(rt.remaining_rounds, 4);
+        let mut current = rt.speaker_queue.pop_front().unwrap();
+        let mut count = 0;
+        let mut last_prompt = String::new();
+        while let Some((next, prompt)) = rt.on_turn_completed(
+            &current,
+            "What do you think @niko-una @levi-kujo?",
+            false,
+            "pane-1",
+            &cat,
+        ) {
+            current = next;
+            count += 1;
+            last_prompt = prompt;
+        }
+        assert_eq!(count, 4);
+        assert_eq!(rt.remaining_rounds, 0);
+        assert!(last_prompt.contains("FINAL TURN — LIMIT REACHED"));
+        assert!(
+            !rt.invite_guest(host.clone(), levi.clone(), "Try to keep talking".into()),
+            "invite_guest must be rejected once turn limit is reached"
+        );
+
+        // Prompt-level turn request ("for 3 turns") is respected and capped by configured max
+        rt.start_debate(
+            host,
+            vec![levi],
+            "Debate for 3 turns about allocators".into(),
+        );
+        assert_eq!(rt.max_rounds, 3);
+        assert_eq!(rt.remaining_rounds, 3);
     }
 }

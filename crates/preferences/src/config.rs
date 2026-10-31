@@ -278,6 +278,8 @@ pub struct Settings {
 
     pub hide_character_badge: bool,
     pub web_search_on_by_default: bool,
+    #[serde(default = "default_max_roundtable_turns")]
+    pub max_roundtable_turns: u32,
     #[serde(default)]
     pub vibe_trusted_dirs: Vec<String>,
     pub enable_file_tools: bool,
@@ -353,6 +355,7 @@ impl Default for Settings {
             invert_scroll: true,
             hide_character_badge: false,
             web_search_on_by_default: true,
+            max_roundtable_turns: default_max_roundtable_turns(),
             vibe_trusted_dirs: vec![],
             enable_file_tools: true,
             enable_system_tools: true,
@@ -381,6 +384,10 @@ impl Default for Settings {
 
 const fn default_overlay_font_scale() -> u32 {
     100
+}
+
+const fn default_max_roundtable_turns() -> u32 {
+    20
 }
 
 impl Settings {

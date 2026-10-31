@@ -213,6 +213,29 @@ pub fn setup_characters_page(
         glib::ControlFlow::Continue
     });
 
+    // === Link to Toolbox & Permissions (Autonomous Turn Limit) ===
+    let turns_link_group = adw::PreferencesGroup::new();
+    let turns_link_label = gtk::Label::new(None);
+    turns_link_label.set_use_markup(true);
+    turns_link_label.set_markup(
+        "<a href=\"toolbox\"><span underline=\"none\">Set Characters Autonomous Turns →</span></a>",
+    );
+    turns_link_label.set_halign(gtk::Align::Start);
+    turns_link_label.add_css_class("boxxy-link");
+
+    let category_list: gtk::ListBox = builder.object("category_list").unwrap();
+    let nav_toolbox: gtk::ListBoxRow = builder.object("nav_toolbox").unwrap();
+    let max_roundtable_turns_spin: adw::SpinRow =
+        builder.object("max_roundtable_turns_spin").unwrap();
+    turns_link_label.connect_activate_link(move |_, _| {
+        category_list.select_row(Some(&nav_toolbox));
+        max_roundtable_turns_spin.grab_focus();
+        glib::Propagation::Stop
+    });
+
+    turns_link_group.add(&turns_link_label);
+    page.add(&turns_link_group);
+
     // === Management group ===
     let manage_group = adw::PreferencesGroup::new();
     manage_group.set_title("Manage");
@@ -266,12 +289,14 @@ pub fn setup_characters_page(
     page.add(&manage_group);
 
     let chars_group_clone = chars_group.clone();
+    let turns_link_group_clone = turns_link_group.clone();
     let manage_group_clone = manage_group.clone();
     Box::new(move |query: &str| {
         let matches = query.is_empty()
-            || "characters avatar personality agent niko levi kuro manage folder reset"
+            || "characters avatar personality agent niko levi kuro manage folder reset autonomous turn limit"
                 .contains(query);
         chars_group_clone.set_visible(matches);
+        turns_link_group_clone.set_visible(matches);
         manage_group_clone.set_visible(matches);
         matches
     })
@@ -634,7 +659,7 @@ fn add_preferences_toast(widget: &impl IsA<gtk::Widget>, message: &str) {
     }
 }
 
-fn make_color_dot<F>(color_hex: &str, tooltip: &str, on_color_chosen: F) -> gtk::Button
+pub(crate) fn make_color_dot<F>(color_hex: &str, tooltip: &str, on_color_chosen: F) -> gtk::Button
 where
     F: Fn(String) + 'static,
 {
@@ -684,14 +709,17 @@ where
         let class = class.clone();
         let current_hex = current_hex.clone();
         Rc::new(move |raw_hex: &str| {
-            let safe_color: &str = if raw_hex.chars().all(|c| c.is_ascii_hexdigit() || c == '#')
-                && !raw_hex.is_empty()
-            {
-                raw_hex
+            let safe_color = if let Ok(rgba) = gdk::RGBA::parse(raw_hex) {
+                format!(
+                    "#{:02x}{:02x}{:02x}",
+                    (rgba.red() * 255.0).round() as u8,
+                    (rgba.green() * 255.0).round() as u8,
+                    (rgba.blue() * 255.0).round() as u8
+                )
             } else {
-                "#808080"
+                "#808080".to_string()
             };
-            *current_hex.borrow_mut() = safe_color.to_string();
+            *current_hex.borrow_mut() = safe_color.clone();
             let css = format!(
                 "button.{class} {{ \
                     background-color: {safe_color}; \
@@ -702,7 +730,7 @@ where
                     padding: 0; \
                     border: 2px solid alpha(currentColor, 0.22); \
                     box-shadow: none; \
-                    transition: transform 150ms ease, border-color 150ms ease; \
+                    transition: transform 150ms ease, border-color 150ms ease, opacity 150ms ease; \
                 }} \
                 button.{class}:hover {{ \
                     background-color: {safe_color}; \
@@ -714,6 +742,11 @@ where
                     background-color: {safe_color}; \
                     background-image: none; \
                     border-color: currentColor; \
+                }} \
+                button.{class}:disabled {{ \
+                    background-color: {safe_color}; \
+                    background-image: none; \
+                    opacity: 0.45; \
                 }}"
             );
             provider.load_from_string(&css);

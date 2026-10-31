@@ -1224,4 +1224,18 @@ frame.avatar-crop-well {
     border-radius: 12px;
 }
 
+/* --- Past Sessions Sidebar List --- */
+row.past-session-row button.past-session-options-btn {
+    opacity: 0;
+    transition: opacity 150ms ease;
+}
+
+row.past-session-row:hover button.past-session-options-btn,
+row.past-session-row button.past-session-options-btn.menu-open,
+row.past-session-row button.past-session-options-btn:hover,
+row.past-session-row button.past-session-options-btn:active {
+    opacity: 1.0;
+}
+
+
 

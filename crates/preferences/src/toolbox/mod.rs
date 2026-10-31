@@ -71,6 +71,8 @@ pub fn setup_toolbox_page(
 ) -> Box<dyn Fn(&str) -> bool> {
     let web_search_by_default_switch: adw::SwitchRow =
         builder.object("web_search_by_default_switch").unwrap();
+    let max_roundtable_turns_spin: adw::SpinRow =
+        builder.object("max_roundtable_turns_spin").unwrap();
     let vibe_location_entry: adw::EntryRow = builder.object("vibe_location_entry").unwrap();
     let vibe_location_browse_btn: gtk::Button =
         builder.object("vibe_location_browse_btn").unwrap();
@@ -187,6 +189,12 @@ pub fn setup_toolbox_page(
 
     // Initialize values
     web_search_by_default_switch.set_active(settings_rc.borrow().web_search_on_by_default);
+    {
+        let turns_val = settings_rc.borrow().max_roundtable_turns.clamp(1, 100) as f64;
+        let turns_adj = gtk::Adjustment::new(turns_val, 1.0, 100.0, 1.0, 5.0, 0.0);
+        max_roundtable_turns_spin.set_adjustment(Some(&turns_adj));
+        max_roundtable_turns_spin.set_value(turns_val);
+    }
     enable_auto_dreaming_switch.set_active(settings_rc.borrow().enable_auto_dreaming);
     enable_file_tools_switch.set_active(settings_rc.borrow().enable_file_tools);
     enable_system_tools_switch.set_active(settings_rc.borrow().enable_system_tools);
@@ -203,6 +211,18 @@ pub fn setup_toolbox_page(
         let mut s = s_rc.borrow_mut();
         if s.web_search_on_by_default != row.is_active() {
             s.web_search_on_by_default = row.is_active();
+            s.save();
+            cb(s.clone());
+        }
+    });
+
+    let s_rc = settings_rc.clone();
+    let cb = on_change.clone();
+    max_roundtable_turns_spin.connect_value_notify(move |row: &adw::SpinRow| {
+        let val = (row.value().round() as u32).clamp(1, 100);
+        let mut s = s_rc.borrow_mut();
+        if s.max_roundtable_turns != val {
+            s.max_roundtable_turns = val;
             s.save();
             cb(s.clone());
         }
@@ -297,6 +317,7 @@ pub fn setup_toolbox_page(
     });
 
     let web_search_by_default_switch_clone = web_search_by_default_switch.clone();
+    let max_roundtable_turns_spin_clone = max_roundtable_turns_spin.clone();
     let vibe_location_entry_clone = vibe_location_entry.clone();
     let enable_file_tools_switch_clone = enable_file_tools_switch.clone();
     let enable_system_tools_switch_clone = enable_system_tools_switch.clone();
@@ -316,6 +337,10 @@ pub fn setup_toolbox_page(
         let ag_web_default = match_row(
             web_search_by_default_switch_clone.upcast_ref(),
             "web search on by default allowed automatically permissions toolbox",
+        );
+        let ag_roundtable_turns = match_row(
+            max_roundtable_turns_spin_clone.upcast_ref(),
+            "character chat turn limit max roundtable turns rounds debate drama autonomous conversation permissions toolbox",
         );
         let ag_vibe_locs = match_row(
             vibe_location_entry_clone.upcast_ref(),
@@ -354,7 +379,7 @@ pub fn setup_toolbox_page(
             "enable clipboard tools read write copy paste",
         );
 
-        group_toolbox_permissions.set_visible(ag_web_default);
+        group_toolbox_permissions.set_visible(ag_web_default || ag_roundtable_turns);
         group_vibe_locations.set_visible(ag_vibe_locs);
         group_toolbox_dreaming.set_visible(ag_dream);
         group_toolbox_tools.set_visible(ag3 || ag4 || ag5 || ag6 || ag_search || ag_os || ag7);

@@ -656,21 +656,32 @@ impl Tool for InviteCharacterTool {
             } else {
                 let guest_name = guest.display_name.clone();
                 let guest_slug = guest.slug.clone();
-                {
+                let (invited, max_rounds) = {
                     let mut state = self.state.lock().await;
-                    state
+                    let ok = state
                         .roundtable
                         .invite_guest(host_identity, guest, args.topic.clone());
-                    if args.debate {
+                    if ok && args.debate {
                         state.roundtable.auto_alternate = true;
                     }
-                }
-                InviteCharacterOutput {
-                    success: true,
-                    message: format!(
-                        "Invited {} (@{}) to the overlay conversation. Conclude your current message addressing {} so they can immediately take the next turn in the overlay.",
-                        guest_name, guest_slug, guest_name
-                    ),
+                    (ok, state.roundtable.max_rounds.max(1))
+                };
+                if invited {
+                    InviteCharacterOutput {
+                        success: true,
+                        message: format!(
+                            "Invited {} (@{}) to the overlay conversation (turn limit: {}). Conclude your current message addressing {} so they can immediately take the next turn in the overlay.",
+                            guest_name, guest_slug, max_rounds, guest_name
+                        ),
+                    }
+                } else {
+                    InviteCharacterOutput {
+                        success: false,
+                        message: format!(
+                            "Character chat turn limit ({}) has already been reached for this exchange. Conclude your current message and return control to the user.",
+                            max_rounds
+                        ),
+                    }
                 }
             }
         } else {

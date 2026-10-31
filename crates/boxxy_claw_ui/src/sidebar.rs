@@ -1158,24 +1158,11 @@ fn populate_past_sessions(
             } else {
                 "msgs"
             };
-            let base_meta = if is_pinned {
-                format!(
-                    "Pinned • {} • {} {} • {}",
-                    char_display, session.message_count, msg_word, age
-                )
-            } else {
-                format!(
-                    "{} • {} {} • {}",
-                    char_display, session.message_count, msg_word, age
-                )
-            };
-            let subtitle_text = if is_active_session {
-                if is_in_background {
-                    format!("Active in Background • {base_meta}")
-                } else {
-                    format!("Active in Tab • {base_meta}")
-                }
-            } else if is_disabled_row {
+            let base_meta = format!(
+                "{} • {} {} • {}",
+                char_display, session.message_count, msg_word, age
+            );
+            let subtitle_text = if is_disabled_row && !is_active_session {
                 if is_in_background {
                     format!("In Background • {base_meta}")
                 } else {
@@ -1186,6 +1173,7 @@ fn populate_past_sessions(
             };
 
             let row = gtk::ListBoxRow::new();
+            row.add_css_class("past-session-row");
             if is_disabled_row {
                 row.set_sensitive(false);
                 row.set_activatable(false);
@@ -1235,23 +1223,6 @@ fn populate_past_sessions(
 
             let title_hbox = gtk::Box::new(gtk::Orientation::Horizontal, 4);
             title_hbox.set_hexpand(true);
-            if is_active_session {
-                let active_dot = gtk::Label::builder()
-                    .label("•")
-                    .css_classes(["caption", "success"])
-                    .valign(gtk::Align::Center)
-                    .build();
-                title_hbox.append(&active_dot);
-            }
-            if is_pinned {
-                let pin_icon = gtk::Image::builder()
-                    .icon_name("boxxy-view-pin-symbolic")
-                    .pixel_size(12)
-                    .css_classes(["accent"])
-                    .valign(gtk::Align::Center)
-                    .build();
-                title_hbox.append(&pin_icon);
-            }
             let title_lbl = gtk::Label::builder()
                 .label(&title)
                 .css_classes(["caption", "heading"])
@@ -1263,15 +1234,35 @@ fn populate_past_sessions(
             title_hbox.append(&title_lbl);
             text_vbox.append(&title_hbox);
 
+            let sub_hbox = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+            sub_hbox.set_halign(gtk::Align::Start);
             let sub_lbl = gtk::Label::builder()
                 .label(&subtitle_text)
                 .css_classes(["caption", "dim-label"])
                 .halign(gtk::Align::Start)
-                .hexpand(true)
                 .xalign(0.0)
                 .ellipsize(gtk::pango::EllipsizeMode::End)
                 .build();
-            text_vbox.append(&sub_lbl);
+            sub_hbox.append(&sub_lbl);
+            if is_pinned {
+                let pin_icon = gtk::Image::builder()
+                    .icon_name("boxxy-view-pin-symbolic")
+                    .pixel_size(14)
+                    .css_classes(["accent"])
+                    .valign(gtk::Align::Center)
+                    .build();
+                sub_hbox.append(&pin_icon);
+            }
+            if is_active_session {
+                let bolt_icon = gtk::Image::builder()
+                    .icon_name("boxxy-vibe-symbolic")
+                    .pixel_size(14)
+                    .css_classes(["success"])
+                    .valign(gtk::Align::Center)
+                    .build();
+                sub_hbox.append(&bolt_icon);
+            }
+            text_vbox.append(&sub_hbox);
 
             resume_btn_content.append(&text_vbox);
 
@@ -1291,7 +1282,7 @@ fn populate_past_sessions(
             // Row options button (plain Button + parented Popover to avoid MenuButton press/release race)
             let options_btn = gtk::Button::builder()
                 .icon_name("view-more-symbolic")
-                .css_classes(["flat", "circular"])
+                .css_classes(["flat", "circular", "past-session-options-btn"])
                 .valign(gtk::Align::Center)
                 .can_focus(false)
                 .tooltip_text("Conversation Options")
@@ -1304,6 +1295,19 @@ fn populate_past_sessions(
                 .build();
             popover.add_css_class("menu");
             popover.set_parent(&options_btn);
+
+            {
+                let btn_weak = options_btn.downgrade();
+                popover.connect_visible_notify(move |pop| {
+                    if let Some(btn) = btn_weak.upgrade() {
+                        if pop.is_visible() {
+                            btn.add_css_class("menu-open");
+                        } else {
+                            btn.remove_css_class("menu-open");
+                        }
+                    }
+                });
+            }
 
             let popover_cleanup = popover.clone();
             options_btn.connect_destroy(move |_| {

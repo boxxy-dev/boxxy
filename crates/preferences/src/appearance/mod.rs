@@ -1,6 +1,6 @@
 use crate::config::{CursorShape, Settings};
 use adw::prelude::*;
-use gtk::{gdk, pango};
+use gtk::pango;
 use gtk4 as gtk;
 use libadwaita as adw;
 use std::cell::RefCell;
@@ -448,19 +448,25 @@ pub fn setup_appearance_page(
         }
     });
 
-    let cursor_color_dialog = gtk::ColorDialog::builder().with_alpha(false).build();
-    let cursor_color_button = gtk::ColorDialogButton::new(Some(cursor_color_dialog));
-    cursor_color_button.set_valign(gtk::Align::Center);
-    if let Ok(rgba) = gdk::RGBA::parse(&settings_rc.borrow().cursor_color) {
-        cursor_color_button.set_rgba(&rgba);
-    }
+    let initial_cursor_color = settings_rc.borrow().cursor_color.clone();
+    let s_rc = settings_rc.clone();
+    let cb = on_change.clone();
+    let cursor_color_button =
+        crate::characters::make_color_dot(&initial_cursor_color, "Cursor Color", move |hex| {
+            let mut s = s_rc.borrow_mut();
+            if s.cursor_color != hex {
+                s.cursor_color = hex;
+                s.save();
+                cb(s.clone());
+            }
+        });
 
     // Add color picker to the row (as a prefix to keep it to the left of the switch)
     cursor_color_row.add_prefix(&cursor_color_button);
 
     cursor_color_switch.set_active(settings_rc.borrow().cursor_color_override);
     cursor_color_button.set_sensitive(settings_rc.borrow().cursor_color_override);
-    let ccb_clone = cursor_color_button.clone();
+    let ccb_clone = cursor_color_button;
     let s_rc = settings_rc.clone();
     let cb = on_change.clone();
     cursor_color_switch.connect_active_notify(move |switch| {
@@ -468,19 +474,6 @@ pub fn setup_appearance_page(
         let mut s = s_rc.borrow_mut();
         if s.cursor_color_override != switch.is_active() {
             s.cursor_color_override = switch.is_active();
-            s.save();
-            cb(s.clone());
-        }
-    });
-
-    let s_rc = settings_rc.clone();
-    let cb = on_change.clone();
-    cursor_color_button.connect_rgba_notify(move |btn| {
-        let rgba = btn.rgba();
-        let current = rgba.to_str().to_string();
-        let mut s = s_rc.borrow_mut();
-        if s.cursor_color != current {
-            s.cursor_color = current;
             s.save();
             cb(s.clone());
         }
