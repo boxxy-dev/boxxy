@@ -1,25 +1,58 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Weak};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use log::{error, info, warn};
+use log::{debug, error, info, warn};
 use rmcp::model::Tool as McpToolDefinition;
 use rmcp::service::{ClientInitializeError, RunningService};
 use rmcp::RoleClient;
 use tokio::sync::{OnceCell, RwLock};
 
 use crate::client::handler::BoxxyClientHandler;
-use crate::client::http::{find_http_status_error, format_service_error};
+use crate::client::http::{PermanentConfigError, find_http_status_error, format_service_error};
 use crate::config::{McpServerConfig, McpTransport};
 use crate::rig_bridge::tool::{DynamicMcpTool, McpToolObserver};
 
 pub type McpClientWrapper = RunningService<RoleClient, BoxxyClientHandler>;
+
+/// Cooldown after a transient MCP connection failure before re-probing.
+const TRANSIENT_COOLDOWN: Duration = Duration::from_secs(60);
+/// Cooldown after a permanent configuration or authorization failure before re-probing
+/// (also immediately reset whenever the user edits the server in Preferences).
+const PERMANENT_CONFIG_COOLDOWN: Duration = Duration::from_secs(300);
+
+#[derive(Debug, Clone)]
+struct CircuitBreakerState {
+    tripped_at: Instant,
+    cooldown: Duration,
+    last_error: String,
+}
+
+#[derive(Debug)]
+struct CircuitBreakerOpenError {
+    server_name: String,
+    remaining_secs: u64,
+    last_error: String,
+}
+
+impl std::fmt::Display for CircuitBreakerOpenError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "MCP server '{}' is in circuit-breaker cooldown ({}s remaining): {}",
+            self.server_name, self.remaining_secs, self.last_error
+        )
+    }
+}
+
+impl std::error::Error for CircuitBreakerOpenError {}
 
 pub struct McpClientManager {
     self_weak: Weak<Self>,
     configs: RwLock<HashMap<String, McpServerConfig>>,
     active_clients: RwLock<HashMap<String, Arc<McpClientWrapper>>>,
     tool_cache: RwLock<HashMap<String, Vec<McpToolDefinition>>>,
+    failed_servers: RwLock<HashMap<String, CircuitBreakerState>>,
 }
 
 static MANAGER: OnceCell<Arc<McpClientManager>> = OnceCell::const_new();
@@ -38,6 +71,7 @@ impl McpClientManager {
             configs: RwLock::new(HashMap::new()),
             active_clients: RwLock::new(HashMap::new()),
             tool_cache: RwLock::new(HashMap::new()),
+            failed_servers: RwLock::new(HashMap::new()),
         })
     }
 
@@ -47,6 +81,7 @@ impl McpClientManager {
     /// disabled, or had its transport/timeout configuration modified.
     pub async fn update_configs(&self, servers: Vec<McpServerConfig>) {
         let mut to_disconnect: Vec<String> = Vec::new();
+        let mut to_reset_breaker: Vec<String> = Vec::new();
 
         {
             let mut configs = self.configs.write().await;
@@ -60,15 +95,32 @@ impl McpClientManager {
 
             for (old_name, old_cfg) in configs.iter() {
                 match new_configs.get(old_name) {
-                    None => to_disconnect.push(old_name.clone()),
+                    None => {
+                        to_disconnect.push(old_name.clone());
+                        to_reset_breaker.push(old_name.clone());
+                    }
                     Some(new_cfg) if new_cfg != old_cfg => {
                         to_disconnect.push(old_name.clone());
+                        to_reset_breaker.push(old_name.clone());
                     }
                     Some(_) => {}
                 }
             }
 
+            for new_name in new_configs.keys() {
+                if !configs.contains_key(new_name) {
+                    to_reset_breaker.push(new_name.clone());
+                }
+            }
+
             *configs = new_configs;
+        }
+
+        if !to_reset_breaker.is_empty() {
+            let mut failed = self.failed_servers.write().await;
+            for name in to_reset_breaker {
+                failed.remove(&name);
+            }
         }
 
         if to_disconnect.is_empty() {
@@ -121,6 +173,26 @@ impl McpClientManager {
             }
         }
 
+        // Check in-memory circuit breaker before attempting network / process spawn
+        {
+            let failed = self.failed_servers.read().await;
+            if let Some(breaker) = failed.get(server_name) {
+                let elapsed = breaker.tripped_at.elapsed();
+                if elapsed < breaker.cooldown {
+                    let remaining_secs = breaker
+                        .cooldown
+                        .saturating_sub(elapsed)
+                        .as_secs()
+                        .max(1);
+                    return Err(anyhow::Error::new(CircuitBreakerOpenError {
+                        server_name: server_name.to_string(),
+                        remaining_secs,
+                        last_error: breaker.last_error.clone(),
+                    }));
+                }
+            }
+        }
+
         let config = {
             let configs = self.configs.read().await;
             configs
@@ -141,6 +213,7 @@ impl McpClientManager {
         };
 
         let mut last_err = None;
+        let mut is_permanent_failure = false;
         for attempt in 1..=attempts {
             let handler = BoxxyClientHandler::new(server_name, self.self_weak.clone());
             let res = match &config.transport {
@@ -168,12 +241,18 @@ impl McpClientManager {
             match res {
                 Ok(client) => {
                     let client_arc = Arc::new(client);
+                    {
+                        let mut failed = self.failed_servers.write().await;
+                        failed.remove(server_name);
+                    }
                     let mut clients = self.active_clients.write().await;
                     clients.insert(server_name.to_string(), client_arc.clone());
                     return Ok(client_arc);
                 }
                 Err(e) => {
-                    // Do not waste retry budget on permanent 401/403 authorization failures.
+                    // Fail-fast on permanent configuration errors (invalid URL/scheme, bad headers, missing binary)
+                    // or permanent 401/403 authorization failures.
+                    let is_permanent_config = e.downcast_ref::<PermanentConfigError>().is_some();
                     let is_permanent_auth = e
                         .downcast_ref::<ClientInitializeError>()
                         .is_some_and(ClientInitializeError::is_authorization_required);
@@ -185,9 +264,10 @@ impl McpClientManager {
                         .map(|secs| (secs.saturating_mul(1_000)).clamp(delay_ms, max_delay_ms));
 
                     last_err = Some(e);
-                    if is_permanent_auth {
+                    if is_permanent_config || is_permanent_auth {
+                        is_permanent_failure = true;
                         warn!(
-                            "MCP connection to '{server_name}' rejected with 401/403 authorization error; skipping retries."
+                            "MCP connection to '{server_name}' failed with permanent configuration/auth error; skipping retries."
                         );
                         break;
                     }
@@ -204,9 +284,29 @@ impl McpClientManager {
             }
         }
 
-        Err(last_err.unwrap_or_else(|| {
+        let final_err = last_err.unwrap_or_else(|| {
             anyhow::anyhow!("Failed to connect to MCP server '{server_name}'")
-        }))
+        });
+
+        // Trip in-memory circuit breaker so subsequent turns / hot-swaps don't stall on a broken server
+        let cooldown = if is_permanent_failure {
+            PERMANENT_CONFIG_COOLDOWN
+        } else {
+            TRANSIENT_COOLDOWN
+        };
+        {
+            let mut failed = self.failed_servers.write().await;
+            failed.insert(
+                server_name.to_string(),
+                CircuitBreakerState {
+                    tripped_at: Instant::now(),
+                    cooldown,
+                    last_error: final_err.to_string(),
+                },
+            );
+        }
+
+        Err(final_err)
     }
 
     /// Returns the cached tools for a server. If not cached (or if the underlying client
@@ -215,7 +315,11 @@ impl McpClientManager {
         let client = match self.ensure_client(server_name).await {
             Ok(c) => c,
             Err(e) => {
-                error!("Failed to connect to MCP server '{server_name}': {e}");
+                if e.downcast_ref::<CircuitBreakerOpenError>().is_some() {
+                    debug!("{e}");
+                } else {
+                    error!("Failed to connect to MCP server '{server_name}': {e}");
+                }
                 return None;
             }
         };
@@ -449,5 +553,77 @@ mod tests {
             "tool_cache must be invalidated on notifications/tools/list_changed"
         );
         let _ = client.cancel().await;
+    }
+
+    #[tokio::test]
+    async fn permanent_config_error_fails_fast_trips_circuit_breaker_and_resets_on_update() {
+        let manager = McpClientManager::new();
+        let bad_http_cfg = McpServerConfig {
+            name: "bad-scheme-srv".to_string(),
+            transport: McpTransport::Http {
+                url: "tcp://example.com:9000".to_string(),
+                headers: HashMap::new(),
+                streamable: true,
+            },
+            enabled: true,
+            timeout_ms: 5_000,
+            max_retries: 3,
+            backoff: BackoffConfig {
+                initial_ms: 1_000,
+                max_ms: 5_000,
+                multiplier: 2.0,
+            },
+        };
+
+        manager.update_configs(vec![bad_http_cfg.clone()]).await;
+
+        // 1. First attempt must fail fast (0 retries, < 100ms instead of 3,000ms backoff)
+        let start = Instant::now();
+        let err1 = manager
+            .ensure_client("bad-scheme-srv")
+            .await
+            .err()
+            .expect("non-http scheme must fail");
+        assert!(
+            start.elapsed() < Duration::from_millis(200),
+            "Permanent config error should skip retry sleeps"
+        );
+        assert!(err1.downcast_ref::<PermanentConfigError>().is_some());
+
+        // 2. Circuit breaker is now open for "bad-scheme-srv"
+        assert!(
+            manager
+                .failed_servers
+                .read()
+                .await
+                .contains_key("bad-scheme-srv")
+        );
+
+        let err2 = manager
+            .ensure_client("bad-scheme-srv")
+            .await
+            .err()
+            .expect("circuit breaker should short-circuit");
+        assert!(err2.downcast_ref::<CircuitBreakerOpenError>().is_some());
+
+        // 3. Modifying the server config in Preferences immediately resets the circuit breaker
+        let updated_cfg = McpServerConfig {
+            name: "bad-scheme-srv".to_string(),
+            transport: McpTransport::Http {
+                url: "https://example.com/mcp".to_string(),
+                headers: HashMap::new(),
+                streamable: true,
+            },
+            ..bad_http_cfg
+        };
+        manager.update_configs(vec![updated_cfg]).await;
+        assert!(
+            !manager
+                .failed_servers
+                .read()
+                .await
+                .contains_key("bad-scheme-srv"),
+            "Updating config must clear the circuit breaker"
+        );
     }
 }

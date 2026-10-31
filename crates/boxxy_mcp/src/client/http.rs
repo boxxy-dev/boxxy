@@ -132,12 +132,38 @@ pub fn format_service_error(err: &ServiceError) -> String {
     err.to_string()
 }
 
+/// Marker error indicating a permanent configuration issue (invalid URL, unsupported
+/// scheme, invalid HTTP header, or missing Stdio binary) that cannot succeed on retry.
+#[derive(Debug)]
+pub struct PermanentConfigError(pub String);
+
+impl std::fmt::Display for PermanentConfigError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl StdError for PermanentConfigError {}
+
 pub async fn build_streamable_http_client(
     handler: BoxxyClientHandler,
     url: &str,
     headers: &HashMap<String, String>,
     timeout_ms: u64,
 ) -> Result<RunningService<RoleClient, BoxxyClientHandler>> {
+    let trimmed_url = url.trim();
+    let parsed_url = reqwest::Url::parse(trimmed_url).map_err(|e| {
+        anyhow::Error::new(PermanentConfigError(format!(
+            "Invalid HTTP MCP server URL '{trimmed_url}': {e}"
+        )))
+    })?;
+    if !matches!(parsed_url.scheme(), "http" | "https") {
+        return Err(anyhow::Error::new(PermanentConfigError(format!(
+            "Unsupported URL scheme '{}' for HTTP MCP server '{trimmed_url}' (expected http:// or https://)",
+            parsed_url.scheme()
+        ))));
+    }
+
     let mut parsed_headers = HashMap::new();
     let mut auth_header = None;
 
@@ -158,16 +184,22 @@ pub async fn build_streamable_http_client(
             continue;
         }
 
-        let name = HeaderName::from_bytes(k.trim().as_bytes())
-            .with_context(|| format!("Invalid HTTP header name: {k}"))?;
-        let value = HeaderValue::from_str(v.trim())
-            .with_context(|| format!("Invalid HTTP header value for '{k}'"))?;
+        let name = HeaderName::from_bytes(k.trim().as_bytes()).map_err(|e| {
+            anyhow::Error::new(PermanentConfigError(format!(
+                "Invalid HTTP header name '{k}': {e}"
+            )))
+        })?;
+        let value = HeaderValue::from_str(v.trim()).map_err(|e| {
+            anyhow::Error::new(PermanentConfigError(format!(
+                "Invalid HTTP header value for '{k}': {e}"
+            )))
+        })?;
         parsed_headers.insert(name, value);
     }
 
     let request_timeout = Duration::from_millis(timeout_ms.max(1_000));
 
-    let mut config = StreamableHttpClientTransportConfig::with_uri(url)
+    let mut config = StreamableHttpClientTransportConfig::with_uri(trimmed_url)
         .custom_headers(parsed_headers)
         .reinit_on_expired_session(true);
 

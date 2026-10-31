@@ -7,6 +7,7 @@ use rmcp::transport::child_process::TokioChildProcess;
 use rmcp::{RoleClient, serve_client};
 
 use super::handler::BoxxyClientHandler;
+use super::http::PermanentConfigError;
 
 pub async fn build_stdio_client(
     handler: BoxxyClientHandler,
@@ -15,8 +16,11 @@ pub async fn build_stdio_client(
     env: &HashMap<String, String>,
     timeout_ms: u64,
 ) -> Result<RunningService<RoleClient, BoxxyClientHandler>> {
-    let mut cmd = rmcp::transport::which_command(command_name)
-        .with_context(|| format!("Executable not found in PATH: {command_name}"))?;
+    let mut cmd = rmcp::transport::which_command(command_name).map_err(|e| {
+        anyhow::Error::new(PermanentConfigError(format!(
+            "Executable not found in PATH '{command_name}': {e}"
+        )))
+    })?;
     cmd.args(args);
     cmd.kill_on_drop(true);
 

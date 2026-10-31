@@ -17,9 +17,10 @@ The `boxxy-mcp` crate provides a generic Model Context Protocol (MCP) client int
    - Advertises `Implementation::new("boxxy-terminal", env!("CARGO_PKG_VERSION"))` via `ClientConfig`.
    - Listens for `notifications/tools/list_changed` and immediately invalidates the server's entry in `McpClientManager::tool_cache`.
    - Configures `rmcp`'s per-peer response cache with `with_serve_stale_on_error(false)` so transport failures surface cleanly.
-3. **Full Config Diffing & Auto-Reconnection (`McpClientManager`):**
-   - `update_configs()` compares full `McpServerConfig` structs. Any server that is removed, disabled, or modified (URL, command, args, headers, env, timeout) is gracefully closed via `close_with_timeout` and evicted from `tool_cache`.
+3. **Full Config Diffing, Auto-Reconnection & In-Memory Circuit Breaker (`McpClientManager`):**
+   - `update_configs()` compares full `McpServerConfig` structs. Any server that is removed, disabled, or modified (URL, command, args, headers, env, timeout) is gracefully closed via `close_with_timeout`, evicted from `tool_cache`, and has its circuit-breaker state cleared.
    - `ensure_client()` checks `client.is_closed() || client.is_transport_closed()` before every tool discovery or execution, automatically reconnecting with exponential backoff (`max_retries` + `BackoffConfig`) if a child process or HTTP session died.
+   - **Fail-Fast & Circuit Breaker (`failed_servers`):** Permanent configuration or auth errors (`PermanentConfigError` for invalid/non-HTTP(S) URLs, bad HTTP headers, or missing Stdio binaries in `PATH`, plus 401/403 authorization challenges) skip retry sleeps immediately on attempt 1. When all attempts fail, `McpClientManager` trips an in-memory circuit breaker (`60s` cooldown for transient errors, `300s` for permanent config/auth errors, cleared immediately if the server config changes in Preferences) so subsequent turns and settings hot-swaps never stall re-probing broken servers.
 
 ### Process Safety (Zombification Prevention)
 Node.js and Python processes spawned via Stdio are notoriously difficult to clean up if the parent process crashes.
