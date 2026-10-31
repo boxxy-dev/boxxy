@@ -414,10 +414,35 @@ impl AutocompleteController {
                 label.set_width_request(-1);
             }
 
-            hbox.append(&label);
+            let has_subtitle = item.display_name.contains('\n');
+            if let Some((title_line, sub_line)) = item.display_name.split_once('\n') {
+                label.set_text(title_line);
+                let sub_label = gtk::Label::new(Some(sub_line));
+                sub_label.set_xalign(0.0);
+                sub_label.set_halign(gtk::Align::Start);
+                sub_label.add_css_class("caption");
+                sub_label.add_css_class("dim-label");
+
+                let text_vbox = gtk::Box::new(gtk::Orientation::Vertical, 1);
+                text_vbox.set_valign(gtk::Align::Center);
+                text_vbox.set_hexpand(true);
+                text_vbox.set_margin_end(8);
+                text_vbox.append(&label);
+                text_vbox.append(&sub_label);
+                hbox.append(&text_vbox);
+            } else {
+                hbox.append(&label);
+            }
 
             let right_box = gtk::Box::new(gtk::Orientation::Horizontal, 12);
-            right_box.set_valign(gtk::Align::Center);
+            right_box.set_valign(if has_subtitle {
+                gtk::Align::Start
+            } else {
+                gtk::Align::Center
+            });
+            if has_subtitle {
+                right_box.set_margin_top(2);
+            }
             if is_plain_command {
                 right_box.set_hexpand(true);
                 right_box.set_halign(gtk::Align::Start);

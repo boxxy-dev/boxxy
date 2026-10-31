@@ -119,6 +119,30 @@ impl CompletionProvider for FileCompletionProvider {
     }
 }
 
+fn format_character_title(name: &str) -> String {
+    name.split(['-', ' '])
+        .filter(|s| !s.is_empty())
+        .map(|word| {
+            let mut chars = word.chars();
+            match chars.next() {
+                None => String::new(),
+                Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn format_character_display(name: &str, duties: &str) -> String {
+    let title = format_character_title(name);
+    let role = duties.trim();
+    if role.is_empty() {
+        title
+    } else {
+        format!("{title}\n{role}")
+    }
+}
+
 pub struct AgentCompletionProvider {
     character_id: std::rc::Rc<std::cell::RefCell<Option<String>>>,
 }
@@ -153,6 +177,7 @@ impl CompletionProvider for AgentCompletionProvider {
                     .display_name
                     .to_lowercase()
                     .contains(&query_lower)
+                || info.config.duties.to_lowercase().contains(&query_lower)
             {
                 let badge_color = Some(info.config.color.clone());
 
@@ -160,11 +185,12 @@ impl CompletionProvider for AgentCompletionProvider {
                     .iter()
                     .any(|claim| claim.character_id == info.config.id);
 
-                let (secondary_text, icon_name) = if is_taken {
-                    ("In Use".to_string(), "boxxy-chat-symbolic".to_string())
+                let secondary_text = if is_taken {
+                    "In Use".to_string()
                 } else {
-                    ("Available".to_string(), "boxxy-chat-symbolic".to_string())
+                    "Available".to_string()
                 };
+                let icon_name = "boxxy-chat-symbolic".to_string();
 
                 let avatar_path = if info.has_avatar {
                     chars_dir.as_ref().map(|d| {
@@ -178,7 +204,10 @@ impl CompletionProvider for AgentCompletionProvider {
                 };
 
                 items.push(CompletionItem {
-                    display_name: info.config.display_name.clone(),
+                    display_name: format_character_display(
+                        &info.config.name,
+                        &info.config.duties,
+                    ),
                     replacement_text: format!(":{}", info.config.name),
                     icon_name: Some(icon_name),
                     icon_path: avatar_path,
@@ -494,6 +523,7 @@ impl CompletionProvider for DebateCompletionProvider {
                     .display_name
                     .to_lowercase()
                     .contains(&query_trimmed)
+                || info.config.duties.to_lowercase().contains(&query_trimmed)
             {
                 let is_taken = claims
                     .iter()
@@ -515,7 +545,10 @@ impl CompletionProvider for DebateCompletionProvider {
                 };
 
                 items.push(CompletionItem {
-                    display_name: info.config.display_name.clone(),
+                    display_name: format_character_display(
+                        &info.config.name,
+                        &info.config.duties,
+                    ),
                     replacement_text: format!("/debate :{} ", info.config.name),
                     icon_name: Some("boxxy-chat-symbolic".to_string()),
                     icon_path: avatar_path,
@@ -568,6 +601,7 @@ impl CompletionProvider for DramaCompletionProvider {
                     .display_name
                     .to_lowercase()
                     .contains(&query_trimmed)
+                || info.config.duties.to_lowercase().contains(&query_trimmed)
             {
                 let is_taken = claims
                     .iter()
@@ -589,7 +623,10 @@ impl CompletionProvider for DramaCompletionProvider {
                 };
 
                 items.push(CompletionItem {
-                    display_name: info.config.display_name.clone(),
+                    display_name: format_character_display(
+                        &info.config.name,
+                        &info.config.duties,
+                    ),
                     replacement_text: format!("/drama :{} ", info.config.name),
                     icon_name: Some("boxxy-chat-symbolic".to_string()),
                     icon_path: avatar_path,
@@ -672,12 +709,12 @@ impl CompletionProvider for ResumeCompletionProvider {
             );
 
             let badge_text = char_info
-                .map(|c| c.config.display_name.clone())
+                .map(|c| format_character_title(&c.config.display_name))
                 .unwrap_or_else(|| {
                     if !session.character_display_name.is_empty() {
-                        session.character_display_name.clone()
+                        format_character_title(&session.character_display_name)
                     } else {
-                        char_name.clone()
+                        format_character_title(&char_name)
                     }
                 });
 

@@ -187,7 +187,8 @@ button.claw-row-copy-btn:hover {
 }
 
 .virtual-history > row:hover .claw-avatar-frame,
-.claw-virtual-row:hover .claw-avatar-frame {
+.claw-virtual-row:hover .claw-avatar-frame,
+.claw-avatar-frame.claw-avatar-typing {
     border-color: alpha(currentColor, 0.85);
     transform: scale(1.06);
     animation: claw-avatar-pulse 1.8s ease-in-out infinite;

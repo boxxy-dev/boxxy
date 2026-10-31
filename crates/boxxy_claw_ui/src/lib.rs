@@ -391,6 +391,7 @@ pub fn create_claw_message_list() -> (gtk::ListView, gio::ListStore) {
         }
         thumbs_box.set_visible(false);
         icon.set_visible(true);
+        avatar_frame.remove_css_class("claw-avatar-typing");
         avatar_frame.set_visible(false);
         avatar.set_visible(true);
         avatar.set_custom_image(None::<&gdk::Texture>);
@@ -554,10 +555,12 @@ pub fn create_claw_message_list() -> (gtk::ListView, gio::ListStore) {
                     if char_ends.len() <= 2 {
                         viewer.set_content(&content);
                     } else {
+                        avatar_frame.add_css_class("claw-avatar-typing");
                         viewer.set_content(&content[..char_ends[1]]);
                         let idx = std::cell::Cell::new(1usize);
                         let viewer_for_tick = viewer.clone();
                         let timer_slot = typewriter_timer.clone();
+                        let avatar_frame_for_tick = avatar_frame.clone();
                         let source_id = glib::timeout_add_local(
                             std::time::Duration::from_millis(22),
                             move || {
@@ -566,6 +569,7 @@ pub fn create_claw_message_list() -> (gtk::ListView, gio::ListStore) {
                                 let byte_end = char_ends[next_idx];
                                 viewer_for_tick.set_content(&content[..byte_end]);
                                 if next_idx + 1 >= char_ends.len() {
+                                    avatar_frame_for_tick.remove_css_class("claw-avatar-typing");
                                     let _ = timer_slot.borrow_mut().take();
                                     glib::ControlFlow::Break
                                 } else {
@@ -717,6 +721,9 @@ pub fn create_claw_message_list() -> (gtk::ListView, gio::ListStore) {
         let hbox = list_item.child().and_downcast::<gtk::Box>().unwrap();
         if let Some(bound_pos) = hbox.get_safe_data::<Rc<Cell<u32>>>("bound_pos") {
             bound_pos.set(gtk::INVALID_LIST_POSITION);
+        }
+        if let Some(avatar_frame) = hbox.get_safe_data::<gtk::Box>("avatar_frame") {
+            avatar_frame.remove_css_class("claw-avatar-typing");
         }
         if let Some(timer_slot) =
             hbox.get_safe_data::<Rc<std::cell::RefCell<Option<glib::SourceId>>>>("typewriter_timer")
