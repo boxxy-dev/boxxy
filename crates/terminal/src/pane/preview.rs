@@ -35,10 +35,7 @@ pub(super) fn setup_preview(terminal: &TerminalWidget, inner: &Rc<RefCell<PaneIn
         if state.contains(gdk::ModifierType::CONTROL_MASK) {
             if let Some(hyperlink) = term_for_primary_click.check_hyperlink_at(x, y) {
                 gesture.set_state(gtk::EventSequenceState::Claimed);
-                let _ = gio::AppInfo::launch_default_for_uri(
-                    hyperlink.as_str(),
-                    None::<&gio::AppLaunchContext>,
-                );
+                launch_uri(&term_for_primary_click, hyperlink.as_str());
             } else {
                 let (match_opt, _tag, _) = term_for_primary_click.check_match_at(x, y);
                 if let Some(matched) = match_opt {
@@ -48,18 +45,12 @@ pub(super) fn setup_preview(terminal: &TerminalWidget, inner: &Rc<RefCell<PaneIn
                         || matched_str.starts_with("file://")
                     {
                         gesture.set_state(gtk::EventSequenceState::Claimed);
-                        let _ = gio::AppInfo::launch_default_for_uri(
-                            &matched_str,
-                            None::<&gio::AppLaunchContext>,
-                        );
+                        launch_uri(&term_for_primary_click, &matched_str);
                     } else {
                         let cwd = inner.borrow().working_dir.clone();
-                        if let Some(uri) = resolve_local_path_to_file_uri(&matched_str, cwd.as_deref()) {
+                        if let Some(path) = resolve_local_path(&matched_str, cwd.as_deref()) {
                             gesture.set_state(gtk::EventSequenceState::Claimed);
-                            let _ = gio::AppInfo::launch_default_for_uri(
-                                &uri,
-                                None::<&gio::AppLaunchContext>,
-                            );
+                            launch_local_path(&term_for_primary_click, &path);
                         }
                     }
                 }
@@ -154,10 +145,79 @@ pub(super) fn setup_preview(terminal: &TerminalWidget, inner: &Rc<RefCell<PaneIn
     terminal.add_controller(motion_ctrl);
 }
 
-/// Resolves a matched terminal path (supporting `~/`, `./`, `../`, `/`, and optional
-/// `:line` or `:line:col` suffixes) against `working_dir` and returns a `file://` URI
-/// if the target exists on disk.
-fn resolve_local_path_to_file_uri(raw_match: &str, working_dir: Option<&str>) -> Option<String> {
+/// Strips an optional hostname authority from `file://hostname/path` URIs
+/// (as emitted by OSC 8 producers like `ls --hyperlink` or `eza`) so GIO treats
+/// them as local `file:///path` URIs.
+pub(crate) fn normalize_file_uri(uri: &str) -> String {
+    if let Some(after_scheme) = uri.strip_prefix("file://")
+        && !after_scheme.starts_with('/')
+        && let Some(slash_idx) = after_scheme.find('/')
+    {
+        return format!("file://{}", &after_scheme[slash_idx..]);
+    }
+    uri.to_string()
+}
+
+fn launch_local_path(terminal: &TerminalWidget, path: &std::path::Path) {
+    let file = gio::File::for_path(path);
+    let uri = file.uri();
+    let ctx = terminal.display().app_launch_context();
+    if gio::AppInfo::launch_default_for_uri(uri.as_str(), Some(&ctx)).is_ok() {
+        return;
+    }
+    let parent_win = terminal
+        .root()
+        .and_then(|r| r.downcast::<gtk::Window>().ok());
+    let launcher = gtk::FileLauncher::new(Some(&file));
+    launcher.set_always_ask(false);
+    gtk::glib::spawn_future_local(async move {
+        let _ = launcher.launch_future(parent_win.as_ref()).await;
+    });
+}
+
+fn launch_uri(terminal: &TerminalWidget, raw_uri: &str) {
+    let normalized = normalize_file_uri(raw_uri);
+    if normalized.starts_with("file://") {
+        let file = gio::File::for_uri(&normalized);
+        if let Some(local_path) = file.path() {
+            launch_local_path(terminal, &local_path);
+            return;
+        }
+        let ctx = terminal.display().app_launch_context();
+        if gio::AppInfo::launch_default_for_uri(&normalized, Some(&ctx)).is_ok() {
+            return;
+        }
+        let parent_win = terminal
+            .root()
+            .and_then(|r| r.downcast::<gtk::Window>().ok());
+        let launcher = gtk::FileLauncher::new(Some(&file));
+        launcher.set_always_ask(false);
+        gtk::glib::spawn_future_local(async move {
+            let _ = launcher.launch_future(parent_win.as_ref()).await;
+        });
+        return;
+    }
+
+    let ctx = terminal.display().app_launch_context();
+    if gio::AppInfo::launch_default_for_uri(&normalized, Some(&ctx)).is_ok() {
+        return;
+    }
+    let parent_win = terminal
+        .root()
+        .and_then(|r| r.downcast::<gtk::Window>().ok());
+    let launcher = gtk::UriLauncher::new(&normalized);
+    gtk::glib::spawn_future_local(async move {
+        let _ = launcher.launch_future(parent_win.as_ref()).await;
+    });
+}
+
+/// Resolves a matched terminal path (supporting `~/`, `./`, `../`, `/`, relative
+/// paths, and optional `:line` or `:line:col` suffixes) against `working_dir`
+/// (and its ancestor directories or `$HOME`) if the target exists on disk.
+pub(crate) fn resolve_local_path(
+    raw_match: &str,
+    working_dir: Option<&str>,
+) -> Option<std::path::PathBuf> {
     use std::path::{Path, PathBuf};
 
     fn strip_line_col(s: &str) -> &str {
@@ -181,23 +241,98 @@ fn resolve_local_path_to_file_uri(raw_match: &str, working_dir: Option<&str>) ->
     } else {
         strip_line_col(raw_match)
     };
+    if path_str.is_empty() {
+        return None;
+    }
 
-    let expanded: PathBuf = if let Some(rest) = path_str.strip_prefix("~/") {
-        let home = std::env::var("HOME").ok()?;
-        PathBuf::from(home).join(rest)
-    } else if path_str.starts_with('/') {
-        PathBuf::from(path_str)
-    } else if let Some(cwd) = working_dir {
-        let clean_cwd = cwd.strip_prefix("file://").unwrap_or(cwd);
-        PathBuf::from(clean_cwd).join(path_str)
-    } else {
-        PathBuf::from(path_str)
+    let canonicalize_existing = |candidate: PathBuf| -> Option<PathBuf> {
+        candidate
+            .exists()
+            .then(|| candidate.canonicalize().unwrap_or(candidate))
     };
 
-    if expanded.exists() {
-        let canonical = expanded.canonicalize().unwrap_or(expanded);
-        Some(format!("file://{}", canonical.to_string_lossy()))
-    } else {
-        None
+    if path_str == "~" || path_str == "~/" {
+        let home = std::env::var("HOME").ok()?;
+        return canonicalize_existing(PathBuf::from(home));
+    }
+
+    if let Some(rest) = path_str.strip_prefix("~/") {
+        let home = std::env::var("HOME").ok()?;
+        return canonicalize_existing(PathBuf::from(home).join(rest));
+    }
+
+    if path_str.starts_with('/') {
+        return canonicalize_existing(PathBuf::from(path_str));
+    }
+
+    // Relative path: check against `working_dir` first, then its ancestor directories
+    // (so clicking a relative path from an earlier `cd subdir/nested/` command line
+    // still resolves after the shell has changed into that directory), then `$HOME`.
+    if let Some(cwd) = working_dir {
+        let clean_cwd = cwd.strip_prefix("file://").unwrap_or(cwd);
+        if !clean_cwd.is_empty() {
+            let cwd_path = Path::new(clean_cwd);
+            for ancestor in cwd_path.ancestors() {
+                if let Some(found) = canonicalize_existing(ancestor.join(path_str)) {
+                    return Some(found);
+                }
+            }
+        }
+    }
+
+    if let Ok(home) = std::env::var("HOME")
+        && !home.is_empty()
+        && let Some(found) = canonicalize_existing(PathBuf::from(home).join(path_str))
+    {
+        return Some(found);
+    }
+
+    canonicalize_existing(PathBuf::from(path_str))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{normalize_file_uri, resolve_local_path};
+    use std::fs;
+
+    #[test]
+    fn normalize_file_uri_strips_hostname_authority() {
+        assert_eq!(
+            normalize_file_uri("file://workstation/tmp/archive"),
+            "file:///tmp/archive"
+        );
+        assert_eq!(
+            normalize_file_uri("file:///tmp/archive"),
+            "file:///tmp/archive"
+        );
+        assert_eq!(
+            normalize_file_uri("https://example.com/docs"),
+            "https://example.com/docs"
+        );
+    }
+
+    #[test]
+    fn resolve_local_path_resolves_relative_and_ancestor_directories() {
+        let tmp = std::env::temp_dir().join(format!("boxxy-test-{}", uuid::Uuid::new_v4()));
+        let nested = tmp.join("workspace").join("subdir");
+        fs::create_dir_all(&nested).expect("create nested dir");
+
+        let cwd_root = tmp.to_string_lossy().into_owned();
+        let cwd_nested = nested.to_string_lossy().into_owned();
+        let expected = nested.canonicalize().unwrap_or(nested.clone());
+
+        // 1. Relative to current working directory (with trailing slash)
+        assert_eq!(
+            resolve_local_path("workspace/subdir/", Some(&cwd_root)),
+            Some(expected.clone())
+        );
+
+        // 2. Relative to an ancestor directory after `cd workspace/subdir/`
+        assert_eq!(
+            resolve_local_path("workspace/subdir/", Some(&cwd_nested)),
+            Some(expected)
+        );
+
+        let _ = fs::remove_dir_all(&tmp);
     }
 }

@@ -22,7 +22,7 @@ mod claw;
 mod claw_host;
 mod events;
 mod gestures;
-mod preview;
+pub(crate) mod preview;
 mod ui;
 
 pub(crate) use claw_host::PaneClawHost;
@@ -1100,7 +1100,13 @@ impl TerminalPaneComponent {
             (msg_bar, inner)
         };
 
-        gestures::setup_gestures(&terminal, &search_bar_rc, callback.clone(), id.clone());
+        gestures::setup_gestures(
+            &terminal,
+            &inner,
+            &search_bar_rc,
+            callback.clone(),
+            id.clone(),
+        );
         preview::setup_preview(&terminal, &inner);
 
         let inner_clone_resize = Rc::downgrade(&inner);
@@ -1936,15 +1942,30 @@ impl TerminalPaneComponent {
 
                     match agent.spawn_process(master_fd_for_agent, options).await {
                         Ok(pid) => {
+                            let effective_cwd = if !initial_cwd.is_empty() {
+                                initial_cwd
+                            } else {
+                                agent
+                                    .get_cwd(pid)
+                                    .await
+                                    .ok()
+                                    .filter(|c| !c.is_empty())
+                                    .or_else(|| std::env::var("HOME").ok())
+                                    .unwrap_or_default()
+                            };
                             {
                                 let mut inner = inner_rc.borrow_mut();
                                 inner.pid = Some(pid);
+                                if inner.working_dir.is_none() && !effective_cwd.is_empty() {
+                                    inner.working_dir = Some(effective_cwd.clone());
+                                    inner.msg_bar.set_working_dir(Some(effective_cwd.clone()));
+                                }
                             }
                             let _ = agent.set_pane_id(pid, layout_tag).await;
                             let _ = agent
                                 .update_workspace_pane(
                                     id.clone(),
-                                    initial_cwd,
+                                    effective_cwd,
                                     String::new(),
                                     String::new(),
                                     String::new(),

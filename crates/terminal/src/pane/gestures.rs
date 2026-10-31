@@ -46,6 +46,7 @@ pub(crate) fn export_and_open_scrollback(terminal: &TerminalWidget) {
 
 pub(super) fn setup_gestures(
     terminal: &TerminalWidget,
+    inner: &Rc<RefCell<super::PaneInner>>,
     search_bar: &Rc<SearchBarComponent>,
     callback: std::sync::Arc<dyn Fn(PaneOutput) + Send + Sync + 'static>,
     id: String,
@@ -195,6 +196,7 @@ pub(super) fn setup_gestures(
     // the terminal owns the right-click (no mouse-reporting mode active, or
     // Shift is held), it calls this callback instead of forwarding to the PTY.
     let term_for_menu = terminal.downgrade();
+    let inner_for_menu = Rc::downgrade(inner);
     let app_menu_clone = app_menu.clone();
     terminal.on_context_menu(move |x, y| {
         let Some(term_for_menu) = term_for_menu.upgrade() else {
@@ -225,10 +227,13 @@ pub(super) fn setup_gestures(
                 if matched_str.starts_with("http://") || matched_str.starts_with("https://") {
                     path_to_copy = Some(matched_str);
                 } else {
-                    let resolved = matched_str;
-                    let is_path = std::path::Path::new(&resolved).exists();
-                    if is_path {
-                        path_to_copy = Some(resolved);
+                    let cwd = inner_for_menu
+                        .upgrade()
+                        .and_then(|i| i.borrow().working_dir.clone());
+                    if let Some(resolved) =
+                        super::preview::resolve_local_path(&matched_str, cwd.as_deref())
+                    {
+                        path_to_copy = Some(resolved.to_string_lossy().into_owned());
                     }
                 }
             }

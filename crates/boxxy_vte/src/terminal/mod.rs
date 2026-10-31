@@ -245,19 +245,37 @@ impl TerminalWidget {
         // ── Built-in matchers (registered in priority order) ─────────────────
 
         // 1. HTTP / HTTPS URLs
-        // Character class: anything that isn't whitespace or common URL
-        // terminators.  Written with concat! to avoid raw-string/quote issues.
-        self.add_match_regex_str(concat!(r"https?://[^\s)>\]", r#"'""#, r"]+"), 0);
-
-        // 2. file:// URIs
-        self.add_match_regex_str(concat!(r"file://[^\s)>\]", r#"'""#, r"]+"), 0);
-
-        // 3. Bare absolute / relative / home-relative Unix paths (with optional :line[:col] suffix)
+        // Character class: anything that isn't whitespace, box-drawing/Powerline PUA
+        // glyphs, or common URL terminators.
         self.add_match_regex_str(
             concat!(
-                r"(?:~|\.{0,2})?/[^\s:,;)>\]|*?\\",
+                r"https?://[^\s)>\]",
                 r#"'""#,
-                r"]+(?::\d+(?::\d+)?)?"
+                r"\u{2500}-\u{259F}\u{E000}-\u{F8FF}\u{F0000}-\u{10FFFF}]+"
+            ),
+            0,
+        );
+
+        // 2. file:// URIs
+        self.add_match_regex_str(
+            concat!(
+                r"file://[^\s)>\]",
+                r#"'""#,
+                r"\u{2500}-\u{259F}\u{E000}-\u{F8FF}\u{F0000}-\u{10FFFF}]+"
+            ),
+            0,
+        );
+
+        // 3. Bare absolute / relative / home-relative Unix paths (with optional :line[:col] suffix).
+        // Supports leading `~`, `.`, `..`, or relative directory names (`workspace/subdir/`),
+        // while excluding surrounding Nerd Font / Powerline PUA icons and box-drawing borders.
+        self.add_match_regex_str(
+            concat!(
+                r"(?:(?:~|\.{1,2}|[A-Za-z0-9._-]+)/[^\s:,;)>\]|*?\\",
+                r#"'""#,
+                r"\u{2500}-\u{259F}\u{E000}-\u{F8FF}\u{F0000}-\u{10FFFF}]*|/[^\s:,;)>\]|*?\\",
+                r#"'""#,
+                r"\u{2500}-\u{259F}\u{E000}-\u{F8FF}\u{F0000}-\u{10FFFF}]+)(?::\d+(?::\d+)?)?"
             ),
             0,
         );
@@ -861,4 +879,88 @@ pub(crate) fn match_row_cells(
     }
 
     (None, 0, None)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{imp, match_row_cells};
+    use crate::engine::term::cell::{Cell, Flags};
+
+    fn default_rules() -> Vec<imp::MatchRule> {
+        let patterns = [
+            concat!(
+                r"https?://[^\s)>\]",
+                r#"'""#,
+                r"\u{2500}-\u{259F}\u{E000}-\u{F8FF}\u{F0000}-\u{10FFFF}]+"
+            ),
+            concat!(
+                r"file://[^\s)>\]",
+                r#"'""#,
+                r"\u{2500}-\u{259F}\u{E000}-\u{F8FF}\u{F0000}-\u{10FFFF}]+"
+            ),
+            concat!(
+                r"(?:(?:~|\.{1,2}|[A-Za-z0-9._-]+)/[^\s:,;)>\]|*?\\",
+                r#"'""#,
+                r"\u{2500}-\u{259F}\u{E000}-\u{F8FF}\u{F0000}-\u{10FFFF}]*|/[^\s:,;)>\]|*?\\",
+                r#"'""#,
+                r"\u{2500}-\u{259F}\u{E000}-\u{F8FF}\u{F0000}-\u{10FFFF}]+)(?::\d+(?::\d+)?)?"
+            ),
+        ];
+        patterns
+            .into_iter()
+            .enumerate()
+            .map(|(idx, pat)| imp::MatchRule {
+                id: (idx + 1) as i32,
+                regex: regex::Regex::new(pat).expect("valid regex"),
+                cursor_name: String::from("pointer"),
+            })
+            .collect()
+    }
+
+    fn row_from_str(s: &str, width: usize) -> Vec<Cell> {
+        let mut cells = vec![Cell::default(); width];
+        let mut col = 0;
+        for ch in s.chars() {
+            let cw = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(1);
+            if col + cw > width {
+                break;
+            }
+            cells[col].c = ch;
+            if cw == 2 {
+                cells[col].flags.insert(Flags::WIDE_CHAR);
+                cells[col + 1].c = ' ';
+                cells[col + 1].flags.insert(Flags::WIDE_CHAR_SPACER);
+            }
+            col += cw;
+        }
+        cells
+    }
+
+    #[test]
+    fn match_row_cells_matches_relative_directory_path_in_full() {
+        let rules = default_rules();
+        let row = row_from_str("cd workspace/subdir/", 40);
+
+        // Clicking on the leading segment ("workspace") or trailing segment ("subdir/")
+        // must match the entire relative path "workspace/subdir/".
+        let (matched_start, _, bounds_start) = match_row_cells(&row, 0, 3, &rules);
+        assert_eq!(matched_start.as_deref(), Some("workspace/subdir/"));
+        assert_eq!(bounds_start, Some((0, 3, 20)));
+
+        let (matched_end, _, bounds_end) = match_row_cells(&row, 0, 15, &rules);
+        assert_eq!(matched_end.as_deref(), Some("workspace/subdir/"));
+        assert_eq!(bounds_end, Some((0, 3, 20)));
+    }
+
+    #[test]
+    fn match_row_cells_excludes_powerline_caps_and_leading_emoji_icons() {
+        let rules = default_rules();
+        // Simulate a prompt pill: `\u{E0B6}📁~/workspace/subdir\u{E0B4}`
+        let row = row_from_str("\u{E0B6}📁~/workspace/subdir\u{E0B4}", 40);
+
+        let (matched, _, bounds) = match_row_cells(&row, 1, 5, &rules);
+        assert_eq!(matched.as_deref(), Some("~/workspace/subdir"));
+        // Col 0 is `\u{E0B6}`, cols 1..3 are wide `📁`, cols 3..21 are `~/workspace/subdir`, col 21 is `\u{E0B4}`.
+        assert_eq!(bounds, Some((1, 3, 21)));
+    }
 }

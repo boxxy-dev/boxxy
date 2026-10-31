@@ -371,15 +371,20 @@ impl TerminalWidget {
         layout.set_attributes(None);
         layout.set_text("A");
         let (_, logical) = layout.extents();
-        let raw_w =
-            (logical.width() as f64 / gtk4::pango::SCALE as f64) * self.cell_width_scale.get();
+        // Preserve Pango's exact logical advance width (in 1/1024 Pango units) so
+        // multi-character text runs never drift from cell backgrounds, underlines,
+        // or the cursor position.
+        let w_pango = if (self.cell_width_scale.get() - 1.0).abs() > f64::EPSILON {
+            let diff =
+                (logical.width() as f64 * (self.cell_width_scale.get() - 1.0)).round() as i32;
+            (logical.width() + diff).max(gtk4::pango::SCALE) as f64
+        } else {
+            logical.width() as f64
+        };
+        let raw_w = w_pango / gtk4::pango::SCALE as f64;
         let raw_h =
             (logical.height() as f64 / gtk4::pango::SCALE as f64) * self.cell_height_scale.get();
-        let scale = self.fractional_scale(widget);
-        let cs = (
-            ((raw_w * scale).round() / scale).max(1.0),
-            ((raw_h * scale).round() / scale).max(1.0),
-        );
+        let cs = (raw_w.max(1.0), raw_h.max(1.0));
         self.cached_char_size.set(Some(cs));
         cs
     }

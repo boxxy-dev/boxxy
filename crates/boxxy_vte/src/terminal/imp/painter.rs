@@ -291,8 +291,8 @@ impl super::TerminalWidget {
                 layout.set_text("A");
                 let (_, logical) = layout.extents();
                 if (self.cell_width_scale.get() - 1.0).abs() > f64::EPSILON {
-                    let diff =
-                        (logical.width() as f64 * (self.cell_width_scale.get() - 1.0)) as i32;
+                    let diff = (logical.width() as f64 * (self.cell_width_scale.get() - 1.0))
+                        .round() as i32;
                     letter_spacing_diff = Some(diff);
                 }
                 if (self.cell_height_scale.get() - 1.0).abs() > f64::EPSILON {

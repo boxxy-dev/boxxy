@@ -849,6 +849,11 @@ impl super::TerminalWidget {
                         }
 
                         if n_press == 1
+                            && !modifiers.intersects(
+                                gtk4::gdk::ModifierType::CONTROL_MASK
+                                    | gtk4::gdk::ModifierType::ALT_MASK
+                                    | gtk4::gdk::ModifierType::SUPER_MASK,
+                            )
                             && let Some(seq) = state.calculate_navigation_sequence(point)
                         {
                             backend.set_selection(None);

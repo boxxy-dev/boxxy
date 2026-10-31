@@ -171,7 +171,8 @@ impl ImagePreviewPopover {
             return;
         }
 
-        let file = gtk::gio::File::for_uri(uri_trimmed);
+        let normalized_uri = crate::pane::preview::normalize_file_uri(uri_trimmed);
+        let file = gtk::gio::File::for_uri(&normalized_uri);
 
         let popover_clone = self.popover.clone();
         let picture_clone = self.picture.clone();
