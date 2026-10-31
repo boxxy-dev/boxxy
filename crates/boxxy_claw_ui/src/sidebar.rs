@@ -1174,11 +1174,9 @@ fn populate_past_sessions(
 
             let row = gtk::ListBoxRow::new();
             row.add_css_class("past-session-row");
+            row.add_css_class("activatable");
             if is_disabled_row {
-                row.set_sensitive(false);
                 row.set_activatable(false);
-            } else {
-                row.add_css_class("activatable");
             }
 
             let outer_hbox = gtk::Box::new(gtk::Orientation::Horizontal, 8);
@@ -1220,6 +1218,9 @@ fn populate_past_sessions(
             let text_vbox = gtk::Box::new(gtk::Orientation::Vertical, 2);
             text_vbox.set_hexpand(true);
             text_vbox.set_valign(gtk::Align::Center);
+            if is_disabled_row {
+                text_vbox.set_opacity(0.5);
+            }
 
             let title_hbox = gtk::Box::new(gtk::Orientation::Horizontal, 4);
             title_hbox.set_hexpand(true);
