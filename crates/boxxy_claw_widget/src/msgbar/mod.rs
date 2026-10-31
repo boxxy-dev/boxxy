@@ -16,7 +16,6 @@ pub struct MsgBarComponent {
     pub entry: gtk::TextView,
     placeholder_label: gtk::Label,
     default_placeholder: Rc<RefCell<String>>,
-    pub send_btn: gtk::Button,
     pub is_active: Rc<Cell<bool>>,
     pub attachment_mgr: AttachmentManager,
     pub history: Rc<RefCell<history::MsgHistory>>,
@@ -30,8 +29,9 @@ pub struct MsgBarComponent {
     pin_switch: gtk::Switch,
     web_switch: gtk::Switch,
     vibe_switch: gtk::Switch,
-    avatar_sleep_badge: gtk::Box,
-    avatar_vibe_badge: gtk::Box,
+    right_badges: gtk::Box,
+    sleep_indicator: gtk::Image,
+    vibe_indicator: gtk::Image,
     pub claw_state: Rc<Cell<bool>>,
     pub sleep_state: Rc<Cell<bool>>,
     pub pin_state: Rc<Cell<bool>>,
@@ -139,46 +139,8 @@ impl MsgBarComponent {
         avatar_stack.set_margin_start(2);
         avatar_stack.set_margin_end(2);
 
-        let avatar_sleep_icon = gtk::Image::builder()
-            .icon_name("boxxy-bedtime-symbolic")
-            .pixel_size(10)
-            .hexpand(true)
-            .vexpand(true)
-            .halign(gtk::Align::Center)
-            .valign(gtk::Align::Center)
-            .build();
-        let avatar_sleep_badge = gtk::Box::builder()
-            .halign(gtk::Align::End)
-            .valign(gtk::Align::End)
-            .css_classes(["avatar-sleep-badge", "avatar-sleep-badge-small"])
-            .visible(false)
-            .build();
-        avatar_sleep_badge.append(&avatar_sleep_icon);
-
-        let avatar_vibe_icon = gtk::Image::builder()
-            .icon_name("boxxy-vibe-symbolic")
-            .pixel_size(10)
-            .hexpand(true)
-            .vexpand(true)
-            .halign(gtk::Align::Center)
-            .valign(gtk::Align::Center)
-            .build();
-        let avatar_vibe_badge = gtk::Box::builder()
-            .halign(gtk::Align::End)
-            .valign(gtk::Align::End)
-            .css_classes(["avatar-vibe-badge", "avatar-sleep-badge-small"])
-            .visible(false)
-            .build();
-        avatar_vibe_badge.append(&avatar_vibe_icon);
-
-        let avatar_overlay = gtk::Overlay::builder()
-            .child(&avatar_stack)
-            .build();
-        avatar_overlay.add_overlay(&avatar_vibe_badge);
-        avatar_overlay.add_overlay(&avatar_sleep_badge);
-
         let claw_toggle = gtk::Button::builder()
-            .child(&avatar_overlay)
+            .child(&avatar_stack)
             .css_classes(["flat", "image-button"])
             .tooltip_text("Session Options (/vibe, /sleep, /pin, /web)")
             .margin_start(4)
@@ -310,20 +272,34 @@ impl MsgBarComponent {
 
         widget.append(&entry_overlay);
 
-        // Send button — mirrors Enter in the entry. Intentionally NOT
-        // appended to `widget`: callers (the claw overlay drawer) place
-        // it *outside* the msgbar box so the bar itself can be a rounded
-        // field and the send icon floats next to it, matching chat UIs.
-        // Anchored to `End` (bottom) so when the input wraps to multiple
-        // lines, the send icon sits on the last line.
-        let send_btn = gtk::Button::builder()
-            .icon_name("boxxy-paper-plane-symbolic")
-            .css_classes(["flat", "image-button", "msgbar-send"])
-            .tooltip_text("Send")
-            .valign(gtk::Align::End)
-            .margin_bottom(6)
-            .can_focus(false)
+        // Trailing status indicators inside the right end of the input bar (Discord-style)
+        let right_badges = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        right_badges.set_valign(gtk::Align::Center);
+        right_badges.set_margin_start(6);
+        right_badges.set_margin_end(8);
+        right_badges.set_visible(false);
+
+        let sleep_indicator = gtk::Image::builder()
+            .icon_name("boxxy-bedtime-symbolic")
+            .pixel_size(16)
+            .valign(gtk::Align::Center)
+            .tooltip_text("Sleep Mode Active")
+            .css_classes(["warning", "msgbar-status-icon"])
+            .visible(false)
             .build();
+        right_badges.append(&sleep_indicator);
+
+        let vibe_indicator = gtk::Image::builder()
+            .icon_name("boxxy-vibe-symbolic")
+            .pixel_size(16)
+            .valign(gtk::Align::Center)
+            .tooltip_text("Vibe Mode Active")
+            .css_classes(["warning", "msgbar-status-icon"])
+            .visible(false)
+            .build();
+        right_badges.append(&vibe_indicator);
+
+        widget.append(&right_badges);
 
         let is_active = Rc::new(Cell::new(false));
         let history = Rc::new(RefCell::new(history::MsgHistory::new()));
@@ -459,11 +435,6 @@ impl MsgBarComponent {
                 }
             })
         };
-
-        let send_submit = submit_action.clone();
-        send_btn.connect_clicked(move |_| {
-            send_submit();
-        });
 
         let mut providers: Vec<Box<dyn boxxy_core_widgets::autocomplete::CompletionProvider>> = vec![
             Box::new(autocomplete::AgentCompletionProvider::new(
@@ -620,7 +591,6 @@ impl MsgBarComponent {
             entry,
             placeholder_label,
             default_placeholder,
-            send_btn,
             is_active,
             attachment_mgr,
             history,
@@ -634,8 +604,9 @@ impl MsgBarComponent {
             pin_switch,
             web_switch,
             vibe_switch,
-            avatar_sleep_badge,
-            avatar_vibe_badge,
+            right_badges,
+            sleep_indicator,
+            vibe_indicator,
             claw_state,
             sleep_state,
             pin_state,
@@ -746,8 +717,6 @@ impl MsgBarComponent {
                 self.sleep_toggle
                     .set_tooltip_text(Some("Sleep Mode (Passive Observer)"));
                 self.sleep_switch.set_active(false);
-                self.avatar_sleep_badge.set_visible(false);
-                self.avatar_vibe_badge.set_visible(self.vibe_state.get());
                 self.sleep_state.set(false);
             }
             AgentStatus::Sleep => {
@@ -755,24 +724,28 @@ impl MsgBarComponent {
                 self.sleep_toggle
                     .set_tooltip_text(Some("Wake up (Resume from Sleep)"));
                 self.sleep_switch.set_active(true);
-                self.avatar_sleep_badge.set_visible(true);
-                self.avatar_vibe_badge.set_visible(false);
                 self.sleep_state.set(true);
             }
             AgentStatus::Faulted { .. } => {
                 self.claw_toggle.add_css_class("status-error");
                 self.sleep_switch.set_active(false);
-                self.avatar_sleep_badge.set_visible(false);
-                self.avatar_vibe_badge.set_visible(self.vibe_state.get());
+                self.sleep_state.set(false);
             }
             AgentStatus::Off => {
                 self.sleep_state.set(false);
                 self.sleep_switch.set_active(false);
-                self.avatar_sleep_badge.set_visible(false);
-                self.avatar_vibe_badge.set_visible(self.vibe_state.get());
                 self.claw_image.add_css_class("grayscale");
             }
         }
+        self.sync_right_badges();
+    }
+
+    fn sync_right_badges(&self) {
+        let sleeping = self.sleep_state.get();
+        let vibe = self.vibe_state.get();
+        self.sleep_indicator.set_visible(sleeping);
+        self.vibe_indicator.set_visible(vibe);
+        self.right_badges.set_visible(sleeping || vibe);
     }
 
     pub fn show_at_y(&self, y_offset: i32, height: i32) {
@@ -802,7 +775,6 @@ impl MsgBarComponent {
             }
         }
         self.entry.set_sensitive(sensitive);
-        self.send_btn.set_sensitive(sensitive);
         if sensitive {
             self.placeholder_label
                 .set_label(&self.default_placeholder.borrow());
@@ -817,7 +789,6 @@ impl MsgBarComponent {
         self.sleep_toggle.set_sensitive(active);
         self.pin_toggle.set_sensitive(active);
         self.vibe_toggle.set_sensitive(true);
-        let is_sleeping = status == AgentStatus::Sleep;
         self.vibe_state.set(vibe);
         self.set_status(status);
         self.refresh_user_avatar();
@@ -827,7 +798,7 @@ impl MsgBarComponent {
         self.pin_switch.set_active(pinned);
         self.web_switch.set_active(web_search);
         self.vibe_switch.set_active(vibe);
-        self.avatar_vibe_badge.set_visible(vibe && !is_sleeping);
+        self.sync_right_badges();
 
         if pinned {
             self.pin_toggle.set_tooltip_text(Some("Unpin this session"));

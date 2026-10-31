@@ -27,7 +27,7 @@ boxxy_claw_widget/
 The single boundary between widget code and surface-specific code. Ten methods: `host_id`, `inject_line`, `execute_script`, `snapshot` (async), `grab_focus`, `set_focusable`, `is_busy`, `working_dir`, `send_claw`, `focus_sidebar`, `cd`, `notify`, `forward_event`. The trait is `!Send` / `!Sync` — GTK widgets are single-threaded and every call happens on the main thread; a `Send` bound would be a lie and would force `Arc<Mutex<…>>` ceremony in impls.
 
 ### The drawer (`overlay.rs`)
-Defines `TerminalOverlay` and `OverlayMode { Claw, Bookmark }`. Constructed via `TerminalOverlay::new(indicator, msg_bar, host, pending_character)`. The `.ui` file wires most of the layout; Rust code attaches `ClawIndicator::widget()` into `indicator_slot`, appends `msg_bar.widget` + `msg_bar.send_btn` into the `msgbar_slot`, and stitches up button handlers (each one is two lines of `host.xyz()`).
+Defines `TerminalOverlay` and `OverlayMode { Claw, Bookmark }`. Constructed via `TerminalOverlay::new(indicator, msg_bar, host, pending_character)`. The `.ui` file wires most of the layout; Rust code attaches `ClawIndicator::widget()` into `indicator_slot`, appends `msg_bar.widget` into `msgbar_slot`, and stitches up button handlers (each one is two lines of `host.xyz()`).
 
 `TerminalOverlay::sync_action_state()` is the single source of truth for the bottom action row (`file_action_box`, `action_box`, `ok_btn`, `accept_btn`, `reject_btn`, `indicator_slot`, `tips_cycle`, and `msg_bar.set_input_sensitive`):
 - `OverlayState::Idle` — `ok_btn` visible, `indicator_slot` hidden, input sensitive.

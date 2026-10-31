@@ -124,12 +124,8 @@ impl TerminalOverlay {
         msgbar_vbox.set_hexpand(true);
         msgbar_vbox.append(msg_bar.attachment_mgr.widget());
 
-        let msgbar_hbox = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-        msgbar_hbox.set_hexpand(true);
         msg_bar.widget.set_hexpand(true);
-        msgbar_hbox.append(&msg_bar.widget);
-        msgbar_hbox.append(&msg_bar.send_btn);
-        msgbar_vbox.append(&msgbar_hbox);
+        msgbar_vbox.append(&msg_bar.widget);
 
         msgbar_slot.append(&msgbar_vbox);
         msg_bar.set_embedded(true);
@@ -851,30 +847,7 @@ impl TerminalOverlay {
                 }
             }
 
-            if is_current && self.msg_bar.vibe_state.get() {
-                let vibe_icon = gtk::Image::builder()
-                    .icon_name("boxxy-vibe-symbolic")
-                    .pixel_size(10)
-                    .hexpand(true)
-                    .vexpand(true)
-                    .halign(gtk::Align::Center)
-                    .valign(gtk::Align::Center)
-                    .build();
-                let vibe_badge = gtk::Box::builder()
-                    .halign(gtk::Align::End)
-                    .valign(gtk::Align::End)
-                    .css_classes(["avatar-vibe-badge", "avatar-sleep-badge-small"])
-                    .build();
-                vibe_badge.append(&vibe_icon);
-                let avatar_overlay = gtk::Overlay::builder()
-                    .valign(gtk::Align::Center)
-                    .child(&avatar)
-                    .build();
-                avatar_overlay.add_overlay(&vibe_badge);
-                inner_box.append(&avatar_overlay);
-            } else {
-                inner_box.append(&avatar);
-            }
+            inner_box.append(&avatar);
 
             let label = gtk::Label::new(Some(&info.config.display_name.to_uppercase()));
             label.set_valign(gtk::Align::Center);
@@ -1155,7 +1128,6 @@ impl TerminalOverlay {
         let is_claw = mode == OverlayMode::Claw;
         self.msgbar_slot.set_visible(is_claw);
         self.msg_bar.widget.set_visible(is_claw);
-        self.msg_bar.send_btn.set_visible(is_claw);
         self.inspect_btn.set_visible(is_claw);
 
         // 3. Character Selector Box logic
