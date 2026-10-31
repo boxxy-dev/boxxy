@@ -13,9 +13,10 @@ boxxy_claw_widget/
 │                      /dev/boxxy/BoxxyTerminal/ui/claw_overlay.ui
 ├── claw_indicator.rs  floating status pill / badge (ClawIndicator)
 ├── msgbar/            merged input bar (formerly a crate)
-│   ├── mod.rs         MsgBarComponent constructor + status / update_ui
+│   ├── mod.rs         MsgBarComponent constructor + status / update_ui + TextTag highlighting
 │   ├── attachment.rs  clipboard paste → image/text chips
-│   ├── autocomplete.rs @agent / /resume completion providers
+│   ├── autocomplete.rs @file / :character / /debate / /drama / /resume completion providers
+│   ├── file_index.rs  async ignore::WalkBuilder file indexer + frizbee fuzzy matcher + frecency
 │   └── history.rs     lazy-loaded MsgHistory backed by boxxy-db
 ├── dispatch.rs        spawn_dispatch(rx, host, overlay, …) event loop
 ├── claw_host.rs       ClawHost trait — the decoupling boundary
@@ -52,7 +53,7 @@ Formerly the `boxxy-msgbar` crate — folded in during phase 2. The `MsgBarCompo
 
 - **Embedded flag**: `msg_bar.set_embedded(true)` suppresses the bar's self-hide on Enter / Escape. The drawer owns visibility; the bar stays visible as long as the drawer is revealed. `is_active` stays latched while embedded.
 - **Attachments**: `AttachmentManager` intercepts Ctrl+V to convert long text / images into chips above the input. `build_payload(base_text)` merges everything into `(text, Vec<base64_image>)` for the agent.
-- **Autocomplete**: three providers sorted by trigger-length descending — `AgentCompletionProvider` (@agent, reads from `CLAIMS_CACHE` for live availability + `boxxy_claw::registry::workspace` for peer names), `CommandCompletionProvider` (/resume etc.), `ResumeCompletionProvider` (lists recent sessions from the DB with LLM-generated titles + relative timestamps + agent colors).
+- **Autocomplete**: six providers sorted by trigger-length descending — `FileCompletionProvider` (`@file`, backed by `file_index.rs` using `ignore 0.4.34` + `frizbee 0.13.0` SIMD Smith-Waterman fuzzy matching, frecency boosting, `#L1-L2` / `:L1-L2` line-range preservation, and directory drilling), `AgentCompletionProvider` (`:character`, reads from `CHARACTER_CACHE` and `CLAIMS_CACHE`), `DebateCompletionProvider` (`/debate `), `DramaCompletionProvider` (`/drama `), `CommandCompletionProvider` (`/resume`, `/vibe`, etc.), and `ResumeCompletionProvider` (lists recent sessions from the DB with LLM-generated titles + relative timestamps + agent colors).
 - **History**: `MsgHistory` — lazily loaded from `boxxy-db` on the first up/down key. Capped at ~100 entries in memory, images pruned after 20, to keep RAM flat even after thousands of sessions.
 
 ### The `ClawIndicator` (`claw_indicator.rs`)

@@ -116,7 +116,9 @@ pub(super) fn wire_terminal_events(
     let inner_for_cwd = Rc::downgrade(inner);
     terminal.on_cwd_changed(move |dir| {
         if let Some(inner_rc) = inner_for_cwd.upgrade() {
-            inner_rc.borrow_mut().working_dir = Some(dir.clone());
+            let mut inner_mut = inner_rc.borrow_mut();
+            inner_mut.working_dir = Some(dir.clone());
+            inner_mut.msg_bar.set_working_dir(Some(dir.clone()));
         }
         let pane_id = id_clone.clone();
         let cwd_for_agent = dir.clone();

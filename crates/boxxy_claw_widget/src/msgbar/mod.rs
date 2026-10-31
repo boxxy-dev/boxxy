@@ -1,5 +1,6 @@
 pub mod attachment;
 pub mod autocomplete;
+pub mod file_index;
 pub mod history;
 
 use boxxy_claw_protocol::AgentStatus;
@@ -39,6 +40,8 @@ pub struct MsgBarComponent {
     pub vibe_state: Rc<Cell<bool>>,
     /// Current character UUID for avatar lookup
     pub character_id: Rc<RefCell<Option<String>>>,
+    /// Live working directory of the host terminal pane for `@` file autocomplete
+    pub working_dir: Rc<RefCell<Option<String>>>,
     pub avatar: adw::Avatar,
     avatar_stack: gtk::Stack,
     /// When true, the msgbar does not hide itself on Enter/Escape — its
@@ -92,7 +95,7 @@ impl MsgBarComponent {
             .build();
 
         let default_placeholder_str =
-            "Type your message... (/: commands, Ctrl+V: attach, @character: direct)";
+            "Type your message... (@file: attach, :character: mention, /: commands)";
         let default_placeholder = Rc::new(RefCell::new(default_placeholder_str.to_string()));
         let placeholder_label = gtk::Label::builder()
             .label(default_placeholder_str)
@@ -112,10 +115,24 @@ impl MsgBarComponent {
             .build();
         entry_overlay.add_overlay(&placeholder_label);
 
+        let file_tag = gtk::TextTag::builder()
+            .name("mention-file")
+            .foreground("#62a0ea")
+            .weight(600)
+            .build();
+        let char_tag = gtk::TextTag::builder()
+            .name("mention-char")
+            .foreground("#c061cb")
+            .weight(600)
+            .build();
+        entry.buffer().tag_table().add(&file_tag);
+        entry.buffer().tag_table().add(&char_tag);
+
         let placeholder_for_buf = placeholder_label.clone();
         let entry_for_buf = entry.clone();
         entry.buffer().connect_changed(move |buf| {
             placeholder_for_buf.set_visible(buf.char_count() == 0);
+            highlight_input_mentions(buf, &file_tag, &char_tag);
             entry_for_buf.queue_resize();
         });
 
@@ -151,6 +168,7 @@ impl MsgBarComponent {
 
         let claw_state = Rc::new(Cell::new(false));
         let character_id: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
+        let working_dir: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
 
         left_badges.append(&claw_toggle);
 
@@ -437,10 +455,17 @@ impl MsgBarComponent {
         };
 
         let mut providers: Vec<Box<dyn boxxy_core_widgets::autocomplete::CompletionProvider>> = vec![
+            Box::new(autocomplete::FileCompletionProvider::new(
+                working_dir.clone(),
+                Some(entry.downgrade()),
+            )),
             Box::new(autocomplete::AgentCompletionProvider::new(
                 character_id.clone(),
             )),
             Box::new(autocomplete::DebateCompletionProvider::new(
+                character_id.clone(),
+            )),
+            Box::new(autocomplete::DramaCompletionProvider::new(
                 character_id.clone(),
             )),
             Box::new(autocomplete::CommandCompletionProvider::new(
@@ -455,14 +480,23 @@ impl MsgBarComponent {
                 entry.downgrade(),
             ))),
         ];
-        // Sort by trigger length descending to ensure "/resume " and "/debate " match before "/"
+        // Sort by trigger length descending to ensure "/resume ", "/debate ", and "/drama " match before "/"
         providers.sort_by(|a, b| b.trigger().len().cmp(&a.trigger().len()));
 
         let autocomplete_submit = submit_action.clone();
+        let working_dir_for_frecency = working_dir.clone();
         let autocomplete_ctrl = boxxy_core_widgets::autocomplete::AutocompleteController::new(
             &entry,
             providers,
             Some(Box::new(move |replacement| {
+                if replacement.starts_with('@') && !replacement.ends_with('/') {
+                    let cwd = working_dir_for_frecency
+                        .borrow()
+                        .clone()
+                        .unwrap_or_default();
+                    file_index::record_file_frecency(&cwd, &replacement);
+                    return;
+                }
                 let is_resume_session = replacement
                     .strip_prefix("/resume ")
                     .is_some_and(|s| !s.trim().is_empty());
@@ -613,6 +647,7 @@ impl MsgBarComponent {
             web_search_state,
             vibe_state,
             character_id,
+            working_dir,
             avatar,
             avatar_stack,
             embedded,
@@ -645,12 +680,22 @@ impl MsgBarComponent {
     pub fn clear_character(&self) {
         *self.character_id.borrow_mut() = None;
         let text =
-            "Type your message... (/: commands, Ctrl+V: attach, @character: direct)".to_string();
+            "Type your message... (@file: attach, :character: mention, /: commands)".to_string();
         *self.default_placeholder.borrow_mut() = text.clone();
         if self.entry.is_sensitive() {
             self.placeholder_label.set_label(&text);
         }
         self.refresh_user_avatar();
+    }
+
+    /// Updates the host pane's live working directory and pre-warms the background `@` file index.
+    pub fn set_working_dir(&self, cwd: Option<String>) {
+        if let Some(ref dir) = cwd
+            && !dir.trim().is_empty()
+        {
+            file_index::refresh_workspace_index_async(dir.clone(), None);
+        }
+        *self.working_dir.borrow_mut() = cwd;
     }
 
     /// Update the placeholder text based on the active character UUID and refresh the user avatar.
@@ -833,4 +878,49 @@ impl MsgBarComponent {
     /// with the shell; now it's chat chrome and inherits the default
     /// app font. Kept to preserve the public API.
     pub fn apply_font(&self, _font_desc: &gtk::pango::FontDescription) {}
+}
+
+/// Applies OpenCode-style live syntax highlighting (`gtk::TextTag`) to `@file` and `:character`
+/// tokens inside the input buffer as the user types.
+fn highlight_input_mentions(
+    buf: &gtk::TextBuffer,
+    file_tag: &gtk::TextTag,
+    char_tag: &gtk::TextTag,
+) {
+    let start = buf.start_iter();
+    let end = buf.end_iter();
+    buf.remove_tag(file_tag, &start, &end);
+    buf.remove_tag(char_tag, &start, &end);
+
+    let text = buf.text(&start, &end, false);
+    if !text.contains('@') && !text.contains(':') {
+        return;
+    }
+
+    let chars: Vec<(usize, char)> = text.char_indices().collect();
+    let len = chars.len();
+    let mut i = 0;
+
+    while i < len {
+        let ch = chars[i].1;
+        let at_word_start = i == 0 || chars[i - 1].1.is_whitespace();
+        if at_word_start && (ch == '@' || ch == ':') {
+            let token_start = i;
+            i += 1;
+            while i < len && !chars[i].1.is_whitespace() {
+                i += 1;
+            }
+            if i > token_start + 1 {
+                let start_iter = buf.iter_at_offset(token_start as i32);
+                let end_iter = buf.iter_at_offset(i as i32);
+                if ch == '@' {
+                    buf.apply_tag(file_tag, &start_iter, &end_iter);
+                } else {
+                    buf.apply_tag(char_tag, &start_iter, &end_iter);
+                }
+            }
+        } else {
+            i += 1;
+        }
+    }
 }

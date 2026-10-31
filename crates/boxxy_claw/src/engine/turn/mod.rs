@@ -1,3 +1,4 @@
+pub mod file_refs;
 pub mod history;
 pub mod persistence;
 pub mod skills;
@@ -33,7 +34,7 @@ pub fn spawn_turn(
     let session_id_clone = session_id.clone();
     let snapshot_clone = snapshot.to_string();
     let cwd_clone = cwd.clone();
-    let images_clone = image_attachments.clone();
+    let mut images_clone = image_attachments.clone();
     let session_ctx_clone = _session_ctx.to_string();
 
     tokio::spawn(async move {
@@ -84,9 +85,16 @@ pub fn spawn_turn(
 
         let settings = boxxy_preferences::Settings::load();
 
-        // 1. Build Skills Context
+        // 1. Build Skills Context & Pre-Load `@file` References
         let (active_skills_text, _available_skills_text) =
             skills::build_skills_context(&prompt_clone, &pane_id).await;
+        let resolved_file_refs =
+            file_refs::resolve_prompt_file_refs(&prompt_clone, &cwd_clone).await;
+        for b64 in resolved_file_refs.image_attachments {
+            if !images_clone.contains(&b64) {
+                images_clone.push(b64);
+            }
+        }
 
         // 2. Fetch Global Workspace Radar + Detached Background Shells
         let workspace = crate::registry::workspace::global_workspace().await;
@@ -182,6 +190,9 @@ pub fn spawn_turn(
         ) = {
             let mut state_lock = state.lock().await;
             state_lock.current_dir = cwd_clone.clone();
+            for (path, hash) in &resolved_file_refs.read_hashes {
+                state_lock.read_file_hashes.insert(path.clone(), *hash);
+            }
             if !state_lock.current_turn_snapshots.is_empty() {
                 state_lock.last_turn_snapshots =
                     std::mem::take(&mut state_lock.current_turn_snapshots);
@@ -277,6 +288,7 @@ pub fn spawn_turn(
                 {}\n\
                 {}\n\
                 {}\n\
+                {}\n\
                 {}\n",
                 identity,
                 now.to_rfc3339(),
@@ -284,6 +296,7 @@ pub fn spawn_turn(
                 vibe_ctx,
                 roundtable_context,
                 guest_home_context,
+                resolved_file_refs.context_block,
                 active_skills_text,
                 past_memories,
                 radar,

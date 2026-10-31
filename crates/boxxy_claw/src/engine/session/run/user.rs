@@ -325,11 +325,26 @@ impl ClawSession {
         cwd: String,
         image_attachments: Vec<String>,
     ) {
+        let mut image_attachments = image_attachments;
         ctx.current_dir = cwd.clone();
         self.ensure_session_persisted(&cwd).await;
+
+        // Pre-resolve any `@path/to/image.png` file references so their square thumbnails
+        // also render in the user message bubble and are passed to vision models.
+        let pre_resolved =
+            crate::engine::turn::file_refs::resolve_prompt_file_refs(&query, &cwd).await;
+        for b64 in pre_resolved.image_attachments {
+            if !image_attachments.contains(&b64) {
+                image_attachments.push(b64);
+            }
+        }
+
         let thumb_paths = cache_user_attachment_thumbnails(&image_attachments).await;
         let display_query = query
             .split("\n\n--- UPDATE CHANGELOG CONTEXT ---")
+            .next()
+            .unwrap_or(&query)
+            .split("\n\n--- ATTACHMENTS ---")
             .next()
             .unwrap_or(&query)
             .to_string();

@@ -182,9 +182,9 @@ impl RoundtableState {
             }
         }
 
-        // If `multi_turn` is true (e.g. "hey Niko ... talk about it with @levi-kujo") or if the prompt
-        // does not start directly with `@<guest>`, the Host character speaks FIRST, followed by the Guest(s)!
-        let starts_with_guest_mention = prompt.trim_start().starts_with('@')
+        // If `multi_turn` is true (e.g. "hey Niko ... talk about it with :levi-kujo") or if the prompt
+        // does not start directly with `:<guest>` / `@<guest>`, the Host character speaks FIRST, followed by the Guest(s)!
+        let starts_with_guest_mention = prompt.trim_start().starts_with(['@', ':'])
             && mentioned
                 .first()
                 .is_some_and(|first| first.character_id != host.character_id);
@@ -444,16 +444,25 @@ pub fn speaker_from_info(
 
 /// Resolves a character token (slug like `levi-kujo`, first name like `levi`, display name,
 /// UUID, or active swarm petname) into a `SpeakerIdentity`.
+/// Supports both `:character` (primary) and `@character` (fallback, ignoring file paths).
 pub fn resolve_speaker_token(
     token: &str,
     host_character_id: &str,
     host_pane_id: &str,
     catalog: &[CharacterInfo],
 ) -> Option<SpeakerIdentity> {
-    let cleaned = token
+    let stripped_prefix = token
         .trim()
-        .trim_start_matches('@')
-        .trim_matches(|c: char| !c.is_alphanumeric() && c != '-' && c != '_');
+        .trim_start_matches(['@', ':'])
+        .trim_end_matches([',', ';', '!', '?', '.', ')', ']', '}']);
+
+    // Never treat file paths (`@src/levi.rs`, `@crates/kuro/mod.rs`, `@file#10-20`) as character mentions
+    if stripped_prefix.contains(['/', '.', '#', ':']) {
+        return None;
+    }
+
+    let cleaned =
+        stripped_prefix.trim_matches(|c: char| !c.is_alphanumeric() && c != '-' && c != '_');
     if cleaned.is_empty() {
         return None;
     }
@@ -496,7 +505,7 @@ pub fn resolve_speaker_token(
     None
 }
 
-/// Extracts all `@<character>` mentions from a text string in order of appearance.
+/// Extracts all `:<character>` (or non-file `@<character>`) mentions from a text string in order of appearance.
 pub fn extract_mentioned_characters(
     text: &str,
     host_pane_id: &str,
@@ -504,9 +513,13 @@ pub fn extract_mentioned_characters(
 ) -> Vec<SpeakerIdentity> {
     let mut results = Vec::new();
     for word in text.split_whitespace() {
-        if let Some(rest) = word.strip_prefix('@') {
+        if let Some(rest) = word.strip_prefix(':').or_else(|| word.strip_prefix('@')) {
+            let trimmed_punct = rest.trim_end_matches([',', ';', '!', '?', '.', ')', ']', '}']);
+            if trimmed_punct.contains(['/', '.', '#', ':']) {
+                continue;
+            }
             let candidate =
-                rest.trim_end_matches(|c: char| !c.is_alphanumeric() && c != '-' && c != '_');
+                trimmed_punct.trim_end_matches(|c: char| !c.is_alphanumeric() && c != '-' && c != '_');
             if !candidate.is_empty()
                 && let Some(spk) = resolve_speaker_token(candidate, "", host_pane_id, catalog)
                 && !results
@@ -562,7 +575,7 @@ pub fn parse_user_roundtable_intent(
         let mut topic_words = Vec::new();
 
         for word in rest.split_whitespace() {
-            if word.starts_with('@')
+            if word.starts_with(['@', ':'])
                 && let Some(mut spk) =
                     resolve_speaker_token(word, &host.character_id, "", catalog)
             {
@@ -595,7 +608,7 @@ pub fn parse_user_roundtable_intent(
         let mut topic_words = Vec::new();
 
         for word in rest.split_whitespace() {
-            if word.starts_with('@')
+            if word.starts_with(['@', ':'])
                 && let Some(mut spk) =
                     resolve_speaker_token(word, &host.character_id, "", catalog)
             {
@@ -653,17 +666,18 @@ pub fn parse_user_roundtable_intent(
     let has_guest = mentioned.iter().any(|m| m.is_guest);
     if has_guest {
         // Detect if the user wants a multi-turn back-and-forth (e.g. mentioned multiple characters,
-        // or didn't just start the message with `@guest`, or used conversational keywords like
-        // "talk", "chat", "debate", "discuss", "argue", "with @", etc.)
-        let starts_with_at = trimmed.starts_with('@');
+        // or didn't just start the message with `:guest` / `@guest`, or used conversational keywords like
+        // "talk", "chat", "debate", "discuss", "argue", "with :", "with @", etc.)
+        let starts_with_mention = trimmed.starts_with(['@', ':']);
         let wants_multi_turn = mentioned.len() >= 2
-            || !starts_with_at
+            || !starts_with_mention
             || lower.contains("debate")
             || lower.contains("each other")
             || lower.contains("discuss")
             || lower.contains("talk")
             || lower.contains("chat")
             || lower.contains("argue")
+            || lower.contains("with :")
             || lower.contains("with @");
 
         return UserRoundtableIntent::Mention {
@@ -846,6 +860,35 @@ mod tests {
         } else {
             panic!("Expected single-character Drama intent");
         }
+
+        // `:levi` primary colon mention syntax
+        let colon_mention = parse_user_roundtable_intent(
+            ":levi check @src/levi.rs and tell me what you think",
+            &host,
+            false,
+            &cat,
+        );
+        if let UserRoundtableIntent::Mention {
+            mentioned,
+            multi_turn,
+            ..
+        } = colon_mention
+        {
+            assert_eq!(mentioned.len(), 1);
+            assert_eq!(mentioned[0].character_id, "id-levi");
+            assert!(!multi_turn);
+        } else {
+            panic!("Expected Mention intent for :levi");
+        }
+
+        // File mentions (`@src/levi.rs`, `@kuro.toml`) must NOT trigger character roundtable
+        let file_only = parse_user_roundtable_intent(
+            "refactor @src/levi.rs and @kuro.toml#10-20",
+            &host,
+            false,
+            &cat,
+        );
+        assert_eq!(file_only, UserRoundtableIntent::None);
     }
 
     #[test]

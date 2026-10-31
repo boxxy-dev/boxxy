@@ -6,7 +6,7 @@ use std::time::Duration;
 
 pub const TIPS: &[&str] = &[
     "There is a Boxxy Extension for GNOME Shell",
-    "Try `@character: direct` to talk to another character",
+    "Type `@file` to attach files or `:character` to mention another character",
     "Use `/resume: session` to pick up where you left off",
     "You can change `Ctrl+/` from preferences",
     "You can ask a character to go to sleep",

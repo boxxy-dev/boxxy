@@ -923,6 +923,7 @@ impl TerminalOverlay {
         diagnosis: &str,
         proposal: Proposal,
     ) {
+        self.msg_bar.set_working_dir(self.host.working_dir());
         self.refresh_character_selector(title);
 
         self.diagnosis_viewer.set_content(diagnosis);
@@ -1003,6 +1004,7 @@ impl TerminalOverlay {
     }
 
     pub fn show_chat_only(&self, agent_name: &str) {
+        self.msg_bar.set_working_dir(self.host.working_dir());
         self.refresh_character_selector(agent_name);
 
         self.diagnosis_viewer.set_content("");
@@ -1016,6 +1018,7 @@ impl TerminalOverlay {
     }
 
     pub fn show_input_only(&self, agent_name: &str) {
+        self.msg_bar.set_working_dir(self.host.working_dir());
         if !self.revealer.reveals_child() {
             // Drawer is closed → present the "chat only" shell so the user
             // gets a clean prompt aimed at this pane's agent.

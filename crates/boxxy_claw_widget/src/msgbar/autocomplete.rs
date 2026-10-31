@@ -91,6 +91,34 @@ pub async fn resolve_session_character_id(session_id: &str) -> Option<String> {
     .map(|info| info.config.id.clone())
 }
 
+pub struct FileCompletionProvider {
+    working_dir: std::rc::Rc<std::cell::RefCell<Option<String>>>,
+    entry_weak: Option<gtk::glib::WeakRef<gtk::TextView>>,
+}
+
+impl FileCompletionProvider {
+    pub fn new(
+        working_dir: std::rc::Rc<std::cell::RefCell<Option<String>>>,
+        entry_weak: Option<gtk::glib::WeakRef<gtk::TextView>>,
+    ) -> Self {
+        Self {
+            working_dir,
+            entry_weak,
+        }
+    }
+}
+
+impl CompletionProvider for FileCompletionProvider {
+    fn trigger(&self) -> String {
+        "@".to_string()
+    }
+
+    fn get_completions(&self, query: &str) -> Vec<CompletionItem> {
+        let cwd = self.working_dir.borrow().clone().unwrap_or_default();
+        super::file_index::get_file_completions(&cwd, query, self.entry_weak.clone())
+    }
+}
+
 pub struct AgentCompletionProvider {
     character_id: std::rc::Rc<std::cell::RefCell<Option<String>>>,
 }
@@ -103,7 +131,7 @@ impl AgentCompletionProvider {
 
 impl CompletionProvider for AgentCompletionProvider {
     fn trigger(&self) -> String {
-        "@".to_string()
+        ":".to_string()
     }
 
     fn get_completions(&self, query: &str) -> Vec<CompletionItem> {
@@ -151,7 +179,7 @@ impl CompletionProvider for AgentCompletionProvider {
 
                 items.push(CompletionItem {
                     display_name: info.config.display_name.clone(),
-                    replacement_text: format!("@{} ", info.config.name),
+                    replacement_text: format!(":{}", info.config.name),
                     icon_name: Some(icon_name),
                     icon_path: avatar_path,
                     secondary_text: Some(secondary_text),
@@ -443,8 +471,8 @@ impl CompletionProvider for DebateCompletionProvider {
     }
 
     fn get_completions(&self, query: &str) -> Vec<CompletionItem> {
-        let query_trimmed = query.trim_start_matches('@').to_lowercase();
-        // Once the user has already typed a space after the @character (entering the topic),
+        let query_trimmed = query.trim_start_matches(['@', ':']).to_lowercase();
+        // Once the user has already typed a space after the :character (entering the topic),
         // hide the character picker so they can type their debate topic freely.
         if query.trim_start().contains(' ') {
             return Vec::new();
@@ -488,7 +516,81 @@ impl CompletionProvider for DebateCompletionProvider {
 
                 items.push(CompletionItem {
                     display_name: info.config.display_name.clone(),
-                    replacement_text: format!("/debate @{} ", info.config.name),
+                    replacement_text: format!("/debate :{} ", info.config.name),
+                    icon_name: Some("boxxy-chat-symbolic".to_string()),
+                    icon_path: avatar_path,
+                    secondary_text: Some(secondary_text),
+                    badge_text: None,
+                    badge_color: Some(info.config.color.clone()),
+                    disabled: false,
+                });
+            }
+        }
+
+        items
+    }
+}
+
+pub struct DramaCompletionProvider {
+    character_id: std::rc::Rc<std::cell::RefCell<Option<String>>>,
+}
+
+impl DramaCompletionProvider {
+    pub fn new(character_id: std::rc::Rc<std::cell::RefCell<Option<String>>>) -> Self {
+        Self { character_id }
+    }
+}
+
+impl CompletionProvider for DramaCompletionProvider {
+    fn trigger(&self) -> String {
+        "/drama ".to_string()
+    }
+
+    fn get_completions(&self, query: &str) -> Vec<CompletionItem> {
+        let query_trimmed = query.trim_start_matches(['@', ':']).to_lowercase();
+        if query.trim_start().contains(' ') {
+            return Vec::new();
+        }
+
+        let mut items = Vec::new();
+        let registry = boxxy_claw_protocol::characters::CHARACTER_CACHE.load();
+        let claims = boxxy_claw_protocol::characters::CLAIMS_CACHE.load();
+        let chars_dir = boxxy_claw_protocol::character_loader::get_characters_dir().ok();
+        let current_cid = self.character_id.borrow().clone();
+
+        for info in registry.iter() {
+            if current_cid.as_deref() == Some(info.config.id.as_str()) {
+                continue;
+            }
+            if info.config.name.to_lowercase().contains(&query_trimmed)
+                || info
+                    .config
+                    .display_name
+                    .to_lowercase()
+                    .contains(&query_trimmed)
+            {
+                let is_taken = claims
+                    .iter()
+                    .any(|claim| claim.character_id == info.config.id);
+                let secondary_text = if is_taken {
+                    "Active Peer (Swarm)".to_string()
+                } else {
+                    "Available Guest".to_string()
+                };
+                let avatar_path = if info.has_avatar {
+                    chars_dir.as_ref().map(|d| {
+                        d.join(&info.config.name)
+                            .join("AVATAR.png")
+                            .to_string_lossy()
+                            .into_owned()
+                    })
+                } else {
+                    None
+                };
+
+                items.push(CompletionItem {
+                    display_name: info.config.display_name.clone(),
+                    replacement_text: format!("/drama :{} ", info.config.name),
                     icon_name: Some("boxxy-chat-symbolic".to_string()),
                     icon_path: avatar_path,
                     secondary_text: Some(secondary_text),

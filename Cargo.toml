@@ -136,3 +136,5 @@ opentelemetry-otlp = { version = "0.33.1", features = ["http-json", "reqwest-rus
 opentelemetry-http = "0.33.1"
 opentelemetry-stdout = { version = "0.33.1", features = ["metrics"] }
 serial_test = "4.0.1"
+frizbee = "0.13.0"
+ignore = "0.4.34"

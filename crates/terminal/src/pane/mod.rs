@@ -1065,6 +1065,7 @@ impl TerminalPaneComponent {
             ));
 
             msg_bar.set_web_search_visible(settings.enable_web_search);
+            msg_bar.set_working_dir(init.working_dir.clone());
 
             let inner = Rc::new(RefCell::new(PaneInner {
                 terminal: terminal.clone(),

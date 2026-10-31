@@ -2,9 +2,32 @@ use gtk4 as gtk;
 use gtk4::prelude::*;
 use libadwaita as adw;
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::rc::Rc;
+use std::time::SystemTime;
 
-#[derive(Clone, Debug)]
+thread_local! {
+    static AVATAR_TEXTURE_CACHE: RefCell<HashMap<String, (Option<SystemTime>, gtk::gdk::Texture)>> =
+        RefCell::new(HashMap::new());
+}
+
+fn load_cached_avatar_texture(path: &str) -> Option<gtk::gdk::Texture> {
+    let mtime = std::fs::metadata(path).and_then(|m| m.modified()).ok();
+    AVATAR_TEXTURE_CACHE.with(|cache| {
+        if let Some((cached_mtime, texture)) = cache.borrow().get(path)
+            && *cached_mtime == mtime
+        {
+            return Some(texture.clone());
+        }
+        let texture = gtk::gdk::Texture::from_filename(path).ok()?;
+        cache
+            .borrow_mut()
+            .insert(path.to_string(), (mtime, texture.clone()));
+        Some(texture)
+    })
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CompletionItem {
     pub display_name: String,
     pub replacement_text: String,
@@ -86,6 +109,7 @@ pub struct AutocompleteController {
     list: gtk::ListBox,
     providers: Vec<Box<dyn CompletionProvider>>,
     active_trigger: Rc<RefCell<Option<(String, usize)>>>, // (trigger, start_index)
+    last_items: RefCell<Vec<CompletionItem>>,
     on_activated: Option<Box<dyn Fn(String) + 'static>>,
 }
 
@@ -154,6 +178,7 @@ impl AutocompleteController {
             list,
             providers,
             active_trigger: Rc::new(RefCell::new(None)),
+            last_items: RefCell::new(Vec::new()),
             on_activated,
         });
 
@@ -186,9 +211,18 @@ impl AutocompleteController {
                     .map(|(i, _)| i)
                     .unwrap_or(text.len());
                 let text_before = &text[..byte_cursor_pos];
+
+                // Collect all valid trigger matches and prefer the one closest to the cursor
+                // (breaking ties by longer trigger length, e.g. "/resume " before "/").
+                let mut candidates = Vec::new();
                 for provider in &c_clone.providers {
                     let trigger = provider.trigger();
                     if let Some(idx) = text_before.rfind(&trigger) {
+                        // Slash commands ("/", "/resume ", etc.) must start at index 0
+                        if trigger.starts_with('/') && idx != 0 {
+                            continue;
+                        }
+
                         // Trigger must be preceded by space/newline or be at the start
                         let is_at_start = idx == 0;
                         let followed_by_space = if is_at_start {
@@ -203,31 +237,52 @@ impl AutocompleteController {
                             // Allow multi-word queries for commands that end with a space (e.g., "/resume ")
                             let allow_spaces = trigger.ends_with(' ');
 
-                            if allow_spaces || !query.contains(' ') {
-                                found_trigger = Some((provider, idx, query, trigger));
-                                break;
+                            if allow_spaces || !query.contains([' ', '\n']) {
+                                candidates.push((provider, idx, query, trigger));
                             }
                         }
                     }
                 }
+
+                candidates.sort_by(|a, b| {
+                    let end_a = a.1 + a.3.len();
+                    let end_b = b.1 + b.3.len();
+                    end_b.cmp(&end_a).then_with(|| b.3.len().cmp(&a.3.len()))
+                });
+
+                for (provider, idx, query, trigger) in candidates {
+                    let completions = provider.get_completions(query);
+                    if !completions.is_empty() {
+                        found_trigger = Some((completions, idx, trigger));
+                        break;
+                    }
+                }
             }
 
-            if let Some((provider, idx, query, trigger)) = found_trigger {
-                let completions = provider.get_completions(query);
-                if completions.is_empty() {
-                    c_clone.popover.popdown();
-                    c_clone.active_trigger.replace(None);
+            if let Some((completions, idx, trigger)) = found_trigger {
+                let was_visible = c_clone.popover.is_visible();
+                let items_changed = *c_clone.last_items.borrow() != completions;
+
+                if items_changed || !was_visible {
+                    c_clone.update_list(&completions, was_visible);
+                    *c_clone.last_items.borrow_mut() = completions;
+                }
+                c_clone.active_trigger.replace(Some((trigger, idx)));
+
+                if was_visible {
+                    if items_changed {
+                        // Keep the native popup surface mapped so the scrollbar and popup
+                        // do not unmap/remap on every keystroke; resize and present in place.
+                        c_clone.popover.queue_resize();
+                        c_clone.popover.present();
+                    }
                 } else {
-                    // GTK4 won't resize an already visible popover to fit new content.
-                    // By popping down, updating the list, and immediately popping back up,
-                    // GTK measures the new natural height of the ScrolledWindow perfectly.
-                    c_clone.popover.popdown();
-                    c_clone.update_list(completions);
-                    c_clone.active_trigger.replace(Some((trigger, idx)));
                     c_clone.popover.popup();
                 }
             } else {
-                c_clone.popover.popdown();
+                if c_clone.popover.is_visible() {
+                    c_clone.popover.popdown();
+                }
                 c_clone.active_trigger.replace(None);
             }
         }));
@@ -271,25 +326,38 @@ impl AutocompleteController {
         self.input.widget().add_controller(key_ctrl);
     }
 
-    fn update_list(&self, items: Vec<CompletionItem>) {
-        while let Some(child) = self.list.first_child() {
-            self.list.remove(&child);
-        }
-
+    fn update_list(&self, items: &[CompletionItem], was_visible: bool) {
+        let prev_items = self.last_items.borrow();
         let mut first_selectable = None;
         let label_size_group = gtk::SizeGroup::new(gtk::SizeGroupMode::Horizontal);
-        for item in items {
-            let row = gtk::ListBoxRow::new();
-            row.set_widget_name(&item.replacement_text);
 
-            if item.disabled {
-                row.set_sensitive(false);
-                row.set_activatable(false);
-                row.set_selectable(false);
-            }
-
+        for (idx, item) in items.iter().enumerate() {
             let is_plain_command =
                 item.badge_text.is_none() && item.icon_name.is_none() && item.icon_path.is_none();
+
+            if was_visible
+                && !is_plain_command
+                && prev_items.get(idx) == Some(item)
+                && let Some(existing) = self.list.row_at_index(idx as i32)
+            {
+                if !item.disabled && first_selectable.is_none() {
+                    first_selectable = Some(existing);
+                }
+                continue;
+            }
+
+            let row = if let Some(existing) = self.list.row_at_index(idx as i32) {
+                existing
+            } else {
+                let new_row = gtk::ListBoxRow::new();
+                self.list.append(&new_row);
+                new_row
+            };
+
+            row.set_widget_name(&item.replacement_text);
+            row.set_sensitive(!item.disabled);
+            row.set_activatable(!item.disabled);
+            row.set_selectable(!item.disabled);
 
             let hbox = gtk::Box::new(
                 gtk::Orientation::Horizontal,
@@ -301,7 +369,7 @@ impl AutocompleteController {
             hbox.set_margin_end(6);
 
             if let Some(path) = item.icon_path.as_deref().filter(|p| !p.is_empty()) {
-                if let Ok(texture) = gtk::gdk::Texture::from_filename(path) {
+                if let Some(texture) = load_cached_avatar_texture(path) {
                     let avatar = adw::Avatar::new(32, None, false);
                     avatar.set_custom_image(Some(&texture));
                     hbox.append(&avatar);
@@ -319,13 +387,20 @@ impl AutocompleteController {
             let label = gtk::Label::new(Some(&item.display_name));
             label.set_xalign(0.0);
 
-            // Only force a wide width for rich items (like session resume)
+            let is_file_item = item.replacement_text.starts_with('@');
+
+            // Only force a wide width for rich items (like session resume or @file paths)
             // to avoid making simple command suggestions ('/resume') weirdly wide.
             if item.badge_text.is_some() {
                 label.set_hexpand(true);
                 label.set_halign(gtk::Align::Fill);
                 label.set_ellipsize(gtk::pango::EllipsizeMode::End);
                 label.set_width_request(400);
+            } else if is_file_item {
+                label.set_hexpand(true);
+                label.set_halign(gtk::Align::Fill);
+                label.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
+                label.set_width_request(380);
             } else if is_plain_command {
                 label.set_hexpand(false);
                 label.set_halign(gtk::Align::Start);
@@ -350,8 +425,8 @@ impl AutocompleteController {
                 right_box.set_halign(gtk::Align::End);
             }
 
-            if let Some(secondary) = item.secondary_text {
-                let sec_label = gtk::Label::new(Some(&secondary));
+            if let Some(ref secondary) = item.secondary_text {
+                let sec_label = gtk::Label::new(Some(secondary));
                 sec_label.add_css_class("caption");
                 sec_label.add_css_class("dim-label");
                 if is_plain_command {
@@ -359,15 +434,15 @@ impl AutocompleteController {
                     sec_label.set_halign(gtk::Align::Start);
                 } else {
                     // Fixed minimum width and right alignment inside the label for perfect column stacking
-                    sec_label.set_width_request(40);
+                    sec_label.set_width_request(if is_file_item { 56 } else { 40 });
                     sec_label.set_xalign(1.0);
                     sec_label.set_halign(gtk::Align::End);
                 }
                 right_box.append(&sec_label);
             }
 
-            if let Some(badge) = item.badge_text {
-                let badge_label = gtk::Label::new(Some(&badge));
+            if let Some(ref badge) = item.badge_text {
+                let badge_label = gtk::Label::new(Some(badge));
                 badge_label.add_css_class("caption");
 
                 let badge_box = gtk::Box::new(gtk::Orientation::Horizontal, 0);
@@ -381,7 +456,7 @@ impl AutocompleteController {
                 let inner_badge_box = gtk::Box::new(gtk::Orientation::Horizontal, 0);
                 inner_badge_box.set_halign(gtk::Align::Center);
 
-                if let Some(color) = item.badge_color {
+                if let Some(ref color) = item.badge_color {
                     static BADGE_COUNTER: std::sync::atomic::AtomicUsize =
                         std::sync::atomic::AtomicUsize::new(0);
                     let id = BADGE_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -418,14 +493,20 @@ impl AutocompleteController {
             hbox.append(&right_box);
 
             row.set_child(Some(&hbox));
-            self.list.append(&row);
 
             if !item.disabled && first_selectable.is_none() {
                 first_selectable = Some(row);
             }
         }
 
-        if let Some(first) = first_selectable {
+        // Remove any excess rows from previous larger completion lists *after* updating retained rows
+        while let Some(extra) = self.list.row_at_index(items.len() as i32) {
+            self.list.remove(&extra);
+        }
+
+        if let Some(first) = first_selectable
+            && self.list.selected_row().as_ref() != Some(&first)
+        {
             self.list.select_row(Some(&first));
         }
     }
@@ -497,15 +578,26 @@ impl AutocompleteController {
             new_text.push_str(replacement);
 
             let is_command = replacement.starts_with('/');
-            if !is_command {
+            let is_dir_drill = replacement.starts_with('@') && replacement.ends_with('/');
+            let already_spaced = replacement.ends_with(' ');
+            let tail = &text[byte_cursor_pos..];
+            let tail_starts_with_space = tail.starts_with(' ');
+            let add_space =
+                !is_command && !is_dir_drill && !already_spaced && !tail_starts_with_space;
+            if add_space {
                 new_text.push(' ');
             }
-            new_text.push_str(&text[byte_cursor_pos..]);
+            new_text.push_str(tail);
 
             let start_char_pos = text[..start_idx].chars().count();
             let replacement_char_len = replacement.chars().count();
-            let new_cursor_pos =
-                start_char_pos + replacement_char_len + if is_command { 0 } else { 1 };
+            let new_cursor_pos = start_char_pos
+                + replacement_char_len
+                + if add_space || (tail_starts_with_space && !is_command && !is_dir_drill) {
+                    1
+                } else {
+                    0
+                };
 
             self.input.set_text_and_cursor(&new_text, new_cursor_pos);
 
