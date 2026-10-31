@@ -378,19 +378,45 @@ impl ClawSidebarComponent {
         let mcp_box = gtk::Box::new(gtk::Orientation::Vertical, 4);
         mcp_box.set_hexpand(true);
         mcp_box.set_halign(gtk::Align::Fill);
-        mcp_box.set_visible(false);
+
+        let mcp_header_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        mcp_header_row.set_hexpand(true);
 
         let mcp_title_lbl = gtk::Label::builder()
             .label("MCP")
             .css_classes(["caption", "heading"])
             .halign(gtk::Align::Start)
+            .hexpand(true)
             .xalign(0.0)
             .build();
-        mcp_box.append(&mcp_title_lbl);
+        mcp_header_row.append(&mcp_title_lbl);
+
+        let configure_mcp_lbl = gtk::Label::builder()
+            .label("Configure…")
+            .css_classes(["caption", "accent"])
+            .halign(gtk::Align::End)
+            .tooltip_text("Configure MCP Servers")
+            .build();
+        configure_mcp_lbl.set_cursor_from_name(Some("pointer"));
+        {
+            let gesture = gtk::GestureClick::new();
+            let lbl_weak = configure_mcp_lbl.downgrade();
+            gesture.connect_released(move |_, _, _, _| {
+                if let Some(lbl) = lbl_weak.upgrade()
+                    && let Some(root) = lbl.root()
+                {
+                    let _ = gtk::prelude::WidgetExt::activate_action(&root, "win.open-mcp", None);
+                }
+            });
+            configure_mcp_lbl.add_controller(gesture);
+        }
+        mcp_header_row.append(&configure_mcp_lbl);
+        mcp_box.append(&mcp_header_row);
 
         let mcp_rows_box = gtk::Box::new(gtk::Orientation::Vertical, 2);
         mcp_rows_box.set_hexpand(true);
         mcp_rows_box.set_halign(gtk::Align::Fill);
+        mcp_rows_box.set_visible(false);
         mcp_box.append(&mcp_rows_box);
 
         footer_info_vbox.append(&mcp_box);
@@ -858,7 +884,8 @@ fn populate_mcp_rows(
         .collect();
 
     if active_servers.is_empty() {
-        mcp_box.set_visible(false);
+        mcp_rows_box.set_visible(false);
+        mcp_box.set_visible(true);
         return;
     }
 
@@ -893,6 +920,7 @@ fn populate_mcp_rows(
         mcp_rows_box.append(&row);
     }
 
+    mcp_rows_box.set_visible(true);
     mcp_box.set_visible(true);
 }
 

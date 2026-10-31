@@ -9,6 +9,7 @@ pub struct PreferencesComponent {
     dialog: adw::Dialog,
     stack: adw::ViewStack,
     nav_apis: gtk::ListBoxRow,
+    nav_mcp: gtk::ListBoxRow,
     nav_shortcuts: gtk::ListBoxRow,
     nav_about: gtk::ListBoxRow,
     nav_characters: gtk::ListBoxRow,
@@ -228,6 +229,7 @@ impl PreferencesComponent {
             dialog,
             stack,
             nav_apis,
+            nav_mcp,
             nav_shortcuts,
             nav_about,
             nav_characters,
@@ -263,6 +265,8 @@ impl PreferencesComponent {
         {
             if page_name == "apis" {
                 list_box.select_row(Some(&self.nav_apis));
+            } else if page_name == "mcp" {
+                list_box.select_row(Some(&self.nav_mcp));
             } else if page_name == "shortcuts" {
                 list_box.select_row(Some(&self.nav_shortcuts));
             } else if page_name == "about" {

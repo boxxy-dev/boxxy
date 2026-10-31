@@ -97,6 +97,10 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
             inner.preferences.show_page("apis");
             inner.preferences.show(&inner.window.clone().upcast());
         }
+        AppInput::OpenMcpPreferences => {
+            inner.preferences.show_page("mcp");
+            inner.preferences.show(&inner.window.clone().upcast());
+        }
         AppInput::OpenBookmarks => {
             tabs::open_bookmarks(&mut inner);
         }

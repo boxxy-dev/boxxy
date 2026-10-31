@@ -101,6 +101,7 @@ pub enum AppInput {
     SidebarPageChanged(String),
     OpenPreferences,
     OpenApisPreferences,
+    OpenMcpPreferences,
     OpenBookmarks,
     OpenShortcuts,
     OpenWhatsNew,
