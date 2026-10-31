@@ -585,6 +585,31 @@ boxxyterminalwidget {
   opacity: 0.5;
 }
 
+/* Override Libadwaita typography classes inside .claw-drawer to use relative
+   em units so Ctrl++ / Ctrl+- / Ctrl+0 scales every font in the overlay uniformly. */
+.claw-drawer .title-1 {
+  font-size: 1.75em;
+}
+.claw-drawer .title-2 {
+  font-size: 1.4em;
+}
+.claw-drawer .title-3 {
+  font-size: 1.2em;
+}
+.claw-drawer .title-4 {
+  font-size: 1.08em;
+}
+.claw-drawer .heading {
+  font-size: 1.0em;
+}
+.claw-drawer .caption,
+.claw-drawer .caption-heading {
+  font-size: 0.82em;
+}
+.claw-drawer .monospace {
+  font-size: 1.0em;
+}
+
 /* Toggle buttons on the left side of the bar: flat with no bg at rest. */
 .claw-drawer .boxxy-msgbar button.image-button,
 .claw-drawer .boxxy-msgbar button.flat {
@@ -782,7 +807,7 @@ spinrow button.down image {
     border-radius: 8px;
     padding: 2px 8px;
     font-weight: 500;
-    font-size: 0.75rem;
+    font-size: 0.75em;
     border: 1px solid transparent;
     transition: opacity 150ms ease, border-color 150ms ease;
     box-shadow: none;

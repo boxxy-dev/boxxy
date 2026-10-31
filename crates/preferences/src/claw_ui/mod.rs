@@ -13,6 +13,8 @@ pub fn setup_claw_ui_page(
     let maintain_overlay_history_switch: adw::SwitchRow =
         builder.object("maintain_overlay_history_switch").unwrap();
     let enable_tips_switch: adw::SwitchRow = builder.object("enable_tips_switch").unwrap();
+    let overlay_font_scale_spin: adw::SpinRow =
+        builder.object("overlay_font_scale_spin").unwrap();
     let currency_combo: adw::ComboRow = builder.object("currency_combo").unwrap();
     let enable_timer_sounds_switch: adw::SwitchRow =
         builder.object("enable_timer_sounds_switch").unwrap();
@@ -51,6 +53,16 @@ pub fn setup_claw_ui_page(
         let s = settings_rc.borrow();
         maintain_overlay_history_switch.set_active(s.maintain_overlay_history);
         enable_tips_switch.set_active(s.enable_tips);
+        let scale_adj = gtk::Adjustment::new(
+            s.overlay_font_scale.clamp(60, 220) as f64,
+            60.0,
+            220.0,
+            10.0,
+            20.0,
+            0.0,
+        );
+        overlay_font_scale_spin.set_adjustment(Some(&scale_adj));
+        overlay_font_scale_spin.set_value(s.overlay_font_scale.clamp(60, 220) as f64);
         let curr_idx = Currency::all()
             .iter()
             .position(|&c| c == s.currency)
@@ -61,6 +73,23 @@ pub fn setup_claw_ui_page(
         hide_character_badge_switch.set_active(s.hide_character_badge);
         claw_msgbar_shortcut_entry.set_text(&s.claw_msgbar_shortcut);
     }
+
+    // Overlay font scale spin
+    let s_rc = settings_rc.clone();
+    let cb = on_change.clone();
+    let is_up = is_updating.clone();
+    overlay_font_scale_spin.connect_value_notify(move |row: &adw::SpinRow| {
+        if is_up.get() {
+            return;
+        }
+        let val = (row.value().round() as u32).clamp(60, 220);
+        let mut s = s_rc.borrow_mut();
+        if s.overlay_font_scale != val {
+            s.overlay_font_scale = val;
+            s.save();
+            cb(s.clone());
+        }
+    });
 
     // Currency selection
     let s_rc = settings_rc.clone();
@@ -219,6 +248,7 @@ pub fn setup_claw_ui_page(
     let group_claw_ui_shortcuts_clone = group_claw_ui_shortcuts.clone();
     let maintain_overlay_history_switch_clone = maintain_overlay_history_switch.clone();
     let enable_tips_switch_clone = enable_tips_switch.clone();
+    let overlay_font_scale_spin_clone = overlay_font_scale_spin.clone();
     let currency_combo_clone = currency_combo.clone();
     let enable_timer_sounds_switch_clone = enable_timer_sounds_switch.clone();
     let enable_task_sounds_switch_clone = enable_task_sounds_switch.clone();
@@ -256,6 +286,11 @@ pub fn setup_claw_ui_page(
             "tips usage hints rotating help",
         );
 
+        let font_scale = match_row(
+            overlay_font_scale_spin_clone.upcast_ref(),
+            "overlay font scale size zoom percentage ctrl plus minus",
+        );
+
         let currency = match_row(
             currency_combo_clone.upcast_ref(),
             "cost currency spend usd eur cny inr brl dollar euro yuan rupee real brazil china india",
@@ -270,7 +305,7 @@ pub fn setup_claw_ui_page(
             "reset default claw ui shortcut keybinding",
         );
 
-        let behavior_visible = maintain || tips || currency;
+        let behavior_visible = maintain || tips || font_scale || currency;
         let sounds_visible = timer_sounds || task_sounds;
         let identity_visible = hide_badge;
         let shortcut_visible = s_accel || reset_shortcut;

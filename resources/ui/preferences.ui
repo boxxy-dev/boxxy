@@ -728,6 +728,13 @@
                                   </object>
                                 </child>
                                 <child>
+                                  <object class="AdwSpinRow" id="overlay_font_scale_spin">
+                                    <property name="title" translatable="yes">Overlay Font Scale (%)</property>
+                                    <property name="subtitle" translatable="yes">Scale all text in the Claw overlay. You can also press Ctrl++ or Ctrl+- while the overlay is open.</property>
+                                    <property name="numeric">True</property>
+                                  </object>
+                                </child>
+                                <child>
                                   <object class="AdwComboRow" id="currency_combo">
                                     <property name="title" translatable="yes">Cost Currency</property>
                                     <property name="subtitle" translatable="yes">Currency used to display session spend in the Claw sidebar.</property>

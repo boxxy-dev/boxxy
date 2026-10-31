@@ -12,6 +12,18 @@ use std::rc::Rc;
 
 use crate::state::{AppInput, AppWindowInner};
 
+fn is_active_tab_claw_drawer_visible(inner: &AppWindowInner) -> bool {
+    let Some(page) = inner.tab_view.selected_page() else {
+        return false;
+    };
+    let child = page.child();
+    inner
+        .tabs
+        .iter()
+        .find(|t| t.controller.widget() == &child)
+        .is_some_and(|t| t.controller.is_active_claw_drawer_visible())
+}
+
 pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
     let mut inner = inner_ref.borrow_mut();
     match input {
@@ -148,6 +160,10 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
             window_state::settings_changed(&mut inner, settings);
         }
         AppInput::ZoomIn => {
+            if is_active_tab_claw_drawer_visible(&inner) {
+                boxxy_terminal::TerminalComponent::zoom_in_claw_overlay();
+                return;
+            }
             let settings = boxxy_preferences::Settings::update(|s| {
                 s.font_size += 1;
             });
@@ -156,6 +172,10 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
                 .send_blocking(AppInput::SettingsChanged((*settings).clone()));
         }
         AppInput::ZoomOut => {
+            if is_active_tab_claw_drawer_visible(&inner) {
+                boxxy_terminal::TerminalComponent::zoom_out_claw_overlay();
+                return;
+            }
             if boxxy_preferences::Settings::load().font_size > 4 {
                 let settings = boxxy_preferences::Settings::update(|s| {
                     if s.font_size > 4 {
@@ -168,6 +188,10 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
             }
         }
         AppInput::ResetZoom => {
+            if is_active_tab_claw_drawer_visible(&inner) {
+                boxxy_terminal::TerminalComponent::reset_claw_overlay_zoom();
+                return;
+            }
             let default_font_size = boxxy_preferences::Settings::default().font_size;
             let settings = boxxy_preferences::Settings::update(|s| {
                 s.font_size = default_font_size;

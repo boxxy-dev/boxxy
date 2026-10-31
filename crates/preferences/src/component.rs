@@ -15,6 +15,7 @@ pub struct PreferencesComponent {
     search_entry: gtk::SearchEntry,
     theme_row: adw::ActionRow,
     chat_width_spin: adw::SpinRow,
+    overlay_font_scale_spin: adw::SpinRow,
     font_button: gtk::FontDialogButton,
     settings_rc: Rc<RefCell<Settings>>,
 }
@@ -178,6 +179,8 @@ impl PreferencesComponent {
         let theme_row = appearance_widgets.theme_row;
         let chat_width_spin = appearance_widgets.chat_width_spin;
         let font_button = appearance_widgets.font_button;
+        let overlay_font_scale_spin: adw::SpinRow =
+            builder.object("overlay_font_scale_spin").unwrap();
 
         // Search filtering logic
         let search_entry: gtk::SearchEntry = builder.object("search_entry").unwrap();
@@ -231,6 +234,7 @@ impl PreferencesComponent {
             search_entry,
             theme_row,
             chat_width_spin,
+            overlay_font_scale_spin,
             font_button,
             settings_rc,
         }
@@ -276,6 +280,11 @@ impl PreferencesComponent {
         if (self.chat_width_spin.value() - settings.ai_chat_width as f64).abs() > 1e-6 {
             self.chat_width_spin
                 .set_value(settings.ai_chat_width as f64);
+        }
+        if (self.overlay_font_scale_spin.value() - settings.overlay_font_scale as f64).abs() > 1e-6
+        {
+            self.overlay_font_scale_spin
+                .set_value(settings.overlay_font_scale as f64);
         }
         let mut desc = gtk::pango::FontDescription::new();
         desc.set_family(&settings.font_name);

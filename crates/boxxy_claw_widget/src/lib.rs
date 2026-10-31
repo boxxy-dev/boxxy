@@ -19,7 +19,10 @@ pub use claw_host::ClawHost;
 pub use claw_indicator::ClawIndicator;
 pub use dispatch::spawn_dispatch;
 pub use msgbar::{Attachment, AttachmentManager, MsgBarComponent};
-pub use overlay::{OverlayMode, TerminalOverlay};
+pub use overlay::{
+    OverlayMode, TerminalOverlay, reset_overlay_zoom, set_overlay_zoom_pct, zoom_in_overlay,
+    zoom_out_overlay,
+};
 pub use proposal::Proposal;
 pub mod state;
 pub use state::OverlayState;

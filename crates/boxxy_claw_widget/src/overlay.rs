@@ -70,6 +70,9 @@ impl TerminalOverlay {
         let builder = gtk::Builder::from_resource("/dev/boxxy/BoxxyTerminal/ui/claw_overlay.ui");
 
         let revealer: gtk::Revealer = builder.object("root_revealer").unwrap();
+        let main_drawer: gtk::Box = builder.object("main_drawer").unwrap();
+        set_overlay_zoom_pct(Settings::load().overlay_font_scale);
+        Self::attach_zoom_controllers(&main_drawer);
         let indicator_slot: gtk::Box = builder.object("indicator_slot").unwrap();
         let character_selector_box: gtk::Box = builder.object("character_selector_box").unwrap();
 
@@ -1275,4 +1278,135 @@ impl TerminalOverlay {
             Proposal::None
         }
     }
+
+    fn attach_zoom_controllers(drawer: &gtk::Box) {
+        let zoom_controller = gtk::ShortcutController::new();
+        zoom_controller.set_propagation_phase(gtk::PropagationPhase::Capture);
+
+        if let Some(trigger) = gtk::ShortcutTrigger::parse_string(
+            "<Control>plus|<Control>equal|<Control>KP_Add|<Control><Shift>plus|<Control><Shift>equal",
+        ) {
+            let action = gtk::CallbackAction::new(|_, _| {
+                zoom_in_overlay();
+                gtk::glib::Propagation::Stop
+            });
+            zoom_controller.add_shortcut(
+                gtk::Shortcut::builder()
+                    .trigger(&trigger)
+                    .action(&action)
+                    .build(),
+            );
+        }
+
+        if let Some(trigger) = gtk::ShortcutTrigger::parse_string(
+            "<Control>minus|<Control>KP_Subtract|<Control>underscore|<Control><Shift>minus",
+        ) {
+            let action = gtk::CallbackAction::new(|_, _| {
+                zoom_out_overlay();
+                gtk::glib::Propagation::Stop
+            });
+            zoom_controller.add_shortcut(
+                gtk::Shortcut::builder()
+                    .trigger(&trigger)
+                    .action(&action)
+                    .build(),
+            );
+        }
+
+        if let Some(trigger) = gtk::ShortcutTrigger::parse_string("<Control>0|<Control>KP_0") {
+            let action = gtk::CallbackAction::new(|_, _| {
+                reset_overlay_zoom();
+                gtk::glib::Propagation::Stop
+            });
+            zoom_controller.add_shortcut(
+                gtk::Shortcut::builder()
+                    .trigger(&trigger)
+                    .action(&action)
+                    .build(),
+            );
+        }
+
+        drawer.add_controller(zoom_controller);
+
+        let scroll_ctrl = gtk::EventControllerScroll::new(gtk::EventControllerScrollFlags::VERTICAL);
+        scroll_ctrl.set_propagation_phase(gtk::PropagationPhase::Capture);
+        scroll_ctrl.connect_scroll(|ctrl, _dx, dy| {
+            let state = ctrl.current_event_state();
+            if state.contains(gtk::gdk::ModifierType::CONTROL_MASK) {
+                if dy < 0.0 {
+                    zoom_in_overlay();
+                } else if dy > 0.0 {
+                    zoom_out_overlay();
+                }
+                return gtk::glib::Propagation::Stop;
+            }
+            gtk::glib::Propagation::Proceed
+        });
+        drawer.add_controller(scroll_ctrl);
+    }
+}
+
+const OVERLAY_ZOOM_DEFAULT_PCT: u32 = 100;
+const OVERLAY_ZOOM_MIN_PCT: u32 = 60;
+const OVERLAY_ZOOM_MAX_PCT: u32 = 220;
+const OVERLAY_ZOOM_STEP_PCT: u32 = 10;
+
+thread_local! {
+    static OVERLAY_ZOOM_STATE: (Cell<u32>, RefCell<Option<gtk::CssProvider>>) =
+        const { (Cell::new(OVERLAY_ZOOM_DEFAULT_PCT), RefCell::new(None)) };
+}
+
+fn apply_overlay_zoom_pct(pct: u32) {
+    let clamped = pct.clamp(OVERLAY_ZOOM_MIN_PCT, OVERLAY_ZOOM_MAX_PCT);
+    OVERLAY_ZOOM_STATE.with(|(zoom_cell, provider_cell)| {
+        if zoom_cell.get() == clamped && provider_cell.borrow().is_some() {
+            return;
+        }
+        zoom_cell.set(clamped);
+        let mut slot = provider_cell.borrow_mut();
+        let provider = slot.get_or_insert_with(|| {
+            let p = gtk::CssProvider::new();
+            if let Some(display) = gtk::gdk::Display::default() {
+                gtk::style_context_add_provider_for_display(
+                    &display,
+                    &p,
+                    gtk::STYLE_PROVIDER_PRIORITY_USER,
+                );
+            }
+            p
+        });
+        provider.load_from_string(&format!(".claw-drawer {{ font-size: {clamped}%; }}"));
+    });
+}
+
+pub fn set_overlay_zoom_pct(pct: u32) {
+    apply_overlay_zoom_pct(pct);
+}
+
+fn update_and_persist_overlay_zoom_pct(pct: u32) {
+    let clamped = pct.clamp(OVERLAY_ZOOM_MIN_PCT, OVERLAY_ZOOM_MAX_PCT);
+    apply_overlay_zoom_pct(clamped);
+    if Settings::load().overlay_font_scale != clamped {
+        Settings::update(|s| {
+            s.overlay_font_scale = clamped;
+        });
+    }
+}
+
+pub fn zoom_in_overlay() {
+    let next = OVERLAY_ZOOM_STATE.with(|(zoom_cell, _)| {
+        zoom_cell.get().saturating_add(OVERLAY_ZOOM_STEP_PCT)
+    });
+    update_and_persist_overlay_zoom_pct(next);
+}
+
+pub fn zoom_out_overlay() {
+    let next = OVERLAY_ZOOM_STATE.with(|(zoom_cell, _)| {
+        zoom_cell.get().saturating_sub(OVERLAY_ZOOM_STEP_PCT)
+    });
+    update_and_persist_overlay_zoom_pct(next);
+}
+
+pub fn reset_overlay_zoom() {
+    update_and_persist_overlay_zoom_pct(OVERLAY_ZOOM_DEFAULT_PCT);
 }

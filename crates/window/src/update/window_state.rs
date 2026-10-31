@@ -294,6 +294,7 @@ pub fn new_window(inner: &AppWindowInner) {
 pub fn settings_changed(inner: &mut AppWindowInner, settings: Settings) {
     inner.current_settings = settings.clone();
     inner.preferences.sync_settings(&settings);
+    boxxy_terminal::TerminalComponent::set_claw_overlay_zoom_pct(settings.overlay_font_scale);
 
     let style_manager = libadwaita::StyleManager::default();
     let scheme = match settings.color_scheme {

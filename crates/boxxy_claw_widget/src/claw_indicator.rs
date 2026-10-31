@@ -69,7 +69,7 @@ impl ClawIndicator {
                     margin: 0;
                 }
                 .status-label {
-                    font-size: 0.9rem;
+                    font-size: 0.9em;
                     font-weight: bold;
                     opacity: 0.8;
                 }

@@ -1455,4 +1455,28 @@ impl TerminalComponent {
             }
         }
     }
+
+    pub fn is_active_claw_drawer_visible(&self) -> bool {
+        let inner = self.inner.borrow();
+        inner
+            .panes
+            .get(&inner.active_pane_id)
+            .is_some_and(|p| p.controller.is_claw_drawer_visible())
+    }
+
+    pub fn zoom_in_claw_overlay() {
+        boxxy_claw_widget::zoom_in_overlay();
+    }
+
+    pub fn zoom_out_claw_overlay() {
+        boxxy_claw_widget::zoom_out_overlay();
+    }
+
+    pub fn reset_claw_overlay_zoom() {
+        boxxy_claw_widget::reset_overlay_zoom();
+    }
+
+    pub fn set_claw_overlay_zoom_pct(pct: u32) {
+        boxxy_claw_widget::set_overlay_zoom_pct(pct);
+    }
 }

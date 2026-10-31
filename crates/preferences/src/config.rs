@@ -298,6 +298,8 @@ pub struct Settings {
     /// because the overlay normally shows only the latest turn.
     pub maintain_overlay_history: bool,
     pub enable_tips: bool,
+    #[serde(default = "default_overlay_font_scale")]
+    pub overlay_font_scale: u32,
     #[serde(default)]
     pub currency: Currency,
     pub claw_msgbar_shortcut: String,
@@ -366,6 +368,7 @@ impl Default for Settings {
             colored_tabs: false,
             maintain_overlay_history: true,
             enable_tips: true,
+            overlay_font_scale: default_overlay_font_scale(),
             currency: Currency::Usd,
             claw_msgbar_shortcut: "<Ctrl>slash".to_string(),
             enable_telemetry: true, // ON by default during Preview
@@ -374,6 +377,10 @@ impl Default for Settings {
             openai_compatible_endpoints: vec![],
         }
     }
+}
+
+const fn default_overlay_font_scale() -> u32 {
+    100
 }
 
 impl Settings {

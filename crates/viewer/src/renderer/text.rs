@@ -76,11 +76,11 @@ impl BlockRenderer for TextRenderer {
                 label.set_selectable(true);
 
                 let (css_class, size_tag) = match level {
-                    1 => ("title-1", "xx-large"),
-                    2 => ("title-2", "x-large"),
-                    3 => ("title-3", "large"),
-                    4 => ("title-4", "medium"),
-                    _ => ("heading", "medium"),
+                    1 => ("title-1", "160%"),
+                    2 => ("title-2", "135%"),
+                    3 => ("title-3", "118%"),
+                    4 => ("title-4", "106%"),
+                    _ => ("heading", "100%"),
                 };
 
                 label.add_css_class(css_class);
