@@ -790,10 +790,12 @@ impl TerminalComponent {
             .any(|p| p.controller.has_pending_tasks())
     }
 
-    pub fn resume_session(&self, session_id: &str) {
+    pub fn resume_session(&self, session_id: &str, override_character_id: Option<String>) {
         let inner = self.inner.borrow();
         if let Some(pane_data) = inner.panes.get(&inner.active_pane_id) {
-            pane_data.controller.resume_session(session_id);
+            pane_data
+                .controller
+                .resume_session(session_id, override_character_id);
         }
     }
 

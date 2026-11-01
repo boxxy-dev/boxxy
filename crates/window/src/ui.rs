@@ -106,8 +106,9 @@ impl AppWindow {
                 let _ = tx_claw_soft_clear.send_blocking(AppInput::ClearClawHistory(None));
             },
         );
-        claw.set_on_resume_session(move |session_id| {
-            let _ = tx_claw_resume.send_blocking(AppInput::ResumeClawSession(session_id));
+        claw.set_on_resume_session(move |session_id, override_character_id| {
+            let _ = tx_claw_resume
+                .send_blocking(AppInput::ResumeClawSession(session_id, override_character_id));
         });
 
         let tx_bookmarks = tx.clone();

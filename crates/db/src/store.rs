@@ -404,14 +404,28 @@ impl<'a> Store<'a> {
         Ok(())
     }
 
-    /// Migrates all sessions belonging to `old_character_id` to a replacement character.
-    /// Preserves `updated_at` so session ordering and age badges remain intact.
+    /// Migrates all sessions belonging to `old_character_id` to a replacement character,
+    /// recording a `Character Switch` system event in `claw_events` for any non-empty session
+    /// while preserving all historical message rows and `updated_at` timestamps.
     pub async fn migrate_character_sessions(
         &self,
         old_character_id: &str,
         new_character_id: &str,
         new_display_name: &str,
     ) -> Result<u64> {
+        let affected_sessions: Vec<(String, String, Option<String>, String)> = sqlx::query_as(
+            r"
+            SELECT s.id, s.character_display_name, s.agent_name, s.name
+            FROM sessions s
+            WHERE s.character_id = ?
+              AND EXISTS (SELECT 1 FROM claw_events e WHERE e.session_id = s.id)
+            ",
+        )
+        .bind(old_character_id)
+        .fetch_all(self.pool)
+        .await
+        .unwrap_or_default();
+
         let res = sqlx::query(
             "UPDATE sessions SET character_id = ?, character_display_name = ?, name = ?, agent_name = ? WHERE character_id = ?",
         )
@@ -422,6 +436,46 @@ impl<'a> Store<'a> {
         .bind(old_character_id)
         .execute(self.pool)
         .await?;
+
+        let prettify = |raw: &str| -> String {
+            raw.split(['-', ' '])
+                .filter(|w| !w.is_empty())
+                .map(|word| {
+                    let mut c = word.chars();
+                    match c.next() {
+                        None => String::new(),
+                        Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+                    }
+                })
+                .collect::<Vec<String>>()
+                .join(" ")
+        };
+
+        let new_pretty = prettify(new_display_name);
+        for (sess_id, char_disp, agent_name, sess_name) in affected_sessions {
+            let old_raw = if !char_disp.trim().is_empty() {
+                char_disp
+            } else if let Some(a) = agent_name.filter(|s| !s.trim().is_empty()) {
+                a
+            } else if !sess_name.trim().is_empty() {
+                sess_name
+            } else {
+                "Previous Character".to_string()
+            };
+            let old_pretty = prettify(&old_raw);
+            if !old_pretty.eq_ignore_ascii_case(&new_pretty) {
+                let switch_content = format!("Character Switch: {old_pretty} → {new_pretty}");
+                let event_json = serde_json::json!({
+                    "SystemMessage": {
+                        "pane_id": "system",
+                        "content": switch_content
+                    }
+                })
+                .to_string();
+                let _ = self.add_claw_event(&sess_id, &event_json).await;
+            }
+        }
+
         Ok(res.rows_affected())
     }
 
@@ -1713,5 +1767,56 @@ mod tests {
         let remaining = store.get_recent_active_sessions(10).await.unwrap();
         assert_eq!(remaining.len(), 1);
         assert_eq!(remaining[0].id, "sess_pin_2");
+    }
+
+    #[tokio::test]
+    async fn test_migrate_character_sessions_preserves_events_and_appends_switch_banner() {
+        let db = Db::new_in_memory().await.unwrap();
+        let store = Store::new(db.pool());
+
+        store
+            .upsert_session_state(
+                "sess_migrated",
+                "custom-hero",
+                "char-custom",
+                "Custom Hero",
+                "Refactor Task",
+                "[]",
+                "[]",
+                "Custom Hero",
+                "/tmp",
+                "model",
+                false,
+                50,
+                50,
+                0.01,
+            )
+            .await
+            .unwrap();
+        store
+            .add_claw_event(
+                "sess_migrated",
+                "{\"Diagnosis\":{\"pane_id\":\"p1\",\"agent_name\":\"Custom Hero\",\"character_id\":\"char-custom\",\"content\":\"Hello\",\"usage\":null}}",
+            )
+            .await
+            .unwrap();
+
+        let affected = store
+            .migrate_character_sessions("char-custom", "char-niko", "Niko Una")
+            .await
+            .unwrap();
+        assert_eq!(affected, 1);
+
+        let updated = store.get_session("sess_migrated").await.unwrap().unwrap();
+        assert_eq!(updated.character_id, "char-niko");
+        assert_eq!(updated.character_display_name, "Niko Una");
+
+        let events = store.get_claw_events("sess_migrated").await.unwrap();
+        assert_eq!(events.len(), 2);
+        // First event still belongs to the original character
+        assert!(events[0].contains("\"agent_name\":\"Custom Hero\""));
+        assert!(events[0].contains("\"character_id\":\"char-custom\""));
+        // Second event is the Character Switch system banner
+        assert!(events[1].contains("Character Switch: Custom Hero → Niko Una"));
     }
 }

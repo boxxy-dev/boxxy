@@ -21,6 +21,11 @@ use libadwaita as adw;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
+type RenderedSessionSig = (
+    Vec<(String, String, Option<String>, bool, i64)>,
+    Vec<(String, String, bool)>,
+);
+
 pub struct ClawSidebarComponent {
     widget: gtk::Box,
     hero_box: gtk::Box,
@@ -36,9 +41,9 @@ pub struct ClawSidebarComponent {
     sessions_box: gtk::Box,
     sessions_list: gtk::ListBox,
     is_new_session: Rc<Cell<bool>>,
-    rendered_sessions_sig: Rc<RefCell<Vec<(String, Option<String>, bool, i64)>>>,
+    rendered_sessions_sig: Rc<RefCell<RenderedSessionSig>>,
     active_options_popover: Rc<RefCell<Option<gtk::Popover>>>,
-    on_resume_session: Rc<RefCell<Option<Rc<dyn Fn(String) + 'static>>>>,
+    on_resume_session: Rc<RefCell<Option<Rc<dyn Fn(String, Option<String>) + 'static>>>>,
     claw_model_lbl: gtk::Label,
     dreams_model_lbl: gtk::Label,
     dream_status_lbl: gtk::Label,
@@ -442,7 +447,7 @@ impl ClawSidebarComponent {
             sessions_box,
             sessions_list,
             is_new_session: Rc::new(Cell::new(true)),
-            rendered_sessions_sig: Rc::new(RefCell::new(Vec::new())),
+            rendered_sessions_sig: Rc::new(RefCell::new((Vec::new(), Vec::new()))),
             active_options_popover: Rc::new(RefCell::new(None)),
             on_resume_session: Rc::new(RefCell::new(None)),
             claw_model_lbl,
@@ -533,6 +538,9 @@ impl ClawSidebarComponent {
         let mut reg_rx = boxxy_claw_protocol::characters::subscribe_registry_changes();
         glib::spawn_future_local(async move {
             while reg_rx.changed().await.is_ok() {
+                // Always invalidate the cached signature on registry/claim changes,
+                // even if the active tab hasn't finished closing yet.
+                *sig_reg.borrow_mut() = (Vec::new(), Vec::new());
                 if is_new_reg.get() {
                     populate_past_sessions(
                         s_box_reg.clone(),
@@ -663,7 +671,7 @@ impl ClawSidebarComponent {
         self.refresh_visibility();
     }
 
-    pub fn set_on_resume_session<FR: Fn(String) + 'static>(&self, cb: FR) {
+    pub fn set_on_resume_session<FR: Fn(String, Option<String>) + 'static>(&self, cb: FR) {
         *self.on_resume_session.borrow_mut() = Some(Rc::new(cb));
     }
 
@@ -1030,9 +1038,9 @@ fn populate_past_sessions(
     hero_icon: gtk::Image,
     memories_lbl: gtk::Label,
     is_new_session: Rc<Cell<bool>>,
-    rendered_sessions_sig: Rc<RefCell<Vec<(String, Option<String>, bool, i64)>>>,
+    rendered_sessions_sig: Rc<RefCell<RenderedSessionSig>>,
     active_options_popover: Rc<RefCell<Option<gtk::Popover>>>,
-    on_resume_session: Rc<RefCell<Option<Rc<dyn Fn(String) + 'static>>>>,
+    on_resume_session: Rc<RefCell<Option<Rc<dyn Fn(String, Option<String>) + 'static>>>>,
     force: bool,
 ) {
     glib::spawn_future_local(async move {
@@ -1066,7 +1074,7 @@ fn populate_past_sessions(
         }
 
         if !is_new_session.get() || fetched.is_empty() {
-            rendered_sessions_sig.borrow_mut().clear();
+            *rendered_sessions_sig.borrow_mut() = (Vec::new(), Vec::new());
             while let Some(row) = sessions_list.row_at_index(0) {
                 sessions_list.remove(&row);
             }
@@ -1081,10 +1089,32 @@ fn populate_past_sessions(
         hero_box.set_visible(false);
         sessions_box.set_visible(true);
 
-        let new_sig: Vec<(String, Option<String>, bool, i64)> = fetched
+        let registry = boxxy_claw_protocol::characters::CHARACTER_CACHE.load();
+        let claims = boxxy_claw_protocol::characters::CLAIMS_CACHE.load();
+
+        let new_sessions_sig: Vec<(String, String, Option<String>, bool, i64)> = fetched
             .iter()
-            .map(|s| (s.id.clone(), s.title.clone(), s.pinned, s.message_count))
+            .map(|s| {
+                (
+                    s.id.clone(),
+                    s.character_id.clone(),
+                    s.title.clone(),
+                    s.pinned,
+                    s.message_count,
+                )
+            })
             .collect();
+        let new_claims_sig: Vec<(String, String, bool)> = claims
+            .iter()
+            .map(|c| {
+                (
+                    c.character_id.clone(),
+                    c.session_id.clone(),
+                    c.owner_bus_name.is_empty(),
+                )
+            })
+            .collect();
+        let new_sig = (new_sessions_sig, new_claims_sig);
 
         if !force
             && *rendered_sessions_sig.borrow() == new_sig
@@ -1101,8 +1131,6 @@ fn populate_past_sessions(
             sessions_list.remove(&row);
         }
 
-        let registry = boxxy_claw_protocol::characters::CHARACTER_CACHE.load();
-        let claims = boxxy_claw_protocol::characters::CLAIMS_CACHE.load();
         let chars_dir = boxxy_claw_protocol::character_loader::get_characters_dir().ok();
 
         for session in fetched {
@@ -1273,7 +1301,7 @@ fn populate_past_sessions(
                 let cb_for_resume = on_resume_session.clone();
                 gesture.connect_released(move |_, _, _, _| {
                     if let Some(cb) = cb_for_resume.borrow().as_ref().cloned() {
-                        cb(sid_for_resume.clone());
+                        cb(sid_for_resume.clone(), None);
                     }
                 });
                 resume_btn_content.add_controller(gesture);
@@ -1475,6 +1503,124 @@ fn populate_past_sessions(
             }
 
             menu_vbox.append(&pin_btn);
+
+            if !is_active_session {
+                let current_char_id = char_info
+                    .map(|c| c.config.id.as_str())
+                    .unwrap_or(session.character_id.as_str());
+                let available_others: Vec<_> =
+                    boxxy_claw_protocol::characters::find_available_characters_in(
+                        &registry, &claims, None,
+                    )
+                    .into_iter()
+                    .filter(|c| c.config.id != current_char_id)
+                    .collect();
+
+                if !available_others.is_empty() {
+                    let continue_hbox = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+                    continue_hbox.append(&gtk::Image::from_icon_name("boxxy-chat-symbolic"));
+                    continue_hbox.append(
+                        &gtk::Label::builder()
+                            .label("Continue with…")
+                            .halign(gtk::Align::Start)
+                            .hexpand(true)
+                            .xalign(0.0)
+                            .build(),
+                    );
+                    let chevron = gtk::Image::from_icon_name("boxxy-down-symbolic");
+                    chevron.add_css_class("dim-label");
+                    continue_hbox.append(&chevron);
+
+                    let continue_btn = gtk::Button::builder()
+                        .css_classes(["flat"])
+                        .child(&continue_hbox)
+                        .build();
+
+                    let continue_revealer = gtk::Revealer::builder()
+                        .transition_type(gtk::RevealerTransitionType::SlideDown)
+                        .transition_duration(150)
+                        .reveal_child(false)
+                        .build();
+
+                    let chars_vbox = gtk::Box::new(gtk::Orientation::Vertical, 2);
+                    chars_vbox.set_margin_start(14);
+                    chars_vbox.set_margin_top(2);
+                    chars_vbox.set_margin_bottom(2);
+
+                    for alt_char in available_others {
+                        let alt_display = if alt_char.config.name.contains('-') {
+                            prettify_name(&alt_char.config.name)
+                        } else if !alt_char.config.display_name.trim().is_empty() {
+                            prettify_name(&alt_char.config.display_name)
+                        } else {
+                            prettify_name(&alt_char.config.name)
+                        };
+
+                        let alt_hbox = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+                        let alt_avatar = adw::Avatar::new(18, Some(&alt_display), true);
+                        alt_avatar.set_valign(gtk::Align::Center);
+                        if alt_char.has_avatar
+                            && let Some(ref dir) = chars_dir
+                        {
+                            let avatar_path =
+                                dir.join(&alt_char.config.name).join("AVATAR.png");
+                            if let Ok(texture) = gdk::Texture::from_filename(&avatar_path) {
+                                alt_avatar.set_custom_image(Some(&texture));
+                            }
+                        }
+                        alt_hbox.append(&alt_avatar);
+                        alt_hbox.append(
+                            &gtk::Label::builder()
+                                .label(&alt_display)
+                                .halign(gtk::Align::Start)
+                                .xalign(0.0)
+                                .build(),
+                        );
+
+                        let alt_btn = gtk::Button::builder()
+                            .css_classes(["flat"])
+                            .child(&alt_hbox)
+                            .build();
+
+                        let pop_weak = popover.downgrade();
+                        let sid_alt = session_id.clone();
+                        let target_cid = alt_char.config.id.clone();
+                        let cb_alt = on_resume_session.clone();
+                        alt_btn.connect_clicked(move |_| {
+                            if let Some(p) = pop_weak.upgrade() {
+                                p.popdown();
+                            }
+                            if let Some(cb) = cb_alt.borrow().as_ref().cloned() {
+                                cb(sid_alt.clone(), Some(target_cid.clone()));
+                            }
+                        });
+                        chars_vbox.append(&alt_btn);
+                    }
+
+                    continue_revealer.set_child(Some(&chars_vbox));
+
+                    {
+                        let rev_toggle = continue_revealer.clone();
+                        continue_btn.connect_clicked(move |_| {
+                            rev_toggle.set_reveal_child(!rev_toggle.reveals_child());
+                        });
+                    }
+                    {
+                        let rev_weak = continue_revealer.downgrade();
+                        popover.connect_visible_notify(move |pop| {
+                            if !pop.is_visible()
+                                && let Some(rev) = rev_weak.upgrade()
+                            {
+                                rev.set_reveal_child(false);
+                            }
+                        });
+                    }
+
+                    menu_vbox.append(&continue_btn);
+                    menu_vbox.append(&continue_revealer);
+                }
+            }
+
             menu_vbox.append(&del_btn);
             popover.set_child(Some(&menu_vbox));
 

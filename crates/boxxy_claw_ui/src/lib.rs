@@ -437,6 +437,20 @@ pub fn create_claw_message_list() -> (gtk::ListView, gio::ListStore) {
             name.unwrap_or_else(|| "Unknown Agent".to_string())
         };
 
+        let format_char_name = |raw: &str| -> String {
+            raw.split(['-', ' '])
+                .filter(|w| !w.is_empty())
+                .map(|word| {
+                    let mut c = word.chars();
+                    match c.next() {
+                        None => String::new(),
+                        Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+                    }
+                })
+                .collect::<Vec<String>>()
+                .join(" ")
+        };
+
         let set_agent_header = |char_id: &Option<String>,
                                 fallback_name: &Option<String>,
                                 default_icon: &str,
@@ -448,32 +462,22 @@ pub fn create_claw_message_list() -> (gtk::ListView, gio::ListStore) {
             let fallback_names = [fb_str];
 
             if (!id_str.is_empty() || !fb_str.is_empty())
-                && let Some(info) = boxxy_claw_protocol::characters::resolve_character(
+                && let Some(info) = boxxy_claw_protocol::characters::find_character_exact(
                     &cache,
                     id_str,
                     &fallback_names,
                 )
             {
-                let formatted_name = info
-                    .config
-                    .name
-                    .split('-')
-                    .map(|word| {
-                        let mut c = word.chars();
-                        match c.next() {
-                            None => String::new(),
-                            Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
-                        }
-                    })
-                    .collect::<Vec<String>>()
-                    .join(" ");
+                let formatted_name = format_char_name(&info.config.name);
 
                 title.set_markup(&format!(
                     "<span foreground=\"{}\"><b>{}</b></span>",
-                    info.config.color, formatted_name
+                    info.config.color,
+                    glib::markup_escape_text(&formatted_name)
                 ));
                 update_avatar_ring_color(&info.config.color);
                 avatar.set_text(Some(&formatted_name));
+                avatar.set_show_initials(true);
                 if info.has_avatar
                     && let Ok(dir) = boxxy_claw_protocol::character_loader::get_characters_dir()
                 {
@@ -485,11 +489,26 @@ pub fn create_claw_message_list() -> (gtk::ListView, gio::ListStore) {
                 avatar_frame.set_visible(true);
                 icon.set_visible(false);
                 name_set = true;
+            } else if !fb_str.trim().is_empty() {
+                // Character was deleted from the catalog: preserve their original name
+                // and revert to a standard Adwaita initials avatar.
+                let formatted_name = format_char_name(fb_str);
+                title.set_markup(&format!(
+                    "<b>{}</b>",
+                    glib::markup_escape_text(&formatted_name)
+                ));
+                update_avatar_ring_color("#808080");
+                avatar.set_custom_image(None::<&gdk::Texture>);
+                avatar.set_text(Some(&formatted_name));
+                avatar.set_show_initials(true);
+                avatar_frame.set_visible(true);
+                icon.set_visible(false);
+                name_set = true;
             }
 
             if !name_set {
                 let name = agent_or_unknown(fallback_name.clone());
-                title.set_markup(&format!("<b>{}</b>", name));
+                title.set_markup(&format!("<b>{}</b>", glib::markup_escape_text(&name)));
                 avatar_frame.set_visible(false);
                 icon.set_visible(true);
             }

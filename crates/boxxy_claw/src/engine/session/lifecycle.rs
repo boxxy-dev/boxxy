@@ -344,12 +344,17 @@ impl ClawSession {
 
         let lookup_id = claimed_char_id.as_deref().unwrap_or(&self.character_id);
         let fallback_names = [self.name.as_str()];
+        let old_char_id = self.character_id.clone();
+        let old_char_name = self.name.clone();
         let mut character_changed = false;
+        let mut character_id_switched = false;
 
         if let Some(info) =
             boxxy_claw_protocol::characters::resolve_character(&catalog, lookup_id, &fallback_names)
             && (info.config.id != self.character_id || info.config.display_name != self.name)
         {
+            character_id_switched =
+                !self.character_id.is_empty() && info.config.id != self.character_id;
             self.character_id = info.config.id.clone();
             self.name = info.config.display_name.clone();
             character_changed = true;
@@ -358,9 +363,27 @@ impl ClawSession {
         // Always reload character duties & personality so edits to CHARACTER.toml apply on next turn
         self.session_context = load_session_context(&self.character_id);
 
-        let (total_tokens, context_tokens, total_cost_usd) = {
+        let (total_tokens, context_tokens, total_cost_usd, had_messages) = {
             let mut state_lock = self.state.lock().await;
             if character_changed {
+                if character_id_switched {
+                    for msg in &mut state_lock.history {
+                        if let Message::Assistant(turn) = msg {
+                            for item in turn.content.iter_mut() {
+                                if let rig::message::AssistantContent::Text(t) = item
+                                    && crate::engine::turn::history::parse_speaker_tag(&t.text)
+                                        .is_none()
+                                {
+                                    t.text = crate::engine::turn::history::tag_assistant_text(
+                                        &old_char_id,
+                                        &old_char_name,
+                                        &t.text,
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
                 state_lock.character_id = self.character_id.clone();
                 state_lock.character_display_name = self.name.clone();
                 state_lock.agent_name = self.name.clone();
@@ -372,6 +395,7 @@ impl ClawSession {
                 state_lock.total_tokens,
                 state_lock.context_tokens,
                 state_lock.total_cost_usd,
+                !state_lock.history.is_empty(),
             )
         };
         let (web_search_enabled, vibe_enabled) = {
@@ -440,6 +464,23 @@ impl ClawSession {
                     total_cost_usd,
                 })
                 .await;
+
+            if character_id_switched && had_messages {
+                let switch_event = ClawEngineEvent::SystemMessage {
+                    text: format!(
+                        "Character Switch: {} → {}",
+                        crate::engine::session::roundtable::format_character_title(&old_char_name),
+                        crate::engine::session::roundtable::format_character_title(&self.name),
+                    ),
+                };
+                crate::engine::persist_visual_event(
+                    self.db.clone(),
+                    self.session_id.clone(),
+                    self.pane_id.clone(),
+                    &switch_event,
+                );
+                let _ = self.tx_ui.send(switch_event).await;
+            }
         }
 
         if new_claw == old_claw && new_memory == old_memory && new_search == old_search {
@@ -488,6 +529,7 @@ impl ClawSession {
     pub(super) async fn handle_resume_session(
         &mut self,
         session_id: String,
+        override_character_id: Option<String>,
         current_dir: &str,
         is_initialized: &mut bool,
     ) {
@@ -522,18 +564,42 @@ impl ClawSession {
                             (**cached_registry).clone()
                         };
 
+                    let prev_char_id = session.character_id.clone();
+                    let prev_name = if !session.character_display_name.trim().is_empty() {
+                        session.character_display_name.clone()
+                    } else if let Some(n) =
+                        session.agent_name.as_deref().filter(|s| !s.trim().is_empty())
+                    {
+                        n.to_string()
+                    } else {
+                        session.name.clone()
+                    };
+
                     let fallback_names = [
                         session.character_display_name.as_str(),
                         session.agent_name.as_deref().unwrap_or_default(),
                         session.name.as_str(),
                     ];
-                    let char_info = boxxy_claw_protocol::characters::resolve_character(
-                        &registry,
-                        &session.character_id,
-                        &fallback_names,
-                    );
+                    let char_info = if let Some(target_id) =
+                        override_character_id.as_deref().filter(|s| !s.is_empty())
+                    {
+                        boxxy_claw_protocol::characters::resolve_character(
+                            &registry,
+                            target_id,
+                            &[],
+                        )
+                    } else {
+                        boxxy_claw_protocol::characters::resolve_character(
+                            &registry,
+                            &session.character_id,
+                            &fallback_names,
+                        )
+                    };
 
-                    let is_fallback = char_info
+                    let switched_character = char_info
+                        .map(|c| !prev_char_id.is_empty() && c.config.id != prev_char_id)
+                        .unwrap_or(false);
+                    let needs_db_update = char_info
                         .map(|c| {
                             c.config.id != session.character_id
                                 || c.config.display_name != session.character_display_name
@@ -543,7 +609,7 @@ impl ClawSession {
                     if let Some(info) = char_info {
                         self.name = info.config.display_name.clone();
                         self.character_id = info.config.id.clone();
-                        if is_fallback {
+                        if needs_db_update {
                             info!(
                                 "Character '{}' reassigned for session {} -> '{}' ({})",
                                 session.character_id,
@@ -589,7 +655,29 @@ impl ClawSession {
 
                     if let Some(history_json) = session.history_json {
                         match serde_json::from_str::<Vec<Message>>(&history_json) {
-                            Ok(history) => {
+                            Ok(mut history) => {
+                                // Tag any untagged historical Assistant messages with the previous
+                                // character's identity so perspective-flipping keeps the new
+                                // character's persona distinct from the previous character's turns.
+                                if !prev_char_id.is_empty() || !prev_name.is_empty() {
+                                    for msg in &mut history {
+                                        if let Message::Assistant(turn) = msg {
+                                            for item in turn.content.iter_mut() {
+                                                if let rig::message::AssistantContent::Text(t) =
+                                                    item
+                                                    && crate::engine::turn::history::parse_speaker_tag(&t.text)
+                                                        .is_none()
+                                                {
+                                                    t.text = crate::engine::turn::history::tag_assistant_text(
+                                                        &prev_char_id,
+                                                        &prev_name,
+                                                        &t.text,
+                                                    );
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
                                 state_lock.flushed_watermark = history.len();
                                 state_lock.history = history;
                             }
@@ -622,13 +710,12 @@ impl ClawSession {
                     self.clear_ui_history().await;
 
                     if let Ok(event_jsons) = store.get_claw_events(&session_id).await {
-                        let resolved_char_id = self.character_id.clone();
-                        let resolved_name = self.name.clone();
-                        let rows: Vec<PersistentClawRow> = event_jsons
+                        let mut rows: Vec<PersistentClawRow> = event_jsons
                             .into_iter()
                             .filter_map(|json| serde_json::from_str::<PersistentClawRow>(&json).ok())
                             .map(|mut row| {
-                                // Ensure rows from deleted/migrated characters display the reassigned character
+                                // Preserve the original character's identity on historical rows
+                                // (only backfilling if a legacy row had no character_id/agent_name at all).
                                 match &mut row {
                                     PersistentClawRow::Diagnosis {
                                         agent_name,
@@ -649,16 +736,25 @@ impl ClawSession {
                                         agent_name,
                                         character_id,
                                         ..
+                                    }
+                                    | PersistentClawRow::FileDiff {
+                                        agent_name,
+                                        character_id,
+                                        ..
                                     } => {
-                                        let row_char_exists = character_id
-                                            .as_ref()
-                                            .is_some_and(|id| {
-                                                !id.is_empty()
-                                                    && registry.iter().any(|c| c.config.id == *id)
-                                            });
-                                        if !row_char_exists && !resolved_char_id.is_empty() {
-                                            *character_id = Some(resolved_char_id.clone());
-                                            *agent_name = Some(resolved_name.clone());
+                                        if character_id
+                                            .as_deref()
+                                            .is_none_or(|s| s.trim().is_empty())
+                                            && !prev_char_id.is_empty()
+                                        {
+                                            *character_id = Some(prev_char_id.clone());
+                                        }
+                                        if agent_name
+                                            .as_deref()
+                                            .is_none_or(|s| s.trim().is_empty())
+                                            && !prev_name.is_empty()
+                                        {
+                                            *agent_name = Some(prev_name.clone());
                                         }
                                     }
                                     _ => {}
@@ -666,6 +762,34 @@ impl ClawSession {
                                 row
                             })
                             .collect();
+
+                        if switched_character && !rows.is_empty() {
+                            let old_pretty =
+                                crate::engine::session::roundtable::format_character_title(
+                                    &prev_name,
+                                );
+                            let new_pretty =
+                                crate::engine::session::roundtable::format_character_title(
+                                    &self.name,
+                                );
+                            let switch_text = format!("Character Switch: {old_pretty} → {new_pretty}");
+                            let already_appended = matches!(
+                                rows.last(),
+                                Some(PersistentClawRow::SystemMessage { content, .. })
+                                    if content == &switch_text
+                            );
+                            if !already_appended && !old_pretty.eq_ignore_ascii_case(&new_pretty) {
+                                let switch_row = PersistentClawRow::SystemMessage {
+                                    pane_id: self.pane_id.clone(),
+                                    content: switch_text,
+                                };
+                                if let Ok(json) = serde_json::to_string(&switch_row) {
+                                    let _ = store.add_claw_event(&session_id, &json).await;
+                                }
+                                rows.push(switch_row);
+                            }
+                        }
+
                         if !rows.is_empty() {
                             let _ = self
                                 .tx_ui

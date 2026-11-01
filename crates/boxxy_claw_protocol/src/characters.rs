@@ -58,10 +58,41 @@ pub fn has_available_character(exclude_holder_id: Option<&str>) -> bool {
     find_first_available_in(&catalog, &claims, exclude_holder_id).is_some()
 }
 
-/// Resolves a character from `catalog` by matching `character_id` first, then
-/// falling back to case-insensitive matches on `name` or `display_name` in
-/// `fallback_names`, and finally falling back to the first character in `catalog`.
-pub fn resolve_character<'a>(
+/// Returns all characters in `catalog` that are not claimed in `claims`
+/// (optionally ignoring a claim held by `exclude_holder_id`).
+pub fn find_available_characters_in<'a>(
+    catalog: &'a [CharacterInfo],
+    claims: &[CharacterClaim],
+    exclude_holder_id: Option<&str>,
+) -> Vec<&'a CharacterInfo> {
+    catalog
+        .iter()
+        .filter(|info| {
+            !claims.iter().any(|claim| {
+                claim.character_id == info.config.id
+                    && exclude_holder_id.is_none_or(|excluded| claim.holder_id != excluded)
+            })
+        })
+        .collect()
+}
+
+/// Returns all currently unclaimed characters from the global `CHARACTER_CACHE` and `CLAIMS_CACHE`,
+/// optionally ignoring a claim held by `exclude_holder_id`.
+pub fn get_available_characters(exclude_holder_id: Option<&str>) -> Vec<CharacterInfo> {
+    let catalog = CHARACTER_CACHE.load();
+    let claims = CLAIMS_CACHE.load();
+    find_available_characters_in(&catalog, &claims, exclude_holder_id)
+        .into_iter()
+        .cloned()
+        .collect()
+}
+
+/// Looks up a character in `catalog` by exact `character_id` first, then by case-insensitive
+/// matches on `name` or `display_name` in `fallback_names`.
+/// Unlike `resolve_character`, returns `None` when the character is not in `catalog`
+/// (e.g., it was deleted), allowing historical rows to preserve the deleted character's
+/// original name and render an initials avatar.
+pub fn find_character_exact<'a>(
     catalog: &'a [CharacterInfo],
     character_id: &str,
     fallback_names: &[&str],
@@ -84,7 +115,18 @@ pub fn resolve_character<'a>(
         }
     }
 
-    catalog.first()
+    None
+}
+
+/// Resolves a character from `catalog` by matching `character_id` first, then
+/// falling back to case-insensitive matches on `name` or `display_name` in
+/// `fallback_names`, and finally falling back to the first character in `catalog`.
+pub fn resolve_character<'a>(
+    catalog: &'a [CharacterInfo],
+    character_id: &str,
+    fallback_names: &[&str],
+) -> Option<&'a CharacterInfo> {
+    find_character_exact(catalog, character_id, fallback_names).or_else(|| catalog.first())
 }
 
 /// What kind of entity holds a character claim. Today the only variant is

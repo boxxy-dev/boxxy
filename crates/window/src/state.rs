@@ -163,7 +163,7 @@ pub enum AppInput {
     GrabFocus,
     CancelTask(uuid::Uuid, Option<String>), // (task_id, pane_id)
     ClearClawHistory(Option<String>),       // (pane_id)
-    ResumeClawSession(String),              // (session_id)
+    ResumeClawSession(String, Option<String>), // (session_id, override_character_id)
     ShowDetachedSessions,
     RefreshDetachedSessions,
     UpdateDetachedSessionsBadge(Vec<boxxy_terminal::DetachedSessionInfo>),

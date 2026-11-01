@@ -237,9 +237,17 @@ impl ClawSession {
                 let _ = self.tx_ui.send(ClawEngineEvent::Evicted).await;
                 ctx.workspace.unregister_pane(self.pane_id.clone()).await;
             }
-            ClawMessage::ResumeSession { session_id } => {
-                self.handle_resume_session(session_id, &ctx.current_dir, &mut ctx.is_initialized)
-                    .await;
+            ClawMessage::ResumeSession {
+                session_id,
+                character_id,
+            } => {
+                self.handle_resume_session(
+                    session_id,
+                    character_id,
+                    &ctx.current_dir,
+                    &mut ctx.is_initialized,
+                )
+                .await;
             }
             ClawMessage::Initialize => {
                 self.handle_initialize(&ctx.current_dir).await;

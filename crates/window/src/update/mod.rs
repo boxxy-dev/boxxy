@@ -1063,7 +1063,7 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
                 }
             }
         }
-        AppInput::ResumeClawSession(session_id) => {
+        AppInput::ResumeClawSession(session_id, override_character_id) => {
             if let Some(page) = inner.tab_view.selected_page() {
                 let child = page.child();
                 if let Some(pos) = inner
@@ -1071,7 +1071,9 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
                     .iter()
                     .position(|c| c.controller.widget() == &child)
                 {
-                    inner.tabs[pos].controller.resume_session(&session_id);
+                    inner.tabs[pos]
+                        .controller
+                        .resume_session(&session_id, override_character_id);
                 }
             }
         }

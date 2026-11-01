@@ -393,6 +393,8 @@ pub enum ClawMessage {
     },
     ResumeSession {
         session_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        character_id: Option<String>,
     },
     TogglePin(bool),
     ToggleWebSearch(bool),

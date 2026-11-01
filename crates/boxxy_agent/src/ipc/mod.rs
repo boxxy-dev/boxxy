@@ -880,28 +880,40 @@ impl AgentInterface {
             if let Some((pane_id, tx)) = pane_info {
                 if let ClawMessage::ResumeSession {
                     session_id: ref resume_sid,
+                    character_id: ref override_cid,
                 } = message
                 {
                     let store = boxxy_db::store::Store::new(self.core.db.pool());
-                    if let Ok(Some(db_session)) = store.get_session(resume_sid).await
-                        && let Some((_, display_name)) = self
+                    if let Ok(Some(db_session)) = store.get_session(resume_sid).await {
+                        let (target_cid, target_disp, target_agent) =
+                            if let Some(cid) = override_cid.as_deref().filter(|s| !s.is_empty()) {
+                                (cid, "", None)
+                            } else {
+                                (
+                                    db_session.character_id.as_str(),
+                                    db_session.character_display_name.as_str(),
+                                    db_session.agent_name.as_deref(),
+                                )
+                            };
+                        if let Some((_, display_name)) = self
                             .core
                             .registry
                             .resolve_and_update_holder_character(
                                 &pane_id,
-                                &db_session.character_id,
-                                &db_session.character_display_name,
-                                db_session.agent_name.as_deref(),
+                                target_cid,
+                                target_disp,
+                                target_agent,
                                 Some(resume_sid),
                             )
                             .await
-                    {
-                        let mut manager = self.session_manager.lock().await;
-                        if let Some(hosted) = manager.sessions.get_mut(&session_id) {
-                            hosted.agent_name = display_name;
-                            *hosted.active_session_id.write() = resume_sid.clone();
-                            let aliased = hosted.clone();
-                            manager.sessions.insert(resume_sid.clone(), aliased);
+                        {
+                            let mut manager = self.session_manager.lock().await;
+                            if let Some(hosted) = manager.sessions.get_mut(&session_id) {
+                                hosted.agent_name = display_name;
+                                *hosted.active_session_id.write() = resume_sid.clone();
+                                let aliased = hosted.clone();
+                                manager.sessions.insert(resume_sid.clone(), aliased);
+                            }
                         }
                     }
                 }

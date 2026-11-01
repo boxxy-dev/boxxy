@@ -634,6 +634,7 @@ impl TerminalPaneComponent {
                                                 session_id,
                                                 ClawMessage::ResumeSession {
                                                     session_id: resume_id,
+                                                    character_id: None,
                                                 },
                                             )
                                             .await;
@@ -685,6 +686,7 @@ impl TerminalPaneComponent {
                                 let _ = tx
                                     .send(ClawMessage::ResumeSession {
                                         session_id: resume_id.clone(),
+                                        character_id: None,
                                     })
                                     .await;
                                 *session_id_ref.lock().await = Some(resume_id);
@@ -1400,7 +1402,7 @@ impl TerminalPaneComponent {
         true
     }
 
-    pub fn resume_session(&self, resume_id: &str) {
+    pub fn resume_session(&self, resume_id: &str, override_character_id: Option<String>) {
         let resume_id = resume_id.trim().to_string();
         if resume_id.is_empty() {
             return;
@@ -1482,7 +1484,11 @@ impl TerminalPaneComponent {
             let has_session = session_id_ref.lock().await.is_some();
             if !has_session {
                 let agent = crate::get_agent().await;
-                let char_id =
+                let char_id = if let Some(ref cid) =
+                    override_character_id.as_ref().filter(|s| !s.is_empty())
+                {
+                    (*cid).clone()
+                } else {
                     boxxy_claw_widget::msgbar::autocomplete::resolve_session_character_id(
                         &resume_id,
                     )
@@ -1493,7 +1499,8 @@ impl TerminalPaneComponent {
                             .first()
                             .map(|c| c.config.id.clone())
                             .unwrap_or_default()
-                    });
+                    })
+                };
 
                 if let Ok((session_id, _sub_guard)) = agent
                     .create_claw_session_with_sender(pane_id, char_id, event_tx.clone())
@@ -1510,6 +1517,7 @@ impl TerminalPaneComponent {
                             session_id,
                             ClawMessage::ResumeSession {
                                 session_id: resume_id,
+                                character_id: override_character_id,
                             },
                         )
                         .await;
@@ -1521,6 +1529,7 @@ impl TerminalPaneComponent {
                 let _ = tx
                     .send(ClawMessage::ResumeSession {
                         session_id: resume_id.clone(),
+                        character_id: override_character_id,
                     })
                     .await;
                 *session_id_ref.lock().await = Some(resume_id);
