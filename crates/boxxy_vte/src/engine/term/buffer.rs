@@ -472,8 +472,21 @@ impl<T> Term<T> {
                 .flags
                 .intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER)
             {
-                // Push cells primary character.
-                text.push(cell.c);
+                // Push cells primary character (normalizing msedit's U+FF65 / U+FFEB
+                // visual whitespace markers on highlighted cells back to spaces).
+                let ch = match cell.c {
+                    '\u{FF65}' | '\u{FFEB}'
+                        if cell.flags.contains(Flags::INVERSE)
+                            || cell.bg
+                                != crate::engine::ansi::Color::Named(
+                                    crate::engine::ansi::NamedColor::Background,
+                                ) =>
+                    {
+                        ' '
+                    }
+                    c => c,
+                };
+                text.push(ch);
 
                 // Push zero-width characters.
                 for c in cell.zerowidth().into_iter().flatten() {

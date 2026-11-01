@@ -34,4 +34,4 @@ The container component representing a single Tab.
 - **Persistent-Shells Dispatch (Experimental)**: `PaneInner::drop` reads the live `pty_persistence` setting. Off → `signal_process_group(pid, SIGTERM)` kills the shell + its children. On → `set_persistence(pid, true)` + `detach(pid)` hands the shell to the daemon. Read at close-time so toggling takes effect on the very next close.
 - **Eviction Awareness**: The dispatch loop reacts to `ClawEngineEvent::Evicted` by flipping the indicator to grayscale and pushing a system message into the sidebar log.
 - **Modern Hyperlinks**: Native OSC 8 support with robust media previews.
-- **OSD Indicators**: Interactive overlays for terminal size and agent status.
+- **OSD Indicators**: Pass-through (`can_target: false`) overlays for terminal resize dimensions (`size_revealer`), progress bars (`progress_bar`), and the floating character badge so hidden `Crossfade` revealers never block mouse clicks on centered TUI dialogs.

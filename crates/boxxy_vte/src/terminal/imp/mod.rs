@@ -53,6 +53,9 @@ pub type ContextMenuCallback = Box<dyn Fn(f64, f64) + 'static>;
 pub struct TerminalWidget {
     pub backend: RefCell<Option<TerminalBackend>>,
     pub mouse_pressed: Cell<bool>,
+    pub tui_drag_start: Cell<Option<(usize, usize)>>,
+    pub tui_drag_end: Cell<Option<(usize, usize)>>,
+    pub last_osc52_text: RefCell<Option<String>>,
     pub fg_color: RefCell<Option<gtk4::gdk::RGBA>>,
     pub bg_color: RefCell<Option<gtk4::gdk::RGBA>>,
     pub palette: RefCell<Vec<gtk4::gdk::RGBA>>,
@@ -126,6 +129,9 @@ impl Default for TerminalWidget {
         Self {
             backend: RefCell::new(None),
             mouse_pressed: Cell::new(false),
+            tui_drag_start: Cell::new(None),
+            tui_drag_end: Cell::new(None),
+            last_osc52_text: RefCell::new(None),
             fg_color: RefCell::new(None),
             bg_color: RefCell::new(None),
             palette: RefCell::new(Vec::new()),
@@ -490,6 +496,11 @@ impl TerminalWidget {
                             }
                         }
                         Event::ClipboardStore(ty, text) => {
+                            if text.is_empty() {
+                                widget.imp().last_osc52_text.replace(None);
+                            } else {
+                                widget.imp().last_osc52_text.replace(Some(text.clone()));
+                            }
                             let cb = if ty == crate::engine::term::ClipboardType::Selection {
                                 widget.display().primary_clipboard()
                             } else {
@@ -630,25 +641,52 @@ impl TerminalWidget {
         self.obj().queue_draw();
     }
 
-    pub(crate) fn copy_clipboard(&self) {
+    pub(crate) fn selected_text(&self) -> Option<String> {
         let backend_ref = self.backend.borrow();
-        let Some(backend) = backend_ref.as_ref() else {
-            return;
-        };
+        let backend = backend_ref.as_ref()?;
         let state = backend.render_state.load();
         if let Some(text) = state.selection_text() {
+            return Some(text);
+        }
+        if let Some(text) = self
+            .last_osc52_text
+            .borrow()
+            .clone()
+            .filter(|s| !s.is_empty())
+        {
+            return Some(text);
+        }
+        if state
+            .mode
+            .intersects(crate::engine::term::TermMode::MOUSE_MODE)
+            && let (Some(start), Some(end)) = (self.tui_drag_start.get(), self.tui_drag_end.get())
+        {
+            return state.extract_tui_selection(start, end);
+        }
+        None
+    }
+
+    pub(crate) fn copy_clipboard(&self) {
+        if let Some(text) = self.selected_text() {
+            self.obj().display().primary_clipboard().set_text(&text);
             self.obj().clipboard().set_text(&text);
             return;
         }
-        backend.copy_selection(crate::engine::term::ClipboardType::Clipboard);
+        if let Some(backend) = self.backend.borrow().as_ref() {
+            backend.copy_selection(crate::engine::term::ClipboardType::Clipboard);
+        }
     }
 
     pub(crate) fn has_selection(&self) -> bool {
-        self.backend
+        if self
+            .backend
             .borrow()
             .as_ref()
-            .map(|b| b.has_selection())
-            .unwrap_or(false)
+            .is_some_and(|b| b.has_selection())
+        {
+            return true;
+        }
+        self.selected_text().is_some()
     }
 
     pub(crate) fn export_ansi_snapshot(&self) -> Vec<u8> {

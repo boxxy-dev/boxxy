@@ -1134,4 +1134,54 @@ mod tests {
         let uid2 = h.term.kitty_graphics.images.get(&1018484).unwrap().unique_id;
         assert_ne!(uid1, uid2);
     }
+
+    #[test]
+    fn passive_tui_selection_survives_line_redraw_and_extracts_highlighted_pane_text() {
+        let mut h = HeadlessTerminal::new(60, 6);
+
+        // Simulate a split-view TUI before selection
+        h.feed(
+            b"\x1b[1;1H 1 - unselected top   | 1 + right top\r\n\
+               2 - first selected   | 2 + right middle\r\n\
+               3 - second selected  | 3 + right bottom\r\n\
+               4 - unselected bot   | 4 + right footer",
+        );
+
+        // TUI app responds to the mouse drag by clearing and redrawing rows 1..2 with
+        // a 24-bit selection highlight background (`\x1b[48;2;75;50;99m`) on the left pane only,
+        // and rendering leading spaces inside the selection as U+FF65 (`･`, as `msedit` does).
+        h.feed(
+            "\x1b[2;1H\x1b[2K 2 - \x1b[48;2;75;50;99m\u{FF65}\u{FF65}first\u{FF65}selected\x1b[0m   | 2 + right middle\
+              \x1b[3;1H\x1b[2K 3 - \x1b[48;2;75;50;99m\u{FF65}\u{FF65}second\u{FF65}selected\x1b[0m  | 3 + right bottom"
+                .as_bytes(),
+        );
+
+        let state = h.render_state();
+        assert_eq!(
+            state.extract_tui_selection((5, 1), (25, 2)),
+            Some("  first selected\n  second selected".to_string())
+        );
+
+        // Simulate `msedit` layout where unselected cells have explicit `\x1b[48;2;0;0;0m` black bg,
+        // row 0 and the bottom row have blue menu/status bars (`\x1b[48;2;12;36;98m`), and rows 2..=3
+        // have a `\x1b[48;2;119;154;226m` selection highlight with U+FF65 (`･`) space markers.
+        let mut h_edit = HeadlessTerminal::new(50, 6);
+        h_edit.feed(
+            "\x1b[1;1H\x1b[48;2;12;36;98m File Edit View Help                              \r\n\
+             \x1b[48;2;0;0;0m  1 │ [workspace]                                 \r\n\
+             \x1b[48;2;0;0;0m  2 │ \x1b[48;2;119;154;226m\u{FF65}\u{FF65}\u{FF65}\u{FF65}\"crates/alpha\",\x1b[48;2;0;0;0m                         \r\n\
+             \x1b[48;2;0;0;0m  3 │ \x1b[48;2;119;154;226m\u{FF65}\u{FF65}\u{FF65}\u{FF65}\"crates/beta\",\x1b[48;2;0;0;0m                          \r\n\
+             \x1b[48;2;0;0;0m  4 │     \"crates/gamma\",                         \r\n\
+             \x1b[48;2;12;36;98m [Plain Text]  [LF]  [UTF-8]                      "
+                .as_bytes(),
+        );
+        let edit_state = h_edit.render_state();
+        // Even if the user started dragging at column 6 on row 2 and ended at column 30 on row 3
+        // (in the black `0;0;0` area to the right of `"crates/beta",`), `extract_tui_selection`
+        // must reject the black `0;0;0` background and extract only the blue-selected lines!
+        assert_eq!(
+            edit_state.extract_tui_selection((6, 2), (30, 3)),
+            Some("    \"crates/alpha\",\n    \"crates/beta\",".to_string())
+        );
+    }
 }

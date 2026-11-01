@@ -128,6 +128,7 @@ impl ClawIndicator {
             .margin_end(12)
             .css_classes(["indicator-container"])
             .spacing(0)
+            .can_target(false)
             .build();
 
         // 2. Detailed Indicator Widget (For drawer)
@@ -198,12 +199,14 @@ impl ClawIndicator {
         badge_revealer.set_transition_type(gtk::RevealerTransitionType::Crossfade);
         badge_revealer.set_transition_duration(280);
         badge_revealer.set_reveal_child(false);
+        badge_revealer.set_can_target(false);
 
         let badge_box = gtk::Box::new(gtk::Orientation::Horizontal, 4);
         badge_box.add_css_class("badge-label");
         badge_box.add_css_class(&badge_class);
         badge_box.set_valign(gtk::Align::Center);
         badge_box.set_height_request(20);
+        badge_box.set_can_target(false);
 
         let badge_label = gtk::Label::builder().valign(gtk::Align::Center).build();
         badge_box.append(&badge_label);

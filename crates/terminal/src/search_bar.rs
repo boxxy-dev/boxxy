@@ -40,6 +40,7 @@ impl SearchBarComponent {
         revealer.set_halign(gtk::Align::Center);
         revealer.set_valign(gtk::Align::End);
         revealer.set_margin_bottom(12);
+        revealer.set_can_target(false);
 
         let container = gtk::Box::new(gtk::Orientation::Horizontal, 6);
         container.add_css_class("toolbar");
@@ -151,12 +152,14 @@ impl SearchBarComponent {
         {
             self.entry.set_text(first_line);
         }
+        self.revealer.set_can_target(true);
         self.revealer.set_reveal_child(true);
         self.entry.grab_focus();
         self.entry.select_region(0, -1);
     }
 
     pub fn hide(&self) {
+        self.revealer.set_can_target(false);
         self.revealer.set_reveal_child(false);
         if let Some(term) = self.terminal.borrow().as_ref() {
             term.search_set_regex(None, 0);

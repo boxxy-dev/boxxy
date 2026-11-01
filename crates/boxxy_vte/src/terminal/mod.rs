@@ -80,11 +80,7 @@ impl TerminalWidget {
     }
 
     pub fn selected_text(&self) -> Option<String> {
-        self.imp()
-            .backend
-            .borrow()
-            .as_ref()
-            .and_then(|b| b.render_state.load().selection_text())
+        self.imp().selected_text()
     }
 
     pub fn clear_scrollback(&self) {
@@ -95,7 +91,11 @@ impl TerminalWidget {
     }
 
     pub fn reset_terminal(&self) {
-        if let Some(backend) = self.imp().backend.borrow().as_ref() {
+        let imp = self.imp();
+        imp.last_osc52_text.replace(None);
+        imp.tui_drag_start.set(None);
+        imp.tui_drag_end.set(None);
+        if let Some(backend) = imp.backend.borrow().as_ref() {
             backend.reset_state();
             self.queue_draw();
         }

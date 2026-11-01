@@ -387,11 +387,15 @@ impl super::TerminalWidget {
                             | gtk4::gdk::ModifierType::SUPER_MASK,
                     )
                     && let Some(backend) = imp.backend.borrow().as_ref()
-                    && backend.has_selection()
                 {
-                    backend.clear_selection();
-                    obj.queue_draw();
-                    return glib::Propagation::Stop;
+                    imp.last_osc52_text.replace(None);
+                    imp.tui_drag_start.set(None);
+                    imp.tui_drag_end.set(None);
+                    if backend.has_selection() {
+                        backend.clear_selection();
+                        obj.queue_draw();
+                        return glib::Propagation::Stop;
+                    }
                 }
                 // Classic X11/Linux clipboard bindings and dedicated hardware Copy/Paste keys
                 if key == gtk4::gdk::Key::Copy
@@ -803,6 +807,12 @@ impl super::TerminalWidget {
                             backend.set_selection(None);
                             obj.queue_draw();
                         }
+                        if gesture.current_button() == 1 {
+                            imp.last_osc52_text.replace(None);
+                            imp.tui_drag_start.set(Some((col, row)));
+                            imp.tui_drag_end
+                                .set(if n_press >= 2 { Some((col, row)) } else { None });
+                        }
                         imp.mouse_pressed.set(true);
                         imp.mouse_pos.set(Some((x, y)));
                         imp.last_mouse_cell.set(Some((col, row)));
@@ -836,6 +846,9 @@ impl super::TerminalWidget {
                     }
 
                     if gesture.current_button() == 1 {
+                        imp.last_osc52_text.replace(None);
+                        imp.tui_drag_start.set(None);
+                        imp.tui_drag_end.set(None);
                         imp.mouse_pos.set(Some((x, y)));
                         imp.drag_start_pos.set(Some((x, y)));
                         imp.last_selection_point.set(Some((sel_row, sel_col, side)));
@@ -898,6 +911,11 @@ impl super::TerminalWidget {
                         .intersects(crate::engine::term::TermMode::MOUSE_MODE)
                         && !modifiers.contains(gtk4::gdk::ModifierType::SHIFT_MASK)
                     {
+                        if gesture.current_button() == 1
+                            && imp.tui_drag_start.get() != Some((col, row))
+                        {
+                            imp.tui_drag_end.set(Some((col, row)));
+                        }
                         imp.stop_autoscroll();
                         imp.drag_start_pos.set(None);
                         imp.last_selection_point.set(None);
@@ -976,6 +994,12 @@ impl super::TerminalWidget {
                         imp.mouse_pos.set(Some((x, y)));
                         let (col, row) =
                             imp.pixel_to_cell(&obj, x, y, state.columns, state.screen_lines);
+                        if imp.mouse_pressed.get()
+                            && modifiers.contains(gtk4::gdk::ModifierType::BUTTON1_MASK)
+                            && imp.tui_drag_start.get() != Some((col, row))
+                        {
+                            imp.tui_drag_end.set(Some((col, row)));
+                        }
                         if imp.last_mouse_cell.replace(Some((col, row))) == Some((col, row)) {
                             return;
                         }

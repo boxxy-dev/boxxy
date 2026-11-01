@@ -223,7 +223,20 @@ impl RenderState {
                     .flags
                     .intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER)
                 {
-                    line_str.push(if cell.c == '\0' { ' ' } else { cell.c });
+                    let ch = match cell.c {
+                        '\0' => ' ',
+                        '\u{FF65}' | '\u{FFEB}'
+                            if cell.flags.contains(Flags::INVERSE)
+                                || cell.bg
+                                    != crate::engine::ansi::Color::Named(
+                                        crate::engine::ansi::NamedColor::Background,
+                                    ) =>
+                        {
+                            ' '
+                        }
+                        c => c,
+                    };
+                    line_str.push(ch);
                     for c in cell.zerowidth().into_iter().flatten() {
                         line_str.push(*c);
                     }
@@ -252,6 +265,230 @@ impl RenderState {
             None
         } else {
             Some(res)
+        }
+    }
+
+    /// Extract text selected via mouse drag inside a `MOUSE_MODE` TUI application
+    /// (without holding `Shift`), given viewport `(col, row)` endpoints.
+    ///
+    /// First checks if the TUI app highlighted the selected cells across `start_row..=end_row`
+    /// with a distinct selection background color (`cell.bg`) or `Flags::INVERSE` (so split panes
+    /// and line-number gutters are excluded). Falls back to extracting the plain cell span
+    /// between `start` and `end`.
+    pub fn extract_tui_selection(
+        &self,
+        start: (usize, usize),
+        end: (usize, usize),
+    ) -> Option<String> {
+        use crate::engine::ansi::{Color, NamedColor};
+
+        if self.columns == 0
+            || self.screen_lines == 0
+            || self.cells.len() < self.columns * self.screen_lines
+        {
+            return None;
+        }
+
+        let ((mut s_col, mut s_row), (mut e_col, mut e_row)) =
+            if (start.1, start.0) <= (end.1, end.0) {
+                (start, end)
+            } else {
+                (end, start)
+            };
+
+        s_row = s_row.min(self.screen_lines - 1);
+        e_row = e_row.min(self.screen_lines - 1);
+        s_col = s_col.min(self.columns - 1);
+        e_col = e_col.min(self.columns - 1);
+
+        let row_slice =
+            |r: usize| -> &[Cell] { &self.cells[r * self.columns..(r + 1) * self.columns] };
+        let cell_highlight = |cell: &Cell| -> Option<(Color, bool)> {
+            let inv = cell.flags.contains(Flags::INVERSE);
+            if inv || cell.bg != Color::Named(NamedColor::Background) {
+                Some((cell.bg, inv))
+            } else {
+                None
+            }
+        };
+        let normalize_tui_char = |cell: &Cell| -> char {
+            match cell.c {
+                '\0' => ' ',
+                // Microsoft Edit (`msedit`) renders selected spaces as U+FF65 (`･`)
+                // and selected tabs as U+FFEB (`￫`) on highlighted cells.
+                '\u{FF65}' | '\u{FFEB}' if cell_highlight(cell).is_some() => ' ',
+                c => c,
+            }
+        };
+
+        // Exclude the rightmost column when scanning for selection highlight candidates
+        // so TUI vertical scrollbars (e.g. `msedit` at col `columns - 1`) are not mistaken
+        // for text selection highlights.
+        let scan_cols = if self.columns > 1 {
+            self.columns - 1
+        } else {
+            self.columns
+        };
+
+        let mut candidates: Vec<(Color, bool)> = Vec::new();
+        let mut push_candidate = |cell: &Cell| {
+            if let Some(h) = cell_highlight(cell)
+                && !candidates.contains(&h)
+            {
+                candidates.push(h);
+            }
+        };
+
+        // 1. Prioritize cells at the exact drag start/end coordinates and inside the dragged span.
+        let start_r = row_slice(s_row);
+        let end_r = row_slice(e_row);
+        push_candidate(&start_r[s_col.min(scan_cols - 1)]);
+        push_candidate(&end_r[e_col.min(scan_cols - 1)]);
+
+        if s_row == e_row {
+            for col in s_col..=e_col.min(scan_cols - 1) {
+                if start_r[col].c != ' ' && start_r[col].c != '\0' {
+                    push_candidate(&start_r[col]);
+                }
+            }
+            for col in s_col..=e_col.min(scan_cols - 1) {
+                push_candidate(&start_r[col]);
+            }
+        } else {
+            for col in s_col..scan_cols {
+                if start_r[col].c != ' ' && start_r[col].c != '\0' {
+                    push_candidate(&start_r[col]);
+                }
+            }
+            for col in (0..=e_col.min(scan_cols - 1)).rev() {
+                if end_r[col].c != ' ' && end_r[col].c != '\0' {
+                    push_candidate(&end_r[col]);
+                }
+            }
+            for r in s_row..=e_row {
+                let r_cells = row_slice(r);
+                let c_min = if r == s_row { s_col } else { 0 };
+                let c_max = if r == e_row {
+                    e_col.min(scan_cols - 1)
+                } else {
+                    scan_cols - 1
+                };
+                for col in c_min..=c_max {
+                    push_candidate(&r_cells[col]);
+                }
+            }
+        }
+
+        let highlight_style = candidates.into_iter().find(|&h| {
+            // Must appear on at least one row near the start and one row near the end
+            let near_start = (s_row..=(s_row + 1).min(e_row)).any(|r| {
+                row_slice(r)[..scan_cols]
+                    .iter()
+                    .any(|c| cell_highlight(c) == Some(h))
+            });
+            let near_end = (e_row.saturating_sub(1).max(s_row)..=e_row).any(|r| {
+                row_slice(r)[..scan_cols]
+                    .iter()
+                    .any(|c| cell_highlight(c) == Some(h))
+            });
+            if !near_start || !near_end {
+                return false;
+            }
+
+            // Must not be a uniform background across the entire row on both bounds
+            let has_non_h = (0..scan_cols).any(|c| cell_highlight(&start_r[c]) != Some(h))
+                || (0..scan_cols).any(|c| cell_highlight(&end_r[c]) != Some(h));
+            if !has_non_h {
+                return false;
+            }
+
+            // Reject the unselected editor/gutter background: if `h` continues at the same
+            // column onto the unselected row immediately above `s_row` OR below `e_row`,
+            // it is a static pane/editor/gutter background (such as `msedit`'s `0;0;0` black
+            // background), not the active selection highlight.
+            let continues_above = s_row > 0 && {
+                let above = row_slice(s_row - 1);
+                (0..scan_cols).any(|c| {
+                    cell_highlight(&start_r[c]) == Some(h) && cell_highlight(&above[c]) == Some(h)
+                })
+            };
+            let continues_below = e_row + 1 < self.screen_lines && {
+                let below = row_slice(e_row + 1);
+                (0..scan_cols).any(|c| {
+                    cell_highlight(&end_r[c]) == Some(h) && cell_highlight(&below[c]) == Some(h)
+                })
+            };
+            if continues_above && continues_below {
+                return false;
+            }
+            if (continues_above || continues_below) && s_col > 0 && cell_highlight(&start_r[0]) == Some(h) {
+                return false;
+            }
+
+            true
+        });
+
+        if let Some(h_style) = highlight_style {
+            let mut lines_out: Vec<String> = Vec::with_capacity(e_row - s_row + 1);
+            for r in s_row..=e_row {
+                let r_cells = row_slice(r);
+                let mut line_str = String::new();
+                let mut any_highlighted = false;
+                for cell in &r_cells[..scan_cols] {
+                    if cell_highlight(cell) != Some(h_style) {
+                        continue;
+                    }
+                    any_highlighted = true;
+                    if !cell
+                        .flags
+                        .intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER)
+                    {
+                        line_str.push(normalize_tui_char(cell));
+                        for c in cell.zerowidth().into_iter().flatten() {
+                            line_str.push(*c);
+                        }
+                    }
+                }
+                if any_highlighted {
+                    lines_out.push(line_str.trim_end_matches(' ').to_string());
+                } else if !lines_out.is_empty() && lines_out.last().is_some_and(|l| !l.is_empty()) {
+                    lines_out.push(String::new());
+                }
+            }
+            while lines_out.last().is_some_and(|l| l.is_empty()) {
+                lines_out.pop();
+            }
+            let joined = lines_out.join("\n");
+            if !joined.trim().is_empty() {
+                return Some(joined);
+            }
+        }
+
+        // Fallback: extract plain text between (s_col, s_row) and (e_col, e_row)
+        let mut fallback_lines: Vec<String> = Vec::with_capacity(e_row - s_row + 1);
+        for r in s_row..=e_row {
+            let r_cells = row_slice(r);
+            let c_start = if r == s_row { s_col } else { 0 };
+            let c_end = if r == e_row { e_col } else { scan_cols.saturating_sub(1) };
+            let mut line_str = String::new();
+            for cell in &r_cells[c_start..=c_end.min(self.columns - 1)] {
+                if !cell
+                    .flags
+                    .intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER)
+                {
+                    line_str.push(normalize_tui_char(cell));
+                    for c in cell.zerowidth().into_iter().flatten() {
+                        line_str.push(*c);
+                    }
+                }
+            }
+            fallback_lines.push(line_str.trim_end_matches(' ').to_string());
+        }
+        let joined = fallback_lines.join("\n");
+        if joined.trim().is_empty() {
+            None
+        } else {
+            Some(joined)
         }
     }
 

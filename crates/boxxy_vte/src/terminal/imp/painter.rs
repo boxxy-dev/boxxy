@@ -626,6 +626,10 @@ impl super::TerminalWidget {
                             .flags
                             .intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER);
                         let is_filling = is_cell_filling_char(cell.c);
+                        let is_non_ascii = !cell.c.is_ascii()
+                            && cell.c != '\0'
+                            && !is_kitty_placeholder
+                            && !is_filling;
 
                         let style_flags = if is_kitty_placeholder {
                             (cell.flags & STYLE_FLAGS) - Flags::ALL_UNDERLINES
@@ -644,6 +648,7 @@ impl super::TerminalWidget {
                             || is_wide
                             || is_spacer
                             || is_filling
+                            || is_non_ascii
                         {
                             if !line_str.is_empty() {
                                 if !current_flags.contains(Flags::HIDDEN) {
@@ -699,25 +704,29 @@ impl super::TerminalWidget {
                             }
                             run_cells += if is_wide { 2 } else { 1 };
 
-                            if is_wide {
+                            if is_wide || is_non_ascii {
                                 apply_pango_style(&layout, current_flags);
                                 layout.set_text(&line_str);
                                 let (_, logical) = layout.extents();
                                 let actual_width =
                                     logical.width() as f32 / gtk4::pango::SCALE as f32;
-                                let target_width = char_width * 2.0;
+                                let target_width = if is_wide {
+                                    char_width * 2.0
+                                } else {
+                                    char_width
+                                };
                                 if !current_flags.contains(Flags::HIDDEN) {
                                     row_snap.save();
                                     row_snap.translate(&gtk4::graphene::Point::new(
                                         start_col, offset_y,
                                     ));
-                                    if (actual_width - target_width).abs() > 0.1
+                                    let ah = logical.height() as f32 / gtk4::pango::SCALE as f32;
+                                    if is_wide
+                                        && (actual_width - target_width).abs() > 0.1
                                         && actual_width > 0.0
                                     {
                                         let s = target_width / actual_width;
                                         row_snap.scale(s, s);
-                                        let ah =
-                                            logical.height() as f32 / gtk4::pango::SCALE as f32;
                                         let scaled_h = ah * s;
                                         if scaled_h < char_height {
                                             row_snap.translate(&gtk4::graphene::Point::new(
@@ -725,6 +734,11 @@ impl super::TerminalWidget {
                                                 (char_height - scaled_h) / 2.0,
                                             ));
                                         }
+                                    } else if (ah - char_height).abs() > 0.5 && ah > 0.0 {
+                                        row_snap.translate(&gtk4::graphene::Point::new(
+                                            0.0,
+                                            (char_height - ah) / 2.0,
+                                        ));
                                     }
                                     row_snap.append_layout(&layout, &current_fg);
                                     row_snap.restore();

@@ -80,12 +80,14 @@ pub(super) fn build_ui() -> (
 
     let size_label = gtk::Label::new(None);
     size_label.add_css_class("terminal-size-osd");
+    size_label.set_can_target(false);
 
     let size_revealer = gtk::Revealer::new();
     size_revealer.set_transition_type(gtk::RevealerTransitionType::Crossfade);
     size_revealer.set_child(Some(&size_label));
     size_revealer.set_halign(gtk::Align::Center);
     size_revealer.set_valign(gtk::Align::Center);
+    size_revealer.set_can_target(false);
     widget.add_overlay(&size_revealer);
 
     let search_bar = SearchBarComponent::new();
@@ -101,6 +103,7 @@ pub(super) fn build_ui() -> (
     progress_bar.set_margin_start(0);
     progress_bar.set_margin_end(0);
     progress_bar.set_margin_top(0);
+    progress_bar.set_can_target(false);
     progress_bar.set_visible(false);
 
     // We add it to the overlay so it sits on top of the terminal
