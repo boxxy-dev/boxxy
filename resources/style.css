@@ -1237,5 +1237,79 @@ row.past-session-row button.past-session-options-btn:active {
     opacity: 1.0;
 }
 
+/* --- Split Pane Drag Handle & Drop Overlay --- */
+.terminal-pane .split-drag-lane {
+    background-color: alpha(currentColor, 0.10);
+    min-height: 20px;
+    opacity: 0;
+    transition: opacity 120ms ease;
+}
+
+.terminal-pane .split-drag-lane.visible {
+    opacity: 1.0;
+}
+
+.terminal-pane .split-drag-handle {
+    min-width: 44px;
+    min-height: 20px;
+    padding: 0 6px;
+    background: transparent;
+    background-color: transparent;
+    opacity: 0;
+    transition: opacity 120ms ease;
+}
+
+.terminal-pane .split-drag-handle image {
+    -gtk-icon-size: 20px;
+}
+
+.terminal-pane .split-drag-handle.visible {
+    opacity: 0.72;
+}
+
+.terminal-pane .split-drag-handle.visible:hover {
+    opacity: 1.0;
+    background: transparent;
+    background-color: transparent;
+}
+
+.terminal-pane .split-drop-overlay {
+    background-color: transparent;
+    background-image: none;
+}
+
+.terminal-pane .split-drop-overlay.drop-left {
+    background-image: linear-gradient(
+        to right,
+        alpha(@accent_bg_color, 0.35) 50%,
+        transparent 50%
+    );
+}
+
+.terminal-pane .split-drop-overlay.drop-right {
+    background-image: linear-gradient(
+        to left,
+        alpha(@accent_bg_color, 0.35) 50%,
+        transparent 50%
+    );
+}
+
+.terminal-pane .split-drop-overlay.drop-top {
+    background-image: linear-gradient(
+        to bottom,
+        alpha(@accent_bg_color, 0.35) 50%,
+        transparent 50%
+    );
+}
+
+.terminal-pane .split-drop-overlay.drop-bottom {
+    background-image: linear-gradient(
+        to top,
+        alpha(@accent_bg_color, 0.35) 50%,
+        transparent 50%
+    );
+}
+
+
 
 

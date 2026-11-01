@@ -557,6 +557,18 @@ pub fn handle_terminal_event(
             TerminalEventKind::ResetZoom => {
                 let _ = inner.tx.send_blocking(AppInput::ResetZoom);
             }
+            TerminalEventKind::MovePaneToSplit {
+                source_pane_id,
+                target_pane_id,
+                direction,
+            } => {
+                super::split::move_pane_to_split(
+                    inner,
+                    source_pane_id,
+                    target_pane_id,
+                    direction,
+                );
+            }
             TerminalEventKind::RestoreDetached(_, _) => {}
         }
     }

@@ -760,6 +760,45 @@ impl AppWindow {
             .view(tab_view)
             .build();
 
+        tab_bar.setup_extra_drop_target(
+            gtk::gdk::DragAction::MOVE,
+            &[gtk::glib::Type::STRING],
+        );
+        tab_bar.set_extra_drag_preload(true);
+        tab_bar.connect_extra_drag_value(|_, _page, value| {
+            let Some(val) = value else {
+                return gtk::gdk::DragAction::MOVE;
+            };
+            let is_pane = val
+                .get::<String>()
+                .ok()
+                .is_some_and(|s| s.starts_with(boxxy_terminal::PANE_DND_PREFIX));
+            if is_pane {
+                gtk::gdk::DragAction::MOVE
+            } else {
+                gtk::gdk::DragAction::empty()
+            }
+        });
+        let tx_tab_drop = tx.clone();
+        tab_bar.connect_extra_drag_drop(move |_, page, value| {
+            let Some(source_pane_id) = value
+                .get::<String>()
+                .ok()
+                .and_then(|s| {
+                    s.strip_prefix(boxxy_terminal::PANE_DND_PREFIX)
+                        .map(str::to_string)
+                })
+            else {
+                return false;
+            };
+            let target_page_key = page.child().as_ptr() as usize;
+            let _ = tx_tab_drop.send_blocking(AppInput::DropPaneOnTab {
+                source_pane_id,
+                target_page_key,
+            });
+            true
+        });
+
         content_header.set_title_widget(Some(&tab_bar));
 
         let toggle_sidebar_btn = gtk::Button::builder()

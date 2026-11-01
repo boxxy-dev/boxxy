@@ -41,6 +41,11 @@ pub enum TerminalEventKind {
     Notification(String),
     RestoreDetached(u32, String),
     ClawStateChanged(bool, bool),
+    MovePaneToSplit {
+        source_pane_id: String,
+        target_pane_id: String,
+        direction: crate::Direction,
+    },
     ZoomIn,
     ZoomOut,
     ResetZoom,
@@ -72,6 +77,11 @@ pub enum PaneOutput {
     ForegroundProcessChanged(String, String), // id, process_name
     Notification(String, String),             // id, message
     ClawStateChanged(String, bool, bool),     // id, is_active, is_proactive
+    MovePaneToSplit {
+        source_pane_id: String,
+        target_pane_id: String,
+        direction: crate::Direction,
+    },
     ZoomIn,
     ZoomOut,
     ResetZoom,

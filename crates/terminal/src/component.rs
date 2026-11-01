@@ -17,6 +17,14 @@ pub struct PaneData {
     pub title: Option<String>,
 }
 
+#[derive(Debug)]
+pub struct ExtractedPane {
+    pub id: String,
+    pub controller: TerminalPaneComponent,
+    pub wrapper: gtk::Box,
+    pub title: Option<String>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Direction {
     Up,
@@ -177,6 +185,14 @@ impl TerminalComponent {
             .keys()
             .cloned()
             .collect()
+    }
+
+    pub fn has_pane(&self, pane_id: &str) -> bool {
+        self.inner.borrow().panes.contains_key(pane_id)
+    }
+
+    pub fn pane_count(&self) -> usize {
+        self.inner.borrow().panes.len()
     }
 
     pub fn send_text(&self, text: &str) {
@@ -410,6 +426,21 @@ impl TerminalComponent {
                         kind: TerminalEventKind::ClawStateChanged(active, sleep),
                     });
                 }
+            }
+            PaneOutput::MovePaneToSplit {
+                source_pane_id,
+                target_pane_id,
+                direction,
+            } => {
+                let term_id = self.inner.borrow().id.clone();
+                let _ = TERMINAL_EVENT_BUS.send(TerminalEvent {
+                    id: term_id,
+                    kind: TerminalEventKind::MovePaneToSplit {
+                        source_pane_id,
+                        target_pane_id,
+                        direction,
+                    },
+                });
             }
             PaneOutput::ZoomIn => {
                 let term_id = self.inner.borrow().id.clone();
@@ -1456,6 +1487,327 @@ impl TerminalComponent {
                 data.controller.grab_focus();
             }
         }
+    }
+
+    fn detach_wrapper_from_tree(wrapper: &gtk::Box) {
+        if let Some(parent) = wrapper.parent() {
+            if let Some(parent_paned) = parent.downcast_ref::<gtk::Paned>() {
+                let sibling = if parent_paned.start_child().as_ref() == Some(wrapper.upcast_ref()) {
+                    parent_paned.end_child()
+                } else {
+                    parent_paned.start_child()
+                };
+
+                let grandparent = parent_paned.parent();
+                parent_paned.set_start_child(None::<&gtk::Widget>);
+                parent_paned.set_end_child(None::<&gtk::Widget>);
+
+                if let Some(sibling) = sibling
+                    && let Some(grandparent) = grandparent
+                {
+                    if let Some(gp_paned) = grandparent.downcast_ref::<gtk::Paned>() {
+                        if gp_paned.start_child().as_ref() == Some(parent_paned.upcast_ref()) {
+                            gp_paned.set_start_child(Some(&sibling));
+                        } else {
+                            gp_paned.set_end_child(Some(&sibling));
+                        }
+                    } else if let Some(gp_box) = grandparent.downcast_ref::<gtk::Box>() {
+                        gp_box.remove(parent_paned);
+                        gp_box.append(&sibling);
+                    }
+                }
+            } else if let Some(parent_box) = parent.downcast_ref::<gtk::Box>() {
+                parent_box.remove(wrapper);
+            }
+        }
+    }
+
+    fn attach_wrapper_split(
+        target_wrapper: &gtk::Box,
+        new_wrapper: &gtk::Box,
+        direction: Direction,
+        expected_w: i32,
+        expected_h: i32,
+    ) {
+        let is_horizontal_paned = matches!(direction, Direction::Left | Direction::Right);
+        let orientation = if is_horizontal_paned {
+            gtk::Orientation::Horizontal
+        } else {
+            gtk::Orientation::Vertical
+        };
+
+        let paned = gtk::Paned::new(orientation);
+        paned.set_hexpand(true);
+        paned.set_vexpand(true);
+
+        if let Some(parent) = target_wrapper.parent() {
+            if let Some(p_paned) = parent.downcast_ref::<gtk::Paned>() {
+                if p_paned.start_child().as_ref() == Some(target_wrapper.upcast_ref()) {
+                    p_paned.set_start_child(Some(&paned));
+                } else {
+                    p_paned.set_end_child(Some(&paned));
+                }
+            } else if let Some(p_box) = parent.downcast_ref::<gtk::Box>() {
+                p_box.remove(target_wrapper);
+                p_box.append(&paned);
+            }
+        }
+
+        match direction {
+            Direction::Left | Direction::Up => {
+                paned.set_start_child(Some(new_wrapper));
+                paned.set_end_child(Some(target_wrapper));
+            }
+            Direction::Right | Direction::Down => {
+                paned.set_start_child(Some(target_wrapper));
+                paned.set_end_child(Some(new_wrapper));
+            }
+        }
+
+        let initial_pos = if is_horizontal_paned {
+            expected_w / 2
+        } else {
+            expected_h / 2
+        };
+        if initial_pos > 0 {
+            paned.set_position(initial_pos);
+        }
+
+        let paned_weak = paned.downgrade();
+        gtk::glib::idle_add_local_once(move || {
+            if let Some(paned) = paned_weak.upgrade() {
+                let size = if is_horizontal_paned {
+                    paned.width()
+                } else {
+                    paned.height()
+                };
+                if size > 0 {
+                    paned.set_position(size / 2);
+                }
+            }
+        });
+    }
+
+    pub fn move_pane_to_split(
+        &self,
+        source_pane_id: &str,
+        target_pane_id: &str,
+        direction: Direction,
+    ) -> bool {
+        if source_pane_id == target_pane_id {
+            return false;
+        }
+        if self.inner.borrow().is_maximized {
+            self.toggle_maximize();
+        }
+
+        let mut inner = self.inner.borrow_mut();
+        if !inner.panes.contains_key(source_pane_id) || !inner.panes.contains_key(target_pane_id) {
+            return false;
+        }
+
+        let source_data = inner.panes.get(source_pane_id).unwrap();
+        let target_data = inner.panes.get(target_pane_id).unwrap();
+        let source_wrapper = source_data.wrapper.clone();
+        let target_wrapper = target_data.wrapper.clone();
+        let source_controller = source_data.controller.clone();
+        let target_controller = target_data.controller.clone();
+
+        let (expected_w, expected_h) = if let Some(parent) = source_wrapper.parent()
+            && Some(&parent) == target_wrapper.parent().as_ref()
+        {
+            (parent.width(), parent.height())
+        } else {
+            (target_wrapper.width(), target_wrapper.height())
+        };
+
+        let source_widget = source_controller.widget().clone();
+        let target_widget = target_controller.widget().clone();
+        source_widget.set_size_request(source_widget.width().max(1), source_widget.height().max(1));
+        target_widget.set_size_request(target_widget.width().max(1), target_widget.height().max(1));
+
+        Self::detach_wrapper_from_tree(&source_wrapper);
+        Self::attach_wrapper_split(
+            &target_wrapper,
+            &source_wrapper,
+            direction,
+            expected_w,
+            expected_h,
+        );
+
+        gtk::glib::idle_add_local_once(move || {
+            source_widget.set_size_request(-1, -1);
+            target_widget.set_size_request(-1, -1);
+        });
+
+        inner.active_pane_id = source_pane_id.to_string();
+        inner.working_dir = source_controller.working_dir();
+        source_controller.grab_focus();
+        drop(inner);
+        self.update_dimming();
+        true
+    }
+
+    pub fn take_pane(&self, pane_id: &str) -> Option<ExtractedPane> {
+        if self.inner.borrow().is_maximized {
+            self.toggle_maximize();
+        }
+
+        let mut inner = self.inner.borrow_mut();
+        let pane_data = inner.panes.remove(pane_id)?;
+
+        let leaf_widget = pane_data.controller.widget().clone();
+        leaf_widget.set_size_request(leaf_widget.width().max(1), leaf_widget.height().max(1));
+        Self::detach_wrapper_from_tree(&pane_data.wrapper);
+        gtk::glib::idle_add_local_once(move || {
+            leaf_widget.set_size_request(-1, -1);
+        });
+
+        let term_id = inner.id.clone();
+        let mut next_focus_events = None;
+        if let Some((next_id, next_data)) = inner.panes.iter().next() {
+            let next_id = next_id.clone();
+            let next_ctrl = next_data.controller.clone();
+            let next_title = next_data
+                .title
+                .clone()
+                .or_else(|| next_ctrl.last_title())
+                .unwrap_or_else(|| "Terminal".to_string());
+            let next_cwd = next_ctrl.working_dir();
+            inner.active_pane_id = next_id.clone();
+            inner.working_dir = next_cwd.clone();
+            next_focus_events = Some((next_id, next_ctrl, next_title, next_cwd));
+        }
+        drop(inner);
+        self.update_dimming();
+
+        if let Some((next_id, next_ctrl, next_title, next_cwd)) = next_focus_events {
+            next_ctrl.grab_focus();
+            let _ = TERMINAL_EVENT_BUS.send(TerminalEvent {
+                id: term_id.clone(),
+                kind: TerminalEventKind::PaneFocused(next_id),
+            });
+            let _ = TERMINAL_EVENT_BUS.send(TerminalEvent {
+                id: term_id.clone(),
+                kind: TerminalEventKind::TitleChanged(next_title),
+            });
+            if let Some(dir) = next_cwd {
+                let _ = TERMINAL_EVENT_BUS.send(TerminalEvent {
+                    id: term_id,
+                    kind: TerminalEventKind::DirectoryChanged(dir),
+                });
+            }
+        }
+
+        let title = pane_data
+            .title
+            .or_else(|| pane_data.controller.last_title());
+        Some(ExtractedPane {
+            id: pane_id.to_string(),
+            controller: pane_data.controller,
+            wrapper: pane_data.wrapper,
+            title,
+        })
+    }
+
+    pub fn insert_pane_split(
+        &self,
+        extracted: ExtractedPane,
+        target_pane_id: &str,
+        direction: Direction,
+    ) -> bool {
+        if self.inner.borrow().is_maximized {
+            self.toggle_maximize();
+        }
+
+        let mut inner = self.inner.borrow_mut();
+        let resolved_target_id = if inner.panes.contains_key(target_pane_id) {
+            target_pane_id.to_string()
+        } else {
+            inner.active_pane_id.clone()
+        };
+        let Some(target_data) = inner.panes.get(&resolved_target_id) else {
+            return false;
+        };
+        let target_wrapper = target_data.wrapper.clone();
+        let expected_w = target_wrapper.width();
+        let expected_h = target_wrapper.height();
+
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<PaneOutput>();
+        let c = self.clone();
+        gtk::glib::spawn_future_local(async move {
+            while let Some(msg) = rx.recv().await {
+                c.handle_pane_output(msg);
+            }
+        });
+        extracted.controller.set_callback(move |msg: PaneOutput| {
+            let _ = tx.send(msg);
+        });
+
+        let split_idx = inner.panes.len();
+        let split_dir_code = if matches!(direction, Direction::Left | Direction::Right) {
+            "v"
+        } else {
+            "h"
+        };
+        let layout_tag = format!("{}::{}::{}", inner.id, split_idx, split_dir_code);
+        extracted.controller.set_layout_tag(layout_tag);
+
+        if let Some(ref settings) = inner.current_settings {
+            extracted
+                .controller
+                .update_settings(settings.clone(), inner.current_palette);
+        }
+
+        Self::attach_wrapper_split(
+            &target_wrapper,
+            &extracted.wrapper,
+            direction,
+            expected_w,
+            expected_h,
+        );
+
+        let new_id = extracted.id.clone();
+        let new_ctrl = extracted.controller.clone();
+        let new_title = extracted
+            .title
+            .clone()
+            .or_else(|| new_ctrl.last_title())
+            .unwrap_or_else(|| "Terminal".to_string());
+        let new_cwd = new_ctrl.working_dir();
+        let term_id = inner.id.clone();
+
+        inner.panes.insert(
+            new_id.clone(),
+            PaneData {
+                controller: extracted.controller,
+                wrapper: extracted.wrapper,
+                title: extracted.title,
+            },
+        );
+        inner.active_pane_id = new_id.clone();
+        inner.working_dir = new_cwd.clone();
+        drop(inner);
+
+        self.update_dimming();
+        new_ctrl.grab_focus();
+
+        let _ = TERMINAL_EVENT_BUS.send(TerminalEvent {
+            id: term_id.clone(),
+            kind: TerminalEventKind::PaneFocused(new_id),
+        });
+        let _ = TERMINAL_EVENT_BUS.send(TerminalEvent {
+            id: term_id.clone(),
+            kind: TerminalEventKind::TitleChanged(new_title),
+        });
+        if let Some(dir) = new_cwd {
+            let _ = TERMINAL_EVENT_BUS.send(TerminalEvent {
+                id: term_id,
+                kind: TerminalEventKind::DirectoryChanged(dir),
+            });
+        }
+
+        true
     }
 
     pub fn is_active_claw_drawer_visible(&self) -> bool {

@@ -338,6 +338,16 @@ impl TerminalWidget {
         }
     }
 
+    pub fn foreground_color(&self) -> gtk4::gdk::RGBA {
+        (*self.imp().fg_color.borrow())
+            .unwrap_or_else(|| gtk4::gdk::RGBA::new(0.85, 0.85, 0.85, 1.0))
+    }
+
+    pub fn background_color(&self) -> gtk4::gdk::RGBA {
+        (*self.imp().bg_color.borrow())
+            .unwrap_or_else(|| gtk4::gdk::RGBA::new(0.08, 0.08, 0.1, 1.0))
+    }
+
     pub fn set_colors(
         &self,
         fg: Option<&gtk4::gdk::RGBA>,

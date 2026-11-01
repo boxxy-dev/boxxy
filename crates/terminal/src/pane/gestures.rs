@@ -298,3 +298,311 @@ pub(super) fn setup_gestures(
     });
     terminal.add_controller(motion_ctrl);
 }
+
+pub const PANE_DND_PREFIX: &str = "boxxy-pane:";
+
+fn calc_drop_direction(width: f64, height: f64, x: f64, y: f64) -> crate::Direction {
+    if width <= 0.0 || height <= 0.0 {
+        return crate::Direction::Right;
+    }
+    let l_dist = x / width;
+    let t_dist = y / height;
+    let r_dist = 1.0 - l_dist;
+    let b_dist = 1.0 - t_dist;
+    let min = l_dist.min(t_dist).min(r_dist).min(b_dist);
+
+    if (min - l_dist).abs() < f64::EPSILON {
+        crate::Direction::Left
+    } else if (min - r_dist).abs() < f64::EPSILON {
+        crate::Direction::Right
+    } else if (min - t_dist).abs() < f64::EPSILON {
+        crate::Direction::Up
+    } else {
+        crate::Direction::Down
+    }
+}
+
+fn set_drop_overlay_direction(drop_overlay: &gtk::DrawingArea, dir: Option<crate::Direction>) {
+    for cls in ["drop-top", "drop-bottom", "drop-left", "drop-right"] {
+        drop_overlay.remove_css_class(cls);
+    }
+    if let Some(d) = dir {
+        let cls = match d {
+            crate::Direction::Up => "drop-top",
+            crate::Direction::Down => "drop-bottom",
+            crate::Direction::Left => "drop-left",
+            crate::Direction::Right => "drop-right",
+        };
+        drop_overlay.add_css_class(cls);
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn setup_split_drag_and_drop(
+    pane_overlay: &gtk::Overlay,
+    terminal: &TerminalWidget,
+    drop_overlay: &gtk::DrawingArea,
+    drag_lane: &gtk::Box,
+    drag_handle: &gtk::Box,
+    search_bar: &Rc<SearchBarComponent>,
+    claw_popover: &boxxy_claw_widget::TerminalOverlay,
+    callback: std::sync::Arc<dyn Fn(PaneOutput) + Send + Sync + 'static>,
+    pane_id: String,
+) {
+    let is_lane_visible = Rc::new( std::cell::Cell::new(false));
+    let is_dragging = Rc::new(std::cell::Cell::new(false));
+
+    let hide_lane = {
+        let is_lane_visible = is_lane_visible.clone();
+        let drag_lane = drag_lane.downgrade();
+        let drag_handle = drag_handle.downgrade();
+        move || {
+            if is_lane_visible.replace(false) {
+                if let Some(lane) = drag_lane.upgrade() {
+                    lane.remove_css_class("visible");
+                }
+                if let Some(handle) = drag_handle.upgrade() {
+                    handle.remove_css_class("visible");
+                    handle.set_can_target(false);
+                }
+            }
+        }
+    };
+
+    // Passive motion observer on the pane overlay.
+    // Leaving y < 3.0 untouched when hidden ensures hovering the GtkPaned
+    // separator border in horizontal splits never interferes with resizing.
+    let hover_motion = gtk::EventControllerMotion::new();
+    {
+        let is_lane_visible = is_lane_visible.clone();
+        let is_dragging = is_dragging.clone();
+        let drag_lane_w = drag_lane.downgrade();
+        let drag_handle_w = drag_handle.downgrade();
+        let search_bar = search_bar.clone();
+        let claw_popover = claw_popover.clone();
+        let hide_lane_c = hide_lane.clone();
+
+        hover_motion.connect_motion(move |ctrl, _x, y| {
+            if is_dragging.get() || claw_popover.is_visible() || search_bar.is_visible() {
+                hide_lane_c();
+                return;
+            }
+
+            let buttons_pressed = ctrl.current_event_state().intersects(
+                gdk::ModifierType::BUTTON1_MASK
+                    | gdk::ModifierType::BUTTON2_MASK
+                    | gdk::ModifierType::BUTTON3_MASK,
+            );
+            if buttons_pressed && !is_lane_visible.get() {
+                return;
+            }
+
+            let currently_visible = is_lane_visible.get();
+            let in_zone = if currently_visible {
+                (0.0..=22.0).contains(&y)
+            } else {
+                (3.0..=18.0).contains(&y)
+            };
+
+            if in_zone && !currently_visible {
+                is_lane_visible.set(true);
+                if let Some(lane) = drag_lane_w.upgrade() {
+                    lane.add_css_class("visible");
+                }
+                if let Some(handle) = drag_handle_w.upgrade() {
+                    handle.add_css_class("visible");
+                    handle.set_can_target(true);
+                }
+            } else if !in_zone && currently_visible {
+                hide_lane_c();
+            }
+        });
+    }
+    {
+        let hide_lane_c = hide_lane.clone();
+        hover_motion.connect_leave(move |_| {
+            hide_lane_c();
+        });
+    }
+    pane_overlay.add_controller(hover_motion);
+
+    // DragSource is attached strictly to the centered three-dots handle,
+    // never to the full horizontal line.
+    let drag_source = gtk::DragSource::new();
+    drag_source.set_actions(gdk::DragAction::MOVE);
+    {
+        let payload = format!("{PANE_DND_PREFIX}{pane_id}");
+        drag_source.connect_prepare(move |_, _, _| {
+            Some(gdk::ContentProvider::for_value(&payload.to_value()))
+        });
+    }
+    {
+        let is_dragging = is_dragging.clone();
+        let hide_lane_c = hide_lane.clone();
+        let pane_overlay_w = pane_overlay.downgrade();
+        let terminal_w = terminal.downgrade();
+        drag_source.connect_drag_begin(move |src, _| {
+            is_dragging.set(true);
+            hide_lane_c();
+
+            let Some(pane_overlay) = pane_overlay_w.upgrade() else {
+                return;
+            };
+            let width = pane_overlay.width();
+            let height = pane_overlay.height();
+            if width <= 0 || height <= 0 {
+                return;
+            }
+
+            let preview_scale = 0.22_f32;
+            let paintable = gtk::WidgetPaintable::new(Some(&pane_overlay));
+            let snap = gtk::Snapshot::new();
+            snap.scale(preview_scale, preview_scale);
+
+            let rect = gtk::graphene::Rect::new(0.0, 0.0, width as f32, height as f32);
+            let rounded = gtk::gsk::RoundedRect::from_rect(rect, 28.0);
+            snap.push_rounded_clip(&rounded);
+            let mut bg = terminal_w
+                .upgrade()
+                .map(|t| t.background_color())
+                .unwrap_or_else(|| gdk::RGBA::new(0.08, 0.08, 0.1, 1.0));
+            bg.set_alpha(0.94);
+            snap.append_color(&bg, &rect);
+            gdk::prelude::PaintableExt::snapshot(&paintable, &snap, width as f64, height as f64);
+            snap.pop();
+
+            let hot_x = ((width as f32 * preview_scale) / 2.0) as i32;
+            let hot_y = ((height as f32 * preview_scale) / 2.0) as i32;
+            if let Some(scaled) = snap.to_paintable(None) {
+                src.set_icon(Some(&scaled), hot_x, hot_y);
+            } else {
+                src.set_icon(Some(&paintable), width / 2, height / 2);
+            }
+        });
+    }
+    {
+        let is_dragging = is_dragging.clone();
+        drag_source.connect_drag_end(move |_, _, _| {
+            is_dragging.set(false);
+        });
+    }
+    {
+        let is_dragging = is_dragging.clone();
+        drag_source.connect_drag_cancel(move |_, _, _| {
+            is_dragging.set(false);
+            false
+        });
+    }
+    drag_handle.add_controller(drag_source);
+
+    // DropTarget on the pane overlay to accept dragged panes and preview the split half.
+    let drop_target = gtk::DropTarget::new(glib::Type::STRING, gdk::DragAction::MOVE);
+    drop_target.set_preload(true);
+    {
+        let drop_overlay_w = drop_overlay.downgrade();
+        let target_id = pane_id.clone();
+        drop_target.connect_value_notify(move |tgt| {
+            let valid = tgt
+                .value()
+                .and_then(|v| v.get::<String>().ok())
+                .and_then(|s| s.strip_prefix(PANE_DND_PREFIX).map(str::to_string))
+                .is_some_and(|src_id| src_id != target_id);
+            if !valid {
+                if let Some(ov) = drop_overlay_w.upgrade() {
+                    set_drop_overlay_direction(&ov, None);
+                }
+                tgt.reject();
+            }
+        });
+    }
+    {
+        let pane_overlay_w = pane_overlay.downgrade();
+        let drop_overlay_w = drop_overlay.downgrade();
+        let target_id = pane_id.clone();
+        drop_target.connect_motion(move |tgt, x, y| {
+            if let Some(val) = tgt.value() {
+                let valid = val
+                    .get::<String>()
+                    .ok()
+                    .and_then(|s| s.strip_prefix(PANE_DND_PREFIX).map(str::to_string))
+                    .is_some_and(|src_id| src_id != target_id);
+                if !valid {
+                    if let Some(ov) = drop_overlay_w.upgrade() {
+                        set_drop_overlay_direction(&ov, None);
+                    }
+                    return gdk::DragAction::empty();
+                }
+            }
+            if let (Some(pane_ov), Some(drop_ov)) =
+                (pane_overlay_w.upgrade(), drop_overlay_w.upgrade())
+            {
+                let dir =
+                    calc_drop_direction(pane_ov.width() as f64, pane_ov.height() as f64, x, y);
+                set_drop_overlay_direction(&drop_ov, Some(dir));
+            }
+            gdk::DragAction::MOVE
+        });
+    }
+    {
+        let drop_overlay_w = drop_overlay.downgrade();
+        drop_target.connect_leave(move |_| {
+            if let Some(ov) = drop_overlay_w.upgrade() {
+                set_drop_overlay_direction(&ov, None);
+            }
+        });
+    }
+    {
+        let pane_overlay_w = pane_overlay.downgrade();
+        let drop_overlay_w = drop_overlay.downgrade();
+        let target_id = pane_id;
+        drop_target.connect_drop(move |_, value, x, y| {
+            if let Some(ov) = drop_overlay_w.upgrade() {
+                set_drop_overlay_direction(&ov, None);
+            }
+            let Some(source_pane_id) = value
+                .get::<String>()
+                .ok()
+                .and_then(|s| s.strip_prefix(PANE_DND_PREFIX).map(str::to_string))
+            else {
+                return false;
+            };
+            if source_pane_id == target_id {
+                return false;
+            }
+            let dir = if let Some(pane_ov) = pane_overlay_w.upgrade() {
+                calc_drop_direction(pane_ov.width() as f64, pane_ov.height() as f64, x, y)
+            } else {
+                crate::Direction::Right
+            };
+            callback(PaneOutput::MovePaneToSplit {
+                source_pane_id,
+                target_pane_id: target_id.clone(),
+                direction: dir,
+            });
+            true
+        });
+    }
+    pane_overlay.add_controller(drop_target);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::calc_drop_direction;
+    use crate::Direction;
+
+    #[test]
+    fn drop_direction_identifies_nearest_edge() {
+        let w = 400.0;
+        let h = 300.0;
+
+        assert_eq!(calc_drop_direction(w, h, 20.0, 150.0), Direction::Left);
+        assert_eq!(calc_drop_direction(w, h, 380.0, 150.0), Direction::Right);
+        assert_eq!(calc_drop_direction(w, h, 200.0, 20.0), Direction::Up);
+        assert_eq!(calc_drop_direction(w, h, 200.0, 280.0), Direction::Down);
+    }
+
+    #[test]
+    fn drop_direction_handles_zero_dimensions() {
+        assert_eq!(calc_drop_direction(0.0, 0.0, 10.0, 10.0), Direction::Right);
+    }
+}

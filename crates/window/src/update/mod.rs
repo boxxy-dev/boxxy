@@ -264,6 +264,19 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
         AppInput::SwapDown => {
             split::swap(&mut inner, boxxy_terminal::Direction::Down);
         }
+        AppInput::MovePaneToSplit {
+            source_pane_id,
+            target_pane_id,
+            direction,
+        } => {
+            split::move_pane_to_split(&mut inner, source_pane_id, target_pane_id, direction);
+        }
+        AppInput::DropPaneOnTab {
+            source_pane_id,
+            target_page_key,
+        } => {
+            split::drop_pane_on_tab(&mut inner, source_pane_id, target_page_key);
+        }
         AppInput::ShowThemesSidebar => {
             window_state::show_themes_sidebar(&mut inner);
         }

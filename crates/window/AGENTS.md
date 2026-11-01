@@ -11,7 +11,7 @@ This crate follows a modular **Model-View-Update (MVU)** architecture:
 - **`update/` Module**: Pure state transition logic:
     - **`update/mod.rs`**: Primary message dispatcher.
     - **`update/tabs.rs`**: Tab lifecycle (open, close, adopt, transfer).
-    - **`update/split.rs`**: Split management and layout control.
+    - **`update/split.rs`**: Split management, layout control, and cross-tab/intra-tab pane drag-and-drop (`move_pane_to_split`, `drop_pane_on_tab`).
     - **`update/events.rs`**: Terminal signal routing and agent event handling.
     - **`update/window_state.rs`**: Persistence and global state updates.
 

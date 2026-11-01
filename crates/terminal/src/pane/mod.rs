@@ -21,7 +21,7 @@ mod app_menu;
 mod claw;
 mod claw_host;
 mod events;
-mod gestures;
+pub mod gestures;
 pub(crate) mod preview;
 mod ui;
 
@@ -212,6 +212,9 @@ pub(crate) struct PaneInner {
     pub(super) claw_popover: Option<TerminalOverlay>,
     pub(super) msg_bar: Rc<MsgBarComponent>,
     pub(super) callback: std::sync::Arc<dyn Fn(PaneOutput) + Send + Sync + 'static>,
+    pub(super) callback_slot: std::sync::Arc<
+        parking_lot::RwLock<std::sync::Arc<dyn Fn(PaneOutput) + Send + Sync + 'static>>,
+    >,
 }
 
 impl PaneInner {
@@ -348,8 +351,15 @@ impl TerminalPaneComponent {
 
     pub fn new<F: Fn(PaneOutput) + Send + Sync + 'static>(init: PaneInit, callback: F) -> Self {
         let settings = boxxy_preferences::Settings::load();
-        let callback: std::sync::Arc<dyn Fn(PaneOutput) + Send + Sync + 'static> =
+        let initial_cb: std::sync::Arc<dyn Fn(PaneOutput) + Send + Sync + 'static> =
             std::sync::Arc::new(callback);
+        let callback_slot = std::sync::Arc::new(parking_lot::RwLock::new(initial_cb));
+        let slot_for_proxy = callback_slot.clone();
+        let callback: std::sync::Arc<dyn Fn(PaneOutput) + Send + Sync + 'static> =
+            std::sync::Arc::new(move |output: PaneOutput| {
+                let cb = slot_for_proxy.read().clone();
+                cb(output);
+            });
         let id = init.id;
 
         let (
@@ -360,6 +370,9 @@ impl TerminalPaneComponent {
             size_label,
             search_bar_rc,
             progress_bar,
+            drop_overlay,
+            drag_lane,
+            drag_handle,
         ) = ui::build_ui();
 
         let (claw_event_tx, claw_rx_from_agent) = async_channel::unbounded();
@@ -1095,6 +1108,7 @@ impl TerminalPaneComponent {
                 claw_popover: None,
                 msg_bar: msg_bar.clone(),
                 callback: callback.clone(),
+                callback_slot,
             }));
 
             *inner_weak_ref.borrow_mut() = Some(Rc::downgrade(&inner));
@@ -1204,6 +1218,18 @@ impl TerminalPaneComponent {
         inner.borrow_mut().claw_indicator = Some(claw_indicator.clone());
         inner.borrow_mut().claw_popover = Some(claw_popover.clone());
 
+        gestures::setup_split_drag_and_drop(
+            &widget,
+            &terminal,
+            &drop_overlay,
+            &drag_lane,
+            &drag_handle,
+            &search_bar_rc,
+            &claw_popover,
+            callback.clone(),
+            id.clone(),
+        );
+
         // Keep popover height capped to the live pane height.
         let claw_popover_for_resize = claw_popover.clone();
         let height_detector = gtk::DrawingArea::new();
@@ -1273,6 +1299,29 @@ impl TerminalPaneComponent {
 
     pub fn widget(&self) -> &gtk::Overlay {
         &self.widget
+    }
+
+    pub fn set_callback<F: Fn(PaneOutput) + Send + Sync + 'static>(&self, callback: F) {
+        let slot = self.inner.borrow().callback_slot.clone();
+        *slot.write() = std::sync::Arc::new(callback);
+    }
+
+    pub fn set_layout_tag(&self, layout_tag: String) {
+        let pid = {
+            let mut inner = self.inner.borrow_mut();
+            inner.layout_tag = layout_tag.clone();
+            inner.pid
+        };
+        if let Some(pid) = pid {
+            glib::spawn_future_local(async move {
+                let agent = crate::get_agent().await;
+                let _ = agent.set_pane_id(pid, layout_tag).await;
+            });
+        }
+    }
+
+    pub fn last_title(&self) -> Option<String> {
+        self.inner.borrow().last_title.clone()
     }
 
     pub fn get_session_usage(&self) -> SessionUsage {

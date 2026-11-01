@@ -139,6 +139,15 @@ pub enum AppInput {
     SwapRight,
     SwapUp,
     SwapDown,
+    MovePaneToSplit {
+        source_pane_id: String,
+        target_pane_id: String,
+        direction: boxxy_terminal::Direction,
+    },
+    DropPaneOnTab {
+        source_pane_id: String,
+        target_page_key: usize,
+    },
     FocusActiveTerminal,
     TabPageDetached(usize),
     TabPageAttached(usize),

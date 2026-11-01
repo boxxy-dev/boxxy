@@ -319,6 +319,11 @@ window.frosted-glass-active .terminal-header tabbar tab:selected {{
     background-color: {surface};
     color: {fg};
 }}
+
+.terminal-pane .split-drag-lane,
+.terminal-pane .split-drag-handle {{
+    color: {fg};
+}}
 "#
     )
 }
