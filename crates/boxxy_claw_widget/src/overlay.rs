@@ -50,6 +50,8 @@ pub struct TerminalOverlay {
     active_agent: Rc<RefCell<String>>,
     history_sticky: Rc<Cell<bool>>,
     is_auto_scrolling: Rc<Cell<bool>>,
+    last_pane_height: Rc<Cell<i32>>,
+    bottom_gap: Rc<Cell<bool>>,
     tips_cycle: TipsCycle,
     esc_interrupt_label: gtk::Label,
     esc_interrupt_armed: Rc<Cell<bool>>,
@@ -70,7 +72,13 @@ impl TerminalOverlay {
 
         let revealer: gtk::Revealer = builder.object("root_revealer").unwrap();
         let main_drawer: gtk::Box = builder.object("main_drawer").unwrap();
-        set_overlay_zoom_pct(Settings::load().overlay_font_scale);
+        let initial_settings = Settings::load();
+        set_overlay_zoom_pct(initial_settings.overlay_font_scale);
+        revealer.set_margin_bottom(if initial_settings.overlay_bottom_gap {
+            80
+        } else {
+            0
+        });
         Self::attach_zoom_controllers(&main_drawer);
         let indicator_slot: gtk::Box = builder.object("indicator_slot").unwrap();
         let character_selector_box: gtk::Box = builder.object("character_selector_box").unwrap();
@@ -113,7 +121,7 @@ impl TerminalOverlay {
         let tip_label: gtk::Label = builder.object("tip_label").unwrap();
         let tip_revealer: gtk::Revealer = builder.object("tip_revealer").unwrap();
         let tips_cycle = TipsCycle::new(tip_label, tip_revealer);
-        tips_cycle.set_enabled(Settings::load().enable_tips);
+        tips_cycle.set_enabled(initial_settings.enable_tips);
 
         // Embed the merged msgbar into the drawer's bottom area. The
         // msgbar owns attachments, autocomplete, history nav, Ctrl+V
@@ -309,6 +317,8 @@ impl TerminalOverlay {
         let state = Rc::new(RefCell::new(OverlayState::Idle));
         let current_mode = Rc::new(RefCell::new(OverlayMode::Claw));
         let active_agent = Rc::new(RefCell::new(String::new()));
+        let last_pane_height = Rc::new(Cell::new(0));
+        let bottom_gap = Rc::new(Cell::new(initial_settings.overlay_bottom_gap));
 
         let s = Self {
             revealer: revealer.clone(),
@@ -336,6 +346,8 @@ impl TerminalOverlay {
             active_agent: active_agent.clone(),
             history_sticky: history_sticky.clone(),
             is_auto_scrolling: is_auto_scrolling.clone(),
+            last_pane_height,
+            bottom_gap,
             tips_cycle: tips_cycle.clone(),
             esc_interrupt_label: esc_interrupt_label.clone(),
             esc_interrupt_armed: esc_interrupt_armed.clone(),
@@ -667,9 +679,25 @@ impl TerminalOverlay {
     /// Called whenever the parent pane is resized. Caps the scroll window height
     /// so the popover never overflows the visible terminal area minus the gap.
     pub fn update_pane_height(&self, pane_height: i32) {
-        // 80px bottom gap + ~12px top padding.
-        const V_PAD: i32 = 92;
-        let effective = (pane_height - V_PAD).max(100);
+        self.last_pane_height.set(pane_height);
+        self.recompute_max_content_height();
+    }
+
+    pub fn set_bottom_gap(&self, enabled: bool) {
+        if self.bottom_gap.replace(enabled) != enabled {
+            self.revealer.set_margin_bottom(if enabled { 80 } else { 0 });
+            self.recompute_max_content_height();
+        }
+    }
+
+    fn recompute_max_content_height(&self) {
+        let pane_height = self.last_pane_height.get();
+        if pane_height <= 0 {
+            return;
+        }
+        // 80px bottom gap (when enabled) + ~12px top padding.
+        let v_pad = if self.bottom_gap.get() { 92 } else { 12 };
+        let effective = (pane_height - v_pad).max(100);
         self.single_scroll.set_max_content_height(effective);
         self.history_scroll.set_max_content_height(effective);
     }

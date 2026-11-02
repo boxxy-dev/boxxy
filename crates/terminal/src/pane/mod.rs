@@ -1210,6 +1210,7 @@ impl TerminalPaneComponent {
         // Badge must be added AFTER the drawer overlay so it renders on top.
         widget.add_overlay(claw_indicator.badge());
 
+        claw_popover.set_bottom_gap(settings.overlay_bottom_gap);
         claw_indicator.update_settings(settings.hide_character_badge);
 
         inner.borrow_mut().claw_indicator = Some(claw_indicator.clone());
@@ -2367,6 +2368,8 @@ impl TerminalPaneComponent {
             let next_effective_frosted = settings.frosted_glass && settings.opacity < 1.0;
             needs_frosted_glass = prev_effective_frosted != next_effective_frosted;
         }
+
+        self.claw_popover.set_bottom_gap(settings.overlay_bottom_gap);
 
         self.msgbar_shortcut
             .set_trigger(Some(parse_accel_trigger(&settings.claw_msgbar_shortcut)));

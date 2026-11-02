@@ -723,6 +723,12 @@
                               <object class="AdwPreferencesGroup" id="group_claw_ui_behavior">
                                 <property name="title">Behavior</property>
                                 <child>
+                                  <object class="AdwSwitchRow" id="overlay_bottom_gap_switch">
+                                    <property name="title" translatable="yes">Leave Bottom Space in Overlay</property>
+                                    <property name="subtitle" translatable="yes">Leave a gap below the Claw drawer so the terminal remains visible behind it.</property>
+                                  </object>
+                                </child>
+                                <child>
                                   <object class="AdwSwitchRow" id="enable_tips_switch">
                                     <property name="title">Show usage tips</property>
                                     <property name="subtitle">Display rotating usage hints in the Claw drawer while the agent is thinking.</property>

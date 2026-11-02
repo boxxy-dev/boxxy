@@ -294,6 +294,8 @@ pub struct Settings {
     pub enable_timer_sounds: bool,
     pub enable_task_sounds: bool,
     pub colored_tabs: bool,
+    #[serde(default = "default_overlay_bottom_gap")]
+    pub overlay_bottom_gap: bool,
     pub enable_tips: bool,
     #[serde(default = "default_overlay_font_scale")]
     pub overlay_font_scale: u32,
@@ -364,6 +366,7 @@ impl Default for Settings {
             enable_timer_sounds: true,
             enable_task_sounds: true,
             colored_tabs: false,
+            overlay_bottom_gap: default_overlay_bottom_gap(),
             enable_tips: true,
             overlay_font_scale: default_overlay_font_scale(),
             currency: Currency::Usd,
@@ -374,6 +377,10 @@ impl Default for Settings {
             openai_compatible_endpoints: vec![],
         }
     }
+}
+
+const fn default_overlay_bottom_gap() -> bool {
+    true
 }
 
 const fn default_overlay_font_scale() -> u32 {
