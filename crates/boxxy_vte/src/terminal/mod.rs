@@ -623,6 +623,10 @@ impl TerminalWidget {
         }
     }
 
+    pub fn on_alt_screen_changed<F: Fn(bool) + 'static>(&self, f: F) {
+        self.imp().alt_screen_callback.replace(Some(Box::new(f)));
+    }
+
     /// Returns true when the running application has enabled any mouse
     /// reporting mode (1000/1002/1003).  Used to decide who owns mouse events.
     pub fn is_mouse_mode(&self) -> bool {

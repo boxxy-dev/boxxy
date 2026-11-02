@@ -55,6 +55,11 @@ tab {
 	min-height: 28px;
 	padding: 2px 4px 2px 4px;
 	margin: 0px 0px 0px 0px;
+	transition: background-color 150ms ease-in-out;
+}
+
+tabbar tab:hover:not(:selected) {
+	background-color: color-mix(in srgb, currentColor 8%, transparent);
 }
 
 tab > separator {
@@ -911,6 +916,10 @@ window.frosted-glass-active tabbar tab {
     background: transparent;
     background-color: transparent;
     box-shadow: none;
+}
+
+window.frosted-glass-active tabbar tab:hover:not(:selected) {
+    background-color: color-mix(in srgb, currentColor 9%, transparent);
 }
 
 window.frosted-glass-active tabbar tab:selected {

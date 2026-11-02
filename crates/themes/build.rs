@@ -256,10 +256,22 @@ window.frosted-glass-active .terminal-header {{
 window:not(.frosted-glass-active) .terminal-header tabbar tab {{
     background-color: {bg};
     color: {fg};
+    transition: background-color 150ms ease-in-out;
 }}
 
 window.frosted-glass-active .terminal-header tabbar tab {{
     background-color: transparent;
+    color: {fg};
+    transition: background-color 150ms ease-in-out;
+}}
+
+window:not(.frosted-glass-active) .terminal-header tabbar tab:hover:not(:selected) {{
+    background-color: color-mix(in srgb, {surface} 65%, {bg});
+    color: {fg};
+}}
+
+window.frosted-glass-active .terminal-header tabbar tab:hover:not(:selected) {{
+    background-color: color-mix(in srgb, currentColor 9%, transparent);
     color: {fg};
 }}
 

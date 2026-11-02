@@ -8,6 +8,8 @@ This crate follows a modular **Model-View-Update (MVU)** architecture:
 
 - **`state.rs`**: Central state definition (`AppWindowInner`) and the `AppInput` message enum.
 - **`ui.rs`**: GTK widget tree construction and signal-to-message mapping.
+- **`application_detector.rs`**: Pure-Rust application category detector (`ApplicationCategory`, `TerminalAppState`, `detect_application_state`) combining foreground process inspection (with `/proc/<tpgid>/cmdline` wrapper resolution in `boxxy-agent`) and VT alternate-screen mode (`?1049h` / `?1049l`) to classify active terminal sessions into `Idle`, `Editor`, `Monitor`, `AiAgent`, `Git`, `FileManager`, `Pager`, `Multiplexer`, `Remote`, `GenericTui`, and `RunningCommand` for category-specific tab icons.
+- **`tab_title.rs`**: Smart Tab Naming and hover tooltip resolution (`smart_tab_naming` setting, enabled by default). Prioritizes user custom titles, remote SSH host + directory (`host · boxxy-terminal`), foreground commands (`vim`), and directory basenames (`boxxy-terminal`, `Downloads`, `src`) with automatic parent-directory disambiguation (`src · boxxy-terminal`) when multiple tabs share the same title, while exposing the full path in the `AdwTabPage` hover tooltip and tab context menu.
 - **`update/` Module**: Pure state transition logic:
     - **`update/mod.rs`**: Primary message dispatcher.
     - **`update/tabs.rs`**: Tab lifecycle (open, close, adopt, transfer).

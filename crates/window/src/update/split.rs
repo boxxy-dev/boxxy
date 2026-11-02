@@ -134,26 +134,12 @@ pub fn move_pane_to_split(
 
     if inner.tabs[source_tab_idx].controller.pane_count() == 0 {
         let removed_tc = inner.tabs.remove(source_tab_idx);
+        removed_tc.stop_working_anim();
         let src_page = inner.tab_view.page(removed_tc.controller.widget());
         inner.tab_view.close_page(&src_page);
-    } else {
-        let src_tc = &inner.tabs[source_tab_idx];
-        let src_page = inner.tab_view.page(src_tc.controller.widget());
-        if src_tc.has_pending_tasks() {
-            src_page.set_indicator_icon(Some(&gtk4::gio::ThemedIcon::new(
-                "boxxy-timer-symbolic",
-            )));
-            src_page.set_indicator_activatable(false);
-        } else if src_tc.controller.is_claw_active() {
-            src_page.set_indicator_icon(Some(&gtk4::gio::ThemedIcon::new(
-                "boxxy-boxxyclaw-symbolic",
-            )));
-            src_page.set_indicator_activatable(false);
-        } else {
-            src_page.set_indicator_icon(None::<&gtk4::gio::Icon>);
-        }
     }
 
+    super::tabs::sync_tab_titles(inner);
     super::tabs::focus_active_terminal(inner);
 }
 

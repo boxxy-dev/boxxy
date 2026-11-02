@@ -408,6 +408,7 @@ impl AppWindow {
         let tx_title = tx.clone();
         let tx_menu_focus = tx.clone();
         let inner_for_menu = inner_ref.clone();
+        let inner_for_menu_cwd = inner_ref.clone();
         // The tab bar to attach the gesture to
         let context_tab_bar = inner_ref.borrow().tab_bar.clone();
         let context_tab_view = inner_ref.borrow().tab_view.clone();
@@ -439,6 +440,15 @@ impl AppWindow {
                     .iter()
                     .find(|t| t.controller.widget().as_ptr() as usize == key)
                     .and_then(|t| t.custom_title.clone())
+            },
+            move |page| {
+                let inner = inner_for_menu_cwd.borrow();
+                let key = page.child().as_ptr() as usize;
+                inner
+                    .tabs
+                    .iter()
+                    .find(|t| t.controller.widget().as_ptr() as usize == key)
+                    .and_then(|t| t.cwd.clone().or_else(|| t.controller.working_dir()))
             },
             move || {
                 let _ = tx_menu_focus.send_blocking(AppInput::FocusActiveTerminal);

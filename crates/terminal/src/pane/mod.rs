@@ -190,6 +190,7 @@ pub(crate) struct PaneInner {
     pub(super) scrolled_window: gtk::ScrolledWindow,
     pub(super) working_dir: Option<String>,
     pub(super) last_title: Option<String>,
+    pub(super) foreground_process: Option<String>,
     pub id: String,
     pub(super) layout_tag: String,
     pub(super) current_settings: Option<Settings>,
@@ -1087,6 +1088,7 @@ impl TerminalPaneComponent {
                 scrolled_window,
                 working_dir: init.working_dir,
                 last_title: None,
+                foreground_process: None,
                 id: id.clone(),
                 layout_tag: init.layout_tag.unwrap_or_else(|| id.clone()),
                 current_settings: None,
@@ -1320,6 +1322,14 @@ impl TerminalPaneComponent {
 
     pub fn last_title(&self) -> Option<String> {
         self.inner.borrow().last_title.clone()
+    }
+
+    pub fn foreground_process(&self) -> Option<String> {
+        self.inner.borrow().foreground_process.clone()
+    }
+
+    pub fn is_alt_screen(&self) -> bool {
+        self.inner.borrow().terminal.is_alt_screen()
     }
 
     pub fn get_session_usage(&self) -> SessionUsage {
@@ -1899,7 +1909,16 @@ impl TerminalPaneComponent {
                                             .await;
                                     });
                                 }
-                                let cb = inner.borrow().callback.clone();
+                                let cb = {
+                                    let mut inner_mut = inner.borrow_mut();
+                                    let new_fg =
+                                        (!process_name.is_empty()).then(|| process_name.clone());
+                                    if new_fg.is_none() && inner_mut.foreground_process.is_some() {
+                                        inner_mut.last_title = None;
+                                    }
+                                    inner_mut.foreground_process = new_fg;
+                                    inner_mut.callback.clone()
+                                };
                                 cb(PaneOutput::ForegroundProcessChanged(
                                     id_for_fg.clone(),
                                     process_name,
@@ -2017,6 +2036,13 @@ impl TerminalPaneComponent {
                                     inner.msg_bar.set_working_dir(Some(effective_cwd.clone()));
                                 }
                             }
+                            if !effective_cwd.is_empty() {
+                                let cb = inner_rc.borrow().callback.clone();
+                                cb(PaneOutput::DirectoryChanged(
+                                    id.clone(),
+                                    effective_cwd.clone(),
+                                ));
+                            }
                             let _ = agent.set_pane_id(pid, layout_tag).await;
                             let _ = agent
                                 .update_workspace_pane(
@@ -2105,7 +2131,18 @@ impl TerminalPaneComponent {
                                     }
 
                                     // Notify UI for overlays/indicators
-                                    let cb = inner.borrow().callback.clone();
+                                    let cb = {
+                                        let mut inner_mut = inner.borrow_mut();
+                                        let new_fg = (!process_name.is_empty())
+                                            .then(|| process_name.clone());
+                                        if new_fg.is_none()
+                                            && inner_mut.foreground_process.is_some()
+                                        {
+                                            inner_mut.last_title = None;
+                                        }
+                                        inner_mut.foreground_process = new_fg;
+                                        inner_mut.callback.clone()
+                                    };
                                     cb(PaneOutput::ForegroundProcessChanged(
                                         id_for_fg.clone(),
                                         process_name,

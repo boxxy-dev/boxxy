@@ -35,6 +35,7 @@ impl TabContextMenu {
         on_set_color: impl Fn(libadwaita::TabPage, TabColor) + 'static,
         on_set_title: impl Fn(libadwaita::TabPage, Option<String>) + 'static,
         get_custom_title: impl Fn(&libadwaita::TabPage) -> Option<String> + 'static,
+        get_cwd: impl Fn(&libadwaita::TabPage) -> Option<String> + 'static,
         on_menu_closed: impl Fn() + 'static,
     ) -> Self {
         let current_page: Rc<RefCell<Option<libadwaita::TabPage>>> = Rc::new(RefCell::new(None));
@@ -284,6 +285,8 @@ impl TabContextMenu {
                 } else {
                     title_entry.set_text("");
                 }
+                let cwd = get_cwd(&page);
+                title_entry.set_tooltip_text(cwd.as_deref());
 
                 let rect = gtk4::gdk::Rectangle::new(x as i32, y as i32, 1, 1);
                 pop_clone3.set_pointing_to(Some(&rect));

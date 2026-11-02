@@ -45,21 +45,19 @@ pub fn handle_terminal_event(
     if let Some(pos) = inner.tabs.iter().position(|c| c.id == event.id) {
         match event.kind {
             TerminalEventKind::TitleChanged(title) => {
+                inner.tabs[pos].raw_title = Some(title);
                 if inner.tabs[pos].custom_title.is_none() {
                     let widget = inner.tabs[pos].controller.widget();
                     let page = inner.tab_view.page(widget);
-                    page.set_title(&title);
                     if Some(&page) != inner.tab_view.selected_page().as_ref() {
-                        page.set_indicator_icon(Some(&gtk4::gio::ThemedIcon::new(
-                            "boxxy-visual-bell-symbolic",
-                        )));
-                        page.set_indicator_activatable(false);
+                        inner.tabs[pos].unread_bell = true;
                     }
-                    super::tabs::sync_header_title(inner);
                 }
+                super::tabs::sync_tab_titles(inner);
             }
             TerminalEventKind::DirectoryChanged(path) => {
                 inner.tabs[pos].cwd = Some(path);
+                super::tabs::sync_tab_titles(inner);
             }
             TerminalEventKind::Exited(_code) => {
                 let id = event.id;
@@ -69,19 +67,33 @@ pub fn handle_terminal_event(
                 let widget = inner.tabs[pos].controller.widget();
                 let page = inner.tab_view.page(widget);
                 if Some(&page) != inner.tab_view.selected_page().as_ref() {
-                    page.set_indicator_icon(Some(&gtk4::gio::ThemedIcon::new(
-                        "boxxy-visual-bell-symbolic",
-                    )));
-                    page.set_indicator_activatable(false);
+                    inner.tabs[pos].unread_bell = true;
+                    super::tabs::sync_tab_running_icons(inner);
                 } else {
                     inner.bell_indicator.set_visible(true);
                 }
             }
-            TerminalEventKind::Osc133A
-            | TerminalEventKind::Osc133B
-            | TerminalEventKind::Osc133C
-            | TerminalEventKind::Osc133D(_, _)
-            | TerminalEventKind::ForegroundProcessChanged(_) => {}
+            TerminalEventKind::ForegroundProcessChanged(proc_name) => {
+                let new_fg = (!proc_name.is_empty()).then_some(proc_name);
+                if new_fg.is_none() {
+                    inner.tabs[pos].raw_title = inner.tabs[pos].controller.last_title();
+                }
+                inner.tabs[pos].foreground_process = new_fg;
+                super::tabs::sync_tab_titles(inner);
+            }
+            TerminalEventKind::AltScreenChanged(is_alt) => {
+                if !is_alt {
+                    inner.tabs[pos].raw_title = inner.tabs[pos].controller.last_title();
+                }
+                super::tabs::sync_tab_titles(inner);
+            }
+            TerminalEventKind::Osc133A | TerminalEventKind::Osc133D(_, _) => {
+                inner.tabs[pos].foreground_process =
+                    inner.tabs[pos].controller.foreground_process();
+                inner.tabs[pos].raw_title = inner.tabs[pos].controller.last_title();
+                super::tabs::sync_tab_titles(inner);
+            }
+            TerminalEventKind::Osc133B | TerminalEventKind::Osc133C => {}
             TerminalEventKind::Notification(message) => {
                 let _ = inner.tx.send_blocking(AppInput::PushGlobalNotification(
                     crate::widgets::notification::Notification::new_info(message),
@@ -91,20 +103,7 @@ pub fn handle_terminal_event(
                 let widget = inner.tabs[pos].controller.widget();
                 let page = inner.tab_view.page(widget);
 
-                // Update tab icon (swap: claw is indicator, timer is main icon)
-                if inner.tabs[pos].has_pending_tasks() {
-                    page.set_indicator_icon(Some(&gtk4::gio::ThemedIcon::new(
-                        "boxxy-timer-symbolic",
-                    )));
-                    page.set_indicator_activatable(false);
-                } else if active {
-                    page.set_indicator_icon(Some(&gtk4::gio::ThemedIcon::new(
-                        "boxxy-boxxyclaw-symbolic",
-                    )));
-                    page.set_indicator_activatable(false);
-                } else {
-                    page.set_indicator_icon(None::<&gtk4::gio::Icon>);
-                }
+                super::tabs::sync_tab_running_icons(inner);
 
                 if Some(&page) == inner.tab_view.selected_page().as_ref() {
                     inner.claw_active = active;
@@ -124,24 +123,15 @@ pub fn handle_terminal_event(
                 }
             }
             TerminalEventKind::PaneFocused(_) => {
+                inner.tabs[pos].cwd = inner.tabs[pos].controller.working_dir();
+                inner.tabs[pos].raw_title = inner.tabs[pos].controller.last_title();
+                inner.tabs[pos].foreground_process =
+                    inner.tabs[pos].controller.foreground_process();
+                super::tabs::sync_tab_titles(inner);
+
                 let widget = inner.tabs[pos].controller.widget();
                 let page = inner.tab_view.page(widget);
-
-                // Update tab icon
                 let is_claw_active = inner.tabs[pos].controller.is_claw_active();
-                if inner.tabs[pos].has_pending_tasks() {
-                    page.set_indicator_icon(Some(&gtk4::gio::ThemedIcon::new(
-                        "boxxy-timer-symbolic",
-                    )));
-                    page.set_indicator_activatable(false);
-                } else if is_claw_active {
-                    page.set_indicator_icon(Some(&gtk4::gio::ThemedIcon::new(
-                        "boxxy-boxxyclaw-symbolic",
-                    )));
-                    page.set_indicator_activatable(false);
-                } else {
-                    page.set_indicator_icon(None::<&gtk4::gio::Icon>);
-                }
 
                 if Some(&page) == inner.tab_view.selected_page().as_ref() {
                     inner.claw_active = is_claw_active;
@@ -395,23 +385,10 @@ pub fn handle_terminal_event(
                         }
                     }
                     ClawEngineEvent::TaskStatusChanged { tasks, .. } => {
-                        let has_pending = tasks.iter().any(|t| t.status == TaskStatus::Pending);
                         let widget = inner.tabs[pos].controller.widget();
                         let page = inner.tab_view.page(widget);
 
-                        if has_pending {
-                            // Replace claw with colored timer composite in the indicator slot
-                            page.set_indicator_icon(Some(&gtk4::gio::ThemedIcon::new(
-                                "boxxy-timer-symbolic",
-                            )));
-                            page.set_indicator_activatable(false);
-                        } else {
-                            // Revert to normal claw indicator
-                            page.set_indicator_icon(Some(&gtk4::gio::ThemedIcon::new(
-                                "boxxy-boxxyclaw-symbolic",
-                            )));
-                            page.set_indicator_activatable(false);
-                        }
+                        super::tabs::sync_tab_running_icons(inner);
 
                         // Update sidebar if this is the active tab
                         if let Some(selected) = inner.tab_view.selected_page() {

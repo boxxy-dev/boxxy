@@ -1,0 +1,27 @@
+<svg gpa:rendering="symbolic" xmlns="http://www.w3.org/2000/svg" xmlns:cc="http://creativecommons.org/ns#" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:gpa="https://www.gtk.org/grappa" xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" width="16" height="16" gpa:version="1" gpa:state="2" gpa:state-names="outline filled empty">
+<path d="M 1.49928784 6.95557499 L 6.95557499 1.49928784 C 7.53239489 0.92246753, 8.46760559 0.92246753, 9.04442596 1.49928784 L 14.5007153 6.95557499 C 15.0775318 7.53239489, 15.0775318 8.46760559, 14.5007153 9.04442596 L 9.04442596 14.5007153 C 8.46760559 15.0775318, 7.53239489 15.0775318, 6.95557499 14.5007153 L 1.49928784 9.04442596 C 0.92246753 8.46760559, 0.92246753 7.53239489, 1.49928784 6.95557499 Z" id="path2" gpa:states="outline filled" stroke-width="1.84182" stroke-linecap="round" stroke-linejoin="round" stroke="rgb(0,0,0)" fill="none" class="foreground-stroke transparent-fill" gpa:stroke-minwidth='25%' gpa:stroke-maxwidth='150%' gpa:stroke="foreground" gpa:transition-type='animate' gpa:transition-duration='400ms' gpa:transition-easing='ease-in-out'>
+    </path>
+  <path d="M 7.50917435 4.50917435 L 7.5 9.5 M 5.69939756 2.69939733 L 9.7965517 6.7965517" id="path9" gpa:states="outline filled" stroke-width="1" stroke-linecap="round" stroke-linejoin="round" stroke="rgb(0,0,0)" fill-rule="nonzero" fill="rgb(0,0,0)" class="foreground-stroke foreground-fill" gpa:stroke="foreground" gpa:fill="foreground" gpa:stroke-minwidth="25%" gpa:stroke-maxwidth="200%"  gpa:transition-type='animate' gpa:transition-duration='400ms' gpa:transition-easing='ease-in-out'>
+    </path>
+  <path visibility="hidden" d="M 8.5 10.5 C 8.5 11.0522852, 8.05228519 11.5, 7.5 11.5 C 6.94771528 11.5, 6.5 11.0522852, 6.5 10.5 C 6.5 9.94771481, 6.94771528 9.5, 7.5 9.5 C 8.05228519 9.5, 8.5 9.94771481, 8.5 10.5 Z M 11.5 7.5 C 11.5 8.05228519, 11.0522852 8.5, 10.5 8.5 C 9.94771481 8.5, 9.5 8.05228519, 9.5 7.5 C 9.5 6.94771528, 9.94771481 6.5, 10.5 6.5 C 11.0522852 6.5, 11.5 6.94771528, 11.5 7.5 Z" id="circles" gpa:states="filled" stroke-width="1" stroke-linecap="round" stroke-linejoin="round" stroke="rgb(0,0,0)" fill-rule="nonzero" fill="rgb(0,0,0)" class="foreground-stroke foreground-fill" gpa:stroke="foreground" gpa:fill="foreground" gpa:stroke-minwidth="25%" gpa:stroke-maxwidth="200%"  gpa:transition-type='animate' gpa:transition-duration='400ms' gpa:transition-easing='ease-in-out'>
+    </path>
+  <path d="M 8.5 10.5 C 8.5 11.0522852, 8.05228519 11.5, 7.5 11.5 C 6.94771528 11.5, 6.5 11.0522852, 6.5 10.5 C 6.5 9.94771481, 6.94771528 9.5, 7.5 9.5 C 8.05228519 9.5, 8.5 9.94771481, 8.5 10.5 Z M 11.5 7.5 C 11.5 8.05228519, 11.0522852 8.5, 10.5 8.5 C 9.94771481 8.5, 9.5 8.05228519, 9.5 7.5 C 9.5 6.94771528, 9.94771481 6.5, 10.5 6.5 C 11.0522852 6.5, 11.5 6.94771528, 11.5 7.5 Z" id="circles-force-outline" gpa:states="outline" stroke-width="1" stroke-linecap="round" stroke-linejoin="round" stroke="rgb(0,0,0)" fill="none" class="foreground-stroke transparent-fill" gpa:stroke="foreground" gpa:stroke-minwidth="25%" gpa:stroke-maxwidth="200%"  gpa:transition-type='animate' gpa:transition-duration='400ms' gpa:transition-easing='ease-in-out'>
+    </path>
+  <metadata>
+    <rdf:RDF>
+      <cc:Work>
+        <cc:license rdf:resource="https://creativecommons.org/publicdomain/zero/1.0/"></cc:license>
+        <dc:subject>
+          <rdf:Bag>
+            <rdf:li>version control svn git</rdf:li>
+          </rdf:Bag>
+        </dc:subject>
+        <dc:creator>
+          <cc:Agent>
+            <dc:title>Jakub Steiner</dc:title>
+          </cc:Agent>
+        </dc:creator>
+      </cc:Work>
+    </rdf:RDF>
+  </metadata>
+</svg>

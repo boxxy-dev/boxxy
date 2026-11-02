@@ -359,7 +359,7 @@ pub fn settings_changed(inner: &mut AppWindowInner, settings: Settings) {
 
     // from global settings here. Those are window-local states that can be toggled independently per window.
 
-    super::tabs::sync_header_title(inner);
+    super::tabs::sync_tab_titles(inner);
 }
 
 pub fn theme_selected(inner: &mut AppWindowInner, palette: boxxy_themes::ParsedPaletteStatic) {

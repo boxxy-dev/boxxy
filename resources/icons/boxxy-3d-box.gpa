@@ -1,0 +1,23 @@
+<svg gpa:rendering="symbolic" xmlns="http://www.w3.org/2000/svg" xmlns:cc="http://creativecommons.org/ns#" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:gpa="https://www.gtk.org/grappa" xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" gpa:version="1" gpa:state="1" id="svg1" width="16" height="16" gpa:state-names="outline empty">
+  <metadata>
+    <rdf:RDF>
+      <cc:Work>
+        <cc:license rdf:resource="https://creativecommons.org/publicdomain/zero/1.0/"></cc:license>
+        <dc:subject>
+          <rdf:Bag>
+            <rdf:li>graphics box 3d inkscape</rdf:li>
+          </rdf:Bag>
+        </dc:subject>
+        <dc:creator>
+          <cc:Agent>
+            <dc:title>Jakub Steiner</dc:title>
+          </cc:Agent>
+        </dc:creator>
+      </cc:Work>
+    </rdf:RDF>
+  </metadata>
+  <path id="border" fill="none" stroke="rgb(0,0,0)" gpa:stroke="foreground" stroke-opacity="1" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" stroke-miterlimit="4" stroke-dasharray="none" paint-order="stroke fill markers" d="M 1 6.36438 L 1 9.63562 A 2.4662 2.4662 61.0472 0 0 2.15587 11.7249 L 6.84413 14.6652 A 2.17549 2.17549 0 0 0 9.15587 14.6652 L 13.8441 11.7249 A 2.4662 2.4662 118.953 0 0 15 9.63562 L 15 6.36438 A 2.44296 2.44296 60.8168 0 0 13.8383 4.2844 L 9.16166 1.4035 A 2.21485 2.21485 0 0 0 6.83834 1.4035 L 2.16166 4.2844 A 2.44296 2.44296 119.183 0 0 1 6.36438 Z" class="transparent-fill foreground-stroke" gpa:states="outline" gpa:stroke-minwidth="25%" gpa:stroke-maxwidth="150%"  gpa:transition-type='animate' gpa:transition-duration='400ms' gpa:transition-easing='ease-in-out'>
+  </path>
+  <path id="split" fill="none" stroke="rgb(0,0,0)" gpa:stroke="foreground" stroke-opacity="1" stroke-width="1" stroke-linecap="round" stroke-linejoin="round" stroke-miterlimit="4" paint-order="stroke fill markers" d="M 8 8.56552 L 8 14.9977 M 13.8383 4.2844 L 13.841 4.28607 A 0.800121 0.800121 0 0 1 13.8125 5.66533 L 9.19029 8.25508 A 2.43517 2.43517 0 0 1 6.80971 8.25508 L 2.19029 5.6669 A 0.801996 0.801996 0 0 1 2.16166 4.2844 L 2.16166 4.2844" class="transparent-fill foreground-stroke" gpa:states="outline" gpa:stroke-minwidth="25%" gpa:stroke-maxwidth="200%"  gpa:transition-type='animate' gpa:transition-duration='400ms' gpa:transition-easing='ease-in-out'>
+  </path>
+</svg>

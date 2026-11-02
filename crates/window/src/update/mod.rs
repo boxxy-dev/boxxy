@@ -3,7 +3,6 @@ pub mod split;
 pub mod tabs;
 pub mod window_state;
 
-use gtk4::gio;
 use gtk4::prelude::*;
 use libadwaita as adw;
 use libadwaita::prelude::*;
@@ -371,16 +370,9 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
                         && inner.tabs[pos].controller.active_pane_id() == id
                     {
                         inner.claw_active = active;
-                        if active {
-                            page.set_indicator_icon(Some(&gtk4::gio::ThemedIcon::new(
-                                "boxxy-boxxyclaw-symbolic",
-                            )));
-                            page.set_indicator_activatable(false);
-                        } else {
-                            page.set_indicator_icon(None::<&gio::Icon>);
-                        }
                     }
                 }
+                tabs::sync_tab_running_icons(&inner);
             } else {
                 // If no pane identified (e.g. no tabs open), just update the window state
                 inner.claw_active = active;
@@ -391,18 +383,8 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
 
             for tab in &inner.tabs {
                 tab.controller.set_claw_active(active);
-
-                let widget = tab.controller.widget();
-                let page = inner.tab_view.page(widget);
-                if active {
-                    page.set_indicator_icon(Some(&gtk4::gio::ThemedIcon::new(
-                        "boxxy-boxxyclaw-symbolic",
-                    )));
-                    page.set_indicator_activatable(false);
-                } else {
-                    page.set_indicator_icon(None::<&gio::Icon>);
-                }
             }
+            tabs::sync_tab_running_icons(&inner);
         }
         AppInput::ThemeSelected(palette) => {
             window_state::theme_selected(&mut inner, *palette);

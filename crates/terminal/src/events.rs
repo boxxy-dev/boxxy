@@ -38,6 +38,7 @@ pub enum TerminalEventKind {
     FocusClawSidebar,
     PaneFocused(String),
     ForegroundProcessChanged(String),
+    AltScreenChanged(bool),
     Notification(String),
     RestoreDetached(u32, String),
     ClawStateChanged(bool, bool),
@@ -75,6 +76,7 @@ pub enum PaneOutput {
     FocusClawSidebar(String),
     RequestFocus(String),
     ForegroundProcessChanged(String, String), // id, process_name
+    AltScreenChanged(String, bool),           // id, is_alt_screen
     Notification(String, String),             // id, message
     ClawStateChanged(String, bool, bool),     // id, is_active, is_proactive
     MovePaneToSplit {

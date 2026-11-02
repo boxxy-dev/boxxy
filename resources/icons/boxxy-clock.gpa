@@ -1,0 +1,57 @@
+<svg gpa:rendering="symbolic"
+        xmlns='http://www.w3.org/2000/svg'
+        xmlns:svg='http://www.w3.org/2000/svg'
+        xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'
+        xmlns:cc='http://creativecommons.org/ns#'
+        xmlns:dc='http://purl.org/dc/elements/1.1/'
+        xmlns:gpa='https://www.gtk.org/grappa'
+        gpa:version='1'
+        gpa:state-names='outline empty'
+        gpa:state='1'
+        width='16'
+        height='16'>
+  <metadata>
+    <rdf:RDF>
+      <cc:Work>
+        <cc:license
+                rdf:resource='https://creativecommons.org/publicdomain/zero/1.0/'/>
+        <dc:creator>
+          <cc:Agent>
+            <dc:title>Jakub Steiner</dc:title>
+          </cc:Agent>
+        </dc:creator>
+        <dc:subject>
+          <rdf:Bag>
+            <rdf:li>clock document history recent emoji-recent document-open-recent documents-recent preferences-system-time gnome-maps</rdf:li>
+          </rdf:Bag>
+        </dc:subject>
+      </cc:Work>
+    </rdf:RDF>
+  </metadata>
+  <path
+          id='path0'
+          fill='none'
+          stroke='rgb(0,0,0)'
+          stroke-width='2'
+          stroke-linecap='round'
+          stroke-linejoin='round'
+          d='M 15 8 C 15 11.866, 11.866 15, 8 15 C 4.13401 15, 1 11.866, 1 8 C 1 4.13401, 4.13401 1, 8 1 C 11.866 1, 15 4.13401, 15 8 Z'
+          gpa:stroke-minwidth='25%'
+          gpa:stroke-maxwidth='150%'
+          gpa:stroke='foreground'
+          gpa:states='outline' gpa:transition-type='animate' gpa:transition-duration='400ms' gpa:transition-easing='ease-in-out'>
+  </path>
+  <path
+          id='path1'
+          fill='none'
+          stroke='rgb(0,0,0)'
+          stroke-width='0.75'
+          stroke-linecap='round'
+          stroke-linejoin='round'
+          d='M 8.5 8.5 C 8.5 8.77614, 8.27614 9, 8 9 C 7.72386 9, 7.5 8.77614, 7.5 8.5 C 7.5 8.22386, 7.72386 8, 8 8 C 8.27614 8, 8.5 8.22386, 8.5 8.5 Z M 6 6.508 L 7.64639 8.15439 M 8.3547 8.15551 L 11.53 5'
+          gpa:stroke-minwidth='33%'
+          gpa:stroke-maxwidth='267%'
+          gpa:stroke='foreground'
+          gpa:states='outline' gpa:transition-type='animate' gpa:transition-duration='400ms' gpa:transition-easing='ease-in-out'>
+  </path>
+</svg>

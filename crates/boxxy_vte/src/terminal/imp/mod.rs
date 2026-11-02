@@ -48,6 +48,7 @@ pub type Osc133ACallback = Box<dyn Fn() + 'static>;
 pub type Osc133BCallback = Box<dyn Fn() + 'static>;
 pub type Osc133CCallback = Box<dyn Fn() + 'static>;
 pub type Osc133DCallback = Box<dyn Fn(Option<i32>) + 'static>;
+pub type AltScreenCallback = Box<dyn Fn(bool) + 'static>;
 pub type ContextMenuCallback = Box<dyn Fn(f64, f64) + 'static>;
 
 pub struct TerminalWidget {
@@ -104,6 +105,8 @@ pub struct TerminalWidget {
     pub osc_133_b_callback: RefCell<Option<Osc133BCallback>>,
     pub osc_133_c_callback: RefCell<Option<Osc133CCallback>>,
     pub osc_133_d_callback: RefCell<Option<Osc133DCallback>>,
+    pub alt_screen_callback: RefCell<Option<AltScreenCallback>>,
+    pub last_alt_screen: Cell<bool>,
     pub context_menu_callback: RefCell<Option<ContextMenuCallback>>,
     pub last_cwd: RefCell<Option<String>>,
     pub im_context: RefCell<gtk4::IMContext>,
@@ -179,6 +182,8 @@ impl Default for TerminalWidget {
             osc_133_b_callback: RefCell::new(None),
             osc_133_c_callback: RefCell::new(None),
             osc_133_d_callback: RefCell::new(None),
+            alt_screen_callback: RefCell::new(None),
+            last_alt_screen: Cell::new(false),
             context_menu_callback: RefCell::new(None),
             last_cwd: RefCell::new(None),
             im_context: RefCell::new(gtk4::IMMulticontext::new().upcast::<gtk4::IMContext>()),
@@ -419,15 +424,25 @@ impl TerminalWidget {
                 if let Some(widget) = obj_weak.upgrade() {
                     match event {
                         Event::Wakeup => {
+                            let mut alt_changed = None;
                             if let Some(backend) = widget.imp().backend.borrow().as_ref() {
                                 backend.clear_pending_wakeups();
+                                let is_alt = backend.is_alt_screen();
+                                if widget.imp().last_alt_screen.replace(is_alt) != is_alt {
+                                    alt_changed = Some(is_alt);
+                                }
                                 if widget.imp().scroll_on_output.get()
                                     && !widget.imp().mouse_pressed.get()
-                                    && !backend.is_alt_screen()
+                                    && !is_alt
                                     && backend.render_state.load().display_offset > 0
                                 {
                                     backend.scroll_display(crate::engine::grid::Scroll::Bottom);
                                 }
+                            }
+                            if let Some(is_alt) = alt_changed
+                                && let Some(f) = widget.imp().alt_screen_callback.borrow().as_ref()
+                            {
+                                f(is_alt);
                             }
                             if widget.is_mapped() {
                                 widget.queue_draw();

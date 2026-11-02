@@ -43,6 +43,8 @@ pub fn setup_appearance_page(
     let dim_inactive_switch: adw::SwitchRow = builder.object("dim_inactive_switch").unwrap();
     let fixed_width_tabs_switch: adw::SwitchRow =
         builder.object("fixed_width_tabs_switch").unwrap();
+    let smart_tab_naming_switch: adw::SwitchRow =
+        builder.object("smart_tab_naming_switch").unwrap();
     let colored_tabs_switch: adw::SwitchRow = builder.object("colored_tabs_switch").unwrap();
     let chat_width_spin: adw::SpinRow = builder.object("chat_width_spin").unwrap();
 
@@ -410,6 +412,18 @@ pub fn setup_appearance_page(
         }
     });
 
+    smart_tab_naming_switch.set_active(settings_rc.borrow().smart_tab_naming);
+    let s_rc = settings_rc.clone();
+    let cb = on_change.clone();
+    smart_tab_naming_switch.connect_active_notify(move |row| {
+        let mut s = s_rc.borrow_mut();
+        if s.smart_tab_naming != row.is_active() {
+            s.smart_tab_naming = row.is_active();
+            s.save();
+            cb(s.clone());
+        }
+    });
+
     colored_tabs_switch.set_active(settings_rc.borrow().colored_tabs);
     let s_rc = settings_rc.clone();
     let cb = on_change.clone();
@@ -518,6 +532,7 @@ pub fn setup_appearance_page(
     let invert_scroll_switch_clone = invert_scroll_switch.clone();
     let dim_inactive_switch_clone = dim_inactive_switch.clone();
     let fixed_width_tabs_switch_clone = fixed_width_tabs_switch.clone();
+    let smart_tab_naming_switch_clone = smart_tab_naming_switch.clone();
     let colored_tabs_switch_clone = colored_tabs_switch.clone();
     let chat_width_spin_clone = chat_width_spin.clone();
     let color_scheme_combo_clone = color_scheme_combo.clone();
@@ -597,6 +612,10 @@ pub fn setup_appearance_page(
             fixed_width_tabs_switch_clone.upcast_ref(),
             "fixed width tabs do not expand",
         );
+        let l_smart_tabs = match_row(
+            smart_tab_naming_switch_clone.upcast_ref(),
+            "smart tab naming titles concise directory folder command basename full path hover",
+        );
         let l6 = match_row(
             chat_width_spin_clone.upcast_ref(),
             "sidebar width px hacky mouse resize overlay split view",
@@ -605,7 +624,7 @@ pub fn setup_appearance_page(
         group_appearance.set_visible(s1 || f1 || t_bg || t1 || t_op || f_glass || c_tabs);
         group_terminal.set_visible(t2 || t3 || t4 || t5);
         group_cursor.set_visible(c1 || c3 || c4 || c5);
-        group_layout.set_visible(pb || l1 || l2 || l3 || l5 || l6);
+        group_layout.set_visible(pb || l1 || l2 || l3 || l5 || l_smart_tabs || l6);
 
         group_appearance.is_visible()
             || group_terminal.is_visible()

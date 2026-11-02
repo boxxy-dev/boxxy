@@ -63,6 +63,24 @@
     <file compressed="true" alias="icons/boxxy-expand-vertical-symbolic.svg">icons/boxxy-expand-vertical-symbolic.svg</file>
     <file compressed="true" alias="icons/boxxy-drag-handle-symbolic.svg">icons/boxxy-drag-handle-symbolic.svg</file>
     <file compressed="true" alias="icons/boxxy-spinner.gpa">icons/boxxy-spinner.gpa</file>
+    <file compressed="true" alias="icons/boxxy-terminal-working.gpa">icons/boxxy-terminal-working.gpa</file>
+    <file compressed="true" alias="icons/boxxy-pencil.gpa">icons/boxxy-pencil.gpa</file>
+    <file compressed="true" alias="icons/boxxy-ai-slop.gpa">icons/boxxy-ai-slop.gpa</file>
+    <file compressed="true" alias="icons/boxxy-folder-silhouette.gpa">icons/boxxy-folder-silhouette.gpa</file>
+    <file compressed="true" alias="icons/boxxy-git.gpa">icons/boxxy-git.gpa</file>
+    <file compressed="true" alias="icons/boxxy-text-left.gpa">icons/boxxy-text-left.gpa</file>
+    <file compressed="true" alias="icons/boxxy-monitor.gpa">icons/boxxy-monitor.gpa</file>
+    <file compressed="true" alias="icons/boxxy-terminal.gpa">icons/boxxy-terminal.gpa</file>
+    <file compressed="true" alias="icons/boxxy-celestial-loader.gpa">icons/boxxy-celestial-loader.gpa</file>
+    <file compressed="true" alias="icons/boxxy-boxxyclaw.gpa">icons/boxxy-boxxyclaw.gpa</file>
+    <file compressed="true" alias="icons/boxxy-clock.gpa">icons/boxxy-clock.gpa</file>
+    <file compressed="true" alias="icons/boxxy-bell.gpa">icons/boxxy-bell.gpa</file>
+    <file compressed="true" alias="icons/boxxy-zoom-fit.gpa">icons/boxxy-zoom-fit.gpa</file>
+    <file compressed="true" alias="icons/boxxy-folder-remote.gpa">icons/boxxy-folder-remote.gpa</file>
+    <file compressed="true" alias="icons/boxxy-3d-box.gpa">icons/boxxy-3d-box.gpa</file>
+    <file compressed="true" alias="icons/boxxy-git-branch-symbolic.svg">icons/boxxy-git-branch-symbolic.svg</file>
+    <file compressed="true" alias="icons/boxxy-pager-symbolic.svg">icons/boxxy-pager-symbolic.svg</file>
+    <file compressed="true" alias="icons/boxxy-tui-symbolic.svg">icons/boxxy-tui-symbolic.svg</file>
     <file compressed="true" alias="prompts/ai_chat.md">prompts/ai_chat.md</file>
     <file compressed="true" alias="prompts/claw.md">prompts/claw.md</file>
     <file compressed="true" alias="prompts/bookmark_generator.md">prompts/bookmark_generator.md</file>

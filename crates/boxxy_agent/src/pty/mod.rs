@@ -26,6 +26,100 @@ fn is_leaked_multiplexer_var(key: &str) -> bool {
     is_leaked_multiplexer_prefix(key) || LEAKED_MULTIPLEXER_EXACT.contains(&key)
 }
 
+/// Parses a NUL-delimited `/proc/<pid>/cmdline` buffer to extract the effective
+/// foreground executable basename, unwrapping privilege/env wrappers (`sudo`, `doas`,
+/// `env`, `nice`, `nohup`, `time`) and interpreter-wrapped CLI binaries (`python3 /usr/bin/ranger`,
+/// `node /usr/local/bin/claude`).
+pub(crate) fn resolve_foreground_command_from_cmdline(cmdline: &[u8]) -> Option<String> {
+    let args: Vec<&str> = cmdline
+        .split(|&b| b == 0)
+        .filter_map(|s| std::str::from_utf8(s).ok())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .collect();
+
+    resolve_foreground_command_from_args(&args)
+}
+
+fn resolve_foreground_command_from_args(args: &[&str]) -> Option<String> {
+    let first = *args.first()?;
+    // Handle monolithic argv[0] strings if a process overwrote its argv[0] with spaces
+    let first_tok = first.split_whitespace().next().unwrap_or(first);
+    let base = first_tok
+        .rsplit('/')
+        .next()
+        .unwrap_or(first_tok)
+        .trim_start_matches('-');
+    if base.is_empty() {
+        return None;
+    }
+
+    let lower = base.to_ascii_lowercase();
+
+    // Unwrap privilege / scheduling wrappers: `sudo vim`, `env FOO=1 nvim`, `nice -n 10 btop`
+    if matches!(
+        lower.as_str(),
+        "sudo" | "doas" | "env" | "nice" | "ionice" | "nohup" | "time" | "rlwrap"
+    ) && args.len() > 1
+    {
+        let mut idx = 1;
+        while idx < args.len() {
+            let arg = args[idx];
+            if arg.starts_with('-') {
+                if matches!(arg, "-u" | "-g" | "-C" | "-D" | "-R" | "-T" | "-n" | "-c") {
+                    idx += 2;
+                } else {
+                    idx += 1;
+                }
+                continue;
+            }
+            if arg.contains('=') {
+                idx += 1;
+                continue;
+            }
+            return resolve_foreground_command_from_args(&args[idx..]);
+        }
+    }
+
+    // Unwrap interpreter-launched CLI tools (e.g. `python3 /usr/bin/ranger`, `node /usr/bin/claude`)
+    let is_interpreter = lower == "python"
+        || lower.starts_with("python3")
+        || matches!(
+            lower.as_str(),
+            "node" | "nodejs" | "bun" | "deno" | "ruby" | "perl"
+        );
+    if is_interpreter && args.len() > 1 {
+        for &arg in &args[1..] {
+            if arg.starts_with('-') {
+                continue;
+            }
+            let script_base = arg.rsplit('/').next().unwrap_or(arg);
+            // If it's an installed CLI entrypoint (no source extension, or located in a bin dir)
+            let has_source_ext = script_base.ends_with(".py")
+                || script_base.ends_with(".js")
+                || script_base.ends_with(".mjs")
+                || script_base.ends_with(".cjs")
+                || script_base.ends_with(".ts")
+                || script_base.ends_with(".rb")
+                || script_base.ends_with(".pl");
+            if !script_base.is_empty()
+                && (!has_source_ext || arg.contains("/bin/") || arg.contains("/.bin/"))
+            {
+                let clean = script_base
+                    .strip_suffix(".py")
+                    .or_else(|| script_base.strip_suffix(".js"))
+                    .unwrap_or(script_base);
+                if !clean.is_empty() {
+                    return Some(clean.to_string());
+                }
+            }
+            break;
+        }
+    }
+
+    Some(base.to_string())
+}
+
 pub struct PtySubsystem {
     state: AgentState,
 }
@@ -36,6 +130,8 @@ impl PtySubsystem {
     }
 
     /// Internal helper to read the foreground process from /proc without &self.
+    /// Resolves wrappers (`sudo`, `doas`, `env`) and interpreter-launched CLI tools
+    /// (`python3 /usr/bin/ranger`, `node /usr/bin/claude`) via `/proc/<tpgid>/cmdline`.
     fn get_foreground_process_internal(pid: u32) -> fdo::Result<String> {
         let stat_path = format!("/proc/{}/stat", pid);
         let stat_content = match std::fs::read_to_string(&stat_path) {
@@ -59,6 +155,12 @@ impl PtySubsystem {
 
         if tpgid == 0 || tpgid == pgrp {
             return Ok("".to_string());
+        }
+
+        if let Ok(cmdline_bytes) = std::fs::read(format!("/proc/{tpgid}/cmdline"))
+            && let Some(resolved) = resolve_foreground_command_from_cmdline(&cmdline_bytes)
+        {
+            return Ok(resolved);
         }
 
         let tpgid_stat_path = format!("/proc/{}/stat", tpgid);
@@ -482,7 +584,7 @@ impl PtySubsystem {
         let pty_registry = self.state.pty_registry.clone();
 
         tokio::spawn(async move {
-            let mut interval = tokio::time::interval(std::time::Duration::from_millis(500));
+            let mut interval = tokio::time::interval(std::time::Duration::from_millis(150));
             let mut last_process_name = String::new();
 
             loop {

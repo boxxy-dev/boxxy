@@ -139,7 +139,11 @@ pub(super) fn wire_terminal_events(
 
     let cb_clone = callback.clone();
     let id_clone = id.clone();
+    let inner_for_osc_a = Rc::downgrade(inner);
     terminal.on_osc_133_a(move || {
+        if let Some(inner_rc) = inner_for_osc_a.upgrade() {
+            inner_rc.borrow_mut().foreground_process = None;
+        }
         cb_clone(PaneOutput::Osc133A(id_clone.clone()));
     });
 
@@ -155,11 +159,51 @@ pub(super) fn wire_terminal_events(
         cb_clone(PaneOutput::Osc133C(id_clone.clone()));
     });
 
+    let cb_alt = callback.clone();
+    let id_alt = id.clone();
+    let inner_for_alt = Rc::downgrade(inner);
+    terminal.on_alt_screen_changed(move |is_alt| {
+        if let Some(inner_rc) = inner_for_alt.upgrade() {
+            if !is_alt {
+                // Leaving alternate screen (`?1049l`): clear any stale TUI OSC title
+                let mut inner_mut = inner_rc.borrow_mut();
+                inner_mut.last_title = None;
+                inner_mut.foreground_process = None;
+            } else if let Some(pid) = inner_rc.borrow().pid {
+                // Entering alternate screen (`?1049h`): query foreground process immediately
+                // so TUI apps like `vim` or `btop` are classified without waiting for the poll tick.
+                let inner_weak = Rc::downgrade(&inner_rc);
+                let cb_fg = cb_alt.clone();
+                let pane_id = id_alt.clone();
+                gtk::glib::spawn_future_local(async move {
+                    let agent = crate::get_agent().await;
+                    if let Ok(proc_name) = agent.get_foreground_process(pid).await
+                        && !proc_name.is_empty()
+                    {
+                        if let Some(inner) = inner_weak.upgrade() {
+                            inner.borrow_mut().foreground_process = Some(proc_name.clone());
+                        }
+                        cb_fg(PaneOutput::ForegroundProcessChanged(pane_id, proc_name));
+                    }
+                });
+            }
+        }
+        cb_alt(PaneOutput::AltScreenChanged(id_alt.clone(), is_alt));
+    });
+
+    let cb_osc_d = callback;
     let tx_osc_clone = claw_sender.clone();
     let inner_for_osc = Rc::downgrade(inner);
     let active_clone_for_osc = is_claw_active.clone();
     let id_for_osc = id.clone();
     terminal.on_osc_133_d(move |exit_code| {
+        if let Some(inner_rc) = inner_for_osc.upgrade() {
+            let mut inner_mut = inner_rc.borrow_mut();
+            inner_mut.foreground_process = None;
+            inner_mut.last_title = None;
+        }
+        cb_osc_d(PaneOutput::Osc133D(id_for_osc.clone(), exit_code));
+
         if let Some(code) = exit_code {
             let Some(inner_rc) = inner_for_osc.upgrade() else {
                 return;

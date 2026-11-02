@@ -252,6 +252,8 @@ pub struct Settings {
     pub hide_scrollbars: bool,
     pub dim_inactive_panes: bool,
     pub fixed_width_tabs: bool,
+    #[serde(default = "default_smart_tab_naming")]
+    pub smart_tab_naming: bool,
     pub api_keys: std::collections::HashMap<String, String>,
     pub ollama_base_url: String,
     pub login_shell: bool,
@@ -335,6 +337,7 @@ impl Default for Settings {
             hide_scrollbars: true,
             dim_inactive_panes: true,
             fixed_width_tabs: true,
+            smart_tab_naming: default_smart_tab_naming(),
             api_keys: std::collections::HashMap::new(),
             ollama_base_url: "http://localhost:11434".to_string(),
             login_shell: true,
@@ -380,6 +383,10 @@ impl Default for Settings {
 }
 
 const fn default_overlay_bottom_gap() -> bool {
+    true
+}
+
+const fn default_smart_tab_naming() -> bool {
     true
 }
 
@@ -981,15 +988,19 @@ mod tests {
         let legacy: Settings = serde_json::from_str("{}").unwrap();
         assert!(legacy.use_native_search);
         assert!(legacy.nautilus_integration);
+        assert!(legacy.smart_tab_naming);
 
         // Explicit false and true roundtrip cleanly
         let mut s = Settings::default();
         assert!(s.use_native_search);
+        assert!(s.smart_tab_naming);
         s.use_native_search = false;
+        s.smart_tab_naming = false;
         s.currency = Currency::Eur;
         let json = serde_json::to_string(&s).unwrap();
         let decoded: Settings = serde_json::from_str(&json).unwrap();
         assert!(!decoded.use_native_search);
+        assert!(!decoded.smart_tab_naming);
         assert_eq!(decoded.currency, Currency::Eur);
         assert_eq!(Currency::Usd.format_from_usd(0.05), "$0.05");
         assert_eq!(Currency::Eur.format_from_usd(1.0), "€0.89");

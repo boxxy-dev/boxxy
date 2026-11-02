@@ -252,27 +252,18 @@ impl TerminalComponent {
                 let mut inner = self.inner.borrow_mut();
                 if inner.active_pane_id != id {
                     inner.active_pane_id = id.clone();
-                    let title_opt = inner.panes.get(&id).and_then(|p| p.title.clone());
+                    inner.working_dir = inner
+                        .panes
+                        .get(&id)
+                        .and_then(|p| p.controller.working_dir());
                     let term_id = inner.id.clone();
                     drop(inner);
                     self.update_dimming();
 
                     let _ = TERMINAL_EVENT_BUS.send(TerminalEvent {
-                        id: term_id.clone(),
-                        kind: TerminalEventKind::PaneFocused(id.clone()),
+                        id: term_id,
+                        kind: TerminalEventKind::PaneFocused(id),
                     });
-
-                    if let Some(title) = title_opt {
-                        let _ = TERMINAL_EVENT_BUS.send(TerminalEvent {
-                            id: term_id,
-                            kind: TerminalEventKind::TitleChanged(title),
-                        });
-                    } else {
-                        let _ = TERMINAL_EVENT_BUS.send(TerminalEvent {
-                            id: term_id,
-                            kind: TerminalEventKind::TitleChanged("Terminal".to_string()),
-                        });
-                    }
                 }
             }
             PaneOutput::Exited(id, code) => {
@@ -338,7 +329,10 @@ impl TerminalComponent {
                 }
             }
             PaneOutput::Osc133A(id) => {
-                let inner = self.inner.borrow();
+                let mut inner = self.inner.borrow_mut();
+                if let Some(pane) = inner.panes.get_mut(&id) {
+                    pane.title = pane.controller.last_title();
+                }
                 if inner.active_pane_id == id {
                     let term_id = inner.id.clone();
                     let _ = TERMINAL_EVENT_BUS.send(TerminalEvent {
@@ -368,7 +362,10 @@ impl TerminalComponent {
                 }
             }
             PaneOutput::Osc133D(id, exit_code) => {
-                let inner = self.inner.borrow();
+                let mut inner = self.inner.borrow_mut();
+                if let Some(pane) = inner.panes.get_mut(&id) {
+                    pane.title = pane.controller.last_title();
+                }
                 if inner.active_pane_id == id {
                     let term_id = inner.id.clone();
                     let _ = TERMINAL_EVENT_BUS.send(TerminalEvent {
@@ -398,12 +395,32 @@ impl TerminalComponent {
                 self.focus_pane_by_id(&id);
             }
             PaneOutput::ForegroundProcessChanged(id, process_name) => {
-                let inner = self.inner.borrow();
+                let mut inner = self.inner.borrow_mut();
+                if process_name.is_empty()
+                    && let Some(pane) = inner.panes.get_mut(&id)
+                {
+                    pane.title = pane.controller.last_title();
+                }
                 if inner.active_pane_id == id {
                     let term_id = inner.id.clone();
                     let _ = TERMINAL_EVENT_BUS.send(TerminalEvent {
                         id: term_id,
                         kind: TerminalEventKind::ForegroundProcessChanged(process_name),
+                    });
+                }
+            }
+            PaneOutput::AltScreenChanged(id, is_alt) => {
+                let mut inner = self.inner.borrow_mut();
+                if !is_alt
+                    && let Some(pane) = inner.panes.get_mut(&id)
+                {
+                    pane.title = pane.controller.last_title();
+                }
+                if inner.active_pane_id == id {
+                    let term_id = inner.id.clone();
+                    let _ = TERMINAL_EVENT_BUS.send(TerminalEvent {
+                        id: term_id,
+                        kind: TerminalEventKind::AltScreenChanged(is_alt),
                     });
                 }
             }
@@ -902,6 +919,33 @@ impl TerminalComponent {
         }
     }
 
+    pub fn last_title(&self) -> Option<String> {
+        let inner = self.inner.borrow();
+        if let Some(pane_data) = inner.panes.get(&inner.active_pane_id) {
+            pane_data.controller.last_title()
+        } else {
+            None
+        }
+    }
+
+    pub fn foreground_process(&self) -> Option<String> {
+        let inner = self.inner.borrow();
+        if let Some(pane_data) = inner.panes.get(&inner.active_pane_id) {
+            pane_data.controller.foreground_process()
+        } else {
+            None
+        }
+    }
+
+    pub fn is_alt_screen(&self) -> bool {
+        let inner = self.inner.borrow();
+        if let Some(pane_data) = inner.panes.get(&inner.active_pane_id) {
+            pane_data.controller.is_alt_screen()
+        } else {
+            false
+        }
+    }
+
     pub fn open_in_files(&self) {
         let inner = self.inner.borrow();
         if let Some(pane_data) = inner.panes.get(&inner.active_pane_id) {
@@ -1255,9 +1299,18 @@ impl TerminalComponent {
             }
 
             let next_id_opt = inner.panes.iter().next().map(|(id, _)| id.clone());
+            let term_id = inner.id.clone();
             if let Some(id) = next_id_opt {
                 inner.active_pane_id = id.clone();
+                inner.working_dir = inner
+                    .panes
+                    .get(&id)
+                    .and_then(|p| p.controller.working_dir());
                 inner.panes.get(&id).unwrap().controller.grab_focus();
+                let _ = TERMINAL_EVENT_BUS.send(TerminalEvent {
+                    id: term_id,
+                    kind: TerminalEventKind::PaneFocused(id),
+                });
             }
         }
         drop(inner);
@@ -1364,11 +1417,20 @@ impl TerminalComponent {
 
         if let Some(id) = best_id {
             inner.active_pane_id = id.clone();
+            inner.working_dir = inner
+                .panes
+                .get(&id)
+                .and_then(|p| p.controller.working_dir());
+            let term_id = inner.id.clone();
             if let Some(data) = inner.panes.get(&id) {
                 data.controller.grab_focus();
             }
             drop(inner);
             self.update_dimming();
+            let _ = TERMINAL_EVENT_BUS.send(TerminalEvent {
+                id: term_id,
+                kind: TerminalEventKind::PaneFocused(id),
+            });
         }
     }
 

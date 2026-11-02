@@ -15,11 +15,35 @@ pub struct TerminalController {
     pub controller: TerminalComponent,
     pub id: String,
     pub cwd: Option<String>,
+    pub raw_title: Option<String>,
+    pub foreground_process: Option<String>,
+    pub has_running_app: bool,
+    pub unread_bell: bool,
+    pub app_state: crate::application_detector::TerminalAppState,
+    pub category_svg: std::rc::Rc<
+        std::cell::RefCell<Option<(crate::application_detector::ApplicationCategory, gtk4::Svg)>>,
+    >,
+    pub indicator_svg: std::rc::Rc<
+        std::cell::RefCell<Option<(crate::application_detector::TabIndicatorKind, gtk4::Svg)>>,
+    >,
+    pub working_anim_source: std::rc::Rc<std::cell::RefCell<Option<gtk4::glib::SourceId>>>,
     pub tab_color: TabColor,
     pub custom_title: Option<String>,
 }
 
 impl TerminalController {
+    pub fn stop_working_anim(&self) {
+        if let Some(source) = self.working_anim_source.borrow_mut().take() {
+            source.remove();
+        }
+        if let Some((_, svg)) = self.category_svg.borrow_mut().take() {
+            svg.pause();
+        }
+        if let Some((_, svg)) = self.indicator_svg.borrow_mut().take() {
+            svg.pause();
+        }
+    }
+
     pub fn cancel_task_by_id(&self, pane_id: &str, task_id: uuid::Uuid) -> bool {
         self.controller.cancel_task_by_id(pane_id, task_id)
     }
