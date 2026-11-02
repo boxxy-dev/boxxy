@@ -10,8 +10,6 @@ pub fn setup_claw_ui_page(
     settings_rc: Rc<RefCell<Settings>>,
     on_change: Rc<dyn Fn(Settings) + 'static>,
 ) -> Box<dyn Fn(&str) -> bool> {
-    let maintain_overlay_history_switch: adw::SwitchRow =
-        builder.object("maintain_overlay_history_switch").unwrap();
     let enable_tips_switch: adw::SwitchRow = builder.object("enable_tips_switch").unwrap();
     let overlay_font_scale_spin: adw::SpinRow =
         builder.object("overlay_font_scale_spin").unwrap();
@@ -51,7 +49,6 @@ pub fn setup_claw_ui_page(
     // Initial sync
     {
         let s = settings_rc.borrow();
-        maintain_overlay_history_switch.set_active(s.maintain_overlay_history);
         enable_tips_switch.set_active(s.enable_tips);
         let scale_adj = gtk::Adjustment::new(
             s.overlay_font_scale.clamp(60, 220) as f64,
@@ -106,23 +103,6 @@ pub fn setup_claw_ui_page(
         let mut s = s_rc.borrow_mut();
         if s.currency != currency {
             s.currency = currency;
-            s.save();
-            cb(s.clone());
-        }
-    });
-
-    // Maintain-overlay-history toggle
-    let s_rc = settings_rc.clone();
-    let cb = on_change.clone();
-    let is_up = is_updating.clone();
-    maintain_overlay_history_switch.connect_active_notify(move |row: &adw::SwitchRow| {
-        if is_up.get() {
-            return;
-        }
-        let val = row.is_active();
-        let mut s = s_rc.borrow_mut();
-        if s.maintain_overlay_history != val {
-            s.maintain_overlay_history = val;
             s.save();
             cb(s.clone());
         }
@@ -246,7 +226,6 @@ pub fn setup_claw_ui_page(
     let group_claw_identity_clone = group_claw_identity.clone();
     let group_claw_ui_behavior_clone = group_claw_ui_behavior.clone();
     let group_claw_ui_shortcuts_clone = group_claw_ui_shortcuts.clone();
-    let maintain_overlay_history_switch_clone = maintain_overlay_history_switch.clone();
     let enable_tips_switch_clone = enable_tips_switch.clone();
     let overlay_font_scale_spin_clone = overlay_font_scale_spin.clone();
     let currency_combo_clone = currency_combo.clone();
@@ -276,11 +255,6 @@ pub fn setup_claw_ui_page(
             "hide character badge agent identity top right corner",
         );
 
-        let maintain = match_row(
-            maintain_overlay_history_switch_clone.upcast_ref(),
-            "maintain session history overlay log scrollable conversation",
-        );
-
         let tips = match_row(
             enable_tips_switch_clone.upcast_ref(),
             "tips usage hints rotating help",
@@ -305,7 +279,7 @@ pub fn setup_claw_ui_page(
             "reset default claw ui shortcut keybinding",
         );
 
-        let behavior_visible = maintain || tips || font_scale || currency;
+        let behavior_visible = tips || font_scale || currency;
         let sounds_visible = timer_sounds || task_sounds;
         let identity_visible = hide_badge;
         let shortcut_visible = s_accel || reset_shortcut;

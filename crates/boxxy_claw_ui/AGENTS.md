@@ -7,7 +7,7 @@ Every GTK widget that renders into the "Claw" page of the right-hand sidebar liv
 Three consumers:
 - `boxxy-window` embeds `ClawSidebarComponent` as one page of its right-hand `ViewStack`.
 - `boxxy-terminal`'s pane module creates one per-pane message list via `create_claw_message_list()` and hands its `ListStore` to the widget's dispatch loop as the `sidebar_store` argument.
-- `boxxy-claw-widget`'s `dispatch::spawn_dispatch` is the actual writer: every `ClawEngineEvent` that produces a row calls the relevant `add_*_row` helper against both the sidebar store (passed-in) and the overlay's own history store (when the `maintain_overlay_history` setting is on).
+- `boxxy-claw-widget`'s `dispatch::spawn_dispatch` is the actual writer: every `ClawEngineEvent` that produces a row calls the relevant `add_*_row` helper against both the sidebar store (passed-in) and the overlay's own history store.
 
 ## Structure
 

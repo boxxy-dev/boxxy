@@ -39,7 +39,6 @@ Defines `TerminalOverlay` and `OverlayMode { Claw, Bookmark }`. Constructed via 
 - `show_chat_only(agent_name)` — opens the drawer in an empty-proposal state (used when the agent starts thinking before producing output).
 - `show_input_only(agent_name)` — the `Ctrl+/` entry point. Reveals the drawer if closed; focuses the input if sensitive; never hides or clobbers an active `Thinking` or `Action` state. The Okay/Reject/Accept buttons are the explicit dismiss paths — silent hiding would strand the user when the agent is waiting for a message.
 - `enter_waiting_state()` — collapses proposal controls and transitions immediately to `OverlayState::Thinking` so the drawer reads as "thinking…" the moment the user submits a reply or approves an in-turn tool proposal.
-- `set_history_mode(enabled)` — toggles between the single-message view and a full scrollable conversation log (user preference `maintain_overlay_history`).
 
 The character selector renders from `CHARACTER_CACHE` and `CLAIMS_CACHE`; it is refreshed via `RegistrySnapshot` push signals, not polling.
 
@@ -62,7 +61,7 @@ Two widgets in one: a small floating badge (over the terminal, shows the agent's
 **Quiet-by-default policy**: the badge starts with its revealer retracted. It only appears once `set_identity(name)` arrives with a non-empty name. `set_mode(AgentStatus)` only drives status icons + color tint; it never writes placeholder labels like "CLAW" / "WORKING". Dormant panes show nothing. Character lookup on `set_identity` reads `CHARACTER_CACHE` by UUID; orphan character migration (deleted UUID) is handled daemon-side via the `Migrated` claim error, not locally.
 
 ### The dispatch loop (`dispatch.rs`)
-`spawn_dispatch(rx, host, overlay, indicator, msg_bar, id, session_status, is_pinned, is_web_search, agent_name, session_usage)` — a single `while let Ok(event) = rx.recv().await` that matches every `ClawEngineEvent` variant. Each branch either mutates widget UI, appends overlay-visible rows to the overlay's full-session backing store (which syncs to the visible `history_store`), or delegates to the host. Toggling `maintain_overlay_history` off and back on, or resuming a session, restores the full conversation history. Every event, including ones with no widget reaction (`RequestSpawnAgent`, `InjectKeystrokes`), is forwarded via `host.forward_event(event)` at the tail so non-UI consumers (tab badges, swarm router) see the full stream.
+`spawn_dispatch(rx, host, overlay, indicator, msg_bar, id, session_status, is_pinned, is_web_search, agent_name, session_usage)` — a single `while let Ok(event) = rx.recv().await` that matches every `ClawEngineEvent` variant. Each branch either mutates widget UI, appends overlay-visible rows to the overlay's full-session backing store (which syncs to the visible `history_store`), or delegates to the host. Resuming a session restores the full conversation history. Every event, including ones with no widget reaction (`RequestSpawnAgent`, `InjectKeystrokes`), is forwarded via `host.forward_event(event)` at the tail so non-UI consumers (tab badges, swarm router) see the full stream.
 
 **User-typed error handling.** On `LazyErrorIndicator`, dispatch calls `indicator.show_lazy_error()` — a small red "Error Detected" pill appears at the pane corner. **No drawer opens, no LLM call.** The user clicks "Diagnose" on the pill, which fires the indicator's `on_lazy_click` → the pane sends `ClawMessage::RequestLazyDiagnosis` → engine drains its stashed prompt and runs the diagnosis pipeline → next `DiagnosisComplete` opens the drawer normally. Agent-originated command failures (the accept → error loop) still auto-diagnose via the engine's proactive path, emerging as `DiagnosisComplete` directly. The dispatch code doesn't need to know which mode it's in — origin is the engine's concern.
 
@@ -83,7 +82,7 @@ boxxy-claw-widget
 ├── boxxy-claw-ui          (sidebar row helpers; same factory reused here)
 ├── boxxy-core-widgets     (AutocompleteController + CompletionProvider trait)
 ├── boxxy-db               (MsgHistory persistence)
-├── boxxy-preferences      (read settings: maintain_overlay_history, …)
+├── boxxy-preferences      (read settings: enable_tips, overlay_font_scale, …)
 └── boxxy-viewer           (StructuredViewer for diagnosis rendering)
 ```
 

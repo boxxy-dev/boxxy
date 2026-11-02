@@ -294,11 +294,6 @@ pub struct Settings {
     pub enable_timer_sounds: bool,
     pub enable_task_sounds: bool,
     pub colored_tabs: bool,
-    /// When true, the in-terminal Claw overlay keeps a scrollable history
-    /// of messages (mirroring the sidebar logger). When false, each new
-    /// message replaces the previous one in the overlay. Off by default
-    /// because the overlay normally shows only the latest turn.
-    pub maintain_overlay_history: bool,
     pub enable_tips: bool,
     #[serde(default = "default_overlay_font_scale")]
     pub overlay_font_scale: u32,
@@ -369,7 +364,6 @@ impl Default for Settings {
             enable_timer_sounds: true,
             enable_task_sounds: true,
             colored_tabs: false,
-            maintain_overlay_history: true,
             enable_tips: true,
             overlay_font_scale: default_overlay_font_scale(),
             currency: Currency::Usd,

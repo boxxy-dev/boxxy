@@ -48,7 +48,6 @@ pub struct TerminalOverlay {
     state: Rc<RefCell<OverlayState>>,
     current_mode: Rc<RefCell<OverlayMode>>,
     active_agent: Rc<RefCell<String>>,
-    history_enabled: Rc<Cell<bool>>,
     history_sticky: Rc<Cell<bool>>,
     is_auto_scrolling: Rc<Cell<bool>>,
     tips_cycle: TipsCycle,
@@ -310,7 +309,6 @@ impl TerminalOverlay {
         let state = Rc::new(RefCell::new(OverlayState::Idle));
         let current_mode = Rc::new(RefCell::new(OverlayMode::Claw));
         let active_agent = Rc::new(RefCell::new(String::new()));
-        let history_enabled = Rc::new(Cell::new(false));
 
         let s = Self {
             revealer: revealer.clone(),
@@ -336,7 +334,6 @@ impl TerminalOverlay {
             state: state.clone(),
             current_mode: current_mode.clone(),
             active_agent: active_agent.clone(),
-            history_enabled: history_enabled.clone(),
             history_sticky: history_sticky.clone(),
             is_auto_scrolling: is_auto_scrolling.clone(),
             tips_cycle: tips_cycle.clone(),
@@ -643,9 +640,8 @@ impl TerminalOverlay {
 
     /// Returns the per-pane full session history store for the overlay.
     /// `dispatch` writes every overlay-visible `ClawEngineEvent` into this
-    /// store unconditionally so the full session is retained even when
-    /// `maintain_overlay_history` is temporarily turned off or the visible
-    /// view is cleared.
+    /// store unconditionally so the full session is retained even when the
+    /// visible view is cleared.
     pub fn history_store(&self) -> gio::ListStore {
         self.full_history_store.clone()
     }
@@ -666,36 +662,6 @@ impl TerminalOverlay {
         self.history_store.remove_all();
         self.diagnosis_viewer.set_content("");
         self.hide();
-    }
-
-    /// Toggle between the single-message view (latest diagnosis only) and the
-    /// full scrollable history. Turning `maintain_overlay_history` back on
-    /// restores the full session into the visible store.
-    pub fn set_history_mode(&self, enabled: bool) {
-        let was_enabled = self.history_enabled.replace(enabled);
-        self.single_scroll.set_visible(!enabled);
-        self.history_scroll.set_visible(enabled);
-
-        if enabled && !was_enabled {
-            let n = self.full_history_store.n_items();
-            let mut batch = Vec::with_capacity(n as usize);
-            for i in 0..n {
-                if let Some(obj) = self
-                    .full_history_store
-                    .item(i)
-                    .and_downcast::<boxxy_claw_ui::row_object::ClawRowObject>()
-                {
-                    batch.push(obj);
-                }
-            }
-            self.history_store.remove_all();
-            self.history_store.extend_from_slice(&batch);
-            self.scroll_to_latest();
-        }
-    }
-
-    pub fn history_mode(&self) -> bool {
-        self.history_enabled.get()
     }
 
     /// Called whenever the parent pane is resized. Caps the scroll window height
@@ -1028,7 +994,7 @@ impl TerminalOverlay {
         }
 
         // Auto-scroll to the newest row so reopening lands on the latest
-        // message (history mode) or the bottom of the scroll (single mode).
+        // message in the conversation log.
         self.scroll_to_latest();
 
         // Defer focus grab a tick so GTK has realized the revealed widgets.
@@ -1041,10 +1007,10 @@ impl TerminalOverlay {
         });
     }
 
-    /// Force the visible scroll (history or single) to its bottom edge.
+    /// Force the visible scroll (history or bookmark preview) to its bottom edge.
     /// Used on reveal so the user always lands on the latest content.
     fn scroll_to_latest(&self) {
-        if self.history_enabled.get() {
+        if *self.current_mode.borrow() == OverlayMode::Claw {
             let n = self.history_store.n_items();
             if n == 0 {
                 return;
@@ -1132,6 +1098,8 @@ impl TerminalOverlay {
 
         // 2. Base components based on mode
         let is_claw = mode == OverlayMode::Claw;
+        self.single_scroll.set_visible(!is_claw);
+        self.history_scroll.set_visible(is_claw);
         self.msgbar_slot.set_visible(is_claw);
         self.msg_bar.widget.set_visible(is_claw);
         self.inspect_btn.set_visible(is_claw);
