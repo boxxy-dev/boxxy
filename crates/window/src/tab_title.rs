@@ -2,7 +2,7 @@ use crate::application_detector::{
     TerminalAppState, detect_application_state, is_prompt_helper_executable, is_shell_executable,
     is_ssh_executable, normalize_executable_name,
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::LazyLock;
 
@@ -237,19 +237,27 @@ pub fn resolve_tab_titles(
         });
     }
 
-    // Count occurrences of each auto-generated `base_title` to disambiguate identical titles
-    let mut counts: HashMap<String, usize> = HashMap::with_capacity(candidates.len());
+    // Only disambiguate when two or more auto-named tabs share `base_title` AND
+    // actually live in different parent/working directories (`distinct.len() > 1`).
+    // Opening a second tab in the exact same directory keeps the clean `base_title`.
+    let mut disambiguators_by_title: HashMap<String, HashSet<Option<String>>> =
+        HashMap::with_capacity(candidates.len());
     for c in &candidates {
         if !c.is_custom && c.base_title != "Terminal" {
-            *counts.entry(c.base_title.clone()).or_insert(0) += 1;
+            disambiguators_by_title
+                .entry(c.base_title.clone())
+                .or_default()
+                .insert(c.disambiguator.clone());
         }
     }
 
     candidates
         .into_iter()
         .map(|c| {
-            let needs_disambiguation =
-                !c.is_custom && counts.get(c.base_title.as_str()).copied().unwrap_or(0) > 1;
+            let needs_disambiguation = !c.is_custom
+                && disambiguators_by_title
+                    .get(c.base_title.as_str())
+                    .is_some_and(|set| set.len() > 1);
             let title = if needs_disambiguation {
                 if let Some(ref parent) = c.disambiguator
                     && !parent.is_empty()
@@ -806,6 +814,30 @@ mod tests {
         assert_eq!(resolved[1].title, "src · other-project");
         assert_eq!(resolved[1].tooltip, "/home/user/Projects/other-project/src");
         assert_eq!(resolved[2].title, "Downloads");
+    }
+
+    #[test]
+    fn test_two_tabs_in_same_directory_keep_clean_basename() {
+        let tabs = vec![
+            TabTitleInput {
+                custom_title: None,
+                cwd: Some("/home/user/Projects/boxxy-dev/boxxy-terminal".to_string()),
+                raw_title: Some("~/Projects/boxxy-dev/boxxy-terminal - fish".to_string()),
+                foreground_process: None,
+                ..Default::default()
+            },
+            TabTitleInput {
+                custom_title: None,
+                cwd: Some("/home/user/Projects/boxxy-dev/boxxy-terminal".to_string()),
+                raw_title: Some("~/Projects/boxxy-dev/boxxy-terminal - fish".to_string()),
+                foreground_process: None,
+                ..Default::default()
+            },
+        ];
+
+        let resolved = resolve_tab_titles(&tabs, true, HOME, LOCAL_HOST);
+        assert_eq!(resolved[0].title, "boxxy-terminal");
+        assert_eq!(resolved[1].title, "boxxy-terminal");
     }
 
     #[test]
