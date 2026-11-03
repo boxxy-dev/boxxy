@@ -1125,20 +1125,16 @@ button.whats-new-commit-row {
     font-weight: 400;
 }
 
-.whats-new-commit-sha {
-    background-color: alpha(@accent_bg_color, 0.16);
-    color: @accent_color;
-    border: 1px solid alpha(@accent_bg_color, 0.28);
-    border-radius: 6px;
-    padding: 1px 6px;
-    font-size: 0.80em;
-    font-weight: 700;
+.whats-new-commit-title {
+    font-size: 0.93em;
+    font-weight: 500;
+    opacity: 0.94;
 }
 
-.whats-new-commit-title {
-    font-size: 0.92em;
-    font-weight: 400;
-    opacity: 0.92;
+.whats-new-commit-meta {
+    font-size: 0.76em;
+    font-weight: 500;
+    opacity: 0.55;
 }
 
 button.whats-new-back-btn {
@@ -1147,6 +1143,22 @@ button.whats-new-back-btn {
     border-radius: 6px;
     font-size: 0.82em;
     font-weight: 700;
+}
+
+button.whats-new-nav-btn {
+    min-width: 24px;
+    min-height: 24px;
+    padding: 2px 4px;
+    border-radius: 6px;
+    opacity: 0.70;
+}
+
+button.whats-new-nav-btn:hover:not(:disabled) {
+    opacity: 1.0;
+}
+
+button.whats-new-nav-btn:disabled {
+    opacity: 0.25;
 }
 
 .whats-new-commit-detail-text {

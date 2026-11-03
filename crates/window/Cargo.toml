@@ -25,6 +25,7 @@ boxxy-bookmarks = { path = "../boxxy_bookmarks" }
 boxxy-ai-core = { path = "../ai_core" }
 boxxy-model-selection = { path = "../model_selection" }
 boxxy-command-palette = { path = "../command_palette" }
+chrono.workspace = true
 anyhow.workspace = true
 sourceview5.workspace = true
 async-channel.workspace = true

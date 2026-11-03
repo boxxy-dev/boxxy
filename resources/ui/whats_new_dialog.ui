@@ -204,11 +204,51 @@
                     <property name="margin-top">16</property>
                     <property name="margin-bottom">20</property>
 
-                    <!-- Stats and Commits Section (no outer border box) -->
+                    <!-- Stats and Commits Section (Loading Stack vs Loaded Content) -->
                     <child>
-                      <object class="GtkBox" id="stats_card">
-                        <property name="orientation">vertical</property>
-                        <property name="spacing">14</property>
+                      <object class="GtkStack" id="body_state_stack">
+                        <property name="transition-type">crossfade</property>
+                        <property name="transition-duration">180</property>
+                        <property name="vhomogeneous">false</property>
+                        <property name="interpolate-size">true</property>
+                        <child>
+                          <object class="GtkStackPage">
+                            <property name="name">loading</property>
+                            <property name="child">
+                              <object class="GtkBox">
+                                <property name="orientation">vertical</property>
+                                <property name="spacing">14</property>
+                                <property name="halign">center</property>
+                                <property name="valign">center</property>
+                                <property name="height-request">348</property>
+                                <child>
+                                  <object class="GtkSpinner" id="body_loading_spinner">
+                                    <property name="spinning">true</property>
+                                    <property name="width-request">32</property>
+                                    <property name="height-request">32</property>
+                                    <property name="halign">center</property>
+                                  </object>
+                                </child>
+                                <child>
+                                  <object class="GtkLabel" id="body_loading_label">
+                                    <property name="label">Fetching update details from GitHub…</property>
+                                    <property name="halign">center</property>
+                                    <style>
+                                      <class name="dim-label"/>
+                                    </style>
+                                  </object>
+                                </child>
+                              </object>
+                            </property>
+                          </object>
+                        </child>
+                        <child>
+                          <object class="GtkStackPage">
+                            <property name="name">content</property>
+                            <property name="child">
+                              <object class="GtkBox" id="stats_card">
+                                <property name="orientation">vertical</property>
+                                <property name="spacing">14</property>
                         <child>
                           <object class="GtkBox">
                             <property name="orientation">horizontal</property>
@@ -223,7 +263,7 @@
                                 </style>
                                 <child>
                                   <object class="GtkLabel" id="commits_val">
-                                    <property name="label">📦 0</property>
+                                    <property name="label">0</property>
                                     <style>
                                       <class name="whats-new-stat-big"/>
                                     </style>
@@ -248,7 +288,7 @@
                                 </style>
                                 <child>
                                   <object class="GtkLabel" id="files_val">
-                                    <property name="label">🗂️ 0</property>
+                                    <property name="label">0</property>
                                     <style>
                                       <class name="whats-new-stat-big"/>
                                     </style>
@@ -374,7 +414,7 @@
                                 <property name="hscrollbar-policy">never</property>
                                 <property name="vscrollbar-policy">automatic</property>
                                 <property name="propagate-natural-height">true</property>
-                                <property name="max-content-height">220</property>
+                                <property name="max-content-height">252</property>
                                 <child>
                                   <object class="GtkBox" id="commits_list">
                                     <property name="orientation">vertical</property>
@@ -385,6 +425,10 @@
                                 </child>
                               </object>
                             </child>
+                          </object>
+                        </child>
+                      </object>
+                            </property>
                           </object>
                         </child>
                       </object>
@@ -430,6 +474,9 @@
                             <child>
                               <object class="GtkButton" id="close_btn">
                                 <property name="label">Close</property>
+                                <style>
+                                  <class name="pill"/>
+                                </style>
                               </object>
                             </child>
                             <child>
@@ -453,6 +500,7 @@
                                 </child>
                                 <style>
                                   <class name="suggested-action"/>
+                                  <class name="pill"/>
                                 </style>
                               </object>
                             </child>
@@ -496,15 +544,47 @@
                       </object>
                     </child>
                     <child>
-                      <object class="GtkLabel" id="detail_sha_label">
-                        <property name="use-markup">true</property>
+                      <object class="GtkBox">
+                        <property name="orientation">horizontal</property>
+                        <property name="spacing">2</property>
                         <property name="halign">end</property>
                         <property name="valign">center</property>
                         <property name="hexpand">true</property>
-                        <style>
-                          <class name="whats-new-see-diff"/>
-                          <class name="boxxy-link"/>
-                        </style>
+                        <child>
+                          <object class="GtkButton" id="commit_prev_btn">
+                            <property name="icon-name">go-previous-symbolic</property>
+                            <property name="tooltip-text">Previous commit</property>
+                            <property name="valign">center</property>
+                            <property name="focus-on-click">false</property>
+                            <style>
+                              <class name="flat"/>
+                              <class name="whats-new-nav-btn"/>
+                            </style>
+                          </object>
+                        </child>
+                        <child>
+                          <object class="GtkLabel" id="detail_sha_label">
+                            <property name="use-markup">true</property>
+                            <property name="valign">center</property>
+                            <style>
+                              <class name="monospace"/>
+                              <class name="whats-new-see-diff"/>
+                              <class name="boxxy-link"/>
+                            </style>
+                          </object>
+                        </child>
+                        <child>
+                          <object class="GtkButton" id="commit_next_btn">
+                            <property name="icon-name">go-next-symbolic</property>
+                            <property name="tooltip-text">Next commit</property>
+                            <property name="valign">center</property>
+                            <property name="focus-on-click">false</property>
+                            <style>
+                              <class name="flat"/>
+                              <class name="whats-new-nav-btn"/>
+                            </style>
+                          </object>
+                        </child>
                       </object>
                     </child>
                   </object>
@@ -518,7 +598,7 @@
                   <object class="GtkScrolledWindow" id="detail_scrolled">
                     <property name="hscrollbar-policy">never</property>
                     <property name="vscrollbar-policy">automatic</property>
-                    <property name="max-content-height">440</property>
+                    <property name="max-content-height">472</property>
                     <property name="hexpand">true</property>
                     <child>
                       <object class="GtkLabel" id="detail_message_label">

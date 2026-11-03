@@ -1289,6 +1289,7 @@ dependencies = [
  "boxxy-sys-utils",
  "boxxy-terminal",
  "boxxy-themes",
+ "chrono",
  "flate2",
  "getrandom 0.4.3",
  "gstreamer",

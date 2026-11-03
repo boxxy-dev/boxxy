@@ -455,6 +455,13 @@ impl Updater {
         fs::write(pending_dir.join(".update_date"), &date)?;
         if !new_commit.trim().is_empty() {
             let _ = fs::write(pending_dir.join(".update_commit"), new_commit.trim());
+            let from_c = CURRENT_COMMIT.to_string();
+            let to_c = new_commit.trim().to_string();
+            if from_c != "unknown" && !from_c.is_empty() {
+                tokio::spawn(async move {
+                    let _ = whats_new::fetch_changelog_summary(&from_c, &to_c).await;
+                });
+            }
         }
 
         Ok(pending_dir)

@@ -522,18 +522,11 @@ impl AppWindow {
                     let _ = tx_startup.send(AppInput::EnsureInitialTab).await;
                 }
                 if let Some(pending) = crate::updater::whats_new::take_whats_new_pending() {
-                    let tx_wn = tx_startup.clone();
-                    tokio::spawn(async move {
-                        let summary = crate::updater::whats_new::fetch_changelog_summary(
-                            &pending.from_commit,
-                            &pending.to_commit,
-                        )
-                        .await
-                        .ok();
-                        let _ = tx_wn
-                            .send(AppInput::ShowWhatsNewDialog(pending, summary))
-                            .await;
-                    });
+                    let cached =
+                        crate::updater::whats_new::load_cached_changelog_summary(&pending);
+                    let _ = tx_startup
+                        .send(AppInput::ShowWhatsNewDialog(pending, cached))
+                        .await;
                 }
                 if let Ok(detached) = agent.list_detached_sessions_detailed().await {
                     let _ = tx_startup

@@ -109,18 +109,9 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
         }
         AppInput::OpenWhatsNew => {
             let pending = crate::updater::whats_new::load_last_whats_new();
+            let cached = crate::updater::whats_new::load_cached_changelog_summary(&pending);
             let tx_wn = inner.tx.clone();
-            tokio::spawn(async move {
-                let summary = crate::updater::whats_new::fetch_changelog_summary(
-                    &pending.from_commit,
-                    &pending.to_commit,
-                )
-                .await
-                .ok();
-                let _ = tx_wn
-                    .send(AppInput::ShowWhatsNewDialog(pending, summary))
-                    .await;
-            });
+            let _ = tx_wn.send_blocking(AppInput::ShowWhatsNewDialog(pending, cached));
         }
         AppInput::OpenAbout => {
             inner.preferences.show_page("about");
@@ -438,11 +429,9 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
         AppInput::PushGlobalNotification(ready) => {
             let is_update = ready.level == crate::widgets::notification::NotificationLevel::Update;
             if is_update {
-                if inner
-                    .notifications
-                    .iter()
-                    .any(|n| n.id == ready.id && n.message == ready.message && n.details == ready.details)
-                {
+                if inner.notifications.iter().any(|n| {
+                    n.id == ready.id && n.message == ready.message && n.details == ready.details
+                }) {
                     return;
                 }
                 inner.notifications.retain(|n| n.id != ready.id);
@@ -692,7 +681,8 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
 
             if let Some(hero_subtitle) = builder.object::<gtk4::Label>("hero_subtitle_label") {
                 if claw_ready {
-                    hero_subtitle.set_label("Hot out of the compiler! Let Boxxy give you the tour.");
+                    hero_subtitle
+                        .set_label("Hot out of the compiler! Let Boxxy give you the tour.");
                 } else {
                     hero_subtitle.set_label(
                         "Hot out of the compiler! Copy the prompt below for your favorite AI.",
@@ -704,7 +694,9 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
             let detail_scrolled_for_back =
                 builder.object::<gtk4::ScrolledWindow>("detail_scrolled");
             if let Some(back_btn) = builder.object::<gtk4::Button>("commit_back_btn") {
-                let stack_weak = commits_stack.as_ref().map(gtk4::prelude::ObjectExt::downgrade);
+                let stack_weak = commits_stack
+                    .as_ref()
+                    .map(gtk4::prelude::ObjectExt::downgrade);
                 let detail_sc_weak = detail_scrolled_for_back
                     .as_ref()
                     .map(gtk4::prelude::ObjectExt::downgrade);
@@ -724,7 +716,141 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
             }
 
             let state_rc = Rc::new(RefCell::new((pending.clone(), summary.clone())));
-            populate_whats_new_summary(&builder, &pending, summary.as_ref());
+            let detail_idx_rc = Rc::new(std::cell::Cell::new(0usize));
+
+            let show_commit_detail: Rc<dyn Fn(usize)> = {
+                let builder_c = builder.clone();
+                let state_c = state_rc.clone();
+                let idx_c = detail_idx_rc.clone();
+                Rc::new(move |idx: usize| {
+                    let (_, ref cur_summary) = *state_c.borrow();
+                    let Some(s) = cur_summary.as_ref() else {
+                        return;
+                    };
+                    let total = s.commits.len();
+                    if idx >= total {
+                        return;
+                    }
+                    // The commit list displays `s.commits.iter().rev()`, so index `idx`
+                    // in display order maps to `s.commits[total - 1 - idx]`.
+                    let entry = &s.commits[total - 1 - idx];
+                    idx_c.set(idx);
+
+                    if let Some(lbl) = builder_c.object::<gtk4::Label>("detail_sha_label") {
+                        let escaped_sha = gtk4::glib::markup_escape_text(&entry.short_sha);
+                        let commit_url = format!(
+                            "https://github.com/{}/{}/commit/{}",
+                            crate::updater::REPO_OWNER,
+                            crate::updater::REPO_NAME,
+                            escaped_sha
+                        );
+                        lbl.set_markup(&format!(
+                            "<a href=\"{commit_url}\"><span underline=\"none\">{escaped_sha}</span></a>"
+                        ));
+                        lbl.set_tooltip_text(Some(&format!(
+                            "View commit {} on GitHub",
+                            entry.short_sha
+                        )));
+                    }
+                    if let Some(prev_btn) = builder_c.object::<gtk4::Button>("commit_prev_btn") {
+                        prev_btn.set_sensitive(idx > 0);
+                    }
+                    if let Some(next_btn) = builder_c.object::<gtk4::Button>("commit_next_btn") {
+                        next_btn.set_sensitive(idx + 1 < total);
+                    }
+                    if let Some(lbl) = builder_c.object::<gtk4::Label>("detail_message_label") {
+                        let mut lines = entry.message.lines();
+                        let first_line = lines.next().unwrap_or(&entry.message).trim();
+                        let rest = lines.collect::<Vec<_>>().join("\n").trim().to_string();
+                        let markup = if rest.is_empty() {
+                            format!("<b>{}</b>", gtk4::glib::markup_escape_text(first_line))
+                        } else {
+                            format!(
+                                "<b>{}</b>\n\n<span alpha=\"85%\">{}</span>",
+                                gtk4::glib::markup_escape_text(first_line),
+                                gtk4::glib::markup_escape_text(&rest)
+                            )
+                        };
+                        lbl.set_markup(&markup);
+                    }
+                    if let Some(sc) = builder_c.object::<gtk4::ScrolledWindow>("detail_scrolled") {
+                        sc.set_min_content_height(452);
+                        sc.set_height_request(452);
+                        sc.vadjustment().set_value(0.0);
+                    }
+                    if let Some(stack) = builder_c.object::<gtk4::Stack>("commits_stack") {
+                        stack.set_visible_child_name("detail");
+                    }
+                })
+            };
+
+            if let Some(prev_btn) = builder.object::<gtk4::Button>("commit_prev_btn") {
+                let idx_c = detail_idx_rc.clone();
+                let show_c = show_commit_detail.clone();
+                prev_btn.connect_clicked(move |_| {
+                    let cur = idx_c.get();
+                    if cur > 0 {
+                        show_c(cur - 1);
+                    }
+                });
+            }
+            if let Some(next_btn) = builder.object::<gtk4::Button>("commit_next_btn") {
+                let idx_c = detail_idx_rc.clone();
+                let show_c = show_commit_detail.clone();
+                next_btn.connect_clicked(move |_| {
+                    show_c(idx_c.get() + 1);
+                });
+            }
+            let loading_rc = Rc::new(std::cell::Cell::new(false));
+            let read_btn = builder.object::<gtk4::Button>("read_btn");
+            let read_btn_label = builder.object::<gtk4::Label>("read_btn_label");
+            let copy_btn = builder.object::<gtk4::Button>("copy_prompt_btn");
+
+            let update_action_buttons: Rc<dyn Fn()> = {
+                let read_btn_c = read_btn.clone();
+                let read_btn_label_c = read_btn_label.clone();
+                let copy_btn_c = copy_btn.clone();
+                let loading_c = loading_rc.clone();
+                Rc::new(move || {
+                    let is_loading = loading_c.get();
+                    if let Some(ref cb) = copy_btn_c {
+                        cb.set_sensitive(!is_loading);
+                    }
+                    if let Some(ref rb) = read_btn_c {
+                        let chars_available =
+                            boxxy_claw_protocol::characters::has_available_character(None);
+                        if is_loading {
+                            rb.set_sensitive(false);
+                            if let Some(ref lbl) = read_btn_label_c {
+                                lbl.set_label("Read What's New");
+                            }
+                            rb.set_tooltip_text(Some("Fetching update details…"));
+                        } else if !claw_ready {
+                            rb.set_sensitive(false);
+                            if let Some(ref lbl) = read_btn_label_c {
+                                lbl.set_label("Read What's New");
+                            }
+                            rb.set_tooltip_text(Some(
+                                "Configure a Claw AI model in Preferences to let Boxxy read what's new",
+                            ));
+                        } else if !chars_available {
+                            rb.set_sensitive(false);
+                            if let Some(ref lbl) = read_btn_label_c {
+                                lbl.set_label("No Characters Free");
+                            }
+                            rb.set_tooltip_text(Some(
+                                "All characters are currently active in other sessions",
+                            ));
+                        } else {
+                            rb.set_sensitive(true);
+                            if let Some(ref lbl) = read_btn_label_c {
+                                lbl.set_label("Read What's New");
+                            }
+                            rb.set_tooltip_text(None);
+                        }
+                    }
+                })
+            };
 
             let range_stack = builder.object::<gtk4::Stack>("commit_range_stack");
             let from_entry = builder.object::<gtk4::Entry>("from_commit_entry");
@@ -754,12 +880,107 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
                 });
             }
 
-            let trigger_refresh: Rc<dyn Fn()> = {
+            let fetch_and_populate: Rc<dyn Fn(crate::updater::whats_new::WhatsNewPending, bool)> = {
                 let builder_c = builder.clone();
                 let range_stack_c = range_stack.clone();
+                let state_c = state_rc.clone();
+                let show_detail_c = show_commit_detail.clone();
+                let loading_c = loading_rc.clone();
+                let update_btns_c = update_action_buttons.clone();
+                let tx_toast = inner.tx.clone();
+                Rc::new(move |new_pending, show_error_toast| {
+                    if let Some(ref st) = range_stack_c {
+                        st.set_visible_child_name("display");
+                    }
+                    if let Some(commit_pill) = builder_c.object::<gtk4::Label>("commit_pill_label")
+                    {
+                        commit_pill.set_label(&format!(
+                            "{} → {}",
+                            new_pending.from_commit, new_pending.to_commit
+                        ));
+                    }
+                    loading_c.set(true);
+                    set_whats_new_loading_state(&builder_c, true);
+                    update_btns_c();
+
+                    if let Some(cached) =
+                        crate::updater::whats_new::load_cached_changelog_summary(&new_pending)
+                    {
+                        loading_c.set(false);
+                        crate::updater::whats_new::save_last_whats_new(&new_pending);
+                        *state_c.borrow_mut() = (new_pending.clone(), Some(cached.clone()));
+                        populate_whats_new_summary(
+                            &builder_c,
+                            &new_pending,
+                            Some(&cached),
+                            &show_detail_c,
+                        );
+                        update_btns_c();
+                        return;
+                    }
+
+                    let builder_async = builder_c.clone();
+                    let state_async = state_c.clone();
+                    let show_detail_async = show_detail_c.clone();
+                    let loading_async = loading_c.clone();
+                    let update_btns_async = update_btns_c.clone();
+                    let tx_toast_async = tx_toast.clone();
+                    gtk4::glib::spawn_future_local(async move {
+                        let p_fetch = new_pending.clone();
+                        let res = boxxy_sys_utils::runtime()
+                            .spawn(async move {
+                                crate::updater::whats_new::fetch_changelog_summary(
+                                    &p_fetch.from_commit,
+                                    &p_fetch.to_commit,
+                                )
+                                .await
+                            })
+                            .await;
+
+                        loading_async.set(false);
+                        match res {
+                            Ok(Ok(new_summary)) if new_summary.total_commits > 0 => {
+                                crate::updater::whats_new::save_last_whats_new(&new_pending);
+                                *state_async.borrow_mut() =
+                                    (new_pending.clone(), Some(new_summary.clone()));
+                                populate_whats_new_summary(
+                                    &builder_async,
+                                    &new_pending,
+                                    Some(&new_summary),
+                                    &show_detail_async,
+                                );
+                            }
+                            _ => {
+                                let (ref prev_pending, ref prev_summary) = *state_async.borrow();
+                                if prev_summary.is_some() {
+                                    populate_whats_new_summary(
+                                        &builder_async,
+                                        prev_pending,
+                                        prev_summary.as_ref(),
+                                        &show_detail_async,
+                                    );
+                                } else {
+                                    set_whats_new_offline_state(&builder_async, &new_pending);
+                                }
+                                if show_error_toast {
+                                    let _ = tx_toast_async.send_blocking(AppInput::ShowToast(
+                                        crate::state::ToastRequest::ephemeral(format!(
+                                            "Could not fetch commits for {}...{}",
+                                            new_pending.from_commit, new_pending.to_commit
+                                        )),
+                                    ));
+                                }
+                            }
+                        }
+                        update_btns_async();
+                    });
+                })
+            };
+
+            let trigger_refresh: Rc<dyn Fn()> = {
                 let from_entry_c = from_entry.clone();
                 let to_entry_c = to_entry.clone();
-                let state_c = state_rc.clone();
+                let fetch_c = fetch_and_populate.clone();
                 let tx_toast = inner.tx.clone();
                 Rc::new(move || {
                     let from_val = from_entry_c
@@ -775,63 +996,31 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
                         return;
                     }
 
-                    if let Some(ref st) = range_stack_c {
-                        st.set_visible_child_name("display");
-                    }
-                    if let Some(commit_pill) = builder_c.object::<gtk4::Label>("commit_pill_label")
-                    {
-                        commit_pill.set_label(&format!("{from_val} → {to_val} …"));
+                    let (from_sanitized, from_clamped) =
+                        crate::updater::whats_new::sanitize_commit_ref(&from_val);
+                    let (to_sanitized, to_clamped) =
+                        crate::updater::whats_new::sanitize_commit_ref(&to_val);
+
+                    if from_clamped || to_clamped {
+                        if let Some(ref fe) = from_entry_c {
+                            fe.set_text(&from_sanitized);
+                        }
+                        if let Some(ref te) = to_entry_c {
+                            te.set_text(&to_sanitized);
+                        }
+                        let _ = tx_toast.send_blocking(AppInput::ShowToast(
+                            crate::state::ToastRequest::ephemeral(format!(
+                                "Commit range capped at {} commits",
+                                crate::updater::whats_new::MAX_WHATS_NEW_COMMITS
+                            )),
+                        ));
                     }
 
                     let new_pending = crate::updater::whats_new::WhatsNewPending {
-                        from_commit: crate::updater::whats_new::shorten_sha(&from_val),
-                        to_commit: crate::updater::whats_new::shorten_sha(&to_val),
+                        from_commit: from_sanitized,
+                        to_commit: to_sanitized,
                     };
-
-                    let builder_async = builder_c.clone();
-                    let state_async = state_c.clone();
-                    let tx_toast_async = tx_toast.clone();
-                    gtk4::glib::spawn_future_local(async move {
-                        let p_fetch = new_pending.clone();
-                        let res = boxxy_sys_utils::runtime()
-                            .spawn(async move {
-                                crate::updater::whats_new::fetch_changelog_summary(
-                                    &p_fetch.from_commit,
-                                    &p_fetch.to_commit,
-                                )
-                                .await
-                            })
-                            .await;
-
-                        match res {
-                            Ok(Ok(new_summary)) if new_summary.total_commits > 0 => {
-                                crate::updater::whats_new::save_last_whats_new(&new_pending);
-                                populate_whats_new_summary(
-                                    &builder_async,
-                                    &new_pending,
-                                    Some(&new_summary),
-                                );
-                                *state_async.borrow_mut() = (new_pending, Some(new_summary));
-                            }
-                            _ => {
-                                let (ref prev_pending, _) = *state_async.borrow();
-                                if let Some(commit_pill) =
-                                    builder_async.object::<gtk4::Label>("commit_pill_label")
-                                {
-                                    commit_pill.set_label(&format!(
-                                        "{} → {}",
-                                        prev_pending.from_commit, prev_pending.to_commit
-                                    ));
-                                }
-                                let _ = tx_toast_async.send_blocking(AppInput::ShowToast(
-                                    crate::state::ToastRequest::ephemeral(format!(
-                                        "Could not fetch commits for {}...{}",
-                                        new_pending.from_commit, new_pending.to_commit
-                                    )),
-                                ));
-                            }
-                        }
-                    });
+                    fetch_c(new_pending, true);
                 })
             };
 
@@ -848,7 +1037,7 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
                 te.connect_activate(move |_| trig());
             }
 
-            if let Some(copy_btn) = builder.object::<gtk4::Button>("copy_prompt_btn") {
+            if let Some(ref copy_btn) = copy_btn {
                 let copy_icon = builder.object::<gtk4::Image>("copy_prompt_icon");
                 let tx_copy = inner.tx.clone();
                 let state_copy = state_rc.clone();
@@ -881,50 +1070,19 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
                 });
             }
 
-            if let Some(read_btn) = builder.object::<gtk4::Button>("read_btn") {
-                let read_btn_label = builder.object::<gtk4::Label>("read_btn_label");
-                let update_read_btn_state = {
-                    let read_btn_c = read_btn.clone();
-                    let read_btn_label_c = read_btn_label.clone();
-                    move || {
-                        let chars_available =
-                            boxxy_claw_protocol::characters::has_available_character(None);
-                        if !claw_ready {
-                            read_btn_c.set_sensitive(false);
-                            if let Some(ref lbl) = read_btn_label_c {
-                                lbl.set_label("Read What's New");
-                            }
-                            read_btn_c.set_tooltip_text(Some(
-                                "Configure a Claw AI model in Preferences to let Boxxy read what's new",
-                            ));
-                        } else if !chars_available {
-                            read_btn_c.set_sensitive(false);
-                            if let Some(ref lbl) = read_btn_label_c {
-                                lbl.set_label("No Characters Free");
-                            }
-                            read_btn_c.set_tooltip_text(Some(
-                                "All characters are currently active in other sessions",
-                            ));
-                        } else {
-                            read_btn_c.set_sensitive(true);
-                            if let Some(ref lbl) = read_btn_label_c {
-                                lbl.set_label("Read What's New");
-                            }
-                            read_btn_c.set_tooltip_text(None);
-                        }
-                    }
-                };
-                update_read_btn_state();
+            if let Some(ref read_btn) = read_btn {
+                update_action_buttons();
 
                 // Reactively update the button if a character claim is released or taken while the dialog is open.
                 let read_btn_weak = read_btn.downgrade();
+                let update_btns_reg = update_action_buttons.clone();
                 let mut rx_reg = boxxy_claw_protocol::characters::subscribe_registry_changes();
                 gtk4::glib::spawn_future_local(async move {
                     while rx_reg.changed().await.is_ok() {
                         if read_btn_weak.upgrade().is_none() {
                             break;
                         }
-                        update_read_btn_state();
+                        update_btns_reg();
                     }
                 });
 
@@ -947,7 +1105,24 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
                 });
             }
 
+            if summary.is_some() {
+                populate_whats_new_summary(
+                    &builder,
+                    &pending,
+                    summary.as_ref(),
+                    &show_commit_detail,
+                );
+            } else {
+                loading_rc.set(true);
+                set_whats_new_loading_state(&builder, true);
+                update_action_buttons();
+            }
+
             dialog.present(Some(&inner.window));
+
+            if summary.is_none() {
+                fetch_and_populate(pending, false);
+            }
         }
         AppInput::StartWhatsNewClaw(prompt) => {
             if !boxxy_claw_protocol::characters::has_available_character(None) {
@@ -1226,10 +1401,8 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
                         {
                             dlg.close();
                         }
-                        let _ = tx_reattach.send_blocking(AppInput::ReattachDetachedSession(
-                            pid,
-                            cwd_opt.clone(),
-                        ));
+                        let _ = tx_reattach
+                            .send_blocking(AppInput::ReattachDetachedSession(pid, cwd_opt.clone()));
                     });
 
                     let tx_kill = tx.clone();
@@ -1338,9 +1511,7 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
                         if let Ok(remaining) = agent.list_detached_sessions_detailed().await
                             && !remaining.is_empty()
                         {
-                            let _ = tx
-                                .send(AppInput::ReattachDetachedBatch(remaining))
-                                .await;
+                            let _ = tx.send(AppInput::ReattachDetachedBatch(remaining)).await;
                         }
                     }
                     "terminate-all" => {
@@ -1356,10 +1527,59 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
     }
 }
 
+fn set_whats_new_loading_state(builder: &gtk4::Builder, loading: bool) {
+    if let Some(body_stack) = builder.object::<gtk4::Stack>("body_state_stack") {
+        if loading {
+            body_stack.set_visible_child_name("loading");
+        } else {
+            body_stack.set_visible_child_name("content");
+        }
+    }
+    if let Some(spinner) = builder.object::<gtk4::Spinner>("body_loading_spinner") {
+        spinner.set_visible(true);
+        spinner.set_spinning(loading);
+    }
+    if loading && let Some(lbl) = builder.object::<gtk4::Label>("body_loading_label") {
+        lbl.set_label("Fetching update details from GitHub…");
+    }
+    if let Some(edit_btn) = builder.object::<gtk4::Button>("edit_range_btn") {
+        edit_btn.set_sensitive(!loading);
+    }
+    if let Some(refresh_btn) = builder.object::<gtk4::Button>("refresh_range_btn") {
+        refresh_btn.set_sensitive(!loading);
+    }
+}
+
+fn set_whats_new_offline_state(
+    builder: &gtk4::Builder,
+    pending: &crate::updater::whats_new::WhatsNewPending,
+) {
+    if let Some(commit_pill) = builder.object::<gtk4::Label>("commit_pill_label") {
+        commit_pill.set_label(&format!("{} → {}", pending.from_commit, pending.to_commit));
+    }
+    if let Some(body_stack) = builder.object::<gtk4::Stack>("body_state_stack") {
+        body_stack.set_visible_child_name("loading");
+    }
+    if let Some(spinner) = builder.object::<gtk4::Spinner>("body_loading_spinner") {
+        spinner.set_spinning(false);
+        spinner.set_visible(false);
+    }
+    if let Some(lbl) = builder.object::<gtk4::Label>("body_loading_label") {
+        lbl.set_label("Could not load commit details from GitHub.");
+    }
+    if let Some(edit_btn) = builder.object::<gtk4::Button>("edit_range_btn") {
+        edit_btn.set_sensitive(true);
+    }
+    if let Some(refresh_btn) = builder.object::<gtk4::Button>("refresh_range_btn") {
+        refresh_btn.set_sensitive(true);
+    }
+}
+
 fn populate_whats_new_summary(
     builder: &gtk4::Builder,
     pending: &crate::updater::whats_new::WhatsNewPending,
     summary: Option<&crate::updater::whats_new::ChangelogSummary>,
+    show_commit_detail: &Rc<dyn Fn(usize)>,
 ) {
     if let Some(commit_pill) = builder.object::<gtk4::Label>("commit_pill_label") {
         commit_pill.set_label(&format!("{} → {}", pending.from_commit, pending.to_commit));
@@ -1368,11 +1588,12 @@ fn populate_whats_new_summary(
     if let Some(s) = summary
         && s.total_commits > 0
     {
+        set_whats_new_loading_state(builder, false);
         if let Some(stats_card) = builder.object::<gtk4::Box>("stats_card") {
             stats_card.set_visible(true);
         }
         if let Some(commits_val) = builder.object::<gtk4::Label>("commits_val") {
-            commits_val.set_label(&format!("📦 {}", s.total_commits));
+            commits_val.set_label(&s.total_commits.to_string());
         }
         if let Some(commits_caption) = builder.object::<gtk4::Label>("commits_caption") {
             let word = if s.total_commits == 1 {
@@ -1383,7 +1604,7 @@ fn populate_whats_new_summary(
             commits_caption.set_label(word);
         }
         if let Some(files_val) = builder.object::<gtk4::Label>("files_val") {
-            files_val.set_label(&format!("🗂️ {}", s.files_changed));
+            files_val.set_label(&s.files_changed.to_string());
         }
         if let Some(files_caption) = builder.object::<gtk4::Label>("files_caption") {
             let word = if s.files_changed == 1 {
@@ -1426,6 +1647,8 @@ fn populate_whats_new_summary(
             while let Some(child) = avatars_box.first_child() {
                 avatars_box.remove(&child);
             }
+            let mut avatar_widgets = Vec::new();
+            let mut needs_remote_fetch = false;
             for contributor in s.contributors.iter().take(5) {
                 let avatar = adw::Avatar::builder()
                     .size(22)
@@ -1438,8 +1661,40 @@ fn populate_whats_new_summary(
                     if let Ok(texture) = gtk4::gdk::Texture::from_bytes(&gbytes) {
                         avatar.set_custom_image(Some(&texture));
                     }
+                } else if contributor.avatar_url.is_some() {
+                    needs_remote_fetch = true;
                 }
                 avatars_box.append(&avatar);
+                avatar_widgets.push((contributor.login.clone(), avatar.downgrade()));
+            }
+
+            if needs_remote_fetch {
+                let contributors_to_fetch: Vec<_> =
+                    s.contributors.iter().take(5).cloned().collect();
+                gtk4::glib::spawn_future_local(async move {
+                    let fetched = boxxy_sys_utils::runtime()
+                        .spawn(async move {
+                            crate::updater::whats_new::fetch_contributor_avatars(
+                                &contributors_to_fetch,
+                            )
+                            .await
+                        })
+                        .await
+                        .unwrap_or_default();
+
+                    for (login, bytes) in fetched {
+                        let gbytes = gtk4::glib::Bytes::from(&bytes);
+                        if let Ok(texture) = gtk4::gdk::Texture::from_bytes(&gbytes) {
+                            for (w_login, w_avatar) in &avatar_widgets {
+                                if w_login.eq_ignore_ascii_case(&login)
+                                    && let Some(av) = w_avatar.upgrade()
+                                {
+                                    av.set_custom_image(Some(&texture));
+                                }
+                            }
+                        }
+                    }
+                });
             }
         }
         if let Some(see_diff_label) = builder.object::<gtk4::Label>("see_diff_label") {
@@ -1455,11 +1710,6 @@ fn populate_whats_new_summary(
             ));
         }
 
-        let commits_stack = builder.object::<gtk4::Stack>("commits_stack");
-        let detail_sha_label = builder.object::<gtk4::Label>("detail_sha_label");
-        let detail_message_label = builder.object::<gtk4::Label>("detail_message_label");
-        let detail_scrolled = builder.object::<gtk4::ScrolledWindow>("detail_scrolled");
-
         if let Some(commits_scrolled) = builder.object::<gtk4::ScrolledWindow>("commits_scrolled") {
             commits_scrolled.vadjustment().set_value(0.0);
         }
@@ -1468,14 +1718,12 @@ fn populate_whats_new_summary(
             while let Some(child) = commits_list.first_child() {
                 commits_list.remove(&child);
             }
-            for entry in s.commits.iter().rev() {
+            for (display_idx, entry) in s.commits.iter().rev().enumerate() {
                 let row_box = gtk4::Box::new(gtk4::Orientation::Horizontal, 12);
 
-                let sha_label = gtk4::Label::builder()
-                    .label(&entry.short_sha)
-                    .valign(gtk4::Align::Center)
-                    .css_classes(["monospace", "whats-new-commit-sha"])
-                    .build();
+                let text_col = gtk4::Box::new(gtk4::Orientation::Vertical, 4);
+                text_col.set_hexpand(true);
+                text_col.set_valign(gtk4::Align::Center);
 
                 let title_label = gtk4::Label::builder()
                     .label(entry.title())
@@ -1488,14 +1736,24 @@ fn populate_whats_new_summary(
                     .css_classes(["whats-new-commit-title"])
                     .build();
 
+                let meta_label = gtk4::Label::builder()
+                    .label(entry.meta_caption())
+                    .halign(gtk4::Align::Start)
+                    .valign(gtk4::Align::Center)
+                    .xalign(0.0)
+                    .css_classes(["whats-new-commit-meta"])
+                    .build();
+
+                text_col.append(&title_label);
+                text_col.append(&meta_label);
+
                 let chevron = gtk4::Image::builder()
                     .icon_name("boxxy-right-symbolic")
                     .valign(gtk4::Align::Center)
                     .opacity(0.45)
                     .build();
 
-                row_box.append(&sha_label);
-                row_box.append(&title_label);
+                row_box.append(&text_col);
                 row_box.append(&chevron);
 
                 let row_btn = gtk4::Button::builder()
@@ -1504,64 +1762,9 @@ fn populate_whats_new_summary(
                     .css_classes(["flat", "whats-new-commit-row"])
                     .build();
 
-                let stack_weak =
-                    commits_stack.as_ref().map(gtk4::prelude::ObjectExt::downgrade);
-                let sha_weak = detail_sha_label
-                    .as_ref()
-                    .map(gtk4::prelude::ObjectExt::downgrade);
-                let msg_weak = detail_message_label
-                    .as_ref()
-                    .map(gtk4::prelude::ObjectExt::downgrade);
-                let scrolled_weak = detail_scrolled
-                    .as_ref()
-                    .map(gtk4::prelude::ObjectExt::downgrade);
-                let short_sha = entry.short_sha.clone();
-                let full_message = entry.message.clone();
-
+                let show_c = show_commit_detail.clone();
                 row_btn.connect_clicked(move |_| {
-                    if let Some(ref sw) = sha_weak
-                        && let Some(lbl) = sw.upgrade()
-                    {
-                        let escaped_sha = gtk4::glib::markup_escape_text(&short_sha);
-                        let commit_url = format!(
-                            "https://github.com/{}/{}/commit/{}",
-                            crate::updater::REPO_OWNER,
-                            crate::updater::REPO_NAME,
-                            escaped_sha
-                        );
-                        lbl.set_markup(&format!(
-                            "<a href=\"{commit_url}\"><span underline=\"none\">See {escaped_sha} on GitHub</span></a>"
-                        ));
-                    }
-                    if let Some(ref mw) = msg_weak
-                        && let Some(lbl) = mw.upgrade()
-                    {
-                        let mut lines = full_message.lines();
-                        let first_line = lines.next().unwrap_or(&full_message).trim();
-                        let rest = lines.collect::<Vec<_>>().join("\n").trim().to_string();
-                        let markup = if rest.is_empty() {
-                            format!("<b>{}</b>", gtk4::glib::markup_escape_text(first_line))
-                        } else {
-                            format!(
-                                "<b>{}</b>\n\n<span alpha=\"85%\">{}</span>",
-                                gtk4::glib::markup_escape_text(first_line),
-                                gtk4::glib::markup_escape_text(&rest)
-                            )
-                        };
-                        lbl.set_markup(&markup);
-                    }
-                    if let Some(ref scw) = scrolled_weak
-                        && let Some(sc) = scw.upgrade()
-                    {
-                        sc.set_min_content_height(420);
-                        sc.set_height_request(420);
-                        sc.vadjustment().set_value(0.0);
-                    }
-                    if let Some(ref stw) = stack_weak
-                        && let Some(stack) = stw.upgrade()
-                    {
-                        stack.set_visible_child_name("detail");
-                    }
+                    show_c(display_idx);
                 });
 
                 commits_list.append(&row_btn);

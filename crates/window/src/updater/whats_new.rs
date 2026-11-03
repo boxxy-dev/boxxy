@@ -10,6 +10,10 @@ use super::{GITHUB_API_BASE, REPO_NAME, REPO_OWNER, USER_AGENT_VALUE, Updater};
 
 const WHATS_NEW_MARKER_FILE: &str = ".whats_new_pending";
 const WHATS_NEW_LAST_FILE: &str = "whats_new_last.json";
+const WHATS_NEW_CACHE_FILE: &str = "whats_new_cache.json";
+
+/// Maximum commit range depth / list size for the What's New dialog.
+pub const MAX_WHATS_NEW_COMMITS: usize = 100;
 
 /// Marker persisted across the update restart so the newly launched binary knows
 /// which commit it upgraded from and can present the "What's New" dialog once.
@@ -23,6 +27,10 @@ pub struct WhatsNewPending {
 pub struct CommitEntry {
     pub short_sha: String,
     pub message: String,
+    #[serde(default)]
+    pub author: Option<String>,
+    #[serde(default)]
+    pub date: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -84,6 +92,44 @@ impl CommitEntry {
             .unwrap_or(&self.message)
             .trim()
     }
+
+    /// Formats a concise secondary metadata string (e.g. `e158d50 · 3h ago`) for the commit row caption.
+    #[must_use]
+    pub fn meta_caption(&self) -> String {
+        if let Some(ref raw_date) = self.date
+            && let Some(formatted) = format_commit_date(raw_date)
+        {
+            format!("{}  ·  {}", self.short_sha, formatted)
+        } else {
+            self.short_sha.clone()
+        }
+    }
+}
+
+fn format_commit_date(raw: &str) -> Option<String> {
+    let dt = chrono::DateTime::parse_from_rfc3339(raw.trim()).ok()?;
+    let now = chrono::Utc::now();
+    let diff = now.signed_duration_since(dt.with_timezone(&chrono::Utc));
+    let secs = diff.num_seconds();
+    if secs < 0 {
+        return Some(dt.format("%b %-d").to_string());
+    }
+    if secs < 60 {
+        Some("just now".to_string())
+    } else if secs < 3600 {
+        Some(format!("{}m ago", secs / 60))
+    } else if secs < 86_400 {
+        Some(format!("{}h ago", secs / 3600))
+    } else if secs < 86_400 * 14 {
+        let days = secs / 86_400;
+        if days == 1 {
+            Some("yesterday".to_string())
+        } else {
+            Some(format!("{days}d ago"))
+        }
+    } else {
+        Some(dt.format("%b %-d").to_string())
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -121,6 +167,8 @@ struct GithubCompareUser {
 #[derive(Debug, Deserialize)]
 struct GithubCompareGitAuthor {
     name: String,
+    #[serde(default)]
+    date: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -141,13 +189,33 @@ pub fn shorten_sha(sha: &str) -> String {
     }
 }
 
+/// Clamps `~N` commit-depth expressions (such as `HEAD~1300` or `a1b2c3d~500`) to
+/// `MAX_WHATS_NEW_COMMITS` (100) so out-of-range ancestry queries do not 404 on GitHub.
+/// Returns `(normalized_ref, was_clamped)`.
+pub fn sanitize_commit_ref(raw: &str) -> (String, bool) {
+    let trimmed = raw.trim();
+    if let Some((base, depth_str)) = trimmed.rsplit_once('~')
+        && !base.is_empty()
+        && !depth_str.is_empty()
+        && depth_str.chars().all(|c| c.is_ascii_digit())
+    {
+        let base_short = shorten_sha(base);
+        let depth = depth_str.parse::<usize>().unwrap_or(MAX_WHATS_NEW_COMMITS + 1);
+        if depth > MAX_WHATS_NEW_COMMITS {
+            return (format!("{base_short}~{MAX_WHATS_NEW_COMMITS}"), true);
+        }
+        return (format!("{base_short}~{depth}"), false);
+    }
+    (shorten_sha(trimmed), false)
+}
+
 pub fn parse_simulate_update_range(raw: &str) -> Option<WhatsNewPending> {
     let trimmed = raw.trim();
     let (from, to) = trimmed
         .split_once("...")
         .or_else(|| trimmed.split_once(".."))?;
-    let from = shorten_sha(from);
-    let to = shorten_sha(to);
+    let (from, _) = sanitize_commit_ref(from);
+    let (to, _) = sanitize_commit_ref(to);
     if from.is_empty() || to.is_empty() {
         return None;
     }
@@ -289,6 +357,102 @@ pub fn load_last_whats_new() -> WhatsNewPending {
     }
 }
 
+/// Persists the most recently fetched `ChangelogSummary` so reopening the "What's New"
+/// dialog for the same commit range loads in 0ms without waiting on GitHub.
+pub fn save_cached_changelog_summary(summary: &ChangelogSummary) {
+    let Ok(json) = serde_json::to_string(summary) else {
+        return;
+    };
+    let config_dir = boxxy_sys_utils::get_config_dir();
+    let _ = fs::create_dir_all(&config_dir);
+    let _ = fs::write(config_dir.join(WHATS_NEW_CACHE_FILE), &json);
+    if let Ok(app_dir) = Updater::get_app_dir()
+        && app_dir.exists()
+    {
+        let _ = fs::write(app_dir.join(WHATS_NEW_CACHE_FILE), &json);
+    }
+}
+
+/// Loads a cached `ChangelogSummary` if it matches the requested `pending` commit range.
+pub fn load_cached_changelog_summary(pending: &WhatsNewPending) -> Option<ChangelogSummary> {
+    let from = shorten_sha(&pending.from_commit);
+    let to = shorten_sha(&pending.to_commit);
+
+    let candidates = [
+        Some(boxxy_sys_utils::get_config_dir().join(WHATS_NEW_CACHE_FILE)),
+        Updater::get_app_dir()
+            .ok()
+            .map(|d| d.join(WHATS_NEW_CACHE_FILE)),
+    ];
+
+    for path in candidates.into_iter().flatten() {
+        if let Ok(raw) = fs::read_to_string(&path)
+            && let Ok(summary) = serde_json::from_str::<ChangelogSummary>(raw.trim())
+            && summary.from_commit == from
+            && summary.to_commit == to
+            && summary.total_commits > 0
+            && summary
+                .commits
+                .first()
+                .is_some_and(|c| c.author.is_some() || c.date.is_some())
+        {
+            return Some(summary);
+        }
+    }
+
+    None
+}
+
+/// Fetches contributor avatars concurrently (up to 5) in the background so the main
+/// changelog summary can be rendered immediately without waiting on image downloads.
+pub async fn fetch_contributor_avatars(
+    contributors: &[ContributorInfo],
+) -> Vec<(String, Vec<u8>)> {
+    let Ok(client) = reqwest::Client::builder()
+        .timeout(Duration::from_secs(3))
+        .build()
+    else {
+        return Vec::new();
+    };
+
+    let mut set = tokio::task::JoinSet::new();
+    for contributor in contributors.iter().take(5) {
+        let Some(ref raw_url) = contributor.avatar_url else {
+            continue;
+        };
+        let sized_url = if raw_url.contains('?') {
+            format!("{raw_url}&s=64")
+        } else {
+            format!("{raw_url}?s=64")
+        };
+        let login = contributor.login.clone();
+        let client_c = client.clone();
+        set.spawn(async move {
+            if let Ok(img_resp) = client_c
+                .get(&sized_url)
+                .header(USER_AGENT, USER_AGENT_VALUE)
+                .send()
+                .await
+                && img_resp.status().is_success()
+                && let Ok(bytes) = img_resp.bytes().await
+                && bytes.len() <= 256 * 1024
+            {
+                Some((login, bytes.to_vec()))
+            } else {
+                None
+            }
+        });
+    }
+
+    let mut out = Vec::new();
+    while let Some(res) = set.join_next().await {
+        if let Ok(Some(pair)) = res {
+            out.push(pair);
+        }
+    }
+    out
+}
+
 /// Fetches the commit messages and line-change counts between `from_commit` and `to_commit`
 /// from GitHub's Compare API without loading code diffs.
 pub async fn fetch_changelog_summary(
@@ -352,29 +516,8 @@ pub async fn fetch_changelog_summary(
     }
 
     let body = resp.text().await?;
-    let mut summary = parse_compare_payload(from, to, &body)?;
-
-    for contributor in summary.contributors.iter_mut().take(5) {
-        if let Some(ref raw_url) = contributor.avatar_url {
-            let sized_url = if raw_url.contains('?') {
-                format!("{raw_url}&s=64")
-            } else {
-                format!("{raw_url}?s=64")
-            };
-            if let Ok(img_resp) = client
-                .get(&sized_url)
-                .header(USER_AGENT, USER_AGENT_VALUE)
-                .timeout(Duration::from_secs(3))
-                .send()
-                .await
-                && img_resp.status().is_success()
-                && let Ok(bytes) = img_resp.bytes().await
-                && bytes.len() <= 256 * 1024
-            {
-                contributor.avatar_bytes = Some(bytes.to_vec());
-            }
-        }
-    }
+    let summary = parse_compare_payload(from, to, &body)?;
+    save_cached_changelog_summary(&summary);
 
     Ok(summary)
 }
@@ -420,12 +563,36 @@ pub(crate) fn parse_compare_payload(
         }
     }
 
-    let commits: Vec<CommitEntry> = payload
+    let mut commits: Vec<CommitEntry> = payload
         .commits
         .into_iter()
-        .map(|item| CommitEntry {
-            short_sha: shorten_sha(&item.sha),
-            message: item.commit.message.trim().to_string(),
+        .map(|item| {
+            let author = item
+                .author
+                .as_ref()
+                .map(|u| u.login.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .or_else(|| {
+                    item.commit
+                        .author
+                        .as_ref()
+                        .map(|a| a.name.trim().to_string())
+                        .filter(|s| !s.is_empty())
+                });
+            let date = item
+                .commit
+                .author
+                .as_ref()
+                .and_then(|a| a.date.as_ref())
+                .map(|d| d.trim().to_string())
+                .filter(|s| !s.is_empty());
+
+            CommitEntry {
+                short_sha: shorten_sha(&item.sha),
+                message: item.commit.message.trim().to_string(),
+                author,
+                date,
+            }
         })
         .collect();
 
@@ -434,6 +601,11 @@ pub(crate) fn parse_compare_payload(
     } else {
         commits.len()
     };
+
+    if commits.len() > MAX_WHATS_NEW_COMMITS {
+        let drop_count = commits.len() - MAX_WHATS_NEW_COMMITS;
+        commits.drain(0..drop_count);
+    }
 
     Ok(ChangelogSummary {
         from_commit: shorten_sha(from_commit),
@@ -655,6 +827,14 @@ mod tests {
         let p2 = parse_simulate_update_range("abcdef1...fedcba9").unwrap();
         assert_eq!(p2.from_commit, "abcdef1");
         assert_eq!(p2.to_commit, "fedcba9");
+
+        let (clamped, was_clamped) = sanitize_commit_ref("HEAD~1300");
+        assert_eq!(clamped, "HEAD~100");
+        assert!(was_clamped);
+
+        let (unclamped, was_clamped_ok) = sanitize_commit_ref("HEAD~25");
+        assert_eq!(unclamped, "HEAD~25");
+        assert!(!was_clamped_ok);
     }
 
     #[test]
@@ -673,6 +853,8 @@ mod tests {
             commits: vec![CommitEntry {
                 short_sha: "e4f5a6b".to_string(),
                 message: "feat: add what's new dialog on update".to_string(),
+                author: Some("alice".to_string()),
+                date: None,
             }],
             contributors: vec![ContributorInfo {
                 login: "alice".to_string(),
