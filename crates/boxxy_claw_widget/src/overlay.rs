@@ -551,10 +551,12 @@ impl TerminalOverlay {
         });
 
         // Esc handling on the revealer (Capture phase):
-        // - In `OverlayState::Thinking`: 1st Esc hides any active tip and shows yellow
+        // - Priority 1: If the msgbar's autocomplete popup or options popover is open,
+        //   dismiss only that popup and keep the drawer open.
+        // - Priority 2 (`OverlayState::Thinking`): 1st Esc hides any active tip and shows yellow
         //   "Press Escape again to interrupt" next to the thinking pill for 3 seconds;
         //   2nd Esc within 3 seconds interrupts the agent and re-focuses the input bar.
-        // - When `ok_btn` is visible (`OverlayState::Idle` / `Pending`): Esc closes the drawer.
+        // - Priority 3 (`ok_btn` visible in `OverlayState::Idle` / `Pending`): Esc closes the drawer.
         let ok_btn_for_esc = ok_btn.clone();
         let state_for_esc = state.clone();
         let esc_armed_for_ctrl = esc_interrupt_armed.clone();
@@ -564,10 +566,14 @@ impl TerminalOverlay {
         let indicator_for_esc = indicator.clone();
         let overlay_for_esc = s.clone();
         let revealer_for_esc = revealer.clone();
+        let msg_bar_for_esc = msg_bar.clone();
         let esc_controller = gtk::EventControllerKey::new();
         esc_controller.set_propagation_phase(gtk::PropagationPhase::Capture);
         esc_controller.connect_key_pressed(move |_, key, _, _| {
             if key == gtk::gdk::Key::Escape {
+                if msg_bar_for_esc.dismiss_popups() {
+                    return gtk::glib::Propagation::Stop;
+                }
                 if matches!(*state_for_esc.borrow(), OverlayState::Thinking) {
                     if esc_armed_for_ctrl.get() {
                         esc_armed_for_ctrl.set(false);
@@ -1086,6 +1092,7 @@ impl TerminalOverlay {
     }
 
     pub fn hide(&self) {
+        let _ = self.msg_bar.dismiss_popups();
         self.revealer.set_reveal_child(false);
         // Robust hiding: clear the proposal state and sync visibility
         // so that stale buttons aren't briefly visible during fade-out

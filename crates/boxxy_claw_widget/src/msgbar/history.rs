@@ -181,7 +181,21 @@ impl MsgHistory {
         Self::ensure_loaded_async();
 
         let state = GLOBAL_HISTORY.lock();
-        if state.items.is_empty() {
+        self.navigate_up_in(&state.items, current_text, current_atts)
+    }
+
+    pub fn navigate_down(&mut self) -> Option<HistoryItem> {
+        let state = GLOBAL_HISTORY.lock();
+        self.navigate_down_in(&state.items)
+    }
+
+    fn navigate_up_in(
+        &mut self,
+        items: &[HistoryItem],
+        current_text: String,
+        current_atts: Vec<Attachment>,
+    ) -> Option<HistoryItem> {
+        if items.is_empty() {
             return None;
         }
 
@@ -190,7 +204,7 @@ impl MsgHistory {
                 text: current_text,
                 attachments: current_atts,
             };
-            self.idx = Some(state.items.len().saturating_sub(1));
+            self.idx = Some(items.len().saturating_sub(1));
         } else {
             let current_idx = self.idx.unwrap();
             if current_idx > 0 {
@@ -198,15 +212,14 @@ impl MsgHistory {
             }
         }
 
-        self.idx.map(|i| state.items[i].clone())
+        self.idx.and_then(|i| items.get(i).cloned())
     }
 
-    pub fn navigate_down(&mut self) -> Option<HistoryItem> {
-        let state = GLOBAL_HISTORY.lock();
+    fn navigate_down_in(&mut self, items: &[HistoryItem]) -> Option<HistoryItem> {
         if let Some(current_idx) = self.idx {
-            if current_idx + 1 < state.items.len() {
+            if current_idx + 1 < items.len() {
                 self.idx = Some(current_idx + 1);
-                Some(state.items[current_idx + 1].clone())
+                items.get(current_idx + 1).cloned()
             } else {
                 self.idx = None;
                 Some(self.draft.clone())
@@ -264,5 +277,61 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["old-item", "already-persisted", "typed-while-loading"]
         );
+    }
+
+    #[test]
+    fn history_navigation_traverses_slash_commands_and_restores_draft() {
+        let items = vec![
+            HistoryItem {
+                text: "/sleep".to_string(),
+                attachments: vec![],
+            },
+            HistoryItem {
+                text: "/drama".to_string(),
+                attachments: vec![],
+            },
+            HistoryItem {
+                text: "hello agent".to_string(),
+                attachments: vec![],
+            },
+        ];
+
+        let mut nav = MsgHistory {
+            draft: HistoryItem::default(),
+            idx: None,
+        };
+
+        let step1 = nav
+            .navigate_up_in(&items, "draft text".to_string(), vec![])
+            .unwrap();
+        assert_eq!(step1.text, "hello agent");
+
+        let step2 = nav
+            .navigate_up_in(&items, step1.text, vec![])
+            .unwrap();
+        assert_eq!(step2.text, "/drama");
+
+        let step3 = nav
+            .navigate_up_in(&items, step2.text, vec![])
+            .unwrap();
+        assert_eq!(step3.text, "/sleep");
+
+        // At top of history, stays on oldest item
+        let step4 = nav
+            .navigate_up_in(&items, step3.text, vec![])
+            .unwrap();
+        assert_eq!(step4.text, "/sleep");
+
+        // Navigate back down through `/drama`, `hello agent`, and back to draft
+        let down1 = nav.navigate_down_in(&items).unwrap();
+        assert_eq!(down1.text, "/drama");
+
+        let down2 = nav.navigate_down_in(&items).unwrap();
+        assert_eq!(down2.text, "hello agent");
+
+        let down3 = nav.navigate_down_in(&items).unwrap();
+        assert_eq!(down3.text, "draft text");
+
+        assert!(nav.navigate_down_in(&items).is_none());
     }
 }

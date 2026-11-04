@@ -49,7 +49,8 @@ pub struct MsgBarComponent {
     embedded: Rc<Cell<bool>>,
     on_submit_hook: Rc<RefCell<Option<Box<dyn Fn(&str)>>>>,
     on_clear_hook: Rc<RefCell<Option<Box<dyn Fn()>>>>,
-    _autocomplete: Rc<boxxy_core_widgets::autocomplete::AutocompleteController>,
+    status_popover: gtk::Popover,
+    autocomplete: Rc<boxxy_core_widgets::autocomplete::AutocompleteController>,
 }
 
 impl MsgBarComponent {
@@ -359,6 +360,9 @@ impl MsgBarComponent {
 
                 if original_text.trim() == "/models" && attachment_mgr.get_attachments().is_empty()
                 {
+                    history
+                        .borrow_mut()
+                        .push(original_text, Vec::new());
                     buf.set_text("");
                     if let Some(root) = entry.root() {
                         let _ = gtk::prelude::WidgetExt::activate_action(
@@ -379,6 +383,9 @@ impl MsgBarComponent {
                 }
 
                 if original_text.trim() == "/vibe" && attachment_mgr.get_attachments().is_empty() {
+                    history
+                        .borrow_mut()
+                        .push(original_text, Vec::new());
                     buf.set_text("");
                     let next = !vibe_state.get();
                     on_vibe_toggle(next);
@@ -386,6 +393,9 @@ impl MsgBarComponent {
                 }
 
                 if original_text.trim() == "/sleep" && attachment_mgr.get_attachments().is_empty() {
+                    history
+                        .borrow_mut()
+                        .push(original_text, Vec::new());
                     buf.set_text("");
                     if claw_state.get() || character_id.borrow().is_some() {
                         let next = !sleep_state.get();
@@ -395,6 +405,9 @@ impl MsgBarComponent {
                 }
 
                 if original_text.trim() == "/pin" && attachment_mgr.get_attachments().is_empty() {
+                    history
+                        .borrow_mut()
+                        .push(original_text, Vec::new());
                     buf.set_text("");
                     if claw_state.get() || character_id.borrow().is_some() {
                         let next = !pin_state.get();
@@ -404,6 +417,9 @@ impl MsgBarComponent {
                 }
 
                 if original_text.trim() == "/web" && attachment_mgr.get_attachments().is_empty() {
+                    history
+                        .borrow_mut()
+                        .push(original_text, Vec::new());
                     buf.set_text("");
                     if boxxy_preferences::Settings::load().enable_web_search {
                         let next = !web_search_state.get();
@@ -413,6 +429,9 @@ impl MsgBarComponent {
                 }
 
                 if original_text.trim() == "/clear" && attachment_mgr.get_attachments().is_empty() {
+                    history
+                        .borrow_mut()
+                        .push(original_text, Vec::new());
                     buf.set_text("");
                     if (claw_state.get() || character_id.borrow().is_some())
                         && let Some(hook) = on_clear_hook.borrow().as_ref()
@@ -423,6 +442,9 @@ impl MsgBarComponent {
                 }
 
                 if original_text.trim() == "/exit" && attachment_mgr.get_attachments().is_empty() {
+                    history
+                        .borrow_mut()
+                        .push(original_text, Vec::new());
                     buf.set_text("");
                     if claw_state.get() || character_id.borrow().is_some() {
                         on_claw_toggle(false);
@@ -538,17 +560,8 @@ impl MsgBarComponent {
             let is_ctrl = state.contains(gtk::gdk::ModifierType::CONTROL_MASK);
             let is_shift = state.contains(gtk::gdk::ModifierType::SHIFT_MASK);
 
-            if k_autocomplete.is_visible() {
-                // If autocomplete is visible, let it handle its own navigation/selection keys
-                if key == gtk::gdk::Key::Up
-                    || key == gtk::gdk::Key::Down
-                    || key == gtk::gdk::Key::Return
-                    || key == gtk::gdk::Key::KP_Enter
-                    || key == gtk::gdk::Key::Tab
-                    || key == gtk::gdk::Key::Escape
-                {
-                    return glib::Propagation::Proceed;
-                }
+            if k_autocomplete.handle_key_pressed(key) == glib::Propagation::Stop {
+                return glib::Propagation::Stop;
             }
 
             if key == gtk::gdk::Key::Return || key == gtk::gdk::Key::KP_Enter {
@@ -573,9 +586,11 @@ impl MsgBarComponent {
                     .borrow_mut()
                     .navigate_up(current_text, current_atts)
                 {
-                    buf.set_text(&item.text);
-                    let end = buf.end_iter();
-                    buf.place_cursor(&end);
+                    k_autocomplete.with_suppressed(|| {
+                        buf.set_text(&item.text);
+                        let end = buf.end_iter();
+                        buf.place_cursor(&end);
+                    });
                     k_attachment_mgr.load_attachments(item.attachments);
                 }
                 return glib::Propagation::Stop;
@@ -588,9 +603,11 @@ impl MsgBarComponent {
                     return glib::Propagation::Proceed;
                 }
                 if let Some(item) = k_history.borrow_mut().navigate_down() {
-                    buf.set_text(&item.text);
-                    let end = buf.end_iter();
-                    buf.place_cursor(&end);
+                    k_autocomplete.with_suppressed(|| {
+                        buf.set_text(&item.text);
+                        let end = buf.end_iter();
+                        buf.place_cursor(&end);
+                    });
                     k_attachment_mgr.load_attachments(item.attachments);
                 }
                 return glib::Propagation::Stop;
@@ -609,7 +626,9 @@ impl MsgBarComponent {
                     k_active.set(false);
                     k_widget.set_visible(false);
                 }
-                k_entry.buffer().set_text("");
+                k_autocomplete.with_suppressed(|| {
+                    k_entry.buffer().set_text("");
+                });
                 k_history.borrow_mut().reset();
                 k_attachment_mgr.clear();
                 k_cancel();
@@ -653,8 +672,22 @@ impl MsgBarComponent {
             embedded,
             on_submit_hook,
             on_clear_hook,
-            _autocomplete: autocomplete_ctrl,
+            status_popover,
+            autocomplete: autocomplete_ctrl,
         }
+    }
+
+    /// Dismisses any open popup (autocomplete or session options popover) owned
+    /// by the input bar. Returns `true` if a popup was open and was dismissed.
+    pub fn dismiss_popups(&self) -> bool {
+        if self.autocomplete.dismiss() {
+            return true;
+        }
+        if self.status_popover.is_visible() {
+            self.status_popover.popdown();
+            return true;
+        }
+        false
     }
 
     pub fn set_on_submit_hook<F: Fn(&str) + 'static>(&self, hook: F) {
@@ -666,7 +699,9 @@ impl MsgBarComponent {
     }
 
     pub fn set_text(&self, text: &str) {
-        self.entry.buffer().set_text(text);
+        self.autocomplete.with_suppressed(|| {
+            self.entry.buffer().set_text(text);
+        });
     }
 
     /// Refreshes the input bar's left-hand avatar to show the user's own profile avatar.

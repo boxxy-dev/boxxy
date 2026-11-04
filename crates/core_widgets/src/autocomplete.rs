@@ -1,7 +1,7 @@
 use gtk4 as gtk;
 use gtk4::prelude::*;
 use libadwaita as adw;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::time::SystemTime;
@@ -103,12 +103,27 @@ impl AutocompleteInput for gtk::TextView {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AutocompleteState {
+    Hidden,
+    Active {
+        trigger: String,
+        start_idx: usize,
+    },
+    Dismissed {
+        trigger: String,
+        start_idx: usize,
+        text_snapshot: String,
+    },
+}
+
 pub struct AutocompleteController {
     input: Box<dyn AutocompleteInputObj>,
     popover: gtk::Popover,
     list: gtk::ListBox,
     providers: Vec<Box<dyn CompletionProvider>>,
-    active_trigger: Rc<RefCell<Option<(String, usize)>>>, // (trigger, start_index)
+    state: Rc<RefCell<AutocompleteState>>,
+    suppress_depth: Cell<u32>,
     last_items: RefCell<Vec<CompletionItem>>,
     on_activated: Option<Box<dyn Fn(String) + 'static>>,
 }
@@ -177,7 +192,8 @@ impl AutocompleteController {
             popover,
             list,
             providers,
-            active_trigger: Rc::new(RefCell::new(None)),
+            state: Rc::new(RefCell::new(AutocompleteState::Hidden)),
+            suppress_depth: Cell::new(0),
             last_items: RefCell::new(Vec::new()),
             on_activated,
         });
@@ -190,14 +206,90 @@ impl AutocompleteController {
         self.popover.is_visible()
     }
 
+    pub fn state(&self) -> AutocompleteState {
+        self.state.borrow().clone()
+    }
+
+    /// Dismisses the autocomplete popup if it is currently visible.
+    /// Transitions state to `Dismissed` for the current token/text snapshot
+    /// so it stays closed until the user modifies the text.
+    /// Returns `true` if the popup was visible and was dismissed.
+    pub fn dismiss(&self) -> bool {
+        if self.popover.is_visible() {
+            let current = self.state.borrow().clone();
+            if let AutocompleteState::Active { trigger, start_idx } = current {
+                *self.state.borrow_mut() = AutocompleteState::Dismissed {
+                    trigger,
+                    start_idx,
+                    text_snapshot: self.input.get_text(),
+                };
+            } else {
+                *self.state.borrow_mut() = AutocompleteState::Hidden;
+            }
+            self.popover.popdown();
+            true
+        } else {
+            false
+        }
+    }
+
     pub fn hide(&self) {
+        *self.state.borrow_mut() = AutocompleteState::Hidden;
         self.popover.popdown();
+    }
+
+    /// Runs a closure (such as programmatic buffer changes from history navigation)
+    /// while suppressing autocomplete popup evaluation and hiding any open popup.
+    pub fn with_suppressed<F: FnOnce()>(&self, f: F) {
+        self.hide();
+        self.suppress_depth
+            .set(self.suppress_depth.get().saturating_add(1));
+        f();
+        self.suppress_depth
+            .set(self.suppress_depth.get().saturating_sub(1));
+    }
+
+    /// Handles navigation, completion activation, and Escape dismissal when the
+    /// autocomplete popup is visible. Returns `Propagation::Stop` if handled.
+    pub fn handle_key_pressed(&self, key: gtk::gdk::Key) -> gtk::glib::Propagation {
+        if !self.popover.is_visible() {
+            return gtk::glib::Propagation::Proceed;
+        }
+        match key {
+            gtk::gdk::Key::Up => {
+                self.move_selection(-1);
+                gtk::glib::Propagation::Stop
+            }
+            gtk::gdk::Key::Down => {
+                self.move_selection(1);
+                gtk::glib::Propagation::Stop
+            }
+            gtk::gdk::Key::Return | gtk::gdk::Key::KP_Enter | gtk::gdk::Key::Tab
+                if let Some(row) = self.list.selected_row() =>
+            {
+                self.apply_completion(row.widget_name().as_str());
+                gtk::glib::Propagation::Stop
+            }
+            gtk::gdk::Key::Escape => {
+                self.dismiss();
+                gtk::glib::Propagation::Stop
+            }
+            _ => gtk::glib::Propagation::Proceed,
+        }
     }
 
     fn setup_signals(self: &Rc<Self>) {
         let c_clone = self.clone();
 
         self.input.connect_text_changed(Box::new(move || {
+            if c_clone.suppress_depth.get() > 0 {
+                if c_clone.popover.is_visible() {
+                    c_clone.popover.popdown();
+                }
+                *c_clone.state.borrow_mut() = AutocompleteState::Hidden;
+                return;
+            }
+
             let text = c_clone.input.get_text();
             let cursor_pos = c_clone.input.cursor_char_pos();
 
@@ -260,6 +352,20 @@ impl AutocompleteController {
             }
 
             if let Some((completions, idx, trigger)) = found_trigger {
+                // If the user explicitly dismissed the popup for this exact token and text
+                // (e.g. background cache refresh emitted `changed`), keep it dismissed.
+                let is_dismissed_same = matches!(
+                    &*c_clone.state.borrow(),
+                    AutocompleteState::Dismissed {
+                        trigger: d_trig,
+                        start_idx: d_idx,
+                        text_snapshot: d_text,
+                    } if d_trig == &trigger && *d_idx == idx && d_text == &text
+                );
+                if is_dismissed_same {
+                    return;
+                }
+
                 let was_visible = c_clone.popover.is_visible();
                 let items_changed = *c_clone.last_items.borrow() != completions;
 
@@ -267,7 +373,10 @@ impl AutocompleteController {
                     c_clone.update_list(&completions, was_visible);
                     *c_clone.last_items.borrow_mut() = completions;
                 }
-                c_clone.active_trigger.replace(Some((trigger, idx)));
+                *c_clone.state.borrow_mut() = AutocompleteState::Active {
+                    trigger,
+                    start_idx: idx,
+                };
 
                 if was_visible {
                     if items_changed {
@@ -283,7 +392,7 @@ impl AutocompleteController {
                 if c_clone.popover.is_visible() {
                     c_clone.popover.popdown();
                 }
-                c_clone.active_trigger.replace(None);
+                *c_clone.state.borrow_mut() = AutocompleteState::Hidden;
             }
         }));
 
@@ -296,33 +405,7 @@ impl AutocompleteController {
         let key_ctrl = gtk::EventControllerKey::new();
         key_ctrl.set_propagation_phase(gtk::PropagationPhase::Capture);
         let c_clone = self.clone();
-        key_ctrl.connect_key_pressed(move |_, key, _, _| {
-            if c_clone.popover.is_visible() {
-                match key {
-                    gtk::gdk::Key::Up => {
-                        c_clone.move_selection(-1);
-                        gtk::glib::Propagation::Stop
-                    }
-                    gtk::gdk::Key::Down => {
-                        c_clone.move_selection(1);
-                        gtk::glib::Propagation::Stop
-                    }
-                    gtk::gdk::Key::Return | gtk::gdk::Key::KP_Enter | gtk::gdk::Key::Tab
-                        if let Some(row) = c_clone.list.selected_row() =>
-                    {
-                        c_clone.apply_completion(row.widget_name().as_str());
-                        gtk::glib::Propagation::Stop
-                    }
-                    gtk::gdk::Key::Escape => {
-                        c_clone.popover.popdown();
-                        gtk::glib::Propagation::Stop
-                    }
-                    _ => gtk::glib::Propagation::Proceed,
-                }
-            } else {
-                gtk::glib::Propagation::Proceed
-            }
-        });
+        key_ctrl.connect_key_pressed(move |_, key, _, _| c_clone.handle_key_pressed(key));
         self.input.widget().add_controller(key_ctrl);
     }
 
@@ -588,9 +671,9 @@ impl AutocompleteController {
 
     fn apply_completion(&self, replacement: &str) {
         self.popover.popdown();
+        let current = std::mem::replace(&mut *self.state.borrow_mut(), AutocompleteState::Hidden);
 
-        let trigger_info = self.active_trigger.borrow().clone();
-        if let Some((_trigger, start_idx)) = trigger_info {
+        if let AutocompleteState::Active { start_idx, .. } = current {
             let text = self.input.get_text();
             let cursor_pos = self.input.cursor_char_pos();
             let byte_cursor_pos = text
@@ -624,7 +707,16 @@ impl AutocompleteController {
                     0
                 };
 
-            self.input.set_text_and_cursor(&new_text, new_cursor_pos);
+            // Suppress re-opening the completion popup if the completed token does not
+            // intentionally drill into a secondary picker (like `@dir/` or `/resume `).
+            let should_retrigger = is_dir_drill || already_spaced;
+            if should_retrigger {
+                self.input.set_text_and_cursor(&new_text, new_cursor_pos);
+            } else {
+                self.with_suppressed(|| {
+                    self.input.set_text_and_cursor(&new_text, new_cursor_pos);
+                });
+            }
 
             if let Some(on_activated) = &self.on_activated {
                 on_activated(replacement.to_string());
