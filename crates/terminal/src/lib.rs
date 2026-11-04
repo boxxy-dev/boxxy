@@ -56,9 +56,29 @@ pub static TERMINAL_EVENT_BUS: LazyLock<broadcast::Sender<TerminalEvent>> = Lazy
 
 pub static AGENT_MANAGER: tokio::sync::OnceCell<AgentManager> = tokio::sync::OnceCell::const_new();
 
+type AgentEnsureHook =
+    Box<dyn Fn() -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> + Send + Sync>;
+
+static AGENT_ENSURE_HOOK: std::sync::OnceLock<AgentEnsureHook> = std::sync::OnceLock::new();
+
+/// Registers the startup hook (e.g. `ensure_agent_running`) that must complete
+/// before `get_agent()` initializes the D-Bus `AgentManager`. This guarantees
+/// `TerminalPaneComponent::spawn()` and `main.rs` never race against a daemon
+/// spawn or version-upgrade restart.
+pub fn register_agent_ensure_hook<F, Fut>(hook: F)
+where
+    F: Fn() -> Fut + Send + Sync + 'static,
+    Fut: std::future::Future<Output = ()> + Send + 'static,
+{
+    let _ = AGENT_ENSURE_HOOK.set(Box::new(move || Box::pin(hook())));
+}
+
 pub async fn get_agent() -> &'static AgentManager {
     AGENT_MANAGER
         .get_or_init(|| async {
+            if let Some(hook) = AGENT_ENSURE_HOOK.get() {
+                hook().await;
+            }
             AgentManager::new()
                 .await
                 .expect("Failed to initialize AgentManager")

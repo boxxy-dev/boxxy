@@ -49,26 +49,45 @@ pub async fn ensure_agent_running() -> Result<()> {
         // Step 1 — Re-deploy binary if needed (only in Flatpak).
         if needs_redeploy(&host_path).await {
             let _ = stop_ghost().await;
-            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+            wait_for_agent_stopped().await;
             deploy_agent_binary(&host_path).await?;
         }
     }
 
-    // Step 2 — Ensure daemon is running.
-    spawn_agent(&host_path).await?;
+    // Step 2 — Ensure daemon is running. Returns `true` if a new daemon was spawned.
+    let spawned = spawn_agent(&host_path).await?;
 
-    // Step 3 — Wait for D-Bus name to be ready.
-    wait_for_agent_ready().await?;
+    // Step 3 — Wait for D-Bus name to be ready when a new daemon was spawned.
+    if spawned {
+        wait_for_agent_ready().await?;
+    }
 
     Ok(())
 }
 
+async fn wait_for_agent_stopped() {
+    let Ok(conn) = Connection::session().await else {
+        return;
+    };
+    let Ok(proxy) = AgentVersionProxy::new(&conn).await else {
+        return;
+    };
+    for _ in 0..40 {
+        if proxy.get_version().await.is_err() {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(15)).await;
+    }
+}
+
 async fn wait_for_agent_ready() -> Result<()> {
+    let conn = Connection::session().await?;
+    let proxy = AgentVersionProxy::new(&conn).await?;
     let mut attempts = 0;
-    let max_attempts = 10;
+    let max_attempts = 200; // 3 seconds total at 15ms intervals
 
     loop {
-        match query_ghost_version().await {
+        match proxy.get_version().await {
             Ok(ver) => {
                 info!("Agent is ready (v{})", ver);
                 return Ok(());
@@ -78,11 +97,13 @@ async fn wait_for_agent_ready() -> Result<()> {
                 if attempts >= max_attempts {
                     anyhow::bail!("Timed out waiting for agent to claim D-Bus name: {}", e);
                 }
-                info!(
-                    "Waiting for agent D-Bus name (attempt {}/{})...",
-                    attempts, max_attempts
-                );
-                tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+                if attempts % 20 == 0 {
+                    info!(
+                        "Waiting for agent D-Bus name (attempt {}/{})...",
+                        attempts, max_attempts
+                    );
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(15)).await;
             }
         }
     }
@@ -128,11 +149,11 @@ async fn query_ghost_version() -> Result<String> {
     Ok(ver)
 }
 
-async fn query_ghost_config_dir() -> Result<String> {
+async fn query_ghost_version_and_config_dir() -> Result<(String, String)> {
     let conn = Connection::session().await?;
     let proxy = AgentVersionProxy::new(&conn).await?;
-    let dir = proxy.get_config_dir().await?;
-    Ok(dir)
+    let (ver, dir) = tokio::try_join!(proxy.get_version(), proxy.get_config_dir())?;
+    Ok((ver, dir))
 }
 
 async fn deploy_agent_binary(dest: &PathBuf) -> Result<()> {
@@ -216,41 +237,29 @@ async fn deploy_agent_binary(dest: &PathBuf) -> Result<()> {
     Ok(())
 }
 
-async fn spawn_agent(host_path: &PathBuf) -> Result<()> {
+async fn spawn_agent(host_path: &PathBuf) -> Result<bool> {
     let expected_config_dir = boxxy_sys_utils::get_config_dir();
 
-    // Check if it's already running.
-    match query_ghost_version().await {
-        Ok(ver) if ver == AGENT_VERSION => {
-            // Check if the configuration directory matches too!
-            match query_ghost_config_dir().await {
-                Ok(dir) if PathBuf::from(&dir) == expected_config_dir => {
-                    info!("Agent v{} with matching config dir is already running.", ver);
-                    return Ok(());
-                }
-                Ok(dir) => {
-                    warn!(
-                        "Ghost config dir ({}) != app config dir ({:?}) — stopping old agent",
-                        dir, expected_config_dir
-                    );
-                    let _ = stop_ghost().await;
-                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-                }
-                Err(e) => {
-                    warn!("Failed to query ghost config dir: {} — stopping old agent", e);
-                    let _ = stop_ghost().await;
-                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-                }
-            }
+    // Check if it's already running with matching version and config dir in one round-trip.
+    match query_ghost_version_and_config_dir().await {
+        Ok((ver, dir)) if ver == AGENT_VERSION && PathBuf::from(&dir) == expected_config_dir => {
+            info!("Agent v{} with matching config dir is already running.", ver);
+            return Ok(false);
         }
-        Ok(ver) => {
-            warn!(
-                "Ghost version {} != app version {} — stopping old agent",
-                ver, AGENT_VERSION
-            );
+        Ok((ver, dir)) => {
+            if ver != AGENT_VERSION {
+                warn!(
+                    "Ghost version {} != app version {} — stopping old agent",
+                    ver, AGENT_VERSION
+                );
+            } else {
+                warn!(
+                    "Ghost config dir ({}) != app config dir ({:?}) — stopping old agent",
+                    dir, expected_config_dir
+                );
+            }
             let _ = stop_ghost().await;
-            // Give it a moment to exit
-            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            wait_for_agent_stopped().await;
         }
         Err(_) => {
             info!("Agent is not running; will spawn.");
@@ -282,7 +291,7 @@ async fn spawn_agent(host_path: &PathBuf) -> Result<()> {
             .spawn()
             .context("Failed to spawn native agent")?;
     }
-    Ok(())
+    Ok(true)
 }
 
 async fn stop_ghost() -> Result<()> {

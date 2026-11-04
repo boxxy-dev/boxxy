@@ -483,6 +483,17 @@ impl AppWindow {
             crate::update::update(&inner_ref, AppInput::AdoptOrphanTabs);
         }
 
+        // Create the initial terminal tab synchronously before `window.present()` so the
+        // terminal widget and its background color/opacity are rendered on Frame 1 with
+        // zero transparent gap. If an external companion queued detached sessions to restore,
+        // this initial blank tab is closed once the restored tabs are attached.
+        let initial_tab_id = if !is_drag_window && inner_ref.borrow().tabs.is_empty() {
+            crate::update::update(&inner_ref, AppInput::NewTab);
+            inner_ref.borrow().tabs.first().map(|t| t.id.clone())
+        } else {
+            None
+        };
+
         // Query initial maintenance status and keep the HeaderBar background shells
         // badge synced with the daemon.
         if !is_drag_window {
@@ -490,16 +501,27 @@ impl AppWindow {
             let window_weak = window.downgrade();
             gtk::glib::spawn_future_local(async move {
                 let agent = boxxy_terminal::get_agent().await;
-                if let Ok((status, on_battery)) = agent.get_maintenance_status().await {
-                    let _ = tx_startup
-                        .send(AppInput::RefreshMaintenanceStatus(status, on_battery))
-                        .await;
+
+                // Spawn sidebar status probes (maintenance + MCP servers) concurrently in
+                // the background so slow/remote MCP handshakes never delay tab restoration,
+                // the What's New dialog, or the HeaderBar background shells badge.
+                {
+                    let agent_bg = agent.clone();
+                    let tx_bg = tx_startup.clone();
+                    gtk::glib::spawn_future_local(async move {
+                        if let Ok((status, on_battery)) = agent_bg.get_maintenance_status().await {
+                            let _ = tx_bg
+                                .send(AppInput::RefreshMaintenanceStatus(status, on_battery))
+                                .await;
+                        }
+                        if let Ok(mcp_statuses) = agent_bg.get_mcp_statuses().await {
+                            let _ = tx_bg
+                                .send(AppInput::RefreshMcpStatuses(mcp_statuses))
+                                .await;
+                        }
+                    });
                 }
-                if let Ok(mcp_statuses) = agent.get_mcp_statuses().await {
-                    let _ = tx_startup
-                        .send(AppInput::RefreshMcpStatuses(mcp_statuses))
-                        .await;
-                }
+
                 let mut restored_any = false;
                 if let Ok(pending_restores) = agent.take_pending_restores().await
                     && !pending_restores.is_empty()
@@ -523,7 +545,11 @@ impl AppWindow {
                         }
                     }
                 }
-                if !restored_any {
+                if restored_any {
+                    if let Some(init_id) = initial_tab_id {
+                        let _ = tx_startup.send(AppInput::CloseTab(init_id)).await;
+                    }
+                } else {
                     let _ = tx_startup.send(AppInput::EnsureInitialTab).await;
                 }
                 if let Some(pending) = crate::updater::whats_new::take_whats_new_pending() {

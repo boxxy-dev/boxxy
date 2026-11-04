@@ -1939,7 +1939,10 @@ impl TerminalPaneComponent {
                 }
             }
 
-            let shell = match agent.get_preferred_shell().await {
+            let (shell_res, pty_res) =
+                tokio::join!(agent.get_preferred_shell(), agent.create_pty());
+
+            let shell = match shell_res {
                 Ok(s) => s,
                 Err(e) => {
                     log::warn!("get_preferred_shell failed: {:#}, falling back", e);
@@ -1967,7 +1970,7 @@ impl TerminalPaneComponent {
                 c
             };
 
-            match agent.create_pty().await {
+            match pty_res {
                 Ok(master_fd) => {
                     let mut env: Vec<(String, String)> = if is_flatpak() {
                         Vec::new()
@@ -1984,7 +1987,7 @@ impl TerminalPaneComponent {
 
                     env.push(("VTE_VERSION".to_string(), "7600".to_string()));
 
-                     let (cols, rows) = {
+                    let (cols, rows) = {
                         let inner = inner_rc.borrow();
                         let c = if inner.n_columns > 0 {
                             inner.n_columns as u16
@@ -2017,6 +2020,15 @@ impl TerminalPaneComponent {
 
                     match agent.spawn_process(master_fd_for_agent, options).await {
                         Ok(pid) => {
+                            // Attach the PTY to the terminal widget immediately so the VTE
+                            // reader loop begins rendering the shell prompt without waiting
+                            // on post-spawn metadata RPCs.
+                            {
+                                let mut inner = inner_rc.borrow_mut();
+                                inner.pid = Some(pid);
+                                inner.terminal.attach_pty(master_fd);
+                            }
+
                             let effective_cwd = if !initial_cwd.is_empty() {
                                 initial_cwd
                             } else {
@@ -2030,7 +2042,6 @@ impl TerminalPaneComponent {
                             };
                             {
                                 let mut inner = inner_rc.borrow_mut();
-                                inner.pid = Some(pid);
                                 if inner.working_dir.is_none() && !effective_cwd.is_empty() {
                                     inner.working_dir = Some(effective_cwd.clone());
                                     inner.msg_bar.set_working_dir(Some(effective_cwd.clone()));
@@ -2043,18 +2054,16 @@ impl TerminalPaneComponent {
                                     effective_cwd.clone(),
                                 ));
                             }
-                            let _ = agent.set_pane_id(pid, layout_tag).await;
-                            let _ = agent
-                                .update_workspace_pane(
+                            let _ = tokio::join!(
+                                agent.set_pane_id(pid, layout_tag),
+                                agent.update_workspace_pane(
                                     id.clone(),
                                     effective_cwd,
                                     String::new(),
                                     String::new(),
                                     String::new(),
-                                )
-                                .await;
-
-                            inner_rc.borrow().terminal.attach_pty(master_fd);
+                                ),
+                            );
 
                             let (exit_rx, exit_guard) = agent.subscribe_process_exit(pid).await;
                             let (fg_rx, fg_guard) = agent.subscribe_foreground_process(pid);

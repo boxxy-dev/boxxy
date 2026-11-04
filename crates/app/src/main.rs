@@ -40,14 +40,17 @@ fn main() {
         boxxy_preferences::Settings::ensure_claw_skills();
     });
 
+    // Register the agent deployment/version check hook so `get_agent()` always
+    // ensures the daemon is running and up to date before connecting.
+    boxxy_terminal::register_agent_ensure_hook(|| async {
+        if let Err(e) = boxxy_window::agent_deployer::ensure_agent_running().await {
+            log::error!("Failed to ensure agent is running: {}", e);
+        }
+    });
+
     // Ensure the background agent is deployed and running on the host.
     // We then proceed to other agent-dependent tasks once it's ready.
     tokio::spawn(async {
-        if let Err(e) = boxxy_window::agent_deployer::ensure_agent_running().await {
-            log::error!("Failed to ensure agent is running: {}", e);
-            return;
-        }
-
         // Fetch API keys from host environment in the background
         let agent = boxxy_terminal::get_agent().await;
 

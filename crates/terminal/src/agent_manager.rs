@@ -381,6 +381,7 @@ pub struct AgentManager {
     claw_proxy: AgentClawProxy<'static>,
     maintenance_proxy: AgentMaintenanceProxy<'static>,
     connection: AgentConnection,
+    preferred_shell: Arc<tokio::sync::OnceCell<String>>,
     /// Notification produced during init (e.g. DB reset). Stored here instead
     /// of sent to TERMINAL_EVENT_BUS immediately, because the bus is a
     /// broadcast channel that drops messages when there are no subscribers —
@@ -394,41 +395,34 @@ impl AgentManager {
             .await
             .context("Failed to connect to Session Bus")?;
 
-        // Wait for the agent to appear on D-Bus if it's not there yet.
-        // This handles cases where the UI starts faster than the agent.
-        let mut attempts = 0;
-        let max_attempts = 30; // 3 seconds total
-        let agent_proxy = loop {
-            match AgentProxy::new(&conn).await {
-                Ok(proxy) => break proxy,
-                Err(e) => {
-                    attempts += 1;
-                    if attempts >= max_attempts {
-                        return Err(anyhow::anyhow!(
-                            "Timed out waiting for AgentProxy on Session Bus: {}",
-                            e
-                        ));
-                    }
-                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-                }
-            }
-        };
-
-        let proxy = AgentPtyProxy::new(&conn)
-            .await
-            .context("Failed to create AgentPtyProxy on Session Bus")?;
-
-        let claw_proxy = AgentClawProxy::new(&conn)
-            .await
-            .context("Failed to create AgentClawProxy on Session Bus")?;
-
-        let maintenance_proxy = AgentMaintenanceProxy::new(&conn)
-            .await
-            .context("Failed to create AgentMaintenanceProxy on Session Bus")?;
+        let (agent_proxy, proxy, claw_proxy, maintenance_proxy) = tokio::try_join!(
+            AgentProxy::new(&conn),
+            AgentPtyProxy::new(&conn),
+            AgentClawProxy::new(&conn),
+            AgentMaintenanceProxy::new(&conn),
+        )
+        .context("Failed to create Agent D-Bus proxies on Session Bus")?;
 
         let connection = AgentConnection::spawn_supervisors(agent_proxy.clone(), proxy.clone());
 
-        let startup_token_json = agent_proxy.claim_startup_token().await.unwrap_or_default();
+        // Wait for the agent to claim its D-Bus name and respond if it is still starting up.
+        let mut attempts = 0;
+        let max_attempts = 120; // 3 seconds total (25ms intervals)
+        let startup_token_json = loop {
+            match agent_proxy.claim_startup_token().await {
+                Ok(json) => break json,
+                Err(e) => {
+                    attempts += 1;
+                    if attempts >= max_attempts {
+                        log::warn!(
+                            "Timed out waiting for Agent claim_startup_token on Session Bus: {e}"
+                        );
+                        break String::new();
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+                }
+            }
+        };
         let startup_notification = if let Ok(token) = serde_json::from_str::<
             boxxy_claw_protocol::characters::StartupToken,
         >(&startup_token_json)
@@ -465,6 +459,7 @@ impl AgentManager {
             claw_proxy,
             maintenance_proxy,
             connection,
+            preferred_shell: Arc::new(tokio::sync::OnceCell::new()),
             startup_notification: Arc::new(Mutex::new(startup_notification)),
         })
     }
@@ -799,10 +794,16 @@ impl AgentManager {
     }
 
     pub async fn get_preferred_shell(&self) -> Result<String> {
-        self.proxy
-            .get_preferred_shell()
+        let proxy = &self.proxy;
+        self.preferred_shell
+            .get_or_try_init(|| async move {
+                proxy
+                    .get_preferred_shell()
+                    .await
+                    .context("Agent get_preferred_shell failed")
+            })
             .await
-            .context("Agent get_preferred_shell failed")
+            .cloned()
     }
 
     pub async fn create_pty(&self) -> Result<OwnedFd> {
