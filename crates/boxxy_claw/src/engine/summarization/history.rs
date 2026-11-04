@@ -177,9 +177,14 @@ pub(crate) async fn persist_flushed_json(
                         fact.get("content").and_then(|c| c.as_str()),
                     ) {
                         // Implicitly extracted facts are candidates and require reinforcement
-                        let _ = store
-                            .upsert_dream_candidate(key, Some(project_path), content, 0.5)
-                            .await;
+                        let _ = crate::engine::context::upsert_candidate_deduped(
+                            &store,
+                            key,
+                            Some(project_path),
+                            content,
+                            0.5,
+                        )
+                        .await;
                         debug!(
                             "Flushed Fact for project {}: {} -> {}",
                             project_path, key, content

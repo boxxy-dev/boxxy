@@ -152,9 +152,10 @@ impl DreamOrchestrator {
                                 .and_then(|c| c.as_f64())
                                 .unwrap_or(0.5);
 
-                            let _ = store
-                                .upsert_dream_candidate(key, path_opt, content, confidence)
-                                .await;
+                            let _ = crate::engine::context::upsert_candidate_deduped(
+                                &store, key, path_opt, content, confidence,
+                            )
+                            .await;
                             debug!("Dreaming stored Candidate Fact: {} -> {}", key, content);
                         }
                     }
