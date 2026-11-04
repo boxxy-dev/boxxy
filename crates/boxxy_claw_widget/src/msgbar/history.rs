@@ -53,16 +53,33 @@ fn prune_in_memory(items: &mut Vec<HistoryItem>) {
 }
 
 /// Merges historical records loaded asynchronously from SQLite with any items
-/// pushed by the user while the database load was in flight.
-pub(crate) fn merge_loaded_history(state: &mut HistoryState, mut db_items: Vec<HistoryItem>) {
-    for pending in state.pending_writes.drain(..) {
-        if db_items.last() != Some(&pending) {
-            db_items.push(pending);
+/// pushed by the user while the database load was in flight, collapsing any
+/// consecutive identical entries.
+pub(crate) fn merge_loaded_history(state: &mut HistoryState, db_items: Vec<HistoryItem>) {
+    let mut merged: Vec<HistoryItem> = Vec::with_capacity(db_items.len() + state.pending_writes.len());
+    for item in db_items.into_iter().chain(state.pending_writes.drain(..)) {
+        if merged.last() != Some(&item) {
+            merged.push(item);
         }
     }
-    prune_in_memory(&mut db_items);
-    state.items = db_items;
+    prune_in_memory(&mut merged);
+    state.items = merged;
     state.status = HistoryLoadStatus::Ready;
+}
+
+/// Appends `item` to `state` if it differs from the most recent entry.
+/// Returns `true` if the item was added (and should be persisted to SQLite),
+/// or `false` if it was skipped as a consecutive duplicate.
+pub(crate) fn push_to_state(state: &mut HistoryState, item: HistoryItem) -> bool {
+    if state.items.last() == Some(&item) {
+        return false;
+    }
+    if state.status != HistoryLoadStatus::Ready {
+        state.pending_writes.push(item.clone());
+    }
+    state.items.push(item);
+    prune_in_memory(&mut state.items);
+    true
 }
 
 pub struct MsgHistory {
@@ -139,16 +156,14 @@ impl MsgHistory {
                 attachments: attachments.clone(),
             };
 
-            {
+            let should_persist = {
                 let mut state = GLOBAL_HISTORY.lock();
-                if state.status != HistoryLoadStatus::Ready {
-                    state.pending_writes.push(item.clone());
-                }
-                state.items.push(item);
-                prune_in_memory(&mut state.items);
-            }
+                push_to_state(&mut state, item)
+            };
 
-            self.save_to_db(text, attachments);
+            if should_persist {
+                self.save_to_db(text, attachments);
+            }
         }
 
         self.idx = None;
@@ -333,5 +348,54 @@ mod tests {
         assert_eq!(down3.text, "draft text");
 
         assert!(nav.navigate_down_in(&items).is_none());
+    }
+
+    #[test]
+    fn push_and_merge_skip_consecutive_duplicate_entries() {
+        let mut state = HistoryState {
+            status: HistoryLoadStatus::Ready,
+            items: Vec::new(),
+            pending_writes: Vec::new(),
+        };
+
+        let sleep_item = HistoryItem {
+            text: "/sleep".to_string(),
+            attachments: vec![],
+        };
+        let drama_item = HistoryItem {
+            text: "/drama".to_string(),
+            attachments: vec![],
+        };
+
+        assert!(push_to_state(&mut state, sleep_item.clone()));
+        assert!(!push_to_state(&mut state, sleep_item.clone()));
+        assert!(push_to_state(&mut state, drama_item.clone()));
+        assert!(push_to_state(&mut state, sleep_item.clone()));
+
+        assert_eq!(
+            state
+                .items
+                .iter()
+                .map(|i| i.text.as_str())
+                .collect::<Vec<_>>(),
+            vec!["/sleep", "/drama", "/sleep"]
+        );
+
+        // Also collapses consecutive duplicates already present in DB history on load
+        let db_with_dups = vec![
+            sleep_item.clone(),
+            sleep_item.clone(),
+            drama_item.clone(),
+            drama_item,
+        ];
+        merge_loaded_history(&mut state, db_with_dups);
+        assert_eq!(
+            state
+                .items
+                .iter()
+                .map(|i| i.text.as_str())
+                .collect::<Vec<_>>(),
+            vec!["/sleep", "/drama"]
+        );
     }
 }
