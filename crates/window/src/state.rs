@@ -180,6 +180,7 @@ pub enum AppInput {
     ReattachDetachedBatch(Vec<boxxy_terminal::DetachedSessionInfo>),
     RefreshMaintenanceStatus(String, bool),
     RefreshMcpStatuses(Vec<(String, bool)>),
+    PrewarmDeferredUi,
 }
 
 pub struct AppWindowInner {
@@ -197,7 +198,7 @@ pub struct AppWindowInner {
     pub view_stack: adw::ViewStack,
     pub next_id: usize,
     pub sidebar_visible: bool,
-    pub preferences: PreferencesComponent,
+    pub preferences: Option<PreferencesComponent>,
     pub app_menu: AppMenuComponent,
     pub ai_chat: AiSidebarComponent,
     pub claw: ClawSidebarComponent,
@@ -216,4 +217,33 @@ pub struct AppWindowInner {
     pub initial_working_dir: Option<String>,
     pub force_close: Rc<Cell<bool>>,
     pub tx: async_channel::Sender<AppInput>,
+}
+
+impl AppWindowInner {
+    pub fn ensure_preferences(&mut self) -> &PreferencesComponent {
+        if self.preferences.is_none() {
+            let tx_pref = self.tx.clone();
+            let tx_themes_nav = self.tx.clone();
+            let tx_reload = self.tx.clone();
+            let preferences = PreferencesComponent::new(
+                move |settings| {
+                    let _ = tx_pref.send_blocking(AppInput::SettingsChanged(settings));
+                },
+                move || {
+                    let _ = tx_themes_nav.send_blocking(AppInput::ShowThemesSidebar);
+                },
+                move || {
+                    let _ = tx_reload.send_blocking(AppInput::ReloadEngine);
+                },
+            );
+            let tx_pref_close = self.tx.clone();
+            use libadwaita::prelude::AdwDialogExt;
+            preferences.widget().connect_closed(move |_| {
+                let _ = tx_pref_close.send_blocking(AppInput::FocusActiveTerminal);
+            });
+            preferences.sync_settings(&self.current_settings);
+            self.preferences = Some(preferences);
+        }
+        self.preferences.as_ref().unwrap()
+    }
 }

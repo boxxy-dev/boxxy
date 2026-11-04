@@ -79,55 +79,71 @@ fn is_selectable_chat_model(catalog: &Catalog, _vendor: &str, spec: &ModelSpec) 
     true
 }
 
+static VENDOR_CATALOG_CACHE: std::sync::LazyLock<
+    std::collections::HashMap<String, Vec<&'static ModelSpec>>,
+> = std::sync::LazyLock::new(|| {
+    let catalog = Catalog::builtin();
+    let mut map: std::collections::HashMap<String, Vec<&'static ModelSpec>> =
+        std::collections::HashMap::new();
+    for spec in catalog.iter() {
+        let vendor = spec.provider.vendor();
+        if is_selectable_chat_model(catalog, vendor, spec) {
+            map.entry(vendor.to_string()).or_default().push(spec);
+        }
+    }
+    for (vendor, specs) in &mut map {
+        // Catalog::builtin() stores entries in ascending ASCII order by ID (so older versions
+        // like 2.5 / 4.5 come before 3.8 / 5.5 / 6.1). Reversing puts the newest generation first.
+        specs.reverse();
+
+        if vendor == "moonshot" {
+            specs.sort_by_key(|spec| spec.id.starts_with("moonshot-v1-"));
+        } else if vendor == "xai" {
+            specs.sort_by_key(|spec| spec.id.starts_with("grok-build"));
+        } else if vendor == "zai" {
+            specs.sort_by_key(|spec| spec.id.starts_with("glm-5v-"));
+        } else if vendor == "mistral" {
+            specs.sort_by_key(|spec| {
+                if matches!(
+                    spec.id.as_str(),
+                    "mistral-large-latest"
+                        | "mistral-medium-latest"
+                        | "mistral-small-latest"
+                        | "codestral-latest"
+                        | "magistral-medium-latest"
+                ) {
+                    0
+                } else if spec.id.ends_with("-latest") {
+                    1
+                } else {
+                    2
+                }
+            });
+        } else if matches!(vendor.as_str(), "opencode" | "opencode-go") {
+            // Keep flagship paid/subscription models ahead of free/stealth preview tiers
+            specs.sort_by_key(|spec| {
+                spec.id.ends_with("-free")
+                    || spec.id == "big-pickle"
+                    || spec.id.starts_with("iceman-")
+            });
+        }
+    }
+    map
+});
+
+/// Pre-warms [`Catalog::builtin`] and the per-vendor selectable model index on a
+/// background thread so UI model selectors never parse the catalog on the GTK thread.
+pub fn prewarm_catalog() {
+    let _ = &*VENDOR_CATALOG_CACHE;
+}
+
 /// Returns all selectable [`ModelSpec`]s for `vendor` from [`Catalog::builtin`],
 /// ordered with the newest / flagship generations first.
 pub fn catalog_models_for_vendor(vendor: &str) -> Vec<&'static ModelSpec> {
-    let catalog = Catalog::builtin();
-    let mut specs: Vec<&'static ModelSpec> = catalog
-        .iter()
-        .filter(|spec| {
-            spec.provider.vendor() == vendor && is_selectable_chat_model(catalog, vendor, spec)
-        })
-        .collect();
-
-    // Catalog::builtin() stores entries in ascending ASCII order by ID (so older versions
-    // like 2.5 / 4.5 come before 3.8 / 5.5 / 6.1). Reversing puts the newest generation first.
-    specs.reverse();
-
-    // For Moonshot, keep flagship `kimi-*` models ahead of legacy `moonshot-v1-*` models.
-    if vendor == "moonshot" {
-        specs.sort_by_key(|spec| spec.id.starts_with("moonshot-v1-"));
-    } else if vendor == "xai" {
-        specs.sort_by_key(|spec| spec.id.starts_with("grok-build"));
-    } else if vendor == "zai" {
-        specs.sort_by_key(|spec| spec.id.starts_with("glm-5v-"));
-    } else if vendor == "mistral" {
-        specs.sort_by_key(|spec| {
-            if matches!(
-                spec.id.as_str(),
-                "mistral-large-latest"
-                    | "mistral-medium-latest"
-                    | "mistral-small-latest"
-                    | "codestral-latest"
-                    | "magistral-medium-latest"
-            ) {
-                0
-            } else if spec.id.ends_with("-latest") {
-                1
-            } else {
-                2
-            }
-        });
-    } else if matches!(vendor, "opencode" | "opencode-go") {
-        // Keep flagship paid/subscription models ahead of free/stealth preview tiers
-        specs.sort_by_key(|spec| {
-            spec.id.ends_with("-free")
-                || spec.id == "big-pickle"
-                || spec.id.starts_with("iceman-")
-        });
-    }
-
-    specs
+    VENDOR_CATALOG_CACHE
+        .get(vendor)
+        .cloned()
+        .unwrap_or_default()
 }
 
 /// Computes the available [`ThinkingLevel`]s for a [`ModelSpec`].

@@ -293,7 +293,9 @@ pub fn new_window(inner: &AppWindowInner) {
 
 pub fn settings_changed(inner: &mut AppWindowInner, settings: Settings) {
     inner.current_settings = settings.clone();
-    inner.preferences.sync_settings(&settings);
+    if let Some(ref preferences) = inner.preferences {
+        preferences.sync_settings(&settings);
+    }
     boxxy_terminal::TerminalComponent::set_claw_overlay_zoom_pct(settings.overlay_font_scale);
 
     let style_manager = libadwaita::StyleManager::default();
@@ -384,7 +386,9 @@ pub fn theme_selected(inner: &mut AppWindowInner, palette: boxxy_themes::ParsedP
             .update_settings(inner.current_settings.clone(), Some(variant));
     }
 
-    inner.preferences.sync_settings(&inner.current_settings);
+    if let Some(ref preferences) = inner.preferences {
+        preferences.sync_settings(&inner.current_settings);
+    }
 
     boxxy_themes::apply_palette(Some(&palette), is_dark);
 }
@@ -394,6 +398,9 @@ pub fn sidebar_visible_changed(inner: &mut AppWindowInner, visible: bool) {
     inner.app_state.sidebar_visible = visible;
     inner.app_state.save();
     inner.sidebar_overlay.set_visible(visible);
+    if visible && inner.view_stack.visible_child_name().as_deref() == Some("themes") {
+        inner.theme_selector.ensure_populated();
+    }
     if !visible {
         super::tabs::focus_active_terminal(inner);
     }
@@ -403,6 +410,8 @@ pub fn sidebar_page_changed(inner: &mut AppWindowInner, name: String) {
     if name == "claw" {
         refresh_claw_maintenance_status(inner.tx.clone());
         inner.claw.refresh_past_sessions();
+    } else if name == "themes" {
+        inner.theme_selector.ensure_populated();
     }
     inner.app_state.active_sidebar_page = name;
     inner.app_state.save();
@@ -445,6 +454,7 @@ pub fn toggle_sidebar(inner: &mut AppWindowInner) {
 }
 
 pub fn show_themes_sidebar(inner: &mut AppWindowInner) {
+    inner.theme_selector.ensure_populated();
     if !inner.sidebar_visible {
         inner.sidebar_overlay.set_visible(true);
         inner.split_view.set_show_sidebar(true);

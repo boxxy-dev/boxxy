@@ -10,7 +10,7 @@ use boxxy_bookmarks::manager::{BOOKMARKS_EVENT_BUS, BookmarksManager};
 use boxxy_bookmarks::sidebar::BookmarksSidebarComponent;
 use boxxy_claw_ui::ClawSidebarComponent;
 use boxxy_command_palette::CommandPaletteComponent;
-use boxxy_preferences::{AppState, PreferencesComponent, Settings};
+use boxxy_preferences::{AppState, Settings};
 use boxxy_sidebar::AiSidebarComponent;
 use boxxy_themes::ThemeSelectorComponent;
 
@@ -77,21 +77,6 @@ impl AppWindow {
             Some(new_tab_view)
         });
 
-        let tx_pref = tx.clone();
-        let tx_themes_nav = tx.clone();
-        let tx_reload = tx.clone();
-        let preferences = PreferencesComponent::new(
-            move |settings| {
-                let _ = tx_pref.send_blocking(AppInput::SettingsChanged(settings));
-            },
-            move || {
-                let _ = tx_themes_nav.send_blocking(AppInput::ShowThemesSidebar);
-            },
-            move || {
-                let _ = tx_reload.send_blocking(AppInput::ReloadEngine);
-            },
-        );
-
         let app_menu = AppMenuComponent::new();
         let ai_chat = AiSidebarComponent::new();
 
@@ -127,10 +112,13 @@ impl AppWindow {
             let _ = tx_theme.send_blocking(AppInput::ThemeSelected(Box::new(palette)));
         });
         theme_selector.select_theme(current_settings.theme.as_str());
+        if app_state.sidebar_visible && app_state.active_sidebar_page == "themes" {
+            theme_selector.ensure_populated();
+        }
 
         let command_palette = CommandPaletteComponent::new();
 
-        // Sync bookmarks with command palette
+        // Sync bookmarks with command palette on an idle tick after `window.present()`
         let cp_clone = command_palette.clone();
         let update_palette = move || {
             let bookmarks = BookmarksManager::list();
@@ -148,8 +136,6 @@ impl AppWindow {
                 .collect();
             cp_clone.set_dynamic_commands(commands);
         };
-
-        update_palette();
 
         let cp_sync = command_palette.clone();
         let mut bookmarks_rx = BOOKMARKS_EVENT_BUS.subscribe();
@@ -193,11 +179,6 @@ impl AppWindow {
         let tx_cp = tx.clone();
         command_palette.widget().connect_closed(move |_| {
             let _ = tx_cp.send_blocking(AppInput::FocusActiveTerminal);
-        });
-
-        let tx_pref_close = tx.clone();
-        preferences.widget().connect_closed(move |_| {
-            let _ = tx_pref_close.send_blocking(AppInput::FocusActiveTerminal);
         });
 
         let tx_am = tx.clone();
@@ -378,7 +359,7 @@ impl AppWindow {
             view_stack,
             next_id: 1,
             sidebar_visible: app_state.sidebar_visible,
-            preferences,
+            preferences: None,
             app_menu,
             ai_chat,
             claw,
@@ -617,6 +598,14 @@ impl AppWindow {
         }
 
         window.present();
+
+        // Hydrate Command Palette bookmarks and pre-warm deferred dialogs/models
+        // right after the window and terminal have presented on screen.
+        gtk::glib::idle_add_local_once(update_palette);
+        let tx_prewarm = tx.clone();
+        gtk::glib::timeout_add_local_once(std::time::Duration::from_millis(150), move || {
+            let _ = tx_prewarm.send_blocking(AppInput::PrewarmDeferredUi);
+        });
 
         gtk::glib::spawn_future_local({
             let inner_ref = inner_ref.clone();

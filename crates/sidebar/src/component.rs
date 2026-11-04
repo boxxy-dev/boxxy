@@ -26,9 +26,34 @@ pub(crate) struct AiSidebarInner {
     pub action_btn: gtk::Button,
     pub command_registry: Rc<CommandRegistry>,
     pub autocomplete_ctrl: Rc<boxxy_core_widgets::autocomplete::AutocompleteController>,
-    pub model_selector: GlobalModelSelectorDialog,
+    pub model_selector: Option<GlobalModelSelectorDialog>,
     pub usage_label: gtk::Label,
     pub total_tokens_used: Rc<std::cell::Cell<u64>>,
+}
+
+impl AiSidebarInner {
+    fn ensure_model_selector(&mut self) -> &GlobalModelSelectorDialog {
+        if self.model_selector.is_none() {
+            let settings = boxxy_preferences::Settings::load();
+            let selector = GlobalModelSelectorDialog::new_with_custom(
+                settings.ai_chat_model.clone(),
+                settings.claw_model.clone(),
+                settings.memory_model.clone(),
+                settings.ollama_base_url.clone(),
+                settings.get_effective_api_keys(),
+                settings.openai_compatible_endpoints.clone(),
+                move |ai_provider, claw_provider, memory_provider| {
+                    boxxy_preferences::Settings::update(|settings| {
+                        settings.ai_chat_model = ai_provider.clone();
+                        settings.claw_model = claw_provider.clone();
+                        settings.memory_model = memory_provider.clone();
+                    });
+                },
+            );
+            self.model_selector = Some(selector);
+        }
+        self.model_selector.as_ref().unwrap()
+    }
 }
 
 impl std::fmt::Debug for AiSidebarComponent {
@@ -181,26 +206,6 @@ impl AiSidebarComponent {
 
         let settings = boxxy_preferences::Settings::load();
         let initial_model = settings.ai_chat_model.clone();
-        let initial_claw_model = settings.claw_model.clone();
-        let ollama_url = settings.ollama_base_url.clone();
-        let initial_memory_model = settings.memory_model.clone();
-        let api_keys = settings.get_effective_api_keys();
-
-        let model_selector = GlobalModelSelectorDialog::new_with_custom(
-            initial_model.clone(),
-            initial_claw_model,
-            initial_memory_model,
-            ollama_url,
-            api_keys,
-            settings.openai_compatible_endpoints.clone(),
-            move |ai_provider, claw_provider, memory_provider| {
-                boxxy_preferences::Settings::update(|settings| {
-                    settings.ai_chat_model = ai_provider.clone();
-                    settings.claw_model = claw_provider.clone();
-                    settings.memory_model = memory_provider.clone();
-                });
-            },
-        );
 
         let adj_scroll = scroll_window.vadjustment();
         let list_view_scroll = list_view.clone();
@@ -229,7 +234,7 @@ impl AiSidebarComponent {
             action_btn,
             command_registry,
             autocomplete_ctrl,
-            model_selector: model_selector.clone(),
+            model_selector: None,
             usage_label,
             total_tokens_used: Rc::new(std::cell::Cell::new(0)),
         }));
@@ -253,14 +258,10 @@ impl AiSidebarComponent {
                 if inner.model_provider != ai_model {
                     inner.model_provider = ai_model.clone();
                 }
-                inner
-                    .model_selector
-                    .ai_chat_selector
-                    .set_model_provider(ai_model);
-                inner
-                    .model_selector
-                    .claw_selector
-                    .set_model_provider(claw_model);
+                if let Some(ref model_selector) = inner.model_selector {
+                    model_selector.ai_chat_selector.set_model_provider(ai_model);
+                    model_selector.claw_selector.set_model_provider(claw_model);
+                }
             }
         });
 
@@ -288,7 +289,7 @@ impl AiSidebarComponent {
     }
 
     pub fn model_selector(&self) -> GlobalModelSelectorDialog {
-        self.inner.borrow().model_selector.clone()
+        self.inner.borrow_mut().ensure_model_selector().clone()
     }
 
     pub fn widget(&self) -> &gtk::Box {
@@ -300,8 +301,9 @@ impl AiSidebarComponent {
     }
 
     pub fn show_model_selector(&self) {
-        let inner = self.inner.borrow();
-        inner.model_selector.present(Some(&inner.input_entry));
+        let mut inner = self.inner.borrow_mut();
+        let entry = inner.input_entry.clone();
+        inner.ensure_model_selector().present(Some(&entry));
     }
 
     pub fn clear_history(&self) {

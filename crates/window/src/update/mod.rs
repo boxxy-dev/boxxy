@@ -90,22 +90,29 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
             window_state::sidebar_page_changed(&mut inner, page);
         }
         AppInput::OpenPreferences => {
-            inner.preferences.show(&inner.window.clone().upcast());
+            let win: gtk4::Window = inner.window.clone().upcast();
+            inner.ensure_preferences().show(&win);
         }
         AppInput::OpenApisPreferences => {
-            inner.preferences.show_page("apis");
-            inner.preferences.show(&inner.window.clone().upcast());
+            let win: gtk4::Window = inner.window.clone().upcast();
+            let prefs = inner.ensure_preferences();
+            prefs.show_page("apis");
+            prefs.show(&win);
         }
         AppInput::OpenMcpPreferences => {
-            inner.preferences.show_page("mcp");
-            inner.preferences.show(&inner.window.clone().upcast());
+            let win: gtk4::Window = inner.window.clone().upcast();
+            let prefs = inner.ensure_preferences();
+            prefs.show_page("mcp");
+            prefs.show(&win);
         }
         AppInput::OpenBookmarks => {
             tabs::open_bookmarks(&mut inner);
         }
         AppInput::OpenShortcuts => {
-            inner.preferences.show_page("shortcuts");
-            inner.preferences.show(&inner.window.clone().upcast());
+            let win: gtk4::Window = inner.window.clone().upcast();
+            let prefs = inner.ensure_preferences();
+            prefs.show_page("shortcuts");
+            prefs.show(&win);
         }
         AppInput::OpenWhatsNew => {
             let pending = crate::updater::whats_new::load_last_whats_new();
@@ -114,8 +121,10 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
             let _ = tx_wn.send_blocking(AppInput::ShowWhatsNewDialog(pending, cached));
         }
         AppInput::OpenAbout => {
-            inner.preferences.show_page("about");
-            inner.preferences.show(&inner.window.clone().upcast());
+            let win: gtk4::Window = inner.window.clone().upcast();
+            let prefs = inner.ensure_preferences();
+            prefs.show_page("about");
+            prefs.show(&win);
         }
         AppInput::OpenInFiles => {
             if let Some(page) = inner.tab_view.selected_page() {
@@ -1252,6 +1261,10 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
         }
         AppInput::RefreshMcpStatuses(statuses) => {
             inner.claw.set_mcp_statuses(statuses);
+        }
+        AppInput::PrewarmDeferredUi => {
+            let _ = inner.ensure_preferences();
+            inner.theme_selector.ensure_populated();
         }
         AppInput::ReattachDetachedSession(pid, cwd) => {
             let _ = tabs::new_tab_reattach(&mut inner, pid, cwd);

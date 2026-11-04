@@ -98,16 +98,19 @@ impl PaletteObject {
 
 pub struct ThemeSelectorComponent {
     widget: gtk::Box,
+    store: gio::ListStore,
     selection_model: gtk::SingleSelection,
+    populated: Rc<Cell<bool>>,
+    pending_theme: Rc<RefCell<String>>,
+    suppress_callback: Rc<Cell<bool>>,
 }
 
 impl ThemeSelectorComponent {
     pub fn new<F: Fn(ParsedPaletteStatic) + 'static>(on_select: F) -> Self {
         let store = gio::ListStore::new::<PaletteObject>();
-
-        // Batch-insert all palettes in a single GListModel emission.
-        let items: Vec<PaletteObject> = THEMES.iter().map(|t| PaletteObject::new(*t)).collect();
-        store.extend_from_slice(&items);
+        let populated = Rc::new(Cell::new(false));
+        let pending_theme = Rc::new(RefCell::new(String::new()));
+        let suppress_callback = Rc::new(Cell::new(false));
 
         let query_state: Rc<RefCell<String>> = Rc::new(RefCell::new(String::new()));
         let query_for_filter = query_state.clone();
@@ -175,8 +178,12 @@ impl ThemeSelectorComponent {
         // Debounce source ID: cancel any pending timer when selection changes
         // again, so rapid arrow-key repeats don't queue up heavy theme work.
         let debounce_id: Rc<Cell<Option<glib::SourceId>>> = Rc::new(Cell::new(None));
+        let suppress_for_notify = suppress_callback.clone();
 
         selection_model.connect_selected_item_notify(move |sel| {
+            if suppress_for_notify.get() {
+                return;
+            }
             // Cancel any previously scheduled apply.
             if let Some(id) = debounce_id.take() {
                 id.remove();
@@ -249,7 +256,11 @@ impl ThemeSelectorComponent {
 
         Self {
             widget,
+            store,
             selection_model,
+            populated,
+            pending_theme,
+            suppress_callback,
         }
     }
 
@@ -257,7 +268,23 @@ impl ThemeSelectorComponent {
         &self.widget
     }
 
+    pub fn ensure_populated(&self) {
+        if self.populated.replace(true) {
+            return;
+        }
+        let items: Vec<PaletteObject> = THEMES.iter().map(|t| PaletteObject::new(*t)).collect();
+        self.store.extend_from_slice(&items);
+        let pending = self.pending_theme.borrow().clone();
+        if !pending.is_empty() {
+            self.select_theme(&pending);
+        }
+    }
+
     pub fn select_theme(&self, id: &str) {
+        *self.pending_theme.borrow_mut() = id.to_string();
+        if !self.populated.get() {
+            return;
+        }
         let model = self.selection_model.clone();
         for i in 0..model.n_items() {
             if let Some(item) = model.item(i)
@@ -265,7 +292,9 @@ impl ThemeSelectorComponent {
                 && let Some(palette) = obj.get_palette()
                 && palette.id == id
             {
+                self.suppress_callback.set(true);
                 self.selection_model.set_selected(i);
+                self.suppress_callback.set(false);
                 break;
             }
         }

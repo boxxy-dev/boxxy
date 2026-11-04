@@ -1,5 +1,18 @@
 use gstreamer as gst;
 use gstreamer::prelude::*;
+use std::sync::OnceLock;
+
+static GST_INIT: OnceLock<()> = OnceLock::new();
+
+/// Ensures GStreamer is initialized exactly once. Can be called from a background
+/// pre-warm task after window presentation or lazily on first audio playback.
+pub fn ensure_gstreamer_init() {
+    GST_INIT.get_or_init(|| {
+        if let Err(e) = gst::init() {
+            log::warn!("Failed to initialize GStreamer: {e}");
+        }
+    });
+}
 
 pub fn play_timer_completion_sound() {
     play_sound("resource:///dev/boxxy/BoxxyTerminal/sounds/timer.wav");
@@ -10,7 +23,7 @@ pub fn play_task_completion_sound() {
 }
 
 fn play_sound(uri: &str) {
-    // GStreamer is initialized in main.rs
+    ensure_gstreamer_init();
     let pipeline = gst::ElementFactory::make("playbin")
         .build()
         .expect("Failed to create playbin element");

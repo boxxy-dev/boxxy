@@ -34,9 +34,10 @@ fn main() {
     boxxy_preferences::Settings::init();
     boxxy_preferences::AppState::init();
 
-    // Ensure all default files and the built-in model catalog index are initialized
-    // in the background on startup, without blocking the UI thread.
+    // Ensure all default files, bookmarks cache, and the built-in model catalog index
+    // are initialized in the background on startup, without blocking the UI thread.
     tokio::spawn(async {
+        boxxy_bookmarks::manager::BookmarksManager::init();
         boxxy_preferences::Settings::ensure_claw_skills();
     });
 
@@ -54,49 +55,7 @@ fn main() {
         // Fetch API keys from host environment in the background
         let agent = boxxy_terminal::get_agent().await;
 
-        // Track app.launch after `get_agent()` has synchronized the shared `session_id`
-        // with `boxxy-agent` and allows querying the real host shell (even inside Flatpak).
-        boxxy_telemetry::init_db().await;
-        {
-            use sysinfo::System;
-            let is_flatpak = std::env::var("FLATPAK_ID").is_ok();
-            let os = if is_flatpak {
-                // Inside the Flatpak sandbox, /etc/os-release belongs to the GNOME Platform
-                // runtime, not the host. /run/host/os-release or /run/host/etc/os-release has the host OS.
-                std::fs::read_to_string("/run/host/os-release")
-                    .or_else(|_| std::fs::read_to_string("/run/host/etc/os-release"))
-                    .ok()
-                    .and_then(|content| {
-                        content
-                            .lines()
-                            .find(|l| l.starts_with("NAME="))
-                            .map(|l| {
-                                l.trim_start_matches("NAME=")
-                                    .trim_matches(['"', '\''])
-                                    .trim()
-                                    .to_string()
-                            })
-                    })
-                    .unwrap_or_else(|| System::name().unwrap_or_else(|_| "Unknown".to_string()))
-            } else {
-                System::name().unwrap_or_else(|_| "Unknown".to_string())
-            };
-            let arch = System::cpu_arch();
-            let version = env!("CARGO_PKG_VERSION");
-            let pkg_type = if is_flatpak { "flatpak" } else { "native" };
-            let shell = agent
-                .proxy()
-                .get_preferred_shell()
-                .await
-                .ok()
-                .filter(|s| !s.trim().is_empty())
-                .unwrap_or_else(|| std::env::var("SHELL").unwrap_or_else(|_| "unknown".to_string()));
-            let desktop =
-                std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_else(|_| "unknown".to_string());
-
-            boxxy_telemetry::track_launch(&os, &arch, pkg_type, version, &shell, &desktop).await;
-        }
-
+        let is_flatpak = std::env::var("FLATPAK_ID").is_ok();
         let mut keys_to_check: Vec<(String, String)> = [
             ("GEMINI_API_KEY", "Gemini"),
             ("ANTHROPIC_API_KEY", "Anthropic"),
@@ -129,15 +88,16 @@ fn main() {
 
         let mut found_any = false;
         for (env_var, provider) in keys_to_check {
-            if let Ok(key) = agent
-                .proxy()
-                .get_environment_variable(env_var)
-                .await
+            let key_opt = if is_flatpak {
+                agent.proxy().get_environment_variable(env_var).await.ok()
+            } else {
+                std::env::var(&env_var).ok()
+            };
+            if let Some(key) = key_opt
+                && !key.is_empty()
             {
-                if !key.is_empty() {
-                    boxxy_preferences::Settings::set_env_api_key(&provider, key);
-                    found_any = true;
-                }
+                boxxy_preferences::Settings::set_env_api_key(&provider, key);
+                found_any = true;
             }
         }
 
@@ -158,9 +118,53 @@ fn main() {
                 settings.ollama_base_url.clone(),
             )
             .await;
-    });
 
-    gstreamer::init().expect("Failed to initialize GStreamer.");
+        // Yield briefly so the initial terminal pane's PTY spawn completes with zero
+        // contention before background telemetry and GStreamer pre-warming run.
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        boxxy_window::sound::ensure_gstreamer_init();
+
+        // Track app.launch after `get_agent()` has synchronized the shared `session_id`
+        // with `boxxy-agent` and allows querying the real host shell (even inside Flatpak).
+        boxxy_telemetry::init_db().await;
+        {
+            use sysinfo::System;
+            let os = if is_flatpak {
+                // Inside the Flatpak sandbox, /etc/os-release belongs to the GNOME Platform
+                // runtime, not the host. /run/host/os-release or /run/host/etc/os-release has the host OS.
+                std::fs::read_to_string("/run/host/os-release")
+                    .or_else(|_| std::fs::read_to_string("/run/host/etc/os-release"))
+                    .ok()
+                    .and_then(|content| {
+                        content
+                            .lines()
+                            .find(|l| l.starts_with("NAME="))
+                            .map(|l| {
+                                l.trim_start_matches("NAME=")
+                                    .trim_matches(['"', '\''])
+                                    .trim()
+                                    .to_string()
+                            })
+                    })
+                    .unwrap_or_else(|| System::name().unwrap_or_else(|_| "Unknown".to_string()))
+            } else {
+                System::name().unwrap_or_else(|_| "Unknown".to_string())
+            };
+            let arch = System::cpu_arch();
+            let version = env!("CARGO_PKG_VERSION");
+            let pkg_type = if is_flatpak { "flatpak" } else { "native" };
+            let shell = agent
+                .get_preferred_shell()
+                .await
+                .ok()
+                .filter(|s| !s.trim().is_empty())
+                .unwrap_or_else(|| std::env::var("SHELL").unwrap_or_else(|_| "unknown".to_string()));
+            let desktop =
+                std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_else(|_| "unknown".to_string());
+
+            boxxy_telemetry::track_launch(&os, &arch, pkg_type, version, &shell, &desktop).await;
+        }
+    });
 
     gio::resources_register_include!("compiled.gresource").expect("Failed to register resources.");
 

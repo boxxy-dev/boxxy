@@ -8,21 +8,39 @@ use gtk4::{gdk, gio};
 use std::cell::RefCell;
 use std::rc::Rc;
 
-pub(super) fn setup_preview(terminal: &TerminalWidget, inner: &Rc<RefCell<PaneInner>>) {
+fn get_or_init_preview(
+    slot: &Rc<RefCell<Option<ImagePreviewPopover>>>,
+    terminal: &TerminalWidget,
+) -> ImagePreviewPopover {
+    if let Some(ref existing) = *slot.borrow() {
+        return existing.clone();
+    }
+    let _ = gstreamer::init();
     let preview = ImagePreviewPopover::new();
     preview.popover().set_parent(terminal);
-
     let preview_popover = preview.popover().clone();
     terminal.connect_destroy(move |_| {
         preview_popover.unparent();
     });
+    *slot.borrow_mut() = Some(preview.clone());
+    preview
+}
+
+fn hide_preview_if_initialized(slot: &Rc<RefCell<Option<ImagePreviewPopover>>>) {
+    if let Some(ref preview) = *slot.borrow() {
+        preview.hide_preview_if_not_pinned();
+    }
+}
+
+pub(super) fn setup_preview(terminal: &TerminalWidget, inner: &Rc<RefCell<PaneInner>>) {
+    let preview_slot: Rc<RefCell<Option<ImagePreviewPopover>>> = Rc::new(RefCell::new(None));
 
     let primary_gesture = gtk::GestureClick::new();
     primary_gesture.set_button(gdk::BUTTON_PRIMARY);
     primary_gesture.set_propagation_phase(gtk::PropagationPhase::Capture);
 
     let term_for_primary_click = terminal.downgrade();
-    let preview_clone_click = preview.clone();
+    let preview_clone_click = preview_slot.clone();
     let inner_for_primary = Rc::downgrade(inner);
 
     primary_gesture.connect_pressed(move |gesture: &gtk::GestureClick, _n_press, x, y| {
@@ -80,22 +98,24 @@ pub(super) fn setup_preview(terminal: &TerminalWidget, inner: &Rc<RefCell<PaneIn
                         || hyperlink.to_lowercase().ends_with(".mov"))
                 {
                     gesture.set_state(gtk::EventSequenceState::Claimed);
-                    preview_clone_click.show_preview(&hyperlink, x, y, false);
+                    let preview =
+                        get_or_init_preview(&preview_clone_click, &term_for_primary_click);
+                    preview.show_preview(&hyperlink, x, y, false);
                 } else {
-                    preview_clone_click.hide_preview_if_not_pinned();
+                    hide_preview_if_initialized(&preview_clone_click);
                 }
             } else {
-                preview_clone_click.hide_preview_if_not_pinned();
+                hide_preview_if_initialized(&preview_clone_click);
             }
         } else {
-            preview_clone_click.hide_preview_if_not_pinned();
+            hide_preview_if_initialized(&preview_clone_click);
         }
     });
     terminal.add_controller(primary_gesture);
 
     let motion_ctrl = gtk::EventControllerMotion::new();
     let term_for_motion = terminal.downgrade();
-    let preview_clone_motion = preview.clone();
+    let preview_clone_motion = preview_slot.clone();
     let inner_for_motion = Rc::downgrade(inner);
 
     motion_ctrl.connect_motion(move |_, x, y| {
@@ -127,19 +147,20 @@ pub(super) fn setup_preview(terminal: &TerminalWidget, inner: &Rc<RefCell<PaneIn
                     || hyperlink.to_lowercase().ends_with(".avi")
                     || hyperlink.to_lowercase().ends_with(".mov")
                 {
-                    preview_clone_motion.show_preview(&hyperlink, x, y, true);
+                    let preview = get_or_init_preview(&preview_clone_motion, &term_for_motion);
+                    preview.show_preview(&hyperlink, x, y, true);
                 } else {
-                    preview_clone_motion.hide_preview_if_not_pinned();
+                    hide_preview_if_initialized(&preview_clone_motion);
                 }
             } else {
-                preview_clone_motion.hide_preview_if_not_pinned();
+                hide_preview_if_initialized(&preview_clone_motion);
             }
         }
     });
 
-    let preview_clone_leave = preview.clone();
+    let preview_clone_leave = preview_slot;
     motion_ctrl.connect_leave(move |_| {
-        preview_clone_leave.hide_preview_if_not_pinned();
+        hide_preview_if_initialized(&preview_clone_leave);
     });
 
     terminal.add_controller(motion_ctrl);
