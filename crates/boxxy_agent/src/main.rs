@@ -47,6 +47,7 @@ fn main() -> Result<()> {
         .filter_module("tracing", log::LevelFilter::Warn)
         .filter_module("sqlx", log::LevelFilter::Warn)
         .filter_module("rig", log::LevelFilter::Warn)
+        .filter_module("rmcp", log::LevelFilter::Warn)
         .init();
 
     let cli = Cli::parse();

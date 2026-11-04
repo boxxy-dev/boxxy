@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use tokio::process::Command;
 use zbus::{Connection, proxy};
 
-const AGENT_VERSION: &str = env!("CARGO_PKG_VERSION");
+const AGENT_VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), "+", env!("GIT_HASH"));
 pub const WELL_KNOWN_NAME: &str = "dev.boxxy.BoxxyAgent";
 
 /// Proxy pointing at the running Ghost's version interface.

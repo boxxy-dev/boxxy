@@ -55,7 +55,7 @@ struct GithubCommitRef {
     sha: String,
 }
 
-fn is_hex_sha(s: &str) -> bool {
+pub(crate) fn is_hex_sha(s: &str) -> bool {
     let trimmed = s.trim();
     (7..=40).contains(&trimmed.len()) && trimmed.chars().all(|c| c.is_ascii_hexdigit())
 }

@@ -4,7 +4,7 @@ use log::{info, warn};
 use zbus::Connection;
 
 pub const WELL_KNOWN_NAME: &str = "dev.boxxy.BoxxyAgent";
-pub const AGENT_VERSION: &str = env!("CARGO_PKG_VERSION");
+pub const AGENT_VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), "+", env!("GIT_HASH"));
 
 #[derive(Debug)]
 pub enum ClaimResult {

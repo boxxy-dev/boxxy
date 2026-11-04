@@ -6,6 +6,9 @@ description.workspace = true
 license.workspace = true
 name = "boxxy-agent"
 
+[features]
+disable-self-update = ["boxxy-sys-utils/disable-self-update"]
+
 [dependencies]
 zbus = { workspace = true }
 tokio = { workspace = true }

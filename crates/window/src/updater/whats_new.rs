@@ -11,6 +11,7 @@ use super::{GITHUB_API_BASE, REPO_NAME, REPO_OWNER, USER_AGENT_VALUE, Updater};
 const WHATS_NEW_MARKER_FILE: &str = ".whats_new_pending";
 const WHATS_NEW_LAST_FILE: &str = "whats_new_last.json";
 const WHATS_NEW_CACHE_FILE: &str = "whats_new_cache.json";
+const LAST_SEEN_COMMIT_FILE: &str = "last_seen_commit";
 
 /// Maximum commit range depth / list size for the What's New dialog.
 pub const MAX_WHATS_NEW_COMMITS: usize = 100;
@@ -280,8 +281,74 @@ pub(crate) fn take_whats_new_pending_in(
     Some(pending)
 }
 
+/// Records `running_commit` as the last seen binary commit in `config_dir`.
+pub(crate) fn record_last_seen_commit_in(config_dir: &Path, running_commit: &str) {
+    let running_short = shorten_sha(running_commit);
+    if !super::is_hex_sha(&running_short) {
+        return;
+    }
+    let _ = fs::create_dir_all(config_dir);
+    let _ = fs::write(config_dir.join(LAST_SEEN_COMMIT_FILE), &running_short);
+}
+
+/// Detects if the running binary's commit hash changed since the previous launch
+/// (e.g. after a Nix flake update, Flatpak update, or system package manager upgrade)
+/// and records the new commit hash in `config_dir/last_seen_commit`.
+///
+/// On a brand-new install (where `last_seen_commit` does not exist yet), records the
+/// current commit and returns `None` so first-time users are not shown an update dialog
+/// on their initial launch.
+pub(crate) fn check_and_record_commit_transition_in(
+    config_dir: &Path,
+    running_commit: &str,
+) -> Option<WhatsNewPending> {
+    let running_short = shorten_sha(running_commit);
+    if !super::is_hex_sha(&running_short) {
+        return None;
+    }
+
+    let tracker_path = config_dir.join(LAST_SEEN_COMMIT_FILE);
+    let prev_opt = fs::read_to_string(&tracker_path)
+        .ok()
+        .map(|s| shorten_sha(s.trim()))
+        .filter(|s| super::is_hex_sha(s));
+
+    record_last_seen_commit_in(config_dir, &running_short);
+
+    if let Some(prev_short) = prev_opt {
+        if prev_short != running_short {
+            return Some(WhatsNewPending {
+                from_commit: prev_short,
+                to_commit: running_short,
+            });
+        }
+        return None;
+    }
+
+    // Fallback for existing installations upgrading into the tracker for the first time:
+    // if `whats_new_last.json` already exists with a valid hex `to_commit` different from
+    // `running_short`, treat that previous `to_commit` as the baseline.
+    if let Ok(raw) = fs::read_to_string(config_dir.join(WHATS_NEW_LAST_FILE))
+        && let Ok(last) = serde_json::from_str::<WhatsNewPending>(raw.trim())
+    {
+        let prev_to = shorten_sha(&last.to_commit);
+        if super::is_hex_sha(&prev_to) && prev_to != running_short {
+            return Some(WhatsNewPending {
+                from_commit: prev_to,
+                to_commit: running_short,
+            });
+        }
+    }
+
+    None
+}
+
 /// Checks if a post-update "What's New" dialog should be shown on this launch.
-/// Supports `BOXXY_SIMULATE_UPDATE="commit_a..commit_b"` for instant local testing.
+/// Supports:
+/// 1. `BOXXY_SIMULATE_UPDATE="commit_a..commit_b"` for instant local testing.
+/// 2. `~/.local/boxxy-terminal/.whats_new_pending` written by the native self-updater.
+/// 3. `~/.config/boxxy-terminal/last_seen_commit` transition detection for Nix, Flatpak,
+///    and system package manager upgrades.
 pub fn take_whats_new_pending() -> Option<WhatsNewPending> {
     if let Ok(sim) = std::env::var("BOXXY_SIMULATE_UPDATE")
         && let Some(pending) = parse_simulate_update_range(&sim)
@@ -295,10 +362,29 @@ pub fn take_whats_new_pending() -> Option<WhatsNewPending> {
         return Some(pending);
     }
 
-    let app_dir = Updater::get_app_dir().ok()?;
-    let pending = take_whats_new_pending_in(&app_dir, super::CURRENT_COMMIT)?;
-    save_last_whats_new(&pending);
-    Some(pending)
+    let config_dir = boxxy_sys_utils::get_config_dir();
+
+    if let Ok(app_dir) = Updater::get_app_dir()
+        && let Some(pending) = take_whats_new_pending_in(&app_dir, super::CURRENT_COMMIT)
+    {
+        record_last_seen_commit_in(&config_dir, super::CURRENT_COMMIT);
+        save_last_whats_new(&pending);
+        return Some(pending);
+    }
+
+    if let Some(pending) =
+        check_and_record_commit_transition_in(&config_dir, super::CURRENT_COMMIT)
+    {
+        log::info!(
+            "Detected binary commit upgrade ({} -> {}); presenting What's New dialog",
+            pending.from_commit,
+            pending.to_commit
+        );
+        save_last_whats_new(&pending);
+        return Some(pending);
+    }
+
+    None
 }
 
 /// Persists the most recently viewed or installed commit range so the Command Palette's
@@ -876,5 +962,33 @@ mod tests {
         assert!(clip_prompt.contains("from commit a1b2c3d to e4f5a6b"));
         assert!(clip_prompt.contains("https://github.com/boxxy-dev/boxxy/compare/a1b2c3d...e4f5a6b"));
         assert!(clip_prompt.contains("+88 lines added, -12 lines removed"));
+    }
+
+    #[test]
+    fn commit_transition_tracker_detects_package_upgrades_once() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config_dir = tmp.path();
+
+        // 1. Fresh install records the commit without triggering the dialog
+        assert!(check_and_record_commit_transition_in(config_dir, "a1b2c3d4e5").is_none());
+
+        // 2. Subsequent launch with the same commit does not trigger
+        assert!(check_and_record_commit_transition_in(config_dir, "a1b2c3d").is_none());
+
+        // 3. Launching a newly upgraded package triggers the dialog once
+        let transition = check_and_record_commit_transition_in(config_dir, "e4f5a6b7c8").unwrap();
+        assert_eq!(
+            transition,
+            WhatsNewPending {
+                from_commit: "a1b2c3d".to_string(),
+                to_commit: "e4f5a6b".to_string(),
+            }
+        );
+
+        // 4. Subsequent launch after the upgrade does not re-trigger
+        assert!(check_and_record_commit_transition_in(config_dir, "e4f5a6b").is_none());
+
+        // 5. Unknown/invalid commit hashes are ignored safely
+        assert!(check_and_record_commit_transition_in(config_dir, "unknown").is_none());
     }
 }

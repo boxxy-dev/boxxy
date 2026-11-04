@@ -482,9 +482,9 @@ impl AgentInterface {
             .and_then(|p| p.to_str().map(|s| s.ends_with(" (deleted)")))
             .unwrap_or(false);
         if is_deleted_on_disk {
-            format!("{}-stale", env!("CARGO_PKG_VERSION"))
+            format!("{}-stale", crate::daemon::singleton::AGENT_VERSION)
         } else {
-            env!("CARGO_PKG_VERSION").to_string()
+            crate::daemon::singleton::AGENT_VERSION.to_string()
         }
     }
 
@@ -584,7 +584,7 @@ impl AgentInterface {
         let snapshot = self.core.registry.snapshot().await;
 
         let token = boxxy_claw_protocol::characters::StartupToken {
-            daemon_version: env!("CARGO_PKG_VERSION").to_string(),
+            daemon_version: crate::daemon::singleton::AGENT_VERSION.to_string(),
             db_was_reset,
             initial_revision: snapshot.revision,
             telemetry_session_id,
