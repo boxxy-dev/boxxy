@@ -152,6 +152,19 @@ impl ClawHost for PaneClawHost {
             .unwrap_or(false)
     }
 
+    fn has_foreground_process(&self) -> bool {
+        self.inner_weak
+            .upgrade()
+            .map(|i| {
+                let b = i.borrow();
+                b.terminal.is_alt_screen()
+                    || b.foreground_process
+                        .as_deref()
+                        .is_some_and(|p| !p.trim().is_empty())
+            })
+            .unwrap_or(false)
+    }
+
     fn working_dir(&self) -> Option<String> {
         self.inner_weak
             .upgrade()

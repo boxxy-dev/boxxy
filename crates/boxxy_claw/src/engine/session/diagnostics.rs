@@ -64,6 +64,7 @@ impl ClawSession {
         let mut state_lock = self.state.lock().await;
         if let Some(reply) = state_lock.pending_terminal_reply.take() {
             state_lock.pending_proposal_summary = None;
+            state_lock.pending_inject_command = false;
             if exit_code == 0 {
                 let _ = reply.send(Ok(snapshot));
             } else {
@@ -71,7 +72,9 @@ impl ClawSession {
                     "Command failed with exit code {exit_code}:\n{snapshot}"
                 )));
             }
-        } else if !Self::should_ignore_exit_code(exit_code, &snapshot) {
+        } else if Self::should_ignore_exit_code(exit_code, &snapshot) {
+            state_lock.pending_inject_command = false;
+        } else {
             let prompt = format!(
                 "The user's command failed with exit code {exit_code}. Please analyze the terminal snapshot and suggest a fix."
             );

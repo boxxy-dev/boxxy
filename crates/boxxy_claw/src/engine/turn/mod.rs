@@ -381,6 +381,10 @@ pub fn spawn_turn(
             .expect("Failed to create claw agent"),
         };
 
+        if !speaker.is_guest {
+            state.lock().await.persistent_agent = Some(agent.clone());
+        }
+
         // 5. Prepare History (Perspective-flipped for the current speaker)
         let final_history = history::prepare_query_history_for_speaker(
             history,

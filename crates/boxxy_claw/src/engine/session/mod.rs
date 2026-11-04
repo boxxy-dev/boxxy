@@ -283,6 +283,7 @@ impl ClawSession {
                 | ClawMessage::KillProcessReply { .. }
                 | ClawMessage::BackgroundCommandReply { .. }
                 | ClawMessage::TerminalCommandAccepted { .. }
+                | ClawMessage::CompleteRunningTerminalCommand { .. }
                 | ClawMessage::GetClipboardReply { .. }
                 | ClawMessage::SetClipboardReply { .. }
                 | ClawMessage::ScrollbackReply { .. }

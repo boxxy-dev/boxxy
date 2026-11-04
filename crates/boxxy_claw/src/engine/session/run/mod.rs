@@ -442,14 +442,15 @@ impl ClawSession {
                 let state = self.state.clone();
                 let workspace = ctx.workspace.clone();
                 let tx_ui = self.tx_ui.clone();
+                let tx_self = self.tx_self.clone();
                 let agent_name = self.name.clone();
                 let char_id = self.character_id.clone();
 
                 tokio::spawn(async move {
                     // Wait 800ms (past the daemon's 500ms foreground-process poll tick).
                     // If the command hasn't emitted OSC 133;D yet AND the target pane is still
-                    // running a foreground process (e.g. `top`, `htop`, `vim`, `make`), resolve
-                    // the tool call as "launched and running" so the character is immediately free.
+                    // running a foreground process (e.g. `top`, `htop`, `vim`, `cachy-update`),
+                    // resolve the command as launched and running.
                     tokio::time::sleep(std::time::Duration::from_millis(800)).await;
 
                     if is_remote {
@@ -525,16 +526,77 @@ impl ClawSession {
                             .as_deref()
                             .and_then(|s| s.strip_prefix("Running: "))
                         {
-                            let mut state_lock = state.lock().await;
-                            if let Some(reply) = state_lock.pending_terminal_reply.take() {
-                                state_lock.pending_proposal_summary = None;
-                                let _ = reply.send(Ok(format!(
-                                    "Command launched and is currently running (`{proc_name}`) in your terminal."
-                                )));
-                            }
+                            // Yield control directly to the user's terminal without making a
+                            // redundant follow-up LLM call that would re-open the overlay drawer
+                            // over an interactive command (e.g. `cachy-update`, `pacman`, `vim`).
+                            let _ = tx_self
+                                .send(ClawMessage::CompleteRunningTerminalCommand {
+                                    process_name: proc_name.to_string(),
+                                })
+                                .await;
                         }
                     }
                 });
+            }
+            ClawMessage::CompleteRunningTerminalCommand { process_name } => {
+                let should_complete = self.state.lock().await.pending_terminal_reply.is_some();
+                if !should_complete {
+                    return;
+                }
+
+                if let Some(handle) = ctx.current_turn.take() {
+                    handle.abort();
+                }
+
+                let (speaker_name, speaker_cid) = {
+                    let mut state_lock = self.state.lock().await;
+                    let (spk_name, spk_cid) = state_lock.effective_speaker();
+                    let _ = state_lock.pending_terminal_reply.take();
+                    // Keep `pending_inject_command = true` so if this agent-originated command
+                    // later exits with a non-zero status, origin-aware auto-diagnosis still runs.
+                    state_lock.pending_inject_command = true;
+                    state_lock.active_speaker = None;
+
+                    let summary = state_lock
+                        .pending_proposal_summary
+                        .take()
+                        .unwrap_or_else(|| format!("terminal_exec `{process_name}`"));
+                    let tagged = crate::engine::turn::history::tag_assistant_text(
+                        &spk_cid,
+                        &spk_name,
+                        &format!(
+                            "[Executed {summary} — command is running interactively in the terminal (`{process_name}`)]"
+                        ),
+                    );
+                    state_lock
+                        .history
+                        .push(rig::message::Message::assistant(tagged));
+                    (spk_name, spk_cid)
+                };
+
+                let _ = self
+                    .tx_ui
+                    .send(ClawEngineEvent::AgentThinking {
+                        agent_name: speaker_name,
+                        character_id: speaker_cid,
+                        is_thinking: false,
+                    })
+                    .await;
+
+                let settings = boxxy_preferences::Settings::load();
+                let p_ctx = crate::engine::turn::persistence::PersistenceContext {
+                    session_id: self.session_id.clone(),
+                    agent_name: self.name.clone(),
+                    user_query: String::new(),
+                    cwd: ctx.current_dir.clone(),
+                    settings: (*settings).clone(),
+                    db: self.db.clone(),
+                    tx_self: self.tx_self.clone(),
+                };
+                crate::engine::turn::persistence::perform_persistence(p_ctx, self.state.clone())
+                    .await;
+
+                let _ = self.tx_self.send(ClawMessage::TurnFinished).await;
             }
             ClawMessage::GetClipboardReply { approved } => {
                 if approved {

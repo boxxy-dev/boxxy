@@ -354,6 +354,12 @@ pub enum ClawMessage {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         target_pane_id: Option<String>,
     },
+    /// Internal signal emitted when a local `terminal_exec` command is still actively
+    /// running in the foreground after the launch grace window, allowing the session
+    /// to yield control to the terminal and finish the turn without an extra LLM call.
+    CompleteRunningTerminalCommand {
+        process_name: String,
+    },
     KillProcessReply {
         approved: bool,
     },

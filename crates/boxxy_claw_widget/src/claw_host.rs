@@ -79,6 +79,12 @@ pub trait ClawHost: 'static {
     /// TUI — e.g. not injecting `cd` when vim is up.
     fn is_busy(&self) -> bool;
 
+    /// True while a foreground process is actively running in the terminal
+    /// (e.g. `cachy-update`, `pacman`, `cargo`, `vim`).
+    fn has_foreground_process(&self) -> bool {
+        self.is_busy()
+    }
+
     /// The host's current working directory, if known. Seeds the
     /// agent's CWD context on each user message.
     fn working_dir(&self) -> Option<String>;

@@ -82,7 +82,7 @@ pub fn spawn_dispatch(
                         if !event_agent_name.is_empty() {
                             overlay.set_active_agent(event_agent_name);
                         }
-                        if !overlay.is_visible() {
+                        if !overlay.is_visible() && !host.has_foreground_process() {
                             overlay.show_chat_only(event_agent_name);
                         }
                         overlay.set_thinking(true);
@@ -120,13 +120,17 @@ pub fn spawn_dispatch(
                         diagnosis,
                         *typewriter,
                     );
-                    overlay.show(
-                        OverlayMode::Claw,
-                        agent_name,
-                        Some("Diagnosis"),
-                        diagnosis,
-                        crate::Proposal::None,
-                    );
+                    if overlay.is_visible() || !host.has_foreground_process() {
+                        overlay.show(
+                            OverlayMode::Claw,
+                            agent_name,
+                            Some("Diagnosis"),
+                            diagnosis,
+                            crate::Proposal::None,
+                        );
+                    } else {
+                        overlay.set_state(crate::OverlayState::Idle);
+                    }
                 }
                 ClawEngineEvent::InjectCommand {
                     command,
@@ -164,16 +168,18 @@ pub fn spawn_dispatch(
                             .filter(|tid| !tid.is_empty() && *tid != id.as_str())
                         {
                             host.inject_line_to_pane(target_id, command.clone());
+                            overlay.show(
+                                OverlayMode::Claw,
+                                agent_name,
+                                Some("Diagnosis"),
+                                diagnosis,
+                                crate::Proposal::None,
+                            );
                         } else {
                             host.inject_line(command.clone());
+                            overlay.hide();
+                            host.grab_focus();
                         }
-                        overlay.show(
-                            OverlayMode::Claw,
-                            agent_name,
-                            Some("Diagnosis"),
-                            diagnosis,
-                            crate::Proposal::None,
-                        );
                     } else {
                         overlay.show(
                             OverlayMode::Claw,
@@ -400,13 +406,15 @@ pub fn spawn_dispatch(
                             host.send_claw(ClawMessage::TerminalCommandAccepted {
                                 target_pane_id: Some(target_id.to_string()),
                             });
+                            overlay.enter_waiting_state();
                         } else {
                             host.inject_line(command.clone());
                             host.send_claw(ClawMessage::TerminalCommandAccepted {
                                 target_pane_id: None,
                             });
+                            overlay.hide();
+                            host.grab_focus();
                         }
-                        overlay.enter_waiting_state();
                     } else {
                         overlay.show(
                             OverlayMode::Claw,
