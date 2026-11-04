@@ -1250,6 +1250,9 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
         AppInput::RefreshMaintenanceStatus(status, on_battery) => {
             inner.claw.set_maintenance_status(&status, on_battery);
         }
+        AppInput::RefreshMcpStatuses(statuses) => {
+            inner.claw.set_mcp_statuses(statuses);
+        }
         AppInput::ReattachDetachedSession(pid, cwd) => {
             let _ = tabs::new_tab_reattach(&mut inner, pid, cwd);
             let tx = inner.tx.clone();

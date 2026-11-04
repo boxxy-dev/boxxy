@@ -9,7 +9,10 @@ use rmcp::RoleClient;
 use tokio::sync::{OnceCell, RwLock};
 
 use crate::client::handler::BoxxyClientHandler;
-use crate::client::http::{PermanentConfigError, find_http_status_error, format_service_error};
+use crate::client::http::{
+    PermanentConfigError, find_http_status_error, format_service_error,
+    is_anyhow_connection_refused, is_loopback_http_url, probe_loopback_http_port,
+};
 use crate::config::{McpServerConfig, McpTransport};
 use crate::rig_bridge::tool::{DynamicMcpTool, McpToolObserver};
 
@@ -250,12 +253,16 @@ impl McpClientManager {
                     return Ok(client_arc);
                 }
                 Err(e) => {
-                    // Fail-fast on permanent configuration errors (invalid URL/scheme, bad headers, missing binary)
-                    // or permanent 401/403 authorization failures.
+                    // Fail-fast on permanent configuration errors (invalid URL/scheme, bad headers, missing binary),
+                    // permanent 401/403 authorization failures, or local loopback servers that aren't running (`ConnectionRefused`).
                     let is_permanent_config = e.downcast_ref::<PermanentConfigError>().is_some();
                     let is_permanent_auth = e
                         .downcast_ref::<ClientInitializeError>()
                         .is_some_and(ClientInitializeError::is_authorization_required);
+                    let is_local_offline = matches!(
+                        &config.transport,
+                        McpTransport::Http { url, .. } if is_loopback_http_url(url)
+                    ) && is_anyhow_connection_refused(&e);
 
                     // Honor numeric `Retry-After` seconds from rmcp 3.8's `HttpStatusError` (429/503).
                     let server_retry_ms = find_http_status_error(Some(e.root_cause()))
@@ -268,6 +275,12 @@ impl McpClientManager {
                         is_permanent_failure = true;
                         warn!(
                             "MCP connection to '{server_name}' failed with permanent configuration/auth error; skipping retries."
+                        );
+                        break;
+                    }
+                    if is_local_offline {
+                        warn!(
+                            "Local MCP server '{server_name}' is offline (Connection refused); skipping retry backoff."
                         );
                         break;
                     }
@@ -365,6 +378,84 @@ impl McpClientManager {
         cache.insert(server_name.to_string(), tools.clone());
 
         Some(tools)
+    }
+
+    /// Returns `[(server_name, is_connected)]` for all enabled MCP servers.
+    ///
+    /// - For loopback HTTP servers (`localhost` / `127.0.0.1`), performs a `< 1ms` local
+    ///   TCP socket check to detect immediately when a local server starts or stops:
+    ///   if a previously connected local server stopped listening, evicts its client and
+    ///   marks it `Not connected`; if a previously offline local server started listening,
+    ///   clears its circuit breaker and connects immediately.
+    /// - For Stdio and remote HTTP servers, checks `is_closed() || is_transport_closed()`
+    ///   and connects any unprobed server (unless its circuit breaker is open).
+    pub async fn get_server_statuses(&self) -> Vec<(String, bool)> {
+        let entries: Vec<(String, McpServerConfig)> = {
+            let configs = self.configs.read().await;
+            let mut list: Vec<(String, McpServerConfig)> =
+                configs.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+            list.sort_by(|a, b| a.0.cmp(&b.0));
+            list
+        };
+
+        let mut statuses = Vec::with_capacity(entries.len());
+        for (name, cfg) in entries {
+            let loopback_url = match &cfg.transport {
+                McpTransport::Http { url, .. } if is_loopback_http_url(url) => Some(url.as_str()),
+                _ => None,
+            };
+
+            let already_live = {
+                let clients = self.active_clients.read().await;
+                clients
+                    .get(&name)
+                    .is_some_and(|c| !c.is_closed() && !c.is_transport_closed())
+            };
+
+            if let Some(url) = loopback_url {
+                let port_open = probe_loopback_http_port(url).await;
+                if already_live && !port_open {
+                    info!("MCP: Local server '{name}' is no longer listening; disconnecting.");
+                    let removed = self.active_clients.write().await.remove(&name);
+                    self.tool_cache.write().await.remove(&name);
+                    if let Some(client) = removed {
+                        client.cancellation_token().cancel();
+                    }
+                    self.failed_servers.write().await.insert(
+                        name.clone(),
+                        CircuitBreakerState {
+                            tripped_at: Instant::now(),
+                            cooldown: TRANSIENT_COOLDOWN,
+                            last_error: "Local server stopped listening".to_string(),
+                        },
+                    );
+                    statuses.push((name, false));
+                    continue;
+                } else if !already_live && port_open {
+                    // Local server just came online! Clear any circuit-breaker cooldown and connect now.
+                    self.failed_servers.write().await.remove(&name);
+                } else if !already_live && !port_open {
+                    // Still offline; ensure circuit breaker is set without spawning a noisy rmcp worker.
+                    let mut failed = self.failed_servers.write().await;
+                    failed.entry(name.clone()).or_insert_with(|| CircuitBreakerState {
+                        tripped_at: Instant::now(),
+                        cooldown: TRANSIENT_COOLDOWN,
+                        last_error: "Connection refused".to_string(),
+                    });
+                    statuses.push((name, false));
+                    continue;
+                }
+            }
+
+            if already_live {
+                statuses.push((name, true));
+                continue;
+            }
+            let connected = self.ensure_client(&name).await.is_ok();
+            statuses.push((name, connected));
+        }
+
+        statuses
     }
 
     /// Builds `rig::tool::DynamicTool` instances for all enabled MCP servers.
@@ -624,6 +715,44 @@ mod tests {
                 .await
                 .contains_key("bad-scheme-srv"),
             "Updating config must clear the circuit breaker"
+        );
+    }
+
+    #[tokio::test]
+    async fn offline_loopback_http_server_fails_fast_without_retry_backoff() {
+        // Bind to port 0 and drop the listener immediately to obtain a guaranteed closed loopback port
+        let closed_port = {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            listener.local_addr().unwrap().port()
+        };
+
+        let manager = McpClientManager::new();
+        let offline_local_cfg = McpServerConfig {
+            name: "offline-local-srv".to_string(),
+            transport: McpTransport::Http {
+                url: format!("http://127.0.0.1:{closed_port}/mcp"),
+                headers: HashMap::new(),
+                streamable: true,
+            },
+            enabled: true,
+            timeout_ms: 5_000,
+            max_retries: 3,
+            backoff: BackoffConfig {
+                initial_ms: 1_000,
+                max_ms: 5_000,
+                multiplier: 2.0,
+            },
+        };
+
+        manager.update_configs(vec![offline_local_cfg]).await;
+
+        let start = Instant::now();
+        let statuses = manager.get_server_statuses().await;
+        assert_eq!(statuses, vec![("offline-local-srv".to_string(), false)]);
+        assert!(
+            start.elapsed() < Duration::from_millis(500),
+            "Offline loopback server must skip 3,000ms retry sleeps (elapsed: {:?})",
+            start.elapsed()
         );
     }
 }

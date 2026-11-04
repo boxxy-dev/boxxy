@@ -24,7 +24,7 @@ Boxxy provides deep, real-time visibility into LLM interactions for developers a
 - **Inline Comments:** Use short, concise inline comments to explain *why* a particular approach was taken, especially for complex async flows, GTK property bindings, or state machine transitions. Avoid over-commenting obvious syntax. Maintain existing comments, updating them only if they become obsolete.
 
 ### 2. Modularity & Scoping
-- **File Length Guideline (~700 LOC):** Aim to keep source files around **700 lines of code** when natural domain boundaries exist. However, **cohesion and clarity always trump strict line counts** — do NOT artificially split a well-defined, single-responsibility file (e.g., an 800–950 line component or state machine) just to satisfy a line number if doing so fragments related logic or creates a mess. Refactor only when a file genuinely mixes distinct responsibilities.
+- **File Length Guideline (~900 LOC):** Aim to keep source files around **900 lines of code** when natural domain boundaries exist. However, **cohesion and clarity always trump strict line counts** — do NOT artificially split a well-defined, single-responsibility file (e.g., an 800–950 line component or state machine) just to satisfy a line number if doing so fragments related logic or creates a mess. Refactor only when a file genuinely mixes distinct responsibilities.
 - **Structural Integrity:** Use directory-based modules (e.g., `pane/mod.rs`) for complex components. Avoid monolithic `lib.rs` files; use them primarily for module declarations and public API exports.
 
 ### 3. UI & Resource Management
@@ -68,7 +68,7 @@ The daemon runs a **Character Catalog Watcher** (`character_watcher.rs`) that mo
 ### 5. `boxxy-claw` (Library Crate)
 Agentic Reasoning Engine using an **Actor Model**. Spawns isolated `ClawSession` actors per terminal pane. Features the **"Red Pony Protocol"**: each pane's `CharacterClaim` carries a stable two-word `petname` (e.g., "red-pony") minted by the `petname` crate at claim time; swarm tools address peers by petname, character display name, or holder ID via `resolve_peer`.
 
-The per-turn reasoning pipeline lives in `engine/turn/` and is split across four focused sub-modules (per the 700-line file limit):
+The per-turn reasoning pipeline lives in `engine/turn/` and is split across four focused sub-modules (per the 900 lines file limit):
 - `turn/history.rs` — `prepare_query_history`: strips stale dynamic context from old messages (retaining the last 4 user turns), clips oversized (`> 2,000` chars) `ToolResult` payloads in turns older than 4 user exchanges (`TRANSCRIPT_CLIP`) while keeping all `Message` and `ToolResult` call IDs intact, pops the current user message to avoid duplication, and injects synthetic `[Previous task was interrupted by the user]` assistant placeholders between any consecutive user messages (required for Anthropic/Gemini alternation compliance). Also provides `find_safe_exchange_cut` and `build_checkpoint_pair` for exchange-boundary compaction.
 - `turn/skills.rs` — semantic + keyword skill injection into the turn context using the 0ms local FTS5 tokenizer (`build_fts5_query`).
 - `turn/snapshot.rs` — hash-based snapshot deduplication (emits `[TERMINAL_SNAPSHOT: NO_CHANGE]` when the terminal hasn't changed, saving tokens).

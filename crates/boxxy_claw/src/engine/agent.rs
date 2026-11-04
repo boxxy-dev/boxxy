@@ -30,6 +30,7 @@ pub struct ClawAgent {
     inner: ClawAgentInner,
     preamble: String,
     pub(crate) config: AgentConfig,
+    mcp_statuses: Vec<(String, bool)>,
 }
 
 #[derive(Clone)]
@@ -46,6 +47,7 @@ enum ClawAgentInner {
 impl ClawAgent {
     pub fn matches_config(&self, candidate: &AgentConfig) -> bool {
         &self.config == candidate
+            && **boxxy_claw_protocol::characters::MCP_STATUS_CACHE.load() == self.mcp_statuses
     }
 
     pub async fn chat<P: Into<Message> + Send>(
@@ -486,6 +488,8 @@ pub async fn create_claw_agent(
     let mcp_tools = mcp_manager
         .build_rig_tools(Some(approval_handler.clone()))
         .await;
+    let mcp_statuses = mcp_manager.get_server_statuses().await;
+    boxxy_claw_protocol::characters::update_mcp_status_cache(mcp_statuses.clone());
     tool_server = tool_server.dynamic_tools(mcp_tools);
 
     let tool_handle = tool_server.run();
@@ -562,5 +566,6 @@ pub async fn create_claw_agent(
         inner,
         preamble: final_preamble,
         config: config.clone(),
+        mcp_statuses,
     })
 }

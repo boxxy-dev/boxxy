@@ -90,8 +90,34 @@ impl DaemonCore {
         // `MaintenanceSubsystem::get_maintenance_status()` reads the same state.
         dreaming::spawn_with_status(power.clone(), ghost.clone(), dream_status.clone());
 
-        // Telemetry subsystem: Initialize and periodically flush in the background
-        // so it never delays daemon startup or UI responsiveness.
+        // MCP background health monitor: warms up configured MCP servers at startup,
+        // periodically checks local/active MCP server liveness while any UI window is attached,
+        // and pushes `McpStatusChanged` over D-Bus whenever a server connects or disconnects.
+        let conn_for_mcp = conn.clone();
+        let ghost_for_mcp = ghost.clone();
+        tokio::spawn(async move {
+            let mut last_statuses: Option<Vec<(String, bool)>> = None;
+            loop {
+                let settings = boxxy_preferences::Settings::load();
+                let has_enabled = settings.mcp_servers.iter().any(|s| s.enabled);
+                if has_enabled && (!ghost_for_mcp.is_ghost() || last_statuses.is_none()) {
+                    let statuses =
+                        boxxy_claw::sync_and_probe_mcp_servers(settings.mcp_servers.clone()).await;
+                    if last_statuses.as_ref() != Some(&statuses) {
+                        last_statuses = Some(statuses.clone());
+                        boxxy_claw_protocol::characters::update_mcp_status_cache(statuses.clone());
+                        crate::ipc::emit_mcp_status_changed(&conn_for_mcp, &statuses).await;
+                    }
+                } else if !has_enabled && last_statuses.as_ref().is_none_or(|s| !s.is_empty()) {
+                    let empty = Vec::new();
+                    last_statuses = Some(empty.clone());
+                    boxxy_claw_protocol::characters::update_mcp_status_cache(empty.clone());
+                    crate::ipc::emit_mcp_status_changed(&conn_for_mcp, &empty).await;
+                }
+                tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+            }
+        });
+
         tokio::spawn(async move {
             boxxy_telemetry::init_db().await;
             boxxy_telemetry::init().await;

@@ -79,4 +79,4 @@ Creates `user/` on first call if it doesn't exist. Used by `boxxy-preferences` t
 - `DimensionsTooLarge(w, h, max)`
 
 ## Extending the pipeline
-To add a new transformation: implement `Transformation` in `transform.rs` (or a new file if the module grows past 700 lines). To add a new analyzer: implement `Analyzer<YourOutput>` in `analyze.rs`. To add a new high-level entry point (e.g. `process_icon`): add a new file under `image/` following the same validation pattern as `avatar.rs`.
+To add a new transformation: implement `Transformation` in `transform.rs` (or a new file if the module grows past 900 lines). To add a new analyzer: implement `Analyzer<YourOutput>` in `analyze.rs`. To add a new high-level entry point (e.g. `process_icon`): add a new file under `image/` following the same validation pattern as `avatar.rs`.

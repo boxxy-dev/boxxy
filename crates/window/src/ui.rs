@@ -495,6 +495,11 @@ impl AppWindow {
                         .send(AppInput::RefreshMaintenanceStatus(status, on_battery))
                         .await;
                 }
+                if let Ok(mcp_statuses) = agent.get_mcp_statuses().await {
+                    let _ = tx_startup
+                        .send(AppInput::RefreshMcpStatuses(mcp_statuses))
+                        .await;
+                }
                 let mut restored_any = false;
                 if let Ok(pending_restores) = agent.take_pending_restores().await
                     && !pending_restores.is_empty()

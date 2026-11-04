@@ -44,6 +44,104 @@ pub(crate) fn same_origin_redirect_policy() -> reqwest::redirect::Policy {
     })
 }
 
+/// Walks an error source chain (and fallback debug/display formatting when `rmcp`
+/// worker channels wrap transport errors as strings) to detect a local TCP `ConnectionRefused` error.
+pub fn is_connection_refused(mut source: Option<&(dyn StdError + 'static)>) -> bool {
+    while let Some(err) = source {
+        if let Some(io_err) = err.downcast_ref::<std::io::Error>()
+            && io_err.kind() == std::io::ErrorKind::ConnectionRefused
+        {
+            return true;
+        }
+        if let Some(init_err) = err.downcast_ref::<ClientInitializeError>() {
+            match init_err {
+                ClientInitializeError::TransportError { error, .. } => {
+                    if is_connection_refused(Some(error.error.as_ref())) {
+                        return true;
+                    }
+                }
+                ClientInitializeError::LegacyFallbackFailed {
+                    discover, fallback, ..
+                } => {
+                    if is_connection_refused(Some(discover.as_ref()))
+                        || is_connection_refused(Some(fallback.as_ref()))
+                    {
+                        return true;
+                    }
+                }
+                _ => {}
+            }
+        }
+        source = err.source();
+    }
+    false
+}
+
+/// Checks an `anyhow::Error` chain for a local `ConnectionRefused` failure,
+/// including `rmcp::transport::worker` errors that close the worker channel on TCP connect failure.
+pub fn is_anyhow_connection_refused(err: &anyhow::Error) -> bool {
+    if is_connection_refused(Some(err.as_ref())) || is_connection_refused(Some(err.root_cause())) {
+        return true;
+    }
+    let full = format!("{err:#}");
+    full.contains("Connection refused")
+        || full.contains("ConnectionRefused")
+        || full.contains("tcp connect error")
+        || full.contains("error sending request for url")
+}
+
+/// Returns `true` if `url` points to a loopback host (`localhost`, `127.0.0.1`, `[::1]`).
+pub fn is_loopback_http_url(url: &str) -> bool {
+    let Ok(parsed) = reqwest::Url::parse(url.trim()) else {
+        return false;
+    };
+    let Some(host_str) = parsed.host_str() else {
+        return false;
+    };
+    if host_str.eq_ignore_ascii_case("localhost") {
+        return true;
+    }
+    let trimmed = host_str.trim_start_matches('[').trim_end_matches(']');
+    trimmed
+        .parse::<std::net::IpAddr>()
+        .is_ok_and(|ip| ip.is_loopback())
+}
+
+/// Performs a sub-millisecond non-blocking TCP probe to a loopback HTTP URL's port
+/// so the health monitor can detect when a local MCP server starts or stops without
+/// generating `rmcp` worker log noise.
+pub async fn probe_loopback_http_port(url: &str) -> bool {
+    let Ok(parsed) = reqwest::Url::parse(url.trim()) else {
+        return false;
+    };
+    let Some(host_str) = parsed.host_str() else {
+        return false;
+    };
+    let port = parsed.port_or_known_default().unwrap_or(80);
+    let trimmed_host = host_str.trim_start_matches('[').trim_end_matches(']');
+
+    if trimmed_host.eq_ignore_ascii_case("localhost") {
+        let v4 = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+        let v6 = std::net::SocketAddr::from(([0, 0, 0, 0, 0, 0, 0, 1], port));
+        tokio::time::timeout(
+            Duration::from_millis(150),
+            tokio::net::TcpStream::connect(&[v4, v6][..]),
+        )
+        .await
+        .is_ok_and(|r| r.is_ok())
+    } else if let Ok(ip) = trimmed_host.parse::<std::net::IpAddr>() {
+        let addr = std::net::SocketAddr::new(ip, port);
+        tokio::time::timeout(
+            Duration::from_millis(150),
+            tokio::net::TcpStream::connect(addr),
+        )
+        .await
+        .is_ok_and(|r| r.is_ok())
+    } else {
+        false
+    }
+}
+
 /// Walks an error source chain to find `rmcp 3.8.0`'s body-free [`HttpStatusError`]
 /// (emitted for HTTP 429 and 5xx responses with optional `Retry-After` metadata).
 pub fn find_http_status_error<'a>(

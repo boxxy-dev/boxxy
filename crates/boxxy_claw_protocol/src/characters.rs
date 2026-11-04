@@ -15,6 +15,28 @@ pub static CLAIMS_CACHE: LazyLock<ArcSwap<Vec<CharacterClaim>>> =
 static REGISTRY_REVISION_WATCH: LazyLock<(watch::Sender<u64>, watch::Receiver<u64>)> =
     LazyLock::new(|| watch::channel(0));
 
+/// Globally accessible, lock-free reactive cache of MCP server connection statuses
+/// `[(server_name, is_connected)]`, updated via D-Bus push signals from `boxxy-agent`.
+pub static MCP_STATUS_CACHE: LazyLock<ArcSwap<Vec<(String, bool)>>> =
+    LazyLock::new(|| ArcSwap::from_pointee(Vec::new()));
+
+static MCP_STATUS_WATCH: LazyLock<(watch::Sender<u64>, watch::Receiver<u64>)> =
+    LazyLock::new(|| watch::channel(0));
+
+/// Updates `MCP_STATUS_CACHE` atomically and notifies local UI subscribers.
+pub fn update_mcp_status_cache(statuses: Vec<(String, bool)>) {
+    if **MCP_STATUS_CACHE.load() != statuses {
+        MCP_STATUS_CACHE.store(Arc::new(statuses));
+        let next = MCP_STATUS_WATCH.0.borrow().wrapping_add(1);
+        let _ = MCP_STATUS_WATCH.0.send(next);
+    }
+}
+
+/// Subscribes to local `MCP_STATUS_CACHE` updates.
+pub fn subscribe_mcp_status_changes() -> watch::Receiver<u64> {
+    MCP_STATUS_WATCH.1.clone()
+}
+
 /// Updates both `CHARACTER_CACHE` and `CLAIMS_CACHE` atomically and notifies local subscribers.
 pub fn update_caches(catalog: Vec<CharacterInfo>, claims: Vec<CharacterClaim>, revision: u64) {
     CLAIMS_CACHE.store(Arc::new(claims));

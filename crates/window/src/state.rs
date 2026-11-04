@@ -179,6 +179,7 @@ pub enum AppInput {
     ReattachDetachedSession(u32, Option<String>),
     ReattachDetachedBatch(Vec<boxxy_terminal::DetachedSessionInfo>),
     RefreshMaintenanceStatus(String, bool),
+    RefreshMcpStatuses(Vec<(String, bool)>),
 }
 
 pub struct AppWindowInner {

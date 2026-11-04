@@ -280,6 +280,26 @@ impl AgentConnection {
             });
         }
 
+        // 2c. MCP Server Status Supervisor
+        {
+            let proxy = agent_proxy.clone();
+            tokio::spawn(async move {
+                loop {
+                    if let Ok(mut stream) = proxy.receive_mcp_status_changed().await {
+                        while let Some(msg) = stream.next().await {
+                            if let Ok(args) = msg.args()
+                                && let Ok(statuses) =
+                                    serde_json::from_str::<Vec<(String, bool)>>(&args.statuses_json)
+                            {
+                                boxxy_claw_protocol::characters::update_mcp_status_cache(statuses);
+                            }
+                        }
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+                }
+            });
+        }
+
         // 3. Claw Session Event Multiplexer
         {
             let proxy = agent_proxy;
@@ -902,6 +922,15 @@ impl AgentManager {
             .await
             .unwrap_or(false);
         Ok((status, on_battery))
+    }
+
+    /// Queries the daemon's Maintenance interface for live MCP server connection statuses
+    /// `[(server_name, is_connected)]`.
+    pub async fn get_mcp_statuses(&self) -> Result<Vec<(String, bool)>> {
+        self.maintenance_proxy
+            .get_mcp_statuses()
+            .await
+            .context("Agent get_mcp_statuses failed")
     }
 }
 

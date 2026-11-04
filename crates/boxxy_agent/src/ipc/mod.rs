@@ -324,6 +324,23 @@ pub(crate) async fn emit_pending_tasks_changed(
     pty_registry.notify_changed();
 }
 
+pub(crate) async fn emit_mcp_status_changed(
+    conn: &Connection,
+    statuses: &[(String, bool)],
+) {
+    if let Ok(json) = serde_json::to_string(statuses) {
+        let _ = conn
+            .emit_signal(
+                Option::<zbus::names::BusName>::None,
+                "/dev/boxxy/Agent",
+                "dev.boxxy.BoxxyTerminal.Agent",
+                "McpStatusChanged",
+                &(json,),
+            )
+            .await;
+    }
+}
+
 #[zbus::proxy(
     interface = "dev.boxxy.BoxxyTerminal.Agent",
     default_service = "dev.boxxy.BoxxyAgent",
@@ -446,6 +463,9 @@ pub trait Agent {
 
     #[zbus(signal)]
     async fn desktop_notification(&self, title: String, message: String) -> zbus::Result<()>;
+
+    #[zbus(signal)]
+    async fn mcp_status_changed(&self, statuses_json: String) -> zbus::Result<()>;
 }
 
 pub struct AgentInterface {
@@ -493,7 +513,10 @@ impl AgentInterface {
         *url_guard = ollama_url;
     }
 
-    async fn notify_settings_invalidated(&self) {
+    async fn notify_settings_invalidated(
+        &self,
+        #[zbus(connection)] conn: &zbus::Connection,
+    ) {
         log::debug!("Settings invalidated signal received from UI. Reloading cache.");
         boxxy_preferences::Settings::reload();
         let settings = boxxy_preferences::Settings::load();
@@ -508,7 +531,21 @@ impl AgentInterface {
             .pty_registry
             .sync_default_persistence(persist)
             .await;
+
+        let mcp_servers = settings.mcp_servers.clone();
+        let conn_clone = conn.clone();
+        tokio::spawn(async move {
+            let statuses = boxxy_claw::sync_and_probe_mcp_servers(mcp_servers).await;
+            boxxy_claw_protocol::characters::update_mcp_status_cache(statuses.clone());
+            emit_mcp_status_changed(&conn_clone, &statuses).await;
+        });
     }
+
+    #[zbus(signal)]
+    async fn mcp_status_changed(
+        emitter: &SignalEmitter<'_>,
+        statuses_json: String,
+    ) -> zbus::Result<()>;
 
     #[zbus(signal)]
     async fn desktop_notification(

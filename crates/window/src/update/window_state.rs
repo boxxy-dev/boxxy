@@ -344,11 +344,17 @@ pub fn settings_changed(inner: &mut AppWindowInner, settings: Settings) {
     // current avoids that fallback path on every turn.)
     let effective_keys = settings.get_effective_api_keys();
     let ollama_url = settings.ollama_base_url.clone();
+    let tx_mcp = inner.tx.clone();
 
     gtk4::glib::spawn_future_local(async move {
         let agent = boxxy_terminal::get_agent().await;
         let _ = agent.update_credentials(effective_keys, ollama_url).await;
         let _ = agent.notify_settings_invalidated().await;
+        if let Ok(mcp_statuses) = agent.get_mcp_statuses().await {
+            let _ = tx_mcp
+                .send(crate::state::AppInput::RefreshMcpStatuses(mcp_statuses))
+                .await;
+        }
     });
 
     if inner.sidebar_toolbar.width_request() != settings.ai_chat_width {
@@ -402,7 +408,7 @@ pub fn sidebar_page_changed(inner: &mut AppWindowInner, name: String) {
     inner.app_state.save();
 }
 
-fn refresh_claw_maintenance_status(tx: async_channel::Sender< crate::state::AppInput>) {
+fn refresh_claw_maintenance_status(tx: async_channel::Sender<crate::state::AppInput>) {
     gtk4::glib::spawn_future_local(async move {
         let agent = boxxy_terminal::get_agent().await;
         if let Ok((status, on_battery)) = agent.get_maintenance_status().await {
@@ -410,6 +416,11 @@ fn refresh_claw_maintenance_status(tx: async_channel::Sender< crate::state::AppI
                 .send(crate::state::AppInput::RefreshMaintenanceStatus(
                     status, on_battery,
                 ))
+                .await;
+        }
+        if let Ok(mcp_statuses) = agent.get_mcp_statuses().await {
+            let _ = tx
+                .send(crate::state::AppInput::RefreshMcpStatuses(mcp_statuses))
                 .await;
         }
     });

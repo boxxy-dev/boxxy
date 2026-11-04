@@ -57,6 +57,7 @@ pub struct ClawSidebarComponent {
     cost_lbl: gtk::Label,
     mcp_box: gtk::Box,
     mcp_rows_box: gtk::Box,
+    mcp_statuses: Rc<RefCell< std::collections::HashMap<String, bool>>>,
     last_usage: Rc<Cell<SessionUsage>>,
     web_search_enabled: Rc<Cell<bool>>,
     command_panel: gtk::Box,
@@ -432,6 +433,13 @@ impl ClawSidebarComponent {
         let last_usage = Rc::new(Cell::new(SessionUsage::default()));
         let web_search_enabled = Rc::new(Cell::new(initial_settings.web_search_on_by_default));
 
+        let initial_mcp_map: std::collections::HashMap<String, bool> =
+            boxxy_claw_protocol::characters::MCP_STATUS_CACHE
+                .load()
+                .iter()
+                .cloned()
+                .collect();
+
         let comp = Self {
             widget,
             hero_box,
@@ -463,6 +471,7 @@ impl ClawSidebarComponent {
             cost_lbl,
             mcp_box,
             mcp_rows_box,
+            mcp_statuses: Rc::new(RefCell::new(initial_mcp_map)),
             last_usage,
             web_search_enabled,
             command_panel,
@@ -495,6 +504,7 @@ impl ClawSidebarComponent {
         let web_search_sub = comp.web_search_enabled.clone();
         let mcp_box_sub = comp.mcp_box.clone();
         let mcp_rows_sub = comp.mcp_rows_box.clone();
+        let mcp_statuses_sub = comp.mcp_statuses.clone();
         let cost_lbl_sub = comp.cost_lbl.clone();
         let last_usage_sub = comp.last_usage.clone();
         let mut settings_rx = boxxy_preferences::SETTINGS_EVENT_BUS.subscribe();
@@ -514,7 +524,12 @@ impl ClawSidebarComponent {
                     &settings,
                     web_search_sub.get(),
                 );
-                populate_mcp_rows(&mcp_box_sub, &mcp_rows_sub, &settings);
+                populate_mcp_rows(
+                    &mcp_box_sub,
+                    &mcp_rows_sub,
+                    &settings,
+                    &mcp_statuses_sub.borrow(),
+                );
                 if settings.currency != boxxy_preferences::config::Currency::Usd {
                     boxxy_sys_utils::runtime()
                         .spawn(boxxy_sys_utils::fetch_exchange_rates())
@@ -553,6 +568,28 @@ impl ClawSidebarComponent {
                         active_pop_reg.clone(),
                         on_res_reg.clone(),
                         true,
+                    );
+                }
+            }
+        });
+
+        let mcp_box_watch = comp.mcp_box.clone();
+        let mcp_rows_watch = comp.mcp_rows_box.clone();
+        let mcp_statuses_watch = comp.mcp_statuses.clone();
+        let mut mcp_rx = boxxy_claw_protocol::characters::subscribe_mcp_status_changes();
+        glib::spawn_future_local(async move {
+            while mcp_rx.changed().await.is_ok() {
+                let latest = boxxy_claw_protocol::characters::MCP_STATUS_CACHE.load();
+                let map: std::collections::HashMap<String, bool> =
+                    latest.iter().cloned().collect();
+                if *mcp_statuses_watch.borrow() != map {
+                    *mcp_statuses_watch.borrow_mut() = map;
+                    let settings = boxxy_preferences::Settings::load();
+                    populate_mcp_rows(
+                        &mcp_box_watch,
+                        &mcp_rows_watch,
+                        &settings,
+                        &mcp_statuses_watch.borrow(),
                     );
                 }
             }
@@ -735,8 +772,28 @@ impl ClawSidebarComponent {
 
     pub fn refresh_mcp_list(&self, settings: &boxxy_preferences::Settings) {
         self.refresh_models_info(settings);
-        populate_mcp_rows(&self.mcp_box, &self.mcp_rows_box, settings);
+        populate_mcp_rows(
+            &self.mcp_box,
+            &self.mcp_rows_box,
+            settings,
+            &self.mcp_statuses.borrow(),
+        );
         self.refresh_visibility();
+    }
+
+    pub fn set_mcp_statuses(&self, statuses: Vec<(String, bool)>) {
+        boxxy_claw_protocol::characters::update_mcp_status_cache(statuses.clone());
+        let map: std::collections::HashMap<String, bool> = statuses.into_iter().collect();
+        if *self.mcp_statuses.borrow() != map {
+            *self.mcp_statuses.borrow_mut() = map;
+            let settings = boxxy_preferences::Settings::load();
+            populate_mcp_rows(
+                &self.mcp_box,
+                &self.mcp_rows_box,
+                &settings,
+                &self.mcp_statuses.borrow(),
+            );
+        }
     }
 
     pub fn set_maintenance_status(&self, status: &str, on_battery: bool) {
@@ -880,6 +937,7 @@ fn populate_mcp_rows(
     mcp_box: &gtk::Box,
     mcp_rows_box: &gtk::Box,
     settings: &boxxy_preferences::Settings,
+    statuses: &std::collections::HashMap<String, bool>,
 ) {
     while let Some(child) = mcp_rows_box.first_child() {
         mcp_rows_box.remove(&child);
@@ -901,9 +959,17 @@ fn populate_mcp_rows(
         let row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
         row.set_hexpand(true);
 
+        let is_connected = statuses.get(&srv.name).copied().unwrap_or(false);
+        let dot_class = if is_connected { "success" } else { "error" };
+        let status_text = if is_connected {
+            "Connected"
+        } else {
+            "Not connected"
+        };
+
         let dot_lbl = gtk::Label::builder()
             .label("•")
-            .css_classes(["caption", "success"])
+            .css_classes(["caption", dot_class])
             .halign(gtk::Align::Start)
             .build();
         row.append(&dot_lbl);
@@ -919,7 +985,7 @@ fn populate_mcp_rows(
         row.append(&name_lbl);
 
         let status_lbl = gtk::Label::builder()
-            .label("Connected")
+            .label(status_text)
             .css_classes(["caption", "dim-label"])
             .halign(gtk::Align::End)
             .build();

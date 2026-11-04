@@ -8,5 +8,6 @@ use zbus::proxy;
 pub trait AgentMaintenance {
     async fn get_maintenance_status(&self) -> zbus::Result<String>;
     async fn is_on_battery(&self) -> zbus::Result<bool>;
+    async fn get_mcp_statuses(&self) -> zbus::Result<Vec<(String, bool)>>;
     async fn trigger_maintenance_now(&self) -> zbus::Result<()>;
 }
