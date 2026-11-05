@@ -1151,13 +1151,9 @@ pub fn focus_active_terminal(inner: &mut AppWindowInner) {
             .iter()
             .position(|c| c.controller.widget() == &child)
         {
-            let popover_open = inner.claw.is_options_popover_open()
-                || gtk4::prelude::GtkWindowExt::focus(&inner.window)
-                    .and_then(|w| w.ancestor(gtk4::Popover::static_type()))
-                    .is_some();
-
+            let modal_open = inner.has_modal_or_popover_open();
             let tc = &inner.tabs[pos];
-            if !popover_open {
+            if !modal_open {
                 tc.controller.grab_focus();
             }
 

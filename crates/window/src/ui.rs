@@ -208,13 +208,7 @@ impl AppWindow {
 
         let tx_focus = tx.clone();
         window.connect_notify(Some("is-active"), move |win, _| {
-            if win.is_active() {
-                if gtk::prelude::GtkWindowExt::focus(win)
-                    .and_then(|w| w.ancestor(gtk::Popover::static_type()))
-                    .is_some()
-                {
-                    return;
-                }
+            if win.is_active() && !AppWindowInner::is_dialog_or_popover_open(win) {
                 let _ = tx_focus.send_blocking(AppInput::FocusActiveTerminal);
             }
         });

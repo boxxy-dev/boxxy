@@ -2,7 +2,7 @@ use crate::config::Settings;
 use adw::prelude::*;
 use gtk4 as gtk;
 use libadwaita as adw;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 pub struct PreferencesComponent {
@@ -19,6 +19,8 @@ pub struct PreferencesComponent {
     overlay_font_scale_spin: adw::SpinRow,
     font_button: gtk::FontDialogButton,
     settings_rc: Rc<RefCell<Settings>>,
+    handle_escape: Rc<dyn Fn()>,
+    bound_parent_ptr: Cell<usize>,
 }
 
 impl std::fmt::Debug for PreferencesComponent {
@@ -43,24 +45,29 @@ impl PreferencesComponent {
         let apis_stack: gtk::Stack = builder.object("apis_stack").unwrap();
         let apis_back_btn: gtk::Button = builder.object("apis_back_btn").unwrap();
 
-        let esc_handler = gtk::EventControllerKey::new();
-        esc_handler.set_propagation_phase(gtk::PropagationPhase::Capture);
         let dialog_esc_clone = dialog.clone();
         let stack_esc = stack.clone();
         let apis_stack_esc = apis_stack.clone();
         let apis_back_esc = apis_back_btn.clone();
         let title_esc = content_title.clone();
+        let handle_escape: Rc<dyn Fn()> = Rc::new(move || {
+            if stack_esc.visible_child_name().as_deref() == Some("apis")
+                && apis_stack_esc.visible_child_name().as_deref() != Some("list")
+            {
+                apis_stack_esc.set_visible_child_name("list");
+                apis_back_esc.set_visible(false);
+                title_esc.set_title("APIs");
+                return;
+            }
+            dialog_esc_clone.close();
+        });
+
+        let esc_handler = gtk::EventControllerKey::new();
+        esc_handler.set_propagation_phase(gtk::PropagationPhase::Capture);
+        let handle_escape_dialog = handle_escape.clone();
         esc_handler.connect_key_pressed(move |_, keyval, _, _| {
             if keyval == gtk::gdk::Key::Escape {
-                if stack_esc.visible_child_name().as_deref() == Some("apis")
-                    && apis_stack_esc.visible_child_name().as_deref() != Some("list")
-                {
-                    apis_stack_esc.set_visible_child_name("list");
-                    apis_back_esc.set_visible(false);
-                    title_esc.set_title("APIs");
-                    return gtk::glib::Propagation::Stop;
-                }
-                dialog_esc_clone.close();
+                handle_escape_dialog();
                 gtk::glib::Propagation::Stop
             } else {
                 gtk::glib::Propagation::Proceed
@@ -239,10 +246,61 @@ impl PreferencesComponent {
             overlay_font_scale_spin,
             font_button,
             settings_rc,
+            handle_escape,
+            bound_parent_ptr: Cell::new(0),
         }
     }
 
     pub fn show(&self, parent: &gtk::Window) {
+        let parent_ptr = parent.as_ptr() as usize;
+        if self.bound_parent_ptr.get() != parent_ptr {
+            self.bound_parent_ptr.set(parent_ptr);
+            // Attach a fallback Capture-phase Escape handler on the host GtkWindow.
+            // In GTK 4, key events propagate from GtkRoot down to `window.focus()`.
+            // When an AdwDialog is closed and re-presented, or when a focused widget
+            // inside the dialog is hidden/unfocused, `window.focus()` can become `None`
+            // (leaving `AdwDialog` out of the propagation path). Handling Escape on the
+            // root window whenever `self.dialog` is the active `visible_dialog` ensures
+            // Escape always works.
+            let win_esc = gtk::EventControllerKey::new();
+            win_esc.set_propagation_phase(gtk::PropagationPhase::Capture);
+            let dialog_weak = self.dialog.downgrade();
+            let parent_weak = parent.downgrade();
+            let handle_escape = self.handle_escape.clone();
+            win_esc.connect_key_pressed(move |_, keyval, _, _| {
+                if keyval != gtk::gdk::Key::Escape {
+                    return gtk::glib::Propagation::Proceed;
+                }
+                let Some(dialog) = dialog_weak.upgrade() else {
+                    return gtk::glib::Propagation::Proceed;
+                };
+                let Some(win) = parent_weak.upgrade() else {
+                    return gtk::glib::Propagation::Proceed;
+                };
+                let is_top_dialog = win
+                    .downcast_ref::<adw::ApplicationWindow>()
+                    .and_then(|aw| aw.visible_dialog())
+                    .is_some_and(|d| d == dialog)
+                    || win
+                        .downcast_ref::<adw::Window>()
+                        .and_then(|aw| aw.visible_dialog())
+                        .is_some_and(|d| d == dialog);
+                if !is_top_dialog {
+                    return gtk::glib::Propagation::Proceed;
+                }
+                // Let open popovers (e.g. AdwComboRow dropdowns) dismiss themselves first.
+                if gtk::prelude::GtkWindowExt::focus(&win)
+                    .and_then(|w| w.ancestor(gtk::Popover::static_type()))
+                    .is_some()
+                {
+                    return gtk::glib::Propagation::Proceed;
+                }
+                handle_escape();
+                gtk::glib::Propagation::Stop
+            });
+            parent.add_controller(win_esc);
+        }
+
         self.search_entry.set_text("");
         let width = parent.width();
         let height = parent.height();
@@ -250,7 +308,10 @@ impl PreferencesComponent {
         let target_height = (height - 40).max(300);
         self.dialog.set_content_width(target_width);
         self.dialog.set_content_height(target_height);
+        self.dialog.set_focus(Some(&self.search_entry));
         self.dialog.present(Some(parent));
+        self.dialog.set_focus(Some(&self.search_entry));
+        self.search_entry.grab_focus();
     }
 
     pub fn widget(&self) -> &adw::Dialog {

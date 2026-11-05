@@ -246,4 +246,23 @@ impl AppWindowInner {
         }
         self.preferences.as_ref().unwrap()
     }
+
+    pub fn is_dialog_or_popover_open(win: &adw::ApplicationWindow) -> bool {
+        use gtk::prelude::{GtkWindowExt, WidgetExt};
+        use libadwaita::prelude::AdwApplicationWindowExt;
+        use libadwaita::glib::types::StaticType;
+
+        win.visible_dialog().is_some()
+            || win
+                .focus()
+                .and_then(|w| {
+                    w.ancestor(gtk::Popover::static_type())
+                        .or_else(|| w.ancestor(adw::Dialog::static_type()))
+                })
+                .is_some()
+    }
+
+    pub fn has_modal_or_popover_open(&self) -> bool {
+        self.claw.is_options_popover_open() || Self::is_dialog_or_popover_open(&self.window)
+    }
 }
