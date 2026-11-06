@@ -80,10 +80,10 @@
                               </object>
                             </child>
                             <child>
-                              <object class="GtkListBoxRow" id="nav_toolbox">
+                              <object class="GtkListBoxRow" id="nav_integrations">
                                 <property name="child">
                                   <object class="GtkLabel">
-                                    <property name="label" translatable="yes">Toolbox &amp; Permissions</property>
+                                    <property name="label" translatable="yes">Desktop Integrations</property>
                                     <property name="xalign">0</property>
                                     <property name="margin-start">12</property>
                                     <property name="margin-end">12</property>
@@ -126,6 +126,20 @@
                                 <property name="child">
                                   <object class="GtkLabel">
                                     <property name="label" translatable="yes">Claw UI &amp; Sounds</property>
+                                    <property name="xalign">0</property>
+                                    <property name="margin-start">12</property>
+                                    <property name="margin-end">12</property>
+                                    <property name="margin-top">10</property>
+                                    <property name="margin-bottom">10</property>
+                                  </object>
+                                </property>
+                              </object>
+                            </child>
+                            <child>
+                              <object class="GtkListBoxRow" id="nav_toolbox">
+                                <property name="child">
+                                  <object class="GtkLabel">
+                                    <property name="label" translatable="yes">Toolbox &amp; Permissions</property>
                                     <property name="xalign">0</property>
                                     <property name="margin-start">12</property>
                                     <property name="margin-end">12</property>
@@ -570,6 +584,58 @@
 
                     <child>
                       <object class="AdwViewStackPage">
+                        <property name="name">integrations</property>
+                        <property name="child">
+                          <object class="AdwPreferencesPage" id="page_integrations">
+                            <child>
+                              <object class="AdwPreferencesGroup" id="group_integrations_gnome">
+                                <property name="title" translatable="yes">GNOME</property>
+                                <child>
+                                  <object class="AdwSwitchRow" id="nautilus_integration_switch">
+                                    <property name="title" translatable="yes">Nautilus Integration</property>
+                                    <property name="subtitle" translatable="yes">Add "Open With Boxxy" to the right-click context menu in Files (requires nautilus-python).</property>
+                                  </object>
+                                </child>
+                                <child>
+                                  <object class="AdwActionRow" id="gnome_companion_row">
+                                    <property name="title" translatable="yes">GNOME Shell Companion</property>
+                                    <property name="subtitle" translatable="yes">https://github.com/boxxy-dev/gnome-shell-boxxy-companion</property>
+                                    <property name="activatable">True</property>
+                                    <child type="suffix">
+                                      <object class="GtkImage">
+                                        <property name="icon-name">boxxy-external-link-symbolic</property>
+                                        <property name="valign">center</property>
+                                      </object>
+                                    </child>
+                                  </object>
+                                </child>
+                              </object>
+                            </child>
+                            <child>
+                              <object class="AdwPreferencesGroup" id="group_integrations_cosmic">
+                                <property name="title" translatable="yes">COSMIC</property>
+                                <child>
+                                  <object class="AdwActionRow" id="cosmic_companion_row">
+                                    <property name="title" translatable="yes">COSMIC Companion</property>
+                                    <property name="subtitle" translatable="yes">https://github.com/boxxy-dev/cosmic-boxxy-companion</property>
+                                    <property name="activatable">True</property>
+                                    <child type="suffix">
+                                      <object class="GtkImage">
+                                        <property name="icon-name">boxxy-external-link-symbolic</property>
+                                        <property name="valign">center</property>
+                                      </object>
+                                    </child>
+                                  </object>
+                                </child>
+                              </object>
+                            </child>
+                          </object>
+                        </property>
+                      </object>
+                    </child>
+
+                    <child>
+                      <object class="AdwViewStackPage">
                         <property name="name">toolbox</property>
                         <property name="title" translatable="yes">Toolbox &amp; Permissions</property>
                         <property name="child">
@@ -865,12 +931,6 @@
                                   <object class="AdwSwitchRow" id="pty_persistence_switch">
                                     <property name="title" translatable="yes">Always Keep Running Processes in Background</property>
                                     <property name="subtitle" translatable="yes">Automatically move running processes to the background when closing a tab or window without showing the confirmation dialog.</property>
-                                  </object>
-                                </child>
-                                <child>
-                                  <object class="AdwSwitchRow" id="nautilus_integration_switch">
-                                    <property name="title" translatable="yes">Nautilus Integration</property>
-                                    <property name="subtitle" translatable="yes">Add "Open With Boxxy" to the right-click context menu in Files (requires nautilus-python).</property>
                                   </object>
                                 </child>
                               </object>
