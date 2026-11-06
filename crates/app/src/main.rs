@@ -161,8 +161,13 @@ fn main() {
                 .unwrap_or_else(|| std::env::var("SHELL").unwrap_or_else(|_| "unknown".to_string()));
             let desktop =
                 std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_else(|_| "unknown".to_string());
+            let theme = {
+                let s = boxxy_preferences::Settings::load();
+                boxxy_telemetry::resolve_theme_telemetry(s.app_theme_mode, &s.app_theme_id)
+            };
 
-            boxxy_telemetry::track_launch(&os, &arch, pkg_type, version, &shell, &desktop).await;
+            boxxy_telemetry::track_launch(&os, &arch, pkg_type, version, &shell, &desktop, theme)
+                .await;
         }
     });
 

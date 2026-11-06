@@ -219,6 +219,51 @@ pub fn normalize_desktop(raw: &str) -> String {
     }
 }
 
+/// Resolves the active app theme mode and ID into one of the 4 privacy-safe telemetry buckets:
+/// `"Boxxy Dark"`, `"Boxxy Light"`, `"Boxxy Community"`, or `"Adwaita"`.
+#[must_use]
+pub fn resolve_theme_telemetry(
+    mode: boxxy_preferences::AppThemeMode,
+    theme_id: &str,
+) -> &'static str {
+    match mode {
+        boxxy_preferences::AppThemeMode::DefaultGtk => "Adwaita",
+        boxxy_preferences::AppThemeMode::Boxxy => {
+            let trimmed = theme_id.trim();
+            if trimmed.is_empty()
+                || trimmed.eq_ignore_ascii_case("boxxy-dark")
+                || trimmed.eq_ignore_ascii_case("boxxy dark")
+            {
+                "Boxxy Dark"
+            } else if trimmed.eq_ignore_ascii_case("boxxy-light")
+                || trimmed.eq_ignore_ascii_case("boxxy light")
+            {
+                "Boxxy Light"
+            } else {
+                "Boxxy Community"
+            }
+        }
+    }
+}
+
+/// Normalizes a raw theme attribute string into strictly one of the 4 allowed telemetry buckets
+/// (`"Boxxy Dark"`, `"Boxxy Light"`, `"Boxxy Community"`, `"Adwaita"`), ensuring user-created
+/// `.toml` theme names never leak into telemetry.
+#[must_use]
+pub fn normalize_theme(raw: &str) -> &'static str {
+    let cleaned = raw.trim().trim_matches(['"', '\'']).trim();
+    if cleaned.is_empty() {
+        return "Boxxy Dark";
+    }
+    match cleaned.to_ascii_lowercase().as_str() {
+        "boxxy dark" | "boxxy-dark" | "boxxy_dark" => "Boxxy Dark",
+        "boxxy light" | "boxxy-light" | "boxxy_light" => "Boxxy Light",
+        "adwaita" | "legacy adwaita" | "default_gtk" | "default-gtk" | "system follow"
+        | "system dark" | "system light" => "Adwaita",
+        _ => "Boxxy Community",
+    }
+}
+
 /// Initialize the telemetry database connection.
 /// This allows the telemetry crate to write to the local journal.
 pub async fn init_db() {
@@ -441,6 +486,8 @@ pub async fn flush_journal() {
                                     opentelemetry::Value::String(normalize_tool_name(s).into())
                                 } else if k == "model_provider" {
                                     opentelemetry::Value::String(normalize_provider_name(s).into())
+                                } else if k == "theme" {
+                                    opentelemetry::Value::String(normalize_theme(s).into())
                                 } else {
                                     opentelemetry::Value::String(s.clone().into())
                                 }
@@ -566,10 +613,12 @@ pub async fn track_launch(
     version: &str,
     shell: &str,
     desktop: &str,
+    theme: &str,
 ) {
     let clean_os = normalize_os(os);
     let clean_shell = normalize_shell(shell);
     let clean_desktop = normalize_desktop(desktop);
+    let clean_theme = normalize_theme(theme);
 
     track_event(
         "app.launch",
@@ -581,6 +630,7 @@ pub async fn track_launch(
             KeyValue::new("version", version.trim().to_string()),
             KeyValue::new("shell", clean_shell),
             KeyValue::new("desktop", clean_desktop),
+            KeyValue::new("theme", clean_theme.to_string()),
         ],
     )
     .await;
@@ -732,6 +782,44 @@ mod tests {
             normalize_provider_name("OpenCode Go"),
             CUSTOM_ENDPOINT_PROVIDER_NAME
         );
+
+        assert_eq!(
+            resolve_theme_telemetry(boxxy_preferences::AppThemeMode::Boxxy, "boxxy-dark"),
+            "Boxxy Dark"
+        );
+        assert_eq!(
+            resolve_theme_telemetry(boxxy_preferences::AppThemeMode::Boxxy, ""),
+            "Boxxy Dark"
+        );
+        assert_eq!(
+            resolve_theme_telemetry(boxxy_preferences::AppThemeMode::Boxxy, "boxxy-light"),
+            "Boxxy Light"
+        );
+        assert_eq!(
+            resolve_theme_telemetry(boxxy_preferences::AppThemeMode::Boxxy, "bauhaus"),
+            "Boxxy Community"
+        );
+        assert_eq!(
+            resolve_theme_telemetry(boxxy_preferences::AppThemeMode::Boxxy, "cotton-candy"),
+            "Boxxy Community"
+        );
+        assert_eq!(
+            resolve_theme_telemetry(boxxy_preferences::AppThemeMode::Boxxy, "my-custom-theme"),
+            "Boxxy Community"
+        );
+        assert_eq!(
+            resolve_theme_telemetry(boxxy_preferences::AppThemeMode::DefaultGtk, "boxxy-dark"),
+            "Adwaita"
+        );
+
+        assert_eq!(normalize_theme("Boxxy Dark"), "Boxxy Dark");
+        assert_eq!(normalize_theme("boxxy-dark"), "Boxxy Dark");
+        assert_eq!(normalize_theme("Boxxy Light"), "Boxxy Light");
+        assert_eq!(normalize_theme("boxxy-light"), "Boxxy Light");
+        assert_eq!(normalize_theme("Adwaita"), "Adwaita");
+        assert_eq!(normalize_theme("default_gtk"), "Adwaita");
+        assert_eq!(normalize_theme("Boxxy Community"), "Boxxy Community");
+        assert_eq!(normalize_theme("custom-user-theme"), "Boxxy Community");
     }
 
     #[test]
