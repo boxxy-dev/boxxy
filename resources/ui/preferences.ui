@@ -41,21 +41,7 @@
                               <object class="GtkListBoxRow" id="nav_appearance">
                                 <property name="child">
                                   <object class="GtkLabel">
-                                    <property name="label" translatable="yes">Appearance</property>
-                                    <property name="xalign">0</property>
-                                    <property name="margin-start">12</property>
-                                    <property name="margin-end">12</property>
-                                    <property name="margin-top">10</property>
-                                    <property name="margin-bottom">10</property>
-                                  </object>
-                                </property>
-                              </object>
-                            </child>
-                            <child>
-                              <object class="GtkListBoxRow" id="nav_previews">
-                                <property name="child">
-                                  <object class="GtkLabel">
-                                    <property name="label" translatable="yes">Previews</property>
+                                    <property name="label" translatable="yes">Terminal</property>
                                     <property name="xalign">0</property>
                                     <property name="margin-start">12</property>
                                     <property name="margin-end">12</property>
@@ -223,7 +209,7 @@
                     </child>
                     <property name="title-widget">
                       <object class="AdwWindowTitle" id="content_title">
-                        <property name="title" translatable="yes">Appearance</property>
+                        <property name="title" translatable="yes">Terminal</property>
                       </object>
                     </property>
                   </object>
@@ -423,18 +409,9 @@
                                 </child>
                               </object>
                             </child>
-                          </object>
-                        </property>
-                      </object>
-                    </child>
-
-                    <child>
-                      <object class="AdwViewStackPage">
-                        <property name="name">previews</property>
-                        <property name="child">
-                          <object class="AdwPreferencesPage" id="page_previews">
                             <child>
                               <object class="AdwPreferencesGroup" id="group_image_previews">
+                                <property name="title" translatable="yes">Previews</property>
                                 <property name="description" translatable="yes">Ensure your CLI tools (like eza or ls) use --hyperlink=auto for the best experience with path copying and image previews.</property>
                                 <child>
                                   <object class="AdwComboRow" id="image_preview_trigger_combo">

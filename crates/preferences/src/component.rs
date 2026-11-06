@@ -80,8 +80,6 @@ impl PreferencesComponent {
         let category_list: gtk::ListBox = builder.object("category_list").unwrap();
         let nav_appearance: gtk::ListBoxRow = builder.object("nav_appearance").unwrap();
         nav_appearance.set_widget_name("nav_appearance");
-        let nav_previews: gtk::ListBoxRow = builder.object("nav_previews").unwrap();
-        nav_previews.set_widget_name("nav_previews");
         let nav_apis: gtk::ListBoxRow = builder.object("nav_apis").unwrap();
         nav_apis.set_widget_name("nav_apis");
         let nav_characters: gtk::ListBoxRow = builder.object("nav_characters").unwrap();
@@ -111,12 +109,8 @@ impl PreferencesComponent {
                 apis_back_nav.set_visible(false);
                 let name = match r.widget_name().as_str() {
                     "nav_appearance" => {
-                        title_clone.set_title("Appearance");
+                        title_clone.set_title("Terminal");
                         "appearance"
-                    }
-                    "nav_previews" => {
-                        title_clone.set_title("Previews");
-                        "previews"
                     }
                     "nav_apis" => {
                         title_clone.set_title("APIs");
@@ -203,7 +197,6 @@ impl PreferencesComponent {
         let search_entry: gtk::SearchEntry = builder.object("search_entry").unwrap();
         let list_clone = category_list.clone();
         let nav_appearance_clone = nav_appearance.clone();
-        let nav_previews_clone = nav_previews.clone();
         let nav_apis_clone = nav_apis.clone();
         let nav_characters_clone = nav_characters.clone();
         let nav_toolbox_clone = nav_toolbox.clone();
@@ -217,8 +210,9 @@ impl PreferencesComponent {
         search_entry.connect_search_changed(move |entry| {
             let query = entry.text().to_lowercase();
 
-            nav_appearance_clone.set_visible(appearance_filter(&query));
-            nav_previews_clone.set_visible(previews_filter(&query));
+            let appearance_visible = appearance_filter(&query);
+            let previews_visible = previews_filter(&query);
+            nav_appearance_clone.set_visible(appearance_visible || previews_visible);
             nav_apis_clone.set_visible(apis_filter(&query));
             nav_characters_clone.set_visible(characters_filter(&query));
             nav_toolbox_clone.set_visible(toolbox_filter(&query));
