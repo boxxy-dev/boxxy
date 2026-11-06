@@ -22,6 +22,11 @@ type PendingCommandWaiter = (
     tokio::sync::oneshot::Sender<Result<String, String>>,
 );
 
+type DelegatedTaskChannel = (
+    tokio::sync::watch::Sender<Option<String>>,
+    tokio::sync::watch::Receiver<Option<String>>,
+);
+
 pub struct WorkspaceRegistry {
     // Map of pane_id -> PaneState
     panes: Arc<RwLock<HashMap<String, PaneState>>>,
@@ -37,6 +42,8 @@ pub struct WorkspaceRegistry {
     locks: Arc<RwLock<HashMap<String, String>>>,
     // Pending cross-pane terminal_exec waiters: target_pane_id -> (source_pane_id, reply_tx)
     pending_commands: Arc<RwLock<HashMap<String, PendingCommandWaiter>>>,
+    // Delegated task promises: request_id -> (watch::Sender, watch::Receiver)
+    delegated_tasks: Arc<RwLock<HashMap<uuid::Uuid, DelegatedTaskChannel>>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -81,6 +88,7 @@ impl WorkspaceRegistry {
             subscriptions: Arc::new(RwLock::new(HashMap::new())),
             locks: Arc::new(RwLock::new(HashMap::new())),
             pending_commands: Arc::new(RwLock::new(HashMap::new())),
+            delegated_tasks: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -734,6 +742,70 @@ impl WorkspaceRegistry {
         let mut global_intent = self.global_intent.write().await;
         *global_intent = Some(intent);
     }
+
+    pub async fn register_delegated_task(&self, request_id: uuid::Uuid) {
+        let (tx, rx) = tokio::sync::watch::channel(None);
+        self.delegated_tasks.write().await.insert(request_id, (tx, rx));
+    }
+
+    pub async fn has_delegated_task(&self, request_id: uuid::Uuid) -> bool {
+        self.delegated_tasks.read().await.contains_key(&request_id)
+    }
+
+    pub async fn complete_delegated_task(&self, request_id: uuid::Uuid, result: String) {
+        let tx = {
+            let mut map = self.delegated_tasks.write().await;
+            map.entry(request_id)
+                .or_insert_with(|| tokio::sync::watch::channel(None))
+                .0
+                .clone()
+        };
+        let _ = tx.send(Some(result));
+    }
+
+    pub async fn wait_for_delegated_task(
+        &self,
+        request_id: uuid::Uuid,
+        timeout: std::time::Duration,
+    ) -> Result<String, String> {
+        let mut rx = {
+            let map = self.delegated_tasks.read().await;
+            let Some((_, rx)) = map.get(&request_id) else {
+                return Err(format!("Task {request_id} not found."));
+            };
+            rx.clone()
+        };
+
+        let existing = rx.borrow_and_update().clone();
+        if let Some(existing) = existing {
+            self.delegated_tasks.write().await.remove(&request_id);
+            return Ok(existing);
+        }
+
+        match tokio::time::timeout(timeout, async {
+            loop {
+                if rx.changed().await.is_err() {
+                    return Err("Delegated task channel closed before completion.".to_string());
+                }
+                let current = rx.borrow_and_update().clone();
+                if let Some(val) = current {
+                    return Ok(val);
+                }
+            }
+        })
+        .await
+        {
+            Ok(Ok(val)) => {
+                self.delegated_tasks.write().await.remove(&request_id);
+                Ok(val)
+            }
+            Ok(Err(e)) => {
+                self.delegated_tasks.write().await.remove(&request_id);
+                Err(e)
+            }
+            Err(_) => Err(format!("Timed out waiting for task {request_id}.")),
+        }
+    }
 }
 
 fn normalize_agent_key(s: &str) -> String {
@@ -840,5 +912,40 @@ mod tests {
             .await;
         assert!(drained);
         assert_eq!(rx2.await.unwrap().unwrap_err(), "[USER_EXPLICIT_REJECT]");
+    }
+
+    #[tokio::test]
+    async fn delegated_task_promise_resolves_before_and_during_wait() {
+        let reg = Arc::new(WorkspaceRegistry::new());
+
+        // Case 1: completed before wait_for_delegated_task is called
+        let id1 = uuid::Uuid::new_v4();
+        reg.register_delegated_task(id1).await;
+        assert!(reg.has_delegated_task(id1).await);
+        reg.complete_delegated_task(id1, "Result A".to_string())
+            .await;
+        let out1 = reg
+            .wait_for_delegated_task(id1, std::time::Duration::from_secs(2))
+            .await
+            .unwrap();
+        assert_eq!(out1, "Result A");
+        assert!(!reg.has_delegated_task(id1).await);
+
+        // Case 2: completed asynchronously while wait_for_delegated_task is awaiting
+        let id2 = uuid::Uuid::new_v4();
+        reg.register_delegated_task(id2).await;
+        let reg_clone = reg.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            reg_clone
+                .complete_delegated_task(id2, "Result B".to_string())
+                .await;
+        });
+        let out2 = reg
+            .wait_for_delegated_task(id2, std::time::Duration::from_secs(2))
+            .await
+            .unwrap();
+        assert_eq!(out2, "Result B");
+        assert!(!reg.has_delegated_task(id2).await);
     }
 }

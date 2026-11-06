@@ -72,6 +72,9 @@ impl Tool for SummonHeadlessWorkerTool {
             )
         };
 
+        let workspace = crate::registry::workspace::global_workspace().await;
+        workspace.register_delegated_task(task_id).await;
+
         // Create and spawn the headless session
         let (session, tx_child) =
             ClawSession::new_headless(my_pane_id, my_session_id, &my_name, args.profile);

@@ -605,9 +605,37 @@ impl ClawSession {
             .await
             .unwrap_or_default();
 
+        let catalog = crate::engine::session::roundtable::get_active_catalog();
+        let (caller_display_name, caller_character_id) =
+            if let Some(resolved) = crate::engine::session::roundtable::resolve_speaker_token(
+                &source_agent_name,
+                &self.character_id,
+                &self.pane_id,
+                &catalog,
+            ) {
+                (resolved.display_name, resolved.character_id)
+            } else {
+                (source_agent_name.clone(), String::new())
+            };
+
+        let incoming_event = ClawEngineEvent::DiagnosisComplete {
+            agent_name: caller_display_name.clone(),
+            character_id: caller_character_id,
+            diagnosis: prompt.clone(),
+            usage: None,
+            typewriter: false,
+        };
+        crate::engine::persist_visual_event(
+            self.db.clone(),
+            self.session_id.clone(),
+            self.pane_id.clone(),
+            &incoming_event,
+        );
+        let _ = self.tx_ui.send(incoming_event).await;
+
         let full_prompt = format!(
             "*Task delegated from agent '{}'*: {}",
-            source_agent_name, prompt
+            caller_display_name, prompt
         );
 
         debug!(

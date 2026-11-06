@@ -441,6 +441,39 @@ impl Tool for AwaitTasksTool {
             .report_tool_started(Self::NAME.to_string())
             .await;
         boxxy_telemetry::track_tool_use(Self::NAME).await;
+        let workspace = global_workspace().await;
+
+        let mut registered_uuids = Vec::new();
+        for id_str in &args.task_ids {
+            if let Ok(uuid) = uuid::Uuid::parse_str(id_str)
+                && workspace.has_delegated_task(uuid).await
+            {
+                registered_uuids.push(uuid);
+            }
+        }
+
+        if !registered_uuids.is_empty() {
+            let mut results = Vec::with_capacity(registered_uuids.len());
+            for uuid in registered_uuids {
+                match workspace
+                    .wait_for_delegated_task(uuid, std::time::Duration::from_secs(120))
+                    .await
+                {
+                    Ok(output) => {
+                        results.push(format!("Task {uuid} result:\n{output}"));
+                    }
+                    Err(err) => {
+                        results.push(format!("Task {uuid} failed: {err}"));
+                    }
+                }
+            }
+            let res = results.join("\n\n");
+            self.approval
+                .report_tool_result(Self::NAME.to_string(), res.clone())
+                .await;
+            return Ok(res);
+        }
+
         let (agent_name, character_id) = {
             let mut state = self.state.lock().await;
             for id_str in &args.task_ids {

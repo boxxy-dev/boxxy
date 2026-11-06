@@ -60,11 +60,9 @@ impl Tool for DelegateTaskTool {
         let workspace = global_workspace().await;
         let request_id = uuid::Uuid::new_v4();
 
-        let (my_name, reply_rx) = {
-            let mut state = self.state.lock().await;
-            let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-            state.pending_delegations.insert(request_id, reply_tx);
-            (state.agent_name.clone(), reply_rx)
+        let my_name = {
+            let state = self.state.lock().await;
+            state.agent_name.clone()
         };
 
         if args.agent_name.to_lowercase() == my_name.to_lowercase() {
@@ -76,6 +74,7 @@ impl Tool for DelegateTaskTool {
         }
 
         let out = if let Some(tx) = workspace.get_pane_tx_by_name(&args.agent_name).await {
+            workspace.register_delegated_task(request_id).await;
             let req = crate::engine::ClawMessage::DelegatedTask {
                 source_agent_name: my_name,
                 prompt: args.prompt,
@@ -87,10 +86,13 @@ impl Tool for DelegateTaskTool {
                     response: format!("Failed to send task to agent: {}", e),
                 }
             } else {
-                match reply_rx.await {
+                match workspace
+                    .wait_for_delegated_task(request_id, std::time::Duration::from_secs(120))
+                    .await
+                {
                     Ok(response) => DelegateTaskOutput { response },
-                    Err(_) => DelegateTaskOutput {
-                        response: "Agent failed to respond or was terminated.".to_string(),
+                    Err(e) => DelegateTaskOutput {
+                        response: format!("Agent failed to respond: {e}"),
                     },
                 }
             }
@@ -164,16 +166,15 @@ impl Tool for DelegateTaskAsyncTool {
         let workspace = global_workspace().await;
         let request_id = uuid::Uuid::new_v4();
 
-        let (my_name, reply_rx) = {
-            let mut state = self.state.lock().await;
-            let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-            state.pending_delegations.insert(request_id, reply_tx);
-            (state.agent_name.clone(), reply_rx)
+        let my_name = {
+            let state = self.state.lock().await;
+            state.agent_name.clone()
         };
 
         let out = if let Some(tx) = workspace.get_pane_tx_by_name(&args.agent_name).await {
+            workspace.register_delegated_task(request_id).await;
             let req = crate::engine::ClawMessage::DelegatedTask {
-                source_agent_name: my_name.clone(),
+                source_agent_name: my_name,
                 prompt: args.prompt,
                 request_id,
             };
@@ -184,25 +185,6 @@ impl Tool for DelegateTaskAsyncTool {
                     message: format!("Failed to send task to agent: {}", e),
                 }
             } else {
-                // Spawn a task to wait for the reply and then publish it back to the EventBus
-                let tx_self = {
-                    let workspace = global_workspace().await;
-                    workspace.get_pane_tx_by_name(&my_name).await
-                };
-
-                tokio::spawn(async move {
-                    if let Ok(result) = reply_rx.await {
-                        if let Some(tx) = tx_self {
-                            let _ = tx
-                                .send(crate::engine::ClawMessage::TaskCompletedEvent {
-                                    task_id: request_id,
-                                    result,
-                                })
-                                .await;
-                        }
-                    }
-                });
-
                 DelegateTaskAsyncOutput {
                     task_id: request_id.to_string(),
                     message: format!("Task delegated successfully. Task ID: {}", request_id),

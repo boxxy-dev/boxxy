@@ -604,6 +604,9 @@ pub fn spawn_turn(
                 }
 
                 if let Some(request_id) = delegate_reply_id {
+                    workspace
+                        .complete_delegated_task(request_id, display_response.clone())
+                        .await;
                     let _ = tx_ui
                         .send(ClawEngineEvent::DelegatedTaskReply {
                             request_id,
@@ -714,10 +717,14 @@ pub fn spawn_turn(
                 let _ = tx_ui.send(event).await;
 
                 if let Some(request_id) = delegate_reply_id {
+                    let err_res = format!("Error: {}", e);
+                    workspace
+                        .complete_delegated_task(request_id, err_res.clone())
+                        .await;
                     let _ = tx_ui
                         .send(ClawEngineEvent::DelegatedTaskReply {
                             request_id,
-                            result: format!("Error: {}", e),
+                            result: err_res,
                         })
                         .await;
                 }
