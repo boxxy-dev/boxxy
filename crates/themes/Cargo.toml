@@ -17,7 +17,12 @@ sourceview5.workspace = true
 glib.workspace = true
 uuid.workspace = true
 parking_lot.workspace = true
+serde = { workspace = true, features = ["derive"] }
+toml.workspace = true
 
 [build-dependencies]
 serde = { workspace = true, features = ["derive"] }
 toml.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

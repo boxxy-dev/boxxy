@@ -2,6 +2,7 @@
 <gresources>
   <gresource prefix="/dev/boxxy/BoxxyTerminal">
     <file compressed="true">style.css</file>
+    <file compressed="true" alias="themes/boxxy_skeleton.css">themes/boxxy_skeleton.css</file>
     <file compressed="true" alias="icons/dev.boxxy.BoxxyTerminal.png">icons/dev.boxxy.BoxxyTerminal.png</file>
     <file compressed="true" alias="icons/whats_new_banner.png">icons/whats_new_banner.png</file>
     <file compressed="true" alias="icons/boxxy-paper-plane-symbolic.svg">icons/boxxy-paper-plane-symbolic.svg</file>

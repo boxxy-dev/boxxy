@@ -10,9 +10,12 @@ pub mod mcp;
 pub mod previews;
 pub mod shortcuts;
 pub mod skills;
+pub mod themes_page;
 pub mod toolbox;
 pub mod user_profile;
 
 pub mod component;
 pub use component::PreferencesComponent;
-pub use config::{AppState, CursorShape, ImagePreviewTrigger, SETTINGS_EVENT_BUS, Settings};
+pub use config::{
+    AppState, AppThemeMode, CursorShape, ImagePreviewTrigger, SETTINGS_EVENT_BUS, Settings,
+};

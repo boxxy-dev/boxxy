@@ -15,10 +15,11 @@
               <object class="AdwToolbarView">
                 <child type="top">
                   <object class="AdwHeaderBar">
+                    <property name="show-start-title-buttons">False</property>
+                    <property name="show-end-title-buttons">False</property>
                     <property name="title-widget">
                       <object class="GtkSearchEntry" id="search_entry">
                         <property name="hexpand">True</property>
-                        <property name="margin-top">6</property>
                         <property name="margin-start">6</property>
                         <property name="margin-end">6</property>
                         <property name="placeholder-text" translatable="yes">Search preferences...</property>
@@ -42,6 +43,20 @@
                                 <property name="child">
                                   <object class="GtkLabel">
                                     <property name="label" translatable="yes">Terminal</property>
+                                    <property name="xalign">0</property>
+                                    <property name="margin-start">12</property>
+                                    <property name="margin-end">12</property>
+                                    <property name="margin-top">10</property>
+                                    <property name="margin-bottom">10</property>
+                                  </object>
+                                </property>
+                              </object>
+                            </child>
+                            <child>
+                              <object class="GtkListBoxRow" id="nav_themes">
+                                <property name="child">
+                                  <object class="GtkLabel">
+                                    <property name="label" translatable="yes">Themes</property>
                                     <property name="xalign">0</property>
                                     <property name="margin-start">12</property>
                                     <property name="margin-end">12</property>
@@ -246,11 +261,6 @@
                                   </object>
                                 </child>
                                 <child>
-                                  <object class="AdwComboRow" id="color_scheme_combo">
-                                    <property name="title" translatable="yes">GTK Theme</property>
-                                  </object>
-                                </child>
-                                <child>
                                   <object class="AdwActionRow" id="background_image_row">
                                     <property name="title" translatable="yes">Background Image</property>
                                     <property name="subtitle" translatable="yes">Select an image to show behind the terminal</property>
@@ -447,6 +457,16 @@
                                 </child>
                               </object>
                             </child>
+                          </object>
+                        </property>
+                      </object>
+                    </child>
+
+                    <child>
+                      <object class="AdwViewStackPage">
+                        <property name="name">themes</property>
+                        <property name="child">
+                          <object class="AdwPreferencesPage" id="page_themes">
                           </object>
                         </property>
                       </object>

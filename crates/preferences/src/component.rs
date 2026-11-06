@@ -8,6 +8,7 @@ use std::rc::Rc;
 pub struct PreferencesComponent {
     dialog: adw::Dialog,
     stack: adw::ViewStack,
+    nav_themes: gtk::ListBoxRow,
     nav_apis: gtk::ListBoxRow,
     nav_mcp: gtk::ListBoxRow,
     nav_skills: gtk::ListBoxRow,
@@ -80,6 +81,8 @@ impl PreferencesComponent {
         let category_list: gtk::ListBox = builder.object("category_list").unwrap();
         let nav_appearance: gtk::ListBoxRow = builder.object("nav_appearance").unwrap();
         nav_appearance.set_widget_name("nav_appearance");
+        let nav_themes: gtk::ListBoxRow = builder.object("nav_themes").unwrap();
+        nav_themes.set_widget_name("nav_themes");
         let nav_apis: gtk::ListBoxRow = builder.object("nav_apis").unwrap();
         nav_apis.set_widget_name("nav_apis");
         let nav_characters: gtk::ListBoxRow = builder.object("nav_characters").unwrap();
@@ -113,6 +116,10 @@ impl PreferencesComponent {
                     "nav_appearance" => {
                         title_clone.set_title("Terminal");
                         "appearance"
+                    }
+                    "nav_themes" => {
+                        title_clone.set_title("Themes");
+                        "themes"
                     }
                     "nav_apis" => {
                         title_clone.set_title("APIs");
@@ -170,6 +177,8 @@ impl PreferencesComponent {
             cb_rc.clone(),
             Rc::new(on_open_themes),
         );
+        let themes_filter =
+            crate::themes_page::setup_themes_page(&builder, settings_rc.clone(), cb_rc.clone());
         let previews_filter =
             crate::previews::setup_previews_page(&builder, settings_rc.clone(), cb_rc.clone());
         let apis_filter =
@@ -208,6 +217,7 @@ impl PreferencesComponent {
         let search_entry: gtk::SearchEntry = builder.object("search_entry").unwrap();
         let list_clone = category_list.clone();
         let nav_appearance_clone = nav_appearance.clone();
+        let nav_themes_clone = nav_themes.clone();
         let nav_apis_clone = nav_apis.clone();
         let nav_characters_clone = nav_characters.clone();
         let nav_integrations_clone = nav_integrations.clone();
@@ -225,6 +235,7 @@ impl PreferencesComponent {
             let appearance_visible = appearance_filter(&query);
             let previews_visible = previews_filter(&query);
             nav_appearance_clone.set_visible(appearance_visible || previews_visible);
+            nav_themes_clone.set_visible(themes_filter(&query));
             nav_apis_clone.set_visible(apis_filter(&query));
             nav_characters_clone.set_visible(characters_filter(&query));
             nav_integrations_clone.set_visible(integrations_filter(&query));
@@ -253,6 +264,7 @@ impl PreferencesComponent {
         Self {
             dialog,
             stack,
+            nav_themes,
             nav_apis,
             nav_mcp,
             nav_skills,
@@ -343,7 +355,9 @@ impl PreferencesComponent {
             .parent()
             .and_then(|p| p.downcast::<gtk::ListBox>().ok())
         {
-            if page_name == "apis" {
+            if page_name == "themes" {
+                list_box.select_row(Some(&self.nav_themes));
+            } else if page_name == "apis" {
                 list_box.select_row(Some(&self.nav_apis));
             } else if page_name == "mcp" {
                 list_box.select_row(Some(&self.nav_mcp));

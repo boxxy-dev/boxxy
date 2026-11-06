@@ -1,0 +1,750 @@
+/* ============================================================================
+ * Boxxy Custom Theme Skeleton (Playful Neo-Brutalist / Tactile UI)
+ *
+ * Loaded ONLY when AppThemeMode::Boxxy is active (Priority 800).
+ * Unloaded completely when AppThemeMode::DefaultGtk is selected.
+ *
+ * CRITICAL RULES:
+ * 1. Never use `!important` (unsupported in GTK 4 CSS).
+ * 2. Never mutate padding, margin, or min-height of existing standard widgets
+ *    — all geometry belongs in `resources/style.css`.
+ * 3. Reference only semantic `@define-color` variables provided by Layer 3/4:
+ *    - @window_bg_color, @window_fg_color
+ *    - @view_bg_color, @view_fg_color
+ *    - @headerbar_bg_color, @headerbar_fg_color
+ *    - @sidebar_bg_color, @sidebar_fg_color
+ *    - @card_bg_color, @card_fg_color
+ *    - @popover_bg_color, @popover_fg_color
+ *    - @accent_color, @accent_bg_color, @accent_fg_color
+ *    - @boxxy_ink, @boxxy_shadow, @boxxy_surface_hover
+ * ============================================================================ */
+
+/* ── Window, HeaderBars & Sidebars ───────────────────────────────────────── */
+
+.sidebar-toolbar,
+.sidebar-toolbar > contents,
+navigation-split-view > .sidebar-pane,
+overlay-split-view > .sidebar-pane,
+.sidebar-pane {
+    background-color: @sidebar_bg_color;
+    color: @sidebar_fg_color;
+}
+
+/* Keep `.navigation-sidebar` itself transparent so Lists inside popovers
+   (like Command Palette) never paint a sidebar-colored box background. */
+.navigation-sidebar {
+    background-color: transparent;
+    color: inherit;
+}
+
+.main-split-view > .sidebar-pane,
+navigation-split-view > .sidebar-pane,
+overlay-split-view > .sidebar-pane,
+.sidebar-pane {
+    border-right: 2px solid @boxxy_ink;
+    box-shadow: none;
+}
+
+/* Strip duplicate borders/shadows on headerbars inside split-view sidebars */
+navigation-split-view > .sidebar-pane headerbar,
+navigation-split-view > .sidebar-pane .top-bar,
+navigation-split-view > .sidebar-pane .top-bar.raised,
+overlay-split-view > .sidebar-pane headerbar,
+overlay-split-view > .sidebar-pane .top-bar,
+overlay-split-view > .sidebar-pane .top-bar.raised,
+.sidebar-header,
+.sidebar-toolbar > .top-bar,
+.sidebar-toolbar > .top-bar.raised {
+    background-color: transparent;
+    color: @sidebar_fg_color;
+    background-image: none;
+    border: none;
+    border-bottom: none;
+    border-right: none;
+    box-shadow: none;
+}
+
+window:not(.frosted-glass-active) .terminal-header,
+window:not(.frosted-glass-active) .content-header {
+    background-color: @headerbar_bg_color;
+    color: @headerbar_fg_color;
+    background-image: none;
+    border-bottom: 2px solid @boxxy_ink;
+    box-shadow: none;
+}
+
+adw-dialog headerbar,
+dialog headerbar,
+navigation-split-view > .content-pane headerbar {
+    background-color: @headerbar_bg_color;
+    color: @headerbar_fg_color;
+    background-image: none;
+    border-bottom: 2px solid @boxxy_ink;
+    box-shadow: none;
+}
+
+/* ── Terminal Tabs (`tabbar tab`) ────────────────────────────────────────── */
+
+.terminal-header tabbar {
+    background-color: transparent;
+    border: none;
+    box-shadow: none;
+}
+
+window:not(.frosted-glass-active) .terminal-header tabbar tab,
+tabbar tab {
+    background-color: @card_bg_color;
+    color: @card_fg_color;
+    border-radius: 8px;
+    outline: 2px solid @boxxy_ink;
+    outline-offset: -2px;
+    box-shadow: 2px 2px 0px @boxxy_shadow;
+    transition: background-color 140ms ease, transform 80ms ease, box-shadow 80ms ease;
+}
+
+window:not(.frosted-glass-active) .terminal-header tabbar tab:hover:not(:selected),
+tabbar tab:hover:not(:selected) {
+    background-color: @boxxy_surface_hover;
+    color: @card_fg_color;
+}
+
+window:not(.frosted-glass-active) .terminal-header tabbar tab:selected,
+tabbar tab:selected,
+tabbar tab:checked {
+    background-color: @accent_bg_color;
+    color: @accent_fg_color;
+    outline: 2px solid @boxxy_ink;
+    outline-offset: -2px;
+    box-shadow: 2px 3px 0px @boxxy_shadow;
+}
+
+window:not(.frosted-glass-active) .terminal-header tabbar tab:selected label,
+window:not(.frosted-glass-active) .terminal-header tabbar tab:selected image,
+tabbar tab:selected label,
+tabbar tab:selected image {
+    color: @accent_fg_color;
+    font-weight: 700;
+}
+
+/* Strip inner rounded circle on tab close buttons */
+tabbar tab button.image-button,
+tabbar tab button.tab-close-btn,
+tabbar tab button.flat {
+    background: transparent;
+    background-color: transparent;
+    background-image: none;
+    border: none;
+    outline: none;
+    box-shadow: none;
+}
+
+/* ── Navigation Sidebar Rows (Nuclear-Style Capsule Pills) ───────────────── */
+
+.navigation-sidebar > row {
+    border-radius: 10px;
+    color: inherit;
+    outline: 2px solid transparent;
+    outline-offset: -2px;
+    transition: background-color 140ms ease, box-shadow 140ms ease, transform 100ms ease;
+}
+
+.navigation-sidebar > row:hover:not(:selected) {
+    background-color: @boxxy_surface_hover;
+    outline: 2px solid alpha(@boxxy_ink, 0.35);
+    outline-offset: -2px;
+}
+
+.navigation-sidebar > row:selected {
+    background-color: @accent_bg_color;
+    color: @accent_fg_color;
+    outline: 2px solid @boxxy_ink;
+    outline-offset: -2px;
+    box-shadow: 2px 3px 0px @boxxy_shadow;
+}
+
+.navigation-sidebar > row:selected label,
+.navigation-sidebar > row:selected image {
+    color: @accent_fg_color;
+    font-weight: 700;
+}
+
+.navigation-sidebar > row:selected:active {
+    transform: translate(1px, 1px);
+    box-shadow: 1px 1px 0px @boxxy_shadow;
+}
+
+/* ── Tactile Neo-Brutalist Buttons & Window Controls ─────────────────────── */
+
+/* Scope padding adjustments strictly to the main window's `.content-header`
+   so dialog headerbar close buttons keep their native square padding. */
+.content-header button.image-button:not(.flat) {
+    padding: 0px 6px;
+}
+
+.content-header .start > button {
+    margin: 2px;
+}
+
+.content-header windowcontrols > button {
+    margin-top: 6px;
+    margin-bottom: 6px;
+    padding: 0px 3px;
+}
+
+/* Strip Libadwaita's inner circular badge background inside close/minimize/maximize buttons */
+windowcontrols > button > image,
+headerbar button.close > image,
+headerbar button.minimize > image,
+headerbar button.maximize > image {
+    background: transparent;
+    background-color: transparent;
+    background-image: none;
+    border: none;
+    border-radius: 0;
+    box-shadow: none;
+    outline: none;
+    color: inherit;
+}
+
+headerbar button:not(.flat):not(.suggested-action):not(.destructive-action),
+windowcontrols > button,
+.sidebar-toolbar headerbar button.toggle,
+.content-header button.toggle,
+.claw-drawer button:not(.flat):not(.character-btn):not(.suggested-action):not(.destructive-action),
+preferencespage button:not(.flat):not(.circular):not(.color-dot-btn):not(.boxxy-theme-card):not(.suggested-action):not(.destructive-action),
+dialog button:not(.flat):not(.circular):not(.color-dot-btn):not(.boxxy-theme-card):not(.suggested-action):not(.destructive-action),
+popover button:not(.flat):not(.model):not(.circular):not(.suggested-action):not(.destructive-action) {
+    background-color: @card_bg_color;
+    background-image: none;
+    color: @card_fg_color;
+    border-radius: 8px;
+    outline: 2px solid @boxxy_ink;
+    outline-offset: -2px;
+    box-shadow: 2px 3px 0px @boxxy_shadow;
+    transition: background-color 120ms ease, transform 80ms ease, box-shadow 80ms ease;
+}
+
+headerbar button:not(.flat):not(.suggested-action):not(.destructive-action):hover,
+windowcontrols > button:hover,
+.sidebar-toolbar headerbar button.toggle:hover,
+.content-header button.toggle:hover,
+.claw-drawer button:not(.flat):not(.character-btn):not(.suggested-action):not(.destructive-action):hover,
+preferencespage button:not(.flat):not(.circular):not(.color-dot-btn):not(.boxxy-theme-card):not(.suggested-action):not(.destructive-action):hover,
+dialog button:not(.flat):not(.circular):not(.color-dot-btn):not(.boxxy-theme-card):not(.suggested-action):not(.destructive-action):hover,
+popover button:not(.flat):not(.model):not(.circular):not(.suggested-action):not(.destructive-action):hover {
+    background-color: @boxxy_surface_hover;
+}
+
+headerbar button:not(.flat):not(.suggested-action):not(.destructive-action):active,
+headerbar button:not(.flat):not(.suggested-action):not(.destructive-action):checked,
+windowcontrols > button:active,
+.sidebar-toolbar headerbar button.toggle:checked,
+.content-header button.toggle:checked,
+.claw-drawer button:not(.flat):not(.character-btn):not(.suggested-action):not(.destructive-action):active,
+.claw-drawer button:not(.flat):not(.character-btn):not(.suggested-action):not(.destructive-action):checked,
+preferencespage button:not(.flat):not(.circular):not(.color-dot-btn):not(.boxxy-theme-card):not(.suggested-action):not(.destructive-action):active,
+preferencespage button:not(.flat):not(.circular):not(.color-dot-btn):not(.boxxy-theme-card):not(.suggested-action):not(.destructive-action):checked,
+dialog button:not(.flat):not(.circular):not(.color-dot-btn):not(.boxxy-theme-card):not(.suggested-action):not(.destructive-action):active,
+dialog button:not(.flat):not(.circular):not(.color-dot-btn):not(.boxxy-theme-card):not(.suggested-action):not(.destructive-action):checked,
+popover button:not(.flat):not(.model):not(.circular):not(.suggested-action):not(.destructive-action):active,
+popover button:not(.flat):not(.model):not(.circular):not(.suggested-action):not(.destructive-action):checked {
+    background-color: @accent_bg_color;
+    color: @accent_fg_color;
+    transform: translate(1px, 1px);
+    box-shadow: 1px 1px 0px @boxxy_shadow;
+}
+
+/* Color Swatch Buttons (preserve their inline selected color while adding tactile border) */
+button.color-dot-btn {
+    border: 2px solid @boxxy_ink;
+    box-shadow: 2px 2px 0px @boxxy_shadow;
+}
+
+button.color-dot-btn:hover {
+    border-color: @boxxy_ink;
+    box-shadow: 2px 3px 0px @boxxy_shadow;
+}
+
+/* Suggested & Destructive Action Buttons (Libadwaita semantic colors) */
+button.suggested-action:not(.flat),
+dialog button.suggested-action:not(.flat),
+preferencespage button.suggested-action:not(.flat),
+.claw-drawer button.suggested-action:not(.flat) {
+    background-color: @accent_bg_color;
+    background-image: none;
+    color: @accent_fg_color;
+    border-radius: 8px;
+    outline: 2px solid @boxxy_ink;
+    outline-offset: -2px;
+    box-shadow: 2px 3px 0px @boxxy_shadow;
+    font-weight: 700;
+    transition: background-color 120ms ease, transform 80ms ease, box-shadow 80ms ease;
+}
+
+button.suggested-action:not(.flat):hover,
+dialog button.suggested-action:not(.flat):hover,
+preferencespage button.suggested-action:not(.flat):hover,
+.claw-drawer button.suggested-action:not(.flat):hover {
+    background-color: mix(@accent_bg_color, white, 0.14);
+}
+
+button.suggested-action:not(.flat):active,
+dialog button.suggested-action:not(.flat):active,
+preferencespage button.suggested-action:not(.flat):active,
+.claw-drawer button.suggested-action:not(.flat):active {
+    transform: translate(1px, 1px);
+    box-shadow: 1px 1px 0px @boxxy_shadow;
+}
+
+button.destructive-action:not(.flat),
+dialog button.destructive-action:not(.flat),
+preferencespage button.destructive-action:not(.flat),
+.claw-drawer button.destructive-action:not(.flat) {
+    background-color: @destructive_bg_color;
+    background-image: none;
+    color: @destructive_fg_color;
+    border-radius: 8px;
+    outline: 2px solid @boxxy_ink;
+    outline-offset: -2px;
+    box-shadow: 2px 3px 0px @boxxy_shadow;
+    font-weight: 700;
+    transition: background-color 120ms ease, transform 80ms ease, box-shadow 80ms ease;
+}
+
+button.destructive-action:not(.flat):hover,
+dialog button.destructive-action:not(.flat):hover,
+preferencespage button.destructive-action:not(.flat):hover,
+.claw-drawer button.destructive-action:not(.flat):hover {
+    background-color: mix(@destructive_bg_color, white, 0.14);
+}
+
+button.destructive-action:not(.flat):active,
+dialog button.destructive-action:not(.flat):active,
+preferencespage button.destructive-action:not(.flat):active,
+.claw-drawer button.destructive-action:not(.flat):active {
+    transform: translate(1px, 1px);
+    box-shadow: 1px 1px 0px @boxxy_shadow;
+}
+
+/* ViewSwitcher buttons in sidebar header: crisp border, no shadow so buttons
+   don't visually collide, with a 2px gap strictly between adjacent buttons. */
+viewswitcher > button,
+headerbar viewswitcher > button {
+    border-radius: 8px;
+    box-shadow: none;
+    transition: background-color 120ms ease;
+}
+
+viewswitcher > button + button,
+headerbar viewswitcher > button + button {
+    margin-left: 2px;
+}
+
+viewswitcher > button:checked,
+headerbar viewswitcher > button:checked,
+viewswitcher > button:active,
+headerbar viewswitcher > button:active {
+    background-color: @accent_bg_color;
+    color: @accent_fg_color;
+    outline: 2px solid @boxxy_ink;
+    outline-offset: -2px;
+    box-shadow: none;
+    transform: none;
+}
+
+/* ── Boxxy-Claw Overlay Drawer (`.claw-drawer`) ──────────────────────────── */
+
+.claw-drawer {
+    background-color: @window_bg_color;
+    color: @window_fg_color;
+    border-bottom: 2.5px solid @boxxy_ink;
+    box-shadow: 0 6px 0px @boxxy_shadow;
+}
+
+.claw-drawer .claw-row {
+    color: @window_fg_color;
+}
+
+.claw-drawer frame.view,
+.claw-drawer .claw-row-diagnosis .viewer-block,
+.claw-drawer .claw-row-tool-call .viewer-block,
+.claw-drawer .claw-row-process-list .viewer-block {
+    background-color: @card_bg_color;
+    color: @card_fg_color;
+    border-radius: 10px;
+    border: 2px solid @boxxy_ink;
+    box-shadow: 2px 3px 0px @boxxy_shadow;
+}
+
+.claw-drawer .boxxy-msgbar {
+    background-color: @card_bg_color;
+    color: @card_fg_color;
+    border-radius: 10px;
+    outline: 2px solid @boxxy_ink;
+    outline-offset: -2px;
+    box-shadow: 2px 3px 0px @boxxy_shadow;
+}
+
+.claw-drawer .boxxy-msgbar:focus-within {
+    outline: 2px solid @accent_color;
+    outline-offset: -2px;
+    box-shadow: 2px 3px 0px @boxxy_ink;
+}
+
+.claw-drawer .boxxy-msgbar entry,
+.claw-drawer .boxxy-msgbar textview,
+.claw-drawer .boxxy-msgbar textview text,
+.claw-drawer .boxxy-msgbar .msgbar-placeholder {
+    color: @card_fg_color;
+}
+
+.claw-drawer .character-btn {
+    background-color: @card_bg_color;
+    color: @card_fg_color;
+    border-radius: 8px;
+    border: 1.5px solid @boxxy_ink;
+    box-shadow: 1.5px 2px 0px @boxxy_shadow;
+    opacity: 0.9;
+}
+
+.claw-drawer .character-btn:hover {
+    background-color: @boxxy_surface_hover;
+    border-color: @boxxy_ink;
+    opacity: 1.0;
+}
+
+.claw-drawer .character-btn.selected-character {
+    background-color: @accent_bg_color;
+    color: @accent_fg_color;
+    border-color: @boxxy_ink;
+    box-shadow: 2px 2.5px 0px @boxxy_shadow;
+    opacity: 1.0;
+}
+
+.claw-drawer .character-btn.selected-character label {
+    color: @accent_fg_color;
+    font-weight: 700;
+}
+
+/* Claw Thinking / Tool Activity Status Pill ("Drinking Water..") */
+.claw-status-pill {
+    background-color: @card_bg_color;
+    color: @card_fg_color;
+    border-radius: 8px;
+    outline: 2px solid @boxxy_ink;
+    outline-offset: -2px;
+    box-shadow: 2px 3px 0px @boxxy_shadow;
+}
+
+.claw-status-pill .status-label {
+    color: @card_fg_color;
+    opacity: 1.0;
+}
+
+.claw-status-pill button.circular {
+    background: transparent;
+    background-color: transparent;
+    background-image: none;
+    border: none;
+    outline: none;
+    box-shadow: none;
+    color: @card_fg_color;
+}
+
+.claw-status-pill button.circular:hover {
+    background-color: @accent_bg_color;
+    color: @accent_fg_color;
+    outline: 1.5px solid @boxxy_ink;
+}
+
+/* ── Search Entries & Inputs ─────────────────────────────────────────────── */
+
+searchentry,
+entry:not(.flat) {
+    background-color: @card_bg_color;
+    color: @card_fg_color;
+    border-radius: 9px;
+    outline: 2px solid @boxxy_ink;
+    outline-offset: -2px;
+    box-shadow: 2px 2px 0px @boxxy_shadow;
+}
+
+searchentry:focus-within,
+entry:not(.flat):focus-within {
+    outline: 2px solid @accent_color;
+    outline-offset: -2px;
+    box-shadow: 2px 3px 0px @boxxy_ink;
+}
+
+/* ── Preference Cards, Boxed Lists & Popovers ────────────────────────────── */
+
+/* Give PreferencesGroup inside AlertDialogs breathing room so ScrolledWindow
+   never clips the boxed-list outline and offset shadow. */
+dialog.alert preferencesgroup {
+    margin: 2px 4px 5px 2px;
+}
+
+preferencesgroup listbox.boxed-list,
+listbox.boxed-list,
+.card,
+.bookmark-card {
+    background-color: @card_bg_color;
+    color: @card_fg_color;
+    border-radius: 12px;
+    outline: 2px solid @boxxy_ink;
+    outline-offset: -2px;
+    box-shadow: 3px 4px 0px @boxxy_shadow;
+}
+
+preferencesgroup listbox.boxed-list > row,
+listbox.boxed-list > row {
+    border-bottom: 1px solid alpha(@boxxy_ink, 0.18);
+}
+
+preferencesgroup listbox.boxed-list > row:last-child,
+listbox.boxed-list > row:last-child {
+    border-bottom: none;
+}
+
+popover > contents,
+popover.menu > contents,
+popover.terminal-menu > contents,
+popover.command-palette > contents,
+popover.search-popover > contents,
+.autocomplete-popover contents {
+    background-color: @popover_bg_color;
+    color: @popover_fg_color;
+    border: 2px solid @boxxy_ink;
+    border-radius: 12px;
+    box-shadow: 4px 5px 0px @boxxy_shadow;
+}
+
+/* Terminal Menu & PopoverMenu Items, Group Buttons, and Separators */
+popover.menu separator,
+popover.terminal-menu separator {
+    background-color: alpha(@boxxy_ink, 0.35);
+    min-height: 1.5px;
+    margin: 2px 6px;
+}
+
+popover.menu modelbutton,
+popover.terminal-menu modelbutton,
+popover.menu button.flat:not(.model):not(.circular):not(.tab-color-swatch-0):not(.tab-color-swatch-1):not(.tab-color-swatch-2):not(.tab-color-swatch-3):not(.tab-color-swatch-4):not(.tab-color-swatch-5):not(.tab-color-swatch-6):not(.tab-color-swatch-7):not(.tab-color-swatch-8):not(.tab-color-swatch-9) {
+    border-radius: 8px;
+    min-height: 28px;
+    padding: 2px 10px;
+    margin: 0 4px 0 2px;
+    color: @popover_fg_color;
+    outline: 2px solid transparent;
+    outline-offset: -2px;
+    transition: background-color 120ms ease, box-shadow 120ms ease;
+}
+
+popover.menu modelbutton:hover:not(:disabled),
+popover.menu modelbutton:selected:not(:disabled),
+popover.terminal-menu modelbutton:hover:not(:disabled),
+popover.terminal-menu modelbutton:selected:not(:disabled),
+popover.menu button.flat:not(.model):not(.circular):not(.tab-color-swatch-0):not(.tab-color-swatch-1):not(.tab-color-swatch-2):not(.tab-color-swatch-3):not(.tab-color-swatch-4):not(.tab-color-swatch-5):not(.tab-color-swatch-6):not(.tab-color-swatch-7):not(.tab-color-swatch-8):not(.tab-color-swatch-9):hover {
+    background-color: @accent_bg_color;
+    color: @accent_fg_color;
+    outline: 2px solid @boxxy_ink;
+    outline-offset: -2px;
+    box-shadow: 2px 2px 0px @boxxy_shadow;
+}
+
+popover.menu modelbutton:hover:not(:disabled) label,
+popover.menu modelbutton:hover:not(:disabled) image,
+popover.menu modelbutton:selected:not(:disabled) label,
+popover.menu modelbutton:selected:not(:disabled) image,
+popover.terminal-menu modelbutton:hover:not(:disabled) label,
+popover.terminal-menu modelbutton:hover:not(:disabled) image,
+popover.terminal-menu modelbutton:selected:not(:disabled) label,
+popover.terminal-menu modelbutton:selected:not(:disabled) image {
+    color: @accent_fg_color;
+}
+
+/* Grouped Horizontal Buttons inside PopoverMenu (`display-hint="horizontal-buttons"` -> `box.linked > button.model`) */
+popover.menu box.linked,
+popover.terminal-menu box.linked {
+    background-color: @card_bg_color;
+    border: 2px solid @boxxy_ink;
+    border-radius: 9px;
+    box-shadow: 2px 3px 0px @boxxy_shadow;
+    margin: 2px 4px 4px 2px;
+}
+
+popover.menu box.linked > button.model,
+popover.terminal-menu box.linked > button.model,
+popover.menu box.linked > button,
+popover.terminal-menu box.linked > button {
+    background-color: @card_bg_color;
+    background-image: none;
+    color: @card_fg_color;
+    min-height: 28px;
+    padding: 2px 10px;
+    border: none;
+    border-right: 2px solid @boxxy_ink;
+    border-radius: 0;
+    outline: none;
+    box-shadow: none;
+    margin: 0;
+    font-weight: 600;
+}
+
+popover.menu box.linked > button.model:first-child,
+popover.terminal-menu box.linked > button.model:first-child,
+popover.menu box.linked > button:first-child,
+popover.terminal-menu box.linked > button:first-child {
+    border-top-left-radius: 7px;
+    border-bottom-left-radius: 7px;
+}
+
+popover.menu box.linked > button.model:last-child,
+popover.terminal-menu box.linked > button.model:last-child,
+popover.menu box.linked > button:last-child,
+popover.terminal-menu box.linked > button:last-child {
+    border-right: none;
+    border-top-right-radius: 7px;
+    border-bottom-right-radius: 7px;
+}
+
+popover.menu box.linked > button.model:hover:not(:disabled),
+popover.menu box.linked > button.model:selected:not(:disabled),
+popover.terminal-menu box.linked > button.model:hover:not(:disabled),
+popover.terminal-menu box.linked > button.model:selected:not(:disabled),
+popover.menu box.linked > button:hover:not(:disabled),
+popover.terminal-menu box.linked > button:hover:not(:disabled) {
+    background-color: @accent_bg_color;
+    background-image: none;
+    color: @accent_fg_color;
+    box-shadow: none;
+    outline: none;
+}
+
+popover.menu box.linked > button.model:hover:not(:disabled) label,
+popover.menu box.linked > button.model:hover:not(:disabled) image,
+popover.menu box.linked > button.model:selected:not(:disabled) label,
+popover.menu box.linked > button.model:selected:not(:disabled) image,
+popover.terminal-menu box.linked > button.model:hover:not(:disabled) label,
+popover.terminal-menu box.linked > button.model:hover:not(:disabled) image,
+popover.terminal-menu box.linked > button.model:selected:not(:disabled) label,
+popover.terminal-menu box.linked > button.model:selected:not(:disabled) image {
+    color: @accent_fg_color;
+}
+
+popover.menu box.linked > button.model:disabled,
+popover.terminal-menu box.linked > button.model:disabled {
+    background-color: @card_bg_color;
+    background-image: none;
+    color: alpha(@card_fg_color, 0.38);
+}
+
+floating-sheet > sheet,
+bottom-sheet > sheet,
+dialog-host > dialog sheet {
+    border: 2px solid @boxxy_ink;
+    outline: 2px solid @boxxy_ink;
+    outline-offset: -2px;
+    box-shadow: 4px 5px 0px @boxxy_shadow;
+}
+
+/* Switches & Checkboxes inside Preferences */
+switch {
+    outline: 2px solid @boxxy_ink;
+    outline-offset: -1px;
+}
+
+switch:checked {
+    background-color: @accent_bg_color;
+    color: @accent_fg_color;
+}
+
+checkbutton check {
+    border: 2px solid @boxxy_ink;
+}
+
+checkbutton check:checked {
+    background-color: @accent_bg_color;
+    color: @accent_fg_color;
+    border-color: @boxxy_ink;
+}
+
+/* ── Preferences -> Themes Page Custom Widgets ───────────────────────────── */
+
+flowboxchild.boxxy-theme-flowchild {
+    padding: 0;
+    margin: 0;
+    background: transparent;
+    border: none;
+    outline: none;
+}
+
+button.boxxy-theme-card {
+    background-color: @card_bg_color;
+    background-image: none;
+    color: @card_fg_color;
+    border-radius: 12px;
+    padding: 10px 14px;
+    outline: 2px solid @boxxy_ink;
+    outline-offset: -2px;
+    box-shadow: 2px 3px 0px @boxxy_shadow;
+    transition: background-color 140ms ease, transform 90ms ease, box-shadow 90ms ease;
+}
+
+button.boxxy-theme-card:hover {
+    background-color: @boxxy_surface_hover;
+    transform: translate(-1px, -1px);
+    box-shadow: 3px 4px 0px @boxxy_shadow;
+}
+
+preferencespage button.boxxy-theme-card.selected-theme-card,
+preferencespage button.boxxy-theme-card.selected-theme-card:hover,
+button.boxxy-theme-card.selected-theme-card,
+button.boxxy-theme-card.selected-theme-card:hover {
+    background-color: @accent_bg_color;
+    color: @accent_fg_color;
+    outline: 2.5px solid @boxxy_ink;
+    outline-offset: -2px;
+    box-shadow: 3px 4px 0px @boxxy_shadow;
+}
+
+button.boxxy-theme-card.selected-theme-card label {
+    color: @accent_fg_color;
+    font-weight: 800;
+}
+
+button.boxxy-theme-card:active {
+    transform: translate(1px, 1px);
+    box-shadow: 1px 1px 0px @boxxy_shadow;
+}
+
+.boxxy-theme-tag-pill {
+    background-color: @accent_bg_color;
+    color: @accent_fg_color;
+    border-radius: 9999px;
+    padding: 1px 8px;
+    font-size: 0.78em;
+    font-weight: 700;
+    outline: 1.5px solid @boxxy_ink;
+}
+
+/* ── What's New Dialog Tiles & Hero Pill ─────────────────────────────────── */
+
+.whats-new-hero {
+    border-bottom: 2px solid @boxxy_ink;
+}
+
+.whats-new-commit-pill {
+    background-color: @card_bg_color;
+    color: @card_fg_color;
+    outline: 2px solid @boxxy_ink;
+    outline-offset: -2px;
+    box-shadow: 2px 2px 0px @boxxy_shadow;
+}
+
+.whats-new-stat-tile {
+    background-color: @card_bg_color;
+    color: @card_fg_color;
+    border: 2px solid @boxxy_ink;
+    box-shadow: 2px 3px 0px @boxxy_shadow;
+}

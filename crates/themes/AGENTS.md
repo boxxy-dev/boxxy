@@ -1,9 +1,14 @@
 # boxxy-themes Agents & Architecture
 
 ## Responsibilities
-Palette-driven theme engine. The terminal palette is the single source of truth — GTK CSS
-overrides and GtkSourceView XML schemes are generated at compile-time and runtime.
-It also provides centralized texture caching for efficient background image rendering.
+Palette-driven terminal theme engine and multi-layer Custom Boxxy App Theme engine (`app_theme.rs`).
+- **Terminal Palettes:** The terminal palette is the single source of truth for terminal foreground/background, ANSI 16 colors, `.terminal-header` / `.claw-drawer` CSS overrides, and GtkSourceView XML schemes generated at compile-time and runtime.
+- **Custom Boxxy App Themes (`app_theme.rs`):** Styles the application chrome (Sidebars, Preferences, HeaderBars, Popovers, Dialogs, Buttons, Navigation pills) independently of the terminal canvas using a 4-layer GTK `CssProvider` cascade:
+  1. `resources/style.css` (`PRIORITY_APPLICATION` = 600) — Always-active geometry and Default GTK fallback.
+  2. `resources/themes/boxxy_skeleton.css` (Priority 640) — Playful neo-brutalist Boxxy skeleton (crisp `@boxxy_ink` outlines, offset `@boxxy_shadow` drop-shadows, capsule sidebar rows, tactile button press states) loaded only when `AppThemeMode::Boxxy` is active.
+  3. Theme Color Tokens (Priority 650) — Generated `@define-color` CSS block from built-in presets (`boxxy-dark`, `boxxy-light`, `ember`, `aurora`, `lagoon`, `moss`) or community `.toml` files discovered in `boxxy_sys_utils::get_config_dir().join("themes")` (`~/.config/boxxy-terminal/themes/`). Community themes are strictly validated hex color definitions (`sanitize_hex_color`) so they can never inject arbitrary CSS or break widget geometry.
+  4. Custom Accent Color Override (Priority 660) — Optional user accent color override (`@accent_color`, `@accent_bg_color`, and auto-contrasted `@accent_fg_color`).
+- **Texture Cache:** Provides centralized texture caching for efficient background image rendering.
 
 ## Data Structures
 

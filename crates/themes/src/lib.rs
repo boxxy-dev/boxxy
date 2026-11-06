@@ -5,6 +5,7 @@ use std::cell::RefCell;
 use std::fs;
 use std::path::PathBuf;
 
+pub mod app_theme;
 pub mod preview;
 pub mod selector;
 
@@ -180,7 +181,7 @@ fn load_css(css: &str) {
         gtk::style_context_add_provider_for_display(
             &display,
             &provider,
-            gtk::STYLE_PROVIDER_PRIORITY_USER,
+            gtk::STYLE_PROVIDER_PRIORITY_APPLICATION + 10,
         );
     }
 }

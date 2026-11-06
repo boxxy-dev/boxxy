@@ -45,12 +45,17 @@ impl AppWindow {
         let app_state = AppState::load();
 
         let style_manager = adw::StyleManager::default();
-        let scheme = match current_settings.color_scheme {
+        let fallback_scheme = match current_settings.color_scheme {
             boxxy_preferences::config::ColorScheme::Default => adw::ColorScheme::Default,
             boxxy_preferences::config::ColorScheme::Light => adw::ColorScheme::ForceLight,
             boxxy_preferences::config::ColorScheme::Dark => adw::ColorScheme::ForceDark,
         };
-        style_manager.set_color_scheme(scheme);
+        boxxy_themes::app_theme::apply_app_theme(
+            current_settings.app_theme_mode == boxxy_preferences::AppThemeMode::Boxxy,
+            &current_settings.app_theme_id,
+            current_settings.custom_accent_color.as_deref(),
+            fallback_scheme,
+        );
 
         let palette = boxxy_themes::load_palette(current_settings.theme.as_str());
         let is_dark = style_manager.is_dark();

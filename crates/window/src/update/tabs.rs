@@ -805,6 +805,7 @@ pub fn close_tab_request(
             let row = libadwaita::ActionRow::builder()
                 .title(&comm)
                 .subtitle(format!("Process {}", pid))
+                .focusable(false)
                 .build();
             group.add(&row);
         }
@@ -825,6 +826,7 @@ pub fn close_tab_request(
             let row = libadwaita::ActionRow::builder()
                 .title(&task.payload)
                 .subtitle(format!("{} by {}", type_str, agent_name))
+                .focusable(false)
                 .build();
             group.add(&row);
         }
@@ -834,6 +836,7 @@ pub fn close_tab_request(
                 let row = libadwaita::ActionRow::builder()
                     .title(&agent_name)
                     .subtitle("Active AI Agent Session")
+                    .focusable(false)
                     .build();
                 group.add(&row);
             }

@@ -1210,6 +1210,7 @@ dependencies = [
  "parking_lot 0.13.0",
  "serde",
  "sourceview5",
+ "tempfile",
  "toml",
  "uuid",
 ]

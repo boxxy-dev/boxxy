@@ -666,7 +666,7 @@ where
     make_editable_color_dot(color_hex, tooltip, on_color_chosen).0
 }
 
-fn make_editable_color_dot<F>(
+pub(crate) fn make_editable_color_dot<F>(
     color_hex: &str,
     tooltip: &str,
     on_color_chosen: F,
@@ -686,6 +686,7 @@ where
     dot.set_focus_on_click(false);
     dot.set_cursor_from_name(Some("pointer"));
     dot.set_tooltip_text(Some(tooltip));
+    dot.add_css_class("color-dot-btn");
     dot.add_css_class(&class);
 
     let provider = gtk::CssProvider::new();
@@ -693,7 +694,7 @@ where
         gtk::style_context_add_provider_for_display(
             &display,
             &provider,
-            gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+            gtk::STYLE_PROVIDER_PRIORITY_USER + 50,
         );
         let provider_cleanup = provider.clone();
         dot.connect_destroy(move |_| {

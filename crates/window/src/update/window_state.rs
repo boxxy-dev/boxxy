@@ -130,6 +130,7 @@ pub fn handle_close_request(inner_ref: &Rc<RefCell<AppWindowInner>>, inner: &mut
             let row = libadwaita::ActionRow::builder()
                 .title(&comm)
                 .subtitle(format!("Process {}", pid))
+                .focusable(false)
                 .build();
             group.add(&row);
         }
@@ -150,6 +151,7 @@ pub fn handle_close_request(inner_ref: &Rc<RefCell<AppWindowInner>>, inner: &mut
             let row = libadwaita::ActionRow::builder()
                 .title(&task.payload)
                 .subtitle(format!("{} by {}", type_str, agent_name))
+                .focusable(false)
                 .build();
             group.add(&row);
         }
@@ -159,6 +161,7 @@ pub fn handle_close_request(inner_ref: &Rc<RefCell<AppWindowInner>>, inner: &mut
                 let row = libadwaita::ActionRow::builder()
                     .title(&agent_name)
                     .subtitle("Active AI Agent Session")
+                    .focusable(false)
                     .build();
                 group.add(&row);
             }
@@ -298,15 +301,17 @@ pub fn settings_changed(inner: &mut AppWindowInner, settings: Settings) {
     }
     boxxy_terminal::TerminalComponent::set_claw_overlay_zoom_pct(settings.overlay_font_scale);
 
-    let style_manager = libadwaita::StyleManager::default();
-    let scheme = match settings.color_scheme {
+    let fallback_scheme = match settings.color_scheme {
         boxxy_preferences::config::ColorScheme::Default => libadwaita::ColorScheme::Default,
         boxxy_preferences::config::ColorScheme::Light => libadwaita::ColorScheme::ForceLight,
         boxxy_preferences::config::ColorScheme::Dark => libadwaita::ColorScheme::ForceDark,
     };
-    if style_manager.color_scheme() != scheme {
-        style_manager.set_color_scheme(scheme);
-    }
+    boxxy_themes::app_theme::apply_app_theme(
+        settings.app_theme_mode == boxxy_preferences::AppThemeMode::Boxxy,
+        &settings.app_theme_id,
+        settings.custom_accent_color.as_deref(),
+        fallback_scheme,
+    );
 
     let parsed = boxxy_themes::load_palette(settings.theme.as_str());
     let is_dark = libadwaita::StyleManager::default().is_dark();

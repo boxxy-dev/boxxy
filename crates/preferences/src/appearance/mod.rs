@@ -18,7 +18,6 @@ pub fn setup_appearance_page(
     on_change: Rc<dyn Fn(Settings) + 'static>,
     on_open_themes: Rc<dyn Fn() + 'static>,
 ) -> (AppearanceWidgets, Box<dyn Fn(&str) -> bool>) {
-    let color_scheme_combo: adw::ComboRow = builder.object("color_scheme_combo").unwrap();
     let select_bg_image_btn: gtk::Button = builder.object("select_bg_image_btn").unwrap();
     let clear_bg_image_btn: gtk::Button = builder.object("clear_bg_image_btn").unwrap();
     let background_image_row: adw::ActionRow = builder.object("background_image_row").unwrap();
@@ -52,32 +51,6 @@ pub fn setup_appearance_page(
     let group_terminal: adw::PreferencesGroup = builder.object("group_terminal").unwrap();
     let group_cursor: adw::PreferencesGroup = builder.object("group_cursor").unwrap();
     let group_layout: adw::PreferencesGroup = builder.object("group_layout").unwrap();
-
-    // 0. Color Scheme
-    let color_schemes_list = gtk::StringList::new(&["Follow System", "Light", "Dark"]);
-    color_scheme_combo.set_model(Some(&color_schemes_list));
-    let scheme_idx = match settings_rc.borrow().color_scheme {
-        crate::config::ColorScheme::Default => 0,
-        crate::config::ColorScheme::Light => 1,
-        crate::config::ColorScheme::Dark => 2,
-    };
-    color_scheme_combo.set_selected(scheme_idx);
-    let s_rc = settings_rc.clone();
-    let cb = on_change.clone();
-    color_scheme_combo.connect_selected_notify(move |row| {
-        let scheme = match row.selected() {
-            0 => crate::config::ColorScheme::Default,
-            1 => crate::config::ColorScheme::Light,
-            2 => crate::config::ColorScheme::Dark,
-            _ => return,
-        };
-        let mut s = s_rc.borrow_mut();
-        if s.color_scheme != scheme {
-            s.color_scheme = scheme;
-            s.save();
-            cb(s.clone());
-        }
-    });
 
     // 0.1 Background Image
     let opacity_adj = gtk::Adjustment::new(settings_rc.borrow().opacity, 0.1, 1.0, 0.05, 0.1, 0.0);
@@ -535,7 +508,6 @@ pub fn setup_appearance_page(
     let smart_tab_naming_switch_clone = smart_tab_naming_switch.clone();
     let colored_tabs_switch_clone = colored_tabs_switch.clone();
     let chat_width_spin_clone = chat_width_spin.clone();
-    let color_scheme_combo_clone = color_scheme_combo.clone();
     let opacity_row_clone = opacity_row.clone();
     let frosted_glass_row_clone = frosted_glass_row.clone();
     let background_image_row_clone = background_image_row.clone();
@@ -553,10 +525,6 @@ pub fn setup_appearance_page(
             m
         };
 
-        let s1 = match_row(
-            color_scheme_combo_clone.upcast_ref(),
-            "gtk theme appearance dark light follow system color scheme",
-        );
         let f1 = match_row(font_row_clone.upcast_ref(), "font family size");
         let t_bg = match_row(
             background_image_row_clone.upcast_ref(),
@@ -621,7 +589,7 @@ pub fn setup_appearance_page(
             "sidebar width px hacky mouse resize overlay split view",
         );
 
-        group_appearance.set_visible(s1 || f1 || t_bg || t1 || t_op || f_glass || c_tabs);
+        group_appearance.set_visible(f1 || t_bg || t1 || t_op || f_glass || c_tabs);
         group_terminal.set_visible(t2 || t3 || t4 || t5);
         group_cursor.set_visible(c1 || c3 || c4 || c5);
         group_layout.set_visible(pb || l1 || l2 || l3 || l5 || l_smart_tabs || l6);

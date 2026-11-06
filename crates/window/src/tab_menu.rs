@@ -162,7 +162,7 @@ impl TabContextMenu {
                 gtk4::style_context_add_provider_for_display(
                     &display,
                     &provider,
-                    gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
+                    gtk4::STYLE_PROVIDER_PRIORITY_USER + 50,
                 );
                 let provider_cleanup = provider.clone();
                 btn.connect_destroy(move |_| {

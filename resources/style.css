@@ -969,6 +969,43 @@ flowbox.viewer-gallery > flowboxchild {
     border: 1px solid rgba(255, 255, 255, 0.25);
 }
 
+/* --- Preferences -> Themes Page Base Styling (Default GTK Fallback) --- */
+flowboxchild.boxxy-theme-flowchild {
+    padding: 0;
+    margin: 0;
+    background: transparent;
+    border: none;
+    outline: none;
+}
+
+button.boxxy-theme-card {
+    background-color: @card_bg_color;
+    color: @card_fg_color;
+    border-radius: 12px;
+    padding: 10px 14px;
+    border: 1.5px solid alpha(currentColor, 0.16);
+}
+
+button.boxxy-theme-card.selected-theme-card {
+    background-color: @accent_bg_color;
+    color: @accent_fg_color;
+    border-color: alpha(currentColor, 0.45);
+}
+
+button.boxxy-theme-card.selected-theme-card label {
+    color: @accent_fg_color;
+    font-weight: 700;
+}
+
+.boxxy-theme-tag-pill {
+    background-color: alpha(@accent_bg_color, 0.2);
+    color: @accent_color;
+    border-radius: 9999px;
+    padding: 1px 8px;
+    font-size: 0.78em;
+    font-weight: 600;
+}
+
 .viewer-image-card-footer {
     padding: 5px 6px 5px 10px;
     background: transparent;

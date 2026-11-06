@@ -82,6 +82,10 @@
                                     <property name="orientation">horizontal</property>
                                     <property name="spacing">6</property>
                                     <property name="valign">center</property>
+                                    <property name="margin-top">2</property>
+                                    <property name="margin-bottom">4</property>
+                                    <property name="margin-start">2</property>
+                                    <property name="margin-end">4</property>
                                     <child>
                                       <object class="GtkLabel" id="commit_pill_label">
                                         <property name="label">a1b2c3d → e4f5g6h</property>
@@ -116,6 +120,10 @@
                                     <property name="orientation">horizontal</property>
                                     <property name="spacing">6</property>
                                     <property name="valign">center</property>
+                                    <property name="margin-top">2</property>
+                                    <property name="margin-bottom">4</property>
+                                    <property name="margin-start">2</property>
+                                    <property name="margin-end">4</property>
                                     <child>
                                       <object class="GtkEntry" id="from_commit_entry">
                                         <property name="width-chars">9</property>

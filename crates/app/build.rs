@@ -7,6 +7,7 @@ fn main() {
 <gresources>
   <gresource prefix="/dev/boxxy/BoxxyTerminal">
     <file compressed="true">style.css</file>
+    <file compressed="true" alias="themes/boxxy_skeleton.css">themes/boxxy_skeleton.css</file>
     <file compressed="true" alias="icons/dev.boxxy.BoxxyTerminal.png">icons/dev.boxxy.BoxxyTerminal.png</file>
     <file compressed="true" alias="icons/whats_new_banner.png">icons/whats_new_banner.png</file>
     <file compressed="true" alias="icons/boxxy-paper-plane-symbolic.svg">icons/boxxy-paper-plane-symbolic.svg</file>
@@ -115,6 +116,7 @@ fn main() {
 
     // Rerun if any palette file is added/removed/modified.
     println!("cargo:rerun-if-changed=../../resources/style.css");
+    println!("cargo:rerun-if-changed=../../resources/themes/boxxy_skeleton.css");
     println!("cargo:rerun-if-changed=../../resources/icons/dev.boxxy.BoxxyTerminal.png");
     println!("cargo:rerun-if-changed=../../resources/icons/whats_new_banner.png");
     println!("cargo:rerun-if-changed=../../resources/icons/boxxy-paper-plane-symbolic.svg");

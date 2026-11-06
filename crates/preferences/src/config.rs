@@ -166,7 +166,7 @@ impl fmt::Display for Currency {
 }
 
 // --- Color Scheme ---
-#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Default)]
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum ColorScheme {
     #[default]
@@ -185,11 +185,33 @@ impl fmt::Display for ColorScheme {
     }
 }
 
+// --- App Theme Mode ---
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum AppThemeMode {
+    DefaultGtk,
+    #[default]
+    Boxxy,
+}
+
+impl fmt::Display for AppThemeMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            AppThemeMode::DefaultGtk => write!(f, "Default GTK (System)"),
+            AppThemeMode::Boxxy => write!(f, "Boxxy Custom Theme"),
+        }
+    }
+}
+
 pub const DEFAULT_FILE_REGEX: &str =
     r#"(?:https?://[^\s"'<>]+|/[\w.@:/-]+|~[\w.@:/-]+|\.{1,2}/[\w.@:/-]+)"#;
 
 pub const NAUTILUS_EXTENSION_SCRIPT: &str =
     include_str!("../../../resources/nautilus/open_with_boxxy.py");
+
+pub const BOXXY_THEME_CREATOR_SLUG: &str = "boxxy-theme-creator";
+pub const BOXXY_THEME_CREATOR_SKILL: &str =
+    include_str!("../../../resources/skills/boxxy-theme-creator/SKILL.md");
 
 // --- User Profile ---
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
@@ -232,6 +254,12 @@ pub struct Settings {
     pub font_size: u16,
     pub theme: String,
     pub color_scheme: ColorScheme,
+    #[serde(default)]
+    pub app_theme_mode: AppThemeMode,
+    #[serde(default = "default_app_theme_id")]
+    pub app_theme_id: String,
+    #[serde(default)]
+    pub custom_accent_color: Option<String>,
     pub opacity: f64,
     pub frosted_glass: bool,
     pub background_image_path: Option<String>,
@@ -307,7 +335,7 @@ pub struct Settings {
     pub enable_telemetry: bool,
     pub install_id: Option<String>,
     pub mcp_servers: Vec<boxxy_mcp::config::McpServerConfig>,
-    #[serde(default)]
+    #[serde(default = "default_disabled_skills")]
     pub disabled_skills: Vec<String>,
     #[serde(default)]
     pub openai_compatible_endpoints: Vec<boxxy_model_selection::OpenAiCompatibleEndpoint>,
@@ -320,6 +348,9 @@ impl Default for Settings {
             font_size: 12,
             theme: "Adwaita Dark".to_string(),
             color_scheme: ColorScheme::Default,
+            app_theme_mode: AppThemeMode::Boxxy,
+            app_theme_id: default_app_theme_id(),
+            custom_accent_color: None,
             opacity: 1.0,
             frosted_glass: false,
             background_image_path: None,
@@ -379,7 +410,7 @@ impl Default for Settings {
             enable_telemetry: true, // ON by default during Preview
             install_id: None,
             mcp_servers: vec![],
-            disabled_skills: vec![],
+            disabled_skills: default_disabled_skills(),
             openai_compatible_endpoints: vec![],
         }
     }
@@ -387,6 +418,14 @@ impl Default for Settings {
 
 const fn default_overlay_bottom_gap() -> bool {
     true
+}
+
+fn default_app_theme_id() -> String {
+    "boxxy-dark".to_string()
+}
+
+fn default_disabled_skills() -> Vec<String> {
+    vec![BOXXY_THEME_CREATOR_SLUG.to_string()]
 }
 
 const fn default_smart_tab_naming() -> bool {
@@ -436,6 +475,26 @@ You can add your own sensitive paths here. One path per line. Lines starting wit
         let skills_dir = boxxyclaw_dir.join("skills");
         if !skills_dir.exists() {
             let _ = fs::create_dir_all(&skills_dir);
+        }
+
+        // Seed bundled Boxxy Theme Creator skill (disabled by default until enabled in Preferences -> Skills)
+        let theme_skill_dir = skills_dir.join(BOXXY_THEME_CREATOR_SLUG);
+        let theme_skill_file = theme_skill_dir.join("SKILL.md");
+        if !theme_skill_file.exists() {
+            let _ = fs::create_dir_all(&theme_skill_dir);
+            let _ = fs::write(&theme_skill_file, BOXXY_THEME_CREATOR_SKILL);
+            let current = Self::load();
+            if !current
+                .disabled_skills
+                .iter()
+                .any(|s| s == BOXXY_THEME_CREATOR_SLUG)
+            {
+                let mut updated = (*current).clone();
+                updated
+                    .disabled_skills
+                    .push(BOXXY_THEME_CREATOR_SLUG.to_string());
+                updated.save();
+            }
         }
 
         Self::sync_nautilus_extension(Self::load().nautilus_integration);
@@ -992,10 +1051,16 @@ mod tests {
         assert!(legacy.use_native_search);
         assert!(legacy.nautilus_integration);
         assert!(legacy.smart_tab_naming);
-        assert!(legacy.disabled_skills.is_empty());
+        assert_eq!(legacy.disabled_skills, vec!["boxxy-theme-creator"]);
+        assert_eq!(legacy.app_theme_mode, AppThemeMode::Boxxy);
+        assert_eq!(legacy.app_theme_id, "boxxy-dark");
+        assert!(legacy.custom_accent_color.is_none());
 
         // Explicit false and true roundtrip cleanly
         let mut s = Settings::default();
+        assert_eq!(s.app_theme_mode, AppThemeMode::Boxxy);
+        assert_eq!(s.app_theme_id, "boxxy-dark");
+        assert!(s.custom_accent_color.is_none());
         assert!(s.use_native_search);
         assert!(s.smart_tab_naming);
         s.use_native_search = false;
