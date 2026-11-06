@@ -419,6 +419,7 @@ impl ClawSession {
         };
 
         boxxy_preferences::Settings::reload();
+        crate::registry::skills::reload_if_initialized().await;
 
         let after = boxxy_preferences::Settings::load();
         let (new_claw, new_memory, new_search) = (

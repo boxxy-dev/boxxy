@@ -8,6 +8,7 @@ pub mod config;
 pub mod mcp;
 pub mod previews;
 pub mod shortcuts;
+pub mod skills;
 pub mod toolbox;
 pub mod user_profile;
 

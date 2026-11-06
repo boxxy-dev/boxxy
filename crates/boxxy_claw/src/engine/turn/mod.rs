@@ -86,8 +86,9 @@ pub fn spawn_turn(
         let settings = boxxy_preferences::Settings::load();
 
         // 1. Build Skills Context & Pre-Load `@file` References
-        let (active_skills_text, _available_skills_text) =
+        let (active_skills_text, available_skills_text) =
             skills::build_skills_context(&prompt_clone, &pane_id).await;
+        let skills_context = format!("{active_skills_text}{available_skills_text}");
         let resolved_file_refs =
             file_refs::resolve_prompt_file_refs(&prompt_clone, &cwd_clone).await;
         for b64 in resolved_file_refs.image_attachments {
@@ -312,7 +313,7 @@ pub fn spawn_turn(
                 roundtable_context,
                 guest_home_context,
                 resolved_file_refs.context_block,
-                active_skills_text,
+                skills_context,
                 past_memories,
                 radar,
                 tui_warning

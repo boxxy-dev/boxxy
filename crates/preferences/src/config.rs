@@ -308,6 +308,8 @@ pub struct Settings {
     pub install_id: Option<String>,
     pub mcp_servers: Vec<boxxy_mcp::config::McpServerConfig>,
     #[serde(default)]
+    pub disabled_skills: Vec<String>,
+    #[serde(default)]
     pub openai_compatible_endpoints: Vec<boxxy_model_selection::OpenAiCompatibleEndpoint>,
 }
 
@@ -377,6 +379,7 @@ impl Default for Settings {
             enable_telemetry: true, // ON by default during Preview
             install_id: None,
             mcp_servers: vec![],
+            disabled_skills: vec![],
             openai_compatible_endpoints: vec![],
         }
     }
@@ -989,6 +992,7 @@ mod tests {
         assert!(legacy.use_native_search);
         assert!(legacy.nautilus_integration);
         assert!(legacy.smart_tab_naming);
+        assert!(legacy.disabled_skills.is_empty());
 
         // Explicit false and true roundtrip cleanly
         let mut s = Settings::default();
@@ -996,11 +1000,13 @@ mod tests {
         assert!(s.smart_tab_naming);
         s.use_native_search = false;
         s.smart_tab_naming = false;
+        s.disabled_skills = vec!["sample-skill".to_string()];
         s.currency = Currency::Eur;
         let json = serde_json::to_string(&s).unwrap();
         let decoded: Settings = serde_json::from_str(&json).unwrap();
         assert!(!decoded.use_native_search);
         assert!(!decoded.smart_tab_naming);
+        assert_eq!(decoded.disabled_skills, vec!["sample-skill".to_string()]);
         assert_eq!(decoded.currency, Currency::Eur);
         assert_eq!(Currency::Usd.format_from_usd(0.05), "$0.05");
         assert_eq!(Currency::Eur.format_from_usd(1.0), "€0.89");

@@ -1,6 +1,7 @@
 pub mod character_loader;
 pub mod characters;
 pub mod diff;
+pub mod skill_loader;
 
 pub use diff::{
     DiffCell, DiffHunk, DiffKind, DiffLineKind, DiffPairRow, DiffSpan, DiffStats, FileDiff,

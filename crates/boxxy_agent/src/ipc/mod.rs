@@ -519,6 +519,7 @@ impl AgentInterface {
     ) {
         log::debug!("Settings invalidated signal received from UI. Reloading cache.");
         boxxy_preferences::Settings::reload();
+        boxxy_claw::registry::skills::reload_if_initialized().await;
         let settings = boxxy_preferences::Settings::load();
         if !settings.enable_telemetry {
             tokio::spawn(async {

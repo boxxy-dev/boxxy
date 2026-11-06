@@ -26,6 +26,7 @@ The crate is the only place where a definition appears in *both* the UI process 
   - `StartupToken { daemon_version, db_was_reset, initial_revision }` — returned by `claim_startup_token()`; lets a reconnecting UI detect DB resets and seed its initial revision.
   - `PeerQuery { ByCharacterId, ByCharacterDisplayName, ByPetname, ByHolderId }` / `PeerInfo` — used by swarm tools to locate peers via `resolve_peer`.
   - `CHARACTER_CACHE: ArcSwap<Vec<CharacterInfo>>` and `CLAIMS_CACHE: ArcSwap<Vec<CharacterClaim>>` — global lock-free caches kept in sync by `agent_manager` via push signals. Read synchronously by UI components (autocomplete, indicator) without D-Bus round-trips.
+- **Skill Loader (`skill_loader.rs`)**: Lightweight YAML frontmatter header scanner (`discover_skill_summaries`, capped at 4 KB so UI discovery never reads full markdown bodies), full skill parser (`parse_skill_document`), and `is_skill_disabled` helper shared between `boxxy-preferences` and `boxxy-claw`.
 
 ## Design Rules
 

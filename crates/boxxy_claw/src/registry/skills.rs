@@ -1,20 +1,12 @@
+pub use boxxy_claw_protocol::skill_loader::SkillFrontmatter;
 use boxxy_db::Db;
 use boxxy_db::models::SkillRecord;
 use boxxy_db::store::Store;
 use log::{debug, error, info};
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
+use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::{Mutex, OnceCell, RwLock};
-
-#[derive(Clone, Debug, serde::Deserialize)]
-pub struct SkillFrontmatter {
-    pub name: String,
-    pub description: String,
-    #[serde(default)]
-    pub triggers: Vec<String>,
-    #[serde(default)]
-    pub pinned: bool,
-}
 
 #[derive(Clone, Debug)]
 pub struct Skill {
@@ -43,11 +35,19 @@ pub async fn global_registry() -> Arc<SkillRegistry> {
         .clone()
 }
 
+/// Reloads the skill registry only if it has already been initialized.
+/// Avoids eagerly loading skills or opening SQLite at startup before an agent turn runs.
+pub async fn reload_if_initialized() {
+    if let Some(registry) = REGISTRY.get() {
+        registry.reload().await;
+    }
+}
+
 impl SkillRegistry {
     pub async fn new(db: Arc<Mutex<Option<Db>>>) -> Self {
         let skills = Arc::new(RwLock::new(Vec::new()));
 
-        // Initial load
+        // Initial load (skips any user-disabled skills without reading their files)
         let initial_skills = Self::load_skills_from_disk();
         *skills.write().await = initial_skills.clone();
 
@@ -59,8 +59,7 @@ impl SkillRegistry {
 
         // Setup file watcher
         let mut watcher = None;
-        let config_dir = boxxy_sys_utils::get_config_dir();
-        let skills_dir = config_dir.join("boxxyclaw").join("skills");
+        let skills_dir = boxxy_claw_protocol::skill_loader::get_skills_dir();
 
         if skills_dir.exists() {
             let skills_clone = skills.clone();
@@ -103,6 +102,7 @@ impl SkillRegistry {
                                 debug!(
                                     "SkillRegistry: File change detected, reloading skills."
                                 );
+                                boxxy_preferences::Settings::reload();
                                 let new_skills = Self::load_skills_from_disk();
                                 *skills_clone.write().await = new_skills.clone();
 
@@ -131,6 +131,12 @@ impl SkillRegistry {
         }
     }
 
+    pub async fn reload(&self) {
+        let new_skills = Self::load_skills_from_disk();
+        *self.skills.write().await = new_skills.clone();
+        let _ = Self::sync_to_db(self.db.clone(), new_skills).await;
+    }
+
     pub async fn get_skills(&self) -> Vec<Skill> {
         self.skills.read().await.clone()
     }
@@ -151,7 +157,11 @@ impl SkillRegistry {
                         frontmatter: SkillFrontmatter {
                             name: r.name,
                             description: r.description,
-                            triggers: r.triggers.split(", ").map(|s| s.to_string()).collect(),
+                            triggers: r.triggers
+                                .split(", ")
+                                .filter(|s| !s.is_empty())
+                                .map(|s| s.to_string())
+                                .collect(),
                             pinned: r.pinned,
                         },
                         content: r.content,
@@ -188,57 +198,93 @@ impl SkillRegistry {
     }
 
     fn load_skills_from_disk() -> Vec<Skill> {
+        let skills_dir = boxxy_claw_protocol::skill_loader::get_skills_dir();
+        let settings = boxxy_preferences::Settings::load();
+        Self::load_enabled_skills_from_dir(&skills_dir, &settings.disabled_skills)
+    }
+
+    /// Loads only enabled skills from `skills_dir`.
+    /// Entries whose on-disk `slug` appears in `disabled_skills` are skipped immediately
+    /// before opening or reading the markdown file.
+    pub fn load_enabled_skills_from_dir(
+        skills_dir: &Path,
+        disabled_skills: &[String],
+    ) -> Vec<Skill> {
         let mut skills = Vec::new();
-        let config_dir = boxxy_sys_utils::get_config_dir();
-        let skills_dir = config_dir.join("boxxyclaw").join("skills");
+        let Ok(entries) = std::fs::read_dir(skills_dir) else {
+            return skills;
+        };
 
-        if let Ok(entries) = std::fs::read_dir(skills_dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                let mut file_path = None;
-                if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("md") {
-                    file_path = Some(path);
-                } else if path.is_dir() {
-                    let skill_md = path.join("SKILL.md");
-                    if skill_md.exists() {
-                        file_path = Some(skill_md);
-                    }
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Some((slug, md_path)) =
+                boxxy_claw_protocol::skill_loader::resolve_skill_entry(&path)
+            else {
+                continue;
+            };
+
+            // Fast-path: skip disabled skills before touching the file on disk.
+            if disabled_skills.iter().any(|d| d == &slug) {
+                continue;
+            }
+
+            if let Ok(content) = std::fs::read_to_string(&md_path) {
+                let (frontmatter, body) =
+                    boxxy_claw_protocol::skill_loader::parse_skill_document(&slug, &content);
+                if boxxy_claw_protocol::skill_loader::is_skill_disabled(
+                    disabled_skills,
+                    &slug,
+                    &frontmatter.name,
+                ) {
+                    continue;
                 }
-
-                if let Some(md_path) = file_path
-                    && let Ok(content) = std::fs::read_to_string(md_path)
-                {
-                    let mut has_frontmatter = false;
-                    if (content.starts_with("---\n") || content.starts_with("---\r\n"))
-                        && let Some(end_idx) = content[4..].find("\n---")
-                    {
-                        let frontmatter_str = &content[4..4 + end_idx];
-                        let body = &content[4 + end_idx + 4..];
-                        #[allow(deprecated)]
-                        let parsed = serde_yml::from_str::<SkillFrontmatter>(frontmatter_str);
-                        if let Ok(frontmatter) = parsed {
-                            skills.push(Skill {
-                                frontmatter,
-                                content: body.trim_start().to_string(),
-                            });
-                            has_frontmatter = true;
-                        }
-                    }
-
-                    if !has_frontmatter {
-                        skills.push(Skill {
-                            frontmatter: SkillFrontmatter {
-                                name: "legacy-skill".to_string(),
-                                description: "Legacy skill".to_string(),
-                                triggers: Vec::new(),
-                                pinned: false,
-                            },
-                            content,
-                        });
-                    }
-                }
+                skills.push(Skill {
+                    frontmatter,
+                    content: body,
+                });
             }
         }
+
+        skills.sort_by(|a, b| a.frontmatter.name.cmp(&b.frontmatter.name));
         skills
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn disabled_skills_are_not_loaded_until_enabled() {
+        let dir = tempfile::tempdir().unwrap();
+        let skills_dir = dir.path();
+
+        let skill_a_dir = skills_dir.join("alpha-skill");
+        std::fs::create_dir_all(&skill_a_dir).unwrap();
+        std::fs::write(
+            skill_a_dir.join("SKILL.md"),
+            "---\nname: Alpha Skill\ndescription: First workflow\n---\nAlpha instructions",
+        )
+        .unwrap();
+
+        let skill_b_dir = skills_dir.join("beta-skill");
+        std::fs::create_dir_all(&skill_b_dir).unwrap();
+        std::fs::write(
+            skill_b_dir.join("SKILL.md"),
+            "---\nname: Beta Skill\ndescription: Second workflow\n---\nBeta instructions",
+        )
+        .unwrap();
+
+        // When beta-skill is disabled by slug, only alpha-skill is loaded.
+        let disabled = vec!["beta-skill".to_string()];
+        let loaded = SkillRegistry::load_enabled_skills_from_dir(skills_dir, &disabled);
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].frontmatter.name, "Alpha Skill");
+
+        // When re-enabled, both skills are loaded.
+        let loaded_all = SkillRegistry::load_enabled_skills_from_dir(skills_dir, &[]);
+        assert_eq!(loaded_all.len(), 2);
+        assert_eq!(loaded_all[0].frontmatter.name, "Alpha Skill");
+        assert_eq!(loaded_all[1].frontmatter.name, "Beta Skill");
     }
 }

@@ -10,6 +10,7 @@ pub struct PreferencesComponent {
     stack: adw::ViewStack,
     nav_apis: gtk::ListBoxRow,
     nav_mcp: gtk::ListBoxRow,
+    nav_skills: gtk::ListBoxRow,
     nav_shortcuts: gtk::ListBoxRow,
     nav_about: gtk::ListBoxRow,
     nav_characters: gtk::ListBoxRow,
@@ -89,6 +90,8 @@ impl PreferencesComponent {
         nav_toolbox.set_widget_name("nav_toolbox");
         let nav_mcp: gtk::ListBoxRow = builder.object("nav_mcp").unwrap();
         nav_mcp.set_widget_name("nav_mcp");
+        let nav_skills: gtk::ListBoxRow = builder.object("nav_skills").unwrap();
+        nav_skills.set_widget_name("nav_skills");
         let nav_claw_ui: gtk::ListBoxRow = builder.object("nav_claw_ui").unwrap();
         nav_claw_ui.set_widget_name("nav_claw_ui");
         let nav_shortcuts: gtk::ListBoxRow = builder.object("nav_shortcuts").unwrap();
@@ -131,6 +134,10 @@ impl PreferencesComponent {
                         title_clone.set_title("MCP");
                         "mcp"
                     }
+                    "nav_skills" => {
+                        title_clone.set_title("Skills");
+                        "skills"
+                    }
                     "nav_claw_ui" => {
                         title_clone.set_title("Claw UI");
                         "claw_ui"
@@ -172,6 +179,8 @@ impl PreferencesComponent {
         let toolbox_filter =
             crate::toolbox::setup_toolbox_page(&builder, settings_rc.clone(), cb_rc.clone());
         let mcp_filter = crate::mcp::setup_mcp_page(&builder, settings_rc.clone(), cb_rc.clone());
+        let skills_filter =
+            crate::skills::setup_skills_page(&builder, settings_rc.clone(), cb_rc.clone());
         let claw_ui_filter =
             crate::claw_ui::setup_claw_ui_page(&builder, settings_rc.clone(), cb_rc.clone());
         let advanced_filter = crate::advanced::setup_advanced_page(
@@ -199,6 +208,7 @@ impl PreferencesComponent {
         let nav_characters_clone = nav_characters.clone();
         let nav_toolbox_clone = nav_toolbox.clone();
         let nav_mcp_clone = nav_mcp.clone();
+        let nav_skills_clone = nav_skills.clone();
         let nav_claw_ui_clone = nav_claw_ui.clone();
         let nav_advanced_clone = nav_advanced.clone();
         let nav_shortcuts_clone = nav_shortcuts.clone();
@@ -213,6 +223,7 @@ impl PreferencesComponent {
             nav_characters_clone.set_visible(characters_filter(&query));
             nav_toolbox_clone.set_visible(toolbox_filter(&query));
             nav_mcp_clone.set_visible(mcp_filter(&query));
+            nav_skills_clone.set_visible(skills_filter(&query));
             nav_claw_ui_clone.set_visible(claw_ui_filter(&query));
             nav_advanced_clone.set_visible(advanced_filter(&query));
             nav_shortcuts_clone.set_visible(shortcuts_filter(&query));
@@ -237,6 +248,7 @@ impl PreferencesComponent {
             stack,
             nav_apis,
             nav_mcp,
+            nav_skills,
             nav_shortcuts,
             nav_about,
             nav_characters,
@@ -328,6 +340,8 @@ impl PreferencesComponent {
                 list_box.select_row(Some(&self.nav_apis));
             } else if page_name == "mcp" {
                 list_box.select_row(Some(&self.nav_mcp));
+            } else if page_name == "skills" {
+                list_box.select_row(Some(&self.nav_skills));
             } else if page_name == "shortcuts" {
                 list_box.select_row(Some(&self.nav_shortcuts));
             } else if page_name == "about" {
