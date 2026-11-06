@@ -1110,6 +1110,18 @@ entry.whats-new-range-entry {
     padding: 10px 8px;
 }
 
+button.whats-new-stat-tile-btn {
+    background-image: none;
+    box-shadow: none;
+    font-weight: inherit;
+    transition: background-color 140ms ease, border-color 140ms ease, transform 80ms ease, box-shadow 80ms ease;
+}
+
+button.whats-new-stat-tile-btn:hover {
+    background-color: alpha(currentColor, 0.10);
+    border-color: alpha(@accent_color, 0.45);
+}
+
 .whats-new-stat-big {
     font-size: 1.15em;
     font-weight: 800;
@@ -1119,6 +1131,15 @@ entry.whats-new-range-entry {
     font-size: 0.76em;
     font-weight: 600;
     opacity: 0.65;
+}
+
+.whats-new-stat-link-icon {
+    opacity: 0.65;
+}
+
+button.whats-new-stat-tile-btn:hover .whats-new-stat-sub,
+button.whats-new-stat-tile-btn:hover .whats-new-stat-link-icon {
+    opacity: 0.90;
 }
 
 /* --- Global Link Styling --- */

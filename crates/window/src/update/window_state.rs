@@ -263,6 +263,9 @@ pub fn handle_close_request(inner_ref: &Rc<RefCell<AppWindowInner>>, inner: &mut
             }
 
             finalize_window_close(&inner_clone);
+        } else {
+            let tx = inner_clone.borrow().tx.clone();
+            let _ = tx.send_blocking(crate::state::AppInput::FocusActiveTerminal);
         }
     });
 }

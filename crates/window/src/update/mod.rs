@@ -397,6 +397,7 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
         }
         AppInput::ModelSelection => {
             let tx_apis = inner.tx.clone();
+            let tx_model_close = inner.tx.clone();
             let dialog = boxxy_model_selection::GlobalModelSelectorDialog::new_with_custom(
                 inner.current_settings.ai_chat_model.clone(),
                 inner.current_settings.claw_model.clone(),
@@ -415,6 +416,12 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
             dialog.set_on_open_apis(move || {
                 let _ = tx_apis.send_blocking(AppInput::OpenApisPreferences);
             });
+            {
+                use libadwaita::prelude::AdwDialogExt;
+                dialog.dialog().connect_closed(move |_| {
+                    let _ = tx_model_close.send_blocking(AppInput::FocusActiveTerminal);
+                });
+            }
             dialog.present(Some(&inner.window));
         }
         AppInput::CloseRequested => {
@@ -611,6 +618,8 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
                                     crate::state::AppInput::DismissNotification(id.clone()),
                                 );
                             }
+                            let _ = tx_dialog
+                                .send_blocking(crate::state::AppInput::FocusActiveTerminal);
                         });
                     }
                 });
@@ -1070,6 +1079,52 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
                 });
             }
 
+            if let Some(commits_btn) = builder.object::<gtk4::Button>("commits_tile_btn") {
+                let state_diff = state_rc.clone();
+                commits_btn.connect_clicked(move |_| {
+                    let (ref cur_pending, _) = *state_diff.borrow();
+                    let compare_url = format!(
+                        "https://github.com/{}/{}/compare/{}...{}",
+                        crate::updater::REPO_OWNER,
+                        crate::updater::REPO_NAME,
+                        cur_pending.from_commit,
+                        cur_pending.to_commit,
+                    );
+                    let _ = gtk4::gio::AppInfo::launch_default_for_uri(
+                        &compare_url,
+                        None::<&gtk4::gio::AppLaunchContext>,
+                    );
+                });
+            }
+
+            if let Some(contributors_btn) = builder.object::<gtk4::Button>("contributors_tile_btn")
+            {
+                contributors_btn.connect_clicked(move |_| {
+                    let contributors_url = format!(
+                        "https://github.com/{}/{}/graphs/contributors",
+                        crate::updater::REPO_OWNER,
+                        crate::updater::REPO_NAME,
+                    );
+                    let _ = gtk4::gio::AppInfo::launch_default_for_uri(
+                        &contributors_url,
+                        None::<&gtk4::gio::AppLaunchContext>,
+                    );
+                });
+            }
+
+            if let Some(sponsor_btn) = builder.object::<gtk4::Button>("sponsor_tile_btn") {
+                sponsor_btn.connect_clicked(move |_| {
+                    let sponsor_url = format!(
+                        "https://github.com/sponsors/{}",
+                        crate::updater::REPO_OWNER,
+                    );
+                    let _ = gtk4::gio::AppInfo::launch_default_for_uri(
+                        &sponsor_url,
+                        None::<&gtk4::gio::AppLaunchContext>,
+                    );
+                });
+            }
+
             if let Some(close_btn) = builder.object::<gtk4::Button>("close_btn") {
                 let dialog_weak = dialog.downgrade();
                 close_btn.connect_clicked(move |_| {
@@ -1102,15 +1157,15 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
                     if !boxxy_claw_protocol::characters::has_available_character(None) {
                         return;
                     }
-                    if let Some(d) = dialog_weak.upgrade() {
-                        d.close();
-                    }
                     let (ref cur_pending, ref cur_summary) = *state_read.borrow();
                     let prompt = crate::updater::whats_new::build_claw_whats_new_prompt(
                         cur_pending,
                         cur_summary.as_ref(),
                     );
                     let _ = tx_read.send_blocking(AppInput::StartWhatsNewClaw(prompt));
+                    if let Some(d) = dialog_weak.upgrade() {
+                        d.close();
+                    }
                 });
             }
 
@@ -1125,6 +1180,14 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
                 loading_rc.set(true);
                 set_whats_new_loading_state(&builder, true);
                 update_action_buttons();
+            }
+
+            {
+                let tx_wn_close = inner.tx.clone();
+                use libadwaita::prelude::AdwDialogExt;
+                dialog.connect_closed(move |_| {
+                    let _ = tx_wn_close.send_blocking(AppInput::FocusActiveTerminal);
+                });
             }
 
             dialog.present(Some(&inner.window));
@@ -1613,9 +1676,9 @@ fn populate_whats_new_summary(
         }
         if let Some(commits_caption) = builder.object::<gtk4::Label>("commits_caption") {
             let word = if s.total_commits == 1 {
-                "Commit Shipped"
+                "Commit Diff"
             } else {
-                "Commits Shipped"
+                "Commits Diff"
             };
             commits_caption.set_label(word);
         }
@@ -1650,14 +1713,7 @@ fn populate_whats_new_summary(
             } else {
                 "Contributors"
             };
-            let contributors_url = format!(
-                "https://github.com/{}/{}/graphs/contributors",
-                crate::updater::REPO_OWNER,
-                crate::updater::REPO_NAME,
-            );
-            contributors_caption.set_markup(&format!(
-                "<a href=\"{contributors_url}\"><span underline=\"none\">{word}</span></a>"
-            ));
+            contributors_caption.set_label(word);
         }
         if let Some(avatars_box) = builder.object::<gtk4::Box>("contributors_avatars_box") {
             while let Some(child) = avatars_box.first_child() {
@@ -1713,19 +1769,6 @@ fn populate_whats_new_summary(
                 });
             }
         }
-        if let Some(see_diff_label) = builder.object::<gtk4::Label>("see_diff_label") {
-            let compare_url = format!(
-                "https://github.com/{}/{}/compare/{}...{}",
-                crate::updater::REPO_OWNER,
-                crate::updater::REPO_NAME,
-                gtk4::glib::markup_escape_text(&pending.from_commit),
-                gtk4::glib::markup_escape_text(&pending.to_commit),
-            );
-            see_diff_label.set_markup(&format!(
-                "<a href=\"{compare_url}\"><span underline=\"none\">See diff</span></a>"
-            ));
-        }
-
         if let Some(commits_scrolled) = builder.object::<gtk4::ScrolledWindow>("commits_scrolled") {
             commits_scrolled.vadjustment().set_value(0.0);
         }

@@ -263,26 +263,53 @@
                             <property name="spacing">10</property>
                             <property name="homogeneous">true</property>
                             <child>
-                              <object class="GtkBox">
-                                <property name="orientation">vertical</property>
-                                <property name="spacing">6</property>
+                              <object class="GtkButton" id="commits_tile_btn">
+                                <property name="tooltip-text">View commit diff on GitHub</property>
                                 <style>
+                                  <class name="flat"/>
                                   <class name="whats-new-stat-tile"/>
+                                  <class name="whats-new-stat-tile-btn"/>
                                 </style>
                                 <child>
-                                  <object class="GtkLabel" id="commits_val">
-                                    <property name="label">0</property>
-                                    <style>
-                                      <class name="whats-new-stat-big"/>
-                                    </style>
-                                  </object>
-                                </child>
-                                <child>
-                                  <object class="GtkLabel" id="commits_caption">
-                                    <property name="label">Commits Shipped</property>
-                                    <style>
-                                      <class name="whats-new-stat-sub"/>
-                                    </style>
+                                  <object class="GtkBox">
+                                    <property name="orientation">vertical</property>
+                                    <property name="spacing">6</property>
+                                    <property name="valign">center</property>
+                                    <child>
+                                      <object class="GtkLabel" id="commits_val">
+                                        <property name="label">0</property>
+                                        <property name="halign">center</property>
+                                        <style>
+                                          <class name="whats-new-stat-big"/>
+                                        </style>
+                                      </object>
+                                    </child>
+                                    <child>
+                                      <object class="GtkBox">
+                                        <property name="orientation">horizontal</property>
+                                        <property name="spacing">4</property>
+                                        <property name="halign">center</property>
+                                        <property name="valign">center</property>
+                                        <child>
+                                          <object class="GtkLabel" id="commits_caption">
+                                            <property name="label">Commits Diff</property>
+                                            <style>
+                                              <class name="whats-new-stat-sub"/>
+                                            </style>
+                                          </object>
+                                        </child>
+                                        <child>
+                                          <object class="GtkImage">
+                                            <property name="icon-name">boxxy-external-link-symbolic</property>
+                                            <property name="pixel-size">11</property>
+                                            <property name="valign">center</property>
+                                            <style>
+                                              <class name="whats-new-stat-link-icon"/>
+                                            </style>
+                                          </object>
+                                        </child>
+                                      </object>
+                                    </child>
                                   </object>
                                 </child>
                               </object>
@@ -340,44 +367,120 @@
                               </object>
                             </child>
                             <child>
-                              <object class="GtkBox">
-                                <property name="orientation">vertical</property>
-                                <property name="spacing">6</property>
+                              <object class="GtkButton" id="contributors_tile_btn">
+                                <property name="tooltip-text">View contributors on GitHub</property>
                                 <style>
+                                  <class name="flat"/>
                                   <class name="whats-new-stat-tile"/>
+                                  <class name="whats-new-stat-tile-btn"/>
                                 </style>
                                 <child>
                                   <object class="GtkBox">
-                                    <property name="orientation">horizontal</property>
+                                    <property name="orientation">vertical</property>
                                     <property name="spacing">6</property>
-                                    <property name="halign">center</property>
                                     <property name="valign">center</property>
                                     <child>
-                                      <object class="GtkBox" id="contributors_avatars_box">
+                                      <object class="GtkBox">
                                         <property name="orientation">horizontal</property>
-                                        <property name="spacing">3</property>
+                                        <property name="spacing">6</property>
+                                        <property name="halign">center</property>
                                         <property name="valign">center</property>
+                                        <child>
+                                          <object class="GtkBox" id="contributors_avatars_box">
+                                            <property name="orientation">horizontal</property>
+                                            <property name="spacing">3</property>
+                                            <property name="valign">center</property>
+                                          </object>
+                                        </child>
+                                        <child>
+                                          <object class="GtkLabel" id="contributors_val">
+                                            <property name="label">1</property>
+                                            <style>
+                                              <class name="whats-new-stat-big"/>
+                                            </style>
+                                          </object>
+                                        </child>
                                       </object>
                                     </child>
                                     <child>
-                                      <object class="GtkLabel" id="contributors_val">
-                                        <property name="label">1</property>
+                                      <object class="GtkBox">
+                                        <property name="orientation">horizontal</property>
+                                        <property name="spacing">4</property>
+                                        <property name="halign">center</property>
+                                        <property name="valign">center</property>
+                                        <child>
+                                          <object class="GtkLabel" id="contributors_caption">
+                                            <property name="label">Contributors</property>
+                                            <style>
+                                              <class name="whats-new-stat-sub"/>
+                                            </style>
+                                          </object>
+                                        </child>
+                                        <child>
+                                          <object class="GtkImage">
+                                            <property name="icon-name">boxxy-external-link-symbolic</property>
+                                            <property name="pixel-size">11</property>
+                                            <property name="valign">center</property>
+                                            <style>
+                                              <class name="whats-new-stat-link-icon"/>
+                                            </style>
+                                          </object>
+                                        </child>
+                                      </object>
+                                    </child>
+                                  </object>
+                                </child>
+                              </object>
+                            </child>
+                            <child>
+                              <object class="GtkButton" id="sponsor_tile_btn">
+                                <property name="tooltip-text">Sponsor Boxxy development on GitHub</property>
+                                <style>
+                                  <class name="flat"/>
+                                  <class name="whats-new-stat-tile"/>
+                                  <class name="whats-new-stat-tile-btn"/>
+                                </style>
+                                <child>
+                                  <object class="GtkBox">
+                                    <property name="orientation">vertical</property>
+                                    <property name="spacing">6</property>
+                                    <property name="valign">center</property>
+                                    <child>
+                                      <object class="GtkLabel">
+                                        <property name="label">&lt;span foreground="#f472b6"&gt;♥&lt;/span&gt; Support</property>
+                                        <property name="use-markup">true</property>
+                                        <property name="halign">center</property>
                                         <style>
                                           <class name="whats-new-stat-big"/>
                                         </style>
                                       </object>
                                     </child>
-                                  </object>
-                                </child>
-                                <child>
-                                  <object class="GtkLabel" id="contributors_caption">
-                                    <property name="label">Contributors</property>
-                                    <property name="use-markup">true</property>
-                                    <property name="halign">center</property>
-                                    <style>
-                                      <class name="whats-new-stat-sub"/>
-                                      <class name="boxxy-link"/>
-                                    </style>
+                                    <child>
+                                      <object class="GtkBox">
+                                        <property name="orientation">horizontal</property>
+                                        <property name="spacing">4</property>
+                                        <property name="halign">center</property>
+                                        <property name="valign">center</property>
+                                        <child>
+                                          <object class="GtkLabel">
+                                            <property name="label">Sponsor Boxxy</property>
+                                            <style>
+                                              <class name="whats-new-stat-sub"/>
+                                            </style>
+                                          </object>
+                                        </child>
+                                        <child>
+                                          <object class="GtkImage">
+                                            <property name="icon-name">boxxy-external-link-symbolic</property>
+                                            <property name="pixel-size">11</property>
+                                            <property name="valign">center</property>
+                                            <style>
+                                              <class name="whats-new-stat-link-icon"/>
+                                            </style>
+                                          </object>
+                                        </child>
+                                      </object>
+                                    </child>
                                   </object>
                                 </child>
                               </object>
@@ -390,31 +493,14 @@
                             <property name="orientation">vertical</property>
                             <property name="spacing">8</property>
                             <child>
-                              <object class="GtkBox">
-                                <property name="orientation">horizontal</property>
-                                <property name="spacing">8</property>
-                                <child>
-                                  <object class="GtkLabel">
-                                    <property name="label">COMMITS IN THIS UPDATE</property>
-                                    <property name="halign">start</property>
-                                    <property name="valign">center</property>
-                                    <property name="hexpand">true</property>
-                                    <style>
-                                      <class name="whats-new-commits-header"/>
-                                    </style>
-                                  </object>
-                                </child>
-                                <child>
-                                  <object class="GtkLabel" id="see_diff_label">
-                                    <property name="use-markup">true</property>
-                                    <property name="halign">end</property>
-                                    <property name="valign">center</property>
-                                    <style>
-                                      <class name="whats-new-see-diff"/>
-                                      <class name="boxxy-link"/>
-                                    </style>
-                                  </object>
-                                </child>
+                              <object class="GtkLabel">
+                                <property name="label">COMMITS IN THIS UPDATE</property>
+                                <property name="halign">start</property>
+                                <property name="valign">center</property>
+                                <property name="hexpand">true</property>
+                                <style>
+                                  <class name="whats-new-commits-header"/>
+                                </style>
                               </object>
                             </child>
                             <child>

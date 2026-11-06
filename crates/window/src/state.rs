@@ -255,10 +255,7 @@ impl AppWindowInner {
         win.visible_dialog().is_some()
             || win
                 .focus()
-                .and_then(|w| {
-                    w.ancestor(gtk::Popover::static_type())
-                        .or_else(|| w.ancestor(adw::Dialog::static_type()))
-                })
+                .and_then(|w| w.ancestor(gtk::Popover::static_type()))
                 .is_some()
     }
 

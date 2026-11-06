@@ -218,6 +218,20 @@ impl AppWindow {
             }
         });
 
+        // Centralized focus restoration whenever any `AdwDialog` / `AdwAlertDialog`
+        // (What's New, Model Selection, Preferences, Background Shells, Close Confirm)
+        // finishes closing on this window.
+        let tx_dialog_focus = tx.clone();
+        window.connect_visible_dialog_notify(move |win| {
+            use libadwaita::prelude::AdwApplicationWindowExt;
+            if win.visible_dialog().is_none() {
+                let tx_idle = tx_dialog_focus.clone();
+                gtk::glib::idle_add_local_once(move || {
+                    let _ = tx_idle.send_blocking(AppInput::FocusActiveTerminal);
+                });
+            }
+        });
+
         let split_view = adw::OverlaySplitView::builder()
             .show_sidebar(app_state.sidebar_visible)
             .build();

@@ -742,9 +742,22 @@ button.boxxy-theme-card:active {
     box-shadow: 2px 2px 0px @boxxy_shadow;
 }
 
-.whats-new-stat-tile {
+.whats-new-stat-tile,
+button.whats-new-stat-tile-btn {
     background-color: @card_bg_color;
     color: @card_fg_color;
     border: 2px solid @boxxy_ink;
     box-shadow: 2px 3px 0px @boxxy_shadow;
+}
+
+button.whats-new-stat-tile-btn:hover {
+    background-color: @boxxy_surface_hover;
+    border-color: @boxxy_ink;
+    transform: translate(-1px, -1px);
+    box-shadow: 3px 4px 0px @boxxy_shadow;
+}
+
+button.whats-new-stat-tile-btn:active {
+    transform: translate(1px, 1px);
+    box-shadow: 1px 1px 0px @boxxy_shadow;
 }

@@ -1031,12 +1031,9 @@ impl TerminalOverlay {
         // message in the conversation log.
         self.scroll_to_latest();
 
-        // Defer focus grab a tick so GTK has realized the revealed widgets.
-        let msg_bar = self.msg_bar.clone();
+        let overlay = self.clone();
         gtk4::glib::timeout_add_local(std::time::Duration::from_millis(50), move || {
-            if msg_bar.entry.is_sensitive() {
-                msg_bar.entry.grab_focus();
-            }
+            overlay.grab_input_focus();
             gtk4::glib::ControlFlow::Break
         });
     }
@@ -1102,10 +1099,30 @@ impl TerminalOverlay {
     }
 
     pub fn grab_input_focus(&self) {
-        if *self.current_mode.borrow() == OverlayMode::Claw {
-            self.msg_bar.entry.grab_focus();
-        } else if self.template_box.is_visible() {
+        if *self.current_mode.borrow() == OverlayMode::Bookmark && self.template_box.is_visible() {
             self.template_entry.grab_focus();
+            return;
+        }
+        match &*self.state.borrow() {
+            OverlayState::Thinking => {
+                self.indicator.grab_cancel_focus();
+            }
+            OverlayState::Action(_) => {
+                if self.template_box.is_visible() {
+                    self.template_entry.grab_focus();
+                } else if self.accept_btn.is_visible() {
+                    self.accept_btn.grab_focus();
+                } else if self.approve_file_btn.is_visible() {
+                    self.approve_file_btn.grab_focus();
+                } else if self.msg_bar.entry.is_sensitive() {
+                    self.msg_bar.entry.grab_focus();
+                }
+            }
+            OverlayState::Idle | OverlayState::Pending => {
+                if *self.current_mode.borrow() == OverlayMode::Claw {
+                    self.msg_bar.entry.grab_focus();
+                }
+            }
         }
     }
 

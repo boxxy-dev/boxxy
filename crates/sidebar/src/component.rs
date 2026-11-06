@@ -50,6 +50,13 @@ impl AiSidebarInner {
                     });
                 },
             );
+            let entry_for_close = self.input_entry.clone();
+            use libadwaita::prelude::AdwDialogExt;
+            selector.dialog().connect_closed(move |_| {
+                if entry_for_close.is_mapped() {
+                    entry_for_close.grab_focus();
+                }
+            });
             self.model_selector = Some(selector);
         }
         self.model_selector.as_ref().unwrap()

@@ -1411,6 +1411,7 @@ impl TerminalPaneComponent {
         terminal.set_focusable(false);
         self.claw_popover.show_chat_only(&display_name);
         self.claw_popover.enter_waiting_state();
+        self.claw_popover.grab_input_focus();
 
         let tx = self.claw_sender.clone();
         glib::spawn_future_local(async move {
