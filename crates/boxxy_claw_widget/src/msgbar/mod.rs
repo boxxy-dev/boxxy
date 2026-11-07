@@ -175,7 +175,7 @@ impl MsgBarComponent {
 
         let status_popover = gtk::Popover::builder()
             .position(gtk::PositionType::Top)
-            .has_arrow(true)
+            .has_arrow(false)
             .autohide(true)
             .build();
         status_popover.set_parent(&claw_toggle);

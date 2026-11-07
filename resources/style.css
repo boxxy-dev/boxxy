@@ -1,3 +1,8 @@
+/* Layer 1 Semantic Fallback Tokens (overridden by Layer 3 when AppThemeMode::Boxxy is active) */
+@define-color boxxy_ink alpha(currentColor, 0.28);
+@define-color boxxy_shadow rgba(0, 0, 0, 0.35);
+@define-color boxxy_surface_hover mix(@card_bg_color, @accent_bg_color, 0.82);
+
 /* TODO: Investigate custom non-expanded tab width sizing in AdwTabBar / AdwTabBox */
 tab > box {
     /* Make the inner box fill the available space */
@@ -80,13 +85,14 @@ tabbar tab.tab-slate label { background-image: radial-gradient(circle, alpha(#6f
 /* Start and End elements in headerbar */
 
 .horizontal.start {
-	padding: 4px;
+	padding: 0px 4px;
 }
 .horizontal.end {
 	padding: 0px;
 }
-.end.horizontal > button {
-	margin: 6px;
+.content-header .start > button,
+.content-header .end > button {
+	margin: 6px 2px;
 }
 
 /* Adjust Sidebar HeaderBar to match */
@@ -765,7 +771,7 @@ boxxyterminalwidget {
 }
 
 .completion-list row:selected {
-  background: rgba(128, 128, 128, 0.15); /* Subtle highlight like Builder */
+  background: alpha(currentColor, 0.12);
 }
 
 
@@ -782,14 +788,14 @@ boxxyterminalwidget {
 }
 
 .msgbar-tag {
-  background: rgba(128, 128, 128, 0.15);
+  background: alpha(currentColor, 0.12);
   color: inherit;
   border-radius: 12px;
   padding: 0 4px 0 10px;
   margin: 0;
   font-size: 0.9em;
   font-weight: bold;
-  border: 1px solid rgba(128, 128, 128, 0.2);
+  border: 1px solid alpha(currentColor, 0.18);
 }
 
 .msgbar-tag label {
@@ -806,12 +812,12 @@ boxxyterminalwidget {
 
 .msgbar-tag button:hover {
   opacity: 1.0;
-  background: rgba(255, 255, 255, 0.1);
+  background: alpha(currentColor, 0.10);
 }
 
 .user-attachment-thumb {
   border-radius: 8px;
-  border: 1px solid rgba(128, 128, 128, 0.25);
+  border: 1px solid alpha(currentColor, 0.22);
 }
 
 
@@ -970,31 +976,9 @@ flowbox.viewer-gallery > flowboxchild {
 }
 
 /* --- Preferences -> Themes Page Base Styling (Default GTK Fallback) --- */
-flowboxchild.boxxy-theme-flowchild {
-    padding: 0;
-    margin: 0;
-    background: transparent;
-    border: none;
-    outline: none;
-}
-
-button.boxxy-theme-card {
-    background-color: @card_bg_color;
-    color: @card_fg_color;
-    border-radius: 12px;
-    padding: 10px 14px;
-    border: 1.5px solid alpha(currentColor, 0.16);
-}
-
-button.boxxy-theme-card.selected-theme-card {
-    background-color: @accent_bg_color;
-    color: @accent_fg_color;
-    border-color: alpha(currentColor, 0.45);
-}
-
-button.boxxy-theme-card.selected-theme-card label {
-    color: @accent_fg_color;
-    font-weight: 700;
+.theme-preview-dot {
+    border-radius: 9999px;
+    border: 1.5px solid @boxxy_ink;
 }
 
 .boxxy-theme-tag-pill {
@@ -1059,15 +1043,15 @@ frame.viewer-blockquote {
         135deg,
         alpha(@accent_bg_color, 0.22) 0%,
         alpha(currentColor, 0.05) 55%,
-        alpha(#4ade80, 0.14) 100%
+        alpha(@success_color, 0.14) 100%
     );
     border-bottom: 1px solid alpha(currentColor, 0.10);
 }
 
 .whats-new-badge {
-    background-color: alpha(#4ade80, 0.18);
-    color: #4ade80;
-    border: 1px solid alpha(#4ade80, 0.35);
+    background-color: alpha(@success_color, 0.18);
+    color: @success_color;
+    border: 1px solid alpha(@success_color, 0.35);
     border-radius: 9999px;
     padding: 3px 10px;
     font-size: 0.72em;

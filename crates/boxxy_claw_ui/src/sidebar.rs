@@ -1384,21 +1384,31 @@ fn populate_past_sessions(
                 .build();
 
             let popover = gtk::Popover::builder()
-                .has_arrow(true)
+                .has_arrow(false)
                 .autohide(true)
                 .position(gtk::PositionType::Bottom)
                 .build();
             popover.add_css_class("menu");
+            popover.add_css_class("past-session-popover");
             popover.set_parent(&options_btn);
 
             {
                 let btn_weak = options_btn.downgrade();
                 popover.connect_visible_notify(move |pop| {
                     if let Some(btn) = btn_weak.upgrade() {
+                        let row = btn
+                            .ancestor(gtk::ListBoxRow::static_type())
+                            .and_downcast::<gtk::ListBoxRow>();
                         if pop.is_visible() {
                             btn.add_css_class("menu-open");
+                            if let Some(r) = row {
+                                r.add_css_class("menu-open");
+                            }
                         } else {
                             btn.remove_css_class("menu-open");
+                            if let Some(r) = row {
+                                r.remove_css_class("menu-open");
+                            }
                         }
                     }
                 });

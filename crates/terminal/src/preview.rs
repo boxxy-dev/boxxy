@@ -26,7 +26,7 @@ impl ImagePreviewPopover {
         let settings = boxxy_preferences::Settings::load();
 
         let popover = gtk::Popover::builder()
-            .has_arrow(true)
+            .has_arrow(false)
             .autohide(false) // We control visibility manually based on hover
             .can_target(true) // Allow popover to receive events to prevent flickering when mouse enters it
             .build();

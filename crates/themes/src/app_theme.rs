@@ -186,7 +186,7 @@ pub fn builtin_app_themes() -> Vec<AppThemeDefinition> {
                 card_fg: "#f2f4f2".to_string(),
                 headerbar_bg: "#1d1d20".to_string(),
                 headerbar_fg: "#f2f4f2".to_string(),
-                popover_bg: "#26262a".to_string(),
+                popover_bg: "#2e2e32".to_string(),
                 popover_fg: "#f2f4f2".to_string(),
                 accent: "#7ec868".to_string(),
                 accent_fg: "#0d140a".to_string(),
@@ -499,12 +499,12 @@ pub fn parse_community_theme_toml(slug: &str, content: &str) -> Option<AppThemeD
         .popover_bg
         .as_deref()
         .and_then(sanitize_hex_color)
-        .unwrap_or_else(|| card_bg.clone());
+        .unwrap_or_else(|| sidebar_bg.clone());
     let popover_fg = c
         .popover_fg
         .as_deref()
         .and_then(sanitize_hex_color)
-        .unwrap_or_else(|| card_fg.clone());
+        .unwrap_or_else(|| sidebar_fg.clone());
 
     let accent_fg = c
         .accent_fg
@@ -858,6 +858,7 @@ accent = "#ff7eb6"
         assert_eq!(parsed.colors.window_bg, "#fff5f8");
         assert_eq!(parsed.colors.sidebar_bg, "#fff5f8");
         assert_eq!(parsed.colors.card_bg, "#fff5f8");
+        assert_eq!(parsed.colors.popover_bg, "#fff5f8");
         assert_eq!(parsed.colors.accent, "#ff7eb6");
         assert_eq!(parsed.colors.ink_border, "#111418");
     }

@@ -37,8 +37,8 @@ impl BlockRenderer for CodeRenderer {
                 if let Some(display) = gtk::gdk::Display::default() {
                     let css = "
                         .code-header {
-                            background-color: rgba(255, 255, 255, 0.04);
-                            border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+                            background-color: alpha(currentColor, 0.05);
+                            border-bottom: 1px solid alpha(currentColor, 0.10);
                             padding: 4px 8px;
                         }
                     ";

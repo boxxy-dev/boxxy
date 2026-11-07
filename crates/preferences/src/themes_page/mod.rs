@@ -44,6 +44,7 @@ fn make_static_color_dot(hex: &str, size: i32) -> gtk::Box {
     dot.set_size_request(size, size);
     dot.set_valign(gtk::Align::Center);
     dot.set_halign(gtk::Align::Center);
+    dot.add_css_class("theme-preview-dot");
     dot.add_css_class(&class);
 
     let safe_hex = sanitize_hex_color(hex).unwrap_or_else(|| "#808080".to_string());
@@ -51,10 +52,8 @@ fn make_static_color_dot(hex: &str, size: i32) -> gtk::Box {
     let css = format!(
         ".{class} {{ \
             background-color: {safe_hex}; \
-            border-radius: 9999px; \
             min-width: {size}px; \
             min-height: {size}px; \
-            border: 1.5px solid #111418; \
         }}"
     );
     provider.load_from_string(&css);

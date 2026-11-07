@@ -449,7 +449,7 @@ impl ClawIndicator {
                     || c.config.display_name.eq_ignore_ascii_case(agent_name)
             })
             .map(|c| c.config.color.clone())
-            .unwrap_or_else(|| "rgba(38, 162, 105, 0.85)".to_string()); // Fallback green
+            .unwrap_or_else(|| "@accent_color".to_string());
 
         let pc = &self.pill_class;
         self.pill_provider.load_from_string(&format!(
@@ -586,7 +586,7 @@ impl ClawIndicator {
             self.badge_label.set_text(name);
 
             self.badge_provider
-                .load_from_string(&format!(".{bc} {{ background-color: #6c7086; }}"));
+                .load_from_string(&format!(".{bc} {{ background-color: @accent_bg_color; }}"));
         }
 
         // First real identity — reveal the badge.

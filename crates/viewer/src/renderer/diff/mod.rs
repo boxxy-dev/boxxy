@@ -434,13 +434,13 @@ fn ensure_diff_css_loaded() {
                 }
                 .diff-card-header {
                     padding: 6px 10px;
-                    border-bottom: 1px solid rgba(128, 128, 128, 0.16);
+                    border-bottom: 1px solid alpha(currentColor, 0.14);
                 }
                 .diff-hunk-divider {
                     opacity: 0.45;
                 }
                 .diff-col-left {
-                    border-right: 1px solid rgba(128, 128, 128, 0.18);
+                    border-right: 1px solid alpha(currentColor, 0.16);
                 }
                 .diff-gutter-sep {
                     opacity: 0.35;
@@ -461,42 +461,42 @@ fn ensure_diff_css_loaded() {
                     letter-spacing: 0.4px;
                 }
                 .diff-badge-modified {
-                    background-color: rgba(56, 139, 253, 0.18);
-                    color: #58a6ff;
+                    background-color: alpha(@accent_bg_color, 0.18);
+                    color: @accent_color;
                 }
                 .diff-badge-created {
-                    background-color: rgba(46, 194, 126, 0.20);
-                    color: #3fb950;
+                    background-color: alpha(@success_bg_color, 0.20);
+                    color: @success_color;
                 }
                 .diff-badge-binary {
-                    background-color: rgba(128, 128, 128, 0.18);
+                    background-color: alpha(currentColor, 0.14);
                 }
                 .diff-stat-add {
-                    color: #2ec27e;
+                    color: @success_color;
                     font-weight: 700;
                 }
                 .diff-stat-del {
-                    color: #e01b24;
+                    color: @error_color;
                     font-weight: 700;
                 }
                 .diff-ratio-block {
                     border-radius: 2px;
                 }
                 .diff-ratio-add {
-                    background-color: #2ec27e;
+                    background-color: @success_bg_color;
                 }
                 .diff-ratio-del {
-                    background-color: #e01b24;
+                    background-color: @error_bg_color;
                 }
                 .diff-ratio-neutral {
-                    background-color: rgba(128, 128, 128, 0.28);
+                    background-color: alpha(currentColor, 0.22);
                 }
                 .diff-header-pill {
                     font-size: 0.78em;
                     font-weight: 600;
                     padding: 2px 8px;
                     border-radius: 6px;
-                    background-color: rgba(128, 128, 128, 0.14);
+                    background-color: alpha(currentColor, 0.10);
                 }
                 .diff-slide-drawer {
                     background-color: @card_bg_color;
@@ -505,7 +505,7 @@ fn ensure_diff_css_loaded() {
                 }
                 .diff-truncation-banner {
                     padding: 4px 12px;
-                    border-top: 1px dashed rgba(128, 128, 128, 0.22);
+                    border-top: 1px dashed alpha(currentColor, 0.18);
                 }
             ";
             let provider = gtk::CssProvider::new();

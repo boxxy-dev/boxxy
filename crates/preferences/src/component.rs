@@ -8,6 +8,7 @@ use std::rc::Rc;
 pub struct PreferencesComponent {
     dialog: adw::Dialog,
     stack: adw::ViewStack,
+    nav_appearance: gtk::ListBoxRow,
     nav_themes: gtk::ListBoxRow,
     nav_apis: gtk::ListBoxRow,
     nav_mcp: gtk::ListBoxRow,
@@ -261,9 +262,13 @@ impl PreferencesComponent {
             }
         });
 
+        // Ensure the first category ("Terminal") is selected by default on creation
+        category_list.select_row(Some(&nav_appearance));
+
         Self {
             dialog,
             stack,
+            nav_appearance,
             nav_themes,
             nav_apis,
             nav_mcp,
@@ -333,6 +338,14 @@ impl PreferencesComponent {
         }
 
         self.search_entry.set_text("");
+        if let Some(list_box) = self
+            .nav_appearance
+            .parent()
+            .and_then(|p| p.downcast::<gtk::ListBox>().ok())
+            && list_box.selected_row().is_none()
+        {
+            list_box.select_row(Some(&self.nav_appearance));
+        }
         let width = parent.width();
         let height = parent.height();
         let target_width = (width - 40).clamp(600, 950);
