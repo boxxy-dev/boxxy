@@ -278,7 +278,6 @@ headerbar button.maximize > image {
 headerbar button:not(.flat):not(.suggested-action):not(.destructive-action):not(.pill),
 windowcontrols > button,
 .sidebar-toolbar headerbar button.toggle,
-.content-header button.toggle,
 .claw-drawer button:not(.flat):not(.character-btn):not(.suggested-action):not(.destructive-action):not(.pill),
 preferencespage button:not(.flat):not(.circular):not(.color-dot-btn):not(.suggested-action):not(.destructive-action):not(.pill),
 dialog button:not(.flat):not(.circular):not(.color-dot-btn):not(.suggested-action):not(.destructive-action):not(.pill),
@@ -304,16 +303,33 @@ button.compact-btn,
     padding: 2px 8px;
 }
 
-/* Unified sizing and padding for all square icon buttons in the main window's
-   `.content-header` (Sidebar Toggle, Hamburger Menu, Minimize/Maximize/Close).
-   Scoped to `.content-header` so dialog close buttons keep native sizing. */
-.content-header button.image-button:not(.flat),
-.content-header windowcontrols > button {
+/* Unified sizing and padding for all square icon buttons in HeaderBars
+   (Main window `.content-header` Sidebar Toggle, Hamburger Menu, Minimize/Maximize/Close,
+   as well as Dialog / Preferences HeaderBar close buttons).
+   `min-height: 24px; padding: 4px 8px;` produces an exact 32x32px square in both
+   `.content-header` and dialog headerbars. */
+headerbar button.image-button:not(.flat):not(.circular):not(.color-dot-btn):not(.suggested-action):not(.destructive-action):not(.pill),
+dialog headerbar button.image-button:not(.flat):not(.circular):not(.color-dot-btn):not(.suggested-action):not(.destructive-action):not(.pill),
+headerbar windowcontrols > button:not(.flat):not(.circular):not(.color-dot-btn):not(.suggested-action):not(.destructive-action):not(.pill),
+dialog headerbar windowcontrols > button:not(.flat):not(.circular):not(.color-dot-btn):not(.suggested-action):not(.destructive-action):not(.pill) {
     min-width: 24px;
     min-height: 24px;
-    padding: 0px 6px;
+    padding: 4px 8px;
+}
+
+headerbar.content-header button.image-button:not(.flat),
+headerbar.content-header windowcontrols > button {
     margin-top: 6px;
     margin-bottom: 6px;
+}
+
+/* Compact padding for icon-only buttons inside Preferences groups
+   (e.g. `-` / `+` spin buttons, clear/action buttons) without affecting
+   the Preferences dialog headerbar close button. */
+preferencespage preferencesgroup button.image-button:not(.flat):not(.circular):not(.color-dot-btn):not(.suggested-action):not(.destructive-action):not(.pill) {
+    min-width: 24px;
+    min-height: 24px;
+    padding: 4px 6px;
 }
 
 headerbar button:not(.flat):not(.suggested-action):not(.destructive-action),

@@ -139,21 +139,12 @@ To maintain full compatibility with both **Boxxy Custom Themes** (`AppThemeMode:
    - `modelbutton` uses `border: 2px solid transparent` at rest and `border: 2px solid @boxxy_ink` on `:hover` (instead of an inward `outline-offset: -2px`) so its `34px` inner fill height matches `box.linked > button.model` and standard buttons pixel-for-pixel.
    - To make a button explicitly smaller/narrower, apply the `.compact-btn` modifier class (`min-height: 20px; padding: 2px 8px;`) rather than writing one-off per-widget padding rules.
    - For prominent dialog footer CTA buttons (`Done`, `Save`, `Apply`, `Read What's New`, `Cancel`, `Close`), apply the standard Libadwaita `.pill` class: in Default GTK mode it renders as a native Adwaita pill, while in `boxxy_skeleton.css` it renders as a boxy-rounded "advertising CTA" button (`min-height: 26px; min-width: 72px; padding: 6px 22px; border-radius: 10px; box-shadow: 3px 4px 0px @boxxy_shadow;` with `button.pill > label` horizontal margins zeroed so text-only and icon+text `.pill` buttons have identical horizontal padding).
-4. **Single Unified Rule for Main Window `.content-header` Icon Buttons:**
-   - The main window headerbar (`.content-header`) hosts two types of square icon buttons: standard `GtkButton.image-button` controls (Sidebar Toggle on the left, Hamburger Menu on the right) and `GtkWindowControls > button` (Minimize, Maximize, Close on the right).
+4. **Single Unified Rule for HeaderBar & Preferences Group Icon Buttons:**
+   - HeaderBars (both `.content-header` in the main window and `dialog headerbar` in Preferences / dialogs) host two types of square icon buttons: standard `GtkButton.image-button` controls (Sidebar Toggle on the left, Hamburger Menu on the right) and `GtkWindowControls > button` (Minimize, Maximize, Close on the right).
    - By default, Libadwaita adds extra internal padding and a circular badge to `windowcontrols > button > image`.
    - In `resources/themes/boxxy_skeleton.css`, we first strip that inner image padding (`padding: 0; margin: 0; background: transparent;` on `windowcontrols > button > image`), which normalizes both `GtkButton.image-button` and `windowcontrols > button` to the exact same `16×16` inner icon box.
-   - Both button types then share **one single CSS sizing rule** scoped strictly to `.content-header` (so dialog headerbars keep their native close button sizing):
-     ```css
-     .content-header button.image-button:not(.flat),
-     .content-header windowcontrols > button {
-         min-width: 24px;
-         min-height: 24px;
-         padding: 0px 6px;
-         margin-top: 6px;
-         margin-bottom: 6px;
-     }
-     ```
+   - Both button types across main and dialog headerbars share **one single CSS sizing rule** (`min-width: 24px; min-height: 24px; padding: 4px 8px;`) with higher specificity than the baseline `headerbar button` and `dialog button` rules (`(0, 6, 2)`), producing an identical `32×32px` square button in both `.content-header` and dialog headerbars.
+   - Icon-only buttons inside Preferences groups (`preferencespage preferencesgroup button.image-button`, such as `-` / `+` spin buttons) use `min-width: 24px; min-height: 24px; padding: 4px 6px;` so they render as compact tactile buttons without affecting headerbar close buttons.
 5. **Single Source of Truth for Scrollbars & Sidebar Resize Clearance:**
    - Libadwaita's built-in stylesheet sets `margin: -8px; border: 8px solid transparent; outline-offset: -8px;` on `scrollbar > range > trough > slider` (paired with `margin: 8px` on `trough`). If `border: none` and `trough { margin: 0 }` are applied without resetting `slider { margin: 0; outline-offset: 0; }`, `trough` measures `0px` wide while `slider` overflows `8px` past the right edge of `GtkScrolledWindow` — clipping the right half of the scrollbar against window/dialog/sidebar borders while rendering double-width (`16px`) inside padded containers like the What's New dialog.
    - `resources/themes/boxxy_skeleton.css` explicitly resets `margin: 0; padding: 0; border: none; outline: none; outline-offset: 0;` on `scrollbar > range > trough > slider` (including `range.fine-tune`) and sets `margin: 3px 5px;` on vertical troughs (`5px 3px` on horizontal troughs) with a `2px` corner radius and a `6px` rest / `12px` hover/drag thumb.
