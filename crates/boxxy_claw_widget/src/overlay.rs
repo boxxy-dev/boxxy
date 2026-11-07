@@ -1398,7 +1398,9 @@ fn apply_overlay_zoom_pct(pct: u32) {
             }
             p
         });
-        provider.load_from_string(&format!(".claw-drawer {{ font-size: {clamped}%; }}"));
+        provider.load_from_string(&format!(
+            ".claw-drawer .virtual-history, .claw-drawer #diagnosis_container, .claw-drawer #command_frame, .claw-drawer .boxxy-msgbar {{ font-size: {clamped}%; }}"
+        ));
     });
 }
 

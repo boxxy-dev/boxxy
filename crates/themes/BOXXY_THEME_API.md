@@ -103,35 +103,43 @@ Boxxy intentionally distinguishes between **floating tactile controls** (which c
 
 | Component / Selector | Has `@boxxy_shadow`? | Shadow Offset | Rationale |
 | :--- | :--- | :--- | :--- |
-| **Sidebar Switcher Buttons** (`viewswitcher > button`, `:checked`) | **Yes** | `2px 3px 0px @boxxy_shadow` | Top-level mode switchers (`AI Chat`, `Claw`, `Bookmarks`, `Colors`) sit in the spacious sidebar header with a `2px` inter-button gap and act as tactile physical toggles. |
+| **Sidebar & Dialog Switcher Buttons** (`viewswitcher > button`, `stackswitcher > button`, `:checked`) | **Yes** | `2px 3px 0px @boxxy_shadow` | Top-level mode switchers (`AI Chat`, `Claw`, `Bookmarks`, `Colors` in the sidebar and `AI Chat` / `Boxxy Claw` / `Memories and Dreams` in Models Selection) sit in spacious headers with inter-button gaps (`2px` / `6px`) and act as tactile physical toggles. |
+| **Hero / Advertising CTA Buttons** (`button.pill:not(.flat)`) | **Yes** | `3px 4px 0px @boxxy_shadow` (`4px 5px 0px` on `:hover`) | Primary dialog footer actions (`Done`, `Save`, `Apply`, `Read What's New`, `Cancel`/`Close`) use boxy-rounded `10px` corners, `32px` min-height, and `7px 22px` padding with a slight hover lift (`translate(-1px, -1px)`). |
 | **Sidebar & Command Palette Rows** (`.navigation-sidebar > row:selected`, `:hover`, `.menu-open`) | **Yes** | `2px 3px 0px @boxxy_shadow` | Lifts the active or hovered conversation, command palette item, bookmark, or preferences category above the flat list. Depresses to `1px 1px 0px` on `:active`. |
 | **Terminal Tabs** (`tabbar tab`, `tabbar tab:selected`) | **No** (`box-shadow: none`) | `none` | Tabs live inside `AdwTabBar`'s compact `28px` strip. Keeping `box-shadow: none` (while retaining the `2px solid @boxxy_ink` outline and `@accent_bg_color` active fill) prevents bottom shadow clipping inside `AdwTabBox` and keeps the tab bar flush. |
 | **Standalone Tactile Buttons** (`headerbar button:not(.flat)`, `windowcontrols > button`, `dialog button`, `preferencespage button`, `.claw-drawer button`) | **Yes** | `2px 3px 0px @boxxy_shadow` | Primary interactive buttons. Depress by `translate(1px, 1px)` with `1px 1px 0px @boxxy_shadow` when clicked. |
 | **Popover Linked Button Container** (`popover.menu box.linked`) | **Yes (Container only)** | `2px 3px 0px @boxxy_shadow` | The outer segmented bar (`Copy \| Copy Link`, split/close bar) casts a single unified shadow. |
 | **Individual Linked Buttons** (`popover.menu box.linked > button.model`) | **No** (`box-shadow: none`) | `none` | Inner segments are separated by `border-right: 2px solid @boxxy_ink` inside the shared container; per-segment shadows would overlap adjacent buttons. |
+| **Dropdown & Menu List Rows** (`dropdown > popover.menu > contents listview > row`, `popover.menu modelbutton`) | **On Hover (`2px 2px 0px @boxxy_shadow`)** | `2px 2px 0px @boxxy_shadow` | Hovered menu and dropdown items snap instantly (`transition: none`) into `@accent_bg_color` with a `2px solid @boxxy_ink` border and `2px 2px 0px` offset shadow. |
 | **Flat / Embedded Sub-Buttons** (`button.flat`, `tab button.image-button`, `.claw-status-pill button.circular`) | **No** (`box-shadow: none`) | `none` | Embedded close/action icons inside a parent pill or tab that already has its own border. |
 | **Search & Text Entries** (`searchentry`, `entry:not(.flat)`) | **Yes** | `2px 2px 0px @boxxy_shadow` (`2px 3px 0px` on focus) | Gives input fields a recessed/tactile card feel. |
-| **Preference Groups & Cards** (`listbox.boxed-list`, `.card`, `.bookmark-card`) | **Yes** | `3px 4px 0px @boxxy_shadow` | Large elevated content containers. |
+| **Preference Boxed Lists** (`.boxed-list`, `.boxed-list-separate`, `preferencesgroup listbox`) | **Yes** | `2px 3px 0px @boxxy_shadow` | Structured `8px`-radius preference groups with a `2px solid @boxxy_ink` frame, recessed `1.5px solid alpha(@boxxy_ink, 0.55)` row grooves, and accent-tinted `row.activatable:hover` states. |
+| **Standalone Content Cards** (`.card`, `.bookmark-card`) | **Yes** | `3px 4px 0px @boxxy_shadow` | Large elevated content containers (`border-radius: 8px`). |
+| **Scale Sliders & Squared Scrollbars** (`scale > trough > slider`, `scrollbar.overlay-indicator`) | **Yes (Slider) / Inset (Scrollbar)** | `1.5px 2px 0px @boxxy_shadow` | `scale` uses a `24×20px` `@card_fg_color` block grabber (`border-radius: 6px`). Overlay scrollbars use a squared `3px`-radius thumb with zero-allocation `inset 0 0 0 1.5px @boxxy_ink` borders to avoid negative-rect clipping during fade animations. |
 | **Popovers & Dialog Sheets** (`popover > contents`, `dialog sheet`) | **Yes** | `4px 5px 0px @boxxy_shadow` | Highest elevation layer floating above the window canvas. |
 
 ---
 
-## 5. Unified Button & HeaderBar Geometry Rules
+## 5. Unified Button, Hover & HeaderBar Geometry Rules
 
 To maintain full compatibility with both **Boxxy Custom Themes** (`AppThemeMode::Boxxy`) and **Legacy Adwaita Themes** (`AppThemeMode::DefaultGtk`) without scattering per-widget stylesheet hacks:
 
-1. **Keep `.ui` XML Files Purely Structural:**
-   - `.ui` files in `resources/ui/` declare widget hierarchy, container `spacing`, and semantic classes (`suggested-action`, `destructive-action`, `flat`, `circular`, `boxed-list`).
+1. **Zero-Lag Hover & State Transitions (`transition: none` Single Source of Truth):**
+   - GTK 4 interpolates `background-color` from an opaque accent color back to `transparent` (`rgba(0,0,0,0)`) through dark grey, which causes a noisy Adwaita-like grey trail when sweeping the cursor across rows, menus, or buttons.
+   - A single top-level rule in `resources/themes/boxxy_skeleton.css` sets `transition: none` across all interactive chrome (`tabbar tab`, `.navigation-sidebar > row`, `listbox > row`, `listview > row`, `modelbutton`, `button`, `switch`, `scale`, `scrollbar`), ensuring instant, crisp tactile state changes everywhere.
+2. **Keep `.ui` XML Files Purely Structural:**
+   - `.ui` files in `resources/ui/` declare widget hierarchy, container `spacing`, and semantic classes (`suggested-action`, `destructive-action`, `flat`, `circular`, `boxed-list`, `pill`).
    - Visual styling, padding overrides, and colors belong exclusively in CSS (`resources/style.css` for shared geometry; `resources/themes/boxxy_skeleton.css` for Boxxy tactile chrome).
-2. **Single Source of Truth for Standard Button & Menu Item Padding (`min-height: 24px; padding: 5px 10px;`):**
+3. **Single Source of Truth for Standard Button & Menu Item Padding (`min-height: 24px; padding: 5px 12px;`):**
    - Standard tactile buttons (`headerbar button`, `dialog button`, `preferencespage button`, `.claw-drawer button`), action buttons (`.suggested-action`, `.destructive-action`), popover menu text rows (`popover.menu modelbutton`, `popover.terminal-menu modelbutton`), and popover segmented buttons (`popover.menu box.linked > button.model`, `button.image-button.model`) all share **one single CSS rule** in `resources/themes/boxxy_skeleton.css`:
      ```css
      min-height: 24px;
-     padding: 5px 10px;
+     padding: 5px 12px;
      ```
    - `modelbutton` uses `border: 2px solid transparent` at rest and `border: 2px solid @boxxy_ink` on `:hover` (instead of an inward `outline-offset: -2px`) so its `34px` inner fill height matches `box.linked > button.model` and standard buttons pixel-for-pixel.
    - To make a button explicitly smaller/narrower, apply the `.compact-btn` modifier class (`min-height: 20px; padding: 2px 8px;`) rather than writing one-off per-widget padding rules.
-3. **Single Unified Rule for Main Window `.content-header` Icon Buttons:**
+   - For prominent dialog footer CTA buttons (`Done`, `Save`, `Apply`, `Read What's New`, `Cancel`, `Close`), apply the standard Libadwaita `.pill` class: in Default GTK mode it renders as a native Adwaita pill, while in `boxxy_skeleton.css` it renders as a boxy-rounded "advertising CTA" button (`min-height: 26px; min-width: 72px; padding: 6px 22px; border-radius: 10px; box-shadow: 3px 4px 0px @boxxy_shadow;` with `button.pill > label` horizontal margins zeroed so text-only and icon+text `.pill` buttons have identical horizontal padding).
+4. **Single Unified Rule for Main Window `.content-header` Icon Buttons:**
    - The main window headerbar (`.content-header`) hosts two types of square icon buttons: standard `GtkButton.image-button` controls (Sidebar Toggle on the left, Hamburger Menu on the right) and `GtkWindowControls > button` (Minimize, Maximize, Close on the right).
    - By default, Libadwaita adds extra internal padding and a circular badge to `windowcontrols > button > image`.
    - In `resources/themes/boxxy_skeleton.css`, we first strip that inner image padding (`padding: 0; margin: 0; background: transparent;` on `windowcontrols > button > image`), which normalizes both `GtkButton.image-button` and `windowcontrols > button` to the exact same `16×16` inner icon box.
