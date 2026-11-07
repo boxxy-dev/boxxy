@@ -11,8 +11,8 @@ use gtk4 as gtk;
 use gtk4::pango;
 use gtk4::prelude::*;
 use layout::{DiffLayoutMode, ResponsiveDiffContainer};
-use markup::{DiffPayloadKind, PreparedDiff, get_or_prepare_diff};
-use std::cell::RefCell;
+use markup::{DiffPayloadKind, PreparedDiff, get_or_prepare_diff, prepare_from_payload};
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::{Arc, Once};
 
@@ -38,7 +38,7 @@ impl BlockRenderer for DiffRenderer {
             return gtk::Box::new(gtk::Orientation::Vertical, 0).upcast();
         };
 
-        let is_dark = libadwaita::StyleManager::default().is_dark();
+        let is_dark = crate::cache::is_card_surface_dark();
         let Some(prepared) = get_or_prepare_diff(raw_payload, is_dark) else {
             let err_lbl = gtk::Label::new(Some("Failed to render file diff."));
             err_lbl.add_css_class("dim-label");
@@ -262,6 +262,38 @@ pub fn build_diff_card_with_mode(
             let created_box =
                 build_created_view(&prepared.hunks, prepared.stats.omitted_lines, is_dark);
             body_revealer.set_child(Some(&created_box));
+
+            let body_rev_weak = body_revealer.downgrade();
+            let payload_arc = Arc::clone(&prepared.payload);
+            let last_dark = Rc::new(Cell::new(is_dark));
+            let update_created: Rc<dyn Fn(bool)> = Rc::new(move |new_dark: bool| {
+                if last_dark.replace(new_dark) == new_dark {
+                    return;
+                }
+                if let Some(body_rev) = body_rev_weak.upgrade() {
+                    let re_prepared = prepare_from_payload((*payload_arc).clone(), new_dark);
+                    let next_box = build_created_view(
+                        &re_prepared.hunks,
+                        re_prepared.stats.omitted_lines,
+                        new_dark,
+                    );
+                    body_rev.set_child(Some(&next_box));
+                }
+            });
+            let update_for_card = update_created.clone();
+            container.connect_card_dark_changed(is_dark, move |new_dark| {
+                update_for_card(new_dark);
+            });
+            let sm = libadwaita::StyleManager::default();
+            let handler_id = sm.connect_dark_notify(move |_| {
+                update_created(crate::cache::is_card_surface_dark());
+            });
+            let handler_cell = RefCell::new(Some(handler_id));
+            container.connect_destroy(move |_| {
+                if let Some(id) = handler_cell.borrow_mut().take() {
+                    libadwaita::StyleManager::default().disconnect(id);
+                }
+            });
         }
         DiffPayloadKind::Modified => {
             let stack = gtk::Stack::builder()
@@ -280,6 +312,8 @@ pub fn build_diff_card_with_mode(
             // or the user clicks the Split <-> Drawer toggle button, cutting initial widget
             // and Pango layout construction in half for standard wide panes.
             let drawer_rev_slot: Rc<RefCell<Option<gtk::Revealer>>> = Rc::new(RefCell::new(None));
+            let active_dark = Rc::new(Cell::new(is_dark));
+            let active_prepared = Rc::new(RefCell::new(Arc::clone(prepared)));
 
             // Wire the "Original" drawer button in the header
             let rev_slot_for_btn = drawer_rev_slot.clone();
@@ -308,12 +342,13 @@ pub fn build_diff_card_with_mode(
 
             // React to automatic width breakpoint or manual override changes
             let stack_for_mode = stack.clone();
-            let peek_btn_for_mode = peek_drawer_btn;
-            let rev_slot_for_mode = drawer_rev_slot;
+            let peek_btn_for_mode = peek_drawer_btn.clone();
+            let rev_slot_for_mode = drawer_rev_slot.clone();
             let toggle_for_mode = mode_toggle_btn;
             let body_rev_for_mode = body_revealer.clone();
             let container_for_resize = container.downgrade();
-            let prepared_for_drawer = Arc::clone(prepared);
+            let prepared_for_drawer = active_prepared.clone();
+            let dark_for_drawer = active_dark.clone();
             container.connect_mode_changed(move |mode, _is_narrow| {
                 let is_expanded = body_rev_for_mode.reveals_child();
                 match mode {
@@ -330,8 +365,10 @@ pub fn build_diff_card_with_mode(
                     }
                     DiffLayoutMode::Drawer => {
                         if rev_slot_for_mode.borrow().is_none() {
-                            let (drawer_overlay, drawer_revealer, drawer_panel) =
-                                build_drawer_view(&prepared_for_drawer, is_dark);
+                            let (drawer_overlay, drawer_revealer, drawer_panel) = build_drawer_view(
+                                &prepared_for_drawer.borrow(),
+                                dark_for_drawer.get(),
+                            );
                             if let Some(c) = container_for_resize.upgrade() {
                                 c.set_drawer_panel(&drawer_panel);
                             }
@@ -355,6 +392,74 @@ pub fn build_diff_card_with_mode(
                 }
                 if let Some(c) = container_for_resize.upgrade() {
                     c.queue_resize();
+                }
+            });
+
+            // Re-render syntax highlighting and diff canvas colors when `@card_bg_color` darkness changes
+            let stack_weak = stack.downgrade();
+            let container_for_theme = container.downgrade();
+            let peek_btn_for_theme = peek_drawer_btn;
+            let rev_slot_for_theme = drawer_rev_slot;
+            let payload_arc = Arc::clone(&prepared.payload);
+            let update_modified: Rc<dyn Fn(bool)> = Rc::new(move |new_dark: bool| {
+                if active_dark.replace(new_dark) == new_dark {
+                    return;
+                }
+                let Some(stk) = stack_weak.upgrade() else {
+                    return;
+                };
+                let re_prepared = Arc::new(prepare_from_payload((*payload_arc).clone(), new_dark));
+                *active_prepared.borrow_mut() = Arc::clone(&re_prepared);
+
+                let current_child_name = stk
+                    .visible_child_name()
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| "split".to_string());
+
+                if let Some(old_split) = stk.child_by_name("split") {
+                    stk.remove(&old_split);
+                }
+                let next_split = build_split_view(&re_prepared, new_dark);
+                stk.add_named(&next_split, Some("split"));
+
+                if let Some(old_drawer) = stk.child_by_name("drawer") {
+                    stk.remove(&old_drawer);
+                }
+                *rev_slot_for_theme.borrow_mut() = None;
+
+                if current_child_name == "drawer" {
+                    let (drawer_overlay, drawer_revealer, drawer_panel) =
+                        build_drawer_view(&re_prepared, new_dark);
+                    if let Some(c) = container_for_theme.upgrade() {
+                        c.set_drawer_panel(&drawer_panel);
+                    }
+                    let peek_btn_for_notify = peek_btn_for_theme.clone();
+                    drawer_revealer.connect_reveal_child_notify(move |rev| {
+                        peek_btn_for_notify.set_label(if rev.reveals_child() {
+                            "Hide Original"
+                        } else {
+                            "Original"
+                        });
+                    });
+                    stk.add_named(&drawer_overlay, Some("drawer"));
+                    *rev_slot_for_theme.borrow_mut() = Some(drawer_revealer);
+                    stk.set_visible_child_name("drawer");
+                } else {
+                    stk.set_visible_child_name("split");
+                }
+            });
+            let update_for_card = update_modified.clone();
+            container.connect_card_dark_changed(is_dark, move |new_dark| {
+                update_for_card(new_dark);
+            });
+            let sm = libadwaita::StyleManager::default();
+            let handler_id = sm.connect_dark_notify(move |_| {
+                update_modified(crate::cache::is_card_surface_dark());
+            });
+            let handler_cell = RefCell::new(Some(handler_id));
+            container.connect_destroy(move |_| {
+                if let Some(id) = handler_cell.borrow_mut().take() {
+                    libadwaita::StyleManager::default().disconnect(id);
                 }
             });
 

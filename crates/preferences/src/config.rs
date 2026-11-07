@@ -477,12 +477,14 @@ You can add your own sensitive paths here. One path per line. Lines starting wit
             let _ = fs::create_dir_all(&skills_dir);
         }
 
-        // Seed bundled Boxxy Theme Creator skill (disabled by default until enabled in Preferences -> Skills)
+        // Seed and always overwrite bundled Boxxy Theme Creator skill on startup
+        // (disabled by default only on first creation so user toggle state is preserved)
         let theme_skill_dir = skills_dir.join(BOXXY_THEME_CREATOR_SLUG);
         let theme_skill_file = theme_skill_dir.join("SKILL.md");
-        if !theme_skill_file.exists() {
-            let _ = fs::create_dir_all(&theme_skill_dir);
-            let _ = fs::write(&theme_skill_file, BOXXY_THEME_CREATOR_SKILL);
+        let is_new_skill = !theme_skill_file.exists();
+        let _ = fs::create_dir_all(&theme_skill_dir);
+        let _ = fs::write(&theme_skill_file, BOXXY_THEME_CREATOR_SKILL);
+        if is_new_skill {
             let current = Self::load();
             if !current
                 .disabled_skills

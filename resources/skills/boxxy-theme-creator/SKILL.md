@@ -38,7 +38,7 @@ window_bg = "#f4f1de"      # Main window, dialogs & Claw drawer canvas
 window_fg = "#1d261f"      # Primary text color (high contrast against window_bg)
 sidebar_bg = "#eae4c9"     # Left navigation sidebar surface
 sidebar_fg = "#1d261f"     # Sidebar text color
-card_bg = "#fffdf6"        # Cards, buttons, inputs, boxed lists, and linked menu strips (must contrast with window_bg and popover_bg!)
+card_bg = "#fdf6e2"        # Cards, buttons, inputs, boxed lists, and linked menu strips (pick any theme-fitting color that contrasts with window_bg and popover_bg!)
 card_fg = "#1d261f"        # Text inside cards and buttons
 headerbar_bg = "#eae4c9"   # Top headerbar surface (defaults to sidebar_bg if omitted)
 headerbar_fg = "#1d261f"   # Headerbar text & icons
@@ -54,9 +54,8 @@ shadow = "#1d261f"         # Hard offset drop-shadow color (usually matches ink_
 1. **Strict Hex Colors Only:** Every value under `[colors]` MUST be a 6-digit hex string starting with `#` (`#RRGGBB`). Never use named colors (`red`), `rgb()`, or CSS syntax—invalid strings are rejected by Boxxy's theme parser.
 2. **Surface Hierarchy (`window_bg` vs `card_bg` vs `sidebar_bg`/`popover_bg`):**
    - Never make `window_bg`, `card_bg`, and `sidebar_bg` all identical.
-   - `popover_bg` should match `sidebar_bg` (and defaults to `sidebar_bg` if omitted) so context menus match the sidebar surface while inner segmented buttons (`card_bg`) stand out cleanly inside menus.
-   - In **light** themes (`mode = "light"`), make `window_bg` a tinted paper/pastel tone (e.g., `#f4f1de` cream, `#eef6f0` sage, `#fff0f5` blossom), `sidebar_bg` / `popover_bg` a warm companion tone (`#eae4c9`), and `card_bg` a brighter cream/white (`#fffdf6` or `#ffffff`) so cards and buttons pop off the page.
-   - In **dark** themes (`mode = "dark"`), make `window_bg` a deep base (e.g., `#1d1d20`), `sidebar_bg` / `popover_bg` elevated (`#2e2e32`), and `card_bg` a distinct intermediate surface (`#26262a`).
+   - **CRITICAL:** `popover_bg` MUST match `sidebar_bg` (or be omitted so it defaults to `sidebar_bg`) so context menus and popovers share the sidebar surface while inner segmented buttons (`card_bg`) stand out cleanly inside menus. Never set `popover_bg` to the same color as `card_bg`.
+   - Choose `window_bg`, `sidebar_bg`, and `card_bg` creatively to fit the requested theme's aesthetic (whether pastel, vibrant retro/arcade, parchment, or dark neon) as long as `card_bg` is visually distinct from `window_bg` and `sidebar_bg`/`popover_bg`, and `card_fg` has strong readability against `card_bg`.
 3. **High-Contrast `accent_fg`:**
    - Both selected controls (`100%` `accent`) and hovered controls (`82%` `accent` mix) render their labels and icons using `accent_fg`. Always pick an `accent_fg` (`#111418` dark ink or `#ffffff` crisp white) that has strong readability against `accent`.
 4. **Crisp Ink Borders (`ink_border` & `shadow`):**

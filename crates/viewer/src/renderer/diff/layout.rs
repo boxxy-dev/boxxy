@@ -21,9 +21,11 @@ mod imp {
     #[derive(Default)]
     pub struct ResponsiveDiffContainer {
         pub(super) last_mode: Cell<Option<DiffLayoutMode>>,
+        pub(super) last_card_dark: Cell<Option<bool>>,
         pub(super) user_override: Cell<Option<DiffLayoutMode>>,
         pub(super) pending_switch: Cell<bool>,
         pub(super) on_mode_change: RefCell<Option<Rc<dyn Fn(DiffLayoutMode, bool)>>>,
+        pub(super) on_card_dark_change: RefCell<Option<Rc<dyn Fn(bool)>>>,
         pub(super) drawer_panel: RefCell<Option<gtk::Widget>>,
     }
 
@@ -122,6 +124,18 @@ mod imp {
                 });
             }
         }
+
+        fn snapshot(&self, snapshot: &gtk::Snapshot) {
+            let current_dark = crate::cache::is_card_surface_dark();
+            if let Some(prev) = self.last_card_dark.replace(Some(current_dark))
+                && prev != current_dark
+                && let Some(cb) = self.on_card_dark_change.borrow().as_ref()
+            {
+                let cb = cb.clone();
+                glib::idle_add_local_once(move || cb(current_dark));
+            }
+            self.parent_snapshot(snapshot);
+        }
     }
 }
 
@@ -152,6 +166,11 @@ impl ResponsiveDiffContainer {
 
     pub fn connect_mode_changed(&self, cb: impl Fn(DiffLayoutMode, bool) + 'static) {
         *self.imp().on_mode_change.borrow_mut() = Some(Rc::new(cb));
+    }
+
+    pub fn connect_card_dark_changed(&self, initial_dark: bool, cb: impl Fn(bool) + 'static) {
+        self.imp().last_card_dark.set(Some(initial_dark));
+        *self.imp().on_card_dark_change.borrow_mut() = Some(Rc::new(cb));
     }
 
     pub fn current_mode(&self) -> DiffLayoutMode {

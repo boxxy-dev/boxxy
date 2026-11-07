@@ -91,9 +91,9 @@ In `Boxxy Dark` (and by default in community themes), `popover_bg` (`#2e2e32`) m
 | `@boxxy_surface_hover` | `mix(@card_bg_color, @accent_bg_color, 0.82)` | Vibrant hover background (82% accent + 18% card, paired with `@accent_fg_color` ink text) for unselected tabs (`tabbar tab:hover:not(:selected)`), unselected sidebar rows (`.navigation-sidebar > row:hover:not(:selected)`), tactile buttons (`:hover`), `.character-btn:hover`, and `.whats-new-stat-tile-btn:hover`. |
 | `@destructive_bg_color` / `@error_bg_color` | Dark: `#c01c28` · Light: `#e01b24` | `button.destructive-action`, `.hold-to-confirm-progress`, `progressbar.terminal-progress-bar.error`, `.editable-avatar-remove-badge:hover`, `.diff-ratio-del`. |
 | `@destructive_fg_color` / `@error_fg_color` | `#ffffff` | Foreground text/icons inside `button.destructive-action` and `.editable-avatar-remove-badge:hover`. |
-| `@destructive_color` / `@error_color` | Dark: `#ff7b63` · Light: `#c01c28` | Inline error text and `.diff-stat-del` (`-R` line deletion counter). |
-| `@warning_bg_color` / `@warning_color` | Bg: `#e5a50a` · Text: `#f8e45c` (Dark) / `#ae7b03` (Light) | `progressbar.terminal-progress-bar.warning`, `.model-status-warning`, `.boxxy-msgbar .msgbar-status-icon`, `.avatar-sleep-badge`. |
-| `@success_bg_color` / `@success_color` | Bg: `#26a269` (Dark) / `#2ec27e` (Light) · Text: `#8ff0a4` (Dark) / `#1b8553` (Light) | `progressbar.terminal-progress-bar`, `.model-status-success`, `.whats-new-badge`, `.whats-new-hero`, `.diff-badge-created`, `.diff-stat-add` (`+A` line addition counter), `.diff-ratio-add`. |
+| `@destructive_color` / `@error_color` | `card_bg` Dark: `#ff7b63` · Light: `#c01c28` | Inline error text and `.diff-stat-del` (`-R` line deletion counter). Selected from `is_hex_dark(card_bg)` so counters on hybrid-theme cards stay readable. |
+| `@warning_bg_color` / `@warning_color` | Bg: `#e5a50a` · Text (`card_bg` Dark / Light): `#f8e45c` / `#ae7b03` | `progressbar.terminal-progress-bar.warning`, `.model-status-warning`, `.boxxy-msgbar .msgbar-status-icon`, `.avatar-sleep-badge`. |
+| `@success_bg_color` / `@success_color` | Bg: `#26a269` (Dark) / `#2ec27e` (Light) · Text (`card_bg` Dark / Light): `#8ff0a4` / `#1b8553` | `progressbar.terminal-progress-bar`, `.model-status-success`, `.whats-new-badge`, `.whats-new-hero`, `.diff-badge-created`, `.diff-stat-add` (`+A` line addition counter), `.diff-ratio-add`. |
 
 ---
 

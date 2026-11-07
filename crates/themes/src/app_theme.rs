@@ -43,7 +43,10 @@ impl AppThemeColors {
     /// Generates the `@define-color` CSS block for Layer 3 following Libadwaita conventions.
     #[must_use]
     pub fn to_gtk_css(&self, is_dark: bool) -> String {
-        // Libadwaita official semantic palette colors for dark vs light mode
+        // Semantic status text/badges (`.diff-badge-created`, `.diff-stat-add`, `.diff-stat-del`,
+        // `.model-status-warning`, etc.) render on top of `@card_bg_color`, so their foreground
+        // contrast must follow the luminance of `card_bg` rather than `window_bg`.
+        let is_card_dark = is_hex_dark(&self.card_bg);
         let (
             destructive_bg,
             destructive_fg,
@@ -54,7 +57,7 @@ impl AppThemeColors {
             success_bg,
             success_fg,
             success_color,
-        ) = if is_dark {
+        ) = if is_card_dark {
             (
                 "#c01c28",
                 "#ffffff",
@@ -67,6 +70,7 @@ impl AppThemeColors {
                 "#8ff0a4",
             )
         } else {
+            let _ = is_dark;
             (
                 "#e01b24",
                 "#ffffff",
@@ -316,7 +320,7 @@ card_bg = "#ffffff"
 card_fg = "#1e1b24"
 headerbar_bg = "#fce8ef"
 headerbar_fg = "#1e1b24"
-popover_bg = "#ffffff"
+popover_bg = "#fce8ef"
 popover_fg = "#1e1b24"
 accent = "#ff7eb6"
 accent_fg = "#1e1b24"
@@ -341,7 +345,7 @@ card_bg = "#fffdf7"
 card_fg = "#141413"
 headerbar_bg = "#ede6d3"
 headerbar_fg = "#141413"
-popover_bg = "#fffdf7"
+popover_bg = "#ede6d3"
 popover_fg = "#141413"
 accent = "#e63946"
 accent_fg = "#ffffff"
@@ -705,11 +709,14 @@ pub fn apply_app_theme(
         if style_manager.color_scheme() != fallback_scheme {
             style_manager.set_color_scheme(fallback_scheme);
         }
+        set_display_card_dark(style_manager.is_dark());
         LAST_APPLIED_STATE.with(|cell| *cell.borrow_mut() = Some(target_state));
         return;
     }
 
     let resolved = resolve_app_theme(theme_id);
+    let is_card_dark = is_hex_dark(&resolved.colors.card_bg);
+    set_display_card_dark(is_card_dark);
     let target_scheme = if resolved.is_dark {
         adw::ColorScheme::ForceDark
     } else {
@@ -762,6 +769,15 @@ pub fn apply_app_theme(
     }
 
     LAST_APPLIED_STATE.with(|cell| *cell.borrow_mut() = Some(target_state));
+}
+
+fn set_display_card_dark(is_card_dark: bool) {
+    if let Some(display) = gtk::gdk::Display::default() {
+        use glib::prelude::ObjectExt;
+        unsafe {
+            display.set_data("boxxy-card-is-dark", is_card_dark);
+        }
+    }
 }
 
 fn ensure_skeleton_provider() {

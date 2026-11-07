@@ -1,4 +1,4 @@
-use crate::cache::{SimpleLru, syntax_set, theme_set};
+use crate::cache::{SimpleLru, format_syntect_span, resolve_syntax, syntax_set, theme_set};
 use crate::parser::markdown::escape_pango;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
@@ -109,6 +109,7 @@ pub struct PreparedHunk {
 /// Cached, ready-to-render representation of a `DiffPayload`.
 #[derive(Debug, Clone)]
 pub struct PreparedDiff {
+    pub payload: Arc<DiffPayload>,
     pub path: String,
     pub dir_prefix: String,
     pub filename: String,
@@ -147,19 +148,14 @@ pub fn get_or_prepare_diff(raw_json: &str, is_dark: bool) -> Option<Arc<Prepared
 
 #[must_use]
 pub fn prepare_from_payload(payload: DiffPayload, is_dark: bool) -> PreparedDiff {
-    let (dir_prefix, filename) = split_path_display(&payload.path);
-    let unified_patch = build_unified_patch(&payload);
-    let total_rows = payload.hunks.iter().map(|h| h.rows.len()).sum();
+    let payload_arc = Arc::new(payload);
+    let (dir_prefix, filename) = split_path_display(&payload_arc.path);
+    let unified_patch = build_unified_patch(&payload_arc);
+    let total_rows = payload_arc.hunks.iter().map(|h| h.rows.len()).sum();
 
     let ss = syntax_set();
     let ts = theme_set();
-    let syntax = if !payload.language.is_empty() && payload.language != "text" {
-        ss.find_syntax_by_token(&payload.language)
-            .or_else(|| ss.find_syntax_by_extension(&payload.language))
-    } else {
-        None
-    }
-    .unwrap_or_else(|| ss.find_syntax_plain_text());
+    let syntax = resolve_syntax(ss, &payload_arc.language, None);
 
     let theme = if is_dark {
         &ts.themes["base16-ocean.dark"]
@@ -167,21 +163,22 @@ pub fn prepare_from_payload(payload: DiffPayload, is_dark: bool) -> PreparedDiff
         &ts.themes["base16-ocean.light"]
     };
 
-    let mut hunks = Vec::with_capacity(payload.hunks.len());
-    for hunk in &payload.hunks {
+    let mut hunks = Vec::with_capacity(payload_arc.hunks.len());
+    for hunk in &payload_arc.hunks {
         hunks.push(prepare_hunk(hunk, syntax, theme, ss, is_dark));
     }
 
     PreparedDiff {
-        path: payload.path,
+        path: payload_arc.path.clone(),
         dir_prefix,
         filename,
-        language: payload.language,
-        kind: payload.kind,
-        stats: payload.stats,
+        language: payload_arc.language.clone(),
+        kind: payload_arc.kind,
+        stats: payload_arc.stats.clone(),
         total_rows,
         unified_patch,
         hunks,
+        payload: payload_arc,
     }
 }
 
@@ -205,6 +202,7 @@ fn prepare_hunk(
     let mut unified_code = String::with_capacity(n * 64);
     let mut unified_tones = Vec::with_capacity(n);
 
+    let default_fg = theme.settings.foreground;
     let mut hl_left = HighlightLines::new(syntax, theme);
     let mut hl_right = HighlightLines::new(syntax, theme);
 
@@ -218,13 +216,14 @@ fn prepare_hunk(
 
         // Left cell (Original)
         append_gutter_line(&mut left_gutter, &row.left, is_dark);
-        let left_line_markup = render_cell_code(&row.left, &mut hl_left, ss, is_dark);
+        let left_line_markup = render_cell_code(&row.left, &mut hl_left, ss, default_fg, is_dark);
         left_code.push_str(&left_line_markup);
         left_tones.push(row.left.kind);
 
         // Right cell (Changes)
         append_gutter_line(&mut right_gutter, &row.right, is_dark);
-        let right_line_markup = render_cell_code(&row.right, &mut hl_right, ss, is_dark);
+        let right_line_markup =
+            render_cell_code(&row.right, &mut hl_right, ss, default_fg, is_dark);
         right_code.push_str(&right_line_markup);
         right_tones.push(row.right.kind);
 
@@ -292,41 +291,37 @@ fn prepare_hunk(
 }
 
 fn append_gutter_line(buf: &mut String, cell: &DiffPayloadCell, is_dark: bool) {
-    let (num_fg, sym_fg, sym) = match cell.kind {
-        DiffRowTone::Context => (
-            if is_dark { "#7a828e" } else { "#6e7781" },
-            if is_dark { "#7a828e" } else { "#6e7781" },
-            ' ',
-        ),
-        DiffRowTone::Delete => (
-            if is_dark { "#ff8080" } else { "#cf222e" },
-            if is_dark { "#ff6b6b" } else { "#cf222e" },
-            '-',
-        ),
-        DiffRowTone::Insert => (
-            if is_dark { "#6ee7b7" } else { "#1a7f37" },
-            if is_dark { "#4ade80" } else { "#1a7f37" },
-            '+',
-        ),
-        DiffRowTone::Empty => (
-            if is_dark { "#484f58" } else { "#afb8c1" },
-            if is_dark { "#484f58" } else { "#afb8c1" },
-            '·',
-        ),
-    };
-
     let num_str = cell
         .line_no
         .map_or_else(|| "    ".to_string(), |n| format!("{n:>4}"));
-    buf.push_str(&format!(
-        "<span foreground=\"{num_fg}\">{num_str}</span> <span foreground=\"{sym_fg}\" weight=\"bold\">{sym}</span>"
-    ));
+
+    match cell.kind {
+        DiffRowTone::Context => {
+            buf.push_str(&format!("<span alpha=\"65%\">{num_str}  </span>"));
+        }
+        DiffRowTone::Empty => {
+            buf.push_str(&format!("<span alpha=\"45%\">{num_str} <b>·</b></span>"));
+        }
+        DiffRowTone::Delete => {
+            let fg = if is_dark { "#fca5a5" } else { "#b91c1c" };
+            buf.push_str(&format!(
+                "<span foreground=\"{fg}\">{num_str} <b>-</b></span>"
+            ));
+        }
+        DiffRowTone::Insert => {
+            let fg = if is_dark { "#86efac" } else { "#116329" };
+            buf.push_str(&format!(
+                "<span foreground=\"{fg}\">{num_str} <b>+</b></span>"
+            ));
+        }
+    }
 }
 
 fn render_cell_code(
     cell: &DiffPayloadCell,
     hl: &mut HighlightLines<'_>,
     ss: &SyntaxSet,
+    default_fg: Option<syntect::highlighting::Color>,
     is_dark: bool,
 ) -> String {
     if cell.kind == DiffRowTone::Empty || cell.spans.is_empty() {
@@ -339,23 +334,23 @@ fn render_cell_code(
         let (emp_bg, emp_fg, base_fg) = match cell.kind {
             DiffRowTone::Delete => {
                 if is_dark {
-                    ("#7d242b", "#ffdcd7", "#f0d6d6")
+                    ("#7d242b", "#ffdcd7", Some("#ffe4e6"))
                 } else {
-                    ("#ff8182", "#4c0004", "#5c161a")
+                    ("#ff8182", "#4c0004", Some("#4c0519"))
                 }
             }
             DiffRowTone::Insert => {
                 if is_dark {
-                    ("#1d633f", "#d2f8e2", "#d6f0df")
+                    ("#1d633f", "#d2f8e2", Some("#dcfce7"))
                 } else {
-                    ("#7ee787", "#043915", "#114620")
+                    ("#7ee787", "#043915", Some("#052e16"))
                 }
             }
             _ => {
                 if is_dark {
-                    ("#30363d", "#e6edf3", "#c9d1d9")
+                    ("#30363d", "#e6edf3", None)
                 } else {
-                    ("#d0d7de", "#1f2328", "#24292f")
+                    ("#d0d7de", "#1f2328", None)
                 }
             }
         };
@@ -367,10 +362,10 @@ fn render_cell_code(
                 out.push_str(&format!(
                     "<span background=\"{emp_bg}\" foreground=\"{emp_fg}\" weight=\"bold\">{escaped}</span>"
                 ));
+            } else if let Some(fg) = base_fg {
+                out.push_str(&format!("<span foreground=\"{fg}\">{escaped}</span>"));
             } else {
-                out.push_str(&format!(
-                    "<span foreground=\"{base_fg}\">{escaped}</span>"
-                ));
+                out.push_str(&escaped);
             }
         }
         if out.is_empty() {
@@ -391,14 +386,7 @@ fn render_cell_code(
             if token.is_empty() {
                 continue;
             }
-            let c = style.foreground;
-            out.push_str(&format!(
-                "<span foreground=\"#{:02x}{:02x}{:02x}\">{}</span>",
-                c.r,
-                c.g,
-                c.b,
-                escape_pango(token)
-            ));
+            out.push_str(&format_syntect_span(style, default_fg, token, is_dark));
         }
         if out.is_empty() {
             out.push(' ');
@@ -510,5 +498,53 @@ mod tests {
         assert_eq!(p1.hunks.len(), 1);
         assert!(p1.hunks[0].left_code_markup.contains("let a = 1;"));
         assert!(p1.hunks[0].right_code_markup.contains("let a = 2;"));
+    }
+
+    #[test]
+    fn toml_diff_inherits_card_fg_for_default_tokens_and_highlights_strings() {
+        let json = r##"{
+            "path": "themes/synthetic.toml",
+            "language": "toml",
+            "kind": "Created",
+            "stats": {
+                "added_lines": 2,
+                "removed_lines": 0,
+                "hunk_count": 1,
+                "old_total_lines": 0,
+                "new_total_lines": 2,
+                "truncated": false,
+                "omitted_lines": 0
+            },
+            "hunks": [{
+                "header": "@@ -0,0 +1,2 @@",
+                "old_start": 0,
+                "old_count": 0,
+                "new_start": 1,
+                "new_count": 2,
+                "rows": [
+                    {
+                        "left": { "line_no": null, "kind": "Empty", "spans": [] },
+                        "right": { "line_no": 1, "kind": "Insert", "spans": [{"emphasized": false, "text": "[meta]"}] }
+                    },
+                    {
+                        "left": { "line_no": null, "kind": "Empty", "spans": [] },
+                        "right": { "line_no": 2, "kind": "Insert", "spans": [{"emphasized": false, "text": "name = \"Synthetic Theme\""}] }
+                    }
+                ]
+            }]
+        }"##;
+
+        let dark = get_or_prepare_diff(json, true).expect("should parse dark");
+        let light = get_or_prepare_diff(json, false).expect("should parse light");
+
+        // Default tokens (`[meta]`) should not be wrapped in low-contrast base16 default grey (#4f5b66 / #c0c5ce)
+        assert!(!dark.hunks[0].right_code_markup.contains("#c0c5ce"));
+        assert!(!light.hunks[0].right_code_markup.contains("#4f5b66"));
+        // Quoted strings in TOML should receive syntax color spans
+        assert!(dark.hunks[0].right_code_markup.contains("<span foreground=\"#"));
+        assert_ne!(
+            dark.hunks[0].right_code_markup,
+            light.hunks[0].right_code_markup
+        );
     }
 }

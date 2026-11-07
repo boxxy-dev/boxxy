@@ -1,15 +1,44 @@
-use crate::cache::{syntax_set, theme_set};
+use crate::cache::{format_syntect_span, resolve_syntax, syntax_set, theme_set};
 use crate::parser::blocks::ContentBlock;
 use crate::parser::markdown::escape_pango;
 use crate::renderer::BlockRenderer;
 use crate::widget::StructuredViewer;
 use gtk4 as gtk;
 use gtk4::prelude::*;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use syntect::easy::HighlightLines;
 use syntect::util::LinesWithEndings;
 
 pub struct CodeRenderer;
+
+fn highlight_code_to_pango(lang: &str, code: &str, is_dark: bool) -> String {
+    let ss = syntax_set();
+    let ts = theme_set();
+    let syntax = resolve_syntax(ss, lang, Some(code));
+    let theme = if is_dark {
+        &ts.themes["base16-ocean.dark"]
+    } else {
+        &ts.themes["base16-ocean.light"]
+    };
+    let default_fg = theme.settings.foreground;
+
+    let mut h = HighlightLines::new(syntax, theme);
+    let mut pango_markup = String::with_capacity(code.len() * 2);
+    pango_markup.push_str("<tt>");
+
+    for line in LinesWithEndings::from(code) {
+        if let Ok(ranges) = h.highlight_line(line, ss) {
+            for (style, text) in ranges {
+                pango_markup.push_str(&format_syntect_span(style, default_fg, text, is_dark));
+            }
+        } else {
+            pango_markup.push_str(&escape_pango(line));
+        }
+    }
+    pango_markup.push_str("</tt>");
+    pango_markup
+}
 
 impl BlockRenderer for CodeRenderer {
     fn can_render(&self, block: &ContentBlock) -> bool {
@@ -108,7 +137,7 @@ impl BlockRenderer for CodeRenderer {
             label.add_css_class("monospace");
 
             // Fast-path: check the highlight LRU cache synchronously (0ms on GtkListView scroll-back)
-            let is_dark = libadwaita::StyleManager::default().is_dark();
+            let is_dark = crate::cache::is_card_surface_dark();
             if let Some(cached_markup) = crate::cache::get_cached_highlight(lang, code, is_dark) {
                 label.set_markup(&cached_markup);
             } else {
@@ -135,48 +164,8 @@ impl BlockRenderer for CodeRenderer {
                     let (tx, rx) = async_channel::bounded::<String>(1);
 
                     boxxy_sys_utils::runtime().spawn_blocking(move || {
-                        let ss = syntax_set();
-                        let ts = theme_set();
-
-                        let syntax =
-                            if !lang_for_highlight.is_empty() && lang_for_highlight != "text" {
-                                ss.find_syntax_by_token(&lang_for_highlight)
-                                    .or_else(|| ss.find_syntax_by_extension(&lang_for_highlight))
-                            } else {
-                                None
-                            };
-
-                        let syntax = syntax
-                            .or_else(|| ss.find_syntax_by_first_line(&code_for_highlight))
-                            .unwrap_or_else(|| ss.find_syntax_plain_text());
-
-                        let theme = if is_dark {
-                            &ts.themes["base16-ocean.dark"]
-                        } else {
-                            &ts.themes["base16-ocean.light"]
-                        };
-
-                        let mut h = HighlightLines::new(syntax, theme);
-                        let mut pango_markup = String::with_capacity(code_for_highlight.len() * 2);
-                        pango_markup.push_str("<tt>");
-
-                        for line in LinesWithEndings::from(&code_for_highlight) {
-                            if let Ok(ranges) = h.highlight_line(line, ss) {
-                                for (style, text) in ranges {
-                                    let color = style.foreground;
-                                    pango_markup.push_str(&format!(
-                                        "<span foreground=\"#{:02x}{:02x}{:02x}\">{}</span>",
-                                        color.r,
-                                        color.g,
-                                        color.b,
-                                        escape_pango(text)
-                                    ));
-                                }
-                            } else {
-                                pango_markup.push_str(&escape_pango(line));
-                            }
-                        }
-                        pango_markup.push_str("</tt>");
+                        let pango_markup =
+                            highlight_code_to_pango(&lang_for_highlight, &code_for_highlight, is_dark);
                         crate::cache::insert_cached_highlight(
                             &lang_for_highlight,
                             &code_for_highlight,
@@ -196,6 +185,44 @@ impl BlockRenderer for CodeRenderer {
                         }
                     });
                 }
+            }
+
+            if !code.is_empty() {
+                let label_weak = label.downgrade();
+                let lang_for_theme = lang.clone();
+                let code_for_theme = code.clone();
+                let last_dark = Rc::new(Cell::new(is_dark));
+                let sm = libadwaita::StyleManager::default();
+                let handler_id = sm.connect_dark_notify(move |_| {
+                    let new_dark = crate::cache::is_card_surface_dark();
+                    if last_dark.replace(new_dark) == new_dark {
+                        return;
+                    }
+                    let Some(lbl) = label_weak.upgrade() else {
+                        return;
+                    };
+                    if let Some(cached) =
+                        crate::cache::get_cached_highlight(&lang_for_theme, &code_for_theme, new_dark)
+                    {
+                        lbl.set_markup(&cached);
+                    } else {
+                        let markup =
+                            highlight_code_to_pango(&lang_for_theme, &code_for_theme, new_dark);
+                        crate::cache::insert_cached_highlight(
+                            &lang_for_theme,
+                            &code_for_theme,
+                            new_dark,
+                            markup.clone(),
+                        );
+                        lbl.set_markup(&markup);
+                    }
+                });
+                let handler_cell = RefCell::new(Some(handler_id));
+                frame.connect_destroy(move |_| {
+                    if let Some(id) = handler_cell.borrow_mut().take() {
+                        libadwaita::StyleManager::default().disconnect(id);
+                    }
+                });
             }
 
             let scroll = gtk::ScrolledWindow::builder()

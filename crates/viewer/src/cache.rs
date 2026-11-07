@@ -222,6 +222,107 @@ pub fn theme_set() -> &'static syntect::highlighting::ThemeSet {
     &THEME_SET
 }
 
+/// Resolves a syntax definition by language token/extension, with a fallback to shell highlighting
+/// for config formats (`toml`, `ini`, `conf`, `cfg`, `env`) not bundled in `syntect`'s default pack.
+#[must_use]
+pub fn resolve_syntax<'a>(
+    ss: &'a syntect::parsing::SyntaxSet,
+    lang: &str,
+    first_line_sample: Option<&str>,
+) -> &'a syntect::parsing::SyntaxReference {
+    let trimmed = lang.trim();
+    if !trimmed.is_empty() && !trimmed.eq_ignore_ascii_case("text") {
+        if let Some(syn) = ss
+            .find_syntax_by_token(trimmed)
+            .or_else(|| ss.find_syntax_by_extension(trimmed))
+        {
+            return syn;
+        }
+        if matches!(
+            trimmed.to_ascii_lowercase().as_str(),
+            "toml" | "ini" | "conf" | "cfg" | "env" | "dotenv"
+        ) && let Some(syn) = ss.find_syntax_by_extension("sh")
+        {
+            return syn;
+        }
+    }
+    first_line_sample
+        .and_then(|s| ss.find_syntax_by_first_line(s))
+        .unwrap_or_else(|| ss.find_syntax_plain_text())
+}
+
+/// Returns whether the active theme's `@card_bg_color` surface is dark.
+///
+/// Code blocks (`.claw-drawer frame.view`) and diff cards (`.viewer-diff-card`) render on
+/// `@card_bg_color`, which in hybrid themes (e.g. dark arcade night `window_bg` with bright
+/// brick-gold `card_bg`) may have the opposite luminance of `window_bg` / `StyleManager::is_dark()`.
+#[must_use]
+pub fn is_card_surface_dark() -> bool {
+    if let Some(display) = gtk::gdk::Display::default() {
+        use gtk::glib::prelude::ObjectExt;
+        if let Some(ptr) = unsafe { display.data::<bool>("boxxy-card-is-dark") } {
+            return unsafe { *ptr.as_ref() };
+        }
+    }
+    libadwaita::StyleManager::default().is_dark()
+}
+
+/// Formats a single `syntect` token into Pango markup.
+///
+/// - Tokens using the theme's default foreground omit `foreground="..."` so they inherit
+///   the active Boxxy theme's `@card_fg_color` via GTK CSS.
+/// - Colored syntax tokens are luminance-clamped (`>= 0.72` on dark cards, `<= 0.28` on light cards)
+///   so they remain readable even on vibrant custom `card_bg` surfaces (e.g. arcade blue or gold).
+#[must_use]
+pub fn format_syntect_span(
+    style: syntect::highlighting::Style,
+    default_fg: Option<syntect::highlighting::Color>,
+    token: &str,
+    is_dark: bool,
+) -> String {
+    let escaped = crate::parser::markdown::escape_pango(token);
+    let c = style.foreground;
+    let is_default_fg = default_fg.is_some_and(|fg| {
+        fg.r.abs_diff(c.r) <= 4 && fg.g.abs_diff(c.g) <= 4 && fg.b.abs_diff(c.b) <= 4
+    });
+    if is_default_fg {
+        return escaped;
+    }
+
+    let (r, g, b) = adjust_syntax_fg(c.r, c.g, c.b, is_dark);
+    format!("<span foreground=\"#{r:02x}{g:02x}{b:02x}\">{escaped}</span>")
+}
+
+fn adjust_syntax_fg(r: u8, g: u8, b: u8, is_dark: bool) -> (u8, u8, u8) {
+    let rf = f32::from(r) / 255.0;
+    let gf = f32::from(g) / 255.0;
+    let bf = f32::from(b) / 255.0;
+    let lum = 0.299 * rf + 0.587 * gf + 0.114 * bf;
+
+    if is_dark {
+        let min_lum = 0.72_f32;
+        if lum < min_lum {
+            let t = ((min_lum - lum) / (1.0 - lum).max(0.01)).clamp(0.0, 1.0);
+            let nr = ((rf + (1.0 - rf) * t) * 255.0).round() as u8;
+            let ng = ((gf + (1.0 - gf) * t) * 255.0).round() as u8;
+            let nb = ((bf + (1.0 - bf) * t) * 255.0).round() as u8;
+            return (nr, ng, nb);
+        }
+    } else {
+        let max_lum = 0.28_f32;
+        if lum > max_lum {
+            let target_lum = 0.05_f32;
+            let t = ((lum - max_lum) / (lum - target_lum).max(0.01)).clamp(0.0, 1.0);
+            let nr = ((rf * (1.0 - t) + 0.05 * t) * 255.0).round() as u8;
+            let ng = ((gf * (1.0 - t) + 0.06 * t) * 255.0).round() as u8;
+            let nb = ((bf * (1.0 - t) + 0.08 * t) * 255.0).round() as u8;
+            return (nr, ng, nb);
+        }
+    }
+
+    (r, g, b)
+}
+
 // ---------------------------------------------------------------------------
 // Parsed Markdown AST Cache & Syntax Highlight Cache
 // ---------------------------------------------------------------------------
