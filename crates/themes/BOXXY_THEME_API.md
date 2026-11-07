@@ -115,7 +115,7 @@ Boxxy intentionally distinguishes between **floating tactile controls** (which c
 | **Search & Text Entries** (`searchentry`, `entry:not(.flat)`) | **Yes** | `2px 2px 0px @boxxy_shadow` (`2px 3px 0px` on focus) | Gives input fields a recessed/tactile card feel. |
 | **Preference Boxed Lists** (`.boxed-list`, `.boxed-list-separate`, `preferencesgroup listbox`) | **Yes** | `2px 3px 0px @boxxy_shadow` | Structured `8px`-radius preference groups with a `2px solid @boxxy_ink` frame, recessed `1.5px solid alpha(@boxxy_ink, 0.55)` row grooves, and accent-tinted `row.activatable:hover` states. |
 | **Standalone Content Cards** (`.card`, `.bookmark-card`) | **Yes** | `3px 4px 0px @boxxy_shadow` | Large elevated content containers (`border-radius: 8px`). |
-| **Scale Sliders & Squared Scrollbars** (`scale > trough > slider`, `scrollbar.overlay-indicator`) | **Yes (Slider) / Inset (Scrollbar)** | `1.5px 2px 0px @boxxy_shadow` | `scale` uses a `24×20px` `@card_fg_color` block grabber (`border-radius: 6px`). Overlay scrollbars use a squared `3px`-radius thumb with zero-allocation `inset 0 0 0 1.5px @boxxy_ink` borders to avoid negative-rect clipping during fade animations. |
+| **Scale Sliders & Squared Scrollbars** (`scale > trough > slider`, `scrollbar.overlay-indicator`) | **Yes (Slider) / Inset (Scrollbar)** | `1.5px 2px 0px @boxxy_shadow` | `scale` uses a `24×20px` `@card_fg_color` block grabber (`border-radius: 6px`). Overlay scrollbars reset Libadwaita's negative `-8px` slider margin (`margin: 0; outline-offset: 0;`) and inset the trough (`margin: 3px 5px`) with a `2px`-radius thumb (`6px` rest / `12px` hover) and `inset 0 0 0 1.5px @boxxy_ink` borders so thumbs never overflow or clip at window, dialog, or sidebar edges. |
 | **Popovers & Dialog Sheets** (`popover > contents`, `dialog sheet`) | **Yes** | `4px 5px 0px @boxxy_shadow` | Highest elevation layer floating above the window canvas. |
 
 ---
@@ -154,6 +154,10 @@ To maintain full compatibility with both **Boxxy Custom Themes** (`AppThemeMode:
          margin-bottom: 6px;
      }
      ```
+5. **Single Source of Truth for Scrollbars & Sidebar Resize Clearance:**
+   - Libadwaita's built-in stylesheet sets `margin: -8px; border: 8px solid transparent; outline-offset: -8px;` on `scrollbar > range > trough > slider` (paired with `margin: 8px` on `trough`). If `border: none` and `trough { margin: 0 }` are applied without resetting `slider { margin: 0; outline-offset: 0; }`, `trough` measures `0px` wide while `slider` overflows `8px` past the right edge of `GtkScrolledWindow` — clipping the right half of the scrollbar against window/dialog/sidebar borders while rendering double-width (`16px`) inside padded containers like the What's New dialog.
+   - `resources/themes/boxxy_skeleton.css` explicitly resets `margin: 0; padding: 0; border: none; outline: none; outline-offset: 0;` on `scrollbar > range > trough > slider` (including `range.fine-tune`) and sets `margin: 3px 5px;` on vertical troughs (`5px 3px` on horizontal troughs) with a `2px` corner radius and a `6px` rest / `12px` hover/drag thumb.
+   - Because vertical scrollbar thumbs sit `5px` inset from the right edge (`[width - 17, width - 5]`), the `4px` `.sidebar-resize-handle` (`[width - 4, width]` in `crates/window/src/ui.rs`) never overlaps the scrollbar thumb, keeping 100% of the thumb grabbable from left to right.
 
 ---
 

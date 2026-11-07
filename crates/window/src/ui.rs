@@ -686,11 +686,13 @@ impl AppWindow {
         sidebar_toolbar.set_content(Some(&sidebar_content_box));
 
         // TODO(libadwaita): Check if future Libadwaita releases add native interactive drag-resizing
-        // to `AdwOverlaySplitView` / `AdwNavigationSplitView` so we can drop this custom 6px
+        // to `AdwOverlaySplitView` / `AdwNavigationSplitView` so we can drop this custom 4px
         // `GestureDrag` handle overlay. (As of Libadwaita 1.10, only static `min-sidebar-width`,
         // `max-sidebar-width`, and `sidebar-width-fraction` properties exist.)
+        // Keep width at 4px so it sits strictly inside the 5px right margin of sidebar scrollbars
+        // and never blocks grabbing or dragging the scrollbar thumb.
         let handle_event_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        handle_event_box.set_width_request(6);
+        handle_event_box.set_width_request(4);
         handle_event_box.set_halign(gtk::Align::End);
         handle_event_box.set_vexpand(true);
         handle_event_box.add_css_class("sidebar-resize-handle");
