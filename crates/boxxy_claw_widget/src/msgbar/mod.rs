@@ -358,11 +358,47 @@ impl MsgBarComponent {
                     .text(&buf.start_iter(), &buf.end_iter(), false)
                     .to_string();
 
+                let is_incognito_active = claw_state.get()
+                    && character_id
+                        .borrow()
+                        .as_deref()
+                        .is_some_and(boxxy_claw_protocol::characters::is_incognito_character);
+
+                let trimmed_input = original_text.trim();
+                let is_incognito_cmd = trimmed_input.eq_ignore_ascii_case("/incognito")
+                    || trimmed_input
+                        .get(..11)
+                        .is_some_and(|p| p.eq_ignore_ascii_case("/incognito "));
+                if is_incognito_cmd {
+                    buf.set_text("");
+                    attachment_mgr.clear();
+                    if claw_state.get() {
+                        // /incognito is only allowed when starting a new session
+                        return;
+                    }
+                    let inline_msg = trimmed_input
+                        .get(10..)
+                        .map(str::trim)
+                        .unwrap_or_default();
+                    let payload_text = if inline_msg.is_empty() {
+                        "/incognito".to_string()
+                    } else {
+                        format!("/incognito {inline_msg}")
+                    };
+                    if let Some(hook) = on_submit_hook.borrow().as_ref() {
+                        hook(&payload_text);
+                    }
+                    on_submit((payload_text, Vec::new()));
+                    return;
+                }
+
                 if original_text.trim() == "/models" && attachment_mgr.get_attachments().is_empty()
                 {
-                    history
-                        .borrow_mut()
-                        .push(original_text, Vec::new());
+                    if !is_incognito_active {
+                        history
+                            .borrow_mut()
+                            .push(original_text, Vec::new());
+                    }
                     buf.set_text("");
                     if let Some(root) = entry.root() {
                         let _ = gtk::prelude::WidgetExt::activate_action(
@@ -376,6 +412,10 @@ impl MsgBarComponent {
 
                 if original_text.trim() == "/resume" && attachment_mgr.get_attachments().is_empty()
                 {
+                    if is_incognito_active {
+                        buf.set_text("");
+                        return;
+                    }
                     buf.set_text("/resume ");
                     let end = buf.end_iter();
                     buf.place_cursor(&end);
@@ -383,57 +423,67 @@ impl MsgBarComponent {
                 }
 
                 if original_text.trim() == "/vibe" && attachment_mgr.get_attachments().is_empty() {
-                    history
-                        .borrow_mut()
-                        .push(original_text, Vec::new());
+                    if !is_incognito_active {
+                        history
+                            .borrow_mut()
+                            .push(original_text, Vec::new());
+                        let next = !vibe_state.get();
+                        on_vibe_toggle(next);
+                    }
                     buf.set_text("");
-                    let next = !vibe_state.get();
-                    on_vibe_toggle(next);
                     return;
                 }
 
                 if original_text.trim() == "/sleep" && attachment_mgr.get_attachments().is_empty() {
-                    history
-                        .borrow_mut()
-                        .push(original_text, Vec::new());
-                    buf.set_text("");
-                    if claw_state.get() || character_id.borrow().is_some() {
-                        let next = !sleep_state.get();
-                        on_sleep_toggle(next);
+                    if !is_incognito_active {
+                        history
+                            .borrow_mut()
+                            .push(original_text, Vec::new());
+                        if claw_state.get() {
+                            let next = !sleep_state.get();
+                            on_sleep_toggle(next);
+                        }
                     }
+                    buf.set_text("");
                     return;
                 }
 
                 if original_text.trim() == "/pin" && attachment_mgr.get_attachments().is_empty() {
-                    history
-                        .borrow_mut()
-                        .push(original_text, Vec::new());
-                    buf.set_text("");
-                    if claw_state.get() || character_id.borrow().is_some() {
-                        let next = !pin_state.get();
-                        on_pin_toggle(next);
+                    if !is_incognito_active {
+                        history
+                            .borrow_mut()
+                            .push(original_text, Vec::new());
+                        if claw_state.get() {
+                            let next = !pin_state.get();
+                            on_pin_toggle(next);
+                        }
                     }
+                    buf.set_text("");
                     return;
                 }
 
                 if original_text.trim() == "/web" && attachment_mgr.get_attachments().is_empty() {
-                    history
-                        .borrow_mut()
-                        .push(original_text, Vec::new());
-                    buf.set_text("");
-                    if boxxy_preferences::Settings::load().enable_web_search {
-                        let next = !web_search_state.get();
-                        on_web_search_toggle(next);
+                    if !is_incognito_active {
+                        history
+                            .borrow_mut()
+                            .push(original_text, Vec::new());
+                        if boxxy_preferences::Settings::load().enable_web_search {
+                            let next = !web_search_state.get();
+                            on_web_search_toggle(next);
+                        }
                     }
+                    buf.set_text("");
                     return;
                 }
 
                 if original_text.trim() == "/clear" && attachment_mgr.get_attachments().is_empty() {
-                    history
-                        .borrow_mut()
-                        .push(original_text, Vec::new());
+                    if !is_incognito_active {
+                        history
+                            .borrow_mut()
+                            .push(original_text, Vec::new());
+                    }
                     buf.set_text("");
-                    if (claw_state.get() || character_id.borrow().is_some())
+                    if claw_state.get()
                         && let Some(hook) = on_clear_hook.borrow().as_ref()
                     {
                         hook();
@@ -442,11 +492,13 @@ impl MsgBarComponent {
                 }
 
                 if original_text.trim() == "/exit" && attachment_mgr.get_attachments().is_empty() {
-                    history
-                        .borrow_mut()
-                        .push(original_text, Vec::new());
+                    if !is_incognito_active {
+                        history
+                            .borrow_mut()
+                            .push(original_text, Vec::new());
+                    }
                     buf.set_text("");
-                    if claw_state.get() || character_id.borrow().is_some() {
+                    if claw_state.get() {
                         on_claw_toggle(false);
                     }
                     return;
@@ -458,9 +510,11 @@ impl MsgBarComponent {
                     if let Some(hook) = on_submit_hook.borrow().as_ref() {
                         hook(&text);
                     }
-                    history
-                        .borrow_mut()
-                        .push(original_text, attachment_mgr.get_attachments());
+                    if !is_incognito_active {
+                        history
+                            .borrow_mut()
+                            .push(original_text, attachment_mgr.get_attachments());
+                    }
                     on_submit((text, images));
                     buf.set_text("");
                 }
@@ -525,7 +579,8 @@ impl MsgBarComponent {
                 if is_resume_session
                     || matches!(
                         replacement.as_str(),
-                        "/models"
+                        "/incognito"
+                            | "/models"
                             | "/vibe"
                             | "/sleep"
                             | "/pin"
@@ -737,6 +792,19 @@ impl MsgBarComponent {
     pub fn set_character(&self, character_id: &str) {
         *self.character_id.borrow_mut() = Some(character_id.to_string());
 
+        if boxxy_claw_protocol::characters::is_incognito_character(character_id) {
+            let text = format!(
+                "Message {} (Incognito — no context sent, nothing saved)...",
+                boxxy_claw_protocol::characters::INCOGNITO_DISPLAY_NAME
+            );
+            *self.default_placeholder.borrow_mut() = text.clone();
+            if self.entry.is_sensitive() {
+                self.placeholder_label.set_label(&text);
+            }
+            self.refresh_user_avatar();
+            return;
+        }
+
         let registry = boxxy_claw_protocol::characters::CHARACTER_CACHE.load();
         if let Some(info) = registry.iter().find(|c| c.config.id == character_id) {
             let formatted_name = info
@@ -864,12 +932,19 @@ impl MsgBarComponent {
     }
 
     pub fn update_ui(&self, status: AgentStatus, pinned: bool, web_search: bool, vibe: bool) {
-        let active = status != AgentStatus::Off || self.character_id.borrow().is_some();
+        let active = status != AgentStatus::Off;
+        let is_incognito = active
+            && self
+                .character_id
+                .borrow()
+                .as_deref()
+                .is_some_and(boxxy_claw_protocol::characters::is_incognito_character);
         self.claw_state.set(active);
-        self.sleep_toggle.set_sensitive(active);
-        self.pin_toggle.set_sensitive(active);
-        self.vibe_toggle.set_sensitive(true);
-        self.vibe_state.set(vibe);
+        self.sleep_toggle.set_sensitive(active && !is_incognito);
+        self.pin_toggle.set_sensitive(active && !is_incognito);
+        self.vibe_toggle.set_sensitive(!is_incognito);
+        self.web_search_toggle.set_sensitive(!is_incognito);
+        self.vibe_state.set(vibe && !is_incognito);
         self.set_status(status);
         self.refresh_user_avatar();
 

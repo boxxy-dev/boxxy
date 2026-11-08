@@ -48,6 +48,9 @@ impl ClawSession {
     /// Spawns a background flush of any unflushed messages in `state.history` before
     /// the session enters Sleep, Deactivate, or Evict.
     pub(super) async fn flush_unflushed_history(&self, cwd: &str) {
+        if self.incognito {
+            return;
+        }
         let unflushed: Vec<Message> = {
             let mut state_lock = self.state.lock().await;
             let items: Vec<Message> = state_lock
@@ -161,6 +164,15 @@ impl ClawSession {
                     total_cost_usd: self.total_cost_usd,
                 })
                 .await;
+        }
+
+        if self.incognito {
+            self.session_context = crate::utils::load_prompt_fallback(
+                "/dev/boxxy/BoxxyTerminal/prompts/ai_chat.md",
+                "ai_chat.md",
+            );
+            *is_initialized = true;
+            return;
         }
 
         let session_context = load_session_context(&self.character_id);
@@ -309,6 +321,9 @@ impl ClawSession {
     }
 
     pub(super) async fn ensure_session_persisted(&self, cwd: &str) {
+        if self.incognito {
+            return;
+        }
         let db_val = {
             let db_guard = self.db.lock().await;
             db_guard.clone()
@@ -326,6 +341,16 @@ impl ClawSession {
             "[{}] Settings changed. Next turn will trigger a hot-swap.",
             self.name
         );
+
+        if self.incognito {
+            boxxy_preferences::Settings::reload();
+            let after = boxxy_preferences::Settings::load();
+            let mut state_lock = self.state.lock().await;
+            state_lock.persistent_agent = None;
+            state_lock.current_claw_model = after.claw_model.clone();
+            state_lock.current_memory_model = after.memory_model.clone();
+            return;
+        }
 
         // Check if the character was migrated or renamed during a catalog hot-reload
         let cached_catalog = boxxy_claw_protocol::characters::CHARACTER_CACHE.load();
@@ -916,7 +941,49 @@ impl ClawSession {
         state_lock.total_tokens = 0;
         state_lock.context_tokens = 0;
         state_lock.total_cost_usd = 0.0;
+        state_lock.status = crate::engine::AgentStatus::Waiting;
         drop(state_lock);
+
+        if self.incognito {
+            self.clear_ui_history().await;
+            let settings = boxxy_preferences::Settings::load();
+            let context_window = boxxy_ai_core::model_context_window_with_endpoints(
+                &settings.claw_model,
+                &settings.openai_compatible_endpoints,
+            );
+            let _ = self
+                .tx_ui
+                .send(ClawEngineEvent::Identity {
+                    agent_name: name.clone(),
+                    character_id: self.character_id.clone(),
+                    pinned: false,
+                    web_search_enabled: false,
+                    vibe_enabled: false,
+                    total_tokens: 0,
+                    context_tokens: 0,
+                    context_window,
+                    total_cost_usd: 0.0,
+                })
+                .await;
+            let _ = self
+                .tx_ui
+                .send(ClawEngineEvent::SessionStateChanged {
+                    agent_name: name,
+                    character_id: self.character_id.clone(),
+                    status: crate::engine::AgentStatus::Waiting,
+                })
+                .await;
+            let tx_ui = self.tx_ui.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                let _ = tx_ui
+                    .send(ClawEngineEvent::SystemMessage {
+                        text: "🕵️ Incognito Mode • No context sent • Nothing saved".to_string(),
+                    })
+                    .await;
+            });
+            return;
+        }
 
         let db_guard = self.db.lock().await;
         if db_guard.is_none()

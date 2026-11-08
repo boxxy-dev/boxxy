@@ -33,6 +33,9 @@ impl ClawSession {
         current_turn: &mut Option<tokio::task::JoinHandle<()>>,
         backlog: &mut VecDeque<ClawMessage>,
     ) {
+        if self.incognito {
+            return;
+        }
         *current_dir = cwd.clone();
 
         let workspace = crate::registry::workspace::global_workspace().await;

@@ -661,6 +661,21 @@ impl AgentInterface {
         #[zbus(connection)] conn: &zbus::Connection,
         holder_id: &str,
     ) {
+        let is_incognito = self
+            .core
+            .registry
+            .snapshot()
+            .await
+            .claims
+            .iter()
+            .any(|c| {
+                c.holder_id == holder_id
+                    && boxxy_claw_protocol::characters::is_incognito_character(&c.character_id)
+            });
+        if is_incognito {
+            self.release_holder(conn, holder_id).await;
+            return;
+        }
         if let Some(claim) = self.core.registry.detach_holder(holder_id).await {
             log::info!(
                 "Detached holder {} into background (session_id={})",
@@ -1201,7 +1216,11 @@ impl AgentInterface {
         match claim_res {
             Ok(claimed_session) => {
                 let session_id = claimed_session.session_id.clone();
-                let character_display_name = {
+                let is_incognito =
+                    boxxy_claw_protocol::characters::is_incognito_character(&character_id);
+                let character_display_name = if is_incognito {
+                    boxxy_claw_protocol::characters::INCOGNITO_DISPLAY_NAME.to_string()
+                } else {
                     let snapshot = self.core.registry.snapshot().await;
                     snapshot
                         .catalog
@@ -1218,8 +1237,10 @@ impl AgentInterface {
                     session_id.clone(),
                 );
 
-                // Register with workspace before emitting signal
-                if holder_kind == boxxy_claw_protocol::characters::HolderKind::Pane {
+                // Register with workspace before emitting signal (skip for ephemeral incognito sessions)
+                if !is_incognito
+                    && holder_kind == boxxy_claw_protocol::characters::HolderKind::Pane
+                {
                     let workspace = boxxy_claw::registry::workspace::global_workspace().await;
                     workspace
                         .register_pane_tx(holder_id.clone(), tx.clone())

@@ -3,7 +3,6 @@ use boxxy_bookmarks::{sidebar::BookmarksSidebarComponent, tab::BookmarksTabCompo
 use boxxy_claw_ui::ClawSidebarComponent;
 use boxxy_command_palette::CommandPaletteComponent;
 use boxxy_preferences::{AppState, PreferencesComponent, Settings};
-use boxxy_sidebar::AiSidebarComponent;
 use boxxy_terminal::TerminalEvent;
 use gtk4 as gtk;
 use libadwaita as adw;
@@ -111,7 +110,6 @@ pub enum AppInput {
     ShowCommandPaletteMenu,
     SettingsChanged(Settings),
     ShowThemesSidebar,
-    ShowAiChat,
     ShowClawSidebar,
     ShowBookmarksSidebar,
     ExecuteBookmark(String, String, String), // Name, Filename, Script
@@ -200,7 +198,6 @@ pub struct AppWindowInner {
     pub sidebar_visible: bool,
     pub preferences: Option<PreferencesComponent>,
     pub app_menu: AppMenuComponent,
-    pub ai_chat: AiSidebarComponent,
     pub claw: ClawSidebarComponent,
     pub bookmarks_sidebar: BookmarksSidebarComponent,
     pub bookmarks_controller: Option<BookmarksTabComponent>,

@@ -611,10 +611,35 @@ impl ClawSidebarComponent {
         }
 
         if !agent_name.is_empty() {
+            let is_incognito =
+                boxxy_claw_protocol::characters::is_incognito_character(agent_name);
             let cache = boxxy_claw_protocol::characters::CHARACTER_CACHE.load();
             let fallback_names = [agent_name];
 
-            if let Some(info) =
+            if is_incognito {
+                let disp = boxxy_claw_protocol::characters::INCOGNITO_DISPLAY_NAME;
+                let color = boxxy_claw_protocol::characters::INCOGNITO_COLOR;
+                self.hero_title.set_markup(&format!(
+                    "<span foreground=\"{}\"><b>{}</b></span>",
+                    glib::markup_escape_text(color),
+                    glib::markup_escape_text(disp)
+                ));
+                self.hero_subtitle
+                    .set_label(boxxy_claw_protocol::characters::INCOGNITO_DUTIES);
+
+                self.hero_avatar.set_text(Some(disp));
+                self.hero_avatar.set_custom_image(None::<&gdk::Texture>);
+                let bytes = glib::Bytes::from_static(
+                    boxxy_claw_protocol::character_loader::incognito_avatar_bytes(),
+                );
+                if let Ok(texture) = gdk::Texture::from_bytes(&bytes) {
+                    self.hero_avatar.set_custom_image(Some(&texture));
+                }
+                self.hero_avatar_overlay.set_visible(true);
+                self.hero_sleep_badge.set_visible(false);
+                self.hero_vibe_badge.set_visible(false);
+                self.hero_icon.set_visible(false);
+            } else if let Some(info) =
                 boxxy_claw_protocol::characters::resolve_character(&cache, "", &fallback_names)
             {
                 let formatted_name = info
@@ -662,21 +687,30 @@ impl ClawSidebarComponent {
                 self.hero_icon.set_visible(true);
             }
 
-            let vibe_str = if vibe_enabled { "Vibe On" } else { "Vibe Off" };
-            let sleep_str = if sleep { "Sleep On" } else { "Sleep Off" };
-            let pin_str = if pinned { "Pin On" } else { "Pin Off" };
-            let web_str = if web_search_enabled {
-                "Web On"
+            if is_incognito {
+                let status_line = gtk::Label::builder()
+                    .label("Incognito Mode  •  Ephemeral")
+                    .css_classes(["caption", "dim-label"])
+                    .build();
+                self.badges_box.append(&status_line);
+                self.stats_box.set_visible(false);
             } else {
-                "Web Off"
-            };
-            let status_line = gtk::Label::builder()
-                .label(format!("{vibe_str}  •  {sleep_str}  •  {pin_str}  •  {web_str}"))
-                .css_classes(["caption", "dim-label"])
-                .build();
-            self.badges_box.append(&status_line);
+                let vibe_str = if vibe_enabled { "Vibe On" } else { "Vibe Off" };
+                let sleep_str = if sleep { "Sleep On" } else { "Sleep Off" };
+                let pin_str = if pinned { "Pin On" } else { "Pin Off" };
+                let web_str = if web_search_enabled {
+                    "Web On"
+                } else {
+                    "Web Off"
+                };
+                let status_line = gtk::Label::builder()
+                    .label(format!("{vibe_str}  •  {sleep_str}  •  {pin_str}  •  {web_str}"))
+                    .css_classes(["caption", "dim-label"])
+                    .build();
+                self.badges_box.append(&status_line);
+                self.stats_box.set_visible(true);
+            }
             self.hero_title.set_visible(true);
-            self.stats_box.set_visible(true);
             self.badges_box.set_visible(true);
             self.is_new_session.set(false);
             self.sessions_box.set_visible(false);

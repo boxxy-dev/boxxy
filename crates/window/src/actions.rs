@@ -26,7 +26,6 @@ pub fn setup_actions(
     add_action!("command-palette", AppInput::CommandPalette);
     add_action!("model-selection", AppInput::ModelSelection);
     add_action!("themes", AppInput::ShowThemesSidebar);
-    add_action!("ai-chat", AppInput::ShowAiChat);
     add_action!("claw", AppInput::ShowClawSidebar);
     add_action!("new-window", AppInput::NewWindow);
     add_action!("new-tab", AppInput::NewTab);

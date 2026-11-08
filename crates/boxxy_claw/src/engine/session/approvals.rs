@@ -92,6 +92,7 @@ mod pending_drain_tests {
             agent_name: "test".to_string(),
             character_id: "test".to_string(),
             character_display_name: "test".to_string(),
+            incognito: false,
             current_dir: String::new(),
             pinned: false,
             web_search_enabled: false,

@@ -470,15 +470,6 @@ pub fn show_themes_sidebar(inner: &mut AppWindowInner) {
     inner.view_stack.set_visible_child_name("themes");
 }
 
-pub fn show_ai_chat(inner: &mut AppWindowInner) {
-    if !inner.sidebar_visible {
-        inner.sidebar_overlay.set_visible(true);
-        inner.split_view.set_show_sidebar(true);
-    }
-    inner.view_stack.set_visible_child_name("assistant");
-    inner.ai_chat.grab_focus();
-}
-
 pub fn show_claw_sidebar(inner: &mut AppWindowInner) {
     if inner.split_view.shows_sidebar()
         && inner.view_stack.visible_child_name().as_deref() == Some("claw")

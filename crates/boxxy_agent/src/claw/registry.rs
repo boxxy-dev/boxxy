@@ -199,7 +199,8 @@ impl CharacterRegistry {
 
             // Check active claims
             for (holder_id, claim) in &inner.claims {
-                if !catalog_ids.contains(&claim.character_id)
+                if !boxxy_claw_protocol::characters::is_incognito_character(&claim.character_id)
+                    && !catalog_ids.contains(&claim.character_id)
                     && let Some(target) = find_replacement_character(
                         &old_catalog,
                         &inner.catalog,
@@ -378,37 +379,41 @@ impl CharacterRegistry {
     ) -> Result<ClaimedSession, ClaimError> {
         let mut inner = self.inner.write().await;
 
-        // 1. Check for migrations
-        if let Some(to_id) = inner.migrations.get(&character_id) {
-            return Err(ClaimError::Migrated {
-                from_id: character_id,
-                to_id: to_id.clone(),
-            });
-        }
+        let is_incognito = boxxy_claw_protocol::characters::is_incognito_character(&character_id);
 
-        // 2. Validate character exists
-        if !inner.catalog.iter().any(|c| c.config.id == character_id) {
-            return Err(ClaimError::UnknownCharacter { character_id });
-        }
-
-        // 3. Validate character is not already taken by another live holder
-        // (including detached background holders where `owner_bus_name` is empty).
-        // Backgrounded characters must never be silently stolen or killed by a new
-        // pane — they can only be reattached via `reattach_holder`.
-        for (other_holder_id, claim) in &inner.claims {
-            if other_holder_id != &holder_id && claim.character_id == character_id {
-                let holder_display_name = inner
-                    .catalog
-                    .iter()
-                    .find(|c| c.config.id == character_id)
-                    .map(|c| c.config.display_name.clone())
-                    .unwrap_or_else(|| "Unknown".to_string());
-
-                return Err(ClaimError::AlreadyTaken {
-                    holder_id: other_holder_id.clone(),
-                    holder_kind: claim.holder_kind,
-                    holder_display_name,
+        if !is_incognito {
+            // 1. Check for migrations
+            if let Some(to_id) = inner.migrations.get(&character_id) {
+                return Err(ClaimError::Migrated {
+                    from_id: character_id,
+                    to_id: to_id.clone(),
                 });
+            }
+
+            // 2. Validate character exists
+            if !inner.catalog.iter().any(|c| c.config.id == character_id) {
+                return Err(ClaimError::UnknownCharacter { character_id });
+            }
+
+            // 3. Validate character is not already taken by another live holder
+            // (including detached background holders where `owner_bus_name` is empty).
+            // Backgrounded characters must never be silently stolen or killed by a new
+            // pane — they can only be reattached via `reattach_holder`.
+            for (other_holder_id, claim) in &inner.claims {
+                if other_holder_id != &holder_id && claim.character_id == character_id {
+                    let holder_display_name = inner
+                        .catalog
+                        .iter()
+                        .find(|c| c.config.id == character_id)
+                        .map(|c| c.config.display_name.clone())
+                        .unwrap_or_else(|| "Unknown".to_string());
+
+                    return Err(ClaimError::AlreadyTaken {
+                        holder_id: other_holder_id.clone(),
+                        holder_kind: claim.holder_kind,
+                        holder_display_name,
+                    });
+                }
             }
         }
 
@@ -792,5 +797,53 @@ mod tests {
             .find(|c| c.holder_id == "pane-bg")
             .expect("detached claim still present");
         assert_eq!(bg_claim.session_id, claimed.session_id);
+    }
+
+    #[tokio::test]
+    async fn test_incognito_claim_allows_multiple_panes_and_survives_reload() {
+        let db = boxxy_db::Db::new_in_memory().await.unwrap();
+        let reg = CharacterRegistry::load_or_default(&db).await;
+
+        let inc_id = boxxy_claw_protocol::characters::INCOGNITO_CHARACTER_ID.to_string();
+
+        let claim_a = reg
+            .try_claim(
+                "pane-inc-a".to_string(),
+                HolderKind::Pane,
+                inc_id.clone(),
+                ":1.20".to_string(),
+            )
+            .await
+            .expect("first incognito claim should succeed");
+        let claim_b = reg
+            .try_claim(
+                "pane-inc-b".to_string(),
+                HolderKind::Pane,
+                inc_id.clone(),
+                ":1.20".to_string(),
+            )
+            .await
+            .expect("second concurrent incognito claim should also succeed");
+
+        assert_ne!(claim_a.session_id, claim_b.session_id);
+        assert_eq!(claim_a.claim.character_id, inc_id);
+        assert_eq!(claim_b.claim.character_id, inc_id);
+
+        // Catalog reload must not treat INCOGNITO_CHARACTER_ID as a deleted orphan character
+        let (_, migrated) = reg.reload_catalog().await.expect("reload_catalog");
+        assert!(!migrated.contains(&"pane-inc-a".to_string()));
+        assert!(!migrated.contains(&"pane-inc-b".to_string()));
+
+        let snap = reg.snapshot().await;
+        assert!(
+            snap.claims
+                .iter()
+                .any(|c| c.holder_id == "pane-inc-a" && c.character_id == inc_id)
+        );
+        assert!(
+            snap.claims
+                .iter()
+                .any(|c| c.holder_id == "pane-inc-b" && c.character_id == inc_id)
+        );
     }
 }

@@ -264,7 +264,29 @@ impl CompletionProvider for CommandCompletionProvider {
 
         let mut items = Vec::new();
         let query_lower = query.to_lowercase();
-        let has_character = self.claw_state.get() || self.character_id.borrow().is_some();
+        let has_session = self.claw_state.get();
+        let is_incognito = has_session
+            && self
+                .character_id
+                .borrow()
+                .as_deref()
+                .is_some_and(boxxy_claw_protocol::characters::is_incognito_character);
+        let has_character = has_session && !is_incognito;
+
+        if "incognito".contains(&query_lower) {
+            items.push(CompletionItem {
+                display_name: "/incognito".to_string(),
+                replacement_text: "/incognito".to_string(),
+                icon_name: None,
+                icon_path: None,
+                secondary_text: Some(
+                    "Start a private, context-free chat (nothing saved)".to_string(),
+                ),
+                badge_text: None,
+                badge_color: None,
+                disabled: has_session,
+            });
+        }
 
         if "resume".contains(&query_lower) {
             items.push(CompletionItem {
@@ -275,7 +297,7 @@ impl CompletionProvider for CommandCompletionProvider {
                 secondary_text: Some("Resume a past conversation".to_string()),
                 badge_text: None,
                 badge_color: None,
-                disabled: false,
+                disabled: is_incognito,
             });
         }
 
@@ -288,7 +310,7 @@ impl CompletionProvider for CommandCompletionProvider {
                 secondary_text: Some("Start a multi-character debate or chat".to_string()),
                 badge_text: None,
                 badge_color: None,
-                disabled: false,
+                disabled: is_incognito,
             });
         }
 
@@ -303,7 +325,7 @@ impl CompletionProvider for CommandCompletionProvider {
                 ),
                 badge_text: None,
                 badge_color: None,
-                disabled: false,
+                disabled: is_incognito,
             });
         }
 
@@ -360,7 +382,7 @@ impl CompletionProvider for CommandCompletionProvider {
                 secondary_text: Some(subtitle.to_string()),
                 badge_text: None,
                 badge_color: None,
-                disabled: false,
+                disabled: is_incognito,
             });
         }
 
@@ -415,7 +437,7 @@ impl CompletionProvider for CommandCompletionProvider {
                 secondary_text: Some(subtitle.to_string()),
                 badge_text: None,
                 badge_color: None,
-                disabled: !allow_web,
+                disabled: !allow_web || is_incognito,
             });
         }
 
@@ -428,7 +450,7 @@ impl CompletionProvider for CommandCompletionProvider {
                 secondary_text: Some("Clear conversation history".to_string()),
                 badge_text: None,
                 badge_color: None,
-                disabled: !has_character,
+                disabled: !has_session,
             });
         }
 
@@ -441,7 +463,7 @@ impl CompletionProvider for CommandCompletionProvider {
                 secondary_text: Some("Withdraw character from terminal".to_string()),
                 badge_text: None,
                 badge_color: None,
-                disabled: !has_character,
+                disabled: !has_session,
             });
         }
 
@@ -783,5 +805,81 @@ impl CompletionProvider for ResumeCompletionProvider {
         }
 
         items
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::{Cell, RefCell};
+    use std::rc::Rc;
+
+    #[test]
+    fn command_completion_enables_incognito_only_on_new_session() {
+        let claw_state = Rc::new(Cell::new(false));
+        let character_id = Rc::new(RefCell::new(Some("preselected-char-uuid".to_string())));
+        let sleep_state = Rc::new(Cell::new(false));
+        let pin_state = Rc::new(Cell::new(false));
+        let web_state = Rc::new(Cell::new(false));
+        let vibe_state = Rc::new(Cell::new(false));
+
+        let provider = CommandCompletionProvider::new(
+            claw_state.clone(),
+            character_id.clone(),
+            sleep_state,
+            pin_state,
+            web_state,
+            vibe_state,
+        );
+
+        // 1. New session (`claw_state == false`, even with pre-selected character in picker):
+        // `/incognito` must be enabled (`disabled == false`), while `/exit` and `/clear` are disabled.
+        let initial_items = provider.get_completions("");
+        let inc_item = initial_items
+            .iter()
+            .find(|i| i.display_name == "/incognito")
+            .expect("/incognito present");
+        assert!(!inc_item.disabled);
+        let exit_item = initial_items
+            .iter()
+            .find(|i| i.display_name == "/exit")
+            .expect("/exit present");
+        assert!(exit_item.disabled);
+
+        // 2. Active conversation (`claw_state == true`):
+        // `/incognito` must be disabled (`disabled == true`).
+        claw_state.set(true);
+        let active_items = provider.get_completions("");
+        let inc_active = active_items
+            .iter()
+            .find(|i| i.display_name == "/incognito")
+            .expect("/incognito present");
+        assert!(inc_active.disabled);
+
+        // 3. Active Incognito session: character-only commands (`/pin`, `/sleep`, `/debate`, `/vibe`)
+        // are disabled while `/clear` and `/exit` remain enabled.
+        *character_id.borrow_mut() =
+            Some(boxxy_claw_protocol::characters::INCOGNITO_CHARACTER_ID.to_string());
+        let inc_session_items = provider.get_completions("");
+        let clear_inc = inc_session_items
+            .iter()
+            .find(|i| i.display_name == "/clear")
+            .unwrap();
+        let exit_inc = inc_session_items
+            .iter()
+            .find(|i| i.display_name == "/exit")
+            .unwrap();
+        let pin_inc = inc_session_items
+            .iter()
+            .find(|i| i.display_name == "/pin")
+            .unwrap();
+        let debate_inc = inc_session_items
+            .iter()
+            .find(|i| i.display_name == "/debate")
+            .unwrap();
+        assert!(!clear_inc.disabled);
+        assert!(!exit_inc.disabled);
+        assert!(pin_inc.disabled);
+        assert!(debate_inc.disabled);
     }
 }

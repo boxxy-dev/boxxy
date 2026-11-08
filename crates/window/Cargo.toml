@@ -17,7 +17,6 @@ boxxy-sys-utils.workspace = true
 boxxy-preferences = { path = "../preferences" }
 boxxy-keybindings = { path = "../keybindings" }
 boxxy-themes = { path = "../themes" }
-boxxy-sidebar = { path = "../sidebar" }
 boxxy-claw = { path = "../boxxy_claw" }
 boxxy-claw-protocol = { path = "../boxxy_claw_protocol" }
 boxxy-claw-ui = { path = "../boxxy_claw_ui" }

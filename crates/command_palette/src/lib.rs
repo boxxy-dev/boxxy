@@ -129,12 +129,6 @@ impl CommandPaletteComponent {
                 shortcut: None,
             },
             CommandItem {
-                title: "AI Chat".to_string(),
-                action: "win.ai-chat".to_string(),
-                parameter: None,
-                shortcut: Some("<Primary><Shift>E".to_string()),
-            },
-            CommandItem {
                 title: "Claw".to_string(),
                 action: "win.claw".to_string(),
                 parameter: None,

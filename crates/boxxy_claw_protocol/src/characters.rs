@@ -3,6 +3,30 @@ use serde::{Deserialize, Serialize};
 use std::sync::{Arc, LazyLock};
 use tokio::sync::watch;
 
+/// Reserved character ID for ephemeral `/incognito` overlay sessions.
+pub const INCOGNITO_CHARACTER_ID: &str = "__incognito__";
+
+/// Slug used for the built-in Incognito persona.
+pub const INCOGNITO_CHARACTER_SLUG: &str = "inco-gnito";
+
+/// Display name shown in the overlay, badge, and sidebar during `/incognito`.
+pub const INCOGNITO_DISPLAY_NAME: &str = "Inco Gnito";
+
+/// Signature stealth violet color for `Inco Gnito`.
+pub const INCOGNITO_COLOR: &str = "#7C5CFF";
+
+/// Subtitle description shown in the sidebar during `/incognito`.
+pub const INCOGNITO_DUTIES: &str = "Private Chat • No context sent • Nothing saved";
+
+/// Returns `true` if `id_or_name` identifies the built-in `/incognito` persona.
+#[must_use]
+pub fn is_incognito_character(id_or_name: &str) -> bool {
+    let trimmed = id_or_name.trim();
+    trimmed == INCOGNITO_CHARACTER_ID
+        || trimmed.eq_ignore_ascii_case(INCOGNITO_CHARACTER_SLUG)
+        || trimmed.eq_ignore_ascii_case(INCOGNITO_DISPLAY_NAME)
+}
+
 /// A globally accessible, lock-free reactive cache of the character registry.
 /// This is updated via D-Bus (in the UI) and directly by `CharacterRegistry` (in the daemon).
 pub static CHARACTER_CACHE: LazyLock<ArcSwap<Vec<CharacterInfo>>> =

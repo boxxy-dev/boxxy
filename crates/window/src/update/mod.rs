@@ -279,9 +279,6 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
         AppInput::ShowThemesSidebar => {
             window_state::show_themes_sidebar(&mut inner);
         }
-        AppInput::ShowAiChat => {
-            window_state::show_ai_chat(&mut inner);
-        }
         AppInput::ShowClawSidebar => {
             window_state::show_claw_sidebar(&mut inner);
         }
@@ -399,15 +396,13 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
             let tx_apis = inner.tx.clone();
             let tx_model_close = inner.tx.clone();
             let dialog = boxxy_model_selection::GlobalModelSelectorDialog::new_with_custom(
-                inner.current_settings.ai_chat_model.clone(),
                 inner.current_settings.claw_model.clone(),
                 inner.current_settings.memory_model.clone(),
                 inner.current_settings.ollama_base_url.clone(),
                 inner.current_settings.get_effective_api_keys(),
                 inner.current_settings.openai_compatible_endpoints.clone(),
-                move |ai_provider, claw_provider, memory_provider| {
+                move |claw_provider, memory_provider| {
                     boxxy_preferences::Settings::update(|settings| {
-                        settings.ai_chat_model = ai_provider.clone();
                         settings.claw_model = claw_provider.clone();
                         settings.memory_model = memory_provider.clone();
                     });

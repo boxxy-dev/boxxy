@@ -366,14 +366,18 @@ impl ClawIndicator {
         self.hbox.remove_css_class("destructive-action");
 
         let registry = boxxy_claw_protocol::characters::CHARACTER_CACHE.load();
-        let color = registry
-            .iter()
-            .find(|c| {
-                c.config.name.eq_ignore_ascii_case(agent_name)
-                    || c.config.display_name.eq_ignore_ascii_case(agent_name)
-            })
-            .map(|c| c.config.color.clone())
-            .unwrap_or_else(|| "@accent_color".to_string());
+        let color = if boxxy_claw_protocol::characters::is_incognito_character(agent_name) {
+            boxxy_claw_protocol::characters::INCOGNITO_COLOR.to_string()
+        } else {
+            registry
+                .iter()
+                .find(|c| {
+                    c.config.name.eq_ignore_ascii_case(agent_name)
+                        || c.config.display_name.eq_ignore_ascii_case(agent_name)
+                })
+                .map(|c| c.config.color.clone())
+                .unwrap_or_else(|| "@accent_color".to_string())
+        };
 
         let pc = &self.pill_class;
         self.pill_provider.load_from_string(&format!(
@@ -499,7 +503,16 @@ impl ClawIndicator {
         let info = registry.iter().find(|c| c.config.id == character_id);
 
         let bc = &self.badge_class;
-        if let Some(info) = info {
+        if boxxy_claw_protocol::characters::is_incognito_character(character_id)
+            || boxxy_claw_protocol::characters::is_incognito_character(name)
+        {
+            self.badge_label
+                .set_text(boxxy_claw_protocol::characters::INCOGNITO_DISPLAY_NAME);
+            self.badge_provider.load_from_string(&format!(
+                ".{bc} {{ background-color: {}; }}",
+                boxxy_claw_protocol::characters::INCOGNITO_COLOR
+            ));
+        } else if let Some(info) = info {
             self.badge_label.set_text(&info.config.display_name);
 
             self.badge_provider.load_from_string(&format!(

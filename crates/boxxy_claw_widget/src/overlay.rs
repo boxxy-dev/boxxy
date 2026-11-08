@@ -628,7 +628,10 @@ impl TerminalOverlay {
         let overlay_for_submit = s.clone();
         s.msg_bar.set_on_submit_hook(move |text| {
             let trimmed = text.trim();
-            if !trimmed.starts_with("/resume ") && !trimmed.starts_with("/btw ") {
+            if !trimmed.starts_with("/resume ")
+                && !trimmed.starts_with("/btw ")
+                && !trimmed.eq_ignore_ascii_case("/incognito")
+            {
                 overlay_for_submit.enter_waiting_state();
             }
         });

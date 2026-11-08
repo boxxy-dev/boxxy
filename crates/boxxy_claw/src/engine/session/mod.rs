@@ -17,6 +17,7 @@ pub struct SessionState {
     pub agent_name: String,
     pub character_id: String,
     pub character_display_name: String,
+    pub incognito: bool,
     pub current_dir: String,
     pub pinned: bool,
     pub web_search_enabled: bool,
@@ -110,6 +111,7 @@ pub struct ClawSession {
     pub session_id: String,
     pub name: String,
     pub character_id: String,
+    pub incognito: bool,
     pub pinned: bool,
     pub total_tokens: u64,
     pub context_tokens: u64,
@@ -143,6 +145,7 @@ impl ClawSession {
             session_id: session_id.clone(),
             name: name.clone(),
             character_id: String::new(),
+            incognito: false,
             pinned: false,
             total_tokens: 0,
             context_tokens: 0,
@@ -158,6 +161,7 @@ impl ClawSession {
                 agent_name: name,
                 character_id: String::new(),
                 character_display_name: String::new(),
+                incognito: false,
                 current_dir: String::new(),
                 pinned: false,
                 web_search_enabled: settings.enable_web_search && settings.web_search_on_by_default,
@@ -220,14 +224,23 @@ impl ClawSession {
         character_display_name: String,
         session_id: String,
     ) -> Self {
+        let is_incognito =
+            boxxy_claw_protocol::characters::is_incognito_character(&character_id);
         self.name = character_display_name.clone();
         self.character_id = character_id.clone();
+        self.incognito = is_incognito;
         self.session_id = session_id.clone();
         if let Ok(mut state) = self.state.try_lock() {
             state.agent_name = character_display_name.clone();
             state.character_id = character_id;
             state.character_display_name = character_display_name;
+            state.incognito = is_incognito;
             state.session_id = session_id;
+            if is_incognito {
+                state.web_search_enabled = false;
+                state.vibe_enabled = false;
+                state.pinned = false;
+            }
         }
         self
     }
@@ -239,12 +252,14 @@ impl ClawSession {
     }
 
     pub(super) async fn send_ui(&self, event: ClawEngineEvent) {
-        persist_visual_event(
-            self.db.clone(),
-            self.session_id.clone(),
-            self.pane_id.clone(),
-            &event,
-        );
+        if !self.incognito {
+            persist_visual_event(
+                self.db.clone(),
+                self.session_id.clone(),
+                self.pane_id.clone(),
+                &event,
+            );
+        }
         let _ = self.tx_ui.send(event).await;
     }
 

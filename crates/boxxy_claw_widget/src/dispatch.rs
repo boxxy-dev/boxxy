@@ -448,7 +448,13 @@ pub fn spawn_dispatch(
                     is_vibe.set(*vibe_enabled);
                     *agent_name.borrow_mut() = name.clone();
 
-                    let status = session_status.borrow().clone();
+                    let status = {
+                        let mut st = session_status.borrow_mut();
+                        if *st == AgentStatus::Off {
+                            *st = AgentStatus::Waiting;
+                        }
+                        st.clone()
+                    };
                     msg_bar.set_character(character_id);
                     msg_bar.update_ui(status, *pinned, *web_search_enabled, *vibe_enabled);
                     let prev_tools =

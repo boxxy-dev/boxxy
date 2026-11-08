@@ -9,7 +9,6 @@ use std::rc::Rc;
 #[derive(Clone)]
 pub struct GlobalModelSelectorDialog {
     dialog: libadwaita::Dialog,
-    pub ai_chat_selector: SingleModelSelector,
     pub claw_selector: SingleModelSelector,
     pub memory_selector: SingleModelSelector,
     on_open_apis: Rc<RefCell<Option<Rc<dyn Fn() + 'static>>>>,
@@ -17,7 +16,6 @@ pub struct GlobalModelSelectorDialog {
 
 impl GlobalModelSelectorDialog {
     pub fn new<F>(
-        init_ai: Option<ModelProvider>,
         init_claw: Option<ModelProvider>,
         init_memory: Option<ModelProvider>,
         ollama_url: String,
@@ -25,10 +23,9 @@ impl GlobalModelSelectorDialog {
         on_done: F,
     ) -> Self
     where
-        F: Fn(Option<ModelProvider>, Option<ModelProvider>, Option<ModelProvider>) + 'static,
+        F: Fn(Option<ModelProvider>, Option<ModelProvider>) + 'static,
     {
         Self::new_with_custom(
-            init_ai,
             init_claw,
             init_memory,
             ollama_url,
@@ -39,7 +36,6 @@ impl GlobalModelSelectorDialog {
     }
 
     pub fn new_with_custom<F>(
-        init_ai: Option<ModelProvider>,
         init_claw: Option<ModelProvider>,
         init_memory: Option<ModelProvider>,
         ollama_url: String,
@@ -48,7 +44,7 @@ impl GlobalModelSelectorDialog {
         on_done: F,
     ) -> Self
     where
-        F: Fn(Option<ModelProvider>, Option<ModelProvider>, Option<ModelProvider>) + 'static,
+        F: Fn(Option<ModelProvider>, Option<ModelProvider>) + 'static,
     {
         let dialog = libadwaita::Dialog::builder()
             .title("Models Selection")
@@ -61,13 +57,6 @@ impl GlobalModelSelectorDialog {
         stack.set_hhomogeneous(true);
         stack.set_vhomogeneous(true);
 
-        let ai_chat_selector = SingleModelSelector::new_with_custom(
-            init_ai,
-            ollama_url.clone(),
-            api_keys.clone(),
-            custom_endpoints.clone(),
-            |_| {},
-        );
         let claw_selector = SingleModelSelector::new_with_custom(
             init_claw.clone(),
             ollama_url.clone(),
@@ -103,10 +92,6 @@ impl GlobalModelSelectorDialog {
             vbox
         };
 
-        let ai_tab = build_tab(
-            &ai_chat_selector,
-            "This model is only used in AI Chat in the Sidebar.",
-        );
         let claw_tab = build_tab(
             &claw_selector,
             "This model is used to run Boxxy Agents. A highly capable reasoning model is recommended.",
@@ -116,7 +101,6 @@ impl GlobalModelSelectorDialog {
             "This model is used to extract background facts and run the background Dream Cycle. Use a fast, lightweight model here.",
         );
 
-        stack.add_titled(&ai_tab, Some("ai"), "AI Chat");
         stack.add_titled(&claw_tab, Some("claw"), "Boxxy Claw");
         stack.add_titled(&mem_tab, Some("memory"), "Memories and Dreams");
 
@@ -163,21 +147,17 @@ impl GlobalModelSelectorDialog {
         footer_row.append(&close_btn);
         container.append(&footer_row);
 
-        let on_done_rc: Rc<
-            dyn Fn(Option<ModelProvider>, Option<ModelProvider>, Option<ModelProvider>),
-        > = Rc::new(on_done);
+        let on_done_rc: Rc<dyn Fn(Option<ModelProvider>, Option<ModelProvider>)> = Rc::new(on_done);
         let on_open_apis: Rc<RefCell<Option<Rc<dyn Fn() + 'static>>>> =
             Rc::new(RefCell::new(None));
 
         {
             let d_clone = dialog.clone();
-            let ai_sel = ai_chat_selector.clone();
             let claw_sel = claw_selector.clone();
             let mem_sel = memory_selector.clone();
             let done_cb = on_done_rc.clone();
             close_btn.connect_clicked(move |_| {
                 done_cb(
-                    ai_sel.get_current_provider(),
                     claw_sel.get_current_provider(),
                     mem_sel.get_current_provider(),
                 );
@@ -189,14 +169,12 @@ impl GlobalModelSelectorDialog {
             let gesture = gtk::GestureClick::new();
             let lbl_weak = apis_link_lbl.downgrade();
             let d_clone = dialog.clone();
-            let ai_sel = ai_chat_selector.clone();
             let claw_sel = claw_selector.clone();
             let mem_sel = memory_selector.clone();
             let done_cb = on_done_rc;
             let open_apis_cb = on_open_apis.clone();
             gesture.connect_released(move |_, _, _, _| {
                 done_cb(
-                    ai_sel.get_current_provider(),
                     claw_sel.get_current_provider(),
                     mem_sel.get_current_provider(),
                 );
@@ -215,7 +193,6 @@ impl GlobalModelSelectorDialog {
 
         Self {
             dialog,
-            ai_chat_selector,
             claw_selector,
             memory_selector,
             on_open_apis,

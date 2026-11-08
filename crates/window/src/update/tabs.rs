@@ -1160,13 +1160,8 @@ pub fn focus_active_terminal(inner: &mut AppWindowInner) {
             .position(|c| c.controller.widget() == &child)
         {
             let modal_open = inner.has_modal_or_popover_open();
-            let focus_in_ai_chat = gtk4::prelude::GtkWindowExt::focus(&inner.window)
-                .is_some_and(|w| {
-                    use gtk4::prelude::WidgetExt;
-                    w.is_ancestor(inner.ai_chat.widget())
-                });
             let tc = &inner.tabs[pos];
-            if !modal_open && !focus_in_ai_chat {
+            if !modal_open {
                 tc.controller.grab_focus();
             }
 

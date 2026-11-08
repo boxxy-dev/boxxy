@@ -78,19 +78,15 @@ pub fn setup_apis_page(
             row.set_title(title);
 
             if is_complete {
-                row.set_subtitle("AI Chat and Boxxy Claw are ready to use.");
+                row.set_subtitle("Boxxy Claw is ready to use.");
                 row.remove_css_class("model-status-warning");
                 row.add_css_class("model-status-success");
             } else {
-                let subtitle = match (
-                    s.resolve_model_state(&s.ai_chat_model),
-                    s.resolve_model_state(&s.claw_model),
-                ) {
-                    (ModelConfigState::MissingApiKey { provider_name: p }, _)
-                    | (_, ModelConfigState::MissingApiKey { provider_name: p }) => {
+                let subtitle = match s.resolve_model_state(&s.claw_model) {
+                    ModelConfigState::MissingApiKey { provider_name: p } => {
                         format!("{} API key is missing.", p)
                     }
-                    (ModelConfigState::OllamaOffline, _) | (_, ModelConfigState::OllamaOffline) => {
+                    ModelConfigState::OllamaOffline => {
                         "Ollama is offline. Check that it is running.".to_string()
                     }
                     _ => "Open Models Selection to set your models.".to_string(),
@@ -431,7 +427,6 @@ pub fn setup_apis_page(
                                         s.api_keys.remove(&old_name_clone);
                                         let s_mut = &mut *s;
                                         for slot in [
-                                            &mut s_mut.ai_chat_model,
                                             &mut s_mut.claw_model,
                                             &mut s_mut.memory_model,
                                         ] {

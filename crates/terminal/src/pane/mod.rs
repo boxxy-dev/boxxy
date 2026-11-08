@@ -510,16 +510,32 @@ impl TerminalPaneComponent {
                         .and_then(|w| w.upgrade())
                     {
                         let pane = inner_arc.borrow().terminal.clone();
+                        let trimmed_query = query.trim();
+                        let incognito_inline_opt =
+                            if trimmed_query.eq_ignore_ascii_case("/incognito") {
+                                Some(String::new())
+                            } else if trimmed_query
+                                .get(..11)
+                                .is_some_and(|p| p.eq_ignore_ascii_case("/incognito "))
+                            {
+                                Some(trimmed_query[11..].trim().to_string())
+                            } else {
+                                None
+                            };
                         let is_resume_cmd = query
                             .strip_prefix("/resume ")
                             .map(str::trim)
                             .is_some_and(|s| !s.is_empty());
-                        if is_resume_cmd {
+                        if is_resume_cmd || incognito_inline_opt.as_ref().is_some_and(String::is_empty)
+                        {
                             inner_arc.borrow().msg_bar.entry.grab_focus();
                         }
 
                         if !is_claw_active_for_msg.get() {
                             is_claw_active_for_msg.set(true);
+                            if *session_status_for_msg.borrow() == AgentStatus::Off {
+                                *session_status_for_msg.borrow_mut() = AgentStatus::Waiting;
+                            }
                             if let Some(ind) = &inner_arc.borrow().claw_indicator {
                                 ind.set_visible(true);
                             }
@@ -547,9 +563,57 @@ impl TerminalPaneComponent {
                         let initial_web = is_web_search_for_msg.get();
 
                         glib::spawn_future_local(async move {
-                            let snapshot =
-                                pane.get_text_snapshot(100, 0).await.unwrap_or_default();
+                            let snapshot = if incognito_inline_opt.is_some() {
+                                String::new()
+                            } else {
+                                pane.get_text_snapshot(100, 0).await.unwrap_or_default()
+                            };
                             let has_session = session_id_ref.lock().await.is_some();
+
+                            if let Some(inline_incognito_query) = incognito_inline_opt {
+                                if has_session {
+                                    // /incognito is only allowed when starting a new session
+                                    return;
+                                }
+                                let agent = crate::get_agent().await;
+                                let char_id = boxxy_claw_protocol::characters::INCOGNITO_CHARACTER_ID
+                                    .to_string();
+                                *pending_rc.borrow_mut() = char_id.clone();
+                                if let Ok((session_id, sub_guard)) = agent
+                                    .create_claw_session_with_sender(
+                                        pane_id,
+                                        char_id,
+                                        event_tx.clone(),
+                                    )
+                                    .await
+                                {
+                                    if session_id.is_empty() {
+                                        return;
+                                    }
+                                    *claw_sub_ref.lock() = Some(sub_guard);
+                                    *session_id_ref.lock().await = Some(session_id.clone());
+                                    let _ = agent
+                                        .post_claw_message(
+                                            session_id.clone(),
+                                            ClawMessage::Initialize,
+                                        )
+                                        .await;
+                                    if !inline_incognito_query.is_empty() {
+                                        let _ = agent
+                                            .post_claw_message(
+                                                session_id,
+                                                ClawMessage::ClawQuery {
+                                                    query: inline_incognito_query,
+                                                    snapshot: String::new(),
+                                                    cwd: String::new(),
+                                                    image_attachments: images,
+                                                },
+                                            )
+                                            .await;
+                                    }
+                                }
+                                return;
+                            }
 
                             let resume_id_opt = query
                                 .strip_prefix("/resume ")
@@ -747,6 +811,7 @@ impl TerminalPaneComponent {
                                 is_pinned_for_active.set(false);
                                 is_vibe_for_active.set(false);
                                 *agent_name_for_active.borrow_mut() = String::new();
+                                *pending_char_for_toggle.borrow_mut() = String::new();
                                 session_usage_for_active.set(SessionUsage::default());
                                 pending_tasks_for_active.borrow_mut().clear();
                                 inner_arc.borrow().msg_bar.clear_character();

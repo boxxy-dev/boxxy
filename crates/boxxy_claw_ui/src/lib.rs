@@ -461,7 +461,28 @@ pub fn create_claw_message_list() -> (gtk::ListView, gio::ListStore) {
             let fb_str = fallback_name.as_deref().unwrap_or_default();
             let fallback_names = [fb_str];
 
-            if (!id_str.is_empty() || !fb_str.is_empty())
+            if boxxy_claw_protocol::characters::is_incognito_character(id_str)
+                || boxxy_claw_protocol::characters::is_incognito_character(fb_str)
+            {
+                let disp = boxxy_claw_protocol::characters::INCOGNITO_DISPLAY_NAME;
+                let color = boxxy_claw_protocol::characters::INCOGNITO_COLOR;
+                title.set_markup(&format!(
+                    "<span foreground=\"{color}\"><b>{}</b></span>",
+                    glib::markup_escape_text(disp)
+                ));
+                update_avatar_ring_color(color);
+                avatar.set_text(Some(disp));
+                avatar.set_show_initials(true);
+                let bytes = glib::Bytes::from_static(
+                    boxxy_claw_protocol::character_loader::incognito_avatar_bytes(),
+                );
+                if let Ok(texture) = gdk::Texture::from_bytes(&bytes) {
+                    avatar.set_custom_image(Some(&texture));
+                }
+                avatar_frame.set_visible(true);
+                icon.set_visible(false);
+                name_set = true;
+            } else if (!id_str.is_empty() || !fb_str.is_empty())
                 && let Some(info) = boxxy_claw_protocol::characters::find_character_exact(
                     &cache,
                     id_str,
@@ -768,6 +789,11 @@ fn format_row_speaker_and_body(row: &PersistentClawRow) -> Option<(String, Strin
         let cache = boxxy_claw_protocol::characters::CHARACTER_CACHE.load();
         let id_str = char_id.as_deref().unwrap_or_default();
         let fb_str = fallback.as_deref().unwrap_or_default();
+        if boxxy_claw_protocol::characters::is_incognito_character(id_str)
+            || boxxy_claw_protocol::characters::is_incognito_character(fb_str)
+        {
+            return boxxy_claw_protocol::characters::INCOGNITO_DISPLAY_NAME.to_string();
+        }
         let fallback_names = [fb_str];
         if (!id_str.is_empty() || !fb_str.is_empty())
             && let Some(info) = boxxy_claw_protocol::characters::resolve_character(

@@ -325,6 +325,46 @@ impl ClawSession {
         cwd: String,
         image_attachments: Vec<String>,
     ) {
+        if self.incognito {
+            if let Some(handle) = ctx.current_turn.take() {
+                handle.abort();
+                let _ = self
+                    .tx_ui
+                    .send(ClawEngineEvent::AgentThinking {
+                        agent_name: self.name.clone(),
+                        character_id: self.character_id.clone(),
+                        is_thinking: false,
+                    })
+                    .await;
+            }
+            ctx.backlog.clear();
+
+            self.send_ui(ClawEngineEvent::UserMessage {
+                content: query.clone(),
+                images: Vec::new(),
+            })
+            .await;
+
+            ctx.current_turn = Some(spawn_turn(
+                self.pane_id.clone(),
+                self.session_id.clone(),
+                self.name.clone(),
+                &query,
+                "",
+                session_ctx,
+                String::new(),
+                false,
+                ctx.env.clone(),
+                self.db.clone(),
+                self.state.clone(),
+                self.tx_ui.clone(),
+                self.tx_self.clone(),
+                None,
+                image_attachments,
+            ));
+            return;
+        }
+
         let mut image_attachments = image_attachments;
         ctx.current_dir = cwd.clone();
         self.ensure_session_persisted(&cwd).await;

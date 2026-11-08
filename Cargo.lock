@@ -1090,26 +1090,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "boxxy-sidebar"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-channel",
- "boxxy-ai-core",
- "boxxy-core-widgets",
- "boxxy-model-selection",
- "boxxy-preferences",
- "boxxy-telemetry",
- "boxxy-viewer",
- "gtk4",
- "libadwaita",
- "rig",
- "sourceview5",
- "tokio",
- "uuid",
-]
-
-[[package]]
 name = "boxxy-sys-utils"
 version = "0.1.0"
 dependencies = [
@@ -1273,7 +1253,6 @@ dependencies = [
  "boxxy-keybindings",
  "boxxy-model-selection",
  "boxxy-preferences",
- "boxxy-sidebar",
  "boxxy-sys-utils",
  "boxxy-terminal",
  "boxxy-themes",

@@ -392,7 +392,7 @@ impl BookmarkEditor {
             ai_text_view_gen.set_sensitive(false);
 
             let settings = boxxy_preferences::Settings::load();
-            let model = settings.claw_model.clone().or(settings.ai_chat_model.clone());
+            let model = settings.claw_model.clone();
             let creds = boxxy_ai_core::AiCredentials::new(
                 settings.get_effective_api_keys(),
                 settings.ollama_base_url.clone(),

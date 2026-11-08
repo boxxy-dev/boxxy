@@ -298,8 +298,6 @@ pub struct Settings {
     pub preview_max_width: i32,
     pub preview_max_height: i32,
     #[serde(default, deserialize_with = "deserialize_optional_model_provider")]
-    pub ai_chat_model: Option<ModelProvider>,
-    #[serde(default, deserialize_with = "deserialize_optional_model_provider")]
     pub claw_model: Option<ModelProvider>,
     #[serde(default, deserialize_with = "deserialize_optional_model_provider")]
     pub memory_model: Option<ModelProvider>,
@@ -381,7 +379,6 @@ impl Default for Settings {
             image_preview_trigger: ImagePreviewTrigger::Click,
             preview_max_width: 300,
             preview_max_height: 200,
-            ai_chat_model: None,
             claw_model: None,
             memory_model: None,
             enable_auto_dreaming: true,
@@ -781,13 +778,11 @@ You can add your own sensitive paths here. One path per line. Lines starting wit
     }
 
     pub fn check_and_unset_invalid_models(&mut self) {
-        let ai_ready   = matches!(self.resolve_model_state(&self.ai_chat_model),  ModelConfigState::Ready(_));
-        let claw_ready = matches!(self.resolve_model_state(&self.claw_model),     ModelConfigState::Ready(_));
-        let mem_ready  = matches!(self.resolve_model_state(&self.memory_model),   ModelConfigState::Ready(_));
+        let claw_ready = matches!(self.resolve_model_state(&self.claw_model),   ModelConfigState::Ready(_));
+        let mem_ready  = matches!(self.resolve_model_state(&self.memory_model), ModelConfigState::Ready(_));
 
-        if !ai_ready   { self.ai_chat_model  = None; }
-        if !claw_ready { self.claw_model     = None; }
-        if !mem_ready  { self.memory_model   = None; }
+        if !claw_ready { self.claw_model   = None; }
+        if !mem_ready  { self.memory_model = None; }
     }
 
     pub fn resolve_model_state(&self, model: &Option<ModelProvider>) -> ModelConfigState {
@@ -853,8 +848,7 @@ You can add your own sensitive paths here. One path per line. Lines starting wit
     }
 
     pub fn is_models_selection_complete(&self) -> bool {
-        matches!(self.resolve_model_state(&self.ai_chat_model), ModelConfigState::Ready(_))
-            && matches!(self.resolve_model_state(&self.claw_model), ModelConfigState::Ready(_))
+        matches!(self.resolve_model_state(&self.claw_model), ModelConfigState::Ready(_))
     }
 
     /// Returns `true` if `cwd` is inside (or equal to) at least one valid directory
@@ -985,7 +979,7 @@ impl Default for AppState {
     fn default() -> Self {
         Self {
             sidebar_visible: false,
-            active_sidebar_page: "assistant".to_string(),
+            active_sidebar_page: "claw".to_string(),
             window_width: 1200,
             window_height: 800,
             is_maximized: false,
@@ -1006,8 +1000,11 @@ impl AppState {
         let mut state = Self::default();
         if let Some(path) = Self::get_path()
             && let Ok(content) = fs::read_to_string(path)
-            && let Ok(s) = serde_json::from_str::<AppState>(&content)
+            && let Ok(mut s) = serde_json::from_str::<AppState>(&content)
         {
+            if s.active_sidebar_page == "assistant" {
+                s.active_sidebar_page = "claw".to_string();
+            }
             state = s;
         }
         APP_STATE_CACHE.store(Arc::new(state));

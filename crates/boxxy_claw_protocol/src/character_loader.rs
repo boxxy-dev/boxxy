@@ -36,6 +36,15 @@ const LEVI_AVATAR: &[u8] = include_bytes!("../../../resources/characters/levi-ku
 const KURO_TOML: &[u8] = include_bytes!("../../../resources/characters/kuro/CHARACTER.toml");
 const KURO_AVATAR: &[u8] = include_bytes!("../../../resources/characters/kuro/AVATAR.png");
 
+const INCOGNITO_AVATAR: &[u8] =
+    include_bytes!("../../../resources/characters/inco-gnito/AVATAR.png");
+
+/// Returns the bundled 256×256 PNG avatar bytes for the `/incognito` persona (`Inco Gnito`).
+#[must_use]
+pub const fn incognito_avatar_bytes() -> &'static [u8] {
+    INCOGNITO_AVATAR
+}
+
 /// Returns the bundled default PNG avatar bytes for the three built-in characters
 /// (`niko-una`, `levi-kujo`, `kuro`), or `None` for user-created characters.
 #[must_use]

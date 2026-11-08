@@ -11,7 +11,6 @@ use boxxy_bookmarks::sidebar::BookmarksSidebarComponent;
 use boxxy_claw_ui::ClawSidebarComponent;
 use boxxy_command_palette::CommandPaletteComponent;
 use boxxy_preferences::{AppState, Settings};
-use boxxy_sidebar::AiSidebarComponent;
 use boxxy_themes::ThemeSelectorComponent;
 
 use crate::actions::setup_actions;
@@ -83,7 +82,6 @@ impl AppWindow {
         });
 
         let app_menu = AppMenuComponent::new();
-        let ai_chat = AiSidebarComponent::new();
 
         let tx_claw_cancel = tx.clone();
         let tx_claw_soft_clear = tx.clone();
@@ -258,7 +256,6 @@ impl AppWindow {
 
         let (sidebar_overlay, sidebar_toolbar, view_stack) = Self::build_sidebar(
             &tx,
-            &ai_chat,
             &claw,
             &bookmarks_sidebar,
             &theme_selector,
@@ -377,7 +374,6 @@ impl AppWindow {
             sidebar_visible: app_state.sidebar_visible,
             preferences: None,
             app_menu,
-            ai_chat,
             claw,
             bookmarks_sidebar,
             bookmarks_controller: None,
@@ -634,7 +630,6 @@ impl AppWindow {
 
     fn build_sidebar(
         tx: &async_channel::Sender<AppInput>,
-        ai_chat: &AiSidebarComponent,
         claw: &ClawSidebarComponent,
         bookmarks_sidebar: &BookmarksSidebarComponent,
         theme_selector: &ThemeSelectorComponent,
@@ -647,9 +642,6 @@ impl AppWindow {
 
         let view_stack = adw::ViewStack::new();
 
-        let assistant_page = view_stack.add_titled(ai_chat.widget(), Some("assistant"), "AI Chat");
-        assistant_page.set_icon_name(Some("boxxy-ai-slop-symbolic"));
-
         let claw_page = view_stack.add_titled(claw.widget(), Some("claw"), "Claw");
         claw_page.set_icon_name(Some("boxxy-boxxyclaw-symbolic"));
 
@@ -660,7 +652,11 @@ impl AppWindow {
         let themes_page = view_stack.add_titled(theme_selector.widget(), Some("themes"), "Colors");
         themes_page.set_icon_name(Some("boxxy-appearance-symbolic"));
 
-        view_stack.set_visible_child_name(&app_state.active_sidebar_page);
+        let initial_page = match app_state.active_sidebar_page.as_str() {
+            "claw" | "bookmarks" | "themes" => app_state.active_sidebar_page.as_str(),
+            _ => "claw",
+        };
+        view_stack.set_visible_child_name(initial_page);
 
         let tx_page = tx.clone();
         view_stack.connect_visible_child_name_notify(move |stack| {

@@ -871,6 +871,14 @@ impl TerminalComponent {
                 continue;
             }
             let claim_opt = claims.iter().find(|c| &c.holder_id == pane_id);
+            if claim_opt
+                .is_some_and(|c| boxxy_claw_protocol::characters::is_incognito_character(&c.character_id))
+                || boxxy_claw_protocol::characters::is_incognito_character(
+                    &data.controller.agent_name(),
+                )
+            {
+                continue;
+            }
             if data.controller.is_claw_active() || claim_opt.is_some() {
                 let mut name = data.controller.agent_name();
                 if name.trim().is_empty()
