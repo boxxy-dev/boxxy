@@ -1,0 +1,61 @@
+/* ============================================================================
+ * Boxxy Theme System — Module 03: Window & HeaderBar Chrome (`boxxy/chrome.css`)
+ *
+ * Owns split-view sidebar panes, headerbar surfaces (.terminal-header,
+ * .content-header, dialog headerbar), and frosted-glass header exclusions.
+ * ============================================================================ */
+
+.sidebar-toolbar,
+.sidebar-toolbar > contents,
+navigation-split-view > .sidebar-pane,
+overlay-split-view > .sidebar-pane,
+.sidebar-pane {
+    background-color: @sidebar_bg_color;
+    color: @sidebar_fg_color;
+}
+
+.main-split-view > .sidebar-pane,
+navigation-split-view > .sidebar-pane,
+overlay-split-view > .sidebar-pane,
+.sidebar-pane {
+    border-right: var(--boxxy-border-width) solid @boxxy_ink;
+    box-shadow: none;
+}
+
+/* Strip duplicate borders/shadows on headerbars inside split-view sidebars */
+navigation-split-view > .sidebar-pane headerbar,
+navigation-split-view > .sidebar-pane .top-bar,
+navigation-split-view > .sidebar-pane .top-bar.raised,
+overlay-split-view > .sidebar-pane headerbar,
+overlay-split-view > .sidebar-pane .top-bar,
+overlay-split-view > .sidebar-pane .top-bar.raised,
+.sidebar-header,
+.sidebar-toolbar > .top-bar,
+.sidebar-toolbar > .top-bar.raised {
+    background-color: transparent;
+    color: @sidebar_fg_color;
+    background-image: none;
+    border: none;
+    border-bottom: none;
+    border-right: none;
+    box-shadow: none;
+}
+
+window:not(.frosted-glass-active) .terminal-header,
+window:not(.frosted-glass-active) .content-header {
+    background-color: @headerbar_bg_color;
+    color: @headerbar_fg_color;
+    background-image: none;
+    border-bottom: var(--boxxy-border-width) solid @boxxy_ink;
+    box-shadow: none;
+}
+
+adw-dialog headerbar,
+dialog headerbar,
+navigation-split-view > .content-pane headerbar {
+    background-color: @headerbar_bg_color;
+    color: @headerbar_fg_color;
+    background-image: none;
+    border-bottom: var(--boxxy-border-width) solid @boxxy_ink;
+    box-shadow: none;
+}

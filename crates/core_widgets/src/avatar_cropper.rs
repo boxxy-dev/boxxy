@@ -32,6 +32,7 @@ impl EditableAvatar {
         let avatar = adw::Avatar::new(size, text, show_initials);
 
         let button = gtk::Button::new();
+        button.add_css_class("circular");
         button.add_css_class("editable-avatar-btn");
         button.set_valign(gtk::Align::Center);
         button.set_halign(gtk::Align::Center);
@@ -48,6 +49,7 @@ impl EditableAvatar {
 
         // Bottom-right pencil badge button (protrudes ~35% outside the avatar circle)
         let edit_btn = gtk::Button::new();
+        edit_btn.add_css_class("circular");
         edit_btn.add_css_class("editable-avatar-badge");
         edit_btn.set_halign(gtk::Align::End);
         edit_btn.set_valign(gtk::Align::End);
@@ -65,6 +67,7 @@ impl EditableAvatar {
 
         // Top-right `×` remove/reset badge button (always displayed when `removable` is enabled)
         let remove_btn = gtk::Button::new();
+        remove_btn.add_css_class("circular");
         remove_btn.add_css_class("editable-avatar-remove-badge");
         remove_btn.set_halign(gtk::Align::End);
         remove_btn.set_valign(gtk::Align::Start);

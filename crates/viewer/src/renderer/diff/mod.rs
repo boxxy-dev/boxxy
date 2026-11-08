@@ -14,7 +14,7 @@ use layout::{DiffLayoutMode, ResponsiveDiffContainer};
 use markup::{DiffPayloadKind, PreparedDiff, get_or_prepare_diff, prepare_from_payload};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
-use std::sync::{Arc, Once};
+use std::sync::Arc;
 
 pub struct DiffRenderer;
 
@@ -28,8 +28,6 @@ impl BlockRenderer for DiffRenderer {
     }
 
     fn render(&self, block: &ContentBlock, _registry: &ViewerRegistry) -> gtk::Widget {
-        ensure_diff_css_loaded();
-
         let ContentBlock::Custom {
             schema,
             raw_payload,
@@ -526,102 +524,6 @@ fn build_info_banner(text: &str) -> gtk::Box {
     row.append(&lbl);
 
     row
-}
-
-fn ensure_diff_css_loaded() {
-    static DIFF_CSS_ONCE: Once = Once::new();
-    DIFF_CSS_ONCE.call_once(|| {
-        if let Some(display) = gtk::gdk::Display::default() {
-            let css = "
-                .viewer-diff-card {
-                    border-radius: 10px;
-                    font-size: 1.05em;
-                }
-                .diff-card-header {
-                    padding: 6px 10px;
-                    border-bottom: 1px solid alpha(currentColor, 0.14);
-                }
-                .diff-hunk-divider {
-                    opacity: 0.45;
-                }
-                .diff-col-left {
-                    border-right: 1px solid alpha(currentColor, 0.16);
-                }
-                .diff-gutter-sep {
-                    opacity: 0.35;
-                }
-                .diff-gutter-label {
-                    font-size: 1em;
-                    font-variant-numeric: tabular-nums;
-                }
-                .diff-code-label {
-                    font-size: 1em;
-                    font-variant-numeric: tabular-nums;
-                }
-                .diff-badge {
-                    font-size: 0.70em;
-                    font-weight: 700;
-                    padding: 2px 7px;
-                    border-radius: 99px;
-                    letter-spacing: 0.4px;
-                }
-                .diff-badge-modified {
-                    background-color: alpha(@accent_bg_color, 0.18);
-                    color: @accent_color;
-                }
-                .diff-badge-created {
-                    background-color: alpha(@success_bg_color, 0.20);
-                    color: @success_color;
-                }
-                .diff-badge-binary {
-                    background-color: alpha(currentColor, 0.14);
-                }
-                .diff-stat-add {
-                    color: @success_color;
-                    font-weight: 700;
-                }
-                .diff-stat-del {
-                    color: @error_color;
-                    font-weight: 700;
-                }
-                .diff-ratio-block {
-                    border-radius: 2px;
-                }
-                .diff-ratio-add {
-                    background-color: @success_bg_color;
-                }
-                .diff-ratio-del {
-                    background-color: @error_bg_color;
-                }
-                .diff-ratio-neutral {
-                    background-color: alpha(currentColor, 0.22);
-                }
-                .diff-header-pill {
-                    font-size: 0.78em;
-                    font-weight: 600;
-                    padding: 2px 8px;
-                    border-radius: 6px;
-                    background-color: alpha(currentColor, 0.10);
-                }
-                .diff-slide-drawer {
-                    background-color: @card_bg_color;
-                    border-left: 2px solid @accent_bg_color;
-                    box-shadow: -6px 0 18px rgba(0, 0, 0, 0.35);
-                }
-                .diff-truncation-banner {
-                    padding: 4px 12px;
-                    border-top: 1px dashed alpha(currentColor, 0.18);
-                }
-            ";
-            let provider = gtk::CssProvider::new();
-            provider.load_from_string(css);
-            gtk::style_context_add_provider_for_display(
-                &display,
-                &provider,
-                gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
-            );
-        }
-    });
 }
 
 #[cfg(test)]

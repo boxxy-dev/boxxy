@@ -1,0 +1,134 @@
+/* ============================================================================
+ * Boxxy Theme System — Module 05: Navigation Sidebar & Switchers (`boxxy/sidebar.css`)
+ *
+ * Owns `.navigation-sidebar` capsule rows, embedded past-session option buttons,
+ * and top-level `viewswitcher` / `stackswitcher` mode toggle buttons.
+ * ============================================================================ */
+
+/* Keep `.navigation-sidebar` itself transparent so Lists inside popovers
+   (like Command Palette) never paint a sidebar-colored box background. */
+.navigation-sidebar {
+    background-color: transparent;
+    color: inherit;
+}
+
+.navigation-sidebar > row {
+    border-radius: var(--boxxy-radius-lg);
+    color: inherit;
+    outline: var(--boxxy-border-width) solid transparent;
+    outline-offset: -2px;
+}
+
+.navigation-sidebar > row:hover:not(:selected),
+.navigation-sidebar > row.menu-open:not(:selected) {
+    background-color: @boxxy_surface_hover;
+    color: @accent_fg_color;
+    outline: var(--boxxy-border-width) solid @boxxy_ink;
+    outline-offset: -2px;
+    box-shadow: 2px 3px 0px @boxxy_shadow;
+}
+
+.navigation-sidebar > row:hover:not(:selected) label,
+.navigation-sidebar > row:hover:not(:selected) image,
+.navigation-sidebar > row.menu-open:not(:selected) label,
+.navigation-sidebar > row.menu-open:not(:selected) image {
+    color: @accent_fg_color;
+}
+
+.navigation-sidebar > row:selected {
+    background-color: @accent_bg_color;
+    color: @accent_fg_color;
+    outline: var(--boxxy-border-width) solid @boxxy_ink;
+    outline-offset: -2px;
+    box-shadow: 2px 3px 0px @boxxy_shadow;
+}
+
+.navigation-sidebar > row:selected label,
+.navigation-sidebar > row:selected image {
+    color: @accent_fg_color;
+    font-weight: 700;
+}
+
+.navigation-sidebar > row:hover:not(:selected):active,
+.navigation-sidebar > row:selected:active {
+    transform: var(--boxxy-press-translate);
+    box-shadow: 1px 1px 0px @boxxy_shadow;
+}
+
+/* Embedded Past-Session `⋮` Options Button inside `.navigation-sidebar > row` */
+.navigation-sidebar > row button.past-session-options-btn {
+    background: transparent;
+    background-color: transparent;
+    background-image: none;
+    border: none;
+    border-radius: var(--boxxy-radius-pill);
+    box-shadow: none;
+}
+
+.navigation-sidebar > row button.past-session-options-btn:hover,
+.navigation-sidebar > row button.past-session-options-btn.menu-open,
+.navigation-sidebar > row button.past-session-options-btn:active {
+    background-color: @window_bg_color;
+    color: @window_fg_color;
+    box-shadow: none;
+}
+
+.navigation-sidebar > row:hover:not(:selected) button.past-session-options-btn:hover image,
+.navigation-sidebar > row:hover:not(:selected) button.past-session-options-btn.menu-open image,
+.navigation-sidebar > row.menu-open button.past-session-options-btn image,
+.navigation-sidebar > row:selected button.past-session-options-btn:hover image,
+.navigation-sidebar > row:selected button.past-session-options-btn.menu-open image,
+.navigation-sidebar > row button.past-session-options-btn:hover image,
+.navigation-sidebar > row button.past-session-options-btn.menu-open image,
+.navigation-sidebar > row button.past-session-options-btn:active image {
+    color: @window_fg_color;
+}
+
+/* ── ViewSwitcher & StackSwitcher Mode Toggle Buttons ────────────────────── */
+
+viewswitcher > button,
+headerbar viewswitcher > button,
+stackswitcher > button,
+dialog stackswitcher > button {
+    border-radius: var(--boxxy-radius-md);
+}
+
+viewswitcher > button + button,
+headerbar viewswitcher > button + button {
+    margin-left: 2px;
+}
+
+stackswitcher.linked > button,
+dialog stackswitcher.linked > button {
+    border-radius: var(--boxxy-radius-md);
+    margin-right: 0;
+}
+
+stackswitcher > button + button,
+dialog stackswitcher > button + button {
+    margin-left: 6px;
+}
+
+viewswitcher > button:checked,
+headerbar viewswitcher > button:checked,
+viewswitcher > button:active,
+headerbar viewswitcher > button:active,
+stackswitcher > button:checked,
+dialog stackswitcher > button:checked {
+    background-color: @accent_bg_color;
+    color: @accent_fg_color;
+    outline: var(--boxxy-border-width) solid @boxxy_ink;
+    outline-offset: -2px;
+    box-shadow: 2px 3px 0px @boxxy_shadow;
+    transform: none;
+}
+
+viewswitcher > button:checked label,
+viewswitcher > button:checked image,
+headerbar viewswitcher > button:checked label,
+headerbar viewswitcher > button:checked image,
+stackswitcher > button:checked label,
+dialog stackswitcher > button:checked label {
+    color: @accent_fg_color;
+    font-weight: 700;
+}

@@ -1,0 +1,171 @@
+/* ============================================================================
+ * Boxxy Theme System — Module 12: Dialog Sheets & Custom Widgets (`boxxy/dialogs-widgets.css`)
+ *
+ * Owns `dialog sheet`, Preferences theme tag pills, What's New dialog hero/tiles/rows,
+ * and Editable Avatar buttons & badges.
+ * ============================================================================ */
+
+/* Dialog Sheets: single crisp 2px ink border & offset shadow */
+floating-sheet > sheet,
+bottom-sheet > sheet,
+dialog-host > dialog sheet {
+    border: var(--boxxy-border-width) solid @boxxy_ink;
+    outline: none;
+    box-shadow: 4px 5px 0px @boxxy_shadow;
+}
+
+/* ── Preferences -> Themes Page Custom Widgets ───────────────────────────── */
+
+.boxxy-theme-tag-pill {
+    background-color: @accent_bg_color;
+    color: @accent_fg_color;
+    border-radius: var(--boxxy-radius-pill);
+    padding: 1px 8px;
+    font-size: 0.78em;
+    font-weight: 700;
+    border: var(--boxxy-border-thin) solid @boxxy_ink;
+    outline: none;
+}
+
+/* ── Editable Avatar & Badges (Protected from `preferencespage button` padding) */
+
+preferencespage button.editable-avatar-btn,
+dialog button.editable-avatar-btn,
+button.editable-avatar-btn {
+    padding: 0;
+    margin: 5px;
+    min-width: 0;
+    min-height: 0;
+    border-radius: var(--boxxy-radius-pill);
+    background-color: transparent;
+    background-image: none;
+    border: var(--boxxy-border-width) solid transparent;
+    outline: none;
+    box-shadow: none;
+}
+
+preferencespage button.editable-avatar-badge,
+dialog button.editable-avatar-badge,
+button.editable-avatar-badge {
+    padding: 0;
+    min-width: 26px;
+    min-height: 26px;
+    border-radius: var(--boxxy-radius-pill);
+    background-color: @window_bg_color;
+    background-image: none;
+    color: @window_fg_color;
+    border: var(--boxxy-border-thin) solid @boxxy_ink;
+    outline: none;
+    box-shadow: 1.5px 2px 0px @boxxy_shadow;
+}
+
+.editable-avatar-container:hover button.editable-avatar-badge,
+preferencespage button.editable-avatar-badge:hover,
+dialog button.editable-avatar-badge:hover,
+button.editable-avatar-badge:hover {
+    background-color: @accent_bg_color;
+    color: @accent_fg_color;
+    border-color: @boxxy_ink;
+}
+
+preferencespage button.editable-avatar-remove-badge,
+dialog button.editable-avatar-remove-badge,
+button.editable-avatar-remove-badge {
+    padding: 0;
+    min-width: 26px;
+    min-height: 26px;
+    border-radius: var(--boxxy-radius-pill);
+    background-color: @window_bg_color;
+    background-image: none;
+    color: @window_fg_color;
+    border: var(--boxxy-border-thin) solid @boxxy_ink;
+    outline: none;
+    box-shadow: 1.5px 2px 0px @boxxy_shadow;
+}
+
+preferencespage button.editable-avatar-remove-badge:hover,
+dialog button.editable-avatar-remove-badge:hover,
+button.editable-avatar-remove-badge:hover {
+    background-color: @error_bg_color;
+    color: @error_fg_color;
+    border-color: @boxxy_ink;
+}
+
+/* ── What's New Dialog Tiles, Pills & Custom Buttons ─────────────────────── */
+
+.whats-new-hero {
+    border-bottom: var(--boxxy-border-width) solid @boxxy_ink;
+}
+
+.whats-new-commit-pill {
+    background-color: @card_bg_color;
+    color: @card_fg_color;
+    border: var(--boxxy-border-width) solid @boxxy_ink;
+    outline: none;
+    box-shadow: 2px 2px 0px @boxxy_shadow;
+}
+
+.whats-new-stat-tile,
+dialog button.whats-new-stat-tile-btn,
+button.whats-new-stat-tile-btn {
+    background-color: @card_bg_color;
+    color: @card_fg_color;
+    border: var(--boxxy-border-width) solid @boxxy_ink;
+    border-radius: var(--boxxy-radius-lg);
+    outline: none;
+    padding: 10px 8px;
+    box-shadow: 2px 3px 0px @boxxy_shadow;
+}
+
+dialog button.whats-new-stat-tile-btn:hover,
+button.whats-new-stat-tile-btn:hover {
+    background-color: @boxxy_surface_hover;
+    border-color: @boxxy_ink;
+    transform: var(--boxxy-lift-translate);
+    box-shadow: 3px 4px 0px @boxxy_shadow;
+}
+
+dialog button.whats-new-stat-tile-btn:active,
+button.whats-new-stat-tile-btn:active {
+    transform: var(--boxxy-press-translate);
+    box-shadow: 1px 1px 0px @boxxy_shadow;
+}
+
+/* Preserve dedicated compact padding on What's New dialog controls
+   (specificity `>= (0, 3, 2)` to beat `dialog button:not(.flat):not(.circular):not(.color-dot-btn)`) */
+dialog button.whats-new-range-btn:not(.circular):not(.color-dot-btn),
+dialog button.whats-new-range-btn,
+button.whats-new-range-btn {
+    min-width: 26px;
+    min-height: 26px;
+    padding: 2px;
+    border-radius: 7px;
+}
+
+dialog button.whats-new-commit-row:not(.circular):not(.color-dot-btn),
+dialog button.whats-new-commit-row,
+button.whats-new-commit-row {
+    min-height: 32px;
+    padding: 6px 10px;
+    border-radius: var(--boxxy-radius-input);
+    font-weight: 400;
+}
+
+dialog button.whats-new-back-btn:not(.circular):not(.color-dot-btn),
+dialog button.whats-new-back-btn,
+button.whats-new-back-btn {
+    min-height: 24px;
+    padding: 2px 8px;
+    border-radius: var(--boxxy-radius-sm);
+    font-size: 0.82em;
+    font-weight: 700;
+}
+
+dialog button.whats-new-nav-btn:not(.circular):not(.color-dot-btn),
+dialog button.whats-new-nav-btn,
+button.whats-new-nav-btn {
+    min-width: 24px;
+    min-height: 24px;
+    padding: 2px 4px;
+    border-radius: var(--boxxy-radius-sm);
+}

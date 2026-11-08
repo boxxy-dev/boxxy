@@ -3,6 +3,18 @@
   <gresource prefix="/dev/boxxy/BoxxyTerminal">
     <file compressed="true">style.css</file>
     <file compressed="true" alias="themes/boxxy_skeleton.css">themes/boxxy_skeleton.css</file>
+    <file compressed="true" alias="themes/boxxy/buttons.css">themes/boxxy/buttons.css</file>
+    <file compressed="true" alias="themes/boxxy/chrome.css">themes/boxxy/chrome.css</file>
+    <file compressed="true" alias="themes/boxxy/claw.css">themes/boxxy/claw.css</file>
+    <file compressed="true" alias="themes/boxxy/dialogs-widgets.css">themes/boxxy/dialogs-widgets.css</file>
+    <file compressed="true" alias="themes/boxxy/inputs.css">themes/boxxy/inputs.css</file>
+    <file compressed="true" alias="themes/boxxy/lists-cards.css">themes/boxxy/lists-cards.css</file>
+    <file compressed="true" alias="themes/boxxy/menus-popovers.css">themes/boxxy/menus-popovers.css</file>
+    <file compressed="true" alias="themes/boxxy/reset.css">themes/boxxy/reset.css</file>
+    <file compressed="true" alias="themes/boxxy/scrollbars.css">themes/boxxy/scrollbars.css</file>
+    <file compressed="true" alias="themes/boxxy/sidebar.css">themes/boxxy/sidebar.css</file>
+    <file compressed="true" alias="themes/boxxy/tabs.css">themes/boxxy/tabs.css</file>
+    <file compressed="true" alias="themes/boxxy/tokens.css">themes/boxxy/tokens.css</file>
     <file compressed="true" alias="icons/dev.boxxy.BoxxyTerminal.png">icons/dev.boxxy.BoxxyTerminal.png</file>
     <file compressed="true" alias="icons/whats_new_banner.png">icons/whats_new_banner.png</file>
     <file compressed="true" alias="icons/boxxy-paper-plane-symbolic.svg">icons/boxxy-paper-plane-symbolic.svg</file>

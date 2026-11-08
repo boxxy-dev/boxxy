@@ -1,0 +1,55 @@
+/* ============================================================================
+ * Boxxy Theme System — Module 01: Design Tokens (`boxxy/tokens.css`)
+ *
+ * Defines shared GTK 4.24 CSS custom properties for geometry, corner radii,
+ * border widths, control sizing, and tactile motion.
+ *
+ * NOTE: All color tokens (`@window_bg_color`, `@card_bg_color`, `@accent_bg_color`,
+ * `@boxxy_ink`, `@boxxy_shadow`, `@boxxy_surface_hover`, etc.) are provided as
+ * `@define-color` variables by Layer 3 (`AppThemeColors::to_gtk_css()`) and
+ * Layer 4 (`generate_accent_override_css()`) so they remain compatible with
+ * Libadwaita internal widgets and GTK color functions (`alpha()`, `mix()`).
+ * ============================================================================ */
+
+:root,
+window,
+dialog,
+adw-dialog,
+popover {
+    /* Neo-Brutalist Stroke Widths */
+    --boxxy-border-thin: 1.5px;
+    --boxxy-border-width: 2px;
+    --boxxy-border-thick: 2.5px;
+
+    /* Corner Radii */
+    --boxxy-radius-xs: 2px;      /* Scrollbar thumbs & ratio blocks */
+    --boxxy-radius-sm: 6px;      /* Compact buttons, sliders, inner list rows */
+    --boxxy-radius-md: 8px;      /* Standard buttons, tabs, cards, boxed-lists, menu items */
+    --boxxy-radius-input: 9px;   /* Search/text entries & linked menu groups */
+    --boxxy-radius-lg: 10px;     /* Sidebar capsule rows, .pill CTAs, msgbar, viewer blocks */
+    --boxxy-radius-xl: 12px;     /* Popovers, dialog sheets, crop wells */
+    --boxxy-radius-pill: 9999px; /* Circular buttons & pill badges */
+
+    /* Standard Tactile Button & Menu Item Geometry (34px outer height) */
+    --boxxy-control-min-height: 24px;
+    --boxxy-control-padding: 5px 12px;
+
+    /* Compact Button Modifier (.compact-btn) */
+    --boxxy-compact-min-height: 20px;
+    --boxxy-compact-padding: 2px 8px;
+
+    /* Square HeaderBar & Preferences Group Icon Buttons */
+    --boxxy-icon-btn-size: 24px;
+    --boxxy-icon-btn-padding: 4px 8px;       /* Produces exact 32x32px square in headerbars */
+    --boxxy-icon-btn-group-padding: 4px 6px; /* Compact icon button inside preference rows */
+
+    /* Hero / Advertising CTA Buttons (button.pill) */
+    --boxxy-pill-min-height: 26px;
+    --boxxy-pill-min-width: 72px;
+    --boxxy-pill-padding: 6px 22px;
+
+    /* Tactile Press & Hover Motion */
+    --boxxy-press-translate: translate(1px, 1px);
+    --boxxy-pill-press-translate: translate(1px, 2px);
+    --boxxy-lift-translate: translate(-1px, -1px);
+}

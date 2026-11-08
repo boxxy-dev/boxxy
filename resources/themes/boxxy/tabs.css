@@ -1,0 +1,91 @@
+/* ============================================================================
+ * Boxxy Theme System — Module 04: Terminal Tabs (`boxxy/tabs.css`)
+ *
+ * Owns `AdwTabBar` (`tabbar tab`) surfaces, hover/selected states, and
+ * embedded circular tab close buttons.
+ * ============================================================================ */
+
+.terminal-header tabbar {
+    background-color: transparent;
+    border: none;
+    box-shadow: none;
+}
+
+window:not(.frosted-glass-active) .terminal-header tabbar tab,
+tabbar tab {
+    background-color: @card_bg_color;
+    color: @card_fg_color;
+    border-radius: var(--boxxy-radius-md);
+    outline: var(--boxxy-border-width) solid @boxxy_ink;
+    outline-offset: -2px;
+    box-shadow: none;
+}
+
+window:not(.frosted-glass-active) .terminal-header tabbar tab:hover:not(:selected),
+tabbar tab:hover:not(:selected) {
+    background-color: @boxxy_surface_hover;
+    color: @accent_fg_color;
+}
+
+window:not(.frosted-glass-active) .terminal-header tabbar tab:hover:not(:selected) label,
+window:not(.frosted-glass-active) .terminal-header tabbar tab:hover:not(:selected) image,
+tabbar tab:hover:not(:selected) label,
+tabbar tab:hover:not(:selected) image {
+    color: @accent_fg_color;
+}
+
+window:not(.frosted-glass-active) .terminal-header tabbar tab:selected,
+tabbar tab:selected,
+tabbar tab:checked {
+    background-color: @accent_bg_color;
+    color: @accent_fg_color;
+    outline: var(--boxxy-border-width) solid @boxxy_ink;
+    outline-offset: -2px;
+    box-shadow: none;
+}
+
+window:not(.frosted-glass-active) .terminal-header tabbar tab:selected label,
+window:not(.frosted-glass-active) .terminal-header tabbar tab:selected image,
+tabbar tab:selected label,
+tabbar tab:selected image {
+    color: @accent_fg_color;
+    font-weight: 700;
+}
+
+/* Embedded Circular Tab Close Buttons (`×`):
+   Since the parent tab is filled with `@accent_bg_color` or `@boxxy_surface_hover`
+   when hovered/selected, hovering the circular close button fills it with
+   `@window_bg_color` and `@window_fg_color` icon for high contrast. */
+tabbar tab button.image-button,
+tabbar tab button.tab-close-btn,
+tabbar tab button.flat {
+    background: transparent;
+    background-color: transparent;
+    background-image: none;
+    border: none;
+    border-radius: var(--boxxy-radius-pill);
+    box-shadow: none;
+}
+
+tabbar tab button.image-button:hover,
+tabbar tab button.tab-close-btn:hover,
+tabbar tab button.flat:hover,
+tabbar tab button.image-button:active,
+tabbar tab button.tab-close-btn:active,
+tabbar tab button.flat:active {
+    background-color: @window_bg_color;
+    color: @window_fg_color;
+    box-shadow: none;
+}
+
+window:not(.frosted-glass-active) .terminal-header tabbar tab:selected button:hover image,
+window:not(.frosted-glass-active) .terminal-header tabbar tab:hover button:hover image,
+window:not(.frosted-glass-active) .terminal-header tabbar tab:selected button:active image,
+window:not(.frosted-glass-active) .terminal-header tabbar tab:hover button:active image,
+tabbar tab:selected button:hover image,
+tabbar tab:hover button:hover image,
+tabbar tab button.image-button:hover image,
+tabbar tab button.tab-close-btn:hover image,
+tabbar tab button.flat:hover image {
+    color: @window_fg_color;
+}

@@ -2,13 +2,39 @@ use std::path::Path;
 
 fn main() {
     let resources_dir = Path::new("../../resources");
+    let boxxy_theme_dir = resources_dir.join("themes/boxxy");
+    let mut boxxy_css_files: Vec<String> = std::fs::read_dir(&boxxy_theme_dir)
+        .ok()
+        .into_iter()
+        .flatten()
+        .filter_map(Result::ok)
+        .filter(|e| {
+            e.path()
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("css"))
+        })
+        .filter_map(|e| e.file_name().into_string().ok())
+        .collect();
+    boxxy_css_files.sort();
 
-    let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+    let boxxy_css_xml_entries: String = boxxy_css_files
+        .iter()
+        .map(|name| {
+            format!(
+                "    <file compressed=\"true\" alias=\"themes/boxxy/{name}\">themes/boxxy/{name}</file>\n"
+            )
+        })
+        .collect();
+
+    let xml = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
 <gresources>
   <gresource prefix="/dev/boxxy/BoxxyTerminal">
     <file compressed="true">style.css</file>
     <file compressed="true" alias="themes/boxxy_skeleton.css">themes/boxxy_skeleton.css</file>
-    <file compressed="true" alias="icons/dev.boxxy.BoxxyTerminal.png">icons/dev.boxxy.BoxxyTerminal.png</file>
+{boxxy_css_xml_entries}    <file compressed="true" alias="icons/dev.boxxy.BoxxyTerminal.png">icons/dev.boxxy.BoxxyTerminal.png</file>"#,
+    ) + r#"
     <file compressed="true" alias="icons/whats_new_banner.png">icons/whats_new_banner.png</file>
     <file compressed="true" alias="icons/boxxy-paper-plane-symbolic.svg">icons/boxxy-paper-plane-symbolic.svg</file>
     <file compressed="true" alias="icons/boxxy-edit-clear-all-symbolic.svg">icons/boxxy-edit-clear-all-symbolic.svg</file>
@@ -105,7 +131,7 @@ fn main() {
     <file compressed="true" alias="sounds/timer.wav">sounds/timer.wav</file>
   </gresource>
 </gresources>
-"#.to_string();
+"#;
 
     // Only write if changed — avoids spurious rebuild loops.
     let xml_path = resources_dir.join("resources.gresource.xml");
@@ -114,9 +140,13 @@ fn main() {
         std::fs::write(&xml_path, &xml).expect("failed to write resources.gresource.xml");
     }
 
-    // Rerun if any palette file is added/removed/modified.
+    // Rerun if any palette or theme CSS file is added/removed/modified.
     println!("cargo:rerun-if-changed=../../resources/style.css");
     println!("cargo:rerun-if-changed=../../resources/themes/boxxy_skeleton.css");
+    println!("cargo:rerun-if-changed=../../resources/themes/boxxy");
+    for name in &boxxy_css_files {
+        println!("cargo:rerun-if-changed=../../resources/themes/boxxy/{name}");
+    }
     println!("cargo:rerun-if-changed=../../resources/icons/dev.boxxy.BoxxyTerminal.png");
     println!("cargo:rerun-if-changed=../../resources/icons/whats_new_banner.png");
     println!("cargo:rerun-if-changed=../../resources/icons/boxxy-paper-plane-symbolic.svg");

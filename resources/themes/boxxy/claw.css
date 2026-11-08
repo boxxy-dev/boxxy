@@ -1,0 +1,122 @@
+/* ============================================================================
+ * Boxxy Theme System — Module 11: Claw Overlay & Status Pill (`boxxy/claw.css`)
+ *
+ * Owns `.claw-drawer`, `.boxxy-msgbar`, `.character-btn` pills,
+ * `.claw-status-pill`, and structured `.viewer-block` cards inside the drawer.
+ * ============================================================================ */
+
+.claw-drawer {
+    background-color: @window_bg_color;
+    color: @window_fg_color;
+    border-bottom: var(--boxxy-border-thick) solid @boxxy_ink;
+    box-shadow: 0 6px 0px @boxxy_shadow;
+}
+
+.claw-drawer .claw-row {
+    color: @window_fg_color;
+}
+
+.claw-drawer frame.view,
+.claw-drawer .claw-row-diagnosis .viewer-block,
+.claw-drawer .claw-row-tool-call .viewer-block,
+.claw-drawer .claw-row-process-list .viewer-block {
+    background-color: @card_bg_color;
+    color: @card_fg_color;
+    border-radius: var(--boxxy-radius-lg);
+    border: var(--boxxy-border-width) solid @boxxy_ink;
+    box-shadow: 2px 3px 0px @boxxy_shadow;
+}
+
+.claw-drawer .boxxy-msgbar {
+    background-color: @card_bg_color;
+    color: @card_fg_color;
+    border-radius: var(--boxxy-radius-lg);
+    outline: var(--boxxy-border-width) solid @boxxy_ink;
+    outline-offset: -2px;
+    box-shadow: 2px 3px 0px @boxxy_shadow;
+}
+
+.claw-drawer .boxxy-msgbar:focus-within {
+    outline: var(--boxxy-border-width) solid @accent_color;
+    outline-offset: -2px;
+    box-shadow: 2px 3px 0px @boxxy_ink;
+}
+
+.claw-drawer .boxxy-msgbar entry,
+.claw-drawer .boxxy-msgbar textview,
+.claw-drawer .boxxy-msgbar textview text,
+.claw-drawer .boxxy-msgbar .msgbar-placeholder {
+    color: @card_fg_color;
+}
+
+/* Protect MsgBar Attachment Tag close buttons (`×`) from `.claw-drawer button` padding */
+.claw-drawer .msgbar-tag button {
+    min-height: 18px;
+    min-width: 18px;
+    padding: 0;
+    margin: 0;
+    background: transparent;
+    border: none;
+    outline: none;
+    box-shadow: none;
+}
+
+/* Character Selector Pills inside Claw Drawer */
+.claw-drawer .character-btn {
+    background-color: @card_bg_color;
+    color: @card_fg_color;
+    border-radius: var(--boxxy-radius-md);
+    border: var(--boxxy-border-thin) solid @boxxy_ink;
+    box-shadow: 1.5px 2px 0px @boxxy_shadow;
+    opacity: 0.9;
+}
+
+.claw-drawer .character-btn:hover {
+    background-color: @boxxy_surface_hover;
+    border-color: @boxxy_ink;
+    opacity: 1.0;
+}
+
+.claw-drawer .character-btn.selected-character {
+    background-color: @accent_bg_color;
+    color: @accent_fg_color;
+    border-color: @boxxy_ink;
+    box-shadow: 2px 2.5px 0px @boxxy_shadow;
+    opacity: 1.0;
+}
+
+.claw-drawer .character-btn.selected-character label {
+    color: @accent_fg_color;
+    font-weight: 700;
+}
+
+/* Claw Thinking / Tool Activity Status Pill ("Drinking Water..") */
+.claw-status-pill {
+    background-color: @card_bg_color;
+    color: @card_fg_color;
+    border-radius: var(--boxxy-radius-md);
+    outline: var(--boxxy-border-width) solid @boxxy_ink;
+    outline-offset: -2px;
+    box-shadow: 2px 3px 0px @boxxy_shadow;
+}
+
+.claw-status-pill .status-label {
+    color: @card_fg_color;
+    opacity: 1.0;
+}
+
+.claw-status-pill button.circular {
+    background: transparent;
+    background-color: transparent;
+    background-image: none;
+    border: none;
+    outline: none;
+    box-shadow: none;
+    color: @card_fg_color;
+}
+
+.claw-status-pill button.circular:hover {
+    background-color: @accent_bg_color;
+    color: @accent_fg_color;
+    outline: var(--boxxy-border-thin) solid @boxxy_ink;
+}

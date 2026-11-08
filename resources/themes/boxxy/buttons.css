@@ -1,0 +1,361 @@
+/* ============================================================================
+ * Boxxy Theme System — Module 06: Canonical Button System (`boxxy/buttons.css`)
+ *
+ * Structured in clean cascade order to keep specificity low (`<= (0, 3, 2)`):
+ *   1. Window Control Inner Icon Normalization (`16x16` icon box)
+ *   2. Standard Tactile Button Geometry & Surface (`min-height: 24px; padding: 5px 12px;`)
+ *   3. Semantic Action Modifiers (`.suggested-action`, `.destructive-action`)
+ *   4. Size & Shape Modifiers (`.compact-btn`, HeaderBar/Group `.image-button`, `.pill`, `.color-dot-btn`)
+ * ============================================================================ */
+
+/* 1. Strip Libadwaita's inner circular badge background and extra padding inside
+   window control icons so they share the exact 16x16 icon geometry as
+   standard HeaderBar `.image-button` controls. */
+windowcontrols > button > image,
+headerbar button.close > image,
+headerbar button.minimize > image,
+headerbar button.maximize > image {
+    background: transparent;
+    background-color: transparent;
+    background-image: none;
+    border: none;
+    border-radius: 0;
+    box-shadow: none;
+    outline: none;
+    padding: 0;
+    margin: 0;
+    color: inherit;
+}
+
+/* 2. Single Source of Truth: Standard Tactile Button & Menu Item Sizing
+   All standard tactile buttons, suggested/destructive action buttons, popover
+   menu text items (`modelbutton`), and popover segmented buttons (`box.linked > button.model`)
+   share the exact same `min-height: 24px; padding: 5px 12px;` content geometry.
+   Notice we do NOT chain `:not(.suggested-action):not(.destructive-action):not(.pill)`
+   here — keeping specificity low (`<= (0, 3, 2)`) so `.pill`, `.compact-btn`,
+   `.image-button`, and component-specific button classes override cleanly below! */
+headerbar button:not(.flat):not(.circular),
+windowcontrols > button,
+.sidebar-toolbar headerbar button.toggle,
+.claw-drawer button:not(.flat):not(.circular):not(.character-btn),
+preferencespage button:not(.flat):not(.circular):not(.color-dot-btn),
+dialog button:not(.flat):not(.circular):not(.color-dot-btn),
+popover button:not(.flat):not(.model):not(.circular),
+.bookmarks-gallery button:not(.flat):not(.circular),
+statuspage button:not(.flat):not(.circular),
+button.suggested-action:not(.flat),
+button.destructive-action:not(.flat),
+popover.menu modelbutton,
+popover.terminal-menu modelbutton,
+popover.menu box.linked > button.model,
+popover.terminal-menu box.linked > button.model,
+popover.menu box.linked > button.image-button.model,
+popover.terminal-menu box.linked > button.image-button.model,
+popover.menu box.linked > button,
+popover.terminal-menu box.linked > button {
+    min-height: var(--boxxy-control-min-height);
+    padding: var(--boxxy-control-padding);
+}
+
+/* Base Tactile Button Surface, Border & Shadow */
+headerbar button:not(.flat):not(.circular),
+windowcontrols > button,
+.sidebar-toolbar headerbar button.toggle,
+.content-header button.toggle,
+.claw-drawer button:not(.flat):not(.circular):not(.character-btn),
+preferencespage button:not(.flat):not(.circular):not(.color-dot-btn),
+dialog button:not(.flat):not(.circular):not(.color-dot-btn),
+popover button:not(.flat):not(.model):not(.circular),
+.bookmarks-gallery button:not(.flat):not(.circular),
+statuspage button:not(.flat):not(.circular) {
+    background-color: @card_bg_color;
+    background-image: none;
+    color: @card_fg_color;
+    border-radius: var(--boxxy-radius-md);
+    outline: var(--boxxy-border-width) solid @boxxy_ink;
+    outline-offset: -2px;
+    box-shadow: 2px 3px 0px @boxxy_shadow;
+}
+
+headerbar button:not(.flat):not(.circular):hover,
+windowcontrols > button:hover,
+.sidebar-toolbar headerbar button.toggle:hover,
+.content-header button.toggle:hover,
+.claw-drawer button:not(.flat):not(.circular):not(.character-btn):hover,
+preferencespage button:not(.flat):not(.circular):not(.color-dot-btn):hover,
+dialog button:not(.flat):not(.circular):not(.color-dot-btn):hover,
+popover button:not(.flat):not(.model):not(.circular):hover,
+.bookmarks-gallery button:not(.flat):not(.circular):hover,
+statuspage button:not(.flat):not(.circular):hover {
+    background-color: @boxxy_surface_hover;
+    color: @accent_fg_color;
+}
+
+headerbar button:not(.flat):not(.circular):hover label,
+headerbar button:not(.flat):not(.circular):hover image,
+windowcontrols > button:hover image,
+.sidebar-toolbar headerbar button.toggle:hover label,
+.sidebar-toolbar headerbar button.toggle:hover image,
+.content-header button.toggle:hover label,
+.content-header button.toggle:hover image,
+.claw-drawer button:not(.flat):not(.circular):not(.character-btn):hover label,
+.claw-drawer button:not(.flat):not(.circular):not(.character-btn):hover image,
+preferencespage button:not(.flat):not(.circular):not(.color-dot-btn):hover label,
+preferencespage button:not(.flat):not(.circular):not(.color-dot-btn):hover image,
+dialog button:not(.flat):not(.circular):not(.color-dot-btn):hover label,
+dialog button:not(.flat):not(.circular):not(.color-dot-btn):hover image,
+popover button:not(.flat):not(.model):not(.circular):hover label,
+popover button:not(.flat):not(.model):not(.circular):hover image,
+.bookmarks-gallery button:not(.flat):not(.circular):hover label,
+.bookmarks-gallery button:not(.flat):not(.circular):hover image,
+statuspage button:not(.flat):not(.circular):hover label,
+statuspage button:not(.flat):not(.circular):hover image {
+    color: @accent_fg_color;
+}
+
+headerbar button:not(.flat):not(.circular):active,
+headerbar button:not(.flat):not(.circular):checked,
+windowcontrols > button:active,
+.sidebar-toolbar headerbar button.toggle:checked,
+.content-header button.toggle:checked,
+.claw-drawer button:not(.flat):not(.circular):not(.character-btn):active,
+.claw-drawer button:not(.flat):not(.circular):not(.character-btn):checked,
+preferencespage button:not(.flat):not(.circular):not(.color-dot-btn):active,
+preferencespage button:not(.flat):not(.circular):not(.color-dot-btn):checked,
+dialog button:not(.flat):not(.circular):not(.color-dot-btn):active,
+dialog button:not(.flat):not(.circular):not(.color-dot-btn):checked,
+popover button:not(.flat):not(.model):not(.circular):active,
+popover button:not(.flat):not(.model):not(.circular):checked,
+.bookmarks-gallery button:not(.flat):not(.circular):active,
+.bookmarks-gallery button:not(.flat):not(.circular):checked,
+statuspage button:not(.flat):not(.circular):active,
+statuspage button:not(.flat):not(.circular):checked {
+    background-color: @accent_bg_color;
+    color: @accent_fg_color;
+    transform: var(--boxxy-press-translate);
+    box-shadow: 1px 1px 0px @boxxy_shadow;
+}
+
+/* 3. Semantic Action Modifiers (`.suggested-action` & `.destructive-action`)
+   Ordered after Base Tactile so they override fill/hover/active colors while
+   inheriting standard geometry and tactile outlines. */
+button.suggested-action:not(.flat),
+headerbar button.suggested-action:not(.flat),
+dialog button.suggested-action:not(.flat),
+preferencespage button.suggested-action:not(.flat),
+popover button.suggested-action:not(.flat),
+.claw-drawer button.suggested-action:not(.flat),
+.bookmarks-gallery button.suggested-action:not(.flat),
+statuspage button.suggested-action:not(.flat) {
+    background-color: @accent_bg_color;
+    background-image: none;
+    color: @accent_fg_color;
+    border-radius: var(--boxxy-radius-md);
+    outline: var(--boxxy-border-width) solid @boxxy_ink;
+    outline-offset: -2px;
+    box-shadow: 2px 3px 0px @boxxy_shadow;
+    font-weight: 700;
+}
+
+button.suggested-action:not(.flat):hover,
+headerbar button.suggested-action:not(.flat):hover,
+dialog button.suggested-action:not(.flat):hover,
+preferencespage button.suggested-action:not(.flat):hover,
+popover button.suggested-action:not(.flat):hover,
+.claw-drawer button.suggested-action:not(.flat):hover,
+.bookmarks-gallery button.suggested-action:not(.flat):hover,
+statuspage button.suggested-action:not(.flat):hover {
+    background-color: mix(@accent_bg_color, white, 0.14);
+    color: @accent_fg_color;
+}
+
+button.suggested-action:not(.flat):active,
+headerbar button.suggested-action:not(.flat):active,
+dialog button.suggested-action:not(.flat):active,
+preferencespage button.suggested-action:not(.flat):active,
+popover button.suggested-action:not(.flat):active,
+.claw-drawer button.suggested-action:not(.flat):active,
+.bookmarks-gallery button.suggested-action:not(.flat):active,
+statuspage button.suggested-action:not(.flat):active {
+    transform: var(--boxxy-press-translate);
+    box-shadow: 1px 1px 0px @boxxy_shadow;
+}
+
+button.destructive-action:not(.flat),
+headerbar button.destructive-action:not(.flat),
+dialog button.destructive-action:not(.flat),
+preferencespage button.destructive-action:not(.flat),
+popover button.destructive-action:not(.flat),
+.claw-drawer button.destructive-action:not(.flat),
+.bookmarks-gallery button.destructive-action:not(.flat),
+statuspage button.destructive-action:not(.flat) {
+    background-color: @destructive_bg_color;
+    background-image: none;
+    color: @destructive_fg_color;
+    border-radius: var(--boxxy-radius-md);
+    outline: var(--boxxy-border-width) solid @boxxy_ink;
+    outline-offset: -2px;
+    box-shadow: 2px 3px 0px @boxxy_shadow;
+    font-weight: 700;
+}
+
+button.destructive-action:not(.flat):hover,
+headerbar button.destructive-action:not(.flat):hover,
+dialog button.destructive-action:not(.flat):hover,
+preferencespage button.destructive-action:not(.flat):hover,
+popover button.destructive-action:not(.flat):hover,
+.claw-drawer button.destructive-action:not(.flat):hover,
+.bookmarks-gallery button.destructive-action:not(.flat):hover,
+statuspage button.destructive-action:not(.flat):hover {
+    background-color: mix(@destructive_bg_color, white, 0.14);
+    color: @destructive_fg_color;
+}
+
+button.destructive-action:not(.flat):hover label,
+button.destructive-action:not(.flat):hover image,
+headerbar button.destructive-action:not(.flat):hover label,
+headerbar button.destructive-action:not(.flat):hover image,
+dialog button.destructive-action:not(.flat):hover label,
+dialog button.destructive-action:not(.flat):hover image,
+preferencespage button.destructive-action:not(.flat):hover label,
+preferencespage button.destructive-action:not(.flat):hover image,
+popover button.destructive-action:not(.flat):hover label,
+popover button.destructive-action:not(.flat):hover image,
+.claw-drawer button.destructive-action:not(.flat):hover label,
+.claw-drawer button.destructive-action:not(.flat):hover image {
+    color: @destructive_fg_color;
+}
+
+button.destructive-action:not(.flat):active,
+headerbar button.destructive-action:not(.flat):active,
+dialog button.destructive-action:not(.flat):active,
+preferencespage button.destructive-action:not(.flat):active,
+popover button.destructive-action:not(.flat):active,
+.claw-drawer button.destructive-action:not(.flat):active,
+.bookmarks-gallery button.destructive-action:not(.flat):active,
+statuspage button.destructive-action:not(.flat):active {
+    transform: var(--boxxy-press-translate);
+    box-shadow: 1px 1px 0px @boxxy_shadow;
+}
+
+/* 4. Size & Shape Modifiers (`.compact-btn`, Square Icon Buttons, `.pill` CTAs, Swatches) */
+
+/* Compact Button Modifier (`.compact-btn`) */
+button.compact-btn,
+headerbar button.compact-btn:not(.flat),
+dialog button.compact-btn:not(.flat),
+preferencespage button.compact-btn:not(.flat),
+popover button.compact-btn:not(.flat),
+.claw-drawer button.compact-btn:not(.flat),
+.compact-btn {
+    min-height: var(--boxxy-compact-min-height);
+    padding: var(--boxxy-compact-padding);
+}
+
+/* Unified sizing and padding for all square icon buttons in HeaderBars
+   (Main window `.content-header` Sidebar Toggle, Hamburger Menu, Minimize/Maximize/Close,
+   as well as Dialog / Preferences HeaderBar close buttons).
+   `min-height: 24px; padding: 4px 8px;` produces an exact 32x32px square. */
+headerbar button.image-button:not(.flat):not(.circular):not(.color-dot-btn):not(.pill),
+dialog headerbar button.image-button:not(.flat):not(.circular):not(.color-dot-btn):not(.pill),
+headerbar windowcontrols > button:not(.flat):not(.circular),
+dialog headerbar windowcontrols > button:not(.flat):not(.circular) {
+    min-width: var(--boxxy-icon-btn-size);
+    min-height: var(--boxxy-icon-btn-size);
+    padding: var(--boxxy-icon-btn-padding);
+}
+
+headerbar.content-header button.image-button:not(.flat),
+headerbar.content-header windowcontrols > button {
+    margin-top: 6px;
+    margin-bottom: 6px;
+}
+
+/* Compact padding for icon-only buttons inside Preferences groups
+   (e.g. `-` / `+` spin buttons, clear/action buttons) without affecting
+   the Preferences dialog headerbar close button. */
+preferencespage preferencesgroup button.image-button:not(.flat):not(.circular):not(.color-dot-btn):not(.pill),
+dialog preferencesgroup button.image-button:not(.flat):not(.circular):not(.color-dot-btn):not(.pill) {
+    min-width: var(--boxxy-icon-btn-size);
+    min-height: var(--boxxy-icon-btn-size);
+    padding: var(--boxxy-icon-btn-group-padding);
+}
+
+/* Hero / Advertising CTA Buttons (`.pill`):
+   Used for primary bottom actions in dialogs (Done, Save, Apply, Read What's New,
+   Cancel/Close). Styled as bold, structured Boxxy banner CTAs (border-radius: 10px)
+   rather than round Adwaita capsules. */
+button.pill:not(.flat),
+dialog button.pill:not(.flat),
+preferencespage button.pill:not(.flat),
+statuspage button.pill:not(.flat),
+button.suggested-action.pill:not(.flat),
+dialog button.suggested-action.pill:not(.flat),
+preferencespage button.suggested-action.pill:not(.flat),
+statuspage button.suggested-action.pill:not(.flat),
+button.destructive-action.pill:not(.flat),
+dialog button.destructive-action.pill:not(.flat),
+preferencespage button.destructive-action.pill:not(.flat) {
+    min-height: var(--boxxy-pill-min-height);
+    min-width: var(--boxxy-pill-min-width);
+    padding: var(--boxxy-pill-padding);
+    border-radius: var(--boxxy-radius-lg);
+    font-weight: 700;
+    letter-spacing: 0.2px;
+    outline: var(--boxxy-border-width) solid @boxxy_ink;
+    outline-offset: -2px;
+    box-shadow: 3px 4px 0px @boxxy_shadow;
+}
+
+/* Strip Libadwaita's extra inner `.pill > label` horizontal margins so text-only
+   and icon+text `.pill` buttons have identical 22px left/right padding. */
+button.pill > label,
+dialog button.pill > label,
+preferencespage button.pill > label,
+statuspage button.pill > label {
+    margin-left: 0;
+    margin-right: 0;
+    padding-left: 0;
+    padding-right: 0;
+}
+
+button.pill:not(.flat):hover:not(:disabled),
+dialog button.pill:not(.flat):hover:not(:disabled),
+preferencespage button.pill:not(.flat):hover:not(:disabled),
+statuspage button.pill:not(.flat):hover:not(:disabled),
+button.suggested-action.pill:not(.flat):hover:not(:disabled),
+dialog button.suggested-action.pill:not(.flat):hover:not(:disabled),
+preferencespage button.suggested-action.pill:not(.flat):hover:not(:disabled),
+statuspage button.suggested-action.pill:not(.flat):hover:not(:disabled),
+button.destructive-action.pill:not(.flat):hover:not(:disabled),
+dialog button.destructive-action.pill:not(.flat):hover:not(:disabled),
+preferencespage button.destructive-action.pill:not(.flat):hover:not(:disabled) {
+    transform: var(--boxxy-lift-translate);
+    box-shadow: 4px 5px 0px @boxxy_shadow;
+}
+
+button.pill:not(.flat):active:not(:disabled),
+dialog button.pill:not(.flat):active:not(:disabled),
+preferencespage button.pill:not(.flat):active:not(:disabled),
+statuspage button.pill:not(.flat):active:not(:disabled),
+button.suggested-action.pill:not(.flat):active:not(:disabled),
+dialog button.suggested-action.pill:not(.flat):active:not(:disabled),
+preferencespage button.suggested-action.pill:not(.flat):active:not(:disabled),
+statuspage button.suggested-action.pill:not(.flat):active:not(:disabled),
+button.destructive-action.pill:not(.flat):active:not(:disabled),
+dialog button.destructive-action.pill:not(.flat):active:not(:disabled),
+preferencespage button.destructive-action.pill:not(.flat):active:not(:disabled) {
+    transform: var(--boxxy-pill-press-translate);
+    box-shadow: 1px 1px 0px @boxxy_shadow;
+}
+
+/* Color Swatch Buttons (preserve their inline selected color while adding tactile border) */
+button.color-dot-btn {
+    border: var(--boxxy-border-width) solid @boxxy_ink;
+    box-shadow: 2px 2px 0px @boxxy_shadow;
+}
+
+button.color-dot-btn:hover {
+    border-color: @boxxy_ink;
+    box-shadow: 2px 3px 0px @boxxy_shadow;
+}

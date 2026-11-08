@@ -1,0 +1,26 @@
+/* ============================================================================
+ * Boxxy Theme System — Module 02: Interaction Reset (`boxxy/reset.css`)
+ *
+ * Single Source of Truth for zero-lag hover and state transitions.
+ * GTK 4 interpolates `background-color` from an opaque accent color back to
+ * `transparent` (`rgba(0,0,0,0)`) through dark grey, causing a noisy Adwaita-like
+ * grey trail when sweeping the cursor across rows, menus, or buttons.
+ * Disabling CSS transitions across all interactive chrome guarantees instant,
+ * crisp tactile state changes everywhere.
+ * ============================================================================ */
+
+tabbar tab,
+tabbar tab button,
+.navigation-sidebar > row,
+.navigation-sidebar > row button,
+listbox > row,
+listview > row,
+modelbutton,
+button,
+switch,
+switch > slider,
+scale > trough > slider,
+scrollbar > range > trough,
+scrollbar > range > trough > slider {
+    transition: none;
+}

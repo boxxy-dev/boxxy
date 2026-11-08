@@ -1,0 +1,121 @@
+/* ============================================================================
+ * Boxxy Theme System — Module 08: Boxed Lists & Content Cards (`boxxy/lists-cards.css`)
+ *
+ * Owns `.boxed-list`, `.boxed-list-separate`, `preferencesgroup listbox`,
+ * activatable preference rows, standalone `.card`, and `.bookmark-card`.
+ * ============================================================================ */
+
+/* Give PreferencesGroup inside AlertDialogs breathing room so ScrolledWindow
+   never clips the boxed-list border and offset shadow. */
+dialog.alert preferencesgroup {
+    margin: 2px 4px 5px 2px;
+}
+
+/* Standalone tactile cards (Bookmarks, Viewers) keep the bold 2px ink & shadow */
+.card,
+.bookmark-card {
+    background-color: @card_bg_color;
+    color: @card_fg_color;
+    border-radius: var(--boxxy-radius-md);
+    outline: var(--boxxy-border-width) solid @boxxy_ink;
+    outline-offset: -2px;
+    box-shadow: 3px 4px 0px @boxxy_shadow;
+}
+
+/* Preferences boxed lists (`.boxed-list`, `.boxed-list-separate`):
+   structured Boxxy surface with 8px corners, clean `@boxxy_ink` box-model frame
+   (zero grey wireframe), recessed dark row grooves, and crisp accent hover. */
+.boxed-list,
+.boxed-list-separate,
+listbox.boxed-list,
+listbox.boxed-list-separate,
+preferencesgroup .boxed-list,
+preferencesgroup .boxed-list-separate,
+preferencesgroup listbox {
+    background-color: @card_bg_color;
+    color: @card_fg_color;
+    border-radius: var(--boxxy-radius-md);
+    border: var(--boxxy-border-width) solid @boxxy_ink;
+    outline: none;
+    box-shadow: 2px 3px 0px @boxxy_shadow;
+}
+
+.boxed-list > row,
+.boxed-list-separate > row,
+listbox.boxed-list > row,
+listbox.boxed-list-separate > row,
+preferencesgroup .boxed-list > row,
+preferencesgroup listbox > row {
+    background-color: transparent;
+    background-image: none;
+    border-radius: 0;
+    border: none;
+    border-bottom: var(--boxxy-border-thin) solid alpha(@boxxy_ink, 0.55);
+    outline: none;
+    box-shadow: none;
+    transition: none;
+}
+
+.boxed-list > row:first-child,
+.boxed-list-separate > row:first-child,
+listbox.boxed-list > row:first-child,
+preferencesgroup .boxed-list > row:first-child,
+preferencesgroup listbox > row:first-child {
+    border-top-left-radius: var(--boxxy-radius-sm);
+    border-top-right-radius: var(--boxxy-radius-sm);
+}
+
+.boxed-list > row:last-child,
+.boxed-list-separate > row:last-child,
+listbox.boxed-list > row:last-child,
+preferencesgroup .boxed-list > row:last-child,
+preferencesgroup listbox > row:last-child {
+    border-bottom: none;
+    border-bottom-left-radius: var(--boxxy-radius-sm);
+    border-bottom-right-radius: var(--boxxy-radius-sm);
+}
+
+.boxed-list > row:only-child,
+.boxed-list-separate > row:only-child,
+listbox.boxed-list > row:only-child,
+preferencesgroup .boxed-list > row:only-child,
+preferencesgroup listbox > row:only-child {
+    border-radius: var(--boxxy-radius-sm);
+    border-bottom: none;
+}
+
+/* Activatable preference rows (Terminal Theme, Website, Changelogs, Version):
+   crisp accent-tinted wash + accent-colored title & trailing icon on hover, zero grey flash. */
+.boxed-list > row.activatable:hover,
+.boxed-list-separate > row.activatable:hover,
+listbox.boxed-list > row.activatable:hover,
+preferencesgroup .boxed-list > row.activatable:hover,
+preferencesgroup listbox > row.activatable:hover {
+    background-color: alpha(@accent_bg_color, 0.14);
+    background-image: none;
+}
+
+.boxed-list > row.activatable:active,
+.boxed-list-separate > row.activatable:active,
+listbox.boxed-list > row.activatable:active,
+preferencesgroup .boxed-list > row.activatable:active,
+preferencesgroup listbox > row.activatable:active {
+    background-color: alpha(@accent_bg_color, 0.24);
+    background-image: none;
+}
+
+.boxed-list > row.activatable:hover .title,
+.boxed-list-separate > row.activatable:hover .title,
+listbox.boxed-list > row.activatable:hover .title,
+preferencesgroup .boxed-list > row.activatable:hover .title,
+preferencesgroup listbox > row.activatable:hover .title,
+.boxed-list > row.activatable:hover .suffixes > image,
+.boxed-list-separate > row.activatable:hover .suffixes > image,
+listbox.boxed-list > row.activatable:hover .suffixes > image,
+preferencesgroup .boxed-list > row.activatable:hover .suffixes > image,
+preferencesgroup listbox > row.activatable:hover .suffixes > image,
+.boxed-list > row.activatable:hover image,
+preferencesgroup .boxed-list > row.activatable:hover image {
+    color: @accent_color;
+    opacity: 1.0;
+}

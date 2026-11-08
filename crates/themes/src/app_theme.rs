@@ -831,6 +831,7 @@ fn remove_provider(slot: &'static std::thread::LocalKey<RefCell<Option<gtk::CssP
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gtk::prelude::*;
 
     #[test]
     fn test_sanitize_hex_color_valid_and_invalid() {
@@ -923,5 +924,85 @@ accent = "#f77f00"
         assert!(css.contains("@define-color accent_color #00acc1;"));
         assert!(css.contains("@define-color accent_bg_color #00acc1;"));
         assert!(css.contains("@define-color accent_fg_color #111418;"));
+    }
+
+    #[test]
+    fn test_boxxy_skeleton_imports_all_exist_and_registered() {
+        let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let themes_dir = repo_root.join("resources/themes");
+        let skeleton_path = themes_dir.join("boxxy_skeleton.css");
+        let skeleton_src =
+            fs::read_to_string(&skeleton_path).expect("resources/themes/boxxy_skeleton.css exists");
+
+        let mut imported_paths = Vec::new();
+        for line in skeleton_src.lines() {
+            let trimmed = line.trim();
+            if let Some(rest) = trimmed.strip_prefix("@import \"")
+                && let Some(rel_path) = rest.strip_suffix("\";")
+            {
+                imported_paths.push(rel_path.to_string());
+            }
+        }
+
+        assert!(
+            !imported_paths.is_empty(),
+            "boxxy_skeleton.css must declare @import modules"
+        );
+
+        let gresource_xml = fs::read_to_string(repo_root.join("resources/resources.gresource.xml"))
+            .expect("resources/resources.gresource.xml exists");
+
+        for rel in &imported_paths {
+            let module_path = themes_dir.join(rel);
+            let content = fs::read_to_string(&module_path)
+                .unwrap_or_else(|_| panic!("imported CSS module must exist: {}", module_path.display()));
+            assert!(
+                !content.trim().is_empty(),
+                "imported CSS module must not be empty: {}",
+                module_path.display()
+            );
+            let expected_alias = format!("alias=\"themes/{rel}\"");
+            assert!(
+                gresource_xml.contains(&expected_alias),
+                "resources.gresource.xml must register imported module: {expected_alias}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_gtk_css_provider_parses_style_and_modular_skeleton_without_errors() {
+        if gtk::init().is_err() {
+            return;
+        }
+
+        let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let style_path = repo_root.join("resources/style.css");
+        let skeleton_path = repo_root.join("resources/themes/boxxy_skeleton.css");
+
+        let errors: std::rc::Rc<RefCell<Vec<String>>> = std::rc::Rc::new(RefCell::new(Vec::new()));
+
+        for css_path in [&style_path, &skeleton_path] {
+            let provider = gtk::CssProvider::new();
+            let err_sink = errors.clone();
+            provider.connect_parsing_error(move |_prov, section, err| {
+                let file_name = section
+                    .file()
+                    .and_then(|f| f.path())
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_else(|| "<inline>".to_string());
+                let line = section.start_location().lines() + 1;
+                err_sink
+                    .borrow_mut()
+                    .push(format!("{file_name}:{line}: {err}"));
+            });
+            provider.load_from_path(css_path);
+        }
+
+        let collected = errors.borrow();
+        assert!(
+            collected.is_empty(),
+            "GTK CSS parser reported errors:\n{}",
+            collected.join("\n")
+        );
     }
 }

@@ -1,0 +1,301 @@
+/* ============================================================================
+ * Boxxy Theme System — Module 09: Menus, Popovers & Dropdowns (`boxxy/menus-popovers.css`)
+ *
+ * Owns `popover > contents`, `popover.menu modelbutton`, segmented menu button
+ * groups (`box.linked > button.model`), and `GtkDropDown` / `AdwComboRow`
+ * popover `listview > row` items.
+ * ============================================================================ */
+
+popover > arrow {
+    background: none;
+    background-color: transparent;
+    border: none;
+    min-width: 0;
+    min-height: 0;
+}
+
+popover > contents,
+popover.menu > contents,
+popover.terminal-menu > contents,
+popover.command-palette > contents,
+popover.search-popover > contents,
+.autocomplete-popover contents {
+    background-color: @popover_bg_color;
+    color: @popover_fg_color;
+    border: var(--boxxy-border-width) solid @boxxy_ink;
+    border-radius: var(--boxxy-radius-xl);
+    box-shadow: 4px 5px 0px @boxxy_shadow;
+}
+
+popover.past-session-popover > contents {
+    margin-top: 6px;
+}
+
+/* Reset popover foreground boundary so parent `.navigation-sidebar > row:hover label`
+   never bleeds into popovers anchored to buttons inside a sidebar row (e.g. Past Session `⋮`),
+   and strip Libadwaita's default bold button weight inside menu popovers. */
+.navigation-sidebar > row:hover:not(:selected) popover > contents label,
+.navigation-sidebar > row:hover:not(:selected) popover > contents image,
+.navigation-sidebar > row.menu-open:not(:selected) popover > contents label,
+.navigation-sidebar > row.menu-open:not(:selected) popover > contents image,
+.navigation-sidebar > row:selected popover > contents label,
+.navigation-sidebar > row:selected popover > contents image,
+popover.menu > contents label,
+popover.menu > contents image,
+popover > contents label,
+popover > contents image {
+    color: @popover_fg_color;
+    font-weight: normal;
+}
+
+.navigation-sidebar > row:hover:not(:selected) popover > contents button.error:not(:hover) label,
+.navigation-sidebar > row:hover:not(:selected) popover > contents button.error:not(:hover) image,
+.navigation-sidebar > row.menu-open:not(:selected) popover > contents button.error:not(:hover) label,
+.navigation-sidebar > row.menu-open:not(:selected) popover > contents button.error:not(:hover) image,
+.navigation-sidebar > row:selected popover > contents button.error:not(:hover) label,
+.navigation-sidebar > row:selected popover > contents button.error:not(:hover) image,
+popover > contents button.error:not(:hover) label,
+popover > contents button.error:not(:hover) image {
+    color: @error_color;
+}
+
+/* ── Terminal Menu & PopoverMenu Items and Separators ────────────────────── */
+
+popover.menu separator,
+popover.terminal-menu separator {
+    background-color: alpha(@boxxy_ink, 0.35);
+    min-height: var(--boxxy-border-thin);
+    margin: 2px 6px;
+}
+
+popover.menu modelbutton,
+popover.terminal-menu modelbutton,
+popover.menu button.flat:not(.model):not(.circular):not(.tab-color-swatch-0):not(.tab-color-swatch-1):not(.tab-color-swatch-2):not(.tab-color-swatch-3):not(.tab-color-swatch-4):not(.tab-color-swatch-5):not(.tab-color-swatch-6):not(.tab-color-swatch-7):not(.tab-color-swatch-8):not(.tab-color-swatch-9) {
+    border-radius: var(--boxxy-radius-md);
+    margin: 0 4px 0 2px;
+    color: @popover_fg_color;
+    font-weight: normal;
+    border: var(--boxxy-border-width) solid transparent;
+    outline: none;
+    transition: none;
+}
+
+popover.menu modelbutton:hover:not(:disabled),
+popover.menu modelbutton:selected:not(:disabled),
+popover.terminal-menu modelbutton:hover:not(:disabled),
+popover.terminal-menu modelbutton:selected:not(:disabled),
+popover.menu button.flat:not(.model):not(.circular):not(.error):not(.tab-color-swatch-0):not(.tab-color-swatch-1):not(.tab-color-swatch-2):not(.tab-color-swatch-3):not(.tab-color-swatch-4):not(.tab-color-swatch-5):not(.tab-color-swatch-6):not(.tab-color-swatch-7):not(.tab-color-swatch-8):not(.tab-color-swatch-9):hover {
+    background-color: @accent_bg_color;
+    color: @accent_fg_color;
+    border: var(--boxxy-border-width) solid @boxxy_ink;
+    outline: none;
+    box-shadow: 2px 2px 0px @boxxy_shadow;
+}
+
+.navigation-sidebar > row:hover:not(:selected) popover.menu button.flat:not(.model):not(.circular):not(.error):hover label,
+.navigation-sidebar > row:hover:not(:selected) popover.menu button.flat:not(.model):not(.circular):not(.error):hover image,
+.navigation-sidebar > row.menu-open:not(:selected) popover.menu button.flat:not(.model):not(.circular):not(.error):hover label,
+.navigation-sidebar > row.menu-open:not(:selected) popover.menu button.flat:not(.model):not(.circular):not(.error):hover image,
+.navigation-sidebar > row:selected popover.menu button.flat:not(.model):not(.circular):not(.error):hover label,
+.navigation-sidebar > row:selected popover.menu button.flat:not(.model):not(.circular):not(.error):hover image,
+popover.menu modelbutton:hover:not(:disabled) label,
+popover.menu modelbutton:hover:not(:disabled) image,
+popover.menu modelbutton:selected:not(:disabled) label,
+popover.menu modelbutton:selected:not(:disabled) image,
+popover.terminal-menu modelbutton:hover:not(:disabled) label,
+popover.terminal-menu modelbutton:hover:not(:disabled) image,
+popover.terminal-menu modelbutton:selected:not(:disabled) label,
+popover.terminal-menu modelbutton:selected:not(:disabled) image,
+popover.menu button.flat:not(.model):not(.circular):not(.error):not(.tab-color-swatch-0):not(.tab-color-swatch-1):not(.tab-color-swatch-2):not(.tab-color-swatch-3):not(.tab-color-swatch-4):not(.tab-color-swatch-5):not(.tab-color-swatch-6):not(.tab-color-swatch-7):not(.tab-color-swatch-8):not(.tab-color-swatch-9):hover label,
+popover.menu button.flat:not(.model):not(.circular):not(.error):not(.tab-color-swatch-0):not(.tab-color-swatch-1):not(.tab-color-swatch-2):not(.tab-color-swatch-3):not(.tab-color-swatch-4):not(.tab-color-swatch-5):not(.tab-color-swatch-6):not(.tab-color-swatch-7):not(.tab-color-swatch-8):not(.tab-color-swatch-9):hover image {
+    color: @accent_fg_color;
+}
+
+/* Destructive menu item hover (`Delete Conversation`) uses `@destructive_bg_color` */
+popover.menu button.flat.error:hover:not(:disabled) {
+    background-color: @destructive_bg_color;
+    color: @destructive_fg_color;
+    border: var(--boxxy-border-width) solid @boxxy_ink;
+    outline: none;
+    box-shadow: 2px 2px 0px @boxxy_shadow;
+}
+
+.navigation-sidebar > row:hover:not(:selected) popover.menu button.flat.error:hover:not(:disabled) label,
+.navigation-sidebar > row:hover:not(:selected) popover.menu button.flat.error:hover:not(:disabled) image,
+.navigation-sidebar > row.menu-open:not(:selected) popover.menu button.flat.error:hover:not(:disabled) label,
+.navigation-sidebar > row.menu-open:not(:selected) popover.menu button.flat.error:hover:not(:disabled) image,
+.navigation-sidebar > row:selected popover.menu button.flat.error:hover:not(:disabled) label,
+.navigation-sidebar > row:selected popover.menu button.flat.error:hover:not(:disabled) image,
+popover.menu button.flat.error:hover:not(:disabled) label,
+popover.menu button.flat.error:hover:not(:disabled) image {
+    color: @destructive_fg_color;
+}
+
+/* ── Grouped Horizontal Buttons inside PopoverMenu (`box.linked > button.model`) */
+
+popover.menu box.linked,
+popover.terminal-menu box.linked {
+    background-color: @card_bg_color;
+    border: var(--boxxy-border-width) solid @boxxy_ink;
+    border-radius: var(--boxxy-radius-input);
+    box-shadow: 2px 3px 0px @boxxy_shadow;
+    margin: 2px 4px 4px 2px;
+}
+
+popover.menu box.linked > button.model,
+popover.terminal-menu box.linked > button.model,
+popover.menu box.linked > button.image-button.model,
+popover.terminal-menu box.linked > button.image-button.model,
+popover.menu box.linked > button,
+popover.terminal-menu box.linked > button {
+    background-color: @card_bg_color;
+    background-image: none;
+    color: @card_fg_color;
+    border: none;
+    border-right: var(--boxxy-border-width) solid @boxxy_ink;
+    border-radius: 0;
+    outline: none;
+    box-shadow: none;
+    margin: 0;
+    font-weight: 600;
+}
+
+popover.menu box.linked > button.model:first-child,
+popover.terminal-menu box.linked > button.model:first-child,
+popover.menu box.linked > button:first-child,
+popover.terminal-menu box.linked > button:first-child {
+    border-top-left-radius: 7px;
+    border-bottom-left-radius: 7px;
+}
+
+popover.menu box.linked > button.model:last-child,
+popover.terminal-menu box.linked > button.model:last-child,
+popover.menu box.linked > button:last-child,
+popover.terminal-menu box.linked > button:last-child {
+    border-right: none;
+    border-top-right-radius: 7px;
+    border-bottom-right-radius: 7px;
+}
+
+popover.menu box.linked > button.model:hover:not(:disabled),
+popover.menu box.linked > button.model:selected:not(:disabled),
+popover.terminal-menu box.linked > button.model:hover:not(:disabled),
+popover.terminal-menu box.linked > button.model:selected:not(:disabled),
+popover.menu box.linked > button:hover:not(:disabled),
+popover.terminal-menu box.linked > button:hover:not(:disabled) {
+    background-color: @accent_bg_color;
+    background-image: none;
+    color: @accent_fg_color;
+    box-shadow: none;
+    outline: none;
+}
+
+popover.menu box.linked > button.model:hover:not(:disabled) label,
+popover.menu box.linked > button.model:hover:not(:disabled) image,
+popover.menu box.linked > button.model:selected:not(:disabled) label,
+popover.menu box.linked > button.model:selected:not(:disabled) image,
+popover.terminal-menu box.linked > button.model:hover:not(:disabled) label,
+popover.terminal-menu box.linked > button.model:hover:not(:disabled) image,
+popover.terminal-menu box.linked > button.model:selected:not(:disabled) label,
+popover.terminal-menu box.linked > button.model:selected:not(:disabled) image {
+    color: @accent_fg_color;
+}
+
+popover.menu box.linked > button.model:disabled,
+popover.terminal-menu box.linked > button.model:disabled {
+    background-color: @card_bg_color;
+    background-image: none;
+    color: alpha(@card_fg_color, 0.38);
+}
+
+/* ── GtkDropDown & AdwComboRow Popover Lists (`dropdown popover listview`) ── */
+
+dropdown > popover.menu > contents,
+row.combo popover > contents {
+    padding: 4px;
+}
+
+dropdown > popover.menu > contents listview,
+row.combo popover > contents listview,
+popover.menu > contents listview {
+    background-color: transparent;
+    color: @popover_fg_color;
+    padding: 2px;
+}
+
+dropdown > popover.menu > contents listview > row,
+row.combo popover > contents listview > row,
+popover.menu > contents listview > row {
+    border-radius: var(--boxxy-radius-md);
+    padding: 5px 10px;
+    margin: 1px 2px;
+    color: @popover_fg_color;
+    background: transparent;
+    background-color: transparent;
+    background-image: none;
+    border: var(--boxxy-border-width) solid transparent;
+    outline: none;
+    box-shadow: none;
+    transition: none;
+}
+
+dropdown > popover.menu > contents listview > row:focus,
+dropdown > popover.menu > contents listview > row:focus-visible,
+row.combo popover > contents listview > row:focus,
+row.combo popover > contents listview > row:focus-visible,
+popover.menu > contents listview > row:focus,
+popover.menu > contents listview > row:focus-visible {
+    outline: none;
+    box-shadow: none;
+}
+
+dropdown > popover.menu > contents listview > row:selected,
+row.combo popover > contents listview > row:selected,
+popover.menu > contents listview > row:selected {
+    background-color: alpha(@accent_bg_color, 0.16);
+    color: @popover_fg_color;
+    border: var(--boxxy-border-width) solid alpha(@boxxy_ink, 0.45);
+    outline: none;
+    box-shadow: none;
+}
+
+dropdown > popover.menu > contents listview > row:selected label,
+row.combo popover > contents listview > row:selected label,
+popover.menu > contents listview > row:selected label {
+    font-weight: 700;
+    color: @popover_fg_color;
+}
+
+dropdown > popover.menu > contents listview > row:selected image,
+row.combo popover > contents listview > row:selected image,
+popover.menu > contents listview > row:selected image {
+    color: @accent_color;
+}
+
+dropdown > popover.menu > contents listview > row:hover,
+dropdown > popover.menu > contents listview > row:selected:hover,
+row.combo popover > contents listview > row:hover,
+row.combo popover > contents listview > row:selected:hover,
+popover.menu > contents listview > row:hover,
+popover.menu > contents listview > row:selected:hover {
+    background-color: @accent_bg_color;
+    color: @accent_fg_color;
+    border: var(--boxxy-border-width) solid @boxxy_ink;
+    outline: none;
+    box-shadow: 2px 2px 0px @boxxy_shadow;
+}
+
+dropdown > popover.menu > contents listview > row:hover label,
+dropdown > popover.menu > contents listview > row:hover image,
+dropdown > popover.menu > contents listview > row:selected:hover label,
+dropdown > popover.menu > contents listview > row:selected:hover image,
+row.combo popover > contents listview > row:hover label,
+row.combo popover > contents listview > row:hover image,
+row.combo popover > contents listview > row:selected:hover label,
+row.combo popover > contents listview > row:selected:hover image,
+popover.menu > contents listview > row:hover label,
+popover.menu > contents listview > row:hover image,
+popover.menu > contents listview > row:selected:hover label,
+popover.menu > contents listview > row:selected:hover image {
+    color: @accent_fg_color;
+}
