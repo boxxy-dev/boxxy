@@ -12,7 +12,7 @@ self-update = []
 disable-self-update = []
 
 [dependencies]
-ashpd         = { workspace = true, features = ["flatpak"] }
+ashpd         = { workspace = true }
 tokio         = { workspace = true, features = ["full"] }
 reqwest       = { workspace = true }
 serde         = { workspace = true }

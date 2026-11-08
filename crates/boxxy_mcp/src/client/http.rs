@@ -20,10 +20,11 @@ use super::handler::BoxxyClientHandler;
 /// Maximum number of same-origin 307/308 redirects followed per request.
 const MAX_REDIRECTS: usize = 10;
 
-/// Redirect policy matching `rmcp 3.8.0`'s default Streamable HTTP client:
+/// Redirect policy matching `rmcp 3.9.0`'s default Streamable HTTP client:
 /// follows only same-origin 307/308 redirects (up to 10 hops) so JSON-RPC POST
 /// bodies are preserved and custom headers / session IDs are never leaked to
 /// another origin or rewritten into bodyless GET requests (301/302/303).
+/// Each followed hop is logged at `debug` level (paths only, never query strings).
 pub(crate) fn same_origin_redirect_policy() -> reqwest::redirect::Policy {
     reqwest::redirect::Policy::custom(|attempt| {
         let preserves_body = matches!(
@@ -39,6 +40,16 @@ pub(crate) fn same_origin_redirect_policy() -> reqwest::redirect::Policy {
         } else if attempt.previous().len() > MAX_REDIRECTS {
             attempt.error(format!("exceeded {MAX_REDIRECTS} redirects"))
         } else {
+            log::debug!(
+                "MCP HTTP following same-origin redirect ({}): {} -> {}",
+                attempt.status(),
+                attempt
+                    .previous()
+                    .last()
+                    .map(reqwest::Url::path)
+                    .unwrap_or_default(),
+                attempt.url().path(),
+            );
             attempt.follow()
         }
     })

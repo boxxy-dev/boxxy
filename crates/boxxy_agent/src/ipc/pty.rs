@@ -67,7 +67,7 @@ pub trait AgentPty {
     /// Detaches `pid` while seeding the daemon's 4 MB ring buffer with `initial_snapshot`
     /// (the pre-detach ANSI viewport snapshot from `boxxy-vte`) so line-oriented CLI
     /// tools paused on a prompt restore their full visible screen on reattach.
-    async fn detach_with_snapshot(&self, pid: u32, initial_snapshot: Vec<u8>) -> zbus::Result<u32>;
+    async fn detach_with_snapshot(&self, pid: u32, initial_snapshot: &[u8]) -> zbus::Result<u32>;
 
     /// Returns `(pid, pane_id, idle_secs)` for every detached session
     /// the daemon is currently hosting — powers a future "Detached

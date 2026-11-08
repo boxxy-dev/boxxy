@@ -633,11 +633,11 @@ impl AgentInterface {
     async fn release_holder(
         &self,
         #[zbus(connection)] conn: &zbus::Connection,
-        holder_id: String,
+        holder_id: &str,
     ) {
-        self.session_manager.lock().await.shutdown_pane(&holder_id);
+        self.session_manager.lock().await.shutdown_pane(holder_id);
 
-        if let Some(claim) = self.core.registry.release_holder(&holder_id).await {
+        if let Some(claim) = self.core.registry.release_holder(holder_id).await {
             log::info!(
                 "Released holder {} (kind {:?})",
                 holder_id,
@@ -659,9 +659,9 @@ impl AgentInterface {
     async fn detach_holder(
         &self,
         #[zbus(connection)] conn: &zbus::Connection,
-        holder_id: String,
+        holder_id: &str,
     ) {
-        if let Some(claim) = self.core.registry.detach_holder(&holder_id).await {
+        if let Some(claim) = self.core.registry.detach_holder(holder_id).await {
             log::info!(
                 "Detached holder {} into background (session_id={})",
                 holder_id,
@@ -675,7 +675,7 @@ impl AgentInterface {
         &self,
         #[zbus(connection)] conn: &zbus::Connection,
         #[zbus(header)] header: zbus::message::Header<'_>,
-        old_holder_id: String,
+        old_holder_id: &str,
         new_holder_id: String,
     ) -> String {
         let owner_bus_name = header
@@ -683,7 +683,7 @@ impl AgentInterface {
             .map(|s| s.as_str().to_string())
             .unwrap_or_default();
         let res = self
-            .do_reattach_holder(conn, &old_holder_id, new_holder_id, owner_bus_name)
+            .do_reattach_holder(conn, old_holder_id, new_holder_id, owner_bus_name)
             .await;
         serde_json::to_string(&res).unwrap_or_default()
     }
@@ -722,10 +722,10 @@ impl AgentInterface {
     async fn cancel_pending_task(
         &self,
         #[zbus(connection)] conn: &zbus::Connection,
-        pane_id: String,
-        task_id: String,
+        pane_id: &str,
+        task_id: &str,
     ) {
-        let Ok(parsed_id) = uuid::Uuid::parse_str(&task_id) else {
+        let Ok(parsed_id) = uuid::Uuid::parse_str(task_id) else {
             return;
         };
         let tx_opt = {
@@ -745,10 +745,10 @@ impl AgentInterface {
             let raw = workspace.get_all_pending_tasks_with_pane().await;
             let remaining: Vec<boxxy_claw_protocol::ScheduledTask> = raw
                 .into_iter()
-                .filter(|(p, _, t)| p == &pane_id && t.id != parsed_id)
+                .filter(|(p, _, t)| p == pane_id && t.id != parsed_id)
                 .map(|(_, _, t)| t)
                 .collect();
-            workspace.update_pane_tasks(pane_id, remaining).await;
+            workspace.update_pane_tasks(pane_id.to_string(), remaining).await;
             emit_pending_tasks_changed(conn, &self.core.state.pty_registry).await;
         }
     }
@@ -806,9 +806,9 @@ impl AgentInterface {
             .await;
     }
 
-    async fn resolve_peer(&self, query_json: String) -> String {
+    async fn resolve_peer(&self, query_json: &str) -> String {
         if let Ok(query) =
-            serde_json::from_str::<boxxy_claw_protocol::characters::PeerQuery>(&query_json)
+            serde_json::from_str::<boxxy_claw_protocol::characters::PeerQuery>(query_json)
         {
             let snapshot = self.core.registry.snapshot().await;
             let match_opt = match query {
@@ -905,13 +905,13 @@ impl AgentInterface {
         std::process::exit(0);
     }
 
-    async fn post_claw_message(&self, session_id: String, message_json: String) {
-        if let Ok(message) = serde_json::from_str::<ClawMessage>(&message_json) {
+    async fn post_claw_message(&self, session_id: &str, message_json: &str) {
+        if let Ok(message) = serde_json::from_str::<ClawMessage>(message_json) {
             let pane_info = {
                 let manager = self.session_manager.lock().await;
                 manager
                     .sessions
-                    .get(&session_id)
+                    .get(session_id)
                     .map(|s| (s.pane_id.clone(), s.tx.clone()))
             };
 
@@ -946,7 +946,7 @@ impl AgentInterface {
                             .await
                         {
                             let mut manager = self.session_manager.lock().await;
-                            if let Some(hosted) = manager.sessions.get_mut(&session_id) {
+                            if let Some(hosted) = manager.sessions.get_mut(session_id) {
                                 hosted.agent_name = display_name;
                                 *hosted.active_session_id.write() = resume_sid.clone();
                                 let aliased = hosted.clone();
@@ -977,7 +977,7 @@ impl AgentInterface {
     async fn request_focus_pane(
         &self,
         #[zbus(signal_emitter)] emitter: zbus::object_server::SignalEmitter<'_>,
-        pane_id: String,
+        pane_id: &str,
     ) {
         log::info!("Focus requested for pane {}", pane_id);
         // If `pane_id` belongs to a detached background session, restore it
@@ -986,7 +986,7 @@ impl AgentInterface {
             .core
             .state
             .pty_registry
-            .find_pid_by_pane_id(&pane_id)
+            .find_pid_by_pane_id(pane_id)
             .await
         {
             log::info!(
@@ -1262,28 +1262,63 @@ impl AgentInterface {
                 let pty_reg_clone = self.core.state.pty_registry.clone();
                 let character_display_name_clone = character_display_name.clone();
                 tokio::spawn(async move {
-                    while let Ok(event) = rx_ui.recv().await {
-                        maybe_send_desktop_notification(
-                            &conn_clone,
-                            &ghost_clone,
-                            &character_display_name_clone,
-                            &event,
-                        )
-                        .await;
+                    let mut batch = Vec::with_capacity(16);
+                    while let Ok(first_event) = rx_ui.recv().await {
+                        batch.clear();
+                        batch.push(first_event);
+                        while batch.len() < 64 {
+                            match rx_ui.try_recv() {
+                                Ok(ev) => batch.push(ev),
+                                Err(_) => break,
+                            }
+                        }
 
-                        if matches!(
-                            event,
-                            ClawEngineEvent::TaskStatusChanged { .. }
-                                | ClawEngineEvent::TaskCompleted { .. }
-                        ) {
+                        let mut notify_tasks = false;
+                        let mut signal_msgs = Vec::with_capacity(batch.len());
+                        let effective_sid = active_session_id.read().clone();
+
+                        for event in batch.drain(..) {
+                            maybe_send_desktop_notification(
+                                &conn_clone,
+                                &ghost_clone,
+                                &character_display_name_clone,
+                                &event,
+                            )
+                            .await;
+
+                            if matches!(
+                                event,
+                                ClawEngineEvent::TaskStatusChanged { .. }
+                                    | ClawEngineEvent::TaskCompleted { .. }
+                            ) {
+                                notify_tasks = true;
+                            }
+
+                            if let Ok(event_json) = serde_json::to_string(&event) {
+                                let mut builder = zbus::Message::signal(
+                                    emitter.path(),
+                                    "dev.boxxy.BoxxyTerminal.Agent",
+                                    "ClawEvent",
+                                );
+                                if let Some(sender) = conn_clone.unique_name() {
+                                    builder = builder.sender(sender);
+                                }
+                                if let Some(dest) = emitter.destination() {
+                                    builder = builder.destination(dest);
+                                }
+                                if let Ok(msg) = builder.build(&(&effective_sid, &event_json)) {
+                                    signal_msgs.push(msg);
+                                }
+                            }
+                        }
+
+                        if notify_tasks {
                             emit_pending_tasks_changed(&conn_clone, &pty_reg_clone).await;
                         }
 
-                        if let Ok(event_json) = serde_json::to_string(&event) {
-                            let effective_sid = active_session_id.read().clone();
-                            let _ =
-                                Self::claw_event(&emitter, effective_sid, event_json)
-                                    .await;
+                        if !signal_msgs.is_empty() {
+                            // Batch-send queued ClawEvent signals in a single vectored socket write (zbus 6.2+)
+                            let _ = conn_clone.send_all(&signal_msgs).await;
                         }
                     }
                 });
@@ -1572,7 +1607,10 @@ mod tests {
             .set_persistence(pid, true)
             .await
             .expect("set_persistence");
-        let outcome = pty_proxy.detach(pid).await.expect("detach");
+        let outcome = pty_proxy
+            .detach_with_snapshot(pid, b"snapshot_seed:")
+            .await
+            .expect("detach_with_snapshot");
         assert_eq!(outcome, 1, "expected DetachOutcome::Detached (1)");
 
         let detached = pty_proxy
@@ -1592,10 +1630,10 @@ mod tests {
 
         let (replay_bytes, reattached_fd) = pty_proxy.reattach(pid).await.expect("reattach");
         assert!(reattached_fd.as_raw_fd() >= 0);
+        let replay_str = String::from_utf8_lossy(&replay_bytes);
         assert!(
-            String::from_utf8_lossy(&replay_bytes).contains("zbus6_persist_ok"),
-            "unexpected replay buffer: {:?}",
-            String::from_utf8_lossy(&replay_bytes)
+            replay_str.starts_with("snapshot_seed:") && replay_str.contains("zbus6_persist_ok"),
+            "unexpected replay buffer: {replay_str:?}"
         );
 
         let _ = pty_proxy

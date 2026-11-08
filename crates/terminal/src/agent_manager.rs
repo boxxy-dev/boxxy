@@ -877,7 +877,7 @@ impl AgentManager {
 
     pub async fn detach_with_snapshot(&self, pid: u32, initial_snapshot: Vec<u8>) -> Result<u32> {
         self.proxy
-            .detach_with_snapshot(pid, initial_snapshot)
+            .detach_with_snapshot(pid, &initial_snapshot)
             .await
             .context("Agent detach_with_snapshot failed")
     }

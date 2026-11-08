@@ -661,11 +661,11 @@ impl PtySubsystem {
         })
     }
 
-    async fn detach_with_snapshot(&self, pid: u32, initial_snapshot: Vec<u8>) -> fdo::Result<u32> {
+    async fn detach_with_snapshot(&self, pid: u32, initial_snapshot: &[u8]) -> fdo::Result<u32> {
         let outcome = self
             .state
             .pty_registry
-            .detach_with_snapshot(pid, &initial_snapshot)
+            .detach_with_snapshot(pid, initial_snapshot)
             .await;
         Ok(match outcome {
             registry::DetachOutcome::Detached => 1,
@@ -780,7 +780,7 @@ impl PtySubsystem {
         Ok(())
     }
 
-    async fn get_environment_variable(&self, name: String) -> fdo::Result<String> {
+    async fn get_environment_variable(&self, name: &str) -> fdo::Result<String> {
         Ok(std::env::var(name).unwrap_or_default())
     }
 

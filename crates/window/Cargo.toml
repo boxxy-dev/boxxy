@@ -43,7 +43,6 @@ gstreamer.workspace = true
 rand.workspace = true
 zbus = { workspace = true }
 home = { workspace = true }
-ashpd = { workspace = true }
 
 [dev-dependencies]
 tar.workspace = true
