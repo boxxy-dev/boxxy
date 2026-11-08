@@ -5,10 +5,12 @@
  * and Editable Avatar buttons & badges.
  * ============================================================================ */
 
-/* Dialog Sheets: single crisp 2px ink border & offset shadow */
+/* Dialog Sheets: elevated popover/sidebar surface, single crisp 2px ink border & offset shadow */
 floating-sheet > sheet,
 bottom-sheet > sheet,
 dialog-host > dialog sheet {
+    background-color: @dialog_bg_color;
+    color: @dialog_fg_color;
     border: var(--boxxy-border-width) solid @boxxy_ink;
     outline: none;
     box-shadow: 4px 5px 0px @boxxy_shadow;

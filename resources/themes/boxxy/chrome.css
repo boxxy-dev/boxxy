@@ -14,6 +14,15 @@ overlay-split-view > .sidebar-pane,
     color: @sidebar_fg_color;
 }
 
+/* Keep the Preferences split-view content pane on the primary window canvas
+   so Preferences pairs the elevated `@sidebar_bg_color` left navigation pane
+   with the darker `@window_bg_color` content area, while standalone dialogs
+   use `@dialog_bg_color` (`@popover_bg_color`). */
+navigation-split-view > .content-pane {
+    background-color: @window_bg_color;
+    color: @window_fg_color;
+}
+
 .main-split-view > .sidebar-pane,
 navigation-split-view > .sidebar-pane,
 overlay-split-view > .sidebar-pane,

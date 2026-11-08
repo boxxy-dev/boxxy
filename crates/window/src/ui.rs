@@ -97,15 +97,18 @@ impl AppWindow {
             },
         );
         claw.set_on_resume_session(move |session_id, override_character_id| {
-            let _ = tx_claw_resume
-                .send_blocking(AppInput::ResumeClawSession(session_id, override_character_id));
+            let _ = tx_claw_resume.send_blocking(AppInput::ResumeClawSession(
+                session_id,
+                override_character_id,
+            ));
         });
 
         let tx_bookmarks = tx.clone();
         let tx_open_bookmarks = tx.clone();
         let bookmarks_sidebar = BookmarksSidebarComponent::new(
             move |name, filename, script| {
-                let _ = tx_bookmarks.send_blocking(AppInput::ExecuteBookmark(name, filename, script));
+                let _ =
+                    tx_bookmarks.send_blocking(AppInput::ExecuteBookmark(name, filename, script));
             },
             move || {
                 let _ = tx_open_bookmarks.send_blocking(AppInput::OpenBookmarks);
@@ -509,9 +512,7 @@ impl AppWindow {
                                 .await;
                         }
                         if let Ok(mcp_statuses) = agent_bg.get_mcp_statuses().await {
-                            let _ = tx_bg
-                                .send(AppInput::RefreshMcpStatuses(mcp_statuses))
-                                .await;
+                            let _ = tx_bg.send(AppInput::RefreshMcpStatuses(mcp_statuses)).await;
                         }
                     });
                 }
@@ -547,8 +548,7 @@ impl AppWindow {
                     let _ = tx_startup.send(AppInput::EnsureInitialTab).await;
                 }
                 if let Some(pending) = crate::updater::whats_new::take_whats_new_pending() {
-                    let cached =
-                        crate::updater::whats_new::load_cached_changelog_summary(&pending);
+                    let cached = crate::updater::whats_new::load_cached_changelog_summary(&pending);
                     let _ = tx_startup
                         .send(AppInput::ShowWhatsNewDialog(pending, cached))
                         .await;
@@ -674,7 +674,7 @@ impl AppWindow {
             .policy(adw::ViewSwitcherPolicy::Narrow)
             .build();
 
-                let sidebar_header = adw::HeaderBar::builder().title_widget(&switcher).build();
+        let sidebar_header = adw::HeaderBar::builder().title_widget(&switcher).build();
         sidebar_header.add_css_class("flat");
         sidebar_header.add_css_class("sidebar-header");
 
@@ -787,7 +787,7 @@ impl AppWindow {
         content_toolbar.add_css_class("terminal-toolbar");
         content_toolbar.set_top_bar_style(adw::ToolbarStyle::Flat);
 
-        let content_header = adw::HeaderBar::builder().build();
+        let content_header = adw::HeaderBar::builder().show_title(false).build();
         content_header.add_css_class("flat");
         content_header.add_css_class("terminal-header");
         content_header.add_css_class("content-header");
@@ -795,13 +795,12 @@ impl AppWindow {
         let tab_bar = adw::TabBar::builder()
             .autohide(false)
             .expand_tabs(false) // Will be synced in sync_header_title
+            .hexpand(true)
+            .margin_start(36)
             .view(tab_view)
             .build();
 
-        tab_bar.setup_extra_drop_target(
-            gtk::gdk::DragAction::MOVE,
-            &[gtk::glib::Type::STRING],
-        );
+        tab_bar.setup_extra_drop_target(gtk::gdk::DragAction::MOVE, &[gtk::glib::Type::STRING]);
         tab_bar.set_extra_drag_preload(true);
         tab_bar.connect_extra_drag_value(|_, _page, value| {
             let Some(val) = value else {
@@ -819,14 +818,10 @@ impl AppWindow {
         });
         let tx_tab_drop = tx.clone();
         tab_bar.connect_extra_drag_drop(move |_, page, value| {
-            let Some(source_pane_id) = value
-                .get::<String>()
-                .ok()
-                .and_then(|s| {
-                    s.strip_prefix(boxxy_terminal::PANE_DND_PREFIX)
-                        .map(str::to_string)
-                })
-            else {
+            let Some(source_pane_id) = value.get::<String>().ok().and_then(|s| {
+                s.strip_prefix(boxxy_terminal::PANE_DND_PREFIX)
+                    .map(str::to_string)
+            }) else {
                 return false;
             };
             let target_page_key = page.child().as_ptr() as usize;
@@ -836,8 +831,6 @@ impl AppWindow {
             });
             true
         });
-
-        content_header.set_title_widget(Some(&tab_bar));
 
         let toggle_sidebar_btn = gtk::Button::builder()
             .icon_name("boxxy-dock-left-symbolic")
@@ -888,6 +881,16 @@ impl AppWindow {
             .margin_end(6)
             .build();
         content_header.pack_start(&bell_indicator);
+        content_header.pack_start(&tab_bar);
+
+        // `AdwHeaderBar`'s internal `.start` box defaults to `halign = Start` and
+        // `hexpand = false`, which clamps packed children to their minimum width (~90px).
+        // Setting `Fill` + `hexpand` lets `tab_bar` expand across the full headerbar
+        // while keeping a fixed 42px gap (6px box spacing + 36px margin_start) after `toggle_sidebar_btn`.
+        if let Some(start_box) = tab_bar.parent() {
+            start_box.set_halign(gtk::Align::Fill);
+            start_box.set_hexpand(true);
+        }
 
         content_toolbar.add_top_bar(&content_header);
         content_toolbar.set_content(Some(tab_view));

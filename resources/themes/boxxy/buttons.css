@@ -137,16 +137,17 @@ statuspage button:not(.flat):not(.circular):checked {
 }
 
 /* 3. Semantic Action Modifiers (`.suggested-action` & `.destructive-action`)
-   Ordered after Base Tactile so they override fill/hover/active colors while
-   inheriting standard geometry and tactile outlines. */
-button.suggested-action:not(.flat),
-headerbar button.suggested-action:not(.flat),
-dialog button.suggested-action:not(.flat),
-preferencespage button.suggested-action:not(.flat),
-popover button.suggested-action:not(.flat),
-.claw-drawer button.suggested-action:not(.flat),
-.bookmarks-gallery button.suggested-action:not(.flat),
-statuspage button.suggested-action:not(.flat) {
+   Ordered after Base Tactile and matching its `:not(...)` qualifiers so they
+   strictly beat Base Tactile specificity across dialogs, preferences, popovers,
+   and the Claw drawer while inheriting standard geometry and tactile outlines. */
+button.suggested-action:not(.flat):not(.circular),
+headerbar button.suggested-action:not(.flat):not(.circular),
+dialog button.suggested-action:not(.flat):not(.circular):not(.color-dot-btn),
+preferencespage button.suggested-action:not(.flat):not(.circular):not(.color-dot-btn),
+popover button.suggested-action:not(.flat):not(.model):not(.circular),
+.claw-drawer button.suggested-action:not(.flat):not(.circular):not(.character-btn),
+.bookmarks-gallery button.suggested-action:not(.flat):not(.circular),
+statuspage button.suggested-action:not(.flat):not(.circular) {
     background-color: @accent_bg_color;
     background-image: none;
     color: @accent_fg_color;
@@ -157,38 +158,40 @@ statuspage button.suggested-action:not(.flat) {
     font-weight: 700;
 }
 
-button.suggested-action:not(.flat):hover,
-headerbar button.suggested-action:not(.flat):hover,
-dialog button.suggested-action:not(.flat):hover,
-preferencespage button.suggested-action:not(.flat):hover,
-popover button.suggested-action:not(.flat):hover,
-.claw-drawer button.suggested-action:not(.flat):hover,
-.bookmarks-gallery button.suggested-action:not(.flat):hover,
-statuspage button.suggested-action:not(.flat):hover {
+button.suggested-action:not(.flat):not(.circular):hover,
+headerbar button.suggested-action:not(.flat):not(.circular):hover,
+dialog button.suggested-action:not(.flat):not(.circular):not(.color-dot-btn):hover,
+preferencespage button.suggested-action:not(.flat):not(.circular):not(.color-dot-btn):hover,
+popover button.suggested-action:not(.flat):not(.model):not(.circular):hover,
+.claw-drawer button.suggested-action:not(.flat):not(.circular):not(.character-btn):hover,
+.bookmarks-gallery button.suggested-action:not(.flat):not(.circular):hover,
+statuspage button.suggested-action:not(.flat):not(.circular):hover {
     background-color: mix(@accent_bg_color, white, 0.14);
     color: @accent_fg_color;
 }
 
-button.suggested-action:not(.flat):active,
-headerbar button.suggested-action:not(.flat):active,
-dialog button.suggested-action:not(.flat):active,
-preferencespage button.suggested-action:not(.flat):active,
-popover button.suggested-action:not(.flat):active,
-.claw-drawer button.suggested-action:not(.flat):active,
-.bookmarks-gallery button.suggested-action:not(.flat):active,
-statuspage button.suggested-action:not(.flat):active {
+button.suggested-action:not(.flat):not(.circular):active,
+headerbar button.suggested-action:not(.flat):not(.circular):active,
+dialog button.suggested-action:not(.flat):not(.circular):not(.color-dot-btn):active,
+preferencespage button.suggested-action:not(.flat):not(.circular):not(.color-dot-btn):active,
+popover button.suggested-action:not(.flat):not(.model):not(.circular):active,
+.claw-drawer button.suggested-action:not(.flat):not(.circular):not(.character-btn):active,
+.bookmarks-gallery button.suggested-action:not(.flat):not(.circular):active,
+statuspage button.suggested-action:not(.flat):not(.circular):active {
+    background-color: @accent_bg_color;
+    color: @accent_fg_color;
     transform: var(--boxxy-press-translate);
     box-shadow: 1px 1px 0px @boxxy_shadow;
 }
 
-button.destructive-action:not(.flat),
-headerbar button.destructive-action:not(.flat),
-dialog button.destructive-action:not(.flat),
-preferencespage button.destructive-action:not(.flat),
-popover button.destructive-action:not(.flat),
-.claw-drawer button.destructive-action:not(.flat),
-.bookmarks-gallery button.destructive-action:not(.flat),
-statuspage button.destructive-action:not(.flat) {
+button.destructive-action:not(.flat):not(.circular),
+headerbar button.destructive-action:not(.flat):not(.circular),
+dialog button.destructive-action:not(.flat):not(.circular):not(.color-dot-btn),
+preferencespage button.destructive-action:not(.flat):not(.circular):not(.color-dot-btn),
+popover button.destructive-action:not(.flat):not(.model):not(.circular),
+.claw-drawer button.destructive-action:not(.flat):not(.circular):not(.character-btn),
+.bookmarks-gallery button.destructive-action:not(.flat):not(.circular),
+statuspage button.destructive-action:not(.flat):not(.circular) {
     background-color: @destructive_bg_color;
     background-image: none;
     color: @destructive_fg_color;
@@ -199,54 +202,130 @@ statuspage button.destructive-action:not(.flat) {
     font-weight: 700;
 }
 
-button.destructive-action:not(.flat):hover,
-headerbar button.destructive-action:not(.flat):hover,
-dialog button.destructive-action:not(.flat):hover,
-preferencespage button.destructive-action:not(.flat):hover,
-popover button.destructive-action:not(.flat):hover,
-.claw-drawer button.destructive-action:not(.flat):hover,
-.bookmarks-gallery button.destructive-action:not(.flat):hover,
-statuspage button.destructive-action:not(.flat):hover {
+button.destructive-action:not(.flat):not(.circular):hover,
+headerbar button.destructive-action:not(.flat):not(.circular):hover,
+dialog button.destructive-action:not(.flat):not(.circular):not(.color-dot-btn):hover,
+preferencespage button.destructive-action:not(.flat):not(.circular):not(.color-dot-btn):hover,
+popover button.destructive-action:not(.flat):not(.model):not(.circular):hover,
+.claw-drawer button.destructive-action:not(.flat):not(.circular):not(.character-btn):hover,
+.bookmarks-gallery button.destructive-action:not(.flat):not(.circular):hover,
+statuspage button.destructive-action:not(.flat):not(.circular):hover {
     background-color: mix(@destructive_bg_color, white, 0.14);
     color: @destructive_fg_color;
 }
 
-button.destructive-action:not(.flat):hover label,
-button.destructive-action:not(.flat):hover image,
-headerbar button.destructive-action:not(.flat):hover label,
-headerbar button.destructive-action:not(.flat):hover image,
-dialog button.destructive-action:not(.flat):hover label,
-dialog button.destructive-action:not(.flat):hover image,
-preferencespage button.destructive-action:not(.flat):hover label,
-preferencespage button.destructive-action:not(.flat):hover image,
-popover button.destructive-action:not(.flat):hover label,
-popover button.destructive-action:not(.flat):hover image,
-.claw-drawer button.destructive-action:not(.flat):hover label,
-.claw-drawer button.destructive-action:not(.flat):hover image {
+button.destructive-action:not(.flat):not(.circular):hover label,
+button.destructive-action:not(.flat):not(.circular):hover image,
+headerbar button.destructive-action:not(.flat):not(.circular):hover label,
+headerbar button.destructive-action:not(.flat):not(.circular):hover image,
+dialog button.destructive-action:not(.flat):not(.circular):not(.color-dot-btn):hover label,
+dialog button.destructive-action:not(.flat):not(.circular):not(.color-dot-btn):hover image,
+preferencespage button.destructive-action:not(.flat):not(.circular):not(.color-dot-btn):hover label,
+preferencespage button.destructive-action:not(.flat):not(.circular):not(.color-dot-btn):hover image,
+popover button.destructive-action:not(.flat):not(.model):not(.circular):hover label,
+popover button.destructive-action:not(.flat):not(.model):not(.circular):hover image,
+.claw-drawer button.destructive-action:not(.flat):not(.circular):not(.character-btn):hover label,
+.claw-drawer button.destructive-action:not(.flat):not(.circular):not(.character-btn):hover image,
+.bookmarks-gallery button.destructive-action:not(.flat):not(.circular):hover label,
+.bookmarks-gallery button.destructive-action:not(.flat):not(.circular):hover image,
+statuspage button.destructive-action:not(.flat):not(.circular):hover label,
+statuspage button.destructive-action:not(.flat):not(.circular):hover image {
     color: @destructive_fg_color;
 }
 
-button.destructive-action:not(.flat):active,
-headerbar button.destructive-action:not(.flat):active,
-dialog button.destructive-action:not(.flat):active,
-preferencespage button.destructive-action:not(.flat):active,
-popover button.destructive-action:not(.flat):active,
-.claw-drawer button.destructive-action:not(.flat):active,
-.bookmarks-gallery button.destructive-action:not(.flat):active,
-statuspage button.destructive-action:not(.flat):active {
+button.destructive-action:not(.flat):not(.circular):active,
+headerbar button.destructive-action:not(.flat):not(.circular):active,
+dialog button.destructive-action:not(.flat):not(.circular):not(.color-dot-btn):active,
+preferencespage button.destructive-action:not(.flat):not(.circular):not(.color-dot-btn):active,
+popover button.destructive-action:not(.flat):not(.model):not(.circular):active,
+.claw-drawer button.destructive-action:not(.flat):not(.circular):not(.character-btn):active,
+.bookmarks-gallery button.destructive-action:not(.flat):not(.circular):active,
+statuspage button.destructive-action:not(.flat):not(.circular):active {
+    background-color: @destructive_bg_color;
+    color: @destructive_fg_color;
     transform: var(--boxxy-press-translate);
     box-shadow: 1px 1px 0px @boxxy_shadow;
+}
+
+/* Flat Semantic Text Action Buttons (`.suggested-action.flat` & `.destructive-action.flat`):
+   Used for inline row actions (e.g. `Reattach` and `Terminate` in Background Shells).
+   Because `.flat` strips the solid fill, text must use `@accent_color` / `@destructive_color`
+   rather than `@accent_fg_color` (which is dark ink in Boxxy Dark). */
+button.suggested-action.flat,
+dialog button.suggested-action.flat,
+preferencespage button.suggested-action.flat {
+    background-color: transparent;
+    background-image: none;
+    color: @accent_color;
+    border-radius: var(--boxxy-radius-md);
+    font-weight: 700;
+}
+
+button.suggested-action.flat label,
+button.suggested-action.flat image,
+dialog button.suggested-action.flat label,
+dialog button.suggested-action.flat image,
+preferencespage button.suggested-action.flat label,
+preferencespage button.suggested-action.flat image {
+    color: @accent_color;
+}
+
+button.suggested-action.flat:hover,
+dialog button.suggested-action.flat:hover,
+preferencespage button.suggested-action.flat:hover {
+    background-color: alpha(@accent_bg_color, 0.16);
+    color: @accent_color;
+}
+
+button.suggested-action.flat:active,
+dialog button.suggested-action.flat:active,
+preferencespage button.suggested-action.flat:active {
+    background-color: alpha(@accent_bg_color, 0.28);
+    color: @accent_color;
+}
+
+button.destructive-action.flat,
+dialog button.destructive-action.flat,
+preferencespage button.destructive-action.flat {
+    background-color: transparent;
+    background-image: none;
+    color: @destructive_color;
+    border-radius: var(--boxxy-radius-md);
+    font-weight: 700;
+}
+
+button.destructive-action.flat label,
+button.destructive-action.flat image,
+dialog button.destructive-action.flat label,
+dialog button.destructive-action.flat image,
+preferencespage button.destructive-action.flat label,
+preferencespage button.destructive-action.flat image {
+    color: @destructive_color;
+}
+
+button.destructive-action.flat:hover,
+dialog button.destructive-action.flat:hover,
+preferencespage button.destructive-action.flat:hover {
+    background-color: alpha(@destructive_bg_color, 0.18);
+    color: @destructive_color;
+}
+
+button.destructive-action.flat:active,
+dialog button.destructive-action.flat:active,
+preferencespage button.destructive-action.flat:active {
+    background-color: alpha(@destructive_bg_color, 0.30);
+    color: @destructive_color;
 }
 
 /* 4. Size & Shape Modifiers (`.compact-btn`, Square Icon Buttons, `.pill` CTAs, Swatches) */
 
 /* Compact Button Modifier (`.compact-btn`) */
-button.compact-btn,
-headerbar button.compact-btn:not(.flat),
-dialog button.compact-btn:not(.flat),
-preferencespage button.compact-btn:not(.flat),
-popover button.compact-btn:not(.flat),
-.claw-drawer button.compact-btn:not(.flat),
+button.compact-btn:not(.flat):not(.circular),
+headerbar button.compact-btn:not(.flat):not(.circular),
+dialog button.compact-btn:not(.flat):not(.circular):not(.color-dot-btn),
+preferencespage button.compact-btn:not(.flat):not(.circular):not(.color-dot-btn),
+popover button.compact-btn:not(.flat):not(.model):not(.circular),
+.claw-drawer button.compact-btn:not(.flat):not(.circular):not(.character-btn),
 .compact-btn {
     min-height: var(--boxxy-compact-min-height);
     padding: var(--boxxy-compact-padding);
@@ -285,17 +364,17 @@ dialog preferencesgroup button.image-button:not(.flat):not(.circular):not(.color
    Used for primary bottom actions in dialogs (Done, Save, Apply, Read What's New,
    Cancel/Close). Styled as bold, structured Boxxy banner CTAs (border-radius: 10px)
    rather than round Adwaita capsules. */
-button.pill:not(.flat),
-dialog button.pill:not(.flat),
-preferencespage button.pill:not(.flat),
-statuspage button.pill:not(.flat),
-button.suggested-action.pill:not(.flat),
-dialog button.suggested-action.pill:not(.flat),
-preferencespage button.suggested-action.pill:not(.flat),
-statuspage button.suggested-action.pill:not(.flat),
-button.destructive-action.pill:not(.flat),
-dialog button.destructive-action.pill:not(.flat),
-preferencespage button.destructive-action.pill:not(.flat) {
+button.pill:not(.flat):not(.circular),
+dialog button.pill:not(.flat):not(.circular):not(.color-dot-btn),
+preferencespage button.pill:not(.flat):not(.circular):not(.color-dot-btn),
+statuspage button.pill:not(.flat):not(.circular),
+button.suggested-action.pill:not(.flat):not(.circular),
+dialog button.suggested-action.pill:not(.flat):not(.circular):not(.color-dot-btn),
+preferencespage button.suggested-action.pill:not(.flat):not(.circular):not(.color-dot-btn),
+statuspage button.suggested-action.pill:not(.flat):not(.circular),
+button.destructive-action.pill:not(.flat):not(.circular),
+dialog button.destructive-action.pill:not(.flat):not(.circular):not(.color-dot-btn),
+preferencespage button.destructive-action.pill:not(.flat):not(.circular):not(.color-dot-btn) {
     min-height: var(--boxxy-pill-min-height);
     min-width: var(--boxxy-pill-min-width);
     padding: var(--boxxy-pill-padding);
@@ -319,32 +398,32 @@ statuspage button.pill > label {
     padding-right: 0;
 }
 
-button.pill:not(.flat):hover:not(:disabled),
-dialog button.pill:not(.flat):hover:not(:disabled),
-preferencespage button.pill:not(.flat):hover:not(:disabled),
-statuspage button.pill:not(.flat):hover:not(:disabled),
-button.suggested-action.pill:not(.flat):hover:not(:disabled),
-dialog button.suggested-action.pill:not(.flat):hover:not(:disabled),
-preferencespage button.suggested-action.pill:not(.flat):hover:not(:disabled),
-statuspage button.suggested-action.pill:not(.flat):hover:not(:disabled),
-button.destructive-action.pill:not(.flat):hover:not(:disabled),
-dialog button.destructive-action.pill:not(.flat):hover:not(:disabled),
-preferencespage button.destructive-action.pill:not(.flat):hover:not(:disabled) {
+button.pill:not(.flat):not(.circular):hover:not(:disabled),
+dialog button.pill:not(.flat):not(.circular):not(.color-dot-btn):hover:not(:disabled),
+preferencespage button.pill:not(.flat):not(.circular):not(.color-dot-btn):hover:not(:disabled),
+statuspage button.pill:not(.flat):not(.circular):hover:not(:disabled),
+button.suggested-action.pill:not(.flat):not(.circular):hover:not(:disabled),
+dialog button.suggested-action.pill:not(.flat):not(.circular):not(.color-dot-btn):hover:not(:disabled),
+preferencespage button.suggested-action.pill:not(.flat):not(.circular):not(.color-dot-btn):hover:not(:disabled),
+statuspage button.suggested-action.pill:not(.flat):not(.circular):hover:not(:disabled),
+button.destructive-action.pill:not(.flat):not(.circular):hover:not(:disabled),
+dialog button.destructive-action.pill:not(.flat):not(.circular):not(.color-dot-btn):hover:not(:disabled),
+preferencespage button.destructive-action.pill:not(.flat):not(.circular):not(.color-dot-btn):hover:not(:disabled) {
     transform: var(--boxxy-lift-translate);
     box-shadow: 4px 5px 0px @boxxy_shadow;
 }
 
-button.pill:not(.flat):active:not(:disabled),
-dialog button.pill:not(.flat):active:not(:disabled),
-preferencespage button.pill:not(.flat):active:not(:disabled),
-statuspage button.pill:not(.flat):active:not(:disabled),
-button.suggested-action.pill:not(.flat):active:not(:disabled),
-dialog button.suggested-action.pill:not(.flat):active:not(:disabled),
-preferencespage button.suggested-action.pill:not(.flat):active:not(:disabled),
-statuspage button.suggested-action.pill:not(.flat):active:not(:disabled),
-button.destructive-action.pill:not(.flat):active:not(:disabled),
-dialog button.destructive-action.pill:not(.flat):active:not(:disabled),
-preferencespage button.destructive-action.pill:not(.flat):active:not(:disabled) {
+button.pill:not(.flat):not(.circular):active:not(:disabled),
+dialog button.pill:not(.flat):not(.circular):not(.color-dot-btn):active:not(:disabled),
+preferencespage button.pill:not(.flat):not(.circular):not(.color-dot-btn):active:not(:disabled),
+statuspage button.pill:not(.flat):not(.circular):active:not(:disabled),
+button.suggested-action.pill:not(.flat):not(.circular):active:not(:disabled),
+dialog button.suggested-action.pill:not(.flat):not(.circular):not(.color-dot-btn):active:not(:disabled),
+preferencespage button.suggested-action.pill:not(.flat):not(.circular):not(.color-dot-btn):active:not(:disabled),
+statuspage button.suggested-action.pill:not(.flat):not(.circular):active:not(:disabled),
+button.destructive-action.pill:not(.flat):not(.circular):active:not(:disabled),
+dialog button.destructive-action.pill:not(.flat):not(.circular):not(.color-dot-btn):active:not(:disabled),
+preferencespage button.destructive-action.pill:not(.flat):not(.circular):not(.color-dot-btn):active:not(:disabled) {
     transform: var(--boxxy-pill-press-translate);
     box-shadow: 1px 1px 0px @boxxy_shadow;
 }

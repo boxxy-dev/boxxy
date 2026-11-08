@@ -104,8 +104,8 @@ impl AppThemeColors {
 @define-color secondary_sidebar_border_color {ink_border};
 @define-color card_bg_color {card_bg};
 @define-color card_fg_color {card_fg};
-@define-color dialog_bg_color {window_bg};
-@define-color dialog_fg_color {window_fg};
+@define-color dialog_bg_color {popover_bg};
+@define-color dialog_fg_color {popover_fg};
 @define-color popover_bg_color {popover_bg};
 @define-color popover_fg_color {popover_fg};
 @define-color accent_color {accent};

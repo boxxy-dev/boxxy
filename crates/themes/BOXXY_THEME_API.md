@@ -32,7 +32,7 @@ Boxxy ships with two official built-in themes in `builtin_app_themes()` (`crates
 
 | Token (`AppThemeColors`) | `Boxxy Dark` (`id = "boxxy-dark"`) | `Boxxy Light` (`id = "boxxy-light"`) | Surface Role |
 | :--- | :--- | :--- | :--- |
-| `window_bg` | `#1d1d20` (Carbon Dark) | `#ecfafb` (Warm Mint Paper) | Primary window, dialog, and Claw overlay drawer canvas background. |
+| `window_bg` | `#1d1d20` (Carbon Dark) | `#ecfafb` (Warm Mint Paper) | Primary window, Preferences content pane, and Claw overlay drawer canvas background. |
 | `window_fg` | `#f2f4f2` | `#111418` | Primary text and icon foreground on `window_bg`. |
 | `sidebar_bg` | `#2e2e32` (Elevated Slate) | `#ffffff` (Crisp White) | Left sidebar (`AI Chat`, `Claw`, `Bookmarks`, `Colors`) and Preferences navigation sidebar background. |
 | `sidebar_fg` | `#f2f4f2` | `#111418` | Text and icon foreground on `sidebar_bg`. |
@@ -40,8 +40,8 @@ Boxxy ships with two official built-in themes in `builtin_app_themes()` (`crates
 | `card_fg` | `#f2f4f2` | `#111418` | Text and icon foreground on `card_bg`. |
 | `headerbar_bg` | `#1d1d20` | `#ffffff` | Main `.content-header`, dialog headerbars, and non-frosted `.terminal-header`. |
 | `headerbar_fg` | `#f2f4f2` | `#111418` | Text and icon foreground on `headerbar_bg`. |
-| `popover_bg` | `#2e2e32` *(matches `sidebar_bg`)* | `#ffffff` *(matches `sidebar_bg`)* | Right-click terminal menu (`popover.terminal-menu`), hamburger menu (`popover.menu`), command palette, search popover, and autocomplete popover. |
-| `popover_fg` | `#f2f4f2` | `#111418` | Text and icon foreground on `popover_bg`. |
+| `popover_bg` | `#2e2e32` *(matches `sidebar_bg`)* | `#ffffff` *(matches `sidebar_bg`)* | Right-click terminal menu (`popover.terminal-menu`), hamburger menu (`popover.menu`), command palette, search popover, autocomplete popover, and standalone modal dialogs (`@dialog_bg_color`). |
+| `popover_fg` | `#f2f4f2` | `#111418` | Text and icon foreground on `popover_bg` and `@dialog_fg_color`. |
 | `accent` | `#7ec868` (Peanut Green) | `#00acc1` (Boxxy Cyan) | Selected tabs, active sidebar rows, active `AdwViewSwitcher` buttons, `.suggested-action` buttons, checked switches/checkboxes, and focus rings. |
 | `accent_fg` | `#0d140a` | `#0d1117` | High-contrast ink text/icons rendered on top of `accent` surfaces. |
 | `ink_border` | `#050505` | `#111418` | Crisp `2px` neo-brutalist outlines and structural pane dividers (`@boxxy_ink`). |
@@ -62,8 +62,8 @@ In `Boxxy Dark` (and by default in community themes), `popover_bg` (`#2e2e32`) m
 
 | CSS `@define-color` Variable | Source Field / Formula | Components Using This Variable |
 | :--- | :--- | :--- |
-| `@window_bg_color` | `colors.window_bg` | Main window background, `adw::Dialog` / `adw::AlertDialog` sheets (`@dialog_bg_color`), `.claw-drawer` overlay background, `.osd` / `.terminal-size-osd`, `.bookmark-preview-frame`, `.bookmarks-ai-input`, `.editable-avatar-badge`, `.avatar-sleep-badge`, `.avatar-vibe-badge`, `.terminal-split-container paned > separator`. |
-| `@window_fg_color` | `colors.window_fg` | Primary text inside windows, dialogs (`@dialog_fg_color`), `.claw-drawer`, `.claw-drawer .claw-row`, `.osd`, `.editable-avatar-badge`. |
+| `@window_bg_color` | `colors.window_bg` | Main window background, Preferences `navigation-split-view > .content-pane`, `.claw-drawer` overlay background, `.osd` / `.terminal-size-osd`, `.bookmark-preview-frame`, `.bookmarks-ai-input`, `.editable-avatar-badge`, `.avatar-sleep-badge`, `.avatar-vibe-badge`, `.terminal-split-container paned > separator`. |
+| `@window_fg_color` | `colors.window_fg` | Primary text inside windows, Preferences `.content-pane`, `.claw-drawer`, `.claw-drawer .claw-row`, `.osd`, `.editable-avatar-badge`. |
 | `@sidebar_bg_color` | `colors.sidebar_bg` | `.sidebar-toolbar`, `navigation-split-view > .sidebar-pane`, `overlay-split-view > .sidebar-pane`, `.sidebar-pane` (Main sidebar & Preferences category sidebar). |
 | `@sidebar_fg_color` | `colors.sidebar_fg` | All text, icons, and `.sidebar-header` inside `.sidebar-pane` and `.sidebar-toolbar`. |
 | `@headerbar_bg_color` | `colors.headerbar_bg` | `.terminal-header`, `.content-header`, `adw-dialog headerbar`, `dialog headerbar`, `navigation-split-view > .content-pane headerbar`. |
@@ -71,8 +71,8 @@ In `Boxxy Dark` (and by default in community themes), `popover_bg` (`#2e2e32`) m
 | `@card_bg_color` | `colors.card_bg` | Unselected `tabbar tab`, all standard tactile buttons (`headerbar button`, `windowcontrols > button`, `preferencespage button`, `dialog button`, `.claw-drawer button`), `preferencesgroup listbox.boxed-list`, `.card`, `.bookmark-card`, `searchentry`, `entry:not(.flat)`, `.claw-drawer .boxxy-msgbar`, `.claw-drawer frame.view`, `.claw-drawer .viewer-block`, `.claw-drawer .character-btn`, `.claw-status-pill`, `popover.menu box.linked` segmented button strips, `.whats-new-commit-pill`, `.whats-new-stat-tile`, `.diff-slide-drawer`. |
 | `@card_fg_color` | `colors.card_fg` | Text, labels, and icons inside all `@card_bg_color` widgets above. |
 | `@view_bg_color` / `@view_fg_color` | Aliases to `card_bg` / `card_fg` | Libadwaita scrolled views, text views, and `.claw-drawer .boxxy-msgbar` fallback hover/fill in Layer 1. |
-| `@popover_bg_color` | `colors.popover_bg` | `popover > contents`, `popover.menu > contents`, `popover.terminal-menu > contents`, `popover.command-palette > contents`, `popover.search-popover > contents`, `.autocomplete-popover contents`. |
-| `@popover_fg_color` | `colors.popover_fg` | Menu items (`popover.menu modelbutton`, `popover.terminal-menu modelbutton`) and labels inside all popovers. |
+| `@popover_bg_color` / `@dialog_bg_color` | `colors.popover_bg` | `popover > contents`, `popover.menu > contents`, `popover.terminal-menu > contents`, `popover.command-palette > contents`, `popover.search-popover > contents`, `.autocomplete-popover contents`, and standalone `adw::Dialog` / `adw::AlertDialog` sheets (`floating-sheet > sheet`, `bottom-sheet > sheet`, `dialog-host > dialog sheet`). |
+| `@popover_fg_color` / `@dialog_fg_color` | `colors.popover_fg` | Menu items (`popover.menu modelbutton`, `popover.terminal-menu modelbutton`), standalone dialog text, and labels inside all popovers. |
 
 ### 3.2 Accent & Interactive Highlight Variables
 
