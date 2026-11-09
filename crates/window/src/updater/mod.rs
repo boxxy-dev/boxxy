@@ -404,26 +404,7 @@ impl Updater {
             .to_string();
         let tmp_tarball = pending_dir.join(&asset_file_name);
 
-        {
-            let mut dest = fs::File::create(&tmp_tarball)?;
-            let mut download = Download::from_url(&url);
-            download
-                .request_header(USER_AGENT, USER_AGENT_VALUE)
-                .request_header(ACCEPT, "application/octet-stream")
-                .timeout(Duration::from_secs(120))
-                .max_download_size(MAX_UPDATE_ARCHIVE_BYTES);
-
-            if url.starts_with("https://api.github.com/")
-                && let Some(token) = Self::github_token_from_env()
-            {
-                download.request_header(AUTHORIZATION, format!("Bearer {token}"));
-            }
-
-            download
-                .download_to_async(&mut dest)
-                .await
-                .context("Failed to download update archive")?;
-        }
+        Self::download_archive_with_retry(&url, &tmp_tarball).await?;
 
         log::info!("Download complete, verifying checksum...");
 
@@ -673,23 +654,84 @@ impl Updater {
         Ok(())
     }
 
-    async fn fetch_checksum_text(url: &str) -> Result<String> {
-        let mut buf = Vec::new();
-        let mut download = Download::from_url(url);
-        download
-            .request_header(USER_AGENT, USER_AGENT_VALUE)
-            .request_header(ACCEPT, "application/octet-stream")
-            .timeout(Duration::from_secs(15))
-            .max_download_size(64 * 1024);
+    async fn download_archive_with_retry(url: &str, tmp_tarball: &Path) -> Result<()> {
+        const MAX_ATTEMPTS: u32 = 3;
+        let mut last_err = None;
 
-        if url.starts_with("https://api.github.com/")
-            && let Some(token) = Self::github_token_from_env()
-        {
-            download.request_header(AUTHORIZATION, format!("Bearer {token}"));
+        for attempt in 1..=MAX_ATTEMPTS {
+            let mut dest = fs::File::create(tmp_tarball)?;
+            let mut download = Download::from_url(url);
+            download
+                .request_header(USER_AGENT, USER_AGENT_VALUE)
+                .request_header(ACCEPT, "application/octet-stream")
+                .timeout(Duration::from_secs(120))
+                .max_download_size(MAX_UPDATE_ARCHIVE_BYTES);
+
+            if url.starts_with("https://api.github.com/")
+                && let Some(token) = Self::github_token_from_env()
+            {
+                download.request_header(AUTHORIZATION, format!("Bearer {token}"));
+            }
+
+            match download.download_to_async(&mut dest).await {
+                Ok(()) => return Ok(()),
+                Err(err) => {
+                    let retryable = !matches!(
+                        err,
+                        self_update::Error::RateLimited { .. }
+                            | self_update::Error::NotFound { .. }
+                            | self_update::Error::Unauthorized { .. }
+                    );
+                    if attempt < MAX_ATTEMPTS && retryable {
+                        let delay = Duration::from_secs(u64::from(attempt));
+                        log::warn!(
+                            "Update download attempt {attempt}/{MAX_ATTEMPTS} failed ({err}); retrying in {}s...",
+                            delay.as_secs()
+                        );
+                        tokio::time::sleep(delay).await;
+                    }
+                    last_err = Some(err);
+                    if !retryable {
+                        break;
+                    }
+                }
+            }
         }
 
-        download.download_to_async(&mut buf).await?;
-        Ok(String::from_utf8(buf)?)
+        Err(last_err.expect("at least one attempt")).context("Failed to download update archive")
+    }
+
+    async fn fetch_checksum_text(url: &str) -> Result<String> {
+        const MAX_ATTEMPTS: u32 = 2;
+        let mut last_err = None;
+
+        for attempt in 1..=MAX_ATTEMPTS {
+            let mut buf = Vec::new();
+            let mut download = Download::from_url(url);
+            download
+                .request_header(USER_AGENT, USER_AGENT_VALUE)
+                .request_header(ACCEPT, "application/octet-stream")
+                .timeout(Duration::from_secs(30))
+                .max_download_size(64 * 1024);
+
+            if url.starts_with("https://api.github.com/")
+                && let Some(token) = Self::github_token_from_env()
+            {
+                download.request_header(AUTHORIZATION, format!("Bearer {token}"));
+            }
+
+            match download.download_to_async(&mut buf).await {
+                Ok(()) => return Ok(String::from_utf8(buf)?),
+                Err(err) => {
+                    if attempt < MAX_ATTEMPTS {
+                        tokio::time::sleep(Duration::from_secs(1)).await;
+                    }
+                    last_err = Some(err);
+                }
+            }
+        }
+
+        Err(last_err.expect("at least one attempt").into())
     }
 
     fn hash_file<D: Digest>(path: &Path) -> Result<String> {
@@ -895,5 +937,50 @@ mod tests {
             info.checksum_source.as_deref(),
             Some("sha256:2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824")
         );
+    }
+
+    #[tokio::test]
+    async fn download_archive_with_retry_recovers_from_transient_502() {
+        use std::io::{Read as _, Write as _};
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/update.tar.gz", listener.local_addr().unwrap());
+
+        let server = std::thread::spawn(move || {
+            // Attempt 1: simulate a transient 502 from upstream redirect tier
+            if let Ok((mut stream, _)) = listener.accept() {
+                let mut req_buf = [0u8; 1024];
+                let _ = stream.read(&mut req_buf);
+                let resp = b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 3\r\nConnection: close\r\n\r\nerr";
+                let _ = stream.write_all(resp);
+                let _ = stream.flush();
+            }
+            // Attempt 2: return 200 OK with archive payload
+            if let Ok((mut stream, _)) = listener.accept() {
+                let mut req_buf = [0u8; 1024];
+                let _ = stream.read(&mut req_buf);
+                let body = b"synthetic-tarball-bytes";
+                let header = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = stream.write_all(header.as_bytes());
+                let _ = stream.write_all(body);
+                let _ = stream.flush();
+            }
+        });
+
+        let tmp = tempfile::tempdir().unwrap();
+        let dest_path = tmp.path().join("update.tar.gz");
+        // Pre-seed stale bytes to ensure retry truncates cleanly
+        fs::write(&dest_path, b"stale-partial-bytes").unwrap();
+
+        Updater::download_archive_with_retry(&url, &dest_path)
+            .await
+            .unwrap();
+        server.join().unwrap();
+
+        assert_eq!(fs::read(&dest_path).unwrap(), b"synthetic-tarball-bytes");
     }
 }

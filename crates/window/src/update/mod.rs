@@ -645,7 +645,12 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
                             .await;
                     }
                     Err(e) => {
-                        log::error!("Failed to download update: {}", e);
+                        log::error!("Failed to download update: {e:#}");
+                        let _ = tx_download
+                            .send(AppInput::ShowToast(crate::state::ToastRequest::ephemeral(
+                                "Update download failed — check CLI logs",
+                            )))
+                            .await;
                     }
                 }
             });
@@ -668,7 +673,10 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
         }
         AppInput::ApplyUpdateAndRestart => {
             if let Err(e) = crate::updater::Updater::apply_update_and_restart() {
-                log::error!("Failed to apply update and restart: {e}");
+                log::error!("Failed to apply update and restart: {e:#}");
+                let toast = adw::Toast::new("Update install failed — check CLI logs");
+                toast.set_timeout(3);
+                inner.toast_overlay.add_toast(toast);
             }
         }
         AppInput::ShowWhatsNewDialog(pending, summary) => {

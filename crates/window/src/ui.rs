@@ -595,7 +595,7 @@ impl AppWindow {
                         }
                         Ok(None) => {}
                         Err(e) => {
-                            log::warn!("Background update check failed: {e}");
+                            log::warn!("Background update check failed: {e:#}");
                         }
                     }
 
