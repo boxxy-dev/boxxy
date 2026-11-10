@@ -33,6 +33,7 @@ impl<T: GridCell + Default + PartialEq> Grid<T> {
 
         // Restore template cell.
         self.cursor.template = template;
+        self.history_epoch = self.history_epoch.wrapping_add(1);
 
         line_delta
     }

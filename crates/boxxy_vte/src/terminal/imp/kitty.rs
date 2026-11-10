@@ -62,6 +62,7 @@ fn find_unicode_placeholder_bounds(
 }
 
 impl super::TerminalWidget {
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn draw_kitty_images(
         &self,
         snapshot: &gtk4::Snapshot,
@@ -111,8 +112,8 @@ impl super::TerminalWidget {
                         let (w, h) = (*width as i32, *height as i32);
                         let pixel_count = (*width as usize) * (*height as usize);
                         let mut rgba = Vec::with_capacity(pixel_count * 4);
-                        for rgb in data.chunks_exact(3).take(pixel_count) {
-                            rgba.extend_from_slice(&[rgb[0], rgb[1], rgb[2], 255]);
+                        for &[r, g, b] in data.as_chunks::<3>().0.iter().take(pixel_count) {
+                            rgba.extend_from_slice(&[r, g, b, 255]);
                         }
                         gtk4::gdk::MemoryTexture::new(
                             w,

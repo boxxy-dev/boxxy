@@ -35,7 +35,16 @@ pub struct RowCacheEpochKey {
     pub scale_milli: u32,
     pub is_dimmed: bool,
     pub palette_generation: u64,
+    pub colors_generation: u64,
     pub font_generation: u64,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct ViewportGridCacheKey {
+    pub generation: u64,
+    pub display_offset: i32,
+    pub epoch: RowCacheEpochKey,
+    pub search_hash: u64,
 }
 
 pub type TitleCallback = Box<dyn Fn(String) + 'static>;
@@ -125,6 +134,8 @@ pub struct TerminalWidget {
     pub font_generation: Cell<u64>,
     pub row_cache_epoch: Cell<Option<RowCacheEpochKey>>,
     pub row_node_cache: RefCell<HashMap<u64, Option<gtk4::gsk::RenderNode>>>,
+    pub row_node_cache_prev: RefCell<HashMap<u64, Option<gtk4::gsk::RenderNode>>>,
+    pub cached_grid_node: RefCell<Option<(ViewportGridCacheKey, Option<gtk4::gsk::RenderNode>)>>,
 }
 
 impl Default for TerminalWidget {
@@ -202,6 +213,8 @@ impl Default for TerminalWidget {
             font_generation: Cell::new(0),
             row_cache_epoch: Cell::new(None),
             row_node_cache: RefCell::new(HashMap::new()),
+            row_node_cache_prev: RefCell::new(HashMap::new()),
+            cached_grid_node: RefCell::new(None),
         }
     }
 }
@@ -293,6 +306,8 @@ impl TerminalWidget {
     pub(crate) fn invalidate_row_cache(&self) {
         self.row_cache_epoch.set(None);
         self.row_node_cache.borrow_mut().clear();
+        self.row_node_cache_prev.borrow_mut().clear();
+        self.cached_grid_node.replace(None);
     }
 
     #[inline]
@@ -328,6 +343,8 @@ impl TerminalWidget {
             widget.stop_cursor_blink();
             self.kitty_textures.borrow_mut().clear();
             self.row_node_cache.borrow_mut().clear();
+            self.row_node_cache_prev.borrow_mut().clear();
+            self.cached_grid_node.replace(None);
         }
     }
 
@@ -730,7 +747,12 @@ impl TerminalWidget {
         if let Some(q) = self.search_query.borrow().clone()
             && let Some(b) = self.backend.borrow().as_ref()
         {
-            b.search(q, dir, !self.search_case_sensitive.get());
+            b.search(
+                q,
+                dir,
+                !self.search_case_sensitive.get(),
+                self.search_wrap_around.get(),
+            );
         }
     }
 }

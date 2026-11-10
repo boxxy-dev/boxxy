@@ -1,8 +1,7 @@
 //! Headless terminal harness for deterministic protocol conformance,
 //! chunk-boundary parsing, query-response verification, and reflow testing.
 
-use parking_lot::Mutex;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use crate::engine::ansi::{self, NamedColor, Rgb};
 use crate::engine::event::{Event, EventListener};
@@ -35,12 +34,12 @@ impl EventListener for HeadlessEventLog {
         if let Event::ColorRequest(index, ref formatter) = event
             && index == NamedColor::Background as usize
         {
-            let bg = *self.default_bg.lock();
+            let bg = *self.default_bg.lock().unwrap();
             let reply = formatter(bg);
-            self.events.lock().push(Event::PtyWrite(reply));
+            self.events.lock().unwrap().push(Event::PtyWrite(reply));
             return;
         }
-        self.events.lock().push(event);
+        self.events.lock().unwrap().push(event);
     }
 }
 
@@ -102,7 +101,7 @@ impl HeadlessTerminal {
 
     /// Set the default background color used when answering `Event::ColorRequest(257, ...)`.
     pub fn set_default_background(&mut self, rgb: Rgb) {
-        *self.listener.default_bg.lock() = rgb;
+        *self.listener.default_bg.lock().unwrap() = rgb;
     }
 
     /// Resize the terminal grid to `(columns, screen_lines)`.
@@ -116,7 +115,7 @@ impl HeadlessTerminal {
 
     /// Drain and return all `Event::PtyWrite` responses emitted by the terminal.
     pub fn take_pty_writes(&mut self) -> Vec<String> {
-        let mut events = self.listener.events.lock();
+        let mut events = self.listener.events.lock().unwrap();
         let mut writes = Vec::new();
         events.retain(|ev| {
             if let Event::PtyWrite(s) = ev {
@@ -131,7 +130,7 @@ impl HeadlessTerminal {
 
     /// Drain and return all recorded terminal events.
     pub fn take_events(&mut self) -> Vec<Event> {
-        std::mem::take(&mut *self.listener.events.lock())
+        std::mem::take(&mut *self.listener.events.lock().unwrap())
     }
 
     /// Return the trimmed text of a visible viewport row (`0..screen_lines`).
@@ -1204,6 +1203,117 @@ mod tests {
         assert_eq!(
             edit_state.extract_tui_selection((6, 2), (30, 3)),
             Some("    \"crates/alpha\",\n    \"crates/beta\",".to_string())
+        );
+    }
+
+    #[test]
+    fn osc_dynamic_colors_propagate_to_render_state_and_answer_queries() {
+        let mut h = HeadlessTerminal::new(40, 8);
+        let mut state = RenderState::default();
+
+        state.update_from(&mut h.term, 1);
+        assert!(state.custom_colors.is_none());
+        assert_eq!(state.colors_generation, 0);
+
+        // Set palette index 1 (OSC 4), foreground (OSC 10), background (OSC 11), cursor (OSC 12)
+        h.feed(
+            b"\x1b]4;1;rgb:aa/bb/cc\x07\
+              \x1b]10;rgb:dd/ee/ff\x07\
+              \x1b]11;rgb:11/22/33\x07\
+              \x1b]12;rgb:44/55/66\x07",
+        );
+        state.update_from(&mut h.term, 2);
+        let custom = state
+            .custom_colors
+            .as_ref()
+            .expect("expected custom_colors");
+        assert_eq!(
+            custom.get(1),
+            Some(Rgb {
+                r: 0xaa,
+                g: 0xbb,
+                b: 0xcc
+            })
+        );
+        assert_eq!(
+            custom.get(NamedColor::Foreground as usize),
+            Some(Rgb {
+                r: 0xdd,
+                g: 0xee,
+                b: 0xff
+            })
+        );
+        assert_eq!(
+            custom.get(NamedColor::Background as usize),
+            Some(Rgb {
+                r: 0x11,
+                g: 0x22,
+                b: 0x33
+            })
+        );
+        assert_eq!(
+            custom.get(NamedColor::Cursor as usize),
+            Some(Rgb {
+                r: 0x44,
+                g: 0x55,
+                b: 0x66
+            })
+        );
+
+        // Querying OSC 4;1;? and OSC 10;? returns the dynamically set colors directly
+        h.take_pty_writes();
+        h.feed(b"\x1b]4;1;?\x07\x1b]10;?\x1b\\");
+        assert_eq!(
+            h.take_pty_writes(),
+            vec![
+                "\x1b]4;1;rgb:aaaa/bbbb/cccc\x07",
+                "\x1b]10;rgb:dddd/eeee/ffff\x1b\\",
+            ]
+        );
+
+        // Resetting all dynamic overrides clears `state.custom_colors` back to `None`
+        h.feed(b"\x1b]104;1\x07\x1b]110\x07\x1b]111\x07\x1b]112\x07");
+        state.update_from(&mut h.term, 3);
+        assert!(state.custom_colors.is_none());
+    }
+
+    #[test]
+    fn selection_arc_cache_reuses_allocation_across_unrelated_viewport_updates() {
+        use crate::engine::index::Side;
+        use crate::engine::selection::{Selection, SelectionType};
+
+        let mut h = HeadlessTerminal::new(30, 4);
+        for i in 0..10 {
+            h.feed(format!("history-row-{i:02}\r\n").as_bytes());
+        }
+
+        // Select a row strictly inside scrollback history (`Line(-3)`).
+        let mut sel = Selection::new(
+            SelectionType::Simple,
+            Point::new(Line(-3), Column(0)),
+            Side::Left,
+        );
+        sel.update(Point::new(Line(-3), Column(13)), Side::Right);
+        h.term.selection = Some(sel);
+
+        let mut state = RenderState::default();
+        state.update_from(&mut h.term, 1);
+        let arc_first = state
+            .selection_text
+            .clone()
+            .expect("expected scrollback selection");
+        assert_eq!(&*arc_first, "history-row-04");
+
+        // In-place viewport updates (`\r` progress bar) must not reallocate scrollback `Arc<str>`.
+        h.feed(b"\rprogress 42%");
+        state.update_from(&mut h.term, 2);
+        let arc_second = state
+            .selection_text
+            .clone()
+            .expect("expected cached scrollback selection");
+        assert!(
+            Arc::ptr_eq(&arc_first, &arc_second),
+            "expected scrollback selection Arc<str> to be reused across in-place viewport updates"
         );
     }
 }

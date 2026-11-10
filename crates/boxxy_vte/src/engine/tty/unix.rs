@@ -26,13 +26,6 @@ use signal_hook::{SigId, consts as sigconsts};
 use crate::engine::event::{OnResize, WindowSize};
 use crate::engine::tty::{ChildEvent, EventedPty, EventedReadWrite, Options};
 
-macro_rules! die {
-    ($($arg:tt)*) => {{
-        error!($($arg)*);
-        std::process::exit(1);
-    }};
-}
-
 /// Really only needed on BSD, but should be fine elsewhere.
 fn set_controlling_terminal(fd: c_int) -> Result<()> {
     let res = unsafe {
@@ -380,7 +373,7 @@ impl OnResize for Pty {
         let res = unsafe { libc::ioctl(self.file.as_raw_fd(), libc::TIOCSWINSZ, &win as *const _) };
 
         if res < 0 {
-            die!("ioctl TIOCSWINSZ failed: {}", Error::last_os_error());
+            log::debug!("ioctl TIOCSWINSZ failed: {}", Error::last_os_error());
         }
     }
 }

@@ -1,11 +1,94 @@
-use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
+use crate::engine::ansi::{NamedColor, Rgb};
 use crate::engine::grid::GridCell;
 use crate::engine::index::{Column, Line, Point};
 use crate::engine::term::cell::Flags;
+use crate::engine::term::color::Colors;
 use gtk4::prelude::*;
 use gtk4::subclass::prelude::*;
+
+/// Fast, non-cryptographic 64-bit hasher tailored for `Cell` (`write_u64`) row hashing.
+struct FxHasher(u64);
+
+impl FxHasher {
+    const SEED: u64 = 0x517c_c1b7_2722_0a95;
+
+    #[inline(always)]
+    const fn new() -> Self {
+        Self(0)
+    }
+
+    #[inline(always)]
+    fn mix(&mut self, word: u64) {
+        self.0 = (self.0.rotate_left(5) ^ word).wrapping_mul(Self::SEED);
+    }
+}
+
+impl Hasher for FxHasher {
+    #[inline(always)]
+    fn finish(&self) -> u64 {
+        self.0
+    }
+
+    #[inline(always)]
+    fn write_u64(&mut self, i: u64) {
+        self.mix(i);
+    }
+
+    #[inline(always)]
+    fn write_usize(&mut self, i: usize) {
+        self.mix(i as u64);
+    }
+
+    #[inline(always)]
+    fn write_i32(&mut self, i: i32) {
+        self.mix(i as u32 as u64);
+    }
+
+    #[inline(always)]
+    fn write_u8(&mut self, i: u8) {
+        self.mix(i as u64);
+    }
+
+    #[inline]
+    fn write(&mut self, mut bytes: &[u8]) {
+        while bytes.len() >= 8 {
+            let (chunk, rest) = bytes.split_at(8);
+            self.mix(u64::from_ne_bytes(chunk.try_into().unwrap()));
+            bytes = rest;
+        }
+        if !bytes.is_empty() {
+            let mut tail = 0u64;
+            for (idx, &b) in bytes.iter().enumerate() {
+                tail |= (b as u64) << (idx * 8);
+            }
+            self.mix(tail);
+        }
+    }
+}
+
+#[inline(always)]
+fn rgb_to_rgba(rgb: Rgb) -> gtk4::gdk::RGBA {
+    gtk4::gdk::RGBA::new(
+        rgb.r as f32 / 255.0,
+        rgb.g as f32 / 255.0,
+        rgb.b as f32 / 255.0,
+        1.0,
+    )
+}
+
+#[inline(always)]
+fn lookup_palette_color(
+    idx: usize,
+    custom_colors: Option<&Colors>,
+    palette: &[gtk4::gdk::RGBA],
+) -> Option<gtk4::gdk::RGBA> {
+    if let Some(rgb) = custom_colors.and_then(|c| c.get(idx)) {
+        return Some(rgb_to_rgba(rgb));
+    }
+    palette.get(idx).cloned()
+}
 
 // ─── Cell-filling character detection ────────────────────────────────────────
 #[inline]
@@ -24,6 +107,7 @@ fn paint_underline_span(
     flags: Flags,
     ucolor: Option<crate::engine::ansi::Color>,
     fg_color: gtk4::gdk::RGBA,
+    custom_colors: Option<&Colors>,
     palette: &[gtk4::gdk::RGBA],
     default_fg: gtk4::gdk::RGBA,
     dim_factor: f32,
@@ -39,17 +123,12 @@ fn paint_underline_span(
 
     let mut ul_rgba = if let Some(color) = ucolor {
         match color {
-            crate::engine::ansi::Color::Spec(rgb) => gtk4::gdk::RGBA::new(
-                rgb.r as f32 / 255.0,
-                rgb.g as f32 / 255.0,
-                rgb.b as f32 / 255.0,
-                1.0,
-            ),
+            crate::engine::ansi::Color::Spec(rgb) => rgb_to_rgba(rgb),
             crate::engine::ansi::Color::Indexed(idx) => {
-                palette.get(idx as usize).cloned().unwrap_or(default_fg)
+                lookup_palette_color(idx as usize, custom_colors, palette).unwrap_or(default_fg)
             }
             crate::engine::ansi::Color::Named(named) => {
-                palette.get(named as usize).cloned().unwrap_or(default_fg)
+                lookup_palette_color(named as usize, custom_colors, palette).unwrap_or(default_fg)
             }
         }
     } else {
@@ -122,10 +201,31 @@ impl super::TerminalWidget {
             self.obj().height() as f32,
             self.padding.get(),
         );
-        let bg_color = (*self.bg_color.borrow())
+        let state_guard = self
+            .backend
+            .borrow()
+            .as_ref()
+            .map(|b| b.render_state.load_full());
+        let custom_colors = state_guard
+            .as_deref()
+            .and_then(|s| s.custom_colors.as_deref());
+
+        let base_bg = (*self.bg_color.borrow())
             .unwrap_or_else(|| gtk4::gdk::RGBA::new(0.05, 0.05, 0.05, 1.0));
-        let fg_color_default =
-            (*self.fg_color.borrow()).unwrap_or_else(|| gtk4::gdk::RGBA::new(0.8, 0.8, 0.8, 1.0));
+        let bg_color = if let Some(osc_bg) =
+            custom_colors.and_then(|c| c.get(NamedColor::Background as usize))
+        {
+            let mut c = rgb_to_rgba(osc_bg);
+            c.set_alpha(base_bg.alpha());
+            c
+        } else {
+            base_bg
+        };
+        let fg_color_default = custom_colors
+            .and_then(|c| c.get(NamedColor::Foreground as usize))
+            .map(rgb_to_rgba)
+            .or_else(|| *self.fg_color.borrow())
+            .unwrap_or_else(|| gtk4::gdk::RGBA::new(0.8, 0.8, 0.8, 1.0));
 
         let mut bg_to_paint = bg_color;
         let dim_factor = if self.is_dimmed.get() { 0.85 } else { 1.0 };
@@ -157,8 +257,7 @@ impl super::TerminalWidget {
             );
         }
 
-        if let Some(backend) = self.backend.borrow().as_ref() {
-            let state = backend.render_state.load();
+        if let Some(ref state) = state_guard {
             snapshot.save();
             snapshot.translate(&gtk4::graphene::Point::new(padding, padding));
             let display_offset = state.display_offset;
@@ -302,7 +401,7 @@ impl super::TerminalWidget {
             }
 
             // Validate per-row GSK RenderNode cache epoch (invalidates on font, scale,
-            // palette, or dimming changes).
+            // palette, OSC 4/10/11 dynamic color overrides, or dimming changes).
             let epoch = super::RowCacheEpochKey {
                 columns: state.columns,
                 char_width_bits: cs.0.to_bits(),
@@ -311,13 +410,14 @@ impl super::TerminalWidget {
                 scale_milli: self.scale_milli(&self.obj()),
                 is_dimmed: self.is_dimmed.get(),
                 palette_generation: self.palette_generation.get(),
+                colors_generation: state.colors_generation,
                 font_generation: self.font_generation.get(),
             };
             if self.row_cache_epoch.get() != Some(epoch) {
                 self.row_cache_epoch.set(Some(epoch));
                 self.row_node_cache.borrow_mut().clear();
-            } else if self.row_node_cache.borrow().len() > 512 {
-                self.row_node_cache.borrow_mut().clear();
+                self.row_node_cache_prev.borrow_mut().clear();
+                self.cached_grid_node.replace(None);
             }
 
             const STYLE_FLAGS: Flags = Flags::from_bits_truncate(
@@ -360,7 +460,7 @@ impl super::TerminalWidget {
             let selection_range = state.selection_range;
             self.draw_kitty_images(
                 snapshot,
-                &state,
+                state,
                 true,
                 display_offset,
                 char_width,
@@ -375,482 +475,558 @@ impl super::TerminalWidget {
             let yellow = gtk4::gdk::RGBA::new(0.961, 0.761, 0.067, 1.0); // #F5C211
             let orange = gtk4::gdk::RGBA::new(1.0, 0.471, 0.0, 1.0); // #FF7800
 
-            for row in 0..state.screen_lines as i32 {
-                let grid_line = Line(row - display_offset);
-                let row_idx = row as usize;
-                let row_cells = &state.cells[row_idx * state.columns..(row_idx + 1) * state.columns];
-
-                // Compute 64-bit content hash for this row (cells + active search highlights on this row)
-                let mut hasher = DefaultHasher::new();
-                row_cells.hash(&mut hasher);
-                let mut row_has_search_match = false;
-                if !visible_matches.is_empty() {
-                    for m in visible_matches.iter() {
-                        if grid_line >= m.start.line && grid_line <= m.end.line {
-                            row_has_search_match = true;
-                            let sc = if grid_line == m.start.line {
-                                m.start.column.0
-                            } else {
-                                0
-                            };
-                            let ec = if grid_line == m.end.line {
-                                m.end.column.0
-                            } else {
-                                state.columns.saturating_sub(1)
-                            };
-                            let is_active = selection_range
-                                .map(|r| r.start == m.start && r.end == m.end)
-                                .unwrap_or(false);
-                            (sc, ec, is_active).hash(&mut hasher);
-                        }
-                    }
+            // Compute a compact hash of active search highlights so the static grid
+            // RenderNode can be reused in O(1) across cursor blinks, selection drags,
+            // and link hovers without re-hashing cells.
+            let search_hash = if visible_matches.is_empty() {
+                0
+            } else {
+                let mut sh = FxHasher::new();
+                sh.mix(1);
+                for m in visible_matches.iter() {
+                    let is_active = selection_range
+                        .is_some_and(|r| r.start == m.start && r.end == m.end);
+                    (
+                        m.start.line.0,
+                        m.start.column.0,
+                        m.end.line.0,
+                        m.end.column.0,
+                        is_active as u8,
+                    )
+                        .hash(&mut sh);
                 }
-                let row_hash = hasher.finish();
+                sh.finish()
+            };
 
-                let cached_hit = self.row_node_cache.borrow().get(&row_hash).cloned();
-                let row_node_opt = if let Some(cached_opt) = cached_hit {
-                    cached_opt
-                } else if !row_has_search_match && row_cells.iter().all(|c| c.is_empty()) {
-                    self.row_node_cache.borrow_mut().insert(row_hash, None);
-                    None
-                } else {
-                    // Build row-local GSK node at y = 0.0..char_height
-                    let row_snap = gtk4::Snapshot::new();
+            let grid_key = super::ViewportGridCacheKey {
+                generation: state.generation,
+                display_offset,
+                epoch,
+                search_hash,
+            };
 
-                    // 1. Background pass (row-local y = 0.0)
-                    let mut current_bg: Option<gtk4::gdk::RGBA> = None;
-                    let mut start_col = 0.0_f32;
-                    for (col, cell) in row_cells.iter().enumerate() {
-                        let mut bg = match cell.bg {
-                            crate::engine::ansi::Color::Named(
-                                crate::engine::ansi::NamedColor::Background,
-                            ) => None,
-                            crate::engine::ansi::Color::Named(named) if (named as usize) < 256 => {
-                                palette.get(named as usize).cloned()
-                            }
-                            crate::engine::ansi::Color::Spec(rgb) => Some(gtk4::gdk::RGBA::new(
-                                rgb.r as f32 / 255.0,
-                                rgb.g as f32 / 255.0,
-                                rgb.b as f32 / 255.0,
-                                1.0,
-                            )),
-                            crate::engine::ansi::Color::Indexed(idx) => {
-                                palette.get(idx as usize).cloned()
-                            }
-                            _ => None,
-                        };
+            let grid_node_hit = self
+                .cached_grid_node
+                .borrow()
+                .as_ref()
+                .filter(|(k, _)| *k == grid_key)
+                .map(|(_, node)| node.clone());
 
-                        if let Some(ref mut bg_col) = bg {
-                            bg_col.set_red(bg_col.red() * dim_factor);
-                            bg_col.set_green(bg_col.green() * dim_factor);
-                            bg_col.set_blue(bg_col.blue() * dim_factor);
-                        }
-                        if cell.flags.contains(Flags::INVERSE) {
-                            let fg = match cell.fg {
-                                crate::engine::ansi::Color::Named(named)
-                                    if (named as usize) < 256 =>
-                                {
-                                    let mut idx = named as usize;
-                                    if cell.flags.contains(Flags::BOLD) && idx < 8 {
-                                        idx += 8;
-                                    }
-                                    palette.get(idx).cloned().unwrap_or(fg_color_default)
-                                }
-                                crate::engine::ansi::Color::Spec(rgb) => gtk4::gdk::RGBA::new(
-                                    rgb.r as f32 / 255.0,
-                                    rgb.g as f32 / 255.0,
-                                    rgb.b as f32 / 255.0,
-                                    1.0,
-                                ),
-                                crate::engine::ansi::Color::Indexed(idx) => {
-                                    let mut i = idx as usize;
-                                    if cell.flags.contains(Flags::BOLD) && i < 8 {
-                                        i += 8;
-                                    }
-                                    palette.get(i).cloned().unwrap_or(fg_color_default)
-                                }
-                                _ => fg_color_default,
-                            };
-                            bg = Some(fg);
-                        }
-                        if bg != current_bg {
-                            if let Some(ref bg_col) = current_bg {
-                                row_snap.append_color(
-                                    bg_col,
-                                    &gtk4::graphene::Rect::new(
-                                        start_col,
-                                        0.0,
-                                        (col as f32 * char_width) - start_col + 0.5,
-                                        char_height + 0.5,
-                                    ),
-                                );
-                            }
-                            current_bg = bg;
-                            start_col = col as f32 * char_width;
-                        }
-                    }
-                    if let Some(ref bg_col) = current_bg {
-                        row_snap.append_color(
-                            bg_col,
-                            &gtk4::graphene::Rect::new(
-                                start_col,
-                                0.0,
-                                (state.columns as f32 * char_width) - start_col + 0.5,
-                                char_height + 0.5,
-                            ),
-                        );
-                    }
+            let grid_node = if let Some(cached) = grid_node_hit {
+                cached
+            } else {
+                let grid_snap = gtk4::Snapshot::new();
 
-                    // 1.5 Search Highlight background pass (row-local y = 0.0)
-                    if row_has_search_match {
+                for row in 0..state.screen_lines as i32 {
+                    let grid_line = Line(row - display_offset);
+                    let row_idx = row as usize;
+                    let row_cells =
+                        &state.cells[row_idx * state.columns..(row_idx + 1) * state.columns];
+
+                    // Compute fast 64-bit content hash for this row (cells + active search spans)
+                    let mut hasher = FxHasher::new();
+                    row_cells.hash(&mut hasher);
+                    let mut row_has_search_match = false;
+                    if !visible_matches.is_empty() {
                         for m in visible_matches.iter() {
                             if grid_line >= m.start.line && grid_line <= m.end.line {
-                                let start_col = if grid_line == m.start.line {
+                                row_has_search_match = true;
+                                let sc = if grid_line == m.start.line {
                                     m.start.column.0
                                 } else {
                                     0
                                 };
-                                let end_col = if grid_line == m.end.line {
+                                let ec = if grid_line == m.end.line {
                                     m.end.column.0
                                 } else {
-                                    state.columns - 1
+                                    state.columns.saturating_sub(1)
                                 };
-
                                 let is_active = selection_range
-                                    .map(|r| r.start == m.start && r.end == m.end)
-                                    .unwrap_or(false);
-                                let color = if is_active { &orange } else { &yellow };
-
-                                row_snap.append_color(
-                                    color,
-                                    &gtk4::graphene::Rect::new(
-                                        start_col as f32 * char_width,
-                                        0.0,
-                                        (end_col as i32 - start_col as i32 + 1) as f32 * char_width,
-                                        char_height,
-                                    ),
-                                );
+                                    .is_some_and(|r| r.start == m.start && r.end == m.end);
+                                (sc, ec, is_active as u8).hash(&mut hasher);
                             }
                         }
                     }
+                    let row_hash = hasher.finish();
 
-                    // 2. Text & custom GSK underline pass (row-local y = offset_y)
-                    let mut current_fg = fg_color_default;
-                    let mut current_flags = Flags::empty();
-                    let mut current_ucolor: Option<crate::engine::ansi::Color> = None;
-                    let mut line_str = String::with_capacity(state.columns);
-                    let mut run_cells = 0usize;
-                    start_col = 0.0_f32;
-
-                    for (col, cell) in row_cells.iter().enumerate() {
-                        let point = Point::new(grid_line, Column(col));
-                        let mut fg = match cell.fg {
-                            crate::engine::ansi::Color::Named(named) => {
-                                let mut idx = named as usize;
-                                if cell.flags.contains(Flags::BOLD) && idx < 8 {
-                                    idx += 8;
-                                }
-                                if idx < 256 {
-                                    palette.get(idx).cloned().unwrap_or(fg_color_default)
-                                } else if idx == 256 {
-                                    fg_color_default
-                                } else if (259..=266).contains(&idx) {
-                                    palette
-                                        .get(idx - 259)
-                                        .cloned()
-                                        .map(|mut c| {
-                                            c.set_alpha(c.alpha() * 0.5);
-                                            c
-                                        })
-                                        .unwrap_or(fg_color_default)
-                                } else {
-                                    fg_color_default
-                                }
+                    // Two-generation bounded lookup (max 256 active + 256 previous entries):
+                    // eliminates the full-screen cache wipe spike when scrolling past 512 rows.
+                    let cached_hit = {
+                        let cur = self.row_node_cache.borrow();
+                        cur.get(&row_hash).cloned()
+                    }
+                    .or_else(|| {
+                        let prev_hit = self.row_node_cache_prev.borrow().get(&row_hash).cloned();
+                        if let Some(ref val) = prev_hit {
+                            let mut cur = self.row_node_cache.borrow_mut();
+                            if cur.len() >= 256 {
+                                let mut prev = self.row_node_cache_prev.borrow_mut();
+                                std::mem::swap(&mut *cur, &mut *prev);
+                                cur.clear();
                             }
-                            crate::engine::ansi::Color::Spec(rgb) => gtk4::gdk::RGBA::new(
-                                rgb.r as f32 / 255.0,
-                                rgb.g as f32 / 255.0,
-                                rgb.b as f32 / 255.0,
-                                1.0,
-                            ),
-                            crate::engine::ansi::Color::Indexed(mut idx) => {
-                                if cell.flags.contains(Flags::BOLD) && idx < 8 {
-                                    idx += 8;
+                            cur.insert(row_hash, val.clone());
+                        }
+                        prev_hit
+                    });
+
+                    let row_node_opt = if let Some(cached_opt) = cached_hit {
+                        cached_opt
+                    } else if !row_has_search_match && row_cells.iter().all(|c| c.is_empty()) {
+                        let mut cur = self.row_node_cache.borrow_mut();
+                        if cur.len() >= 256 {
+                            let mut prev = self.row_node_cache_prev.borrow_mut();
+                            std::mem::swap(&mut *cur, &mut *prev);
+                            cur.clear();
+                        }
+                        cur.insert(row_hash, None);
+                        None
+                    } else {
+                        // Build row-local GSK node at y = 0.0..char_height
+                        let row_snap = gtk4::Snapshot::new();
+
+                        // 1. Background pass (row-local y = 0.0)
+                        let mut current_bg: Option<gtk4::gdk::RGBA> = None;
+                        let mut start_col = 0.0_f32;
+                        for (col, cell) in row_cells.iter().enumerate() {
+                            let mut bg = match cell.bg {
+                                crate::engine::ansi::Color::Named(NamedColor::Background) => None,
+                                crate::engine::ansi::Color::Named(named)
+                                    if (named as usize) < 256 =>
+                                {
+                                    lookup_palette_color(named as usize, custom_colors, &palette)
                                 }
-                                palette
-                                    .get(idx as usize)
-                                    .cloned()
-                                    .unwrap_or(fg_color_default)
-                            }
-                        };
-
-                        if row_has_search_match && visible_matches.iter().any(|m| m.contains(point))
-                        {
-                            fg = gtk4::gdk::RGBA::new(0.118, 0.118, 0.180, 1.0);
-                        }
-
-                        if dim_factor < 1.0 {
-                            fg.set_red(fg.red() * dim_factor);
-                            fg.set_green(fg.green() * dim_factor);
-                            fg.set_blue(fg.blue() * dim_factor);
-                        }
-
-                        if cell.flags.contains(Flags::DIM) {
-                            fg.set_red(fg.red() * 0.6);
-                            fg.set_green(fg.green() * 0.6);
-                            fg.set_blue(fg.blue() * 0.6);
-                        }
-                        if cell.flags.contains(Flags::INVERSE) {
-                            fg = match cell.bg {
-                                crate::engine::ansi::Color::Named(
-                                    crate::engine::ansi::NamedColor::Background,
-                                ) => bg_color,
-                                crate::engine::ansi::Color::Named(n) => {
-                                    palette.get(n as usize).cloned().unwrap_or(bg_color)
-                                }
-                                crate::engine::ansi::Color::Spec(rgb) => gtk4::gdk::RGBA::new(
-                                    rgb.r as f32 / 255.0,
-                                    rgb.g as f32 / 255.0,
-                                    rgb.b as f32 / 255.0,
-                                    1.0,
-                                ),
+                                crate::engine::ansi::Color::Spec(rgb) => Some(rgb_to_rgba(rgb)),
                                 crate::engine::ansi::Color::Indexed(idx) => {
-                                    palette.get(idx as usize).cloned().unwrap_or(bg_color)
+                                    lookup_palette_color(idx as usize, custom_colors, &palette)
+                                }
+                                _ => None,
+                            };
+
+                            if let Some(ref mut bg_col) = bg {
+                                bg_col.set_red(bg_col.red() * dim_factor);
+                                bg_col.set_green(bg_col.green() * dim_factor);
+                                bg_col.set_blue(bg_col.blue() * dim_factor);
+                            }
+                            if cell.flags.contains(Flags::INVERSE) {
+                                let fg = match cell.fg {
+                                    crate::engine::ansi::Color::Named(named)
+                                        if (named as usize) < 256 =>
+                                    {
+                                        let mut idx = named as usize;
+                                        if cell.flags.contains(Flags::BOLD) && idx < 8 {
+                                            idx += 8;
+                                        }
+                                        lookup_palette_color(idx, custom_colors, &palette)
+                                            .unwrap_or(fg_color_default)
+                                    }
+                                    crate::engine::ansi::Color::Spec(rgb) => rgb_to_rgba(rgb),
+                                    crate::engine::ansi::Color::Indexed(idx) => {
+                                        let mut i = idx as usize;
+                                        if cell.flags.contains(Flags::BOLD) && i < 8 {
+                                            i += 8;
+                                        }
+                                        lookup_palette_color(i, custom_colors, &palette)
+                                            .unwrap_or(fg_color_default)
+                                    }
+                                    _ => fg_color_default,
+                                };
+                                bg = Some(fg);
+                            }
+                            if bg != current_bg {
+                                if let Some(ref bg_col) = current_bg {
+                                    row_snap.append_color(
+                                        bg_col,
+                                        &gtk4::graphene::Rect::new(
+                                            start_col,
+                                            0.0,
+                                            (col as f32 * char_width) - start_col + 0.5,
+                                            char_height + 0.5,
+                                        ),
+                                    );
+                                }
+                                current_bg = bg;
+                                start_col = col as f32 * char_width;
+                            }
+                        }
+                        if let Some(ref bg_col) = current_bg {
+                            row_snap.append_color(
+                                bg_col,
+                                &gtk4::graphene::Rect::new(
+                                    start_col,
+                                    0.0,
+                                    (state.columns as f32 * char_width) - start_col + 0.5,
+                                    char_height + 0.5,
+                                ),
+                            );
+                        }
+
+                        // 1.5 Search Highlight background pass (row-local y = 0.0)
+                        if row_has_search_match {
+                            for m in visible_matches.iter() {
+                                if grid_line >= m.start.line && grid_line <= m.end.line {
+                                    let start_col = if grid_line == m.start.line {
+                                        m.start.column.0
+                                    } else {
+                                        0
+                                    };
+                                    let end_col = if grid_line == m.end.line {
+                                        m.end.column.0
+                                    } else {
+                                        state.columns - 1
+                                    };
+
+                                    let is_active = selection_range
+                                        .is_some_and(|r| r.start == m.start && r.end == m.end);
+                                    let color = if is_active { &orange } else { &yellow };
+
+                                    row_snap.append_color(
+                                        color,
+                                        &gtk4::graphene::Rect::new(
+                                            start_col as f32 * char_width,
+                                            0.0,
+                                            (end_col as i32 - start_col as i32 + 1) as f32
+                                                * char_width,
+                                            char_height,
+                                        ),
+                                    );
+                                }
+                            }
+                        }
+
+                        // 2. Text & custom GSK underline pass (row-local y = offset_y)
+                        let mut current_fg = fg_color_default;
+                        let mut current_flags = Flags::empty();
+                        let mut current_ucolor: Option<crate::engine::ansi::Color> = None;
+                        let mut line_str = String::with_capacity(state.columns);
+                        let mut run_cells = 0usize;
+                        start_col = 0.0_f32;
+
+                        for (col, cell) in row_cells.iter().enumerate() {
+                            let point = Point::new(grid_line, Column(col));
+                            let mut fg = match cell.fg {
+                                crate::engine::ansi::Color::Named(named) => {
+                                    let mut idx = named as usize;
+                                    if cell.flags.contains(Flags::BOLD) && idx < 8 {
+                                        idx += 8;
+                                    }
+                                    if idx < 256 {
+                                        lookup_palette_color(idx, custom_colors, &palette)
+                                            .unwrap_or(fg_color_default)
+                                    } else if idx == 256 {
+                                        fg_color_default
+                                    } else if (259..=266).contains(&idx) {
+                                        lookup_palette_color(idx - 259, custom_colors, &palette)
+                                            .map(|mut c| {
+                                                c.set_alpha(c.alpha() * 0.5);
+                                                c
+                                            })
+                                            .unwrap_or(fg_color_default)
+                                    } else {
+                                        fg_color_default
+                                    }
+                                }
+                                crate::engine::ansi::Color::Spec(rgb) => rgb_to_rgba(rgb),
+                                crate::engine::ansi::Color::Indexed(mut idx) => {
+                                    if cell.flags.contains(Flags::BOLD) && idx < 8 {
+                                        idx += 8;
+                                    }
+                                    lookup_palette_color(idx as usize, custom_colors, &palette)
+                                        .unwrap_or(fg_color_default)
                                 }
                             };
-                        }
-                        let is_kitty_placeholder =
-                            cell.c == super::kitty::KITTY_UNICODE_PLACEHOLDER;
-                        let is_wide = cell.flags.contains(Flags::WIDE_CHAR);
-                        let is_spacer = cell
-                            .flags
-                            .intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER);
-                        let is_filling = is_cell_filling_char(cell.c);
-                        let is_non_ascii = !cell.c.is_ascii()
-                            && cell.c != '\0'
-                            && !is_kitty_placeholder
-                            && !is_filling;
 
-                        let style_flags = if is_kitty_placeholder {
-                            (cell.flags & STYLE_FLAGS) - Flags::ALL_UNDERLINES
-                        } else {
-                            cell.flags & STYLE_FLAGS
-                        };
-                        let ucolor = if is_kitty_placeholder {
-                            None
-                        } else {
-                            cell.underline_color()
-                        };
+                            if row_has_search_match
+                                && visible_matches.iter().any(|m| m.contains(point))
+                            {
+                                fg = gtk4::gdk::RGBA::new(0.118, 0.118, 0.180, 1.0);
+                            }
 
-                        if fg != current_fg
-                            || style_flags != current_flags
-                            || ucolor != current_ucolor
-                            || is_wide
-                            || is_spacer
-                            || is_filling
-                            || is_non_ascii
-                        {
-                            if !line_str.is_empty() {
-                                if !current_flags.contains(Flags::HIDDEN) {
-                                    if line_str.bytes().any(|b| b != b' ')
-                                        || current_flags.contains(Flags::STRIKEOUT)
-                                    {
-                                        apply_pango_style(&layout, current_flags);
-                                        layout.set_text(&line_str);
+                            if dim_factor < 1.0 {
+                                fg.set_red(fg.red() * dim_factor);
+                                fg.set_green(fg.green() * dim_factor);
+                                fg.set_blue(fg.blue() * dim_factor);
+                            }
+
+                            if cell.flags.contains(Flags::DIM) {
+                                fg.set_red(fg.red() * 0.6);
+                                fg.set_green(fg.green() * 0.6);
+                                fg.set_blue(fg.blue() * 0.6);
+                            }
+                            if cell.flags.contains(Flags::INVERSE) {
+                                fg = match cell.bg {
+                                    crate::engine::ansi::Color::Named(NamedColor::Background) => {
+                                        bg_color
+                                    }
+                                    crate::engine::ansi::Color::Named(n) => {
+                                        lookup_palette_color(n as usize, custom_colors, &palette)
+                                            .unwrap_or(bg_color)
+                                    }
+                                    crate::engine::ansi::Color::Spec(rgb) => rgb_to_rgba(rgb),
+                                    crate::engine::ansi::Color::Indexed(idx) => {
+                                        lookup_palette_color(idx as usize, custom_colors, &palette)
+                                            .unwrap_or(bg_color)
+                                    }
+                                };
+                            }
+                            let is_kitty_placeholder =
+                                cell.c == super::kitty::KITTY_UNICODE_PLACEHOLDER;
+                            let is_wide = cell.flags.contains(Flags::WIDE_CHAR);
+                            let is_spacer = cell.flags.intersects(
+                                Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER,
+                            );
+                            let is_filling = is_cell_filling_char(cell.c);
+                            let is_non_ascii = !cell.c.is_ascii()
+                                && cell.c != '\0'
+                                && !is_kitty_placeholder
+                                && !is_filling;
+
+                            let style_flags = if is_kitty_placeholder {
+                                (cell.flags & STYLE_FLAGS) - Flags::ALL_UNDERLINES
+                            } else {
+                                cell.flags & STYLE_FLAGS
+                            };
+                            let ucolor = if is_kitty_placeholder {
+                                None
+                            } else {
+                                cell.underline_color()
+                            };
+
+                            if fg != current_fg
+                                || style_flags != current_flags
+                                || ucolor != current_ucolor
+                                || is_wide
+                                || is_spacer
+                                || is_filling
+                                || is_non_ascii
+                            {
+                                if !line_str.is_empty() {
+                                    if !current_flags.contains(Flags::HIDDEN) {
+                                        if line_str.bytes().any(|b| b != b' ')
+                                            || current_flags.contains(Flags::STRIKEOUT)
+                                        {
+                                            apply_pango_style(&layout, current_flags);
+                                            layout.set_text(&line_str);
+                                            row_snap.save();
+                                            row_snap.translate(&gtk4::graphene::Point::new(
+                                                start_col, offset_y,
+                                            ));
+                                            row_snap.append_layout(&layout, &current_fg);
+                                            row_snap.restore();
+                                        }
+                                        paint_underline_span(
+                                            &row_snap,
+                                            current_flags,
+                                            current_ucolor,
+                                            current_fg,
+                                            custom_colors,
+                                            &palette,
+                                            fg_color_default,
+                                            dim_factor,
+                                            start_col,
+                                            start_col + (run_cells as f32) * char_width,
+                                            char_width,
+                                            char_height,
+                                        );
+                                    }
+                                    line_str.clear();
+                                    run_cells = 0;
+                                }
+                                current_fg = fg;
+                                current_flags = style_flags;
+                                current_ucolor = ucolor;
+                            }
+                            if !is_spacer {
+                                if line_str.is_empty() {
+                                    start_col = col as f32 * char_width;
+                                }
+                                if is_kitty_placeholder {
+                                    // Kitty Graphics Unicode Placeholder (`U+10EEEE`):
+                                    // emit a blank space and skip its row/column index diacritics
+                                    // so Pango never draws fallback `[10EE]` hex boxes or overlines.
+                                    line_str.push(' ');
+                                } else {
+                                    line_str.push(if cell.c == '\0' { ' ' } else { cell.c });
+                                    if let Some(zw) = cell.zerowidth() {
+                                        for &c in zw {
+                                            line_str.push(c);
+                                        }
+                                    }
+                                }
+                                run_cells += if is_wide { 2 } else { 1 };
+
+                                if is_wide || is_non_ascii {
+                                    apply_pango_style(&layout, current_flags);
+                                    layout.set_text(&line_str);
+                                    let (_, logical) = layout.extents();
+                                    let actual_width =
+                                        logical.width() as f32 / gtk4::pango::SCALE as f32;
+                                    let target_width = if is_wide {
+                                        char_width * 2.0
+                                    } else {
+                                        char_width
+                                    };
+                                    if !current_flags.contains(Flags::HIDDEN) {
                                         row_snap.save();
                                         row_snap.translate(&gtk4::graphene::Point::new(
                                             start_col, offset_y,
                                         ));
-                                        row_snap.append_layout(&layout, &current_fg);
-                                        row_snap.restore();
-                                    }
-                                    paint_underline_span(
-                                        &row_snap,
-                                        current_flags,
-                                        current_ucolor,
-                                        current_fg,
-                                        &palette,
-                                        fg_color_default,
-                                        dim_factor,
-                                        start_col,
-                                        start_col + (run_cells as f32) * char_width,
-                                        char_width,
-                                        char_height,
-                                    );
-                                }
-                                line_str.clear();
-                                run_cells = 0;
-                            }
-                            current_fg = fg;
-                            current_flags = style_flags;
-                            current_ucolor = ucolor;
-                        }
-                        if !is_spacer {
-                            if line_str.is_empty() {
-                                start_col = col as f32 * char_width;
-                            }
-                            if is_kitty_placeholder {
-                                // Kitty Graphics Unicode Placeholder (`U+10EEEE`):
-                                // emit a blank space and skip its row/column index diacritics
-                                // so Pango never draws fallback `[10EE]` hex boxes or overlines.
-                                line_str.push(' ');
-                            } else {
-                                line_str.push(if cell.c == '\0' { ' ' } else { cell.c });
-                                if let Some(zw) = cell.zerowidth() {
-                                    for &c in zw {
-                                        line_str.push(c);
-                                    }
-                                }
-                            }
-                            run_cells += if is_wide { 2 } else { 1 };
-
-                            if is_wide || is_non_ascii {
-                                apply_pango_style(&layout, current_flags);
-                                layout.set_text(&line_str);
-                                let (_, logical) = layout.extents();
-                                let actual_width =
-                                    logical.width() as f32 / gtk4::pango::SCALE as f32;
-                                let target_width = if is_wide {
-                                    char_width * 2.0
-                                } else {
-                                    char_width
-                                };
-                                if !current_flags.contains(Flags::HIDDEN) {
-                                    row_snap.save();
-                                    row_snap.translate(&gtk4::graphene::Point::new(
-                                        start_col, offset_y,
-                                    ));
-                                    let ah = logical.height() as f32 / gtk4::pango::SCALE as f32;
-                                    if is_wide
-                                        && (actual_width - target_width).abs() > 0.1
-                                        && actual_width > 0.0
-                                    {
-                                        let s = target_width / actual_width;
-                                        row_snap.scale(s, s);
-                                        let scaled_h = ah * s;
-                                        if scaled_h < char_height {
+                                        let ah =
+                                            logical.height() as f32 / gtk4::pango::SCALE as f32;
+                                        if is_wide
+                                            && (actual_width - target_width).abs() > 0.1
+                                            && actual_width > 0.0
+                                        {
+                                            let s = target_width / actual_width;
+                                            row_snap.scale(s, s);
+                                            let scaled_h = ah * s;
+                                            if scaled_h < char_height {
+                                                row_snap.translate(&gtk4::graphene::Point::new(
+                                                    0.0,
+                                                    (char_height - scaled_h) / 2.0,
+                                                ));
+                                            }
+                                        } else if (ah - char_height).abs() > 0.5 && ah > 0.0 {
                                             row_snap.translate(&gtk4::graphene::Point::new(
                                                 0.0,
-                                                (char_height - scaled_h) / 2.0,
+                                                (char_height - ah) / 2.0,
                                             ));
                                         }
-                                    } else if (ah - char_height).abs() > 0.5 && ah > 0.0 {
+                                        row_snap.append_layout(&layout, &current_fg);
+                                        row_snap.restore();
+                                        paint_underline_span(
+                                            &row_snap,
+                                            current_flags,
+                                            current_ucolor,
+                                            current_fg,
+                                            custom_colors,
+                                            &palette,
+                                            fg_color_default,
+                                            dim_factor,
+                                            start_col,
+                                            start_col + target_width,
+                                            char_width,
+                                            char_height,
+                                        );
+                                    }
+                                    line_str.clear();
+                                    run_cells = 0;
+                                } else if is_filling {
+                                    apply_pango_style(&layout, current_flags);
+                                    layout.set_text(&line_str);
+                                    let (_, logical) = layout.extents();
+                                    let aw =
+                                        (logical.width() as f32 / gtk4::pango::SCALE as f32)
+                                            .max(0.1);
+                                    let ah =
+                                        (logical.height() as f32 / gtk4::pango::SCALE as f32)
+                                            .max(0.1);
+                                    let sx = char_width / aw;
+                                    let sy = char_height / ah;
+                                    if !current_flags.contains(Flags::HIDDEN) {
+                                        row_snap.save();
                                         row_snap.translate(&gtk4::graphene::Point::new(
-                                            0.0,
-                                            (char_height - ah) / 2.0,
+                                            start_col, 0.0,
                                         ));
+                                        if (sx - 1.0).abs() > 0.02 || (sy - 1.0).abs() > 0.02 {
+                                            row_snap.scale(sx, sy);
+                                        }
+                                        row_snap.append_layout(&layout, &current_fg);
+                                        row_snap.restore();
+                                        paint_underline_span(
+                                            &row_snap,
+                                            current_flags,
+                                            current_ucolor,
+                                            current_fg,
+                                            custom_colors,
+                                            &palette,
+                                            fg_color_default,
+                                            dim_factor,
+                                            start_col,
+                                            start_col + char_width,
+                                            char_width,
+                                            char_height,
+                                        );
                                     }
-                                    row_snap.append_layout(&layout, &current_fg);
-                                    row_snap.restore();
-                                    paint_underline_span(
-                                        &row_snap,
-                                        current_flags,
-                                        current_ucolor,
-                                        current_fg,
-                                        &palette,
-                                        fg_color_default,
-                                        dim_factor,
-                                        start_col,
-                                        start_col + target_width,
-                                        char_width,
-                                        char_height,
-                                    );
+                                    line_str.clear();
+                                    run_cells = 0;
                                 }
-                                line_str.clear();
-                                run_cells = 0;
-                            } else if is_filling {
-                                apply_pango_style(&layout, current_flags);
-                                layout.set_text(&line_str);
-                                let (_, logical) = layout.extents();
-                                let aw =
-                                    (logical.width() as f32 / gtk4::pango::SCALE as f32).max(0.1);
-                                let ah =
-                                    (logical.height() as f32 / gtk4::pango::SCALE as f32).max(0.1);
-                                let sx = char_width / aw;
-                                let sy = char_height / ah;
-                                if !current_flags.contains(Flags::HIDDEN) {
-                                    row_snap.save();
-                                    row_snap
-                                        .translate(&gtk4::graphene::Point::new(start_col, 0.0));
-                                    if (sx - 1.0).abs() > 0.02 || (sy - 1.0).abs() > 0.02 {
-                                        row_snap.scale(sx, sy);
-                                    }
-                                    row_snap.append_layout(&layout, &current_fg);
-                                    row_snap.restore();
-                                    paint_underline_span(
-                                        &row_snap,
-                                        current_flags,
-                                        current_ucolor,
-                                        current_fg,
-                                        &palette,
-                                        fg_color_default,
-                                        dim_factor,
-                                        start_col,
-                                        start_col + char_width,
-                                        char_width,
-                                        char_height,
-                                    );
-                                }
-                                line_str.clear();
-                                run_cells = 0;
                             }
                         }
-                    }
-                    if !line_str.is_empty() && !current_flags.contains(Flags::HIDDEN) {
-                        if line_str.bytes().any(|b| b != b' ')
-                            || current_flags.contains(Flags::STRIKEOUT)
-                        {
-                            apply_pango_style(&layout, current_flags);
-                            layout.set_text(&line_str);
-                            row_snap.save();
-                            row_snap.translate(&gtk4::graphene::Point::new(start_col, offset_y));
-                            row_snap.append_layout(&layout, &current_fg);
-                            row_snap.restore();
+                        if !line_str.is_empty() && !current_flags.contains(Flags::HIDDEN) {
+                            if line_str.bytes().any(|b| b != b' ')
+                                || current_flags.contains(Flags::STRIKEOUT)
+                            {
+                                apply_pango_style(&layout, current_flags);
+                                layout.set_text(&line_str);
+                                row_snap.save();
+                                row_snap
+                                    .translate(&gtk4::graphene::Point::new(start_col, offset_y));
+                                row_snap.append_layout(&layout, &current_fg);
+                                row_snap.restore();
+                            }
+                            paint_underline_span(
+                                &row_snap,
+                                current_flags,
+                                current_ucolor,
+                                current_fg,
+                                custom_colors,
+                                &palette,
+                                fg_color_default,
+                                dim_factor,
+                                start_col,
+                                start_col + (run_cells as f32) * char_width,
+                                char_width,
+                                char_height,
+                            );
                         }
-                        paint_underline_span(
-                            &row_snap,
-                            current_flags,
-                            current_ucolor,
-                            current_fg,
-                            &palette,
-                            fg_color_default,
-                            dim_factor,
-                            start_col,
-                            start_col + (run_cells as f32) * char_width,
-                            char_width,
-                            char_height,
-                        );
+
+                        let built_node = row_snap.to_node();
+                        let mut cur = self.row_node_cache.borrow_mut();
+                        if cur.len() >= 256 {
+                            let mut prev = self.row_node_cache_prev.borrow_mut();
+                            std::mem::swap(&mut *cur, &mut *prev);
+                            cur.clear();
+                        }
+                        cur.insert(row_hash, built_node.clone());
+                        built_node
+                    };
+
+                    if let Some(ref node) = row_node_opt {
+                        grid_snap.save();
+                        grid_snap
+                            .translate(&gtk4::graphene::Point::new(0.0, row as f32 * char_height));
+                        grid_snap.append_node(node);
+                        grid_snap.restore();
                     }
-
-                    let built_node = row_snap.to_node();
-                    self.row_node_cache
-                        .borrow_mut()
-                        .insert(row_hash, built_node.clone());
-                    built_node
-                };
-
-                if let Some(ref node) = row_node_opt {
-                    snapshot.save();
-                    snapshot.translate(&gtk4::graphene::Point::new(0.0, row as f32 * char_height));
-                    snapshot.append_node(node);
-                    snapshot.restore();
                 }
 
-                // 3. Dynamic per-row overlays (Selection & Hover Underlines — never invalidate row cache).
-                // Note: `Flags::SEMANTIC_PROMPT` (OSC 133;A) is intentionally kept as an invisible
-                // semantic anchor (for prompt jumping, click-to-move, and Claw context) rather than
-                // drawing a left-margin bar, so it never clashes with prompt themes (Tide/Starship)
-                // that render box-drawing characters (`╭─`/`╰─`) at column 0.
-                if let Some(ref range) = selection_range
-                    && grid_line >= range.start.line
-                    && grid_line <= range.end.line
-                {
+                let built_grid = grid_snap.to_node();
+                self.cached_grid_node
+                    .replace(Some((grid_key, built_grid.clone())));
+                built_grid
+            };
+
+            if let Some(ref node) = grid_node {
+                snapshot.append_node(node);
+            }
+
+            // 3. Dynamic overlays (Selection & Hover Underlines — never invalidate grid/row caches).
+            // Note: `Flags::SEMANTIC_PROMPT` (OSC 133;A) is intentionally kept as an invisible
+            // semantic anchor (for prompt jumping, click-to-move, and Claw context) rather than
+            // drawing a left-margin bar, so it never clashes with prompt themes (Tide/Starship)
+            // that render box-drawing characters (`╭─`/`╰─`) at column 0.
+            if let Some(ref range) = selection_range {
+                let first_vis_row = (range.start.line.0 + display_offset).max(0);
+                let last_vis_row =
+                    (range.end.line.0 + display_offset).min(state.screen_lines as i32 - 1);
+                let has_matches = !visible_matches.is_empty();
+                for row in first_vis_row..=last_vis_row {
+                    let grid_line = Line(row - display_offset);
                     let mut sel_span_start: Option<usize> = None;
                     for col in 0..state.columns {
                         let point = Point::new(grid_line, Column(col));
                         let selected = range.contains(point)
-                            && (!row_has_search_match
-                                || !visible_matches.iter().any(|m| m.contains(point)));
+                            && (!has_matches || !visible_matches.iter().any(|m| m.contains(point)));
                         match (sel_span_start, selected) {
                             (None, true) => sel_span_start = Some(col),
                             (Some(s), false) => {
@@ -880,8 +1056,11 @@ impl super::TerminalWidget {
                         );
                     }
                 }
+            }
 
-                if let Some(ref hov_uri) = hovered_uri {
+            if let Some(ref hov_uri) = hovered_uri {
+                for row in 0..state.screen_lines as i32 {
+                    let grid_line = Line(row - display_offset);
                     let mut link_span_start: Option<usize> = None;
                     for col in 0..state.columns {
                         let point = Point::new(grid_line, Column(col));
@@ -918,23 +1097,23 @@ impl super::TerminalWidget {
                         );
                     }
                 }
+            }
 
-                if let Some((r, start_c, end_c)) = self.hovered_regex_match.get()
-                    && r == row as usize
-                    && end_c > start_c
-                {
-                    let clamped_end = end_c.min(state.columns);
-                    if clamped_end > start_c {
-                        snapshot.append_color(
-                            &link_underline_color,
-                            &gtk4::graphene::Rect::new(
-                                start_c as f32 * char_width,
-                                row as f32 * char_height + char_height - 1.5,
-                                (clamped_end - start_c) as f32 * char_width,
-                                1.5,
-                            ),
-                        );
-                    }
+            if let Some((r, start_c, end_c)) = self.hovered_regex_match.get()
+                && r < state.screen_lines
+                && end_c > start_c
+            {
+                let clamped_end = end_c.min(state.columns);
+                if clamped_end > start_c {
+                    snapshot.append_color(
+                        &link_underline_color,
+                        &gtk4::graphene::Rect::new(
+                            start_c as f32 * char_width,
+                            r as f32 * char_height + char_height - 1.5,
+                            (clamped_end - start_c) as f32 * char_width,
+                            1.5,
+                        ),
+                    );
                 }
             }
             drop(visible_matches);
@@ -965,7 +1144,8 @@ impl super::TerminalWidget {
             }
 
             // 4. Cursor overlay (respects DECTCEM `?25h`/`?25l`, DECSCUSR shape/blinking,
-            //    reverse-video character legibility under Block cursor, and hollow outline when unfocused)
+            //    OSC 12 cursor color, reverse-video character legibility under Block cursor,
+            //    and hollow outline when unfocused)
             let effective_shape = state
                 .cursor_style
                 .map(|s| s.shape)
@@ -1005,7 +1185,11 @@ impl super::TerminalWidget {
                             0.0_f32,
                         ),
                     };
-                    let cc = (*self.cursor_color.borrow()).unwrap_or(fg_color_default);
+                    let cc = custom_colors
+                        .and_then(|c| c.get(NamedColor::Cursor as usize))
+                        .map(rgb_to_rgba)
+                        .or_else(|| *self.cursor_color.borrow())
+                        .unwrap_or(fg_color_default);
                     let cursor_rect = gtk4::graphene::Rect::new(
                         cp.column.0 as f32 * char_width,
                         cr as f32 * char_height + cy,
@@ -1035,6 +1219,7 @@ impl super::TerminalWidget {
                             && !cell.flags.contains(Flags::HIDDEN)
                             && cell.c != ' '
                             && cell.c != '\0'
+                            && cell.c != super::kitty::KITTY_UNICODE_PLACEHOLDER
                         {
                             let mut cursor_str = String::with_capacity(8);
                             cursor_str.push(cell.c);
@@ -1046,10 +1231,50 @@ impl super::TerminalWidget {
                             apply_pango_style(&layout, cell.flags & STYLE_FLAGS);
                             layout.set_text(&cursor_str);
                             snapshot.save();
-                            snapshot.translate(&gtk4::graphene::Point::new(
-                                cp.column.0 as f32 * char_width,
-                                cr as f32 * char_height + offset_y,
-                            ));
+                            let is_filling = is_cell_filling_char(cell.c);
+                            if is_filling {
+                                let (_, logical) = layout.extents();
+                                let aw =
+                                    (logical.width() as f32 / gtk4::pango::SCALE as f32).max(0.1);
+                                let ah =
+                                    (logical.height() as f32 / gtk4::pango::SCALE as f32).max(0.1);
+                                let sx = char_width / aw;
+                                let sy = char_height / ah;
+                                snapshot.translate(&gtk4::graphene::Point::new(
+                                    cp.column.0 as f32 * char_width,
+                                    cr as f32 * char_height,
+                                ));
+                                if (sx - 1.0).abs() > 0.02 || (sy - 1.0).abs() > 0.02 {
+                                    snapshot.scale(sx, sy);
+                                }
+                            } else {
+                                snapshot.translate(&gtk4::graphene::Point::new(
+                                    cp.column.0 as f32 * char_width,
+                                    cr as f32 * char_height + offset_y,
+                                ));
+                                if wide || !cell.c.is_ascii() {
+                                    let (_, logical) = layout.extents();
+                                    let aw = logical.width() as f32 / gtk4::pango::SCALE as f32;
+                                    let ah = logical.height() as f32 / gtk4::pango::SCALE as f32;
+                                    let target_w = if wide { char_width * 2.0 } else { char_width };
+                                    if wide && (aw - target_w).abs() > 0.1 && aw > 0.0 {
+                                        let s = target_w / aw;
+                                        snapshot.scale(s, s);
+                                        let scaled_h = ah * s;
+                                        if scaled_h < char_height {
+                                            snapshot.translate(&gtk4::graphene::Point::new(
+                                                0.0,
+                                                (char_height - scaled_h) / 2.0,
+                                            ));
+                                        }
+                                    } else if (ah - char_height).abs() > 0.5 && ah > 0.0 {
+                                        snapshot.translate(&gtk4::graphene::Point::new(
+                                            0.0,
+                                            (char_height - ah) / 2.0,
+                                        ));
+                                    }
+                                }
+                            }
                             let text_on_cursor = gtk4::gdk::RGBA::new(
                                 bg_color.red(),
                                 bg_color.green(),
@@ -1065,7 +1290,7 @@ impl super::TerminalWidget {
             snapshot.restore();
             self.draw_kitty_images(
                 snapshot,
-                &state,
+                state,
                 false,
                 display_offset,
                 char_width,

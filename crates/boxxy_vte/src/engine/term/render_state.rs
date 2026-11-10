@@ -22,7 +22,9 @@ pub struct RenderState {
     pub cursor_point: Point,
     pub cursor_style: Option<CursorStyle>,
     pub selection_range: Option<SelectionRange>,
-    pub selection_text: Option<String>,
+    pub selection_text: Option<Arc<str>>,
+    pub colors_generation: u64,
+    pub custom_colors: Option<Box<color::Colors>>,
     pub kitty_generation: u64,
     pub kitty_placements: Vec<crate::engine::kitty::Placement>,
     pub kitty_images: HashMap<u32, Arc<crate::engine::kitty::KittyImage>>,
@@ -53,10 +55,12 @@ impl RenderState {
         let selection_range = term.selection.as_ref().and_then(|s| s.to_range(term));
         let selection_text = term
             .selection_to_string()
-            .filter(|s| !s.trim_matches(['\n', '\r']).is_empty());
+            .filter(|s| !s.trim_matches(['\n', '\r']).is_empty())
+            .map(Arc::<str>::from);
         let is_alt_screen = term.mode.contains(TermMode::ALT_SCREEN);
         let mode = term.mode;
         let cl_mode = term.cl_mode.clone();
+        let custom_colors = term.has_custom_colors.then(|| Box::new(term.colors));
 
         Self {
             generation: 0,
@@ -69,6 +73,8 @@ impl RenderState {
             cursor_style: term.cursor_style,
             selection_range,
             selection_text,
+            colors_generation: term.colors_generation,
+            custom_colors,
             kitty_generation: term.kitty_graphics.generation,
             kitty_placements: term.kitty_graphics.placements.clone(),
             kitty_images: term.kitty_graphics.images.clone(),
@@ -129,12 +135,23 @@ impl RenderState {
         self.cursor_point = term.grid().cursor.point;
         self.cursor_style = term.cursor_style;
         self.selection_range = term.selection.as_ref().and_then(|s| s.to_range(term));
-        self.selection_text = if self.selection_range.is_some() {
-            term.selection_to_string()
-                .filter(|s| !s.trim_matches(['\n', '\r']).is_empty())
+        self.selection_text = if let Some(range) = self.selection_range {
+            term.cached_selection_arc(range)
         } else {
             None
         };
+        if self.colors_generation != term.colors_generation {
+            self.colors_generation = term.colors_generation;
+            if term.has_custom_colors {
+                if let Some(ref mut boxed) = self.custom_colors {
+                    **boxed = term.colors;
+                } else {
+                    self.custom_colors = Some(Box::new(term.colors));
+                }
+            } else {
+                self.custom_colors = None;
+            }
+        }
         if self.kitty_generation != term.kitty_graphics.generation {
             self.kitty_generation = term.kitty_graphics.generation;
             self.kitty_placements
@@ -165,8 +182,8 @@ impl RenderState {
     /// `RenderState`), falls back to extracting from `self.cells` only when the
     /// entire selection range lies within the visible viewport.
     pub fn selection_text(&self) -> Option<String> {
-        if self.selection_text.is_some() {
-            return self.selection_text.clone();
+        if let Some(ref text) = self.selection_text {
+            return Some((**text).to_owned());
         }
 
         let range = self.selection_range?;
@@ -346,23 +363,24 @@ impl RenderState {
         push_candidate(&end_r[e_col.min(scan_cols - 1)]);
 
         if s_row == e_row {
-            for col in s_col..=e_col.min(scan_cols - 1) {
-                if start_r[col].c != ' ' && start_r[col].c != '\0' {
-                    push_candidate(&start_r[col]);
+            let end_bound = e_col.min(scan_cols - 1);
+            for cell in &start_r[s_col..=end_bound] {
+                if cell.c != ' ' && cell.c != '\0' {
+                    push_candidate(cell);
                 }
             }
-            for col in s_col..=e_col.min(scan_cols - 1) {
-                push_candidate(&start_r[col]);
+            for cell in &start_r[s_col..=end_bound] {
+                push_candidate(cell);
             }
         } else {
-            for col in s_col..scan_cols {
-                if start_r[col].c != ' ' && start_r[col].c != '\0' {
-                    push_candidate(&start_r[col]);
+            for cell in &start_r[s_col..scan_cols] {
+                if cell.c != ' ' && cell.c != '\0' {
+                    push_candidate(cell);
                 }
             }
-            for col in (0..=e_col.min(scan_cols - 1)).rev() {
-                if end_r[col].c != ' ' && end_r[col].c != '\0' {
-                    push_candidate(&end_r[col]);
+            for cell in end_r[..=e_col.min(scan_cols - 1)].iter().rev() {
+                if cell.c != ' ' && cell.c != '\0' {
+                    push_candidate(cell);
                 }
             }
             for r in s_row..=e_row {
@@ -373,8 +391,8 @@ impl RenderState {
                 } else {
                     scan_cols - 1
                 };
-                for col in c_min..=c_max {
-                    push_candidate(&r_cells[col]);
+                for cell in &r_cells[c_min..=c_max] {
+                    push_candidate(cell);
                 }
             }
         }

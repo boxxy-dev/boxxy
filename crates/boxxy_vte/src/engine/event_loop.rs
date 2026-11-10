@@ -33,6 +33,11 @@ const MAX_LOCKED_READ: usize = 0x4_0000;
 /// throttle via `RenderPriority::Immediate`.
 pub(crate) const MIN_SNAPSHOT_INTERVAL: Duration = Duration::from_millis(8);
 
+/// Relaxed snapshot interval while the terminal widget is unmapped/hidden (~4 Hz),
+/// avoiding 120 Hz cell copies on background tabs while keeping `RenderState`
+/// fresh for detached snapshots and status queries.
+pub(crate) const HIDDEN_SNAPSHOT_INTERVAL: Duration = Duration::from_millis(250);
+
 /// Priority level for publishing a new `RenderState` snapshot to the UI thread.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RenderPriority {
@@ -73,7 +78,7 @@ pub enum Msg {
     SetVisible(bool),
     CopySelection(ClipboardType),
     CopyLastCommandOutput(ClipboardType),
-    Search(String, Direction, bool),
+    Search(String, Direction, bool, bool),
     GetTextSnapshot(usize, usize, tokio::sync::oneshot::Sender<String>),
     DumpBuffer(bool, tokio::sync::oneshot::Sender<String>),
 }
@@ -334,6 +339,9 @@ where
                                         let report = crate::engine::term::visibility_report(visible);
                                         state.write_list.push_back(Cow::Borrowed(report.as_bytes()));
                                     }
+                                    if visible && pending_coalesced_render {
+                                        needs_render = true;
+                                    }
                                 }
                             },
                             Ok(Msg::CopySelection(clipboard_type)) => {
@@ -353,27 +361,72 @@ where
                                         .send_event(Event::ClipboardStore(clipboard_type, text));
                                 }
                             },
-                            Ok(Msg::Search(query, direction, case_insensitive)) => {
-                                if let Ok(mut searcher) = crate::engine::term::search::RegexSearch::new(&query, case_insensitive) {
+                            Ok(Msg::Search(query, direction, case_insensitive, wrap_around)) => {
+                                let searcher_ok = if let Some((ref q, ci, _)) = state.cached_search
+                                    && *q == query
+                                    && ci == case_insensitive
+                                {
+                                    true
+                                } else if let Ok(compiled) =
+                                    crate::engine::term::search::RegexSearch::new(&query, case_insensitive)
+                                {
+                                    state.cached_search = Some((query, case_insensitive, compiled));
+                                    true
+                                } else {
+                                    false
+                                };
+
+                                if searcher_ok
+                                    && let Some((_, _, ref mut searcher)) = state.cached_search
+                                {
+                                    use crate::engine::grid::Dimensions;
                                     let mut origin = self.terminal.grid().cursor.point;
+                                    let mut at_unwrapped_end = false;
                                     if let Some(ref sel) = self.terminal.selection
-                                        && let Some(range) = sel.to_range(&self.terminal) {
-                                            origin = if direction == Direction::Right {
-                                                range.end.add(&self.terminal, crate::engine::index::Boundary::Grid, 1)
-                                            } else {
-                                                range.start.sub(&self.terminal, crate::engine::index::Boundary::Grid, 1)
-                                            };
-                                        }
-                                    let mut match_opt = self.terminal.search_next(&mut searcher, origin, direction, Side::Left, None);
-                                    if match_opt.is_none() {
-                                        use crate::engine::grid::Dimensions;
-                                        let wrap_origin = if direction == Direction::Right {
-                                            Point::new(self.terminal.topmost_line(), Column(0))
+                                        && let Some(range) = sel.to_range(&self.terminal)
+                                    {
+                                        if direction == Direction::Right {
+                                            let last = Point::new(
+                                                self.terminal.bottommost_line(),
+                                                self.terminal.last_column(),
+                                            );
+                                            if range.end >= last && !wrap_around {
+                                                at_unwrapped_end = true;
+                                            }
+                                            origin = range.end.add(
+                                                &self.terminal,
+                                                crate::engine::index::Boundary::Grid,
+                                                1,
+                                            );
                                         } else {
-                                            Point::new(self.terminal.bottommost_line(), self.terminal.last_column())
-                                        };
-                                        match_opt = self.terminal.search_next(&mut searcher, wrap_origin, direction, Side::Left, None);
+                                            let first =
+                                                Point::new(self.terminal.topmost_line(), Column(0));
+                                            if range.start <= first && !wrap_around {
+                                                at_unwrapped_end = true;
+                                            }
+                                            origin = range.start.sub(
+                                                &self.terminal,
+                                                crate::engine::index::Boundary::Grid,
+                                                1,
+                                            );
+                                        }
                                     }
+
+                                    // `Term::search_next(..., None)` already wraps around the full
+                                    // grid in a single pass; no second full-buffer scan is needed.
+                                    let match_opt = if at_unwrapped_end {
+                                        None
+                                    } else {
+                                        self.terminal
+                                            .search_next(searcher, origin, direction, Side::Left, None)
+                                            .filter(|m| {
+                                                wrap_around
+                                                    || match direction {
+                                                        Direction::Right => *m.start() >= origin,
+                                                        Direction::Left => *m.start() <= origin,
+                                                    }
+                                            })
+                                    };
 
                                     if let Some(m) = match_opt {
                                         self.terminal.selection = Some(Selection::new(SelectionType::Simple, *m.start(), Side::Left));
@@ -461,8 +514,9 @@ where
                         let Ok(mut guard) = read_guard else {
                             break 'event_loop;
                         };
-                        let in_coalesce_window = last_snapshot_at
-                            .is_some_and(|last| last.elapsed() < MIN_SNAPSHOT_INTERVAL);
+                        let interval = self.snapshot_interval();
+                        let in_coalesce_window =
+                            last_snapshot_at.is_some_and(|last| last.elapsed() < interval);
                         match self.pty_read(&mut state, &mut buf, pipe.as_mut(), in_coalesce_window) {
                             Ok((false, _, _)) => {
                                 // EOF Reached
@@ -490,7 +544,7 @@ where
                                     {
                                         coalesce_sleep
                                             .as_mut()
-                                            .reset(last + MIN_SNAPSHOT_INTERVAL);
+                                            .reset(last + self.snapshot_interval());
                                     }
                                 }
                                 // Only clear edge-triggered readable readiness if we actually
@@ -592,9 +646,22 @@ where
     }
 
     #[inline]
+    fn snapshot_interval(&self) -> Duration {
+        if self.terminal.is_visible {
+            MIN_SNAPSHOT_INTERVAL
+        } else {
+            HIDDEN_SNAPSHOT_INTERVAL
+        }
+    }
+
+    #[inline]
     fn swap_updated_render_state(&mut self) {
         let generation = self.next_generation;
         self.next_generation = self.next_generation.wrapping_add(1);
+        let current_alt = self
+            .terminal
+            .mode()
+            .contains(crate::engine::term::TermMode::ALT_SCREEN);
 
         let new_arc = if let Some(mut spare) = self.spare_render_state.take()
             && let Some(reusable) = Arc::get_mut(&mut spare)
@@ -608,8 +675,14 @@ where
         };
 
         let previous = self.render_state.swap(new_arc);
+        let alt_changed = previous.is_alt_screen != current_alt;
         self.spare_render_state = Some(previous);
-        self.event_proxy.send_event(Event::Wakeup);
+
+        // Suppress GTK main-thread wakeups while unmapped in a background tab unless
+        // alternate-screen state transitioned (so `on_alt_screen_changed` stays live).
+        if self.terminal.is_visible || alt_changed {
+            self.event_proxy.send_event(Event::Wakeup);
+        }
     }
 
     #[inline]
@@ -620,6 +693,7 @@ where
         pending_coalesced_render: &mut bool,
     ) {
         let now = tokio::time::Instant::now();
+        let interval = self.snapshot_interval();
         match priority {
             RenderPriority::Immediate => {
                 *pending_coalesced_render = false;
@@ -628,7 +702,7 @@ where
             }
             RenderPriority::Coalesced => {
                 let elapsed_ok = last_snapshot_at
-                    .map(|last| now.saturating_duration_since(last) >= MIN_SNAPSHOT_INTERVAL)
+                    .map(|last| now.saturating_duration_since(last) >= interval)
                     .unwrap_or(true);
                 if elapsed_ok {
                     *pending_coalesced_render = false;
@@ -692,7 +766,7 @@ where
                 Err(err) => match err.kind() {
                     ErrorKind::Interrupted => continue,
                     ErrorKind::WouldBlock => {
-                        if (in_coalesce_window || processed > 0)
+                        if (in_coalesce_window || processed >= 4095)
                             && processed < MAX_LOCKED_READ
                             && empty_retries < 16
                             && self.rx.is_empty()
@@ -844,6 +918,7 @@ pub struct State {
     write_list: VecDeque<Cow<'static, [u8]>>,
     writing: Option<Writing>,
     parser: ansi::Processor,
+    cached_search: Option<(String, bool, crate::engine::term::search::RegexSearch)>,
 }
 
 impl State {

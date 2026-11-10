@@ -742,17 +742,20 @@ impl<T: EventListener> Handler for Term<T> {
                     }
                 }
             } else {
-                if !has_template_extra {
+                if has_template_extra {
+                    let extra = self.grid.cursor.template.extra.clone();
+                    let row_mut = &mut self.grid[line][Column(start_col)..Column(end_col)];
+                    for (cell, &b) in row_mut.iter_mut().zip(chunk.iter()) {
+                        cell.c = b as char;
+                        cell.fg = fg;
+                        cell.bg = bg;
+                        cell.flags = flags;
+                        cell.extra.clone_from(&extra);
+                    }
+                } else {
                     let has_any_extra = self.has_any_extra;
                     let row_mut = &mut row[Column(start_col)..Column(end_col)];
-                    if !has_any_extra {
-                        for (cell, &b) in row_mut.iter_mut().zip(chunk.iter()) {
-                            cell.c = b as char;
-                            cell.fg = fg;
-                            cell.bg = bg;
-                            cell.flags = flags;
-                        }
-                    } else {
+                    if has_any_extra {
                         for (cell, &b) in row_mut.iter_mut().zip(chunk.iter()) {
                             cell.c = b as char;
                             cell.fg = fg;
@@ -763,16 +766,13 @@ impl<T: EventListener> Handler for Term<T> {
                                 cell.extra = None;
                             }
                         }
-                    }
-                } else {
-                    let extra = self.grid.cursor.template.extra.clone();
-                    let row_mut = &mut self.grid[line][Column(start_col)..Column(end_col)];
-                    for (cell, &b) in row_mut.iter_mut().zip(chunk.iter()) {
-                        cell.c = b as char;
-                        cell.fg = fg;
-                        cell.bg = bg;
-                        cell.flags = flags;
-                        cell.extra.clone_from(&extra);
+                    } else {
+                        for (cell, &b) in row_mut.iter_mut().zip(chunk.iter()) {
+                            cell.c = b as char;
+                            cell.fg = fg;
+                            cell.bg = bg;
+                            cell.flags = flags;
+                        }
                     }
                 }
 
@@ -820,14 +820,7 @@ impl<T: EventListener> Handler for Term<T> {
             if self.grid.cursor.template.extra.is_none() {
                 let has_any_extra = self.has_any_extra;
                 let row_mut = &mut self.grid[cur_line][Column(0)..Column(keep_cols)];
-                if !has_any_extra {
-                    for (cell, &b) in row_mut.iter_mut().zip(chunk.iter()) {
-                        cell.c = b as char;
-                        cell.fg = fg;
-                        cell.bg = bg;
-                        cell.flags = flags;
-                    }
-                } else {
+                if has_any_extra {
                     for (cell, &b) in row_mut.iter_mut().zip(chunk.iter()) {
                         cell.c = b as char;
                         cell.fg = fg;
@@ -837,6 +830,13 @@ impl<T: EventListener> Handler for Term<T> {
                             core::hint::cold_path();
                             cell.extra = None;
                         }
+                    }
+                } else {
+                    for (cell, &b) in row_mut.iter_mut().zip(chunk.iter()) {
+                        cell.c = b as char;
+                        cell.fg = fg;
+                        cell.bg = bg;
+                        cell.flags = flags;
                     }
                 }
             } else {
@@ -1481,18 +1481,29 @@ impl<T: EventListener> Handler for Term<T> {
     fn set_color(&mut self, index: usize, color: Rgb) {
         trace!("Setting color[{index}] = {color:?}");
 
-        // Damage terminal if the color changed and it's not the cursor.
-        if index != NamedColor::Cursor as usize && self.colors[index] != Some(color) {
-            self.mark_fully_damaged();
+        if self.colors[index] != Some(color) {
+            // Damage terminal if the color changed and it's not the cursor.
+            if index != NamedColor::Cursor as usize {
+                self.mark_fully_damaged();
+            }
+            self.colors[index] = Some(color);
+            self.has_custom_colors = true;
+            self.colors_generation = self.colors_generation.wrapping_add(1);
         }
-
-        self.colors[index] = Some(color);
     }
 
     /// Respond to a color query escape sequence.
     #[inline]
     fn dynamic_color_sequence(&mut self, prefix: String, index: usize, terminator: &str) {
         trace!("Requested write of escape sequence for color code {prefix}: color[{index}]");
+
+        if let Some(color) = self.colors.get(index) {
+            self.event_proxy.send_event(Event::PtyWrite(format!(
+                "\x1b]{};rgb:{1:02x}{1:02x}/{2:02x}{2:02x}/{3:02x}{3:02x}{4}",
+                prefix, color.r, color.g, color.b, terminator
+            )));
+            return;
+        }
 
         let terminator = terminator.to_owned();
         self.event_proxy.send_event(Event::ColorRequest(
@@ -1511,12 +1522,15 @@ impl<T: EventListener> Handler for Term<T> {
     fn reset_color(&mut self, index: usize) {
         trace!("Resetting color[{index}]");
 
-        // Damage terminal if the color changed and it's not the cursor.
-        if index != NamedColor::Cursor as usize && self.colors[index].is_some() {
-            self.mark_fully_damaged();
+        if self.colors[index].is_some() {
+            // Damage terminal if the color changed and it's not the cursor.
+            if index != NamedColor::Cursor as usize {
+                self.mark_fully_damaged();
+            }
+            self.colors[index] = None;
+            self.has_custom_colors = !self.colors.is_empty();
+            self.colors_generation = self.colors_generation.wrapping_add(1);
         }
-
-        self.colors[index] = None;
     }
 
     /// Store data into clipboard.
@@ -1665,7 +1679,12 @@ impl<T: EventListener> Handler for Term<T> {
         }
         self.active_charset = Default::default();
         self.cursor_style = None;
-        self.colors = crate::engine::term::color::Colors::default();
+        if self.has_custom_colors {
+            self.colors = crate::engine::term::color::Colors::default();
+            self.has_custom_colors = false;
+            self.colors_generation = self.colors_generation.wrapping_add(1);
+        }
+        self.selection_text_cache = None;
         self.grid.reset();
         self.inactive_grid.reset();
         self.scroll_region = Line(0)..Line(self.screen_lines() as i32);

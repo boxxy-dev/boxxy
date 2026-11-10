@@ -1,9 +1,9 @@
 //! TTY related functionality.
 
 use std::collections::HashMap;
+use std::io;
 use std::path::PathBuf;
 use std::process::ExitStatus;
-use std::{env, io};
 
 mod unix;
 pub use self::unix::*;
@@ -73,15 +73,4 @@ pub trait EventedPty: EventedReadWrite {
 
     /// Gets the raw file descriptor for the child event signal pipe, if available.
     fn child_event_fd(&self) -> Option<std::os::fd::RawFd>;
-}
-
-/// Setup environment variables.
-pub fn setup_env() {
-    // Force 'xterm-256color' to ensure maximum compatibility with CLI apps
-    // expecting standard 256 color support without needing custom terminfo.
-    let terminfo = "xterm-256color";
-    unsafe { env::set_var("TERM", terminfo) };
-
-    // Advertise 24-bit color support.
-    unsafe { env::set_var("COLORTERM", "truecolor") };
 }

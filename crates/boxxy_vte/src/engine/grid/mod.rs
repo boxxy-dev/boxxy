@@ -136,6 +136,10 @@ pub struct Grid<T> {
 
     /// Maximum number of lines in history.
     max_scroll_limit: usize,
+
+    /// Monotonic counter incremented whenever scrollback history rows are rotated,
+    /// resized, shrunk, or cleared.
+    pub(crate) history_epoch: u64,
 }
 
 impl<T: GridCell + Default + PartialEq> Grid<T> {
@@ -143,6 +147,7 @@ impl<T: GridCell + Default + PartialEq> Grid<T> {
         Grid {
             raw: Storage::with_capacity(lines, columns),
             max_scroll_limit,
+            history_epoch: 0,
             display_offset: 0,
             saved_cursor: Cursor::default(),
             cursor: Cursor::default(),
@@ -156,6 +161,7 @@ impl<T: GridCell + Default + PartialEq> Grid<T> {
         let current_history_size = self.history_size();
         if current_history_size > history_size {
             self.raw.shrink_lines(current_history_size - history_size);
+            self.history_epoch = self.history_epoch.wrapping_add(1);
         }
         self.display_offset = min(self.display_offset, history_size);
         self.max_scroll_limit = history_size;
@@ -186,6 +192,7 @@ impl<T: GridCell + Default + PartialEq> Grid<T> {
         if count != 0 {
             self.raw.shrink_lines(min(count, self.history_size()));
             self.display_offset = min(self.display_offset, self.history_size());
+            self.history_epoch = self.history_epoch.wrapping_add(1);
         }
     }
 
@@ -299,6 +306,7 @@ impl<T: GridCell + Default + PartialEq> Grid<T> {
 
             // Rotate the entire line buffer upward.
             self.raw.rotate(-(positions as isize));
+            self.history_epoch = self.history_epoch.wrapping_add(1);
 
             // Swap the fixed lines at the bottom back into position.
             let screen_lines = self.screen_lines() as i32;
@@ -401,6 +409,7 @@ impl<T> Grid<T> {
         // Explicitly purge all lines from history and release backing capacity.
         self.raw.shrink_lines(self.history_size());
         self.raw.truncate();
+        self.history_epoch = self.history_epoch.wrapping_add(1);
 
         // Reset display offset.
         self.display_offset = 0;

@@ -424,11 +424,14 @@ impl TerminalBackend {
         query: String,
         direction: crate::engine::index::Direction,
         case_insensitive: bool,
+        wrap_around: bool,
     ) {
-        let _ = self
-            .notifier
-            .0
-            .send(Msg::Search(query, direction, case_insensitive));
+        let _ = self.notifier.0.send(Msg::Search(
+            query,
+            direction,
+            case_insensitive,
+            wrap_around,
+        ));
     }
 
     pub async fn get_text_snapshot(&self, max_lines: usize, offset_lines: usize) -> Option<String> {
@@ -696,6 +699,118 @@ mod tests {
         assert!(
             backend.render_state.load().selection_text().is_none(),
             "selecting across blank rows must not yield a newline-only clipboard string"
+        );
+    }
+
+    #[tokio::test]
+    async fn hidden_tab_suppresses_wakeups_and_flushes_immediately_on_remap() {
+        use crate::engine::index::{Column, Line, Point};
+
+        let mut fds = [0i32; 2];
+        assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0);
+        let read_fd = unsafe { OwnedFd::from_raw_fd(fds[0]) };
+        let write_fd = unsafe { OwnedFd::from_raw_fd(fds[1]) };
+
+        let (tx, rx) = async_channel::unbounded::<Event>();
+        let backend = TerminalBackend::from_fd(tx, read_fd);
+
+        // Initial visible write triggers Wakeup and sets `last_snapshot_at`.
+        unsafe {
+            libc::write(write_fd.as_raw_fd(), b"Init\r\n".as_ptr() as *const _, 6);
+        }
+        let _ = tokio::time::timeout(std::time::Duration::from_millis(100), rx.recv())
+            .await
+            .expect("initial wakeup");
+        backend.clear_pending_wakeups();
+
+        // Mark terminal hidden (background tab) and immediately stream more output
+        // within the 250ms hidden coalesce window.
+        backend.set_visible(false);
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        unsafe {
+            libc::write(write_fd.as_raw_fd(), b"HiddenOut".as_ptr() as *const _, 9);
+        }
+
+        // No UI `Event::Wakeup` should arrive while unmapped.
+        let hidden_wakeup =
+            tokio::time::timeout(std::time::Duration::from_millis(35), rx.recv()).await;
+        assert!(
+            hidden_wakeup.is_err(),
+            "hidden tab must not send Event::Wakeup on ordinary text output"
+        );
+
+        // Re-mapping (`set_visible(true)`) flushes the pending snapshot immediately
+        // without waiting for the 250ms background timer.
+        backend.set_visible(true);
+        let remapped_wakeup =
+            tokio::time::timeout(std::time::Duration::from_millis(100), rx.recv()).await;
+        assert!(remapped_wakeup.is_ok(), "expected immediate wakeup on remap");
+        backend.clear_pending_wakeups();
+
+        let state = backend.render_state.load();
+        assert_eq!(state.cell(Point::new(Line(1), Column(0))).c, 'H');
+        assert_eq!(state.cell(Point::new(Line(1), Column(8))).c, 't');
+    }
+
+    #[tokio::test]
+    async fn search_respects_wrap_around_flag_and_reuses_cached_dfa() {
+        use crate::engine::index::{Column, Direction, Line, Point, Side};
+        use crate::engine::selection::{Selection, SelectionType};
+
+        let mut fds = [0i32; 2];
+        assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0);
+        let read_fd = unsafe { OwnedFd::from_raw_fd(fds[0]) };
+        let write_fd = unsafe { OwnedFd::from_raw_fd(fds[1]) };
+
+        let (tx, rx) = async_channel::unbounded::<Event>();
+        let backend = TerminalBackend::from_fd(tx, read_fd);
+
+        let payload = b"token-alpha\r\nmiddle-line\r\ntoken-omega\r\n";
+        unsafe {
+            libc::write(
+                write_fd.as_raw_fd(),
+                payload.as_ptr() as *const _,
+                payload.len(),
+            );
+        }
+        let _ = tokio::time::timeout(std::time::Duration::from_millis(100), rx.recv())
+            .await
+            .expect("payload wakeup");
+        backend.clear_pending_wakeups();
+
+        // Select the second match (`token-omega` on Line(2)) so searching forward (`Right`)
+        // reaches the end of the buffer.
+        let mut sel = Selection::new(
+            SelectionType::Simple,
+            Point::new(Line(2), Column(0)),
+            Side::Left,
+        );
+        sel.update(Point::new(Line(2), Column(10)), Side::Right);
+        backend.set_selection(Some(sel));
+        let _ = tokio::time::timeout(std::time::Duration::from_millis(100), rx.recv())
+            .await
+            .expect("selection wakeup");
+        backend.clear_pending_wakeups();
+
+        // 1. With `wrap_around = false`, searching forward past the bottom match must NOT wrap.
+        backend.search("token-[a-z]+".to_string(), Direction::Right, false, false);
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        while rx.try_recv().is_ok() {}
+        backend.clear_pending_wakeups();
+        assert_eq!(
+            backend.render_state.load().selection_text().as_deref(),
+            Some("token-omega")
+        );
+
+        // 2. With `wrap_around = true` (reusing the cached compiled regex), searching forward
+        //    wraps cleanly to `token-alpha` on Line(0).
+        backend.search("token-[a-z]+".to_string(), Direction::Right, false, true);
+        let _ = tokio::time::timeout(std::time::Duration::from_millis(100), rx.recv())
+            .await
+            .expect("wrapped search wakeup");
+        assert_eq!(
+            backend.render_state.load().selection_text().as_deref(),
+            Some("token-alpha")
         );
     }
 }

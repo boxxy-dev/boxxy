@@ -18,8 +18,20 @@ pub const COUNT: usize = 269;
 /// | 259..267 | Dim colors        |
 /// | 267      | Bright foreground |
 /// | 268      | Dim background    |
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct Colors([Option<Rgb>; COUNT]);
+
+impl Colors {
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.0.iter().all(Option::is_none)
+    }
+
+    #[inline]
+    pub fn get(&self, index: usize) -> Option<Rgb> {
+        self.0.get(index).copied().flatten()
+    }
+}
 
 impl Default for Colors {
     fn default() -> Self {

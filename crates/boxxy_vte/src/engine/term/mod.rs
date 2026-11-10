@@ -1,6 +1,7 @@
 //! Exports the `Term` type which is a high-level API for the Grid.
 
 use std::ops::Range;
+use std::sync::Arc;
 use std::{cmp, mem, slice};
 
 #[cfg(feature = "serde")]
@@ -165,6 +166,9 @@ pub(super) struct TermDamageState {
 
     /// Old terminal cursor point.
     pub(super) last_cursor: Point,
+
+    /// Monotonic counter incremented on every viewport cell/region mutation.
+    pub(crate) epoch: u64,
 }
 
 impl TermDamageState {
@@ -177,6 +181,7 @@ impl TermDamageState {
             full: true,
             lines,
             last_cursor: Default::default(),
+            epoch: 0,
         }
     }
 
@@ -185,6 +190,7 @@ impl TermDamageState {
         // Reset point, so old cursor won't end up outside of the viewport.
         self.last_cursor = Default::default();
         self.full = true;
+        self.epoch = self.epoch.wrapping_add(1);
 
         self.lines.clear();
         self.lines.reserve(num_lines);
@@ -202,6 +208,7 @@ impl TermDamageState {
     /// Expand `line`'s damage to span at least `left` to `right` column.
     #[inline]
     pub(super) fn damage_line(&mut self, line: usize, left: usize, right: usize) {
+        self.epoch = self.epoch.wrapping_add(1);
         if !self.full {
             self.lines[line].expand(left, right);
         }
@@ -254,6 +261,19 @@ pub struct Term<T> {
 
     /// Modified terminal colors.
     colors: Colors,
+
+    /// Monotonic generation incremented whenever `OSC 4/10/11/12` or `OSC 104/110/111/112`
+    /// modifies `self.colors`.
+    pub(crate) colors_generation: u64,
+
+    /// True if at least one entry in `self.colors` is `Some(...)`.
+    pub(crate) has_custom_colors: bool,
+
+    /// Cached extracted selection string keyed by `(SelectionRange, epoch)` so 120 Hz
+    /// render snapshots do not re-walk 10,000 scrollback lines when the selected content
+    /// has not changed.
+    pub(crate) selection_text_cache:
+        Option<(crate::engine::selection::SelectionRange, u64, Option<Arc<str>>)>,
 
     /// Current style of the cursor.
     cursor_style: Option<CursorStyle>,
@@ -385,6 +405,9 @@ impl<T> Term<T> {
             vi_mode_cursor: Default::default(),
             cursor_style: Default::default(),
             colors: color::Colors::default(),
+            colors_generation: 0,
+            has_custom_colors: false,
+            selection_text_cache: None,
             title_stack: Default::default(),
             is_focused: Default::default(),
             is_visible: true,
@@ -432,6 +455,36 @@ impl<T> Term<T> {
     #[inline]
     pub(super) fn mark_fully_damaged(&mut self) {
         self.damage.full = true;
+        self.damage.epoch = self.damage.epoch.wrapping_add(1);
+    }
+
+    /// Return the extracted selection text as a shared `Arc<str>`, reusing the cached
+    /// allocation when neither the selection range nor the underlying grid rows changed.
+    pub(crate) fn cached_selection_arc(
+        &mut self,
+        range: crate::engine::selection::SelectionRange,
+    ) -> Option<Arc<str>> {
+        // Scrollback rows (`line < 0`) only change when `grid.history_epoch` advances.
+        // Selections touching the viewport (`end.line >= 0`) also depend on `damage.epoch`.
+        let epoch = if range.end.line.0 < 0 {
+            self.grid.history_epoch
+        } else {
+            self.damage.epoch ^ self.grid.history_epoch.rotate_left(32)
+        };
+
+        if let Some((cached_range, cached_epoch, ref cached_text)) = self.selection_text_cache
+            && cached_range == range
+            && cached_epoch == epoch
+        {
+            return cached_text.clone();
+        }
+
+        let computed = self
+            .selection_to_string()
+            .filter(|s| !s.trim_matches(['\n', '\r']).is_empty())
+            .map(Arc::<str>::from);
+        self.selection_text_cache = Some((range, epoch, computed.clone()));
+        computed
     }
 
     /// Set new options for the [`Term`].
