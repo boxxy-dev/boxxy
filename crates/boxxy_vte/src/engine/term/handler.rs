@@ -1698,11 +1698,16 @@ impl<T: EventListener> Handler for Term<T> {
         self.grid.cursor.input_needs_wrap = false;
         self.grid.saved_cursor = crate::engine::grid::Cursor::default();
         self.scroll_region = Line(0)..Line(self.screen_lines() as i32);
+        self.keyboard_mode_stack = Default::default();
+        self.inactive_keyboard_mode_stack = Default::default();
         self.mode.remove(
             TermMode::INSERT
                 | TermMode::ORIGIN
                 | TermMode::APP_CURSOR
-                | TermMode::APP_KEYPAD,
+                | TermMode::APP_KEYPAD
+                | TermMode::KITTY_KEYBOARD_PROTOCOL
+                | TermMode::MODIFY_OTHER_KEYS_1
+                | TermMode::MODIFY_OTHER_KEYS_2,
         );
         self.mode
             .insert(TermMode::SHOW_CURSOR | TermMode::LINE_WRAP);

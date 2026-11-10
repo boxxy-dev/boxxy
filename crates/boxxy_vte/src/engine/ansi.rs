@@ -1959,7 +1959,9 @@ where
                 }
             }
             ('m', [b'>']) => {
-                let mode = match (next_param_or(1) == 4).then(|| next_param_or(0)) {
+                // `CSI > Pp ; Pv m` (XTMODKEYS): `Pp = 4` sets `modifyOtherKeys`;
+                // `CSI > m` (no params) or `CSI > 4 m` / `CSI > 4 ; m` resets to 0.
+                let mode = match (next_param_or(4) == 4).then(|| next_param_or(0)) {
                     Some(0) => ModifyOtherKeys::Reset,
                     Some(1) => ModifyOtherKeys::EnableExceptWellDefined,
                     Some(2) => ModifyOtherKeys::EnableAll,

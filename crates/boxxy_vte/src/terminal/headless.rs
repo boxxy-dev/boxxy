@@ -494,6 +494,10 @@ mod tests {
         h.feed(b"\x1b[>7u\x1b[?1049l\x1b[?u");
         assert_eq!(h.take_pty_writes(), vec!["\x1b[?15u"]);
 
+        // Re-entering alt screen (?1049h) must NOT inherit the previous crashed alt-screen stack (7)
+        h.feed(b"\x1b[?1049h\x1b[?u\x1b[?1049l");
+        assert_eq!(h.take_pty_writes(), vec!["\x1b[?0u"]);
+
         // Pop 1 -> back to 1
         h.feed(b"\x1b[<1u\x1b[?u");
         assert_eq!(h.take_pty_writes(), vec!["\x1b[?1u"]);
@@ -516,6 +520,24 @@ mod tests {
         assert_eq!(h.take_pty_writes(), vec!["\x1b[>4;1m"]);
 
         h.feed(b"\x1b[>4m\x1b[?4m");
+        assert!(!h.mode().intersects(TermMode::MODIFY_OTHER_KEYS_1 | TermMode::MODIFY_OTHER_KEYS_2));
+        assert_eq!(h.take_pty_writes(), vec!["\x1b[>4;0m"]);
+
+        // Vim's `t_TE = \x1b[>4;m` and xterm's `\x1b[>m` / `DECSTR` (`\x1b[!p`) also reset modifyOtherKeys
+        h.feed(b"\x1b[>4;2m\x1b[>4;m\x1b[?4m");
+        assert!(!h.mode().intersects(TermMode::MODIFY_OTHER_KEYS_1 | TermMode::MODIFY_OTHER_KEYS_2));
+        assert_eq!(h.take_pty_writes(), vec!["\x1b[>4;0m"]);
+
+        h.feed(b"\x1b[>4;2m\x1b[>m\x1b[?4m");
+        assert!(!h.mode().intersects(TermMode::MODIFY_OTHER_KEYS_1 | TermMode::MODIFY_OTHER_KEYS_2));
+        assert_eq!(h.take_pty_writes(), vec!["\x1b[>4;0m"]);
+
+        h.feed(b"\x1b[>4;2m\x1b[!p\x1b[?4m");
+        assert!(!h.mode().intersects(TermMode::MODIFY_OTHER_KEYS_1 | TermMode::MODIFY_OTHER_KEYS_2));
+        assert_eq!(h.take_pty_writes(), vec!["\x1b[>4;0m"]);
+
+        // Exiting the alternate screen (`?1049l`) clears stuck modifyOtherKeys from a crashed TUI
+        h.feed(b"\x1b[?1049h\x1b[>4;2m\x1b[?1049l\x1b[?4m");
         assert!(!h.mode().intersects(TermMode::MODIFY_OTHER_KEYS_1 | TermMode::MODIFY_OTHER_KEYS_2));
         assert_eq!(h.take_pty_writes(), vec!["\x1b[>4;0m"]);
     }

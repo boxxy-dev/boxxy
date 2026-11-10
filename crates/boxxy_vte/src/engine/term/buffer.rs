@@ -596,10 +596,20 @@ impl<T> Term<T> {
             self.inactive_grid.reset_region(..);
         }
 
+        if entering_alt {
+            self.inactive_keyboard_mode_stack.clear();
+        }
         mem::swap(
             &mut self.keyboard_mode_stack,
             &mut self.inactive_keyboard_mode_stack,
         );
+        if !entering_alt {
+            self.inactive_keyboard_mode_stack.clear();
+            // Ensure an alt-screen TUI (e.g. Vim over a dropped SSH session) cannot leave
+            // `modifyOtherKeys` stuck on the primary shell after exiting `?1049l`.
+            self.mode
+                .remove(TermMode::MODIFY_OTHER_KEYS_1 | TermMode::MODIFY_OTHER_KEYS_2);
+        }
         let keyboard_mode = self
             .keyboard_mode_stack
             .last()
