@@ -52,10 +52,38 @@ pub(crate) fn prettify_character_name(raw: &str) -> String {
         .join(" ")
 }
 
+/// Reaps any detached PTY sessions that are sitting idle at a shell prompt with
+/// no active foreground/descendant processes and no attached Claw claim or tasks.
+pub(crate) async fn reap_idle_detached_shells(pty_registry: &registry::PtyRegistry) {
+    let detached = pty_registry.list_detached_with_cwd().await;
+    if detached.is_empty() {
+        return;
+    }
+    let workspace = boxxy_claw::registry::workspace::global_workspace().await;
+    let claims = boxxy_claw_protocol::characters::CLAIMS_CACHE.load();
+
+    for (pid, _pane_id, orig_pane_id, _idle_secs, _initial_cwd) in detached {
+        let has_tasks = workspace.get_pane_pending_task_count(&orig_pane_id).await > 0;
+        let has_claim = claims.iter().any(|c| c.holder_id == orig_pane_id);
+        if !has_tasks && !has_claim && !shell_has_active_process(pid) {
+            log::info!(
+                "pty-registry: reaping idle detached shell pid={} (no active child processes)",
+                pid
+            );
+            pty_registry.set_persistence(pid, false).await;
+            let _ = registry::kill_process_group_safe(pid, libc::SIGTERM);
+        }
+    }
+}
+
+/// Pure, side-effect-free snapshot of all currently detached PTY sessions.
 pub(crate) async fn query_detached_sessions_detailed(
     pty_registry: &registry::PtyRegistry,
 ) -> Vec<DetachedSessionInfo> {
     let detached = pty_registry.list_detached_with_cwd().await;
+    if detached.is_empty() {
+        return Vec::new();
+    }
     let workspace = boxxy_claw::registry::workspace::global_workspace().await;
     let claims = boxxy_claw_protocol::characters::CLAIMS_CACHE.load();
     let catalog = boxxy_claw_protocol::characters::CHARACTER_CACHE.load();
@@ -65,20 +93,6 @@ pub(crate) async fn query_detached_sessions_detailed(
         let pending_tasks = workspace.get_pane_pending_tasks(&orig_pane_id).await;
         let pending_task_count = pending_tasks.len() as u32;
         let claim_opt = claims.iter().find(|c| c.holder_id == orig_pane_id);
-        let has_claw = pending_task_count > 0 || claim_opt.is_some();
-
-        // If a detached shell has no active foreground/child process anymore
-        // AND no detached AI agent / pending reminder, reap it instead of prompting
-        // the user to restore an empty interactive shell.
-        if !shell_has_active_process(pid) && !has_claw {
-            log::info!(
-                "pty-registry: reaping idle detached shell pid={} (no active child processes)",
-                pid
-            );
-            pty_registry.set_persistence(pid, false).await;
-            let _ = registry::kill_process_group_safe(pid, libc::SIGTERM);
-            continue;
-        }
 
         let (character_id, character_name, character_slug, session_id) =
             if let Some(claim) = claim_opt {
@@ -97,17 +111,23 @@ pub(crate) async fn query_detached_sessions_detailed(
                 (String::new(), String::new(), String::new(), String::new())
             };
 
-        let live_cwd = std::fs::read_link(format!("/proc/{pid}/cwd"))
-            .ok()
-            .map(|p| p.to_string_lossy().to_string())
-            .filter(|s| !s.is_empty())
-            .unwrap_or(initial_cwd);
-        let (mut fg_proc, wchan_tty) = procfs::inspect_foreground_state(pid);
-        if fg_proc.is_empty()
-            && let Some((_, child_name)) = collect_descendant_processes(pid).into_iter().next()
-        {
-            fg_proc = child_name;
-        }
+        let (live_cwd, mut fg_proc, wchan_tty) = tokio::task::spawn_blocking(move || {
+            let cwd = std::fs::read_link(format!("/proc/{pid}/cwd"))
+                .ok()
+                .map(|p| p.to_string_lossy().to_string())
+                .filter(|s| !s.is_empty())
+                .unwrap_or(initial_cwd);
+            let (mut fg, wchan) = procfs::inspect_foreground_state(pid);
+            if fg.is_empty()
+                && let Some((_, child_name)) = collect_descendant_processes(pid).into_iter().next()
+            {
+                fg = child_name;
+            }
+            (cwd, fg, wchan)
+        })
+        .await
+        .unwrap_or_else(|_| (String::new(), String::new(), false));
+
         if fg_proc.is_empty() {
             if let Some(first_task) = pending_tasks.first() {
                 let msg = first_task.payload.trim();
@@ -191,7 +211,9 @@ impl PtySubsystem {
     async fn set_foreground_tracking(&self, pid: u32, enabled: bool) -> fdo::Result<()> {
         let mut lock = self.state.tracked_pids.write().await;
         if enabled {
-            lock.insert(pid);
+            if lock.insert(pid) {
+                self.state.tracking_wakeup.notify_waiters();
+            }
         } else {
             lock.remove(&pid);
         }
@@ -390,13 +412,54 @@ impl PtySubsystem {
 
         let emitter = emitter.to_owned();
         let tracked_pids = self.state.tracked_pids.clone();
+        let tracking_wakeup = self.state.tracking_wakeup.clone();
         let pty_registry = self.state.pty_registry.clone();
 
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(std::time::Duration::from_millis(150));
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
             let mut last_process_name = String::new();
 
             loop {
+                // Register notification interest *before* checking `tracked_pids` so
+                // `set_foreground_tracking(pid, true)` can never race between check and await.
+                let notified = tracking_wakeup.notified();
+                tokio::pin!(notified);
+                let is_tracked = tracked_pids.read().await.contains(&pid);
+
+                if !is_tracked {
+                    if !last_process_name.is_empty() {
+                        last_process_name.clear();
+                        if let Some(orig_pane_id) = pty_registry.get_original_pane_id(pid).await {
+                            let workspace =
+                                boxxy_claw::registry::workspace::global_workspace().await;
+                            workspace.set_pane_status(orig_pane_id, None).await;
+                        }
+                        let _ =
+                            PtySubsystem::foreground_process_changed(&emitter, pid, String::new())
+                                .await;
+                    }
+
+                    // Sleep with zero periodic wakeups until either the child exits or
+                    // foreground tracking is enabled for a PID.
+                    tokio::select! {
+                        status = child.wait() => {
+                            let exit_code = match status {
+                                Ok(s) => exit_status_to_code(s),
+                                Err(_) => -1,
+                            };
+                            let _ = PtySubsystem::exited(&emitter, pid, exit_code).await;
+                            tracked_pids.write().await.remove(&pid);
+                            pty_registry.mark_exited(pid, exit_code).await;
+                            break;
+                        }
+                        _ = &mut notified => {
+                            interval.reset();
+                            continue;
+                        }
+                    }
+                }
+
                 tokio::select! {
                     status = child.wait() => {
                         let exit_code = match status {
@@ -412,27 +475,17 @@ impl PtySubsystem {
                         break;
                     }
                     _ = interval.tick() => {
-                        let is_tracked = tracked_pids.read().await.contains(&pid);
-                        if is_tracked {
-                            if let Ok(current_process) = procfs::get_foreground_process(pid)
-                                && current_process != last_process_name
-                            {
-                                if let Some(orig_pane_id) = pty_registry.get_original_pane_id(pid).await {
-                                    let status_opt = (!current_process.is_empty())
-                                        .then(|| format!("Running: {current_process}"));
-                                    let workspace = boxxy_claw::registry::workspace::global_workspace().await;
-                                    workspace.set_pane_status(orig_pane_id, status_opt).await;
-                                }
-                                let _ = PtySubsystem::foreground_process_changed(&emitter, pid, current_process.clone()).await;
-                                last_process_name = current_process;
-                            }
-                        } else if !last_process_name.is_empty() {
-                            last_process_name = String::new();
+                        if let Ok(current_process) = procfs::get_foreground_process(pid)
+                            && current_process != last_process_name
+                        {
                             if let Some(orig_pane_id) = pty_registry.get_original_pane_id(pid).await {
+                                let status_opt = (!current_process.is_empty())
+                                    .then(|| format!("Running: {current_process}"));
                                 let workspace = boxxy_claw::registry::workspace::global_workspace().await;
-                                workspace.set_pane_status(orig_pane_id, None).await;
+                                workspace.set_pane_status(orig_pane_id, status_opt).await;
                             }
-                            let _ = PtySubsystem::foreground_process_changed(&emitter, pid, String::new()).await;
+                            let _ = PtySubsystem::foreground_process_changed(&emitter, pid, current_process.clone()).await;
+                            last_process_name = current_process;
                         }
                     }
                 }

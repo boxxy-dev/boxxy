@@ -255,11 +255,35 @@ $env.config = ($env.config? | default {} | upsert shell_integration {
 })
 "#;
 
+static VERIFIED_INTEGRATION_ROOT: std::sync::OnceLock<parking_lot::Mutex<Option<PathBuf>>> =
+    std::sync::OnceLock::new();
+
+fn integration_scripts_intact(root: &Path) -> bool {
+    root.join("bash/boxxy-bash.sh").exists()
+        && root.join("zsh/.zshrc").exists()
+        && root
+            .join("fish/vendor_conf.d/boxxy-shell-integration.fish")
+            .exists()
+        && root
+            .join("nushell/nushell/vendor/autoload/boxxy.nu")
+            .exists()
+}
+
 /// Writes the bundled Bash, Zsh, Fish, and Nushell integration scripts into
 /// `<config_dir>/shell-integration/` and returns the path to that directory.
+/// Caches the initialized directory so subsequent tab/split spawns only perform
+/// lightweight sentinel checks unless the config root changed or files were removed.
 pub fn ensure_integration_scripts() -> Option<PathBuf> {
     let root = boxxy_sys_utils::get_config_dir().join("shell-integration");
+    let cache = VERIFIED_INTEGRATION_ROOT.get_or_init(|| parking_lot::Mutex::new(None));
+    {
+        let guard = cache.lock();
+        if guard.as_deref() == Some(root.as_path()) && integration_scripts_intact(&root) {
+            return Some(root);
+        }
+    }
     ensure_integration_scripts_in(&root).ok()?;
+    *cache.lock() = Some(root.clone());
     Some(root)
 }
 

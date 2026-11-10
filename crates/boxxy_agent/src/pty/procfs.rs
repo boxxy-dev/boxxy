@@ -96,24 +96,27 @@ fn resolve_foreground_command_from_args(args: &[&str]) -> Option<String> {
     Some(base.to_string())
 }
 
-/// Reads `/proc/<pid>/stat` and returns `Some(tpgid)` when the terminal foreground
-/// process group differs from `pid`'s own process group (`tpgid != 0 && tpgid != pgrp`).
+/// Reads `/proc/<pid>/stat` into a stack buffer (zero heap allocations) and returns
+/// `Some(tpgid)` when the terminal foreground process group differs from `pid`'s own
+/// process group (`tpgid != 0 && tpgid != pgrp`).
 pub(crate) fn read_foreground_tpgid(pid: u32) -> Option<u32> {
-    let stat_path = format!("/proc/{pid}/stat");
-    let stat_content = std::fs::read_to_string(&stat_path).ok()?;
-    let rp_pos = stat_content.rfind(')')?;
-    if rp_pos == 0 || rp_pos + 2 >= stat_content.len() {
+    use std::io::Read;
+
+    let mut file = std::fs::File::open(format!("/proc/{pid}/stat")).ok()?;
+    let mut buf = [0u8; 512];
+    let n = file.read(&mut buf).ok()?;
+    let stat_bytes = &buf[..n];
+
+    let rp_pos = stat_bytes.iter().rposition(|&b| b == b')')?;
+    if rp_pos == 0 || rp_pos + 2 >= stat_bytes.len() {
         return None;
     }
 
-    let rest = &stat_content[rp_pos + 2..];
-    let parts: Vec<&str> = rest.split_whitespace().collect();
-    if parts.len() < 6 {
-        return None;
-    }
-
-    let pgrp: u32 = parts[2].parse().unwrap_or(0);
-    let tpgid: u32 = parts[5].parse().unwrap_or(0);
+    let rest = std::str::from_utf8(&stat_bytes[rp_pos + 2..]).ok()?;
+    let mut fields = rest.split_ascii_whitespace();
+    // Fields after ')': [0]=state, [1]=ppid, [2]=pgrp, [3]=session, [4]=tty_nr, [5]=tpgid
+    let pgrp: u32 = fields.nth(2)?.parse().ok()?;
+    let tpgid: u32 = fields.nth(2)?.parse().ok()?;
     (tpgid != 0 && tpgid != pgrp).then_some(tpgid)
 }
 

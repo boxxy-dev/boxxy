@@ -84,7 +84,12 @@ impl DreamStatusCell {
 ///   3. Waits for ghost mode + AC + setting-enabled (checked each
 ///      minute) before running a cycle. After each cycle, sleeps 15
 ///      minutes before considering another one.
-pub fn spawn_with_status(power: PowerMonitor, ghost: GhostMode, status: DreamStatusCell) {
+pub fn spawn_with_status(
+    power: PowerMonitor,
+    ghost: GhostMode,
+    status: DreamStatusCell,
+    db: boxxy_db::Db,
+) {
     let status_task = status;
     let handle = tokio::runtime::Handle::current();
 
@@ -134,7 +139,7 @@ pub fn spawn_with_status(power: PowerMonitor, ghost: GhostMode, status: DreamSta
                     }
 
                     status_task.set(DreamStatus::Running).await;
-                    match run_one_cycle(&settings).await {
+                    match run_one_cycle(&db, &settings).await {
                         Ok(()) => {
                             consecutive_failures = 0;
                             status_task.set(DreamStatus::Idle).await;
@@ -160,11 +165,13 @@ pub fn spawn_with_status(power: PowerMonitor, ghost: GhostMode, status: DreamSta
         });
 }
 
-async fn run_one_cycle(settings: &boxxy_preferences::Settings) -> anyhow::Result<()> {
-    // Open the same on-disk DB the UI + engine use. This is SQLite;
-    // multi-process access via WAL is fine.
-    let db = boxxy_db::Db::new().await?;
-    let db_arc = Arc::new(Mutex::new(Some(db)));
+async fn run_one_cycle(
+    db: &boxxy_db::Db,
+    settings: &boxxy_preferences::Settings,
+) -> anyhow::Result<()> {
+    // Reuse the daemon's shared SQLite connection pool instead of opening and
+    // migrating a brand-new pool on every Dream Cycle.
+    let db_arc = Arc::new(Mutex::new(Some(db.clone())));
 
     // Prefer effective keys (env overrides + settings file merge)
     // so the daemon's dream cycle works the same way a fresh UI would.

@@ -89,7 +89,12 @@ impl DaemonCore {
         // Dream cycle: niceness-19, battery-gated, ghost-gated,
         // setting-gated. Owns its own status cell; we hand it ours so
         // `MaintenanceSubsystem::get_maintenance_status()` reads the same state.
-        dreaming::spawn_with_status(power.clone(), ghost.clone(), dream_status.clone());
+        dreaming::spawn_with_status(
+            power.clone(),
+            ghost.clone(),
+            dream_status.clone(),
+            db.clone(),
+        );
 
         // MCP background health monitor: warms up configured MCP servers at startup,
         // periodically checks local/active MCP server liveness while any UI window is attached,
@@ -155,13 +160,14 @@ impl DaemonCore {
             std::process::exit(0);
         });
 
-        // Zombie-guard sweeper: sweeps detached idle sessions (> 4h TTL, viewer_count == 0)
-        // and prunes expired `Exited` records even while other UI windows remain open.
+        // Zombie-guard sweeper: sweeps detached idle sessions (> 4h TTL, viewer_count == 0),
+        // reaps idle prompt-only detached shells, and prunes expired `Exited` records.
         let pty_registry = core.state.pty_registry.clone();
         tokio::spawn(async move {
             let mut tick = tokio::time::interval(crate::pty::registry::SWEEP_INTERVAL);
             loop {
                 tick.tick().await;
+                crate::pty::reap_idle_detached_shells(&pty_registry).await;
                 pty_registry.sweep_zombies().await;
             }
         });

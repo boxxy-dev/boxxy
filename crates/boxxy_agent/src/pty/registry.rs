@@ -48,44 +48,89 @@ pub enum ProcessState {
 // Ring buffer
 // ---------------------------------------------------------------------------
 
+/// Initial `VecDeque` allocation for newly detached sessions (64 KiB), growing
+/// on demand up to `RING_BUFFER_CAPACITY` (4 MiB) so quiet detached shells don't
+/// eagerly pin 4 MiB of resident RAM.
+const RING_BUFFER_INITIAL_ALLOC: usize = 64 * 1024;
+
 /// Byte-oriented FIFO that drops the oldest bytes when full. Backed by a
-/// `VecDeque<u8>` because our bursts are dominated by short writes; the
-/// cost of the wraparound copy on snapshot is irrelevant at 4 MB.
+/// `VecDeque<u8>` that starts small (64 KiB) and grows up to `cap` (4 MiB).
 pub struct RingBuffer {
     cap: usize,
     data: VecDeque<u8>,
     evicted_any: bool,
     in_alt_screen: bool,
+    /// Trailing up-to-7 bytes from the previous `push()` so alt-screen escape
+    /// sequences (`\x1b[?1049h` / `\x1b[?1049l`) split across `read()` chunks
+    /// are never missed.
+    escape_tail: [u8; 7],
+    escape_tail_len: u8,
 }
 
 impl RingBuffer {
     pub fn new(cap: usize) -> Self {
         Self {
             cap,
-            data: VecDeque::with_capacity(cap),
+            data: VecDeque::with_capacity(cap.min(RING_BUFFER_INITIAL_ALLOC)),
             evicted_any: false,
             in_alt_screen: false,
+            escape_tail: [0; 7],
+            escape_tail_len: 0,
         }
     }
 
-    fn update_alt_screen_state(&mut self, bytes: &[u8]) {
-        let mut i = 0;
-        while i + 5 <= bytes.len() {
-            if bytes[i] == 0x1b && bytes[i + 1] == b'[' && bytes[i + 2] == b'?' {
-                let tail = &bytes[i + 3..];
+    fn scan_alt_screen_slice(slice: &[u8], in_alt_screen: &mut bool) {
+        let mut offset = 0;
+        while let Some(rel) = slice[offset..].iter().position(|&b| b == 0x1b) {
+            let esc = offset + rel;
+            let rem = &slice[esc..];
+            if rem.len() >= 5 && rem[1] == b'[' && rem[2] == b'?' {
+                let tail = &rem[3..];
                 if tail.starts_with(b"1049h")
                     || tail.starts_with(b"1047h")
                     || tail.starts_with(b"47h")
                 {
-                    self.in_alt_screen = true;
+                    *in_alt_screen = true;
                 } else if tail.starts_with(b"1049l")
                     || tail.starts_with(b"1047l")
                     || tail.starts_with(b"47l")
                 {
-                    self.in_alt_screen = false;
+                    *in_alt_screen = false;
                 }
             }
-            i += 1;
+            offset = esc + 1;
+        }
+    }
+
+    fn update_alt_screen_state(&mut self, bytes: &[u8]) {
+        if bytes.is_empty() {
+            return;
+        }
+        let prev_len = self.escape_tail_len as usize;
+        if prev_len > 0 {
+            let new_prefix_len = bytes.len().min(7);
+            let mut stitch = [0u8; 14];
+            stitch[..prev_len].copy_from_slice(&self.escape_tail[..prev_len]);
+            stitch[prev_len..prev_len + new_prefix_len].copy_from_slice(&bytes[..new_prefix_len]);
+            Self::scan_alt_screen_slice(&stitch[..prev_len + new_prefix_len], &mut self.in_alt_screen);
+        }
+        Self::scan_alt_screen_slice(bytes, &mut self.in_alt_screen);
+
+        if bytes.len() >= 7 {
+            self.escape_tail.copy_from_slice(&bytes[bytes.len() - 7..]);
+            self.escape_tail_len = 7;
+        } else {
+            let total = prev_len + bytes.len();
+            if total <= 7 {
+                self.escape_tail[prev_len..total].copy_from_slice(bytes);
+                self.escape_tail_len = total as u8;
+            } else {
+                let drop_n = total - 7;
+                self.escape_tail.copy_within(drop_n..prev_len, 0);
+                let keep_prev = prev_len - drop_n;
+                self.escape_tail[keep_prev..7].copy_from_slice(bytes);
+                self.escape_tail_len = 7;
+            }
         }
     }
 
@@ -1098,5 +1143,35 @@ mod tests {
         // (Terminated), NOT leak as StillViewed.
         assert_eq!(reg.detach(54321).await, DetachOutcome::Terminated);
         reg.remove(54321).await;
+    }
+
+    #[test]
+    fn ring_buffer_tracks_alt_screen_across_split_chunks_and_allocates_lazily() {
+        let lazy_rb = RingBuffer::new(RING_BUFFER_CAPACITY);
+        assert!(
+            lazy_rb.data.capacity() <= RING_BUFFER_INITIAL_ALLOC * 2,
+            "new 4 MiB RingBuffer must not eagerly allocate full 4 MiB up front"
+        );
+
+        let mut rb = RingBuffer::new(64);
+        // Split `\x1b[?1049h` across two separate push() calls, then overflow 64 bytes
+        rb.push(b"\x1b[?10");
+        rb.push(b"49h");
+        rb.push(&[b'A'; 80]);
+        let snap_alt = rb.snapshot();
+        assert!(
+            snap_alt.starts_with(b"\x1b[?1049h\x1b[0m"),
+            "split-chunk ?1049h must set alt-screen prefix, got {snap_alt:?}"
+        );
+
+        // Split `\x1b[?1049l` across two separate push() calls
+        rb.push(b"\x1b");
+        rb.push(b"[?1049l");
+        rb.push(&[b'B'; 80]);
+        let snap_norm = rb.snapshot();
+        assert!(
+            snap_norm.starts_with(b"\x1b[0m") && !snap_norm.starts_with(b"\x1b[?1049h"),
+            "split-chunk ?1049l must clear alt-screen prefix, got {snap_norm:?}"
+        );
     }
 }

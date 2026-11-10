@@ -23,8 +23,10 @@ pub async fn start_services(
     core: Arc<DaemonCore>,
     client_count_tx: watch::Sender<usize>,
 ) -> Result<(Connection, Arc<Mutex<ClawSessionManager>>)> {
-    let claw_subsystem = Arc::new(crate::claw::ClawSubsystem::new(core.state.clone()));
-    let session_manager = Arc::new(Mutex::new(ClawSessionManager::new(claw_subsystem.clone())));
+    let claw_subsystem = crate::claw::ClawSubsystem::new(core.state.clone());
+    let session_manager = Arc::new(Mutex::new(ClawSessionManager::new(Arc::new(
+        claw_subsystem.clone(),
+    ))));
 
     let conn = Builder::session()
         .name("dev.boxxy.BoxxyAgent")
@@ -40,10 +42,7 @@ pub async fn start_services(
             "/dev/boxxy/BoxxyTerminal/Agent/Pty",
             crate::pty::PtySubsystem::new(core.state.clone()),
         )
-        .serve_at(
-            "/dev/boxxy/BoxxyTerminal/Agent/Claw",
-            crate::claw::ClawSubsystem::new(core.state.clone()),
-        )
+        .serve_at("/dev/boxxy/BoxxyTerminal/Agent/Claw", claw_subsystem)
         .serve_at(
             "/dev/boxxy/BoxxyTerminal/Agent/Maintenance",
             crate::maintenance::MaintenanceSubsystem::new(

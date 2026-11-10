@@ -13,6 +13,7 @@ pub mod sysinfo_sampler;
 pub use registry::CharacterRegistry;
 pub use sysinfo_sampler::SystemSampler;
 
+#[derive(Clone)]
 pub struct ClawSubsystem {
     state: AgentState,
     sampler: SystemSampler,
@@ -90,11 +91,13 @@ impl ClawEnvironment for ClawSubsystem {
                 let stdout = fs_ops::truncate_head_tail(
                     &String::from_utf8_lossy(&output.stdout),
                     fs_ops::EXEC_SHELL_MAX_OUTPUT_BYTES,
-                );
+                )
+                .await;
                 let stderr = fs_ops::truncate_head_tail(
                     &String::from_utf8_lossy(&output.stderr),
                     fs_ops::EXEC_SHELL_MAX_OUTPUT_BYTES,
-                );
+                )
+                .await;
                 let exit_code = {
                     use std::os::unix::process::ExitStatusExt;
                     output

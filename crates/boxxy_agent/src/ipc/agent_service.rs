@@ -188,18 +188,7 @@ impl AgentInterface {
     }
 
     async fn detach_holder(&self, #[zbus(connection)] conn: &zbus::Connection, holder_id: &str) {
-        let is_incognito = self
-            .core
-            .registry
-            .snapshot()
-            .await
-            .claims
-            .iter()
-            .any(|c| {
-                c.holder_id == holder_id
-                    && boxxy_claw_protocol::characters::is_incognito_character(&c.character_id)
-            });
-        if is_incognito {
+        if self.core.registry.is_incognito_holder(holder_id).await {
             self.release_holder(conn, holder_id).await;
             return;
         }
@@ -351,56 +340,14 @@ impl AgentInterface {
     }
 
     async fn resolve_peer(&self, query_json: &str) -> String {
-        if let Ok(query) =
+        let peer_opt = if let Ok(query) =
             serde_json::from_str::<boxxy_claw_protocol::characters::PeerQuery>(query_json)
         {
-            let snapshot = self.core.registry.snapshot().await;
-            let match_opt = match query {
-                boxxy_claw_protocol::characters::PeerQuery::ByCharacterId(id) => {
-                    snapshot.claims.into_iter().find(|c| c.character_id == id)
-                }
-                boxxy_claw_protocol::characters::PeerQuery::ByCharacterDisplayName(name) => {
-                    let found_id = snapshot
-                        .catalog
-                        .iter()
-                        .find(|c| c.config.display_name.eq_ignore_ascii_case(&name))
-                        .map(|info| info.config.id.clone());
-                    if let Some(id) = found_id {
-                        snapshot.claims.into_iter().find(|c| c.character_id == id)
-                    } else {
-                        None
-                    }
-                }
-                boxxy_claw_protocol::characters::PeerQuery::ByPetname(petname) => snapshot
-                    .claims
-                    .into_iter()
-                    .find(|c| c.petname.eq_ignore_ascii_case(&petname)),
-                boxxy_claw_protocol::characters::PeerQuery::ByHolderId(id) => {
-                    snapshot.claims.into_iter().find(|c| c.holder_id == id)
-                }
-            };
-
-            if let Some(claim) = match_opt {
-                let display_name = snapshot
-                    .catalog
-                    .iter()
-                    .find(|c| c.config.id == claim.character_id)
-                    .map(|c| c.config.display_name.clone())
-                    .unwrap_or_else(|| "Unknown".to_string());
-
-                let info = boxxy_claw_protocol::characters::PeerInfo {
-                    holder_id: claim.holder_id,
-                    holder_kind: claim.holder_kind,
-                    session_id: claim.session_id,
-                    character_id: claim.character_id,
-                    character_display_name: display_name,
-                    petname: claim.petname,
-                };
-                return serde_json::to_string(&Some(info)).unwrap_or_default();
-            }
-        }
-        serde_json::to_string(&Option::<boxxy_claw_protocol::characters::PeerInfo>::None)
-            .unwrap_or_default()
+            self.core.registry.resolve_peer(&query).await
+        } else {
+            None
+        };
+        serde_json::to_string(&peer_opt).unwrap_or_default()
     }
 
     async fn request_reload(&self) {
@@ -741,12 +688,10 @@ impl AgentInterface {
                 let character_display_name = if is_incognito {
                     boxxy_claw_protocol::characters::INCOGNITO_DISPLAY_NAME.to_string()
                 } else {
-                    let snapshot = self.core.registry.snapshot().await;
-                    snapshot
-                        .catalog
-                        .iter()
-                        .find(|c| c.config.id == character_id)
-                        .map(|c| c.config.display_name.clone())
+                    self.core
+                        .registry
+                        .character_display_name(&character_id)
+                        .await
                         .unwrap_or_else(|| "Unknown".to_string())
                 };
 
@@ -895,14 +840,9 @@ impl AgentInterface {
         // unowned detached claim exists in `CharacterRegistry`), rebind that detached
         // claim so the backgrounded agent session is never stranded.
         if claimed.is_none() {
-            let snap = self.core.registry.snapshot().await;
-            let unowned: Vec<_> = snap
-                .claims
-                .into_iter()
-                .filter(|c| c.owner_bus_name.is_empty())
-                .collect();
+            let unowned = self.core.registry.unowned_holder_ids().await;
             if unowned.len() == 1 {
-                resolved_old = unowned[0].holder_id.clone();
+                resolved_old = unowned[0].clone();
                 claimed = self
                     .core
                     .registry

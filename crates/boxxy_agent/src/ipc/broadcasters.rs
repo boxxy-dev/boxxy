@@ -4,8 +4,11 @@
 use crate::daemon::DaemonCore;
 use crate::ipc::session_manager::{ClawSessionManager, teardown_holder};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::Mutex;
 use zbus::Connection;
+
+static LAST_PENDING_TASKS_EMPTY: AtomicBool = AtomicBool::new(false);
 
 pub(crate) fn spawn_signal_broadcasters(
     conn: &Connection,
@@ -51,6 +54,7 @@ pub(crate) fn spawn_signal_broadcasters(
     let mgr_for_pty_gc = session_manager.clone();
     let conn_for_pty_signals = conn.clone();
     tokio::spawn(async move {
+        let mut last_detached_json: Option<String> = None;
         loop {
             match rx_pty.recv().await {
                 Ok(()) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
@@ -62,29 +66,35 @@ pub(crate) fn spawn_signal_broadcasters(
                 Ok(()) | Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_))
             ) {}
 
+            // Reap idle prompt-only detached shells before building the snapshot.
+            crate::pty::reap_idle_detached_shells(&pty_reg_for_signals).await;
+
             // Garbage-collect any detached holder whose PTY is no longer running
             // and that has no pending tasks.
-            let workspace = boxxy_claw::registry::workspace::global_workspace().await;
-            let snapshot = reg_for_pty_gc.snapshot().await;
-            for claim in snapshot.claims.iter().filter(|c| c.owner_bus_name.is_empty()) {
-                let pty_alive = pty_reg_for_signals
-                    .find_pid_by_pane_id(&claim.holder_id)
-                    .await
-                    .is_some();
-                let has_tasks =
-                    workspace.get_pane_pending_task_count(&claim.holder_id).await > 0;
-                if !pty_alive && !has_tasks {
-                    log::info!(
-                        "Reaping orphaned detached holder {} (PTY exited and no pending tasks)",
-                        claim.holder_id
-                    );
-                    let _ =
-                        teardown_holder(&mgr_for_pty_gc, &reg_for_pty_gc, &claim.holder_id).await;
+            let unowned_holders = reg_for_pty_gc.unowned_holder_ids().await;
+            if !unowned_holders.is_empty() {
+                let workspace = boxxy_claw::registry::workspace::global_workspace().await;
+                for holder_id in unowned_holders {
+                    let pty_alive = pty_reg_for_signals
+                        .find_pid_by_pane_id(&holder_id)
+                        .await
+                        .is_some();
+                    let has_tasks = workspace.get_pane_pending_task_count(&holder_id).await > 0;
+                    if !pty_alive && !has_tasks {
+                        log::info!(
+                            "Reaping orphaned detached holder {} (PTY exited and no pending tasks)",
+                            holder_id
+                        );
+                        let _ = teardown_holder(&mgr_for_pty_gc, &reg_for_pty_gc, &holder_id).await;
+                    }
                 }
             }
 
             let list = crate::pty::query_detached_sessions_detailed(&pty_reg_for_signals).await;
-            if let Ok(json) = serde_json::to_string(&list) {
+            if let Ok(json) = serde_json::to_string(&list)
+                && last_detached_json.as_deref() != Some(json.as_str())
+            {
+                last_detached_json = Some(json.clone());
                 let _ = conn_for_pty_signals
                     .emit_signal(
                         Option::<zbus::names::BusName>::None,
@@ -187,7 +197,13 @@ pub(crate) async fn emit_pending_tasks_changed(
     pty_registry: &crate::pty::registry::PtyRegistry,
 ) {
     let tasks = build_pending_tasks_snapshot(pty_registry).await;
-    if let Ok(json) = serde_json::to_string(&tasks) {
+    let is_empty = tasks.is_empty();
+    let was_empty = LAST_PENDING_TASKS_EMPTY.swap(is_empty, Ordering::AcqRel);
+    // Avoid spamming redundant back-to-back empty `PendingTasksChanged("[]")` D-Bus
+    // signals when panes without scheduled tasks close or detach.
+    if !(is_empty && was_empty)
+        && let Ok(json) = serde_json::to_string(&tasks)
+    {
         let _ = conn
             .emit_signal(
                 Option::<zbus::names::BusName>::None,

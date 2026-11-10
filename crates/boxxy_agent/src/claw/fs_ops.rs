@@ -26,7 +26,7 @@ pub(super) async fn read_file(
     start_line: u32,
     end_line: u32,
 ) -> anyhow::Result<String> {
-    ensure_path_allowed(&path)?;
+    ensure_path_allowed_async(&path).await?;
 
     let metadata = match tokio::fs::metadata(&path).await {
         Ok(m) => m,
@@ -125,7 +125,7 @@ pub(super) async fn read_file(
 }
 
 pub(super) async fn write_file(path: String, content: String) -> anyhow::Result<()> {
-    ensure_path_allowed(&path)?;
+    ensure_path_allowed_async(&path).await?;
 
     if let Some(parent) = std::path::Path::new(&path).parent()
         && !parent.as_os_str().is_empty()
@@ -138,7 +138,7 @@ pub(super) async fn write_file(path: String, content: String) -> anyhow::Result<
 }
 
 pub(super) async fn list_directory(path: String) -> anyhow::Result<Vec<(String, bool, u64)>> {
-    ensure_path_allowed(&path)?;
+    ensure_path_allowed_async(&path).await?;
 
     let mut entries = Vec::new();
     let mut dir = tokio::fs::read_dir(&path).await?;
@@ -161,7 +161,7 @@ pub(super) async fn list_directory(path: String) -> anyhow::Result<Vec<(String, 
 }
 
 pub(super) async fn delete_file(path: String) -> anyhow::Result<()> {
-    ensure_path_allowed(&path)?;
+    ensure_path_allowed_async(&path).await?;
 
     tokio::fs::remove_file(&path).await?;
     Ok(())
@@ -251,7 +251,7 @@ fn spill_truncated_output_in_dir(dir: &std::path::Path, full_output: &str) -> Op
     Some(file_path.to_string_lossy().into_owned())
 }
 
-pub(super) fn truncate_head_tail(s: &str, max_bytes: usize) -> String {
+pub(super) async fn truncate_head_tail(s: &str, max_bytes: usize) -> String {
     let line_count = s.lines().count();
     if s.len() <= max_bytes && line_count <= EXEC_SHELL_MAX_LINES {
         return s.to_string();
@@ -272,7 +272,14 @@ pub(super) fn truncate_head_tail(s: &str, max_bytes: usize) -> String {
         .max(head_end);
     let omitted = tail_start.saturating_sub(head_end);
 
-    let spillover_hint = match spill_truncated_output_to_disk(s) {
+    let full_owned = s.to_string();
+    let spilled_path =
+        tokio::task::spawn_blocking(move || spill_truncated_output_to_disk(&full_owned))
+            .await
+            .ok()
+            .flatten();
+
+    let spillover_hint = match spilled_path {
         Some(path) => format!(
             "\nFull untruncated output saved to: {path}\nUse `grep_search` or `file_read` (with `start_line`/`end_line`) on `{path}` to inspect specific sections."
         ),
@@ -306,6 +313,29 @@ fn resolve_deepest_canonical(path: &std::path::Path) -> Option<std::path::PathBu
         return Some(c);
     }
     use std::path::Component;
+
+    // Fast O(1) bottom-up path when no `..` segments exist (e.g. writing a new file
+    // inside an existing directory or nested new subdirectories): find the deepest
+    // existing ancestor in a single `canonicalize` call and append the relative tail.
+    let has_parent_dir = path
+        .components()
+        .any(|c| matches!(c, Component::ParentDir));
+    if !has_parent_dir {
+        for ancestor in path.ancestors().skip(1) {
+            if ancestor.as_os_str().is_empty() {
+                break;
+            }
+            if let Ok(canon_anc) = std::fs::canonicalize(ancestor) {
+                if let Ok(rel_tail) = path.strip_prefix(ancestor) {
+                    return Some(canon_anc.join(rel_tail));
+                }
+                break;
+            }
+        }
+    }
+
+    // Fallback for paths containing `..` over non-existent intermediate segments
+    // beneath a symlinked ancestor (e.g. `<symlink_to_etc>/nonexistent/../shadow`).
     let mut acc = std::path::PathBuf::new();
     for component in path.components() {
         match component {
@@ -389,6 +419,11 @@ fn ensure_path_allowed_with_rules(path: &str, blacklisted: &[String]) -> anyhow:
     Ok(())
 }
 
+async fn ensure_path_allowed_async(path: &str) -> anyhow::Result<()> {
+    let path_owned = path.to_string();
+    tokio::task::spawn_blocking(move || ensure_path_allowed(&path_owned)).await?
+}
+
 fn ensure_path_allowed(path: &str) -> anyhow::Result<()> {
     let blacklisted = load_blacklist();
     ensure_path_allowed_with_rules(path, &blacklisted)
@@ -410,21 +445,51 @@ fn parse_blacklist_with_defaults(custom_content: Option<&str>) -> Vec<String> {
     blacklisted
 }
 
-fn load_blacklist() -> Vec<String> {
-    let config_dir = boxxy_sys_utils::get_config_dir();
-    let blacklist_path = config_dir.join("boxxyclaw").join("BLACKLIST.md");
-    let custom = std::fs::read_to_string(&blacklist_path).ok();
-    parse_blacklist_with_defaults(custom.as_deref())
+type BlacklistCacheEntry = (
+    std::path::PathBuf,
+    Option<(std::time::SystemTime, u64)>,
+    std::sync::Arc<Vec<String>>,
+);
+
+static BLACKLIST_CACHE: std::sync::OnceLock<parking_lot::Mutex<Option<BlacklistCacheEntry>>> =
+    std::sync::OnceLock::new();
+
+fn load_blacklist() -> std::sync::Arc<Vec<String>> {
+    let blacklist_path = boxxy_sys_utils::get_config_dir()
+        .join("boxxyclaw")
+        .join("BLACKLIST.md");
+    let stamp = std::fs::metadata(&blacklist_path)
+        .ok()
+        .map(|m| (m.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH), m.len()));
+
+    let cache = BLACKLIST_CACHE.get_or_init(|| parking_lot::Mutex::new(None));
+    {
+        let guard = cache.lock();
+        if let Some((cached_path, cached_stamp, rules)) = guard.as_ref()
+            && cached_path == &blacklist_path
+            && cached_stamp == &stamp
+        {
+            return rules.clone();
+        }
+    }
+
+    let custom = stamp
+        .is_some()
+        .then(|| std::fs::read_to_string(&blacklist_path).ok())
+        .flatten();
+    let rules = std::sync::Arc::new(parse_blacklist_with_defaults(custom.as_deref()));
+    *cache.lock() = Some((blacklist_path, stamp, rules.clone()));
+    rules
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn truncate_head_tail_preserves_both_ends_and_utf8_boundaries() {
+    #[tokio::test]
+    async fn truncate_head_tail_preserves_both_ends_and_utf8_boundaries() {
         let input = format!("START_MARKER_{}_END_MARKER", "x".repeat(1000));
-        let truncated = truncate_head_tail(&input, 200);
+        let truncated = truncate_head_tail(&input, 200).await;
         assert!(truncated.starts_with("START_MARKER_"));
         assert!(truncated.ends_with("_END_MARKER"));
         assert!(truncated.contains("...[truncated "));

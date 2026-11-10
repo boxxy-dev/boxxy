@@ -651,6 +651,84 @@ impl CharacterRegistry {
         let inner = self.inner.read().await;
         inner.by_owner.contains_key(owner_bus_name)
     }
+
+    /// O(1) check whether `holder_id` currently holds the ephemeral Incognito character,
+    /// avoiding cloning the full `RegistrySnapshot`.
+    pub async fn is_incognito_holder(&self, holder_id: &str) -> bool {
+        let inner = self.inner.read().await;
+        inner.claims.get(holder_id).is_some_and(|c| {
+            boxxy_claw_protocol::characters::is_incognito_character(&c.character_id)
+        })
+    }
+
+    /// Returns all detached (`owner_bus_name == ""`) holder IDs without cloning `catalog`.
+    pub async fn unowned_holder_ids(&self) -> Vec<String> {
+        let inner = self.inner.read().await;
+        inner
+            .claims
+            .iter()
+            .filter(|(_, c)| c.owner_bus_name.is_empty())
+            .map(|(id, _)| id.clone())
+            .collect()
+    }
+
+    /// Looks up `display_name` for `character_id` without cloning the catalog.
+    pub async fn character_display_name(&self, character_id: &str) -> Option<String> {
+        let inner = self.inner.read().await;
+        inner
+            .catalog
+            .iter()
+            .find(|c| c.config.id == character_id)
+            .map(|c| c.config.display_name.clone())
+    }
+
+    /// Resolves a `PeerQuery` directly under a read lock with zero catalog/claims Vec clones.
+    pub async fn resolve_peer(
+        &self,
+        query: &boxxy_claw_protocol::characters::PeerQuery,
+    ) -> Option<boxxy_claw_protocol::characters::PeerInfo> {
+        use boxxy_claw_protocol::characters::{PeerInfo, PeerQuery};
+
+        let inner = self.inner.read().await;
+        let matched = match query {
+            PeerQuery::ByCharacterId(id) => {
+                inner.claims.iter().find(|(_, c)| &c.character_id == id)
+            }
+            PeerQuery::ByCharacterDisplayName(name) => {
+                let target_id = inner
+                    .catalog
+                    .iter()
+                    .find(|c| c.config.display_name.eq_ignore_ascii_case(name))
+                    .map(|c| c.config.id.as_str())?;
+                inner
+                    .claims
+                    .iter()
+                    .find(|(_, c)| c.character_id == target_id)
+            }
+            PeerQuery::ByPetname(petname) => inner
+                .claims
+                .iter()
+                .find(|(_, c)| c.petname.eq_ignore_ascii_case(petname)),
+            PeerQuery::ByHolderId(id) => inner.claims.get_key_value(id.as_str()),
+        };
+
+        let (holder_id, claim) = matched?;
+        let display_name = inner
+            .catalog
+            .iter()
+            .find(|c| c.config.id == claim.character_id)
+            .map(|c| c.config.display_name.clone())
+            .unwrap_or_else(|| "Unknown".to_string());
+
+        Some(PeerInfo {
+            holder_id: holder_id.clone(),
+            holder_kind: claim.holder_kind,
+            session_id: claim.session_id.clone(),
+            character_id: claim.character_id.clone(),
+            character_display_name: display_name,
+            petname: claim.petname.clone(),
+        })
+    }
 }
 
 impl RegistryInner {
@@ -910,5 +988,50 @@ mod tests {
             .expect("new owner's claim must remain intact");
         assert_eq!(active.session_id, second.session_id);
         assert_eq!(active.owner_bus_name, ":1.99");
+    }
+
+    #[tokio::test]
+    async fn test_point_lookups_and_resolve_peer_without_snapshot_clones() {
+        use boxxy_claw_protocol::characters::PeerQuery;
+
+        let db = boxxy_db::Db::new_in_memory().await.unwrap();
+        let reg = CharacterRegistry::load_or_default(&db).await;
+        let catalog = reg.snapshot().await.catalog;
+        let first_char = catalog.first().expect("default character");
+
+        let claimed = reg
+            .try_claim(
+                "pane-lookup".to_string(),
+                HolderKind::Pane,
+                first_char.config.id.clone(),
+                ":1.50".to_string(),
+            )
+            .await
+            .expect("claim");
+
+        assert!(!reg.is_incognito_holder("pane-lookup").await);
+        assert_eq!(
+            reg.character_display_name(&first_char.config.id)
+                .await
+                .as_deref(),
+            Some(first_char.config.display_name.as_str())
+        );
+
+        let by_petname = reg
+            .resolve_peer(&PeerQuery::ByPetname(claimed.claim.petname.clone()))
+            .await
+            .expect("resolve by petname");
+        assert_eq!(by_petname.holder_id, "pane-lookup");
+
+        let by_name = reg
+            .resolve_peer(&PeerQuery::ByCharacterDisplayName(
+                first_char.config.display_name.to_uppercase(),
+            ))
+            .await
+            .expect("resolve by case-insensitive display name");
+        assert_eq!(by_name.session_id, claimed.session_id);
+
+        reg.detach_holder("pane-lookup").await.expect("detach");
+        assert_eq!(reg.unowned_holder_ids().await, vec!["pane-lookup".to_string()]);
     }
 }
