@@ -1496,11 +1496,11 @@ where
                 if params.len() >= 2 {
                     let uri = str::from_utf8(params[1]).unwrap_or_default();
                     if let Some(path) = uri.strip_prefix("file://") {
-                        let path = path
+                        let raw_path = path
                             .split_once('/')
-                            .map(|(_, p)| format!("/{}", p))
+                            .map(|(_, p)| format!("/{p}"))
                             .unwrap_or_else(|| path.to_string());
-                        self.handler.set_cwd(path);
+                        self.handler.set_cwd(percent_decode_uri_path(&raw_path));
                     }
                     return;
                 }
@@ -2128,6 +2128,40 @@ where
     fn terminated(&self) -> bool {
         self.terminated
     }
+}
+
+fn decode_hex_nibble(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        _ => None,
+    }
+}
+
+/// Decodes RFC-3986 `%HH` percent-encoded sequences in an `OSC 7` `file://` URI path
+/// while passing unencoded UTF-8 characters through unchanged.
+fn percent_decode_uri_path(raw: &str) -> String {
+    let bytes = raw.as_bytes();
+    if !bytes.contains(&b'%') {
+        return raw.to_string();
+    }
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%'
+            && i + 2 < bytes.len()
+            && let (Some(hi), Some(lo)) =
+                (decode_hex_nibble(bytes[i + 1]), decode_hex_nibble(bytes[i + 2]))
+        {
+            out.push((hi << 4) | lo);
+            i += 3;
+            continue;
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8(out).unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned())
 }
 
 #[inline]

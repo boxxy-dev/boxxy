@@ -49,7 +49,7 @@ if [[ -z "${BOXXY_SHELL_INTEGRATION_LOADED:-}" ]]; then
         fi
         if [[ "$_boxxy_last_cwd" != "$PWD" ]]; then
             _boxxy_last_cwd="$PWD"
-            builtin printf '\e]7;file://%s%s\a' "${HOSTNAME:-localhost}" "$PWD"
+            builtin printf '\e]7;file://%s%s\a' "${HOSTNAME:-localhost}" "${PWD//%/%25}"
         fi
         _boxxy_executing=0
     }
@@ -125,7 +125,7 @@ if [[ -o interactive ]] && [[ -z "${BOXXY_SHELL_INTEGRATION_LOADED:-}" ]]; then
     typeset -gi _boxxy_state=0
 
     _boxxy_osc7() {
-        builtin printf '\e]7;file://%s%s\a' "${HOST:-localhost}" "${PWD}"
+        builtin printf '\e]7;file://%s%s\a' "${HOST:-localhost}" "${PWD//\%/%25}"
     }
 
     _boxxy_precmd() {
@@ -227,7 +227,19 @@ end
 const NUSHELL_INTEGRATION_SCRIPT: &str = r#"# Boxxy Terminal Nushell Integration (auto-generated)
 if 'BOXXY_SHELL_INTEGRATION_XDG_DIR' in $env {
     if 'XDG_DATA_DIRS' in $env {
-        $env.XDG_DATA_DIRS = ($env.XDG_DATA_DIRS | str replace $"($env.BOXXY_SHELL_INTEGRATION_XDG_DIR):" "")
+        let _boxxy_dir = $env.BOXXY_SHELL_INTEGRATION_XDG_DIR
+        let _cleaned = (
+            if (($env.XDG_DATA_DIRS | describe) | str starts-with "list") {
+                $env.XDG_DATA_DIRS | where { |p| $p != $_boxxy_dir } | str join ":"
+            } else {
+                $env.XDG_DATA_DIRS | split row ":" | where { |p| ($p != "") and ($p != $_boxxy_dir) } | str join ":"
+            }
+        )
+        if ($_cleaned | is-empty) {
+            hide-env XDG_DATA_DIRS
+        } else {
+            $env.XDG_DATA_DIRS = $_cleaned
+        }
     }
     hide-env BOXXY_SHELL_INTEGRATION_XDG_DIR
 }
@@ -461,10 +473,14 @@ mod tests {
         apply_shell_integration(&mut nu_argv, &mut nu_env, tmp.path());
         let nu_xdg = find_env_var(&nu_env, "XDG_DATA_DIRS").expect("XDG_DATA_DIRS");
         assert!(nu_xdg.starts_with(tmp.path().join("nushell").to_string_lossy().as_ref()));
-        assert!(
+        let nu_script = fs::read_to_string(
             tmp.path()
-                .join("nushell/nushell/vendor/autoload/boxxy.nu")
-                .exists()
+                .join("nushell/nushell/vendor/autoload/boxxy.nu"),
+        )
+        .expect("read nushell script");
+        assert!(
+            nu_script.contains(r#"str starts-with "list""#),
+            "Nushell script must handle both list and string XDG_DATA_DIRS"
         );
     }
 

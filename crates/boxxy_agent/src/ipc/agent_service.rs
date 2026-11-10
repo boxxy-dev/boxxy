@@ -112,16 +112,17 @@ impl AgentInterface {
             .sender()
             .map(|s| s.as_str().to_string())
             .unwrap_or_default();
-        crate::ipc::client_tracker::register_client(owner_bus_name).await;
+        let (was_empty, new_count) = crate::ipc::client_tracker::register_client_and_sync_count(
+            owner_bus_name,
+            &self.client_count_tx,
+        );
 
-        let current = *self.client_count_tx.borrow();
-        let telemetry_session_id = if current == 0 {
+        let telemetry_session_id = if was_empty {
             boxxy_telemetry::rotate_session_id()
         } else {
             boxxy_telemetry::session_id()
         };
-        let _ = self.client_count_tx.send(current + 1);
-        log::info!("Client connected. Total clients: {}", current + 1);
+        log::info!("Client connected. Total clients: {}", new_count);
 
         let db_was_reset =
             boxxy_db::DATABASE_WAS_RESET.swap(false, std::sync::atomic::Ordering::SeqCst);
@@ -403,7 +404,8 @@ impl AgentInterface {
     }
 
     async fn request_reload(&self) {
-        log::info!("Self-reload requested. Flushing telemetry and executing new binary...");
+        log::info!("Self-reload requested. Flushing sessions, telemetry, and executing new binary...");
+        self.session_manager.lock().await.shutdown_all();
         boxxy_telemetry::flush_journal().await;
 
         let exe_raw = std::env::current_exe()
@@ -485,7 +487,7 @@ impl AgentInterface {
                         {
                             let mut manager = self.session_manager.lock().await;
                             if let Some(hosted) = manager.sessions.get_mut(session_id) {
-                                hosted.agent_name = display_name;
+                                *hosted.agent_name.write() = display_name;
                                 *hosted.active_session_id.write() = resume_sid.clone();
                                 let aliased = hosted.clone();
                                 manager.sessions.insert(resume_sid.clone(), aliased);
@@ -506,7 +508,11 @@ impl AgentInterface {
         for s in manager.sessions.values() {
             let effective_sid = s.active_session_id.read().clone();
             if seen_panes.insert(s.pane_id.clone()) {
-                out.push((effective_sid, s.pane_id.clone(), s.agent_name.clone()));
+                out.push((
+                    effective_sid,
+                    s.pane_id.clone(),
+                    s.agent_name.read().clone(),
+                ));
             }
         }
         out
@@ -751,13 +757,22 @@ impl AgentInterface {
                     session_id.clone(),
                 );
 
-                // Register with workspace before emitting signal (skip for ephemeral incognito sessions)
-                if !is_incognito && holder_kind == boxxy_claw_protocol::characters::HolderKind::Pane
-                {
+                // Register with workspace before emitting signal; for ephemeral incognito
+                // sessions, purge any previous normal-character bindings on `holder_id`
+                // so swarm tools never message a superseded session.
+                if holder_kind == boxxy_claw_protocol::characters::HolderKind::Pane {
                     let workspace = boxxy_claw::registry::workspace::global_workspace().await;
-                    workspace
-                        .register_pane_tx(holder_id.clone(), tx.clone())
-                        .await;
+                    if is_incognito {
+                        workspace.release_all_locks(&holder_id).await;
+                        workspace.unregister_pane(holder_id.clone()).await;
+                        workspace
+                            .update_pane_tasks(holder_id.clone(), Vec::new())
+                            .await;
+                    } else {
+                        workspace
+                            .register_pane_tx(holder_id.clone(), tx.clone())
+                            .await;
+                    }
                 }
 
                 {
@@ -770,22 +785,22 @@ impl AgentInterface {
                 }
 
                 let active_session_id = Arc::new(parking_lot::RwLock::new(session_id.clone()));
-                {
+                let shared_agent_name = Arc::new(parking_lot::RwLock::new(character_display_name));
+                let env = {
                     let mut manager = self.session_manager.lock().await;
-                    manager.prune_dead();
+                    // Shut down any superseded ClawSession actor previously bound to `holder_id`
+                    // (e.g. character switch or `/incognito` transition) so its history flushes
+                    // and its forwarder task exits cleanly instead of leaking.
+                    manager.shutdown_pane(&holder_id);
                     manager.sessions.insert(
                         session_id.clone(),
                         HostedSession {
                             pane_id: holder_id.clone(),
-                            agent_name: character_display_name.clone(),
+                            agent_name: shared_agent_name.clone(),
                             active_session_id: active_session_id.clone(),
                             tx,
                         },
                     );
-                }
-
-                let env = {
-                    let manager = self.session_manager.lock().await;
                     manager.env.clone()
                 };
                 session.start(env);
@@ -793,7 +808,7 @@ impl AgentInterface {
                 let emitter = emitter.to_owned();
                 let conn_clone = conn.clone();
                 let pty_reg_clone = self.core.state.pty_registry.clone();
-                let character_display_name_clone = character_display_name.clone();
+                let agent_name_for_events = shared_agent_name;
                 tokio::spawn(async move {
                     let mut batch = Vec::with_capacity(16);
                     while let Ok(first_event) = rx_ui.recv().await {
@@ -809,11 +824,12 @@ impl AgentInterface {
                         let mut notify_tasks = false;
                         let mut signal_msgs = Vec::with_capacity(batch.len());
                         let effective_sid = active_session_id.read().clone();
+                        let current_agent_name = agent_name_for_events.read().clone();
 
                         for event in batch.drain(..) {
                             maybe_send_desktop_notification(
                                 &conn_clone,
-                                &character_display_name_clone,
+                                &current_agent_name,
                                 &event,
                             )
                             .await;
@@ -903,10 +919,13 @@ impl AgentInterface {
             claimed.session_id
         );
 
-        self.session_manager
-            .lock()
-            .await
-            .rebind_pane(&resolved_old, &new_holder_id);
+        {
+            let mut manager = self.session_manager.lock().await;
+            if resolved_old != new_holder_id {
+                manager.shutdown_pane(&new_holder_id);
+            }
+            manager.rebind_pane(&resolved_old, &new_holder_id);
+        }
 
         emit_pending_tasks_changed(conn, &self.core.state.pty_registry).await;
         Some(claimed)

@@ -372,8 +372,29 @@ mod tests {
         };
         assert!(pty_proxy.spawn(bad_fd, empty_opts).await.is_err());
 
-        // 3. Pane 2 must NOT inherit Pane 1's stored master PTY FD, and SIGKILL exit reports 137
         let tmp = tempfile::tempdir().expect("tempdir");
+
+        // 2b. Non-existent requested CWD falls back gracefully instead of failing with ENOENT
+        let missing_cwd_fd = pty_proxy.create_pty().await.expect("create_pty");
+        let missing_cwd_opts = SpawnOptions {
+            cwd: tmp
+                .path()
+                .join("deleted_subdir_404")
+                .to_string_lossy()
+                .into_owned(),
+            argv: vec!["/bin/sh".into(), "-c".into(), "exit 0".into()],
+            env: vec![],
+            cols: 80,
+            rows: 24,
+            pane_id: "pane-missing-cwd".to_string(),
+        };
+        let fallback_pid = pty_proxy
+            .spawn(missing_cwd_fd, missing_cwd_opts)
+            .await
+            .expect("spawn with missing CWD should fall back to HOME");
+        assert!(fallback_pid > 0);
+
+        // 3. Pane 2 must NOT inherit Pane 1's stored master PTY FD, and SIGKILL exit reports 137
         let leak_report = tmp.path().join("fds.txt");
 
         let mut exited_stream = pty_proxy.receive_exited().await.expect("exited stream");

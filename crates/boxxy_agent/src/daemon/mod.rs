@@ -68,6 +68,7 @@ impl DaemonCore {
         // character assignments, PTY sessions, and swarm locks when a UI process disconnects.
         let workspace = boxxy_claw::registry::workspace::global_workspace().await;
         let session_manager_for_sig = session_manager.clone();
+        let session_manager_for_reload = session_manager.clone();
         let pty_registry_for_sig = core.state.pty_registry.clone();
         crate::ipc::client_tracker::spawn_owner_tracker(
             &conn,
@@ -154,24 +155,21 @@ impl DaemonCore {
             std::process::exit(0);
         });
 
-        // Zombie-guard sweeper: sweeps while in ghost mode (and prunes expired
-        // Exited records) — the detached TTL is 4 h, so a 60s tick is plenty.
+        // Zombie-guard sweeper: sweeps detached idle sessions (> 4h TTL, viewer_count == 0)
+        // and prunes expired `Exited` records even while other UI windows remain open.
         let pty_registry = core.state.pty_registry.clone();
-        let ghost_for_sweep = ghost.clone();
         tokio::spawn(async move {
             let mut tick = tokio::time::interval(crate::pty::registry::SWEEP_INTERVAL);
             loop {
                 tick.tick().await;
-                if ghost_for_sweep.is_ghost() {
-                    pty_registry.sweep_zombies().await;
-                }
+                pty_registry.sweep_zombies().await;
             }
         });
 
         // Spawn character watcher for hot-reloading
         if let Ok(characters_dir) = boxxy_claw_protocol::character_loader::get_characters_dir() {
             let (watcher_tx, mut watcher_rx) = tokio::sync::mpsc::channel::<()>(4);
-            crate::character_watcher::spawn_character_watcher(characters_dir, watcher_tx).await;
+            crate::character_watcher::spawn_character_watcher(characters_dir, watcher_tx);
 
             let registry_for_reload = registry.clone();
             let workspace_for_reload = workspace.clone();
@@ -180,8 +178,25 @@ impl DaemonCore {
                     log::info!("Character catalog change detected, reloading...");
                     match registry_for_reload.reload_catalog().await {
                         Ok((changed_char_ids, migrated_holder_ids)) => {
+                            let snapshot = registry_for_reload.snapshot().await;
+                            // Sync live agent display names across hosted sessions (handles renames & migrations)
+                            {
+                                let mut mgr = session_manager_for_reload.lock().await;
+                                for claim in &snapshot.claims {
+                                    if let Some(info) = snapshot
+                                        .catalog
+                                        .iter()
+                                        .find(|c| c.config.id == claim.character_id)
+                                    {
+                                        mgr.sync_pane_agent_name(
+                                            &claim.holder_id,
+                                            &info.config.display_name,
+                                        );
+                                    }
+                                }
+                            }
+
                             if !changed_char_ids.is_empty() || !migrated_holder_ids.is_empty() {
-                                let snapshot = registry_for_reload.snapshot().await;
                                 for claim in snapshot.claims {
                                     let personality_changed =
                                         changed_char_ids.contains(&claim.character_id);

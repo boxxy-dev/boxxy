@@ -29,7 +29,7 @@ fn has_any_toml(snapshot: &DirSnapshot) -> bool {
         .any(|p| p.extension().is_some_and(|ext| ext == "toml"))
 }
 
-pub async fn spawn_character_watcher(characters_dir: PathBuf, tx: tokio::sync::mpsc::Sender<()>) {
+pub fn spawn_character_watcher(characters_dir: PathBuf, tx: tokio::sync::mpsc::Sender<()>) {
     tokio::task::spawn_blocking(move || {
         let (inner_tx, inner_rx) = std::sync::mpsc::channel();
 
@@ -67,6 +67,7 @@ pub async fn spawn_character_watcher(characters_dir: PathBuf, tx: tokio::sync::m
         );
 
         let mut last_snapshot = get_dir_snapshot(&characters_dir);
+        let mut notified_missing_toml = false;
 
         for res in inner_rx {
             match res {
@@ -79,8 +80,12 @@ pub async fn spawn_character_watcher(characters_dir: PathBuf, tx: tokio::sync::m
                     }
 
                     let current_snapshot = get_dir_snapshot(&characters_dir);
-                    if current_snapshot != last_snapshot || !has_any_toml(&current_snapshot) {
+                    let missing_toml = !has_any_toml(&current_snapshot);
+                    if current_snapshot != last_snapshot
+                        || (missing_toml && !notified_missing_toml)
+                    {
                         last_snapshot = current_snapshot;
+                        notified_missing_toml = missing_toml;
                         if tx.blocking_send(()).is_err() {
                             break;
                         }

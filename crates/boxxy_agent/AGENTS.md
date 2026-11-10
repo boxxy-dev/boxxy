@@ -40,7 +40,7 @@ Host-side implementation of `ClawEnvironment`: shell execution, file I/O with pa
 
 **`claw::CharacterRegistry`** is the volatile in-memory registry of all live character claims, keyed by `holder_id`. It is the daemon's single source of truth for who holds which character. Claims are never written to disk; they live only for the duration of the daemon process. Key methods: `try_claim(holder_id, holder_kind, character_id, owner_bus_name)` (atomic check-then-set under write lock), `release_holder(holder_id)`, `release_owner(owner_bus_name) -> Vec<CharacterClaim>` (bulk release on client disconnect), `snapshot()`, `subscribe()` (broadcast channel for push updates). The registry also handles orphan character migration at load time: sessions referencing a deleted character UUID are silently mapped to the first catalog entry.
 
-**`claw::notifier`** wraps `org.freedesktop.Notifications` with a tiny zbus proxy so `ClawEngineEvent::PushGlobalNotification`, `TaskCompleted`, and `LongTaskCompleted` turn into real desktop toasts when in Ghost Mode (`ghost.is_ghost()`) — so background AI work that finishes while the UI is detached still reaches the user without duplicating `boxxy-window`'s `gio::Notification` when a window is open.
+**`claw::notifier`** wraps `org.freedesktop.Notifications` with a tiny zbus proxy so `ClawEngineEvent::PushGlobalNotification`, `TaskCompleted`, and `LongTaskCompleted` turn into native host desktop notifications across all Linux desktops (COSMIC, KDE, Sway, GNOME) whether a Boxxy window is open, unfocused, or running in Ghost Mode, using live character display names updated across session resumptions and catalog hot-reloads.
 
 ### `ipc/` — `dev.boxxy.BoxxyTerminal.Agent`
 

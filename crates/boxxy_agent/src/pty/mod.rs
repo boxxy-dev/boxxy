@@ -278,9 +278,32 @@ impl PtySubsystem {
             }
         }
 
-        if !options.cwd.is_empty() {
+        let effective_cwd = if options.cwd.is_empty() {
+            String::new()
+        } else if std::path::Path::new(&options.cwd).is_dir() {
             cmd.current_dir(&options.cwd);
-        }
+            options.cwd.clone()
+        } else {
+            // Requested CWD does not exist locally (e.g. deleted directory or remote SSH
+            // OSC 7 path); fall back to $HOME instead of failing spawn() with ENOENT.
+            let fallback = User::from_uid(getuid())
+                .ok()
+                .flatten()
+                .map(|u| u.dir)
+                .or_else(|| std::env::var_os("HOME").map(std::path::PathBuf::from))
+                .filter(|p| p.is_dir());
+            log::warn!(
+                "spawn: requested cwd {:?} does not exist; falling back to {:?}",
+                options.cwd,
+                fallback
+            );
+            if let Some(home) = fallback {
+                cmd.current_dir(&home);
+                home.to_string_lossy().into_owned()
+            } else {
+                String::new()
+            }
+        };
 
         if env.is_empty()
             && let Ok(Some(user)) = User::from_uid(getuid())
@@ -359,7 +382,7 @@ impl PtySubsystem {
                 pid,
                 options.pane_id.clone(),
                 owner_bus_name,
-                options.cwd.clone(),
+                effective_cwd,
                 default_persist,
                 registry_fd,
             )

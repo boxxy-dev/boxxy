@@ -418,9 +418,20 @@ impl CharacterRegistry {
             }
         }
 
-        // 4. Mint or reuse identity
+        // 4. Mint or reuse identity, cleaning up any previous owner's reverse-index entry
         let petname = if let Some(existing) = inner.claims.get(&holder_id) {
-            existing.petname.clone()
+            let prev_petname = existing.petname.clone();
+            let prev_owner = existing.owner_bus_name.clone();
+            if !prev_owner.is_empty()
+                && prev_owner != owner_bus_name
+                && let Some(holders) = inner.by_owner.get_mut(&prev_owner)
+            {
+                holders.remove(&holder_id);
+                if holders.is_empty() {
+                    inner.by_owner.remove(&prev_owner);
+                }
+            }
+            prev_petname
         } else {
             // New holder! Mint a petname.
             petname::petname(2, "-").unwrap_or_else(|| "red-pony".to_string())
@@ -437,12 +448,14 @@ impl CharacterRegistry {
         };
 
         // 5. Record claim
-        inner.claims.insert(holder_id.clone(), new_claim.clone());
-        inner
-            .by_owner
-            .entry(owner_bus_name.clone())
-            .or_default()
-            .insert(holder_id.clone());
+        inner.claims.insert(holder_id.clone(), new_claim);
+        if !owner_bus_name.is_empty() {
+            inner
+                .by_owner
+                .entry(owner_bus_name.clone())
+                .or_default()
+                .insert(holder_id.clone());
+        }
 
         inner.revision += 1;
         let snapshot = inner.snapshot();
@@ -510,12 +523,7 @@ impl CharacterRegistry {
         new_owner_bus_name: String,
     ) -> Option<ClaimedSession> {
         let mut inner = self.inner.write().await;
-        let mut claim = if old_holder_id == new_holder_id {
-            inner.claims.remove(old_holder_id)?
-        } else {
-            // If new_holder_id already has a claim for some reason, remove old_holder_id
-            inner.claims.remove(old_holder_id)?
-        };
+        let mut claim = inner.claims.remove(old_holder_id)?;
 
         if !claim.owner_bus_name.is_empty()
             && let Some(holders) = inner.by_owner.get_mut(&claim.owner_bus_name)
@@ -523,6 +531,17 @@ impl CharacterRegistry {
             holders.remove(old_holder_id);
             if holders.is_empty() {
                 inner.by_owner.remove(&claim.owner_bus_name);
+            }
+        }
+
+        // If `new_holder_id` already had an entry under another owner, purge its reverse index too
+        if let Some(displaced) = inner.claims.remove(&new_holder_id)
+            && !displaced.owner_bus_name.is_empty()
+            && let Some(holders) = inner.by_owner.get_mut(&displaced.owner_bus_name)
+        {
+            holders.remove(&new_holder_id);
+            if holders.is_empty() {
+                inner.by_owner.remove(&displaced.owner_bus_name);
             }
         }
 
@@ -845,5 +864,51 @@ mod tests {
                 .iter()
                 .any(|c| c.holder_id == "pane-inc-b" && c.character_id == inc_id)
         );
+    }
+
+    #[tokio::test]
+    async fn test_reclaim_same_holder_with_new_owner_purges_old_owner_reverse_index() {
+        let db = boxxy_db::Db::new_in_memory().await.unwrap();
+        let reg = CharacterRegistry::load_or_default(&db).await;
+
+        let catalog = reg.snapshot().await.catalog;
+        let char_id = catalog.first().expect("default character").config.id.clone();
+
+        let first = reg
+            .try_claim(
+                "pane-shared".to_string(),
+                HolderKind::Pane,
+                char_id.clone(),
+                ":1.40".to_string(),
+            )
+            .await
+            .expect("first claim");
+
+        // Re-claim same holder under a new owner bus name (e.g. reconnect or character switch)
+        let second = reg
+            .try_claim(
+                "pane-shared".to_string(),
+                HolderKind::Pane,
+                boxxy_claw_protocol::characters::INCOGNITO_CHARACTER_ID.to_string(),
+                ":1.99".to_string(),
+            )
+            .await
+            .expect("second claim");
+        assert_eq!(first.claim.petname, second.claim.petname);
+
+        // Old owner disconnecting must NOT wipe out the new owner's active claim
+        let released = reg.release_owner(":1.40").await;
+        assert!(released.is_empty());
+        assert!(!reg.has_owner(":1.40").await);
+        assert!(reg.has_owner(":1.99").await);
+
+        let snap = reg.snapshot().await;
+        let active = snap
+            .claims
+            .iter()
+            .find(|c| c.holder_id == "pane-shared")
+            .expect("new owner's claim must remain intact");
+        assert_eq!(active.session_id, second.session_id);
+        assert_eq!(active.owner_bus_name, ":1.99");
     }
 }

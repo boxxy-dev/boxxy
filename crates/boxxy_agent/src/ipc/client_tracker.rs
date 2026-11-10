@@ -5,24 +5,62 @@ use crate::pty::registry::PtyRegistry;
 use boxxy_claw::registry::workspace::WorkspaceRegistry;
 use futures_util::StreamExt;
 use std::collections::HashSet;
-use std::sync::Arc;
-use tokio::sync::{Mutex, OnceCell, watch};
+use std::sync::{Arc, OnceLock};
+use tokio::sync::{Mutex, watch};
 use zbus::Connection;
 
-static ACTIVE_CLIENTS: OnceCell<Mutex<HashSet<String>>> = OnceCell::const_new();
+static ACTIVE_CLIENTS: OnceLock<parking_lot::Mutex<HashSet<String>>> = OnceLock::new();
 
-async fn get_active_clients() -> &'static Mutex<HashSet<String>> {
-    ACTIVE_CLIENTS
-        .get_or_init(|| async { Mutex::new(HashSet::new()) })
-        .await
+fn active_clients() -> &'static parking_lot::Mutex<HashSet<String>> {
+    ACTIVE_CLIENTS.get_or_init(|| parking_lot::Mutex::new(HashSet::new()))
 }
 
-pub async fn register_client(bus_name: String) {
+/// Atomically registers `bus_name` in `ACTIVE_CLIENTS` and synchronizes `client_count_tx`
+/// under the same lock so duplicate `claim_startup_token` calls or concurrent client
+/// launches/exits can never drift `client_count` away from `ACTIVE_CLIENTS.len()`.
+///
+/// Returns `(was_empty_before_connect, new_client_count)`.
+pub fn register_client_and_sync_count(
+    bus_name: String,
+    client_count_tx: &watch::Sender<usize>,
+) -> (bool, usize) {
+    let mut clients = active_clients().lock();
+    let was_empty = clients.is_empty();
     if !bus_name.is_empty() {
-        let clients_mutex = get_active_clients().await;
-        let mut clients = clients_mutex.lock().await;
         clients.insert(bus_name);
     }
+    let new_count = clients.len();
+    client_count_tx.send_if_modified(|curr| {
+        if *curr != new_count {
+            *curr = new_count;
+            true
+        } else {
+            false
+        }
+    });
+    (was_empty, new_count)
+}
+
+/// Atomically removes `bus_name` from `ACTIVE_CLIENTS` and updates `client_count_tx`
+/// under the same lock. Returns `Some(new_client_count)` if `bus_name` was registered.
+pub fn unregister_client_and_sync_count(
+    bus_name: &str,
+    client_count_tx: &watch::Sender<usize>,
+) -> Option<usize> {
+    let mut clients = active_clients().lock();
+    if !clients.remove(bus_name) {
+        return None;
+    }
+    let new_count = clients.len();
+    client_count_tx.send_if_modified(|curr| {
+        if *curr != new_count {
+            *curr = new_count;
+            true
+        } else {
+            false
+        }
+    });
+    Some(new_count)
 }
 
 pub async fn spawn_owner_tracker(
@@ -54,17 +92,9 @@ pub async fn spawn_owner_tracker(
 
             let bus_name = args.name.as_str();
 
-            // Check if it was a registered UI client
-            let was_client = {
-                let clients_mutex = get_active_clients().await;
-                let mut clients = clients_mutex.lock().await;
-                clients.remove(bus_name)
-            };
-
-            if was_client {
-                let current = *client_count_tx.borrow();
-                let new_count = current.saturating_sub(1);
-                let _ = client_count_tx.send(new_count);
+            if let Some(new_count) =
+                unregister_client_and_sync_count(bus_name, &client_count_tx)
+            {
                 log::info!(
                     "Client {} disconnected. Total clients: {}",
                     bus_name,
@@ -140,4 +170,34 @@ pub async fn spawn_owner_tracker(
     });
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn duplicate_client_registration_is_idempotent_and_recovers_ghost_mode() {
+        // Use synthetic test-only bus names that cannot collide with real `:1.*` D-Bus names
+        let (tx, rx) = watch::channel(99usize);
+        let name_a = format!(":test.{}.a", uuid::Uuid::new_v4());
+        let name_b = format!(":test.{}.b", uuid::Uuid::new_v4());
+
+        let (_was_empty, c1) = register_client_and_sync_count(name_a.clone(), &tx);
+        // Calling register a second time with the same bus_name must NOT double-increment
+        let (_was_empty2, c2) = register_client_and_sync_count(name_a.clone(), &tx);
+        assert_eq!(c1, c2);
+        assert_eq!(*rx.borrow(), c2);
+
+        let (_, c3) = register_client_and_sync_count(name_b.clone(), &tx);
+        assert_eq!(c3, c1 + 1);
+
+        assert_eq!(unregister_client_and_sync_count(&name_a, &tx), Some(c1));
+        // Second unregister of same disconnected bus_name is a no-op
+        assert_eq!(unregister_client_and_sync_count(&name_a, &tx), None);
+        assert_eq!(
+            unregister_client_and_sync_count(&name_b, &tx),
+            Some(c1.saturating_sub(1))
+        );
+    }
 }

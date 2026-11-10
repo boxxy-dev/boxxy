@@ -508,26 +508,15 @@ impl PtyRegistry {
     pub async fn reattach(&self, pid: u32) -> Option<(Vec<u8>, OwnedFd)> {
         let mut map = self.inner.write().await;
         let s = map.get_mut(&pid)?;
-        if !matches!(s.state, ProcessState::Running) {
+        if !matches!(s.state, ProcessState::Running) || s.reader_task.is_none() {
+            // Not running or never actively detached — return None without mutating
+            // viewer_count so a subsequent detach() does not leak as StillViewed.
             return None;
         }
 
-        s.viewer_count = s.viewer_count.saturating_add(1);
-        s.last_activity = Instant::now();
-
-        // If no reader task ran, this session was never actively
-        // detached. Caller still has its own FD; nothing to return.
-        let handle = s.reader_task.take()?;
-        handle.abort();
-        let buffer = s
-            .ring_buffer
-            .take()
-            .map(|b| b.snapshot())
-            .unwrap_or_default();
-
-        // Clone the stored FD with FD_CLOEXEC (`F_DUPFD_CLOEXEC`) and hand it to
-        // the UI. Our original stays parked in the session, idle, ready for the
-        // next detach, without leaking across child execs.
+        // Clone the stored FD with FD_CLOEXEC (`F_DUPFD_CLOEXEC`) *before* aborting
+        // the reader task or draining the ring buffer so a failed dup leaves the
+        // detached session intact.
         let stored = s.master_fd.as_ref()?;
         let fresh = match stored.try_clone() {
             Ok(fd) => fd,
@@ -536,6 +525,18 @@ impl PtyRegistry {
                 return None;
             }
         };
+
+        if let Some(handle) = s.reader_task.take() {
+            handle.abort();
+        }
+        let buffer = s
+            .ring_buffer
+            .take()
+            .map(|b| b.snapshot())
+            .unwrap_or_default();
+        s.viewer_count = s.viewer_count.saturating_add(1);
+        s.last_activity = Instant::now();
+
         drop(map);
         self.notify_changed();
         Some((buffer, fresh))
@@ -601,17 +602,32 @@ impl PtyRegistry {
         };
 
         // Spawn the reader outside the lock so its own writes to the map
-        // don't deadlock.
+        // don't deadlock, then verify the session is still running & detached
+        // before storing the handle (closing any race with `mark_exited`).
         if start_reader {
             let registry = self.clone();
             let handle = tokio::spawn(async move {
                 run_reader(registry, pid).await;
             });
-            if let Some(s) = self.inner.write().await.get_mut(&pid) {
-                s.reader_task = Some(handle);
+            let attached_handle = {
+                let mut map = self.inner.write().await;
+                if let Some(s) = map.get_mut(&pid)
+                    && matches!(s.state, ProcessState::Running)
+                    && s.viewer_count == 0
+                    && s.persistence_enabled
+                {
+                    s.reader_task = Some(handle);
+                    true
+                } else {
+                    handle.abort();
+                    false
+                }
+            };
+            if attached_handle {
+                self.notify_changed();
+                return DetachOutcome::Detached;
             }
-            self.notify_changed();
-            return DetachOutcome::Detached;
+            return DetachOutcome::Unknown;
         }
 
         if should_kill {
@@ -1067,5 +1083,20 @@ mod tests {
             "reattached PTY master FD must carry FD_CLOEXEC"
         );
         reg.remove(43210).await;
+    }
+
+    #[tokio::test]
+    async fn reattach_on_attached_session_does_not_leak_viewer_count() {
+        let reg = PtyRegistry::new();
+        reg.register(54321, "pane-attached".into(), None).await;
+
+        // Session is currently attached (viewer_count == 1, reader_task == None).
+        // Calling reattach must return None WITHOUT bumping viewer_count to 2.
+        assert!(reg.reattach(54321).await.is_none());
+
+        // Subsequent detach by the sole attached viewer must reach viewer_count == 0
+        // (Terminated), NOT leak as StillViewed.
+        assert_eq!(reg.detach(54321).await, DetachOutcome::Terminated);
+        reg.remove(54321).await;
     }
 }

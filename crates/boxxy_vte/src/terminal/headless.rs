@@ -371,6 +371,19 @@ mod tests {
     }
 
     #[test]
+    fn osc7_percent_decodes_spaces_and_utf8_paths() {
+        let mut h = HeadlessTerminal::new(40, 4);
+        h.feed(b"\x1b]7;file://localhost/var/tmp/my%20workspace/caf%C3%A9%20100%25\x07");
+        let events = h.take_events();
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, Event::CwdChanged(p) if p == "/var/tmp/my workspace/café 100%")),
+            "expected decoded CwdChanged event, got {events:?}"
+        );
+    }
+
+    #[test]
     fn decscusr_and_dectcem_populate_render_state_cursor_style_and_visibility() {
         use crate::engine::ansi::CursorShape;
 

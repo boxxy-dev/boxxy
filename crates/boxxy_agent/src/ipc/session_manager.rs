@@ -13,7 +13,7 @@ use tokio::sync::Mutex;
 #[derive(Clone)]
 pub(crate) struct HostedSession {
     pub(crate) pane_id: String,
-    pub(crate) agent_name: String,
+    pub(crate) agent_name: Arc<parking_lot::RwLock<String>>,
     pub(crate) active_session_id: Arc<parking_lot::RwLock<String>>,
     pub(crate) tx: async_channel::Sender<ClawMessage>,
 }
@@ -83,6 +83,15 @@ impl ClawSessionManager {
             }
         }
     }
+
+    pub fn sync_pane_agent_name(&mut self, pane_id: &str, new_agent_name: &str) {
+        self.prune_dead();
+        for s in self.sessions.values() {
+            if s.pane_id == pane_id {
+                *s.agent_name.write() = new_agent_name.to_string();
+            }
+        }
+    }
 }
 
 /// Cascades swarm lock release, pane unregistration, and scheduled task cleanup
@@ -114,4 +123,50 @@ pub(crate) async fn teardown_holder(
     let workspace = boxxy_claw::registry::workspace::global_workspace().await;
     cascade_workspace_cleanup(&workspace, &claim).await;
     Some(claim)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::state::AgentState;
+
+    #[test]
+    fn shutdown_pane_closes_superseded_session_and_syncs_live_agent_name() {
+        let env = Arc::new(crate::claw::ClawSubsystem::new(AgentState::new()));
+        let mut mgr = ClawSessionManager::new(env);
+
+        let (tx_old, rx_old) = async_channel::unbounded();
+        let (tx_other, _rx_other) = async_channel::unbounded();
+        let shared_name_other = Arc::new(parking_lot::RwLock::new("InitialName".to_string()));
+
+        mgr.sessions.insert(
+            "sess-old".to_string(),
+            HostedSession {
+                pane_id: "pane-1".to_string(),
+                agent_name: Arc::new(parking_lot::RwLock::new("OldChar".to_string())),
+                active_session_id: Arc::new(parking_lot::RwLock::new("sess-old".to_string())),
+                tx: tx_old,
+            },
+        );
+        mgr.sessions.insert(
+            "sess-other".to_string(),
+            HostedSession {
+                pane_id: "pane-2".to_string(),
+                agent_name: shared_name_other.clone(),
+                active_session_id: Arc::new(parking_lot::RwLock::new("sess-other".to_string())),
+                tx: tx_other,
+            },
+        );
+
+        // Shutting down pane-1 sends Deactivate, closes tx_old, and keeps pane-2 intact
+        mgr.shutdown_pane("pane-1");
+        assert!(!mgr.sessions.contains_key("sess-old"));
+        assert!(mgr.sessions.contains_key("sess-other"));
+        assert!(matches!(rx_old.try_recv(), Ok(ClawMessage::Deactivate)));
+        assert!(rx_old.is_closed());
+
+        // Syncing agent name updates the shared RwLock read by event forwarders
+        mgr.sync_pane_agent_name("pane-2", "RenamedChar");
+        assert_eq!(shared_name_other.read().as_str(), "RenamedChar");
+    }
 }
