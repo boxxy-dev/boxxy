@@ -92,13 +92,6 @@ impl AgentInterface {
     ) -> zbus::Result<()>;
 
     #[zbus(signal)]
-    async fn desktop_notification(
-        emitter: &SignalEmitter<'_>,
-        title: String,
-        message: String,
-    ) -> zbus::Result<()>;
-
-    #[zbus(signal)]
     pub async fn claims_changed(
         emitter: &zbus::object_server::SignalEmitter<'_>,
         snapshot_json: String,

@@ -16,10 +16,10 @@ fn main() {
     println!("cargo:rerun-if-env-changed=GIT_HASH");
     // Re-run if git HEAD changes
     println!("cargo:rerun-if-changed=../../.git/HEAD");
-    if let Ok(ref_path) = std::fs::read_to_string("../../.git/HEAD") {
-        if ref_path.starts_with("ref: ") {
-            let path = format!("../../.git/{}", ref_path[5..].trim());
-            println!("cargo:rerun-if-changed={}", path);
-        }
+    if let Ok(ref_path) = std::fs::read_to_string("../../.git/HEAD")
+        && let Some(stripped) = ref_path.strip_prefix("ref: ")
+    {
+        let path = format!("../../.git/{}", stripped.trim());
+        println!("cargo:rerun-if-changed={}", path);
     }
 }

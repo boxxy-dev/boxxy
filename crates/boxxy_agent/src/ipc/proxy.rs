@@ -121,8 +121,5 @@ pub trait Agent {
     async fn restore_detached_requested(&self, pid: u32, cwd: String) -> zbus::Result<()>;
 
     #[zbus(signal)]
-    async fn desktop_notification(&self, title: String, message: String) -> zbus::Result<()>;
-
-    #[zbus(signal)]
     async fn mcp_status_changed(&self, statuses_json: String) -> zbus::Result<()>;
 }

@@ -1082,10 +1082,6 @@ impl ClawSession {
         );
         self.pane_id = new_pane_id.clone();
 
-        // Give the D-Bus caller a brief moment to register its `claw_router`
-        // subscription for `session_id` before we emit the hydration events.
-        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-
         let (
             agent_name,
             character_id,

@@ -36,6 +36,76 @@ impl Drop for SubscriptionGuard {
     }
 }
 
+const MAX_CAPTURE_EVENTS: usize = 256;
+
+struct RouterInner<K, V> {
+    subscribers: HashMap<K, Vec<(u64, async_channel::Sender<V>)>>,
+    captures: HashMap<u64, Vec<(K, V)>>,
+}
+
+/// Short-lived RAII capture handle created before an async D-Bus claim/reattach RPC
+/// whose target `session_id` is returned by the RPC itself. Any unmatched signals
+/// arriving while the RPC is in flight are buffered and atomically replayed in FIFO
+/// order when `subscribe_with_sender` completes (or discarded if dropped on error).
+pub struct PendingCaptureGuard<K, V>
+where
+    K: Eq + Hash + Clone + Send + 'static,
+    V: Clone + Send + 'static,
+{
+    capture_id: u64,
+    inner: Arc<Mutex<RouterInner<K, V>>>,
+    consumed: bool,
+}
+
+impl<K, V> PendingCaptureGuard<K, V>
+where
+    K: Eq + Hash + Clone + Send + 'static,
+    V: Clone + Send + 'static,
+{
+    pub fn subscribe_with_sender(
+        mut self,
+        key: K,
+        tx: async_channel::Sender<V>,
+    ) -> SubscriptionGuard {
+        self.consumed = true;
+        let sub_id = NEXT_SUBSCRIPTION_ID.fetch_add(1, Ordering::Relaxed);
+        {
+            let mut state = self.inner.lock();
+            if let Some(buffered) = state.captures.remove(&self.capture_id) {
+                for (k, v) in buffered {
+                    if k == key {
+                        let _ = tx.try_send(v);
+                    }
+                }
+            }
+            state.subscribers.entry(key.clone()).or_default().push((sub_id, tx));
+        }
+
+        let inner = self.inner.clone();
+        SubscriptionGuard::new(move || {
+            let mut state = inner.lock();
+            if let Some(list) = state.subscribers.get_mut(&key) {
+                list.retain(|(id, _)| *id != sub_id);
+                if list.is_empty() {
+                    state.subscribers.remove(&key);
+                }
+            }
+        })
+    }
+}
+
+impl<K, V> Drop for PendingCaptureGuard<K, V>
+where
+    K: Eq + Hash + Clone + Send + 'static,
+    V: Clone + Send + 'static,
+{
+    fn drop(&mut self) {
+        if !self.consumed {
+            self.inner.lock().captures.remove(&self.capture_id);
+        }
+    }
+}
+
 /// Thread-safe, lock-free-await signal router that multiplexes a single D-Bus
 /// signal stream to keyed per-pane channels.
 ///
@@ -44,13 +114,13 @@ impl Drop for SubscriptionGuard {
 /// synchronously, dropping the channel `Sender` and immediately waking any
 /// awaiting `Receiver::recv().await` task on pane close.
 pub struct SignalRouter<K, V> {
-    subscribers: Arc<Mutex<HashMap<K, Vec<(u64, async_channel::Sender<V>)>>>>,
+    inner: Arc<Mutex<RouterInner<K, V>>>,
 }
 
 impl<K, V> Clone for SignalRouter<K, V> {
     fn clone(&self) -> Self {
         Self {
-            subscribers: self.subscribers.clone(),
+            inner: self.inner.clone(),
         }
     }
 }
@@ -72,7 +142,22 @@ where
 {
     pub fn new() -> Self {
         Self {
-            subscribers: Arc::new(Mutex::new(HashMap::new())),
+            inner: Arc::new(Mutex::new(RouterInner {
+                subscribers: HashMap::new(),
+                captures: HashMap::new(),
+            })),
+        }
+    }
+
+    /// Starts buffering unmatched signals while an async claim/reattach RPC is in flight
+    /// so signals overtaking the method reply are replayed losslessly upon subscription.
+    pub fn begin_capture(&self) -> PendingCaptureGuard<K, V> {
+        let capture_id = NEXT_SUBSCRIPTION_ID.fetch_add(1, Ordering::Relaxed);
+        self.inner.lock().captures.insert(capture_id, Vec::new());
+        PendingCaptureGuard {
+            capture_id,
+            inner: self.inner.clone(),
+            consumed: false,
         }
     }
 
@@ -85,17 +170,17 @@ where
     ) -> SubscriptionGuard {
         let sub_id = NEXT_SUBSCRIPTION_ID.fetch_add(1, Ordering::Relaxed);
         {
-            let mut map = self.subscribers.lock();
-            map.entry(key.clone()).or_default().push((sub_id, tx));
+            let mut state = self.inner.lock();
+            state.subscribers.entry(key.clone()).or_default().push((sub_id, tx));
         }
 
-        let subscribers = self.subscribers.clone();
+        let inner = self.inner.clone();
         SubscriptionGuard::new(move || {
-            let mut map = subscribers.lock();
-            if let Some(list) = map.get_mut(&key) {
+            let mut state = inner.lock();
+            if let Some(list) = state.subscribers.get_mut(&key) {
                 list.retain(|(id, _)| *id != sub_id);
                 if list.is_empty() {
-                    map.remove(&key);
+                    state.subscribers.remove(&key);
                 }
             }
         })
@@ -111,13 +196,29 @@ where
     }
 
     /// Dispatches `value` to all active subscribers for `key`, automatically
-    /// purging any closed channels.
+    /// purging any closed channels, or buffers it into active pending captures
+    /// if no live subscriber is registered yet.
     pub fn dispatch(&self, key: &K, value: V) {
-        let mut map = self.subscribers.lock();
-        if let Some(list) = map.get_mut(key) {
-            list.retain(|(_, tx)| !tx.is_closed() && tx.try_send(value.clone()).is_ok());
+        let mut state = self.inner.lock();
+        let mut delivered = false;
+        if let Some(list) = state.subscribers.get_mut(key) {
+            list.retain(|(_, tx)| {
+                if !tx.is_closed() && tx.try_send(value.clone()).is_ok() {
+                    delivered = true;
+                    true
+                } else {
+                    false
+                }
+            });
             if list.is_empty() {
-                map.remove(key);
+                state.subscribers.remove(key);
+            }
+        }
+        if !delivered && !state.captures.is_empty() {
+            for buf in state.captures.values_mut() {
+                if buf.len() < MAX_CAPTURE_EVENTS {
+                    buf.push((key.clone(), value.clone()));
+                }
             }
         }
     }
@@ -125,7 +226,7 @@ where
     /// Dispatches `value` once and removes all subscribers for `key` (used for
     /// terminal one-shot events like process `Exited`).
     pub fn dispatch_once(&self, key: &K, value: V) {
-        let removed = self.subscribers.lock().remove(key);
+        let removed = self.inner.lock().subscribers.remove(key);
         if let Some(list) = removed {
             for (_, tx) in list {
                 let _ = tx.try_send(value.clone());
@@ -135,23 +236,24 @@ where
 
     /// Removes all subscribers for `key` (dropping their `Sender`s).
     pub fn remove_key(&self, key: &K) {
-        self.subscribers.lock().remove(key);
+        self.inner.lock().subscribers.remove(key);
     }
 
     /// Returns a snapshot of keys that currently have at least one live subscriber.
     pub fn active_keys(&self) -> Vec<K> {
-        let mut map = self.subscribers.lock();
-        map.retain(|_, list| {
+        let mut state = self.inner.lock();
+        state.subscribers.retain(|_, list| {
             list.retain(|(_, tx)| !tx.is_closed());
             !list.is_empty()
         });
-        map.keys().cloned().collect()
+        state.subscribers.keys().cloned().collect()
     }
 
     #[cfg(test)]
     pub fn subscriber_count(&self, key: &K) -> usize {
-        self.subscribers
+        self.inner
             .lock()
+            .subscribers
             .get(key)
             .map_or(0, Vec::len)
     }
@@ -230,33 +332,7 @@ impl AgentConnection {
             });
         }
 
-        // 2. Desktop Notification Supervisor
-        {
-            let proxy = agent_proxy.clone();
-            tokio::spawn(async move {
-                loop {
-                    if let Ok(mut stream) = proxy.receive_desktop_notification().await {
-                        while let Some(msg) = stream.next().await {
-                            if let Ok(args) = msg.args() {
-                                let text = if args.title.is_empty() {
-                                    args.message.to_string()
-                                } else {
-                                    format!("{}: {}", args.title, args.message)
-                                };
-                                let event = crate::TerminalEvent {
-                                    id: String::new(),
-                                    kind: crate::TerminalEventKind::Notification(text),
-                                };
-                                let _ = crate::TERMINAL_EVENT_BUS.send(event);
-                            }
-                        }
-                    }
-                    tokio::time::sleep(std::time::Duration::from_millis(250)).await;
-                }
-            });
-        }
-
-        // 2b. External Companion Restore Request Supervisor
+        // 2. External Companion Restore Request Supervisor
         {
             let proxy = agent_proxy.clone();
             tokio::spawn(async move {
@@ -557,6 +633,7 @@ impl AgentManager {
         character_id: String,
         event_tx: async_channel::Sender<ClawEngineEvent>,
     ) -> Result<(String, SubscriptionGuard)> {
+        let capture = self.connection.claw_router.begin_capture();
         let mut target_id = character_id;
         let mut claimed_session_opt = None;
 
@@ -613,10 +690,7 @@ impl AgentManager {
             claimed_session_opt.ok_or_else(|| anyhow::anyhow!("Claim failed for {target_id}"))?;
         let session_id = claimed_session.session_id;
 
-        let guard = self
-            .connection
-            .claw_router
-            .subscribe_with_sender(session_id.clone(), event_tx);
+        let guard = capture.subscribe_with_sender(session_id.clone(), event_tx);
 
         Ok((session_id, guard))
     }
@@ -684,11 +758,10 @@ impl AgentManager {
         new_pane_id: String,
         event_tx: async_channel::Sender<ClawEngineEvent>,
     ) -> Result<Option<(String, SubscriptionGuard)>> {
-        // Subscribe to the existing session_id BEFORE calling reattach_holder_by_pid
-        // if we can find the claim in CLAIMS_CACHE, or right after.
-        // Wait: reattach_holder_by_pid triggers RebindPane asynchronously in the actor loop.
-        // To ensure we don't miss the immediate Identity/RestoreHistory signals emitted by
-        // RebindPane, let's check what reattach_holder_by_pid does!
+        // Begin buffering unmatched ClawEvents before calling `reattach_holder_by_pid`
+        // so immediate `Identity` / `RestoreHistory` hydration signals emitted by
+        // `RebindPane` are never dropped even if they arrive before the RPC returns.
+        let capture = self.connection.claw_router.begin_capture();
         let result_json = self
             .agent_proxy
             .reattach_holder_by_pid(pid, new_pane_id)
@@ -703,10 +776,7 @@ impl AgentManager {
         };
 
         let session_id = claimed.session_id;
-        let guard = self
-            .connection
-            .claw_router
-            .subscribe_with_sender(session_id.clone(), event_tx);
+        let guard = capture.subscribe_with_sender(session_id.clone(), event_tx);
 
         Ok(Some((session_id, guard)))
     }
@@ -1072,5 +1142,26 @@ mod tests {
         assert_eq!(router.subscriber_count(&77), 0);
         assert_eq!(rx1.recv().await.unwrap(), 0);
         assert_eq!(rx2.recv().await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn signal_router_capture_replays_events_arriving_before_rpc_return() {
+        let router = SignalRouter::<String, i32>::new();
+        let capture = router.begin_capture();
+
+        // Signals arrive while the D-Bus RPC is still in flight (before session_id is known)
+        router.dispatch(&"sess-target".to_string(), 10);
+        router.dispatch(&"sess-unrelated".to_string(), 99);
+        router.dispatch(&"sess-target".to_string(), 20);
+
+        let (tx, rx) = async_channel::unbounded();
+        let _guard = capture.subscribe_with_sender("sess-target".to_string(), tx);
+
+        // Subsequent live dispatch arrives in FIFO order right after the replayed events
+        router.dispatch(&"sess-target".to_string(), 30);
+
+        assert_eq!(rx.recv().await.unwrap(), 10);
+        assert_eq!(rx.recv().await.unwrap(), 20);
+        assert_eq!(rx.recv().await.unwrap(), 30);
     }
 }
