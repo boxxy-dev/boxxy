@@ -1150,9 +1150,7 @@ impl AgentInterface {
                 .pty_registry
                 .set_persistence(target_pid, false)
                 .await;
-            unsafe {
-                libc::kill(-(target_pid as i32), libc::SIGTERM);
-            }
+            let _ = crate::pty::registry::kill_process_group_safe(target_pid, libc::SIGTERM);
         }
         emit_pending_tasks_changed(conn, &self.core.state.pty_registry).await;
     }
@@ -1414,6 +1412,7 @@ mod tests {
     use crate::ipc::pty::AgentPtyProxy;
     use crate::maintenance::MaintenanceSubsystem;
     use crate::pty::PtySubsystem;
+    use std::os::fd::AsFd;
     use std::os::unix::io::AsRawFd;
     use std::os::unix::net::UnixStream;
     use zbus::Guid;
@@ -1497,7 +1496,6 @@ mod tests {
     async fn p2p_pty_spawn_and_exited_signal_stream() {
         use crate::ipc::pty::SpawnOptions;
         use futures_util::StreamExt;
-        use std::os::unix::io::FromRawFd;
 
         let (p0, p1) = UnixStream::pair().expect("unix stream pair");
         let state = AgentState::new();
@@ -1527,10 +1525,8 @@ mod tests {
             .expect("subscribe exited signal");
 
         let master_fd = pty_proxy.create_pty().await.expect("create_pty");
-        let dup_raw = unsafe { libc::dup(master_fd.as_raw_fd()) };
-        assert!(dup_raw >= 0);
         let fd_for_spawn =
-            zbus::OwnedFd::from(unsafe { std::os::unix::io::OwnedFd::from_raw_fd(dup_raw) });
+            zbus::OwnedFd::from(master_fd.as_fd().try_clone_to_owned().expect("clone master_fd"));
 
         let tmp = tempfile::tempdir().expect("tempdir");
         let options = SpawnOptions {
@@ -1574,7 +1570,6 @@ mod tests {
     #[tokio::test]
     async fn p2p_pty_detach_and_reattach_fd_roundtrip() {
         use crate::ipc::pty::SpawnOptions;
-        use std::os::unix::io::FromRawFd;
 
         let (p0, p1) = UnixStream::pair().expect("unix stream pair");
         let state = AgentState::new();
@@ -1599,9 +1594,8 @@ mod tests {
 
         let pty_proxy = AgentPtyProxy::new(&client_conn).await.expect("pty proxy");
         let master_fd = pty_proxy.create_pty().await.expect("create_pty");
-        let dup_raw = unsafe { libc::dup(master_fd.as_raw_fd()) };
         let fd_for_spawn =
-            zbus::OwnedFd::from(unsafe { std::os::unix::io::OwnedFd::from_raw_fd(dup_raw) });
+            zbus::OwnedFd::from(master_fd.as_fd().try_clone_to_owned().expect("clone master_fd"));
         // Drop the client's original master_fd so only the daemon holds it once detached
         drop(master_fd);
 
@@ -1660,5 +1654,128 @@ mod tests {
         let _ = pty_proxy
             .signal_process_group(pid, libc::SIGKILL)
             .await;
+    }
+
+    #[tokio::test]
+    async fn p2p_pty_rejects_empty_argv_dangerous_signals_and_stops_fd_leak_across_panes() {
+        use crate::ipc::pty::SpawnOptions;
+        use futures_util::StreamExt;
+
+        let (p0, p1) = UnixStream::pair().expect("unix stream pair");
+        let state = AgentState::new();
+
+        let (server_conn, client_conn) = futures_util::try_join!(
+            Builder::unix_stream(p0)
+                .server(Guid::generate())
+                .p2p()
+                .serve_at(
+                    "/dev/boxxy/BoxxyTerminal/Agent/Pty",
+                    PtySubsystem::new(state),
+                )
+                .build(),
+            Builder::unix_stream(p1).p2p().build(),
+        )
+        .expect("p2p connections should build");
+
+        let _server_task = tokio::spawn(async move {
+            let _keep = server_conn;
+            std::future::pending::<()>().await;
+        });
+
+        let pty_proxy = AgentPtyProxy::new(&client_conn).await.expect("pty proxy");
+
+        // 1. Dangerous / untracked signal_process_group calls must fail with InvalidArgs
+        assert!(pty_proxy.signal_process_group(0, libc::SIGTERM).await.is_err());
+        assert!(pty_proxy.signal_process_group(1, libc::SIGTERM).await.is_err());
+        assert!(pty_proxy.signal_process_group(u32::MAX, libc::SIGTERM).await.is_err());
+        assert!(pty_proxy.signal_process_group(99999, libc::SIGTERM).await.is_err());
+
+        // 2. Empty argv must fail cleanly without crashing the daemon
+        let bad_fd = pty_proxy.create_pty().await.expect("create_pty");
+        let empty_opts = SpawnOptions {
+            cwd: String::new(),
+            argv: vec![],
+            env: vec![],
+            cols: 80,
+            rows: 24,
+            pane_id: "pane-empty-argv".to_string(),
+        };
+        assert!(pty_proxy.spawn(bad_fd, empty_opts).await.is_err());
+
+        // 3. Pane 2 must NOT inherit Pane 1's stored master PTY FD, and SIGKILL exit reports 137
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let leak_report = tmp.path().join("fds.txt");
+
+        let mut exited_stream = pty_proxy.receive_exited().await.expect("exited stream");
+
+        let master1 = pty_proxy.create_pty().await.expect("create_pty 1");
+        let spawn1 = zbus::OwnedFd::from(master1.as_fd().try_clone_to_owned().expect("clone 1"));
+        let pid1 = pty_proxy
+            .spawn(
+                spawn1,
+                SpawnOptions {
+                    cwd: tmp.path().to_string_lossy().into_owned(),
+                    argv: vec!["/bin/sh".into(), "-c".into(), "sleep 30".into()],
+                    env: vec![],
+                    cols: 80,
+                    rows: 24,
+                    pane_id: "pane-1".into(),
+                },
+            )
+            .await
+            .expect("spawn pane 1");
+
+        // Spawn Pane 2 that inspects its own `/proc/self/fd` symlink targets
+        let master2 = pty_proxy.create_pty().await.expect("create_pty 2");
+        let spawn2 = zbus::OwnedFd::from(master2.as_fd().try_clone_to_owned().expect("clone 2"));
+        let inspect_cmd = format!(
+            "ls -l /proc/self/fd > '{}'",
+            leak_report.display()
+        );
+        let pid2 = pty_proxy
+            .spawn(
+                spawn2,
+                SpawnOptions {
+                    cwd: tmp.path().to_string_lossy().into_owned(),
+                    argv: vec!["/bin/sh".into(), "-c".into(), inspect_cmd],
+                    env: vec![],
+                    cols: 80,
+                    rows: 24,
+                    pane_id: "pane-2".into(),
+                },
+            )
+            .await
+            .expect("spawn pane 2");
+
+        // Wait for pid2 to finish, then kill pid1 with SIGKILL and assert exit_code == 137 (128 + 9)
+        let mut saw_pid2 = false;
+        let mut pid1_code = None;
+        pty_proxy
+            .signal_process_group(pid1, libc::SIGKILL)
+            .await
+            .expect("signal_process_group pid1");
+
+        while !saw_pid2 || pid1_code.is_none() {
+            let sig = tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                exited_stream.next(),
+            )
+            .await
+            .expect("timeout waiting for exits")
+            .expect("stream ended");
+            let args = sig.args().expect("args");
+            if args.pid == pid2 {
+                saw_pid2 = true;
+            } else if args.pid == pid1 {
+                pid1_code = Some(args.exit_code);
+            }
+        }
+
+        assert_eq!(pid1_code, Some(128 + libc::SIGKILL));
+        let fd_listing = std::fs::read_to_string(&leak_report).expect("read fd listing");
+        assert!(
+            !fd_listing.contains("/dev/ptmx"),
+            "Pane 2 leaked a /dev/ptmx master FD from Pane 1:\n{fd_listing}"
+        );
     }
 }

@@ -58,15 +58,26 @@ impl Drop for ProcessGroupKillGuard {
 #[async_trait::async_trait]
 impl ClawEnvironment for ClawSubsystem {
     async fn exec_shell(&self, command: String) -> anyhow::Result<(i32, String, String)> {
-        let child = Command::new("bash")
-            .arg("-c")
-            .arg(command)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .process_group(0)
-            .kill_on_drop(true)
-            .spawn()?;
+        let child = unsafe {
+            Command::new("bash")
+                .arg("-c")
+                .arg(command)
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .process_group(0)
+                .kill_on_drop(true)
+                .pre_exec(|| {
+                    let _ = libc::syscall(
+                        libc::SYS_close_range,
+                        3 as libc::c_uint,
+                        libc::c_uint::MAX,
+                        libc::CLOSE_RANGE_CLOEXEC as libc::c_uint,
+                    );
+                    Ok(())
+                })
+                .spawn()?
+        };
 
         let mut pg_guard = ProcessGroupKillGuard(child.id().and_then(|pid| i32::try_from(pid).ok()));
 
@@ -86,7 +97,14 @@ impl ClawEnvironment for ClawSubsystem {
                     &String::from_utf8_lossy(&output.stderr),
                     EXEC_SHELL_MAX_OUTPUT_BYTES,
                 );
-                let exit_code = output.status.code().unwrap_or(-1);
+                let exit_code = {
+                    use std::os::unix::process::ExitStatusExt;
+                    output
+                        .status
+                        .code()
+                        .or_else(|| output.status.signal().map(|sig| 128 + sig))
+                        .unwrap_or(-1)
+                };
                 Ok((exit_code, stdout, stderr))
             }
             Ok(Err(e)) => Err(e.into()),
@@ -117,6 +135,12 @@ impl ClawEnvironment for ClawSubsystem {
                 .stderr(Stdio::piped())
                 .pre_exec(|| {
                     libc::setsid();
+                    let _ = libc::syscall(
+                        libc::SYS_close_range,
+                        3 as libc::c_uint,
+                        libc::c_uint::MAX,
+                        libc::CLOSE_RANGE_CLOEXEC as libc::c_uint,
+                    );
                     Ok(())
                 })
                 .spawn()?
@@ -476,13 +500,36 @@ async fn suggest_similar_files(missing_path: &str) -> Vec<String> {
     suggestions
 }
 
-fn spill_truncated_output_to_disk(full_output: &str) -> Option<String> {
-    let dir = std::env::temp_dir().join("boxxy-tool-output");
-    let _ = std::fs::create_dir_all(&dir);
+fn resolve_spillover_dir() -> std::path::PathBuf {
+    if let Some(runtime_dir) = std::env::var_os("XDG_RUNTIME_DIR")
+        .map(std::path::PathBuf::from)
+        .filter(|p| p.is_absolute())
+    {
+        runtime_dir.join("boxxy-terminal").join("tool-output")
+    } else {
+        boxxy_sys_utils::get_config_dir()
+            .join("cache")
+            .join("tool-output")
+    }
+}
 
-    // Safeguard 3: Opportunistically sweep spillover logs older than 24 hours
-    // so `/tmp/boxxy-tool-output` never accumulates stale files over time.
-    if let Ok(entries) = std::fs::read_dir(&dir) {
+fn spill_truncated_output_to_disk(full_output: &str) -> Option<String> {
+    let dir = resolve_spillover_dir();
+    spill_truncated_output_in_dir(&dir, full_output)
+}
+
+fn spill_truncated_output_in_dir(dir: &std::path::Path, full_output: &str) -> Option<String> {
+    use std::io::Write;
+    use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
+
+    let mut builder = std::fs::DirBuilder::new();
+    builder.recursive(true).mode(0o700);
+    builder.create(dir).ok()?;
+    let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
+
+    // Opportunistically sweep spillover logs older than 24 hours so the
+    // tool-output directory never accumulates stale files over time.
+    if let Ok(entries) = std::fs::read_dir(dir) {
         let cutoff =
             std::time::SystemTime::now().checked_sub(std::time::Duration::from_secs(24 * 3600));
         for entry in entries.flatten() {
@@ -496,7 +543,13 @@ fn spill_truncated_output_to_disk(full_output: &str) -> Option<String> {
     }
 
     let file_path = dir.join(format!("shell-{}.log", uuid::Uuid::new_v4()));
-    std::fs::write(&file_path, full_output).ok()?;
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&file_path)
+        .ok()?;
+    file.write_all(full_output.as_bytes()).ok()?;
     Some(file_path.to_string_lossy().into_owned())
 }
 
@@ -578,16 +631,75 @@ fn resolve_deepest_canonical(path: &std::path::Path) -> Option<std::path::PathBu
     (!acc.as_os_str().is_empty()).then_some(acc)
 }
 
-fn ensure_path_allowed(path: &str) -> anyhow::Result<()> {
-    let p = std::path::Path::new(path);
-    let lexical = normalize_lexical_path(p).to_string_lossy().to_string();
-    let canonical = resolve_deepest_canonical(p).map(|cp| cp.to_string_lossy().to_string());
+const BUILTIN_BLACKLIST: &[&str] = &[
+    "/etc/shadow",
+    "/etc/gshadow",
+    "/etc/sudoers",
+    "/root/.ssh",
+    ".ssh/id_rsa",
+    ".ssh/id_ed25519",
+    ".ssh/id_ed25519_sk",
+    ".ssh/id_ecdsa",
+    ".ssh/id_ecdsa_sk",
+    ".ssh/id_dsa",
+    ".ssh/authorized_keys",
+    ".gnupg/private-keys-v1.d",
+    ".aws/credentials",
+];
 
-    let blacklisted = load_blacklist();
-    for black_path in &blacklisted {
-        if path.contains(black_path)
-            || lexical.contains(black_path)
-            || canonical.as_ref().is_some_and(|c| c.contains(black_path))
+fn path_matches_blacklist_entry(candidate_path: &str, rule: &str) -> bool {
+    let rule = rule.trim().trim_end_matches('/');
+    if rule.is_empty() {
+        return false;
+    }
+    let cand = candidate_path.trim_end_matches('/');
+    if rule.starts_with('/') {
+        // Root-anchored prefix rule: matches `/etc/shadow` or `/root/.ssh/...`
+        cand == rule
+            || cand
+                .strip_prefix(rule)
+                .is_some_and(|rest| rest.starts_with('/'))
+    } else {
+        // Segment-boundary rule: e.g. `.ssh/id_ed25519` or `.env` matches
+        // `.env`, `/proj/.env`, or `/proj/.env/keys`, without falsely blocking
+        // `src/environment.rs`.
+        if cand == rule {
+            return true;
+        }
+        if cand
+            .strip_prefix(rule)
+            .is_some_and(|rest| rest.starts_with('/'))
+        {
+            return true;
+        }
+        if let Some(prefix) = cand.strip_suffix(rule)
+            && prefix.ends_with('/')
+        {
+            return true;
+        }
+        let mid_needle = format!("/{rule}/");
+        cand.contains(&mid_needle)
+    }
+}
+
+fn ensure_path_allowed_with_rules(path: &str, blacklisted: &[String]) -> anyhow::Result<()> {
+    let p = std::path::Path::new(path);
+    let lexical = normalize_lexical_path(p).to_string_lossy().into_owned();
+    let anchored = if p.is_relative() {
+        std::env::current_dir()
+            .map(|cwd| cwd.join(p))
+            .unwrap_or_else(|_| p.to_path_buf())
+    } else {
+        p.to_path_buf()
+    };
+    let canonical = resolve_deepest_canonical(&anchored).map(|cp| cp.to_string_lossy().into_owned());
+
+    for black_path in blacklisted {
+        if path_matches_blacklist_entry(path, black_path)
+            || path_matches_blacklist_entry(&lexical, black_path)
+            || canonical
+                .as_deref()
+                .is_some_and(|c| path_matches_blacklist_entry(c, black_path))
         {
             return Err(anyhow::anyhow!("Path is blacklisted for security reasons"));
         }
@@ -595,30 +707,32 @@ fn ensure_path_allowed(path: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn load_blacklist() -> Vec<String> {
-    let mut blacklisted = vec![
-        "/etc/shadow".to_string(),
-        "/etc/gshadow".to_string(),
-        "/root/.ssh".to_string(),
-        ".ssh/id_rsa".to_string(),
-        ".ssh/id_ed25519".to_string(),
-    ];
+fn ensure_path_allowed(path: &str) -> anyhow::Result<()> {
+    let blacklisted = load_blacklist();
+    ensure_path_allowed_with_rules(path, &blacklisted)
+}
 
-    let config_dir = boxxy_sys_utils::get_config_dir();
-    let blacklist_path = config_dir.join("boxxyclaw").join("BLACKLIST.md");
-    if let Ok(content) = std::fs::read_to_string(&blacklist_path) {
-        let mut new_blacklist = Vec::new();
+fn parse_blacklist_with_defaults(custom_content: Option<&str>) -> Vec<String> {
+    let mut blacklisted: Vec<String> = BUILTIN_BLACKLIST.iter().map(|s| (*s).to_string()).collect();
+    if let Some(content) = custom_content {
         for line in content.lines() {
             let trimmed = line.trim();
-            if !trimmed.is_empty() && !trimmed.starts_with('#') {
-                new_blacklist.push(trimmed.to_string());
+            if !trimmed.is_empty()
+                && !trimmed.starts_with('#')
+                && !blacklisted.iter().any(|existing| existing == trimmed)
+            {
+                blacklisted.push(trimmed.to_string());
             }
-        }
-        if !new_blacklist.is_empty() {
-            blacklisted = new_blacklist;
         }
     }
     blacklisted
+}
+
+fn load_blacklist() -> Vec<String> {
+    let config_dir = boxxy_sys_utils::get_config_dir();
+    let blacklist_path = config_dir.join("boxxyclaw").join("BLACKLIST.md");
+    let custom = std::fs::read_to_string(&blacklist_path).ok();
+    parse_blacklist_with_defaults(custom.as_deref())
 }
 
 #[cfg(test)]
@@ -653,6 +767,37 @@ mod tests {
             ensure_path_allowed(&nested_via_symlink.to_string_lossy()).is_err(),
             "symlink ancestor with non-existent intermediate segments must still resolve and block /etc/shadow"
         );
+    }
+
+    #[test]
+    fn custom_blacklist_extends_defaults_and_matches_segment_boundaries() {
+        let rules = parse_blacklist_with_defaults(Some("# comment\n.env\nconfig/secrets.toml\n"));
+        // Built-in defaults must remain active even when custom entries exist
+        assert!(ensure_path_allowed_with_rules("/etc/shadow", &rules).is_err());
+        assert!(ensure_path_allowed_with_rules(".ssh/id_rsa", &rules).is_err());
+        // Custom segment rules block exact path segments without substring false positives
+        assert!(ensure_path_allowed_with_rules(".env", &rules).is_err());
+        assert!(ensure_path_allowed_with_rules("/workspace/app/.env", &rules).is_err());
+        assert!(
+            ensure_path_allowed_with_rules("/workspace/app/config/secrets.toml", &rules).is_err()
+        );
+        assert!(ensure_path_allowed_with_rules("src/environment.rs", &rules).is_ok());
+        assert!(ensure_path_allowed_with_rules("/workspace/app/src/dotenv_parser.rs", &rules).is_ok());
+    }
+
+    #[test]
+    fn spillover_creates_owner_only_dir_and_file_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let out_dir = tmp.path().join("tool-output");
+        let saved = spill_truncated_output_in_dir(&out_dir, "synthetic output payload")
+            .expect("spillover should write log file");
+
+        let dir_mode = std::fs::metadata(&out_dir).unwrap().permissions().mode() & 0o777;
+        let file_mode = std::fs::metadata(&saved).unwrap().permissions().mode() & 0o777;
+        assert_eq!(dir_mode, 0o700);
+        assert_eq!(file_mode, 0o600);
     }
 
     #[tokio::test]

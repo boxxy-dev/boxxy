@@ -265,9 +265,7 @@ pub(crate) async fn query_detached_sessions_detailed(
                 pid
             );
             pty_registry.set_persistence(pid, false).await;
-            unsafe {
-                libc::kill(-(pid as i32), libc::SIGTERM);
-            }
+            let _ = registry::kill_process_group_safe(pid, libc::SIGTERM);
             continue;
         }
 
@@ -395,6 +393,26 @@ fn is_pid_wchan_tty_read(pid: u32) -> bool {
     false
 }
 
+fn exit_status_to_code(status: std::process::ExitStatus) -> i32 {
+    use std::os::unix::process::ExitStatusExt;
+    if let Some(code) = status.code() {
+        code
+    } else if let Some(sig) = status.signal() {
+        128 + sig
+    } else {
+        -1
+    }
+}
+
+fn ensure_cloexec(fd: std::os::unix::io::RawFd) {
+    unsafe {
+        let flags = libc::fcntl(fd, libc::F_GETFD);
+        if flags >= 0 && (flags & libc::FD_CLOEXEC) == 0 {
+            let _ = libc::fcntl(fd, libc::F_SETFD, flags | libc::FD_CLOEXEC);
+        }
+    }
+}
+
 #[interface(name = "dev.boxxy.BoxxyTerminal.Agent.Pty")]
 impl PtySubsystem {
     async fn get_preferred_shell(&self) -> fdo::Result<String> {
@@ -437,25 +455,31 @@ impl PtySubsystem {
         pty_master: OwnedFd,
         options: SpawnOptions,
     ) -> fdo::Result<u32> {
+        if options.argv.is_empty() || options.argv[0].is_empty() {
+            return Err(fdo::Error::InvalidArgs(
+                "spawn argv must contain a non-empty executable".to_string(),
+            ));
+        }
+
         let owner_bus_name = header
             .sender()
             .map(|s| s.as_str().to_string())
             .unwrap_or_default();
         let std_fd: std::os::unix::io::OwnedFd = pty_master.into();
+        ensure_cloexec(std_fd.as_raw_fd());
 
-        // Dup the master *before* consuming it into PtyMaster. This dup
-        // goes into the registry and sits idle until `detach()` activates
-        // it, so persistence works without the UI having to hand an FD
-        // over at detach time.
-        let registry_fd_raw = unsafe { libc::dup(std_fd.as_raw_fd()) };
-        let registry_fd = if registry_fd_raw >= 0 {
-            Some(unsafe { std::os::unix::io::OwnedFd::from_raw_fd(registry_fd_raw) })
-        } else {
-            log::warn!(
-                "spawn: dup of master FD failed: {}; session won't be eligible for persistence",
-                std::io::Error::last_os_error()
-            );
-            None
+        // Clone the master FD with FD_CLOEXEC (`F_DUPFD_CLOEXEC`) *before*
+        // consuming `std_fd` into `PtyMaster`. Using `try_clone()` (instead of
+        // `libc::dup`, which strips `FD_CLOEXEC`) guarantees the parked master FD
+        // never leaks into sibling shells, `exec_shell`, `spawn_detached`, or MCP servers.
+        let registry_fd = match std_fd.try_clone() {
+            Ok(fd) => Some(fd),
+            Err(e) => {
+                log::warn!(
+                    "spawn: try_clone of master FD failed: {e}; session won't be eligible for persistence"
+                );
+                None
+            }
         };
 
         let master_fd = unsafe { PtyMaster::from_owned_fd(std_fd) };
@@ -476,6 +500,10 @@ impl PtySubsystem {
                 fdo::Error::Failed(format!("ptsname failed: {}", e))
             })?
         };
+        // Pre-allocate CString on the parent side so `pre_exec` performs zero heap
+        // allocations between `fork()` and `exec()` (async-signal-safety requirement).
+        let slave_cstr = std::ffi::CString::new(slave_name)
+            .map_err(|e| fdo::Error::Failed(format!("invalid slave PTY path: {e}")))?;
 
         let mut argv = options.argv;
         let mut env = options.env;
@@ -529,10 +557,7 @@ impl PtySubsystem {
                     return Err(std::io::Error::last_os_error());
                 }
 
-                let slave_fd = libc::open(
-                    std::ffi::CString::new(slave_name.clone()).unwrap().as_ptr(),
-                    libc::O_RDWR,
-                );
+                let slave_fd = libc::open(slave_cstr.as_ptr(), libc::O_RDWR);
                 if slave_fd == -1 {
                     return Err(std::io::Error::last_os_error());
                 }
@@ -545,10 +570,21 @@ impl PtySubsystem {
                 libc::dup2(slave_fd, libc::STDOUT_FILENO);
                 libc::dup2(slave_fd, libc::STDERR_FILENO);
 
-                libc::close(master_raw_fd);
                 if slave_fd > 2 {
                     libc::close(slave_fd);
                 }
+                if master_raw_fd > 2 {
+                    libc::close(master_raw_fd);
+                }
+                // Mark every remaining descriptor >= 3 as FD_CLOEXEC in O(1) kernel time
+                // (without breaking std::process::Command's internal CLOEXEC exec-error pipe)
+                // so C libraries (NVML/Vulkan) or D-Bus sockets never leak FDs into user shells.
+                let _ = libc::syscall(
+                    libc::SYS_close_range,
+                    3 as libc::c_uint,
+                    libc::c_uint::MAX,
+                    libc::CLOSE_RANGE_CLOEXEC as libc::c_uint,
+                );
 
                 Ok(())
             });
@@ -591,7 +627,7 @@ impl PtySubsystem {
                 tokio::select! {
                     status = child.wait() => {
                         let exit_code = match status {
-                            Ok(s) => s.code().unwrap_or(0),
+                            Ok(s) => exit_status_to_code(s),
                             Err(_) => -1,
                         };
                         let _ = PtySubsystem::exited(&emitter, pid, exit_code).await;
@@ -741,42 +777,56 @@ impl PtySubsystem {
     }
 
     async fn signal_process_group(&self, pid: u32, signal: i32) -> fdo::Result<()> {
+        let raw_pid = i32::try_from(pid).map_err(|_| {
+            fdo::Error::InvalidArgs(format!("Invalid PID {pid}: exceeds maximum positive pid_t"))
+        })?;
+        if raw_pid <= 1 || pid == std::process::id() {
+            return Err(fdo::Error::InvalidArgs(format!(
+                "Refusing to signal protected or invalid PID {pid}"
+            )));
+        }
+        if !(1..=64).contains(&signal) {
+            return Err(fdo::Error::InvalidArgs(format!(
+                "Invalid signal number: {signal}"
+            )));
+        }
+
+        match self.state.pty_registry.process_state(pid).await {
+            Some(registry::ProcessState::Running) => {}
+            Some(registry::ProcessState::Exited { .. }) => {
+                // Process already exited; ignore cleanly without risking PID-reuse signaling.
+                return Ok(());
+            }
+            None => {
+                return Err(fdo::Error::InvalidArgs(format!(
+                    "Refusing to signal untracked PTY PID {pid}"
+                )));
+            }
+        }
+
         let mut tpgid = None;
-        let stat_path = format!("/proc/{}/stat", pid);
-        if let Ok(stat_content) = std::fs::read_to_string(&stat_path) {
-            if let Some(rp_pos) = stat_content.rfind(')') {
-                if rp_pos + 2 < stat_content.len() {
-                    let rest = &stat_content[rp_pos + 2..];
-                    let parts: Vec<&str> = rest.split_whitespace().collect();
-                    if parts.len() >= 6 {
-                        let pgrp: u32 = parts[2].parse().unwrap_or(0);
-                        let parsed_tpgid: u32 = parts[5].parse().unwrap_or(0);
-                        if parsed_tpgid != 0 && parsed_tpgid != pgrp {
-                            tpgid = Some(parsed_tpgid);
-                        }
-                    }
+        let stat_path = format!("/proc/{pid}/stat");
+        if let Ok(stat_content) = std::fs::read_to_string(&stat_path)
+            && let Some(rp_pos) = stat_content.rfind(')')
+            && rp_pos + 2 < stat_content.len()
+        {
+            let rest = &stat_content[rp_pos + 2..];
+            let parts: Vec<&str> = rest.split_whitespace().collect();
+            if parts.len() >= 6 {
+                let pgrp: u32 = parts[2].parse().unwrap_or(0);
+                let parsed_tpgid: u32 = parts[5].parse().unwrap_or(0);
+                if parsed_tpgid > 1 && parsed_tpgid != pgrp && parsed_tpgid != std::process::id() {
+                    tpgid = Some(parsed_tpgid);
                 }
             }
         }
 
-        unsafe {
-            if let Some(tg) = tpgid {
-                log::debug!(
-                    "Signaling foreground process group {} with signal {}",
-                    tg,
-                    signal
-                );
-                libc::kill(-(tg as i32), signal);
-            }
-            log::debug!(
-                "Signaling shell process group {} with signal {}",
-                pid,
-                signal
-            );
-            if libc::kill(-(pid as i32), signal) != 0 {
-                // Ignore error if shell is already dead
-            }
+        if let Some(tg) = tpgid {
+            log::debug!("Signaling foreground process group {tg} with signal {signal}");
+            let _ = registry::kill_process_group_safe(tg, signal);
         }
+        log::debug!("Signaling shell process group {pid} with signal {signal}");
+        let _ = registry::kill_process_group_safe(pid, signal);
         Ok(())
     }
 
@@ -997,8 +1047,10 @@ mod tests {
             .expect("spawn /bin/sh");
         let pid = idle_proc.id();
 
-        let master = posix_openpt(OFlag::O_RDWR | OFlag::O_NOCTTY | OFlag::O_NONBLOCK)
-            .expect("posix_openpt");
+        let master = posix_openpt(
+            OFlag::O_RDWR | OFlag::O_NOCTTY | OFlag::O_NONBLOCK | OFlag::O_CLOEXEC,
+        )
+        .expect("posix_openpt");
         grantpt(&master).expect("grantpt");
         unlockpt(&master).expect("unlockpt");
         let master_owned = unsafe { std::os::unix::io::OwnedFd::from_raw_fd(master.into_raw_fd()) };

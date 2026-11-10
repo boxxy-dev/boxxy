@@ -263,6 +263,27 @@ impl Default for PtyRegistry {
     }
 }
 
+/// Safely signals a process group (`-pgid`), rejecting dangerous PIDs (`0`, `1`,
+/// overflowed `pid_t`, or the daemon itself) and invalid signal numbers (`<= 0` or `> 64`).
+/// Without this guard, `pid = 0` signals the daemon's own group and `pid = 1` (`kill(-1)`)
+/// signals every user process in the desktop session.
+pub(crate) fn kill_process_group_safe(pid: u32, signal: i32) -> std::io::Result<()> {
+    let raw_pid =
+        i32::try_from(pid).map_err(|_| std::io::Error::from_raw_os_error(libc::EINVAL))?;
+    if raw_pid <= 1 || pid == std::process::id() {
+        return Err(std::io::Error::from_raw_os_error(libc::EPERM));
+    }
+    if !(1..=64).contains(&signal) {
+        return Err(std::io::Error::from_raw_os_error(libc::EINVAL));
+    }
+    let rc = unsafe { libc::kill(-raw_pid, signal) };
+    if rc == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
 pub async fn has_pending_claw_work_for_pane(pane_id: &str) -> bool {
     if pane_id.is_empty() {
         return false;
@@ -365,6 +386,12 @@ impl PtyRegistry {
             ProcessState::Exited { exit_code, .. } => Some(exit_code),
             ProcessState::Running => None,
         }
+    }
+
+    /// Returns the tracked `ProcessState` for `pid`, or `None` if `pid` was never
+    /// registered (or its `Exited` retention window has already expired).
+    pub async fn process_state(&self, pid: u32) -> Option<ProcessState> {
+        self.inner.read().await.get(&pid).map(|s| s.state)
     }
 
     /// Called when explicitly removing a session record from the registry.
@@ -496,15 +523,17 @@ impl PtyRegistry {
             .map(|b| b.snapshot())
             .unwrap_or_default();
 
-        // dup the stored FD and hand the dup to the UI. Our original
-        // stays parked in the session, idle, ready for the next detach.
+        // Clone the stored FD with FD_CLOEXEC (`F_DUPFD_CLOEXEC`) and hand it to
+        // the UI. Our original stays parked in the session, idle, ready for the
+        // next detach, without leaking across child execs.
         let stored = s.master_fd.as_ref()?;
-        let dup_raw = unsafe { libc::dup(stored.as_raw_fd()) };
-        if dup_raw < 0 {
-            log::warn!("reattach(pid={}): dup failed", pid);
-            return None;
-        }
-        let fresh = unsafe { OwnedFd::from_raw_fd(dup_raw) };
+        let fresh = match stored.try_clone() {
+            Ok(fd) => fd,
+            Err(e) => {
+                log::warn!("reattach(pid={pid}): try_clone failed: {e}");
+                return None;
+            }
+        };
         drop(map);
         self.notify_changed();
         Some((buffer, fresh))
@@ -584,12 +613,10 @@ impl PtyRegistry {
         }
 
         if should_kill {
-            // SIGTERM the process group; child-waiter will remove() us on
+            // SIGTERM the process group; child-waiter will mark_exited() on
             // SIGCHLD. The UI's FD copy is closed independently when the
             // pane widget is dropped.
-            unsafe {
-                libc::kill(-(pid as i32), libc::SIGTERM);
-            }
+            let _ = kill_process_group_safe(pid, libc::SIGTERM);
             return DetachOutcome::Terminated;
         }
 
@@ -658,9 +685,7 @@ impl PtyRegistry {
 
         for pid in to_kill {
             log::info!("pty-registry: SIGTERM zombie detached session pid={}", pid);
-            unsafe {
-                libc::kill(-(pid as i32), libc::SIGTERM);
-            }
+            let _ = kill_process_group_safe(pid, libc::SIGTERM);
             // mark_exited() is driven by the child-waiter when SIGCHLD fires.
         }
     }
@@ -683,9 +708,7 @@ impl PtyRegistry {
             active
         };
         for pid in pids {
-            unsafe {
-                libc::kill(-(pid as i32), libc::SIGTERM);
-            }
+            let _ = kill_process_group_safe(pid, libc::SIGTERM);
         }
     }
 }
@@ -714,31 +737,30 @@ pub enum DetachOutcome {
 /// closes it (EOF), the task is aborted (reattach or remove), or the
 /// session disappears from the registry.
 async fn run_reader(registry: PtyRegistry, pid: u32) {
-    // Take a raw-fd view of the master without consuming the OwnedFd
-    // stored in the session. AsyncFd needs to own its backing file, so
-    // we dup the fd, wrap the dup in AsyncFd, and read through that.
-    // The session's OwnedFd stays put for reattach().
-    let raw = {
+    // Clone the stored master FD with FD_CLOEXEC (`F_DUPFD_CLOEXEC`) without
+    // consuming the session's OwnedFd, then wrap the clone in AsyncFd.
+    let owned = {
         let map = registry.inner.read().await;
         match map.get(&pid).and_then(|s| s.master_fd.as_ref()) {
-            Some(fd) => unsafe { libc::dup(fd.as_raw_fd()) },
+            Some(fd) => match fd.try_clone() {
+                Ok(cloned) => cloned,
+                Err(e) => {
+                    log::warn!("run_reader(pid={pid}): try_clone failed: {e}");
+                    return;
+                }
+            },
             None => return,
         }
     };
-    if raw < 0 {
-        log::warn!("run_reader(pid={}): dup failed", pid);
-        return;
-    }
 
-    // Put our dup in non-blocking mode so AsyncFd works correctly.
+    // Ensure non-blocking mode so AsyncFd works correctly.
     unsafe {
+        let raw = owned.as_raw_fd();
         let flags = libc::fcntl(raw, libc::F_GETFL);
         if flags >= 0 {
             libc::fcntl(raw, libc::F_SETFL, flags | libc::O_NONBLOCK);
         }
     }
-
-    let owned = unsafe { OwnedFd::from_raw_fd(raw) };
     // SAFETY: `owned` is an `OwnedFd` whose descriptor stays open and unchanged
     // for the entire lifetime of `async_fd`. Register with `Interest::READABLE`
     // only since the detached ring-buffer task never writes to the master PTY.
@@ -795,12 +817,6 @@ async fn run_reader(registry: PtyRegistry, pid: u32) {
     // Our dup drops with AsyncFd. The session's original FD stays live
     // until reattach() or remove() claims it.
 }
-
-// ---------------------------------------------------------------------------
-// Standard imports needed above
-// ---------------------------------------------------------------------------
-
-use std::os::unix::io::FromRawFd;
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -879,15 +895,17 @@ mod tests {
 
         // 1. Open a PTY master/slave pair. O_NONBLOCK on master so the
         //    reader's AsyncFd works without stalling.
-        let master = posix_openpt(OFlag::O_RDWR | OFlag::O_NOCTTY | OFlag::O_NONBLOCK)
-            .expect("posix_openpt");
+        let master = posix_openpt(
+            OFlag::O_RDWR | OFlag::O_NOCTTY | OFlag::O_NONBLOCK | OFlag::O_CLOEXEC,
+        )
+        .expect("posix_openpt");
         grantpt(&master).expect("grantpt");
         unlockpt(&master).expect("unlockpt");
         let slave_path = unsafe { ptsname(&master).expect("ptsname") };
         let slave_fd = unsafe {
             libc::open(
                 std::ffi::CString::new(slave_path).unwrap().as_ptr(),
-                libc::O_RDWR | libc::O_NOCTTY,
+                libc::O_RDWR | libc::O_NOCTTY | libc::O_CLOEXEC,
             )
         };
         assert!(slave_fd >= 0, "open slave pty failed");
@@ -983,8 +1001,10 @@ mod tests {
         use nix::pty::{grantpt, posix_openpt, unlockpt};
         use std::os::fd::{FromRawFd, IntoRawFd};
 
-        let master = posix_openpt(OFlag::O_RDWR | OFlag::O_NOCTTY | OFlag::O_NONBLOCK)
-            .expect("posix_openpt");
+        let master = posix_openpt(
+            OFlag::O_RDWR | OFlag::O_NOCTTY | OFlag::O_NONBLOCK | OFlag::O_CLOEXEC,
+        )
+        .expect("posix_openpt");
         grantpt(&master).expect("grantpt");
         unlockpt(&master).expect("unlockpt");
         let master_owned = unsafe { OwnedFd::from_raw_fd(master.into_raw_fd()) };
@@ -1005,5 +1025,45 @@ mod tests {
         assert_eq!(reg.list_detached().await.len(), 1);
 
         reg.remove(4242).await;
+    }
+
+    #[test]
+    fn kill_process_group_safe_rejects_dangerous_pids_and_signals() {
+        assert!(kill_process_group_safe(0, libc::SIGTERM).is_err());
+        assert!(kill_process_group_safe(1, libc::SIGTERM).is_err());
+        assert!(kill_process_group_safe(u32::MAX, libc::SIGTERM).is_err());
+        assert!(kill_process_group_safe(std::process::id(), libc::SIGTERM).is_err());
+        assert!(kill_process_group_safe(99999, 0).is_err());
+        assert!(kill_process_group_safe(99999, -9).is_err());
+        assert!(kill_process_group_safe(99999, 999).is_err());
+    }
+
+    #[tokio::test]
+    async fn reattach_returned_fd_has_cloexec_set() {
+        use nix::fcntl::OFlag;
+        use nix::pty::{grantpt, posix_openpt, unlockpt};
+        use std::os::fd::{FromRawFd, IntoRawFd};
+
+        let master = posix_openpt(
+            OFlag::O_RDWR | OFlag::O_NOCTTY | OFlag::O_NONBLOCK | OFlag::O_CLOEXEC,
+        )
+        .expect("posix_openpt");
+        grantpt(&master).expect("grantpt");
+        unlockpt(&master).expect("unlockpt");
+        let master_owned = unsafe { OwnedFd::from_raw_fd(master.into_raw_fd()) };
+
+        let reg = PtyRegistry::new();
+        reg.register(43210, "pane-cloexec".into(), Some(master_owned))
+            .await;
+        reg.set_persistence(43210, true).await;
+        assert_eq!(reg.detach(43210).await, DetachOutcome::Detached);
+
+        let (_buf, reattached_fd) = reg.reattach(43210).await.expect("reattach");
+        let fd_flags = unsafe { libc::fcntl(reattached_fd.as_raw_fd(), libc::F_GETFD) };
+        assert!(
+            fd_flags >= 0 && (fd_flags & libc::FD_CLOEXEC) != 0,
+            "reattached PTY master FD must carry FD_CLOEXEC"
+        );
+        reg.remove(43210).await;
     }
 }

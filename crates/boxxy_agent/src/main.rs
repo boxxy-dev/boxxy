@@ -204,7 +204,7 @@ fn daemonize() -> Result<()> {
                 ForkResult::Parent { .. } => std::process::exit(0),
                 ForkResult::Child => {
                     // Redirect standard FDs to /dev/null to be a well-behaved daemon
-                    use std::os::unix::io::AsRawFd;
+                    use std::os::unix::io::{AsRawFd, IntoRawFd};
                     if let Ok(dev_null) = std::fs::OpenOptions::new()
                         .read(true)
                         .write(true)
@@ -215,6 +215,11 @@ fn daemonize() -> Result<()> {
                             libc::dup2(fd, libc::STDIN_FILENO);
                             libc::dup2(fd, libc::STDOUT_FILENO);
                             libc::dup2(fd, libc::STDERR_FILENO);
+                        }
+                        // If stdin/stdout/stderr was already closed before launch, `open`
+                        // received FD 0, 1, or 2; consume ownership so `drop` does not close it.
+                        if fd <= libc::STDERR_FILENO {
+                            let _ = dev_null.into_raw_fd();
                         }
                     }
                 }
