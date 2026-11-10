@@ -1,3 +1,4 @@
+pub mod procfs;
 pub mod registry;
 pub mod shell_integration;
 
@@ -11,6 +12,8 @@ use zbus::OwnedFd;
 use zbus::fdo;
 use zbus::interface;
 use zbus::object_server::SignalEmitter;
+
+pub(crate) use procfs::{collect_descendant_processes, shell_has_active_process};
 
 fn is_leaked_multiplexer_prefix(key: &str) -> bool {
     key.starts_with("TMUX")
@@ -26,100 +29,6 @@ fn is_leaked_multiplexer_var(key: &str) -> bool {
     is_leaked_multiplexer_prefix(key) || LEAKED_MULTIPLEXER_EXACT.contains(&key)
 }
 
-/// Parses a NUL-delimited `/proc/<pid>/cmdline` buffer to extract the effective
-/// foreground executable basename, unwrapping privilege/env wrappers (`sudo`, `doas`,
-/// `env`, `nice`, `nohup`, `time`) and interpreter-wrapped CLI binaries (`python3 /usr/bin/ranger`,
-/// `node /usr/local/bin/claude`).
-pub(crate) fn resolve_foreground_command_from_cmdline(cmdline: &[u8]) -> Option<String> {
-    let args: Vec<&str> = cmdline
-        .split(|&b| b == 0)
-        .filter_map(|s| std::str::from_utf8(s).ok())
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .collect();
-
-    resolve_foreground_command_from_args(&args)
-}
-
-fn resolve_foreground_command_from_args(args: &[&str]) -> Option<String> {
-    let first = *args.first()?;
-    // Handle monolithic argv[0] strings if a process overwrote its argv[0] with spaces
-    let first_tok = first.split_whitespace().next().unwrap_or(first);
-    let base = first_tok
-        .rsplit('/')
-        .next()
-        .unwrap_or(first_tok)
-        .trim_start_matches('-');
-    if base.is_empty() {
-        return None;
-    }
-
-    let lower = base.to_ascii_lowercase();
-
-    // Unwrap privilege / scheduling wrappers: `sudo vim`, `env FOO=1 nvim`, `nice -n 10 btop`
-    if matches!(
-        lower.as_str(),
-        "sudo" | "doas" | "env" | "nice" | "ionice" | "nohup" | "time" | "rlwrap"
-    ) && args.len() > 1
-    {
-        let mut idx = 1;
-        while idx < args.len() {
-            let arg = args[idx];
-            if arg.starts_with('-') {
-                if matches!(arg, "-u" | "-g" | "-C" | "-D" | "-R" | "-T" | "-n" | "-c") {
-                    idx += 2;
-                } else {
-                    idx += 1;
-                }
-                continue;
-            }
-            if arg.contains('=') {
-                idx += 1;
-                continue;
-            }
-            return resolve_foreground_command_from_args(&args[idx..]);
-        }
-    }
-
-    // Unwrap interpreter-launched CLI tools (e.g. `python3 /usr/bin/ranger`, `node /usr/bin/claude`)
-    let is_interpreter = lower == "python"
-        || lower.starts_with("python3")
-        || matches!(
-            lower.as_str(),
-            "node" | "nodejs" | "bun" | "deno" | "ruby" | "perl"
-        );
-    if is_interpreter && args.len() > 1 {
-        for &arg in &args[1..] {
-            if arg.starts_with('-') {
-                continue;
-            }
-            let script_base = arg.rsplit('/').next().unwrap_or(arg);
-            // If it's an installed CLI entrypoint (no source extension, or located in a bin dir)
-            let has_source_ext = script_base.ends_with(".py")
-                || script_base.ends_with(".js")
-                || script_base.ends_with(".mjs")
-                || script_base.ends_with(".cjs")
-                || script_base.ends_with(".ts")
-                || script_base.ends_with(".rb")
-                || script_base.ends_with(".pl");
-            if !script_base.is_empty()
-                && (!has_source_ext || arg.contains("/bin/") || arg.contains("/.bin/"))
-            {
-                let clean = script_base
-                    .strip_suffix(".py")
-                    .or_else(|| script_base.strip_suffix(".js"))
-                    .unwrap_or(script_base);
-                if !clean.is_empty() {
-                    return Some(clean.to_string());
-                }
-            }
-            break;
-        }
-    }
-
-    Some(base.to_string())
-}
-
 pub struct PtySubsystem {
     state: AgentState,
 }
@@ -127,104 +36,6 @@ pub struct PtySubsystem {
 impl PtySubsystem {
     pub fn new(state: AgentState) -> Self {
         Self { state }
-    }
-
-    /// Internal helper to read the foreground process from /proc without &self.
-    /// Resolves wrappers (`sudo`, `doas`, `env`) and interpreter-launched CLI tools
-    /// (`python3 /usr/bin/ranger`, `node /usr/bin/claude`) via `/proc/<tpgid>/cmdline`.
-    fn get_foreground_process_internal(pid: u32) -> fdo::Result<String> {
-        let stat_path = format!("/proc/{}/stat", pid);
-        let stat_content = match std::fs::read_to_string(&stat_path) {
-            Ok(c) => c,
-            Err(_) => return Ok("".to_string()),
-        };
-
-        let rp_pos = stat_content.rfind(')').unwrap_or(0);
-        if rp_pos == 0 || rp_pos + 2 >= stat_content.len() {
-            return Ok("".to_string());
-        }
-
-        let rest = &stat_content[rp_pos + 2..];
-        let parts: Vec<&str> = rest.split_whitespace().collect();
-        if parts.len() < 6 {
-            return Ok("".to_string());
-        }
-
-        let pgrp: u32 = parts[2].parse().unwrap_or(0);
-        let tpgid: u32 = parts[5].parse().unwrap_or(0);
-
-        if tpgid == 0 || tpgid == pgrp {
-            return Ok("".to_string());
-        }
-
-        if let Ok(cmdline_bytes) = std::fs::read(format!("/proc/{tpgid}/cmdline"))
-            && let Some(resolved) = resolve_foreground_command_from_cmdline(&cmdline_bytes)
-        {
-            return Ok(resolved);
-        }
-
-        let tpgid_stat_path = format!("/proc/{}/stat", tpgid);
-        if let Ok(tpgid_stat) = std::fs::read_to_string(&tpgid_stat_path) {
-            let lp_pos = tpgid_stat.find('(');
-            let rp_pos = tpgid_stat.rfind(')');
-            if let (Some(lp), Some(rp)) = (lp_pos, rp_pos) {
-                if rp > lp {
-                    return Ok(tpgid_stat[lp + 1..rp].to_string());
-                }
-            }
-        }
-
-        Ok("".to_string())
-    }
-
-    /// Inspects the foreground process group of `shell_pid` and checks whether
-    /// any process in that foreground group is blocked on a TTY read (`wchan` in
-    /// `n_tty_read` / `tty_read`). Never flags the shell prompt itself.
-    fn inspect_foreground_state(shell_pid: u32) -> (String, bool) {
-        let stat_path = format!("/proc/{shell_pid}/stat");
-        let Ok(stat_content) = std::fs::read_to_string(&stat_path) else {
-            return (String::new(), false);
-        };
-
-        let rp_pos = stat_content.rfind(')').unwrap_or(0);
-        if rp_pos == 0 || rp_pos + 2 >= stat_content.len() {
-            return (String::new(), false);
-        }
-
-        let rest = &stat_content[rp_pos + 2..];
-        let parts: Vec<&str> = rest.split_whitespace().collect();
-        if parts.len() < 6 {
-            return (String::new(), false);
-        }
-
-        let pgrp: u32 = parts[2].parse().unwrap_or(0);
-        let tpgid: u32 = parts[5].parse().unwrap_or(0);
-
-        // If tpgid == pgrp, the shell itself owns the foreground (idle at prompt).
-        if tpgid == 0 || tpgid == pgrp {
-            return (String::new(), false);
-        }
-
-        let mut fg_name = String::new();
-        let tpgid_stat_path = format!("/proc/{tpgid}/stat");
-        if let Ok(tpgid_stat) = std::fs::read_to_string(&tpgid_stat_path)
-            && let (Some(lp), Some(rp)) = (tpgid_stat.find('('), tpgid_stat.rfind(')'))
-            && rp > lp
-        {
-            fg_name = tpgid_stat[lp + 1..rp].to_string();
-        }
-
-        if fg_name.is_empty() {
-            return (String::new(), false);
-        }
-
-        let mut pids_to_check = vec![tpgid];
-        if let Some(children) = read_direct_children_procfs(tpgid) {
-            pids_to_check.extend(children);
-        }
-
-        let waiting_on_tty = pids_to_check.into_iter().any(is_pid_wchan_tty_read);
-        (fg_name, waiting_on_tty)
     }
 }
 
@@ -291,7 +102,7 @@ pub(crate) async fn query_detached_sessions_detailed(
             .map(|p| p.to_string_lossy().to_string())
             .filter(|s| !s.is_empty())
             .unwrap_or(initial_cwd);
-        let (mut fg_proc, wchan_tty) = PtySubsystem::inspect_foreground_state(pid);
+        let (mut fg_proc, wchan_tty) = procfs::inspect_foreground_state(pid);
         if fg_proc.is_empty()
             && let Some((_, child_name)) = collect_descendant_processes(pid).into_iter().next()
         {
@@ -330,67 +141,6 @@ pub(crate) async fn query_detached_sessions_detailed(
         });
     }
     out
-}
-
-/// Returns `true` if `shell_pid` is currently running a foreground command
-/// (`tpgid != pgrp`), has at least one descendant child process, or was
-/// launched as a non-interactive command (e.g. `sh -c ...` or `exec <cmd>`).
-/// Returns `true` if `/proc/<shell_pid>` does not exist (synthetic PIDs in unit tests).
-pub(crate) fn shell_has_active_process(shell_pid: u32) -> bool {
-    let proc_path = format!("/proc/{shell_pid}");
-    if !std::path::Path::new(&proc_path).exists() {
-        return true;
-    }
-
-    // If the root process was spawned with `-c` (non-interactive command script)
-    // or exec'd into a non-shell binary (e.g. `top`, `nvim`), treat it as active.
-    if let Ok(cmdline) = std::fs::read(format!("/proc/{shell_pid}/cmdline")) {
-        let args: Vec<&[u8]> = cmdline
-            .split(|&b| b == 0)
-            .filter(|s| !s.is_empty())
-            .collect();
-        if args.iter().skip(1).any(|&arg| arg == b"-c") {
-            return true;
-        }
-    }
-    if let Ok(comm) = std::fs::read_to_string(format!("/proc/{shell_pid}/comm")) {
-        let name = comm.trim();
-        let is_shell = matches!(
-            name,
-            "sh" | "bash"
-                | "zsh"
-                | "fish"
-                | "dash"
-                | "nu"
-                | "ksh"
-                | "tcsh"
-                | "csh"
-                | "elvish"
-                | "xonsh"
-        );
-        if !name.is_empty() && !is_shell {
-            return true;
-        }
-    }
-
-    let has_fg = PtySubsystem::get_foreground_process_internal(shell_pid)
-        .map(|s| !s.is_empty())
-        .unwrap_or(false);
-    if has_fg {
-        return true;
-    }
-    !collect_descendant_processes(shell_pid).is_empty()
-}
-
-fn is_pid_wchan_tty_read(pid: u32) -> bool {
-    let wchan_path = format!("/proc/{pid}/wchan");
-    if let Ok(wchan) = std::fs::read_to_string(&wchan_path) {
-        let trimmed = wchan.trim();
-        if matches!(trimmed, "n_tty_read" | "tty_read") {
-            return true;
-        }
-    }
-    false
 }
 
 fn exit_status_to_code(status: std::process::ExitStatus) -> i32 {
@@ -532,13 +282,13 @@ impl PtySubsystem {
             cmd.current_dir(&options.cwd);
         }
 
-        if env.is_empty() {
-            if let Ok(Some(user)) = User::from_uid(getuid()) {
-                cmd.env("HOME", user.dir.to_string_lossy().as_ref());
-                cmd.env("USER", &user.name);
-                cmd.env("LOGNAME", &user.name);
-                cmd.env("SHELL", user.shell.to_string_lossy().as_ref());
-            }
+        if env.is_empty()
+            && let Ok(Some(user)) = User::from_uid(getuid())
+        {
+            cmd.env("HOME", user.dir.to_string_lossy().as_ref());
+            cmd.env("USER", &user.name);
+            cmd.env("LOGNAME", &user.name);
+            cmd.env("SHELL", user.shell.to_string_lossy().as_ref());
         }
 
         for (key, value) in env {
@@ -641,17 +391,17 @@ impl PtySubsystem {
                     _ = interval.tick() => {
                         let is_tracked = tracked_pids.read().await.contains(&pid);
                         if is_tracked {
-                            if let Ok(current_process) = Self::get_foreground_process_internal(pid) {
-                                if current_process != last_process_name {
-                                    if let Some(orig_pane_id) = pty_registry.get_original_pane_id(pid).await {
-                                        let status_opt = (!current_process.is_empty())
-                                            .then(|| format!("Running: {current_process}"));
-                                        let workspace = boxxy_claw::registry::workspace::global_workspace().await;
-                                        workspace.set_pane_status(orig_pane_id, status_opt).await;
-                                    }
-                                    let _ = PtySubsystem::foreground_process_changed(&emitter, pid, current_process.clone()).await;
-                                    last_process_name = current_process;
+                            if let Ok(current_process) = procfs::get_foreground_process(pid)
+                                && current_process != last_process_name
+                            {
+                                if let Some(orig_pane_id) = pty_registry.get_original_pane_id(pid).await {
+                                    let status_opt = (!current_process.is_empty())
+                                        .then(|| format!("Running: {current_process}"));
+                                    let workspace = boxxy_claw::registry::workspace::global_workspace().await;
+                                    workspace.set_pane_status(orig_pane_id, status_opt).await;
                                 }
+                                let _ = PtySubsystem::foreground_process_changed(&emitter, pid, current_process.clone()).await;
+                                last_process_name = current_process;
                             }
                         } else if !last_process_name.is_empty() {
                             last_process_name = String::new();
@@ -769,7 +519,7 @@ impl PtySubsystem {
     }
 
     async fn get_foreground_process(&self, pid: u32) -> fdo::Result<String> {
-        Self::get_foreground_process_internal(pid)
+        procfs::get_foreground_process(pid)
     }
 
     async fn get_running_processes(&self, pid: u32) -> fdo::Result<Vec<(u32, String)>> {
@@ -804,24 +554,9 @@ impl PtySubsystem {
             }
         }
 
-        let mut tpgid = None;
-        let stat_path = format!("/proc/{pid}/stat");
-        if let Ok(stat_content) = std::fs::read_to_string(&stat_path)
-            && let Some(rp_pos) = stat_content.rfind(')')
-            && rp_pos + 2 < stat_content.len()
+        if let Some(tg) = procfs::read_foreground_tpgid(pid)
+            .filter(|&tg| tg > 1 && tg != std::process::id())
         {
-            let rest = &stat_content[rp_pos + 2..];
-            let parts: Vec<&str> = rest.split_whitespace().collect();
-            if parts.len() >= 6 {
-                let pgrp: u32 = parts[2].parse().unwrap_or(0);
-                let parsed_tpgid: u32 = parts[5].parse().unwrap_or(0);
-                if parsed_tpgid > 1 && parsed_tpgid != pgrp && parsed_tpgid != std::process::id() {
-                    tpgid = Some(parsed_tpgid);
-                }
-            }
-        }
-
-        if let Some(tg) = tpgid {
             log::debug!("Signaling foreground process group {tg} with signal {signal}");
             let _ = registry::kill_process_group_safe(tg, signal);
         }
@@ -845,164 +580,9 @@ impl PtySubsystem {
     ) -> zbus::Result<()>;
 }
 
-fn read_process_display_name(pid: u32) -> Option<String> {
-    let cmdline_path = format!("/proc/{pid}/cmdline");
-    if let Ok(cmdline) = std::fs::read(&cmdline_path) {
-        let cmd = String::from_utf8_lossy(&cmdline)
-            .replace('\0', " ")
-            .trim()
-            .to_string();
-        if !cmd.is_empty() {
-            return Some(cmd);
-        }
-    }
-
-    let stat_path = format!("/proc/{pid}/stat");
-    let stat_content = std::fs::read_to_string(&stat_path).ok()?;
-    let lp = stat_content.find('(')?;
-    let rp = stat_content.rfind(')')?;
-    (rp > lp).then(|| stat_content[lp + 1..rp].to_string())
-}
-
-fn read_direct_children_procfs(pid: u32) -> Option<Vec<u32>> {
-    let primary_path = format!("/proc/{pid}/task/{pid}/children");
-    let mut children = Vec::new();
-
-    let task_dir = format!("/proc/{pid}/task");
-    if let Ok(entries) = std::fs::read_dir(&task_dir) {
-        let mut read_any = false;
-        for entry in entries.flatten() {
-            let children_path = entry.path().join("children");
-            if let Ok(content) = std::fs::read_to_string(&children_path) {
-                read_any = true;
-                for token in content.split_whitespace() {
-                    if let Ok(child_pid) = token.parse::<u32>() {
-                        children.push(child_pid);
-                    }
-                }
-            }
-        }
-        if read_any {
-            return Some(children);
-        }
-    }
-
-    if let Ok(content) = std::fs::read_to_string(&primary_path) {
-        for token in content.split_whitespace() {
-            if let Ok(child_pid) = token.parse::<u32>() {
-                children.push(child_pid);
-            }
-        }
-        return Some(children);
-    }
-
-    None
-}
-
-/// Collects all descendant processes `(pid, display_name)` of `root_pid`.
-///
-/// Uses the direct `/proc/<pid>/task/<tid>/children` kernel interface ($O(k)$
-/// file reads where $k$ is the number of descendant processes), falling back
-/// to a `/proc` parent-PID scan only if `children` is unavailable.
-pub(crate) fn collect_descendant_processes(root_pid: u32) -> Vec<(u32, String)> {
-    // Fast path: traverse `/proc/<pid>/task/*/children` directly.
-    if let Some(initial_children) = read_direct_children_procfs(root_pid) {
-        let mut descendants = Vec::new();
-        let mut to_visit = initial_children;
-        let mut visited = std::collections::HashSet::new();
-        visited.insert(root_pid);
-
-        while let Some(child_pid) = to_visit.pop() {
-            if !visited.insert(child_pid) {
-                continue;
-            }
-            if let Some(name) = read_process_display_name(child_pid) {
-                descendants.push((child_pid, name));
-            }
-            if let Some(grandchildren) = read_direct_children_procfs(child_pid) {
-                to_visit.extend(grandchildren);
-            }
-        }
-        return descendants;
-    }
-
-    // If the root process doesn't exist at all, return empty immediately.
-    if !std::path::Path::new(&format!("/proc/{root_pid}")).exists() {
-        return Vec::new();
-    }
-
-    // Fallback for kernels compiled without CONFIG_PROC_CHILDREN: scan `/proc/*/stat`
-    // for `(pid, ppid)`, and only read `cmdline` for matched descendants.
-    let mut proc_edges = Vec::new();
-    if let Ok(entries) = std::fs::read_dir("/proc") {
-        for entry in entries.flatten() {
-            if let Ok(file_name) = entry.file_name().into_string()
-                && let Ok(p) = file_name.parse::<u32>()
-            {
-                let stat_path = format!("/proc/{p}/stat");
-                if let Ok(stat_content) = std::fs::read_to_string(&stat_path)
-                    && let Some(rp) = stat_content.rfind(')')
-                    && rp + 2 < stat_content.len()
-                {
-                    let rest = &stat_content[rp + 2..];
-                    let mut parts = rest.split_whitespace();
-                    let _state = parts.next();
-                    if let Some(ppid_str) = parts.next()
-                        && let Ok(ppid) = ppid_str.parse::<u32>()
-                    {
-                        proc_edges.push((p, ppid));
-                    }
-                }
-            }
-        }
-    }
-
-    let mut descendants = Vec::new();
-    let mut to_visit = vec![root_pid];
-    let mut visited = std::collections::HashSet::new();
-
-    while let Some(current) = to_visit.pop() {
-        if !visited.insert(current) {
-            continue;
-        }
-        for &(p, ppid) in &proc_edges {
-            if ppid == current {
-                if let Some(name) = read_process_display_name(p) {
-                    descendants.push((p, name));
-                }
-                to_visit.push(p);
-            }
-        }
-    }
-
-    descendants
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn collect_descendant_processes_finds_spawned_child() {
-        let mut child = std::process::Command::new("sleep")
-            .arg("5")
-            .spawn()
-            .expect("spawn sleep");
-        let child_pid = child.id();
-        let my_pid = std::process::id();
-
-        let descendants = collect_descendant_processes(my_pid);
-        assert!(
-            descendants.iter().any(|(pid, name)| *pid == child_pid && name.contains("sleep")),
-            "expected child pid {child_pid} in {descendants:?}"
-        );
-
-        let _ = child.kill();
-        let _ = child.wait();
-
-        let after_exit = collect_descendant_processes(my_pid);
-        assert!(!after_exit.iter().any(|(pid, _)| *pid == child_pid));
-    }
 
     #[tokio::test]
     async fn idle_shell_without_children_terminates_on_detach_even_with_persistence_on() {
@@ -1053,7 +633,8 @@ mod tests {
         .expect("posix_openpt");
         grantpt(&master).expect("grantpt");
         unlockpt(&master).expect("unlockpt");
-        let master_owned = unsafe { std::os::unix::io::OwnedFd::from_raw_fd(master.into_raw_fd()) };
+        let master_owned =
+            unsafe { std::os::unix::io::OwnedFd::from_raw_fd(master.into_raw_fd()) };
 
         let pane_id = format!("pane-reminder-test-{}", uuid::Uuid::new_v4());
         let workspace = boxxy_claw::registry::workspace::global_workspace().await;

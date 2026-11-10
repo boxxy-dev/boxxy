@@ -1,5 +1,6 @@
 use crate::claw::CharacterRegistry;
 use crate::ipc::ClawSessionManager;
+use crate::ipc::session_manager::cascade_workspace_cleanup;
 use crate::pty::registry::PtyRegistry;
 use boxxy_claw::registry::workspace::WorkspaceRegistry;
 use futures_util::StreamExt;
@@ -131,14 +132,8 @@ pub async fn spawn_owner_tracker(
                 }
             }
             for claim in released_claims {
-                if claim.holder_kind == boxxy_claw_protocol::characters::HolderKind::Pane {
-                    log::debug!("Cascading swarm cleanup for pane {}", claim.holder_id);
-                    workspace.release_all_locks(&claim.holder_id).await;
-                    workspace.unregister_pane(claim.holder_id.clone()).await;
-                    workspace
-                        .update_pane_tasks(claim.holder_id, Vec::new())
-                        .await;
-                }
+                log::debug!("Cascading swarm cleanup for pane {}", claim.holder_id);
+                cascade_workspace_cleanup(&workspace, &claim).await;
             }
             crate::ipc::emit_pending_tasks_changed(&conn_clone, &pty_registry).await;
         }

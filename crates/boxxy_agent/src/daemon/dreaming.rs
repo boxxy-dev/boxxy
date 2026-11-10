@@ -24,10 +24,11 @@ use super::power::PowerMonitor;
 
 /// One of these snapshots what the daemon is currently doing with its
 /// spare cycles. `MaintenanceSubsystem` just formats this into a string.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum DreamStatus {
     /// Nobody has asked us to dream yet (or the 10 s warm-up is still
     /// running).
+    #[default]
     Idle,
     /// Feature disabled in Preferences.
     Disabled,
@@ -70,12 +71,6 @@ impl DreamStatusCell {
 
     pub async fn set(&self, s: DreamStatus) {
         *self.inner.write().await = s;
-    }
-}
-
-impl Default for DreamStatus {
-    fn default() -> Self {
-        DreamStatus::Idle
     }
 }
 
@@ -171,12 +166,13 @@ async fn run_one_cycle(settings: &boxxy_preferences::Settings) -> anyhow::Result
     let db = boxxy_db::Db::new().await?;
     let db_arc = Arc::new(Mutex::new(Some(db)));
 
-    let mut creds = boxxy_ai_core::AiCredentials::default();
     // Prefer effective keys (env overrides + settings file merge)
     // so the daemon's dream cycle works the same way a fresh UI would.
-    creds.api_keys = settings.get_effective_api_keys();
-    creds.ollama_url = settings.ollama_base_url.clone();
-    creds.openai_compatible_endpoints = settings.openai_compatible_endpoints.clone();
+    let creds = boxxy_ai_core::AiCredentials {
+        api_keys: settings.get_effective_api_keys(),
+        ollama_url: settings.ollama_base_url.clone(),
+        openai_compatible_endpoints: settings.openai_compatible_endpoints.clone(),
+    };
 
     let model = settings
         .memory_model

@@ -141,6 +141,7 @@ impl CharacterRegistry {
     /// Returns `(changed_char_ids, migrated_holder_ids)`.
     /// - `changed_char_ids`: character UUIDs whose duties/personality content changed.
     /// - `migrated_holder_ids`: pane holder IDs whose character was deleted and remapped.
+    ///
     /// Kept separate so callers can match on `claim.character_id` vs `claim.holder_id`
     /// without accidentally invalidating unrelated sessions sharing the fallback character.
     pub async fn reload_catalog(&self) -> Result<(Vec<String>, Vec<String>)> {
@@ -649,15 +650,14 @@ impl RegistryInner {
             });
 
             // Update status in the catalog snapshot
-            if let Some(info) = catalog
-                .iter_mut()
-                .find(|c| c.config.id == owned.character_id)
+            if owned.holder_kind == HolderKind::Pane
+                && let Some(info) = catalog
+                    .iter_mut()
+                    .find(|c| c.config.id == owned.character_id)
             {
-                if owned.holder_kind == HolderKind::Pane {
-                    info.status = CharacterStatus::Active {
-                        pane_id: holder_id.clone(),
-                    };
-                }
+                info.status = CharacterStatus::Active {
+                    pane_id: holder_id.clone(),
+                };
             }
         }
 

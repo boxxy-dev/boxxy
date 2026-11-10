@@ -82,8 +82,8 @@ fn main() -> Result<()> {
                         println!("No detached PTY sessions.");
                     } else {
                         println!(
-                            "{:>8}  {:>8}  {:<16}  {:<10}  {:<30}  {}",
-                            "PID", "IDLE_S", "PROCESS", "STATE", "CWD", "PANE_ID"
+                            "{:>8}  {:>8}  {:<16}  {:<10}  {:<30}  PANE_ID",
+                            "PID", "IDLE_S", "PROCESS", "STATE", "CWD"
                         );
                         for s in sessions {
                             let proc_label = if s.foreground_process.is_empty() {

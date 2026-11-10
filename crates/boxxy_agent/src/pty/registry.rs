@@ -165,6 +165,10 @@ impl RingBuffer {
     pub fn len(&self) -> usize {
         self.data.len()
     }
+
+    pub fn is_empty(&self) -> bool {
+        self.data.is_empty()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -513,9 +517,7 @@ impl PtyRegistry {
 
         // If no reader task ran, this session was never actively
         // detached. Caller still has its own FD; nothing to return.
-        let Some(handle) = s.reader_task.take() else {
-            return None;
-        };
+        let handle = s.reader_task.take()?;
         handle.abort();
         let buffer = s
             .ring_buffer
