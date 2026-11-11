@@ -203,7 +203,11 @@ fn resolve_spillover_dir() -> std::path::PathBuf {
         .map(std::path::PathBuf::from)
         .filter(|p| p.is_absolute())
     {
-        runtime_dir.join("boxxy-terminal").join("tool-output")
+        let dir_name = match boxxy_sys_utils::instance_id() {
+            Some(slug) => format!("boxxy-terminal-{slug}"),
+            None => "boxxy-terminal".to_string(),
+        };
+        runtime_dir.join(dir_name).join("tool-output")
     } else {
         boxxy_sys_utils::get_config_dir()
             .join("cache")

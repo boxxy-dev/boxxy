@@ -1,4 +1,3 @@
-use boxxy_sys_utils;
 use boxxy_window::{AppInit, AppWindow};
 use gtk4::{gio, glib};
 use libadwaita::prelude::*;
@@ -16,6 +15,11 @@ fn main() {
         .filter_module("rustls", log::LevelFilter::Warn)
         .init();
 
+    // Parse early isolated dev-mode CLI flags (`--dev`, `--instance`, `--ephemeral`,
+    // `--sync-settings`) before initializing Settings or waiting on restarting parents.
+    boxxy_sys_utils::configure_dev_options(parse_early_dev_args());
+    boxxy_sys_utils::prepare_dev_environment();
+
     // When spawned by `Updater::apply_update_and_restart()`, the old `boxxy-terminal`
     // process calls `spawn()` followed immediately by `std::process::exit(0)`. Because
     // tearing down a GUI process's address space (`exit_mmap`) in the kernel takes several
@@ -24,7 +28,9 @@ fn main() {
     // parent, forward `--new-window` to the dying instance, and exit immediately without
     // opening a window. Waiting for the parent `boxxy-terminal` PID to finish exiting
     // eliminates this race for both older and newer builds.
-    wait_for_restarting_parent();
+    if !boxxy_sys_utils::is_dev_instance() {
+        wait_for_restarting_parent();
+    }
 
     // Enter the global tokio runtime context so tokio::spawn works everywhere.
     let _rt_guard = boxxy_sys_utils::runtime().enter();
@@ -174,12 +180,49 @@ fn main() {
     gio::resources_register_include!("compiled.gresource").expect("Failed to register resources.");
 
     let app = libadwaita::Application::builder()
-        .application_id("dev.boxxy.BoxxyTerminal")
+        .application_id(boxxy_sys_utils::gtk_app_id())
         .flags(
             gio::ApplicationFlags::HANDLES_COMMAND_LINE
                 | gio::ApplicationFlags::ALLOW_REPLACEMENT,
         )
         .build();
+
+    app.connect_startup(|_| {
+        gtk4::Window::set_default_icon_name(boxxy_sys_utils::STABLE_GTK_APP_ID);
+    });
+
+    app.add_main_option(
+        "dev",
+        glib::Char::from(0),
+        glib::OptionFlags::NONE,
+        glib::OptionArg::None,
+        "Run as an isolated development instance alongside Stable Boxxy",
+        None,
+    );
+    app.add_main_option(
+        "instance",
+        glib::Char::from(0),
+        glib::OptionFlags::NONE,
+        glib::OptionArg::String,
+        "Run as a named isolated development instance",
+        Some("SLUG"),
+    );
+    app.add_main_option(
+        "ephemeral",
+        glib::Char::from(0),
+        glib::OptionFlags::NONE,
+        glib::OptionArg::None,
+        "Run an isolated dev instance with clean factory-default settings",
+        None,
+    );
+    app.add_main_option(
+        "sync-settings",
+        glib::Char::from(0),
+        glib::OptionFlags::NONE,
+        glib::OptionArg::None,
+        "Refresh dev instance settings from Stable Boxxy before launching",
+        None,
+    );
 
     app.add_main_option(
         "new-window",
@@ -344,3 +387,58 @@ fn wait_for_restarting_parent() {
 
 #[cfg(not(unix))]
 fn wait_for_restarting_parent() {}
+
+fn parse_early_dev_args() -> boxxy_sys_utils::CliDevOverrides {
+    parse_early_dev_args_from(std::env::args().skip(1))
+}
+
+fn parse_early_dev_args_from<I, S>(iter: I) -> boxxy_sys_utils::CliDevOverrides
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    let mut overrides = boxxy_sys_utils::CliDevOverrides::default();
+    let mut args = iter.into_iter();
+    while let Some(raw) = args.next() {
+        let arg = raw.as_ref();
+        if arg == "--" {
+            break;
+        } else if arg == "--dev" {
+            overrides.dev = true;
+        } else if arg == "--ephemeral" {
+            overrides.ephemeral = true;
+        } else if arg == "--sync-settings" {
+            overrides.sync_settings = true;
+        } else if arg == "--instance" {
+            overrides.instance = args.next().map(|s| s.as_ref().to_string());
+        } else if let Some(val) = arg.strip_prefix("--instance=") {
+            overrides.instance = Some(val.to_string());
+        }
+    }
+    overrides
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_early_dev_args_handles_flags_and_double_dash() {
+        let parsed = parse_early_dev_args_from([
+            "--dev",
+            "--sync-settings",
+            "--instance",
+            "wt-83",
+            "--",
+            "--ephemeral",
+        ]);
+        assert!(parsed.dev);
+        assert!(parsed.sync_settings);
+        assert_eq!(parsed.instance.as_deref(), Some("wt-83"));
+        assert!(!parsed.ephemeral);
+
+        let eq_parsed = parse_early_dev_args_from(["--instance=alpha", "--ephemeral"]);
+        assert_eq!(eq_parsed.instance.as_deref(), Some("alpha"));
+        assert!(eq_parsed.ephemeral);
+    }
+}

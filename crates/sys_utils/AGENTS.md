@@ -6,8 +6,8 @@ Minimal, leaf-level utility crate for system environment detection and global as
 
 ## Core Utilities
 
-- **Config root resolution:** `get_config_dir()` (infallible resolver consulting `$BOXXY_CONFIG_DIR` if absolute, then `ProjectDirs`, then `$HOME/.config/boxxy-terminal`)
-- **Environment detection:** `is_flatpak()`, `can_self_update()`
+- **Config root & dev instance resolution:** `get_config_dir()`, `get_stable_config_dir()`, `instance_id()`, `is_dev_instance()`, `is_ephemeral_mode()`, `agent_bus_name()`, `gtk_app_id()`, `prepare_dev_environment()`, `seed_config_tree_from()` (infallible resolver consulting `$BOXXY_CONFIG_DIR` if absolute, then ephemeral/dev directories when `--dev`/`--ephemeral`/`--instance`/`BOXXY_DEV`/`BOXXY_INSTANCE` is active, then `ProjectDirs`, then `$HOME/.config/boxxy-terminal`)
+- **Environment detection:** `is_flatpak()`, `can_self_update()` (disabled in Flatpak, isolated dev instances, or `disable-self-update`)
 - **Global async runtime:** `runtime()`, `current_worker_index()` (tuned with `max_io_events_per_tick(256)` and `max_io_events_per_busy_tick(64)`)
 - **Location context:** `LocationContext`, `fetch_location_context()`, `get_location_context()`
 - **Live currency exchange rates:** `fetch_exchange_rates()`, `get_exchange_rate(code)` (fetches ECB rates from `https://api.frankfurter.dev/v1/latest?base=USD&symbols=EUR,CNY,INR,BRL` and caches in `EXCHANGE_RATES_CACHE`)

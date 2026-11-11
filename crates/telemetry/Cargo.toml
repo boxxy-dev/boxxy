@@ -19,6 +19,7 @@ uuid.workspace = true
 log.workspace = true
 boxxy-preferences = { path = "../preferences" }
 boxxy-db = { path = "../db" }
+boxxy-sys-utils = { workspace = true }
 sqlx = { workspace = true }
 async-trait.workspace = true
 arc-swap.workspace = true

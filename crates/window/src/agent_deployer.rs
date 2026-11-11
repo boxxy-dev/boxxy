@@ -9,7 +9,6 @@ use tokio::process::Command;
 use zbus::{Connection, proxy};
 
 const AGENT_VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), "+", env!("GIT_HASH"));
-pub const WELL_KNOWN_NAME: &str = "dev.boxxy.BoxxyAgent";
 
 /// Proxy pointing at the running Ghost's version interface.
 #[proxy(
@@ -21,6 +20,13 @@ trait AgentVersion {
     async fn get_version(&self) -> zbus::Result<String>;
     async fn get_config_dir(&self) -> zbus::Result<String>;
     async fn request_stop(&self) -> zbus::Result<()>;
+}
+
+async fn connect_version_proxy(conn: &Connection) -> zbus::Result<AgentVersionProxy<'static>> {
+    AgentVersionProxy::builder(conn)
+        .destination(boxxy_sys_utils::agent_bus_name())
+        .build()
+        .await
 }
 
 /// Returns the path where the agent binary lives on the host.
@@ -69,7 +75,7 @@ async fn wait_for_agent_stopped() {
     let Ok(conn) = Connection::session().await else {
         return;
     };
-    let Ok(proxy) = AgentVersionProxy::new(&conn).await else {
+    let Ok(proxy) = connect_version_proxy(&conn).await else {
         return;
     };
     for _ in 0..40 {
@@ -82,7 +88,7 @@ async fn wait_for_agent_stopped() {
 
 async fn wait_for_agent_ready() -> Result<()> {
     let conn = Connection::session().await?;
-    let proxy = AgentVersionProxy::new(&conn).await?;
+    let proxy = connect_version_proxy(&conn).await?;
     let mut attempts = 0;
     let max_attempts = 200; // 3 seconds total at 15ms intervals
 
@@ -144,14 +150,14 @@ async fn needs_redeploy(host_path: &PathBuf) -> bool {
 
 async fn query_ghost_version() -> Result<String> {
     let conn = Connection::session().await?;
-    let proxy = AgentVersionProxy::new(&conn).await?;
+    let proxy = connect_version_proxy(&conn).await?;
     let ver = proxy.get_version().await?;
     Ok(ver)
 }
 
 async fn query_ghost_version_and_config_dir() -> Result<(String, String)> {
     let conn = Connection::session().await?;
-    let proxy = AgentVersionProxy::new(&conn).await?;
+    let proxy = connect_version_proxy(&conn).await?;
     let (ver, dir) = tokio::try_join!(proxy.get_version(), proxy.get_config_dir())?;
     Ok((ver, dir))
 }
@@ -272,6 +278,12 @@ async fn spawn_agent(host_path: &PathBuf) -> Result<bool> {
         if let Ok(val) = std::env::var("BOXXY_DEBUG_CONTEXT") {
             cmd.args(["--env=BOXXY_DEBUG_CONTEXT=".to_string() + &val]);
         }
+        if let Some(slug) = boxxy_sys_utils::instance_id() {
+            cmd.args([format!("--env=BOXXY_INSTANCE={slug}")]);
+        }
+        if boxxy_sys_utils::is_ephemeral_mode() {
+            cmd.args(["--env=BOXXY_EPHEMERAL=1".to_string()]);
+        }
         cmd.args([
             format!("--env=BOXXY_CONFIG_DIR={}", expected_config_dir.to_string_lossy()),
             "--host".to_string(),
@@ -281,10 +293,20 @@ async fn spawn_agent(host_path: &PathBuf) -> Result<bool> {
         cmd.spawn()
             .context("Failed to spawn agent on host")?;
     } else {
-        info!("Spawning native agent: {}", host_path.display());
+        info!(
+            "Spawning native agent ({}): {}",
+            boxxy_sys_utils::agent_bus_name(),
+            host_path.display()
+        );
         let mut cmd = Command::new(host_path);
         if let Ok(val) = std::env::var("BOXXY_DEBUG_CONTEXT") {
             cmd.env("BOXXY_DEBUG_CONTEXT", val);
+        }
+        if let Some(slug) = boxxy_sys_utils::instance_id() {
+            cmd.env("BOXXY_INSTANCE", slug);
+        }
+        if boxxy_sys_utils::is_ephemeral_mode() {
+            cmd.env("BOXXY_EPHEMERAL", "1");
         }
         cmd.env("BOXXY_CONFIG_DIR", expected_config_dir);
         cmd.arg("--background")
@@ -296,7 +318,7 @@ async fn spawn_agent(host_path: &PathBuf) -> Result<bool> {
 
 async fn stop_ghost() -> Result<()> {
     let conn = Connection::session().await?;
-    let proxy = AgentVersionProxy::new(&conn).await?;
+    let proxy = connect_version_proxy(&conn).await?;
     let _ = proxy.request_stop().await;
     Ok(())
 }

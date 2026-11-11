@@ -362,6 +362,10 @@ pub fn take_whats_new_pending() -> Option<WhatsNewPending> {
         return Some(pending);
     }
 
+    if boxxy_sys_utils::is_dev_instance() {
+        return None;
+    }
+
     let config_dir = boxxy_sys_utils::get_config_dir();
 
     if let Ok(app_dir) = Updater::get_app_dir()

@@ -70,6 +70,8 @@
                         <style>
                           <class name="caption"/>
                           <class name="accent"/>
+                          <class name="boxxy-link"/>
+                          <class name="boxxy-link-inline"/>
                         </style>
                       </object>
                     </child>
@@ -80,6 +82,8 @@
                         <style>
                           <class name="caption"/>
                           <class name="accent"/>
+                          <class name="boxxy-link"/>
+                          <class name="boxxy-link-inline"/>
                         </style>
                       </object>
                     </child>
@@ -134,6 +138,8 @@
                         <style>
                           <class name="caption"/>
                           <class name="accent"/>
+                          <class name="boxxy-link"/>
+                          <class name="boxxy-link-start"/>
                         </style>
                       </object>
                     </child>
@@ -146,6 +152,7 @@
                         <style>
                           <class name="caption"/>
                           <class name="accent"/>
+                          <class name="boxxy-link"/>
                         </style>
                       </object>
                     </child>

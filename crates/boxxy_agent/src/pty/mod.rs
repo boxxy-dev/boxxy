@@ -23,6 +23,32 @@ fn is_leaked_multiplexer_prefix(key: &str) -> bool {
         || key.starts_with("VSCODE_")
 }
 
+/// Parent-shell Boxxy session markers that must be scrubbed from both the daemon's
+/// inherited environment and `SpawnOptions.env` (which `boxxy-app` populates via
+/// `std::env::vars()` on native builds) *before* `apply_shell_integration` runs.
+/// Note: `BOXXY_SHELL_INTEGRATION=0` is preserved so explicit user opt-outs still work.
+const LEAKED_DAEMON_PARENT_VARS: &[&str] = &[
+    "BOXXY_SHELL_INTEGRATION_LOADED",
+    "BOXXY_SHELL_INTEGRATION_XDG_DIR",
+    "BOXXY_LOGIN_SHELL",
+    "BOXXY_ORIG_ZDOTDIR",
+    "BOXXY_WINDOW_ID",
+    "BOXXY_DEV",
+    "BOXXY_INSTANCE",
+    "BOXXY_EPHEMERAL",
+    "BOXXY_SYNC_SETTINGS",
+    "BOXXY_CONFIG_DIR",
+];
+
+fn scrub_inherited_boxxy_env(env: &mut Vec<(String, String)>) {
+    env.retain(|(k, v)| {
+        if k == "BOXXY_SHELL_INTEGRATION" {
+            return v == "0";
+        }
+        !LEAKED_DAEMON_PARENT_VARS.contains(&k.as_str())
+    });
+}
+
 const LEAKED_MULTIPLEXER_EXACT: &[&str] = &["STY", "WINDOW", "WT_SESSION"];
 
 fn is_leaked_multiplexer_var(key: &str) -> bool {
@@ -279,6 +305,7 @@ impl PtySubsystem {
 
         let mut argv = options.argv;
         let mut env = options.env;
+        scrub_inherited_boxxy_env(&mut env);
         if let Some(integration_root) = shell_integration::ensure_integration_scripts() {
             shell_integration::apply_shell_integration(&mut argv, &mut env, &integration_root);
         }
@@ -294,6 +321,10 @@ impl PtySubsystem {
         for key in LEAKED_MULTIPLEXER_EXACT {
             cmd.env_remove(key);
         }
+        for key in LEAKED_DAEMON_PARENT_VARS {
+            cmd.env_remove(key);
+        }
+        cmd.env_remove("BOXXY_SHELL_INTEGRATION");
         for (k, _) in std::env::vars() {
             if is_leaked_multiplexer_prefix(&k) {
                 cmd.env_remove(&k);
@@ -741,5 +772,30 @@ mod tests {
         reg.remove(pid).await;
         let _ = idle_proc.kill();
         let _ = idle_proc.wait();
+    }
+
+    #[test]
+    fn scrub_inherited_boxxy_env_clears_parent_markers_and_keeps_explicit_opt_out() {
+        let mut env = vec![
+            ("PATH".to_string(), "/usr/bin".to_string()),
+            ("BOXXY_DEV".to_string(), "1".to_string()),
+            ("BOXXY_INSTANCE".to_string(), "dev".to_string()),
+            ("BOXXY_EPHEMERAL".to_string(), "1".to_string()),
+            ("BOXXY_CONFIG_DIR".to_string(), "/tmp/synthetic".to_string()),
+            (
+                "BOXXY_SHELL_INTEGRATION_LOADED".to_string(),
+                "1".to_string(),
+            ),
+            ("BOXXY_SHELL_INTEGRATION".to_string(), "1".to_string()),
+        ];
+        scrub_inherited_boxxy_env(&mut env);
+        assert_eq!(env, vec![("PATH".to_string(), "/usr/bin".to_string())]);
+
+        let mut opt_out_env = vec![("BOXXY_SHELL_INTEGRATION".to_string(), "0".to_string())];
+        scrub_inherited_boxxy_env(&mut opt_out_env);
+        assert_eq!(
+            opt_out_env,
+            vec![("BOXXY_SHELL_INTEGRATION".to_string(), "0".to_string())]
+        );
     }
 }

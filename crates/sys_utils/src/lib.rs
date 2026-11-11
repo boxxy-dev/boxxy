@@ -1,3 +1,12 @@
+pub mod dev_mode;
+
+pub use dev_mode::{
+    CliDevOverrides, DEVEL_AGENT_BUS_NAME, DEVEL_GTK_APP_ID, STABLE_AGENT_BUS_NAME,
+    STABLE_GTK_APP_ID, agent_bus_name, configure_dev_options, dev_header_tag,
+    get_stable_config_dir, gtk_app_id, instance_id, is_dev_instance, is_ephemeral_mode,
+    prepare_dev_environment, sanitize_instance_slug, seed_config_tree_from, should_sync_settings,
+};
+
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -29,11 +38,12 @@ struct FrankfurterResponse {
 /// Returns the active config root for Boxxy.
 ///
 /// Resolution order:
-///   1. `$BOXXY_CONFIG_DIR` if set and non-empty (used by the daemon when
-///      launched from the Flatpak UI via `flatpak-spawn --host`).
-///   2. `ProjectDirs::from("org", "boxxy", "boxxy-terminal").config_dir()`.
-///   3. `$HOME/.config/boxxy-terminal`.
-///   4. Last-resort fallback: `std::env::temp_dir().join("boxxy-terminal")`.
+///   1. `$BOXXY_CONFIG_DIR` if set, non-empty, and absolute.
+///   2. Ephemeral dev directory (`$XDG_RUNTIME_DIR/boxxy-terminal-ephemeral-<slug>`) when `--ephemeral` / `BOXXY_EPHEMERAL=1` is set.
+///   3. Isolated dev directory (`~/.config/boxxy-terminal-<slug>`) when `--dev` / `BOXXY_DEV=1` / `BOXXY_INSTANCE=<slug>` is set.
+///   4. `ProjectDirs::from("org", "boxxy", "boxxy-terminal").config_dir()`.
+///   5. `$HOME/.config/boxxy-terminal`.
+///   6. Last-resort fallback: `std::env::temp_dir().join("boxxy-terminal")`.
 ///
 /// Infallible — callers want a `PathBuf`, not an `Option`/`Result`.
 /// Does **not** create the directory; that's the caller's job (most call
@@ -52,13 +62,16 @@ pub fn get_config_dir() -> PathBuf {
         }
     }
 
-    if let Some(dirs) = directories::ProjectDirs::from("org", "boxxy", "boxxy-terminal") {
-        dirs.config_dir().to_path_buf()
-    } else if let Some(home) = home::home_dir() {
-        home.join(".config").join("boxxy-terminal")
-    } else {
-        std::env::temp_dir().join("boxxy-terminal")
+    if is_ephemeral_mode() {
+        let slug = instance_id().unwrap_or_else(|| "dev".to_string());
+        return dev_mode::resolve_ephemeral_config_dir(&slug);
     }
+
+    if let Some(slug) = instance_id() {
+        return dev_mode::resolve_dev_config_dir(&slug);
+    }
+
+    get_stable_config_dir()
 }
 
 /// Returns a reference to the global multi-threaded Tokio runtime.
@@ -93,7 +106,7 @@ pub fn is_flatpak() -> bool {
 }
 
 /// Returns true if the internal self-updater is allowed to run.
-/// This is disabled in Flatpak or if the `disable-self-update` feature is enabled.
+/// This is disabled in Flatpak, in isolated dev instances, or if the `disable-self-update` feature is enabled.
 #[must_use]
 pub fn can_self_update() -> bool {
     #[cfg(any(feature = "disable-self-update", not(feature = "self-update")))]
@@ -102,20 +115,22 @@ pub fn can_self_update() -> bool {
     }
     #[cfg(all(feature = "self-update", not(feature = "disable-self-update")))]
     {
-        !is_flatpak()
+        !is_flatpak() && !is_dev_instance()
     }
 }
 
 fn shared_http_client() -> Option<&'static reqwest::Client> {
     HTTP_CLIENT
-        .get_or_init(|| match reqwest::Client::builder()
-            .timeout(Duration::from_secs(5))
-            .build()
-        {
-            Ok(client) => Some(client),
-            Err(e) => {
-                log::warn!("Failed to build HTTP client: {e}");
-                None
+        .get_or_init(|| {
+            match reqwest::Client::builder()
+                .timeout(Duration::from_secs(5))
+                .build()
+            {
+                Ok(client) => Some(client),
+                Err(e) => {
+                    log::warn!("Failed to build HTTP client: {e}");
+                    None
+                }
             }
         })
         .as_ref()
@@ -212,11 +227,20 @@ mod tests {
     use serial_test::{is_locked_serially, serial};
     use std::ffi::OsString;
 
-    /// RAII guard that mutates `BOXXY_CONFIG_DIR` for the duration of a test
-    /// and restores its prior state on drop (even on panic).
+    const ENV_KEYS: &[&str] = &[
+        "BOXXY_CONFIG_DIR",
+        "BOXXY_DEV",
+        "BOXXY_INSTANCE",
+        "BOXXY_EPHEMERAL",
+        "BOXXY_SYNC_SETTINGS",
+    ];
+
+    /// RAII guard that mutates `BOXXY_*` config/dev environment variables and CLI
+    /// overrides for the duration of a test and restores prior state on drop.
     /// Also asserts that the caller holds the `config_dir` serial lock.
     struct ConfigDirEnvGuard {
-        previous: Option<OsString>,
+        previous_env: Vec<(&'static str, Option<OsString>)>,
+        previous_cli: CliDevOverrides,
     }
 
     impl ConfigDirEnvGuard {
@@ -225,26 +249,41 @@ mod tests {
                 is_locked_serially(Some("config_dir")),
                 "Tests mutating BOXXY_CONFIG_DIR must be annotated with #[serial(config_dir)]"
             );
-            let previous = std::env::var_os("BOXXY_CONFIG_DIR");
-            match value {
-                Some(v) => unsafe { std::env::set_var("BOXXY_CONFIG_DIR", v) },
-                None => unsafe { std::env::remove_var("BOXXY_CONFIG_DIR") },
+            let previous_env = ENV_KEYS
+                .iter()
+                .map(|&k| (k, std::env::var_os(k)))
+                .collect::<Vec<_>>();
+            for &k in ENV_KEYS {
+                unsafe { std::env::remove_var(k) };
             }
-            Self { previous }
+            if let Some(v) = value {
+                unsafe { std::env::set_var("BOXXY_CONFIG_DIR", v) };
+            }
+            let previous_cli = CliDevOverrides::default();
+            configure_dev_options(CliDevOverrides::default());
+            Self {
+                previous_env,
+                previous_cli,
+            }
         }
     }
 
     impl Drop for ConfigDirEnvGuard {
         fn drop(&mut self) {
-            match &self.previous {
-                Some(prev) => unsafe { std::env::set_var("BOXXY_CONFIG_DIR", prev) },
-                None => unsafe { std::env::remove_var("BOXXY_CONFIG_DIR") },
+            for (k, prev) in &self.previous_env {
+                match prev {
+                    Some(val) => unsafe { std::env::set_var(k, val) },
+                    None => unsafe { std::env::remove_var(k) },
+                }
             }
+            configure_dev_options(self.previous_cli.clone());
         }
     }
 
     #[test]
+    #[serial(config_dir)]
     fn test_can_self_update_logic() {
+        let _guard = ConfigDirEnvGuard::set(None);
         let flatpak = is_flatpak();
         let can_update = can_self_update();
 
@@ -261,6 +300,16 @@ mod tests {
                 "Self-update should be enabled for native builds without the feature flag"
             );
         }
+
+        // Dev instances must always disable self-update
+        configure_dev_options(CliDevOverrides {
+            dev: true,
+            ..Default::default()
+        });
+        assert!(
+            !can_self_update(),
+            "Self-update must be disabled in dev mode"
+        );
     }
 
     #[test]
@@ -380,5 +429,122 @@ mod tests {
             idx.is_some(),
             "current_worker_index must be Some(_) inside a multi-thread runtime worker"
         );
+    }
+
+    #[test]
+    #[serial(config_dir)]
+    fn test_dev_instance_bus_app_and_config_names() {
+        let _guard = ConfigDirEnvGuard::set(None);
+        assert_eq!(instance_id(), None);
+        assert!(!is_dev_instance());
+        assert_eq!(agent_bus_name(), STABLE_AGENT_BUS_NAME);
+        assert_eq!(gtk_app_id(), STABLE_GTK_APP_ID);
+        assert_eq!(dev_header_tag(), None);
+
+        // Standard BOXXY_DEV=1
+        unsafe { std::env::set_var("BOXXY_DEV", "1") };
+        assert_eq!(instance_id().as_deref(), Some("dev"));
+        assert!(is_dev_instance());
+        assert_eq!(agent_bus_name(), DEVEL_AGENT_BUS_NAME);
+        assert_eq!(gtk_app_id(), DEVEL_GTK_APP_ID);
+        assert_eq!(dev_header_tag().as_deref(), Some("dev"));
+        assert!(
+            get_config_dir()
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .ends_with("boxxy-terminal-dev")
+        );
+
+        // Custom named instance (e.g. starting with digits / containing hyphens)
+        unsafe { std::env::set_var("BOXXY_INSTANCE", "83-Fix-Branch!") };
+        assert_eq!(instance_id().as_deref(), Some("83-fix-branch"));
+        assert_eq!(
+            agent_bus_name(),
+            "dev.boxxy.BoxxyAgent.Devel.i_83_fix_branch"
+        );
+        assert_eq!(
+            gtk_app_id(),
+            "dev.boxxy.BoxxyTerminal.Devel.i_83_fix_branch"
+        );
+        assert_eq!(dev_header_tag().as_deref(), Some("[dev:83-fix-branch]"));
+
+        // Ephemeral flag
+        unsafe { std::env::remove_var("BOXXY_INSTANCE") };
+        unsafe { std::env::set_var("BOXXY_EPHEMERAL", "1") };
+        assert!(is_ephemeral_mode());
+        assert_eq!(dev_header_tag().as_deref(), Some("dev · ephemeral"));
+        assert!(
+            get_config_dir()
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .contains("boxxy-terminal-ephemeral-dev")
+        );
+    }
+
+    #[test]
+    fn test_seed_config_tree_excludes_sqlite_db_and_runs() {
+        let src_tmp = tempfile::tempdir().expect("src tempdir");
+        let dst_tmp = tempfile::tempdir().expect("dst tempdir");
+        let src = src_tmp.path();
+        let dst = dst_tmp.path().join("seeded-dev");
+
+        std::fs::write(src.join("settings.json"), r#"{"theme":"default"}"#).unwrap();
+        std::fs::write(src.join("last_seen_commit"), "abc1234").unwrap();
+        std::fs::create_dir_all(src.join("themes")).unwrap();
+        std::fs::write(src.join("themes/custom.toml"), "name = 'Synthetic'").unwrap();
+        std::fs::create_dir_all(src.join("bookmarks/runs")).unwrap();
+        std::fs::write(src.join("bookmarks/build.sh"), "echo ok").unwrap();
+        std::fs::write(src.join("bookmarks/runs/tmp.sh"), "echo transient").unwrap();
+        std::fs::create_dir_all(src.join("boxxyclaw/characters/demo")).unwrap();
+        std::fs::write(
+            src.join("boxxyclaw/characters/demo/CHARACTER.toml"),
+            "display_name = 'Demo'",
+        )
+        .unwrap();
+        std::fs::write(src.join("boxxyclaw/boxxy.db"), b"sqlite-binary-stub").unwrap();
+        std::fs::write(src.join("boxxyclaw/boxxy.db-wal"), b"wal-stub").unwrap();
+
+        seed_config_tree_from(src, &dst).expect("seed should succeed");
+
+        assert!(dst.join("settings.json").is_file());
+        assert!(dst.join("themes/custom.toml").is_file());
+        assert!(dst.join("bookmarks/build.sh").is_file());
+        assert!(
+            dst.join("boxxyclaw/characters/demo/CHARACTER.toml")
+                .is_file()
+        );
+        // Transient runs, commit markers, and SQLite DB files must never be copied
+        assert!(!dst.join("bookmarks/runs").exists());
+        assert!(!dst.join("last_seen_commit").exists());
+        assert!(!dst.join("boxxyclaw/boxxy.db").exists());
+        assert!(!dst.join("boxxyclaw/boxxy.db-wal").exists());
+    }
+
+    #[test]
+    fn test_ephemeral_lock_wipes_only_when_unheld() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let eph = tmp.path().join("ephemeral");
+        std::fs::create_dir_all(&eph).unwrap();
+        std::fs::write(eph.join("stale.json"), "{}").unwrap();
+
+        // First process acquires exclusive lock cleanly, wiping `stale.json`, then holds shared lock
+        let guard_one = dev_mode::prepare_ephemeral_dir_in(&eph).expect("first lock");
+        assert!(!eph.join("stale.json").exists());
+
+        // Simulate active runtime DB created by the first process (e.g. boxxy-agent)
+        std::fs::write(eph.join("live_session.db"), "active").unwrap();
+
+        // Second sibling process (e.g. boxxy-app) joins while `guard_one` is still alive:
+        // must NOT wipe `live_session.db`!
+        let guard_two = dev_mode::prepare_ephemeral_dir_in(&eph).expect("second lock");
+        assert!(eph.join("live_session.db").is_file());
+
+        // Once both processes exit (drop locks), the next ephemeral launch wipes cleanly again
+        drop(guard_one);
+        drop(guard_two);
+        let _guard_three = dev_mode::prepare_ephemeral_dir_in(&eph).expect("third lock");
+        assert!(!eph.join("live_session.db").exists());
     }
 }

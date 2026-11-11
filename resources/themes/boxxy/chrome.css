@@ -138,3 +138,18 @@ button.detached-shells-pill.warning:hover {
     background-color: mix(@boxxy_highlight_bg_color, white, 0.16);
     color: @boxxy_highlight_fg_color;
 }
+
+/* HeaderBar Isolated Development Instance Tag (`dev`) */
+headerbar label.dev-mode-tag,
+headerbar.content-header label.dev-mode-tag,
+label.dev-mode-tag {
+    min-height: 20px;
+    padding: 2px 8px;
+    margin: 0 4px 0 2px;
+    border-radius: var(--boxxy-radius-sm);
+    font-size: 0.78em;
+    font-weight: 800;
+    background-color: @warning_bg_color;
+    color: @warning_fg_color;
+    border: var(--boxxy-border-thin) solid @boxxy_ink;
+}

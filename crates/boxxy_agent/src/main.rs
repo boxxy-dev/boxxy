@@ -1,8 +1,6 @@
 use anyhow::{Context, Result};
 use boxxy_agent::daemon;
-use boxxy_agent::ipc::AgentProxy;
-use boxxy_agent::ipc::maintenance::AgentMaintenanceProxy;
-use boxxy_agent::ipc::pty::AgentPtyProxy;
+use boxxy_agent::ipc::{connect_agent_proxy, connect_maintenance_proxy, connect_pty_proxy};
 use clap::{Parser, Subcommand};
 use log::info;
 use zbus::Connection;
@@ -20,6 +18,22 @@ struct Cli {
     /// Run headlessly: spawn daemon and exit immediately.
     #[arg(long)]
     background: bool,
+
+    /// Run as an isolated development instance (`dev.boxxy.BoxxyAgent.Devel`).
+    #[arg(long, global = true)]
+    dev: bool,
+
+    /// Run as a named isolated instance (`dev.boxxy.BoxxyAgent.Devel.i_<slug>`).
+    #[arg(long, global = true, value_name = "SLUG")]
+    instance: Option<String>,
+
+    /// Use a clean ephemeral configuration directory with factory defaults.
+    #[arg(long, global = true)]
+    ephemeral: bool,
+
+    /// Refresh dev configuration files from the stable Boxxy installation before starting.
+    #[arg(long, global = true)]
+    sync_settings: bool,
 
     /// Skip the singleton check (for debugging only).
     #[arg(long, hide = true)]
@@ -51,6 +65,12 @@ fn main() -> Result<()> {
         .init();
 
     let cli = Cli::parse();
+    boxxy_sys_utils::configure_dev_options(boxxy_sys_utils::CliDevOverrides {
+        dev: cli.dev,
+        instance: cli.instance.clone(),
+        ephemeral: cli.ephemeral,
+        sync_settings: cli.sync_settings,
+    });
 
     // Handle subcommands that don't require the daemon to start
     if let Some(cmd) = &cli.command {
@@ -58,8 +78,11 @@ fn main() -> Result<()> {
             Commands::Stop => {
                 return run_async(async {
                     let conn = Connection::session().await?;
-                    let proxy = AgentProxy::new(&conn).await?;
-                    info!("Requesting daemon stop...");
+                    let proxy = connect_agent_proxy(&conn).await?;
+                    info!(
+                        "Requesting daemon stop ({})...",
+                        boxxy_sys_utils::agent_bus_name()
+                    );
                     proxy.request_stop().await?;
                     Ok(())
                 });
@@ -67,8 +90,11 @@ fn main() -> Result<()> {
             Commands::Restart => {
                 return run_async(async {
                     let conn = Connection::session().await?;
-                    let proxy = AgentProxy::new(&conn).await?;
-                    info!("Requesting daemon restart...");
+                    let proxy = connect_agent_proxy(&conn).await?;
+                    info!(
+                        "Requesting daemon restart ({})...",
+                        boxxy_sys_utils::agent_bus_name()
+                    );
                     proxy.request_reload().await?;
                     Ok(())
                 });
@@ -76,7 +102,7 @@ fn main() -> Result<()> {
             Commands::ListSessions => {
                 return run_async(async {
                     let conn = Connection::session().await?;
-                    let proxy = AgentPtyProxy::new(&conn).await?;
+                    let proxy = connect_pty_proxy(&conn).await?;
                     let sessions = proxy.list_detached_sessions_detailed().await?;
                     if sessions.is_empty() {
                         println!("No detached PTY sessions.");
@@ -108,9 +134,9 @@ fn main() -> Result<()> {
             Commands::Status => {
                 return run_async(async {
                     let conn = Connection::session().await?;
-                    let agent_proxy = AgentProxy::new(&conn).await?;
-                    let maint_proxy = AgentMaintenanceProxy::new(&conn).await?;
-                    let pty_proxy = AgentPtyProxy::new(&conn).await?;
+                    let agent_proxy = connect_agent_proxy(&conn).await?;
+                    let maint_proxy = connect_maintenance_proxy(&conn).await?;
+                    let pty_proxy = connect_pty_proxy(&conn).await?;
 
                     let version = agent_proxy.get_version().await.unwrap_or_default();
                     let config_dir = agent_proxy.get_config_dir().await.unwrap_or_default();
@@ -125,7 +151,10 @@ fn main() -> Result<()> {
                         .await
                         .unwrap_or_default();
 
-                    println!("Boxxy Agent v{version}");
+                    println!(
+                        "Boxxy Agent v{version} ({})",
+                        boxxy_sys_utils::agent_bus_name()
+                    );
                     println!("  Config Dir:        {config_dir}");
                     println!(
                         "  Power Source:      {}",
@@ -146,6 +175,9 @@ fn main() -> Result<()> {
         daemonize()?;
     }
 
+    // Prepare isolated dev or ephemeral directory (if active) before hydrating Settings.
+    boxxy_sys_utils::prepare_dev_environment();
+
     // Hydrate the settings cache from disk BEFORE starting the runtime —
     // the claw engine reads model selection from `Settings::load()`, which
     // is backed by a process-global `OnceLock` cache. Without this init
@@ -156,7 +188,11 @@ fn main() -> Result<()> {
     // Now start the async runtime ONLY in the final daemon process
     run_async(async move {
         let resolved_config_dir = boxxy_sys_utils::get_config_dir();
-        info!("Boxxy Agent starting (v{})...", env!("CARGO_PKG_VERSION"));
+        info!(
+            "Boxxy Agent starting (v{}, bus={})...",
+            env!("CARGO_PKG_VERSION"),
+            boxxy_sys_utils::agent_bus_name()
+        );
         info!("Using config directory: {:?}", resolved_config_dir);
 
         if !cli.no_singleton {

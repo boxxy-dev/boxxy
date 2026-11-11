@@ -19,6 +19,36 @@ use std::sync::Arc;
 use tokio::sync::{Mutex, watch};
 use zbus::{Connection, connection::Builder};
 
+pub async fn connect_agent_proxy(conn: &Connection) -> zbus::Result<AgentProxy<'static>> {
+    AgentProxy::builder(conn)
+        .destination(boxxy_sys_utils::agent_bus_name())
+        .build()
+        .await
+}
+
+pub async fn connect_pty_proxy(conn: &Connection) -> zbus::Result<pty::AgentPtyProxy<'static>> {
+    pty::AgentPtyProxy::builder(conn)
+        .destination(boxxy_sys_utils::agent_bus_name())
+        .build()
+        .await
+}
+
+pub async fn connect_claw_proxy(conn: &Connection) -> zbus::Result<claw::AgentClawProxy<'static>> {
+    claw::AgentClawProxy::builder(conn)
+        .destination(boxxy_sys_utils::agent_bus_name())
+        .build()
+        .await
+}
+
+pub async fn connect_maintenance_proxy(
+    conn: &Connection,
+) -> zbus::Result<maintenance::AgentMaintenanceProxy<'static>> {
+    maintenance::AgentMaintenanceProxy::builder(conn)
+        .destination(boxxy_sys_utils::agent_bus_name())
+        .build()
+        .await
+}
+
 pub async fn start_services(
     core: Arc<DaemonCore>,
     client_count_tx: watch::Sender<usize>,
@@ -29,7 +59,7 @@ pub async fn start_services(
     ))));
 
     let conn = Builder::session()
-        .name("dev.boxxy.BoxxyAgent")
+        .name(boxxy_sys_utils::agent_bus_name())
         .serve_at(
             "/dev/boxxy/Agent",
             AgentInterface {

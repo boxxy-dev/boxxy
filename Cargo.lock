@@ -1112,6 +1112,7 @@ dependencies = [
  "async-trait",
  "boxxy-db",
  "boxxy-preferences",
+ "boxxy-sys-utils",
  "log",
  "opentelemetry",
  "opentelemetry-http",

@@ -1,0 +1,6 @@
+[alias]
+dev-agent = "run -p boxxy-agent -- --dev"
+dev-app = "run -p boxxy-app -- --dev"
+dev-sync = "run -p boxxy-app -- --dev --sync-settings"
+dev-ephemeral = "run -p boxxy-app -- --ephemeral"
+dev-agent-ephemeral = "run -p boxxy-agent -- --ephemeral"

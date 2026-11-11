@@ -472,10 +472,10 @@ impl AgentManager {
             .context("Failed to connect to Session Bus")?;
 
         let (agent_proxy, proxy, claw_proxy, maintenance_proxy) = tokio::try_join!(
-            AgentProxy::new(&conn),
-            AgentPtyProxy::new(&conn),
-            AgentClawProxy::new(&conn),
-            AgentMaintenanceProxy::new(&conn),
+            boxxy_agent::ipc::connect_agent_proxy(&conn),
+            boxxy_agent::ipc::connect_pty_proxy(&conn),
+            boxxy_agent::ipc::connect_claw_proxy(&conn),
+            boxxy_agent::ipc::connect_maintenance_proxy(&conn),
         )
         .context("Failed to create Agent D-Bus proxies on Session Bus")?;
 

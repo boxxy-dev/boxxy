@@ -360,10 +360,12 @@ impl AgentInterface {
             .unwrap_or(&exe_raw)
             .to_string();
 
-        // Filter out `--background` so the reloaded process replaces the current
-        // daemon PID in-place instead of calling `daemonize()` (fork + exit) a
-        // second time, which would trigger PR_SET_PDEATHSIG (SIGHUP) on child PTYs.
-        let args: Vec<String> = std::env::args().filter(|a| a != "--background").collect();
+        // Filter out `--background` and `--sync-settings` so the reloaded process
+        // replaces the current daemon PID in-place without daemonizing a second time
+        // or overwriting runtime settings changes.
+        let args: Vec<String> = std::env::args()
+            .filter(|a| a != "--background" && a != "--sync-settings")
+            .collect();
 
         tokio::spawn(async move {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;

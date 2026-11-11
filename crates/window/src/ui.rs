@@ -175,12 +175,16 @@ impl AppWindow {
                 cp_sync.set_dynamic_commands(commands);
             }
         });
+        let window_title = match boxxy_sys_utils::dev_header_tag() {
+            Some(ref tag) => format!("Boxxy Terminal {tag}"),
+            None => "Boxxy Terminal".to_string(),
+        };
         let window = adw::ApplicationWindow::builder()
             .application(app)
             .default_width(app_state.window_width)
             .default_height(app_state.window_height)
             .maximized(app_state.is_maximized)
-            .title("Boxxy Terminal")
+            .title(window_title)
             .build();
         window.add_css_class("main-window");
 
@@ -887,6 +891,20 @@ impl AppWindow {
             let _ = tx_detached_btn.send_blocking(AppInput::ShowDetachedSessions);
         });
         content_header.pack_end(&detached_btn);
+
+        if let Some(tag_text) = boxxy_sys_utils::dev_header_tag() {
+            let tooltip = format!(
+                "Isolated development instance ({})",
+                boxxy_sys_utils::get_config_dir().display()
+            );
+            let dev_tag = gtk::Label::builder()
+                .label(&tag_text)
+                .valign(gtk::Align::Center)
+                .css_classes(["monospace", "dev-mode-tag"])
+                .tooltip_text(&tooltip)
+                .build();
+            content_header.pack_end(&dev_tag);
+        }
 
         let bell_indicator = gtk::Image::builder()
             .icon_name("boxxy-visual-bell-symbolic")

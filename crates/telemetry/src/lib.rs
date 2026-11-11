@@ -98,6 +98,11 @@ fn is_telemetry_enabled() -> bool {
             _ => {}
         }
     }
+    if boxxy_sys_utils::is_dev_instance()
+        && std::env::var_os("BOXXY_TELEMETRY_ENDPOINT").is_none()
+    {
+        return false;
+    }
     boxxy_preferences::Settings::load().enable_telemetry
 }
 

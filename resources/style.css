@@ -143,6 +143,20 @@ button.detached-shells-pill.warning {
     font-variant-numeric: tabular-nums;
 }
 
+/* HeaderBar Isolated Development Instance Tag (`dev`) — Layer 1 Adwaita Fallback & Geometry */
+headerbar label.dev-mode-tag,
+label.dev-mode-tag {
+    min-height: 20px;
+    padding: 2px 8px;
+    margin: 0 4px 0 2px;
+    border-radius: 6px;
+    font-size: 0.78em;
+    font-weight: 800;
+    background-color: @boxxy_highlight_subtle;
+    color: @warning_color;
+    border: 1px solid alpha(@warning_color, 0.45);
+}
+
 /* Secondary Action Button Modifier (Layer 1 Adwaita Fallback) */
 button.secondary-action {
     background-color: @boxxy_secondary_subtle;
@@ -1238,6 +1252,18 @@ button.link {
     margin-right: -6px;
 }
 
+.sidebar-pane .boxxy-link.boxxy-link-start,
+.sidebar-toolbar .boxxy-link.boxxy-link-start {
+    margin-left: -6px;
+    margin-right: 0;
+}
+
+.sidebar-pane .boxxy-link.boxxy-link-inline,
+.sidebar-toolbar .boxxy-link.boxxy-link-inline {
+    margin-left: 0;
+    margin-right: 0;
+}
+
 .boxxy-link:hover {
     background-color: alpha(currentColor, 0.08);
 }
@@ -1861,4 +1887,3 @@ button.claw-task-dismiss-btn:active {
     outline: none;
     box-shadow: none;
 }
-

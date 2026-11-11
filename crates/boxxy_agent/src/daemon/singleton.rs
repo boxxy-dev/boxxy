@@ -1,9 +1,8 @@
-use crate::ipc::AgentProxy;
+use crate::ipc::connect_agent_proxy;
 use anyhow::Result;
 use log::{info, warn};
 use zbus::Connection;
 
-pub const WELL_KNOWN_NAME: &str = "dev.boxxy.BoxxyAgent";
 pub const AGENT_VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), "+", env!("GIT_HASH"));
 
 #[derive(Debug)]
@@ -24,7 +23,8 @@ pub async fn try_claim_or_handoff() -> Result<ClaimResult> {
     let dbus = DBusProxy::new(&conn).await?;
 
     let flags = zbus::fdo::RequestNameFlags::DO_NOT_QUEUE;
-    let name: zbus::names::WellKnownName<'_> = WELL_KNOWN_NAME.try_into()?;
+    let bus_name = boxxy_sys_utils::agent_bus_name();
+    let name: zbus::names::WellKnownName<'_> = bus_name.try_into()?;
     let reply = dbus.request_name(name, flags).await?;
 
     use zbus::fdo::RequestNameReply::*;
@@ -33,7 +33,7 @@ pub async fn try_claim_or_handoff() -> Result<ClaimResult> {
 
         Exists | AlreadyOwner | InQueue => {
             // Ghost is running — do a version check.
-            match AgentProxy::new(&conn).await {
+            match connect_agent_proxy(&conn).await {
                 Ok(proxy) => {
                     let running_ver = proxy.get_version().await.unwrap_or_default();
                     if running_ver == AGENT_VERSION {
