@@ -6,6 +6,7 @@
  *   2. Standard Tactile Button Geometry & Surface (`min-height: 24px; padding: 5px 12px;`)
  *   3. Semantic Action Modifiers (`.suggested-action`, `.destructive-action`)
  *   4. Size & Shape Modifiers (`.compact-btn`, HeaderBar/Group `.image-button`, `.pill`, `.color-dot-btn`)
+ *   5. Quiet Flat / Utility Buttons (`button.flat` — Recessed Surface Cutout + Thin Ink Hairline)
  * ============================================================================ */
 
 /* 1. Strip Libadwaita's inner circular badge background and extra padding inside
@@ -44,6 +45,7 @@ popover button:not(.flat):not(.model):not(.circular),
 .bookmarks-gallery button:not(.flat):not(.circular),
 statuspage button:not(.flat):not(.circular),
 button.suggested-action:not(.flat),
+button.secondary-action:not(.flat),
 button.destructive-action:not(.flat),
 popover.menu modelbutton,
 popover.terminal-menu modelbutton,
@@ -180,6 +182,69 @@ popover button.suggested-action:not(.flat):not(.model):not(.circular):active,
 statuspage button.suggested-action:not(.flat):not(.circular):active {
     background-color: @accent_bg_color;
     color: @accent_fg_color;
+    transform: var(--boxxy-press-translate);
+    box-shadow: 1px 1px 0px @boxxy_shadow;
+}
+
+button.secondary-action:not(.flat):not(.circular),
+headerbar button.secondary-action:not(.flat):not(.circular),
+dialog button.secondary-action:not(.flat):not(.circular):not(.color-dot-btn),
+preferencespage button.secondary-action:not(.flat):not(.circular):not(.color-dot-btn),
+popover button.secondary-action:not(.flat):not(.model):not(.circular),
+.claw-drawer button.secondary-action:not(.flat):not(.circular):not(.character-btn),
+.bookmarks-gallery button.secondary-action:not(.flat):not(.circular),
+statuspage button.secondary-action:not(.flat):not(.circular) {
+    background-color: @boxxy_secondary_bg_color;
+    background-image: none;
+    color: @boxxy_secondary_fg_color;
+    border-radius: var(--boxxy-radius-md);
+    outline: var(--boxxy-border-width) solid @boxxy_ink;
+    outline-offset: -2px;
+    box-shadow: 2px 3px 0px @boxxy_shadow;
+    font-weight: 700;
+}
+
+button.secondary-action:not(.flat):not(.circular):hover,
+headerbar button.secondary-action:not(.flat):not(.circular):hover,
+dialog button.secondary-action:not(.flat):not(.circular):not(.color-dot-btn):hover,
+preferencespage button.secondary-action:not(.flat):not(.circular):not(.color-dot-btn):hover,
+popover button.secondary-action:not(.flat):not(.model):not(.circular):hover,
+.claw-drawer button.secondary-action:not(.flat):not(.circular):not(.character-btn):hover,
+.bookmarks-gallery button.secondary-action:not(.flat):not(.circular):hover,
+statuspage button.secondary-action:not(.flat):not(.circular):hover {
+    background-color: mix(@boxxy_secondary_bg_color, white, 0.16);
+    color: @boxxy_secondary_fg_color;
+}
+
+button.secondary-action:not(.flat):not(.circular):hover label,
+button.secondary-action:not(.flat):not(.circular):hover image,
+headerbar button.secondary-action:not(.flat):not(.circular):hover label,
+headerbar button.secondary-action:not(.flat):not(.circular):hover image,
+dialog button.secondary-action:not(.flat):not(.circular):not(.color-dot-btn):hover label,
+dialog button.secondary-action:not(.flat):not(.circular):not(.color-dot-btn):hover image,
+preferencespage button.secondary-action:not(.flat):not(.circular):not(.color-dot-btn):hover label,
+preferencespage button.secondary-action:not(.flat):not(.circular):not(.color-dot-btn):hover image,
+popover button.secondary-action:not(.flat):not(.model):not(.circular):hover label,
+popover button.secondary-action:not(.flat):not(.model):not(.circular):hover image,
+.claw-drawer button.secondary-action:not(.flat):not(.circular):not(.character-btn):hover label,
+.claw-drawer button.secondary-action:not(.flat):not(.circular):not(.character-btn):hover image,
+.bookmarks-gallery button.secondary-action:not(.flat):not(.circular):hover label,
+.bookmarks-gallery button.secondary-action:not(.flat):not(.circular):hover image,
+statuspage button.secondary-action:not(.flat):not(.circular):hover label,
+statuspage button.secondary-action:not(.flat):not(.circular):hover image {
+    color: @boxxy_secondary_fg_color;
+}
+
+button.secondary-action:not(.flat):not(.circular):active,
+headerbar button.secondary-action:not(.flat):not(.circular):active,
+dialog button.secondary-action:not(.flat):not(.circular):not(.color-dot-btn):active,
+preferencespage button.secondary-action:not(.flat):not(.circular):not(.color-dot-btn):active,
+popover button.secondary-action:not(.flat):not(.model):not(.circular):active,
+.claw-drawer button.secondary-action:not(.flat):not(.circular):not(.character-btn):active,
+.bookmarks-gallery button.secondary-action:not(.flat):not(.circular):active,
+statuspage button.secondary-action:not(.flat):not(.circular):active {
+    background-color: @boxxy_secondary_bg_color;
+    color: @boxxy_secondary_fg_color;
     transform: var(--boxxy-press-translate);
     box-shadow: 1px 1px 0px @boxxy_shadow;
 }
@@ -437,4 +502,70 @@ button.color-dot-btn {
 button.color-dot-btn:hover {
     border-color: @boxxy_ink;
     box-shadow: 2px 3px 0px @boxxy_shadow;
+}
+
+/* 5. Quiet Flat / Utility Buttons (`button.flat`):
+   Replaces Libadwaita's milky grey `.flat:hover` veil with a recessed theme-surface
+   cutout + crisp `1.5px` `@boxxy_ink` hairline (`box-shadow: none`).
+   Kept at low specificity (`(0, 1, 1)` / `(0, 2, 1)`) so specialized pills and list rows
+   (`.detached-shells-pill`, `tabbar tab button.flat`, `.whats-new-commit-row`,
+   `.whats-new-stat-tile-btn`, `popover.menu`, `.suggested-action.flat`) win naturally. */
+button.flat {
+    background: transparent;
+    background-color: transparent;
+    background-image: none;
+    border-radius: var(--boxxy-radius-md);
+    outline: var(--boxxy-border-thin) solid transparent;
+    outline-offset: -1.5px;
+    box-shadow: none;
+}
+
+button.flat:focus:not(:focus-visible) {
+    outline: var(--boxxy-border-thin) solid transparent;
+    box-shadow: none;
+}
+
+button.flat:focus-visible {
+    outline: var(--boxxy-border-thin) solid @accent_color;
+    outline-offset: -1.5px;
+    box-shadow: none;
+}
+
+button.flat:hover:not(:disabled) {
+    background: @window_bg_color;
+    background-color: @window_bg_color;
+    background-image: none;
+    outline: var(--boxxy-border-thin) solid alpha(@boxxy_ink, 0.80);
+    outline-offset: -1.5px;
+    box-shadow: none;
+}
+
+button.flat:active:not(:disabled) {
+    background: color-mix(in srgb, @window_bg_color 82%, @boxxy_ink 18%);
+    background-color: color-mix(in srgb, @window_bg_color 82%, @boxxy_ink 18%);
+    background-image: none;
+    outline: var(--boxxy-border-thin) solid @boxxy_ink;
+    outline-offset: -1.5px;
+    box-shadow: none;
+}
+
+/* Inside `.claw-drawer` (whose canvas is already `@window_bg_color`), step flat
+   utility buttons (such as `#inspect_btn`) onto `@card_bg_color` so the cutout
+   remains crisply visible on both dark and light themes. */
+.claw-drawer button.flat:hover:not(:disabled) {
+    background: @card_bg_color;
+    background-color: @card_bg_color;
+    background-image: none;
+    outline: var(--boxxy-border-thin) solid alpha(@boxxy_ink, 0.80);
+    outline-offset: -1.5px;
+    box-shadow: none;
+}
+
+.claw-drawer button.flat:active:not(:disabled) {
+    background: color-mix(in srgb, @card_bg_color 80%, @boxxy_ink 20%);
+    background-color: color-mix(in srgb, @card_bg_color 80%, @boxxy_ink 20%);
+    background-image: none;
+    outline: var(--boxxy-border-thin) solid @boxxy_ink;
+    outline-offset: -1.5px;
+    box-shadow: none;
 }

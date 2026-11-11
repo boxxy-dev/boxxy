@@ -24,6 +24,7 @@ boxxy-claw-ui = { path = "../boxxy_claw_ui" }
 boxxy-core-widgets.workspace = true
 boxxy-db = { path = "../db" }
 boxxy-preferences = { path = "../preferences" }
+boxxy-themes.workspace = true
 boxxy-viewer = { path = "../viewer" }
 parking_lot.workspace = true
 frizbee.workspace = true

@@ -12,7 +12,7 @@
 }
 
 window:not(.frosted-glass-active) .terminal-header tabbar tab,
-tabbar tab {
+window:not(.frosted-glass-active) tabbar tab {
     background-color: @card_bg_color;
     color: @card_fg_color;
     border-radius: var(--boxxy-radius-md);
@@ -22,21 +22,21 @@ tabbar tab {
 }
 
 window:not(.frosted-glass-active) .terminal-header tabbar tab:hover:not(:selected),
-tabbar tab:hover:not(:selected) {
+window:not(.frosted-glass-active) tabbar tab:hover:not(:selected) {
     background-color: @boxxy_surface_hover;
     color: @accent_fg_color;
 }
 
 window:not(.frosted-glass-active) .terminal-header tabbar tab:hover:not(:selected) label,
 window:not(.frosted-glass-active) .terminal-header tabbar tab:hover:not(:selected) image,
-tabbar tab:hover:not(:selected) label,
-tabbar tab:hover:not(:selected) image {
+window:not(.frosted-glass-active) tabbar tab:hover:not(:selected) label,
+window:not(.frosted-glass-active) tabbar tab:hover:not(:selected) image {
     color: @accent_fg_color;
 }
 
 window:not(.frosted-glass-active) .terminal-header tabbar tab:selected,
-tabbar tab:selected,
-tabbar tab:checked {
+window:not(.frosted-glass-active) tabbar tab:selected,
+window:not(.frosted-glass-active) tabbar tab:checked {
     background-color: @accent_bg_color;
     color: @accent_fg_color;
     outline: var(--boxxy-border-width) solid @boxxy_ink;
@@ -46,8 +46,53 @@ tabbar tab:checked {
 
 window:not(.frosted-glass-active) .terminal-header tabbar tab:selected label,
 window:not(.frosted-glass-active) .terminal-header tabbar tab:selected image,
-tabbar tab:selected label,
-tabbar tab:selected image {
+window:not(.frosted-glass-active) tabbar tab:selected label,
+window:not(.frosted-glass-active) tabbar tab:selected image {
+    color: @accent_fg_color;
+    font-weight: 700;
+}
+
+/* Frosted Glass Tabs in Boxxy Mode: preserve backdrop blur transparency on unselected
+   tabs while keeping crisp ink outlines and accent selection pills. */
+window.frosted-glass-active .terminal-header tabbar tab,
+window.frosted-glass-active tabbar tab {
+    background-color: transparent;
+    color: @headerbar_fg_color;
+    border-radius: var(--boxxy-radius-md);
+    outline: var(--boxxy-border-thin) solid alpha(@boxxy_ink, 0.45);
+    outline-offset: -1.5px;
+    box-shadow: none;
+}
+
+window.frosted-glass-active .terminal-header tabbar tab:hover:not(:selected),
+window.frosted-glass-active tabbar tab:hover:not(:selected) {
+    background-color: alpha(@accent_bg_color, 0.78);
+    color: @accent_fg_color;
+    outline: var(--boxxy-border-width) solid @boxxy_ink;
+    outline-offset: -2px;
+}
+
+window.frosted-glass-active .terminal-header tabbar tab:hover:not(:selected) label,
+window.frosted-glass-active .terminal-header tabbar tab:hover:not(:selected) image,
+window.frosted-glass-active tabbar tab:hover:not(:selected) label,
+window.frosted-glass-active tabbar tab:hover:not(:selected) image {
+    color: @accent_fg_color;
+}
+
+window.frosted-glass-active .terminal-header tabbar tab:selected,
+window.frosted-glass-active tabbar tab:selected,
+window.frosted-glass-active tabbar tab:checked {
+    background-color: alpha(@accent_bg_color, 0.90);
+    color: @accent_fg_color;
+    outline: var(--boxxy-border-width) solid @boxxy_ink;
+    outline-offset: -2px;
+    box-shadow: none;
+}
+
+window.frosted-glass-active .terminal-header tabbar tab:selected label,
+window.frosted-glass-active .terminal-header tabbar tab:selected image,
+window.frosted-glass-active tabbar tab:selected label,
+window.frosted-glass-active tabbar tab:selected image {
     color: @accent_fg_color;
     font-weight: 700;
 }

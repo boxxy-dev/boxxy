@@ -59,6 +59,21 @@ window:not(.frosted-glass-active) .content-header {
     box-shadow: none;
 }
 
+window.frosted-glass-active .terminal-header,
+window.frosted-glass-active .content-header {
+    background-color: transparent;
+    color: @headerbar_fg_color;
+    background-image: none;
+    border-bottom: var(--boxxy-border-thin) solid alpha(@boxxy_ink, 0.45);
+    box-shadow: none;
+}
+
+window.frosted-glass-active .sidebar-toolbar,
+window.frosted-glass-active .sidebar-toolbar > contents,
+window.frosted-glass-active .main-split-view > .sidebar-pane {
+    background-color: alpha(@sidebar_bg_color, 0.90);
+}
+
 adw-dialog headerbar,
 dialog headerbar,
 navigation-split-view > .content-pane headerbar {
@@ -67,4 +82,59 @@ navigation-split-view > .content-pane headerbar {
     background-image: none;
     border-bottom: var(--boxxy-border-width) solid @boxxy_ink;
     box-shadow: none;
+}
+
+/* HeaderBar Detached Background Shells Status Pill:
+   Styled as a compact, shadowless status indicator capsule (matching Pending Tasks /
+   Phase pills) rather than a 32x32 3D window-chrome button. */
+headerbar button.detached-shells-pill,
+headerbar.content-header button.detached-shells-pill,
+button.detached-shells-pill {
+    min-height: 20px;
+    min-width: 0;
+    padding: 2px 9px;
+    margin: 0 4px 0 2px;
+    border-radius: var(--boxxy-radius-pill);
+    background-color: @boxxy_secondary_bg_color;
+    background-image: none;
+    color: @boxxy_secondary_fg_color;
+    border: var(--boxxy-border-thin) solid @boxxy_ink;
+    outline: none;
+    box-shadow: none;
+}
+
+headerbar button.detached-shells-pill label,
+headerbar button.detached-shells-pill image,
+button.detached-shells-pill label,
+button.detached-shells-pill image {
+    color: @boxxy_secondary_fg_color;
+}
+
+headerbar button.detached-shells-pill:hover,
+button.detached-shells-pill:hover {
+    background-color: mix(@boxxy_secondary_bg_color, white, 0.16);
+    background-image: none;
+    color: @boxxy_secondary_fg_color;
+    border-color: @boxxy_ink;
+    box-shadow: none;
+}
+
+headerbar button.detached-shells-pill.warning,
+button.detached-shells-pill.warning {
+    background-color: @boxxy_highlight_bg_color;
+    color: @boxxy_highlight_fg_color;
+    border-color: @boxxy_ink;
+}
+
+headerbar button.detached-shells-pill.warning label,
+headerbar button.detached-shells-pill.warning image,
+button.detached-shells-pill.warning label,
+button.detached-shells-pill.warning image {
+    color: @boxxy_highlight_fg_color;
+}
+
+headerbar button.detached-shells-pill.warning:hover,
+button.detached-shells-pill.warning:hover {
+    background-color: mix(@boxxy_highlight_bg_color, white, 0.16);
+    color: @boxxy_highlight_fg_color;
 }

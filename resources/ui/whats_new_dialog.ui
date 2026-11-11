@@ -44,12 +44,27 @@
                         <property name="margin-top">14</property>
                         <property name="margin-bottom">14</property>
                         <child>
-                          <object class="GtkLabel" id="hero_badge_label">
-                            <property name="label">✨ FRESH UPDATE</property>
+                          <object class="GtkBox">
+                            <property name="orientation">horizontal</property>
+                            <property name="spacing">5</property>
                             <property name="halign">start</property>
+                            <property name="valign">center</property>
                             <style>
                               <class name="whats-new-badge"/>
                             </style>
+                            <child>
+                              <object class="GtkImage">
+                                <property name="icon-name">boxxy-up-arrow-in-a-star-symbolic</property>
+                                <property name="pixel-size">12</property>
+                                <property name="valign">center</property>
+                              </object>
+                            </child>
+                            <child>
+                              <object class="GtkLabel" id="hero_badge_label">
+                                <property name="label">FRESH UPDATE</property>
+                                <property name="valign">center</property>
+                              </object>
+                            </child>
                           </object>
                         </child>
                         <child>
@@ -97,17 +112,18 @@
                                         </style>
                                       </object>
                                     </child>
-                                    <child>
-                                      <object class="GtkButton" id="edit_range_btn">
-                                        <property name="icon-name">boxxy-document-edit-symbolic</property>
-                                        <property name="tooltip-text">Customize commit range</property>
-                                        <property name="valign">center</property>
-                                        <style>
-                                          <class name="flat"/>
-                                          <class name="whats-new-range-btn"/>
-                                        </style>
-                                      </object>
-                                    </child>
+                                      <child>
+                                        <object class="GtkButton" id="edit_range_btn">
+                                          <property name="icon-name">boxxy-document-edit-symbolic</property>
+                                          <property name="tooltip-text">Customize commit range</property>
+                                          <property name="valign">center</property>
+                                          <property name="focus-on-click">false</property>
+                                          <style>
+                                            <class name="flat"/>
+                                            <class name="whats-new-range-btn"/>
+                                          </style>
+                                        </object>
+                                      </child>
                                   </object>
                                 </property>
                               </object>
@@ -537,6 +553,7 @@
                         <child>
                           <object class="GtkButton" id="copy_prompt_btn">
                             <property name="halign">start</property>
+                            <property name="focus-on-click">false</property>
                             <property name="tooltip-text">Copy the update changelog prompt to paste in any web AI</property>
                             <style>
                               <class name="flat"/>
@@ -631,6 +648,7 @@
                         <property name="label">← Back</property>
                         <property name="halign">start</property>
                         <property name="valign">center</property>
+                        <property name="focus-on-click">false</property>
                         <style>
                           <class name="flat"/>
                           <class name="whats-new-back-btn"/>

@@ -147,6 +147,16 @@ dialog stackswitcher > button:checked label {
     font-weight: 700;
 }
 
+.claw-task-kind-badge {
+    background-color: @boxxy_secondary_bg_color;
+    color: @boxxy_secondary_fg_color;
+    border: var(--boxxy-border-thin) solid @boxxy_ink;
+    border-radius: 5px;
+    padding: 1px 6px;
+    font-size: 0.72em;
+    font-weight: 700;
+}
+
 .claw-tasks-empty-card {
     background-color: @card_bg_color;
     color: @card_fg_color;
@@ -229,8 +239,8 @@ dialog stackswitcher > button:checked label {
 }
 
 .claw-round-phase-pill.claw-round-phase-work {
-    background-color: @accent_bg_color;
-    color: @accent_fg_color;
+    background-color: @boxxy_secondary_bg_color;
+    color: @boxxy_secondary_fg_color;
     border: var(--boxxy-border-thin) solid @boxxy_ink;
 }
 
@@ -261,7 +271,7 @@ dialog stackswitcher > button:checked label {
 
 .claw-round-pip.claw-round-pip-active {
     min-width: 24px;
-    background-color: @accent_bg_color;
+    background-color: @boxxy_highlight_bg_color;
     border-color: @boxxy_ink;
 }
 

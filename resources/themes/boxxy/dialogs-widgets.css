@@ -16,17 +16,42 @@ dialog-host > dialog sheet {
     box-shadow: 4px 5px 0px @boxxy_shadow;
 }
 
-/* ── Preferences -> Themes Page Custom Widgets ───────────────────────────── */
+/* ── Preferences -> Themes Page & Semantic Badges ────────────────────────── */
 
 .boxxy-theme-tag-pill {
-    background-color: @accent_bg_color;
-    color: @accent_fg_color;
+    background-color: @boxxy_secondary_bg_color;
+    color: @boxxy_secondary_fg_color;
     border-radius: var(--boxxy-radius-pill);
     padding: 1px 8px;
     font-size: 0.78em;
     font-weight: 700;
     border: var(--boxxy-border-thin) solid @boxxy_ink;
     outline: none;
+}
+
+.boxxy-badge-secondary {
+    background-color: @boxxy_secondary_bg_color;
+    color: @boxxy_secondary_fg_color;
+    border-radius: var(--boxxy-radius-pill);
+    padding: 2px 9px;
+    font-size: 0.76em;
+    font-weight: 700;
+    border: var(--boxxy-border-thin) solid @boxxy_ink;
+    outline: none;
+    box-shadow: 1.5px 2px 0px @boxxy_shadow;
+}
+
+.boxxy-badge-highlight {
+    background-color: @boxxy_highlight_bg_color;
+    color: @boxxy_highlight_fg_color;
+    border-radius: var(--boxxy-radius-pill);
+    padding: 2px 9px;
+    font-size: 0.76em;
+    font-weight: 800;
+    letter-spacing: 0.4px;
+    border: var(--boxxy-border-thin) solid @boxxy_ink;
+    outline: none;
+    box-shadow: 1.5px 2px 0px @boxxy_shadow;
 }
 
 /* ── Editable Avatar & Badges (Protected from `preferencespage button` padding) */
@@ -99,6 +124,18 @@ button.editable-avatar-remove-badge:hover {
     border-bottom: var(--boxxy-border-width) solid @boxxy_ink;
 }
 
+.whats-new-badge {
+    background-color: @boxxy_highlight_bg_color;
+    color: @boxxy_highlight_fg_color;
+    border: var(--boxxy-border-thin) solid @boxxy_ink;
+    box-shadow: 1.5px 2px 0px @boxxy_shadow;
+}
+
+.whats-new-badge label,
+.whats-new-badge image {
+    color: @boxxy_highlight_fg_color;
+}
+
 .whats-new-commit-pill {
     background-color: @card_bg_color;
     color: @card_fg_color;
@@ -133,9 +170,7 @@ button.whats-new-stat-tile-btn:active {
     box-shadow: 1px 1px 0px @boxxy_shadow;
 }
 
-/* Preserve dedicated compact padding on What's New dialog controls
-   (specificity `>= (0, 3, 2)` to beat `dialog button:not(.flat):not(.circular):not(.color-dot-btn)`) */
-dialog button.whats-new-range-btn:not(.circular):not(.color-dot-btn),
+/* Preserve dedicated compact geometry on What's New dialog flat utility controls */
 dialog button.whats-new-range-btn,
 button.whats-new-range-btn {
     min-width: 26px;
@@ -144,16 +179,62 @@ button.whats-new-range-btn {
     border-radius: 7px;
 }
 
-dialog button.whats-new-commit-row:not(.circular):not(.color-dot-btn),
 dialog button.whats-new-commit-row,
 button.whats-new-commit-row {
     min-height: 32px;
     padding: 6px 10px;
     border-radius: var(--boxxy-radius-input);
     font-weight: 400;
+    background: transparent;
+    background-color: transparent;
+    background-image: none;
+    color: @dialog_fg_color;
+    border: none;
+    outline: var(--boxxy-border-thin) solid transparent;
+    outline-offset: -1.5px;
+    box-shadow: none;
+    transition: none;
 }
 
-dialog button.whats-new-back-btn:not(.circular):not(.color-dot-btn),
+dialog button.whats-new-commit-row:hover:not(:disabled),
+dialog button.whats-new-commit-row:focus-visible,
+button.whats-new-commit-row:hover:not(:disabled),
+button.whats-new-commit-row:focus-visible {
+    background: @window_bg_color;
+    background-color: @window_bg_color;
+    background-image: none;
+    color: @dialog_fg_color;
+    border: none;
+    outline: var(--boxxy-border-thin) solid alpha(@boxxy_ink, 0.80);
+    outline-offset: -1.5px;
+    box-shadow: none;
+}
+
+dialog button.whats-new-commit-row:active:not(:disabled),
+button.whats-new-commit-row:active:not(:disabled) {
+    background: color-mix(in srgb, @window_bg_color 82%, @boxxy_ink 18%);
+    background-color: color-mix(in srgb, @window_bg_color 82%, @boxxy_ink 18%);
+    background-image: none;
+    color: @dialog_fg_color;
+    border: none;
+    outline: var(--boxxy-border-thin) solid @boxxy_ink;
+    outline-offset: -1.5px;
+    box-shadow: none;
+}
+
+dialog .whats-new-commit-arrow,
+.whats-new-commit-arrow {
+    transition: none;
+}
+
+dialog button.whats-new-commit-row:hover .whats-new-commit-arrow,
+dialog button.whats-new-commit-row:focus-visible .whats-new-commit-arrow,
+button.whats-new-commit-row:hover .whats-new-commit-arrow,
+button.whats-new-commit-row:focus-visible .whats-new-commit-arrow {
+    opacity: 0.85;
+    color: @dialog_fg_color;
+}
+
 dialog button.whats-new-back-btn,
 button.whats-new-back-btn {
     min-height: 24px;
@@ -163,13 +244,24 @@ button.whats-new-back-btn {
     font-weight: 700;
 }
 
-dialog button.whats-new-nav-btn:not(.circular):not(.color-dot-btn),
 dialog button.whats-new-nav-btn,
 button.whats-new-nav-btn {
     min-width: 24px;
     min-height: 24px;
     padding: 2px 4px;
     border-radius: var(--boxxy-radius-sm);
+}
+
+.boxxy-link {
+    outline: var(--boxxy-border-thin) solid transparent;
+    outline-offset: -1.5px;
+    transition: none;
+}
+
+.boxxy-link:hover {
+    background-color: @window_bg_color;
+    outline: var(--boxxy-border-thin) solid alpha(@boxxy_ink, 0.80);
+    outline-offset: -1.5px;
 }
 
 /* ── In-App Toasts (`AdwToastOverlay > toast`) ─────────────────────────────

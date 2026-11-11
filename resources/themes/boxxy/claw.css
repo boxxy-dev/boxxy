@@ -49,6 +49,18 @@
     color: @card_fg_color;
 }
 
+/* Keep the embedded avatar toggle inside `.boxxy-msgbar` free of a square hover box
+   (the avatar itself scales smoothly on hover). */
+.claw-drawer .boxxy-msgbar button.flat,
+.claw-drawer .boxxy-msgbar button.flat:hover:not(:disabled),
+.claw-drawer .boxxy-msgbar button.flat:active:not(:disabled) {
+    background: transparent;
+    background-color: transparent;
+    background-image: none;
+    outline: none;
+    box-shadow: none;
+}
+
 /* Protect MsgBar Attachment Tag close buttons (`×`) from `.claw-drawer button` padding */
 .claw-drawer .msgbar-tag button {
     min-height: 18px;
@@ -119,4 +131,16 @@
     background-color: @accent_bg_color;
     color: @accent_fg_color;
     outline: var(--boxxy-border-thin) solid @boxxy_ink;
+}
+
+/* Vibe Mode Avatar Badge: Highlight callout role (distinct from Sleep warning & Accent selection) */
+.avatar-vibe-badge {
+    background-color: @boxxy_highlight_bg_color;
+    color: @boxxy_highlight_fg_color;
+    border: var(--boxxy-border-thin) solid @boxxy_ink;
+    box-shadow: 1.5px 2px 0px @boxxy_shadow;
+}
+
+.avatar-vibe-badge image {
+    color: @boxxy_highlight_fg_color;
 }

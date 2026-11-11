@@ -1,6 +1,6 @@
 # Boxxy Theme Engine & Community Theme API (`BOXXY_THEME_API.md`)
 
-This document is the authoritative specification for the **Boxxy App Theme Engine** (`crates/themes/src/app_theme.rs` and `resources/themes/boxxy_skeleton.css`). It documents the 4-layer GTK CSS cascade, the official Dark and Light color palettes, the complete `@define-color` variable catalog and every UI component that consumes it, the Shadow vs. Non-Shadow visual hierarchy, the unified HeaderBar button geometry rules, and the `.toml` Community Theme API.
+This document is the authoritative specification for the **Boxxy App Theme Engine** (`crates/themes/src/app_theme/` and `resources/themes/boxxy_skeleton.css`). It documents the 4-layer GTK CSS cascade, the official Dark and Light color palettes, the complete `@define-color` variable catalog and every UI component that consumes it, the Shadow vs. Non-Shadow visual hierarchy, the unified HeaderBar button geometry rules, and the `.toml` Community Theme API.
 
 ---
 
@@ -9,7 +9,7 @@ This document is the authoritative specification for the **Boxxy App Theme Engin
 Boxxy decouples **Terminal Palettes** from **Application Chrome Themes**:
 
 - **Terminal Palettes (`crates/themes/src/lib.rs`, `resources/palettes/*.toml`):** Control the terminal canvas foreground/background, cursor, 16 ANSI colors, and `GtkSourceView` XML schemes.
-- **Boxxy App Themes (`crates/themes/src/app_theme.rs`, `resources/themes/boxxy_skeleton.css`):** Style the surrounding application chrome (HeaderBars, Sidebars, Tabs, Popovers, Menus, Preferences, Dialogs, Claw Overlay Drawer, and Buttons) using a 4-layer GTK 4 `CssProvider` cascade.
+- **Boxxy App Themes (`crates/themes/src/app_theme/`, `resources/themes/boxxy_skeleton.css`):** Style the surrounding application chrome (HeaderBars, Sidebars, Tabs, Popovers, Menus, Preferences, Dialogs, Claw Overlay Drawer, and Buttons) using a 4-layer GTK 4 `CssProvider` cascade.
 
 ### The 4-Layer GTK `CssProvider` Cascade
 
@@ -28,9 +28,9 @@ Boxxy decouples **Terminal Palettes** from **Application Chrome Themes**:
 
 ## 2. Official Built-in Palettes (`Boxxy Dark` & `Boxxy Light`)
 
-Boxxy ships with two official built-in themes in `builtin_app_themes()` (`crates/themes/src/app_theme.rs`):
+Boxxy ships with two official built-in themes in `builtin_app_themes()` (`crates/themes/src/app_theme/colors.rs`), featuring a 3-color identity triad (`accent`, `secondary`, `highlight`):
 
-| Token (`AppThemeColors`) | `Boxxy Dark` (`id = "boxxy-dark"`) | `Boxxy Light` (`id = "boxxy-light"`) | Surface Role |
+| Token (`AppThemeColors`) | `Boxxy Dark` (`id = "boxxy-dark"`) | `Boxxy Light` (`id = "boxxy-light"`) | Surface / Identity Role |
 | :--- | :--- | :--- | :--- |
 | `window_bg` | `#1d1d20` (Carbon Dark) | `#ecfafb` (Warm Mint Paper) | Primary window, Preferences content pane, and Claw overlay drawer canvas background. |
 | `window_fg` | `#f2f4f2` | `#111418` | Primary text and icon foreground on `window_bg`. |
@@ -42,8 +42,12 @@ Boxxy ships with two official built-in themes in `builtin_app_themes()` (`crates
 | `headerbar_fg` | `#f2f4f2` | `#111418` | Text and icon foreground on `headerbar_bg`. |
 | `popover_bg` | `#2e2e32` *(matches `sidebar_bg`)* | `#ffffff` *(matches `sidebar_bg`)* | Right-click terminal menu (`popover.terminal-menu`), hamburger menu (`popover.menu`), command palette, search popover, autocomplete popover, and standalone modal dialogs (`@dialog_bg_color`). |
 | `popover_fg` | `#f2f4f2` | `#111418` | Text and icon foreground on `popover_bg` and `@dialog_fg_color`. |
-| `accent` | `#7ec868` (Peanut Green) | `#00acc1` (Boxxy Cyan) | Selected tabs, active sidebar rows, active `AdwViewSwitcher` buttons, `.suggested-action` buttons, checked switches/checkboxes, and focus rings. |
+| `accent` | `#7ec868` (Peanut Green) | `#00acc1` (Boxxy Cyan) | **Primary interaction:** Selected tabs, active sidebar rows, active `AdwViewSwitcher` buttons, `.suggested-action` buttons, checked switches/checkboxes, focus rings, and `@boxxy_surface_hover`. |
 | `accent_fg` | `#0d140a` | `#0d1117` | High-contrast ink text/icons rendered on top of `accent` surfaces. |
+| `secondary` | `#7dc4e4` (Sky Slate Cyan) | `#a594f9` (Iris Lavender) | **Supporting identity:** Theme tag pills (`.boxxy-theme-tag-pill`), bookmark variable chips (`.bookmark-var-chip`), task kind badges (`.claw-task-kind-badge`), `.boxxy-badge-secondary`, and `@file` input tags. |
+| `secondary_fg` | `#0b1620` | `#111418` | High-contrast ink text/icons rendered on top of solid `secondary` badges. |
+| `highlight` | `#f5b971` (Warm Solar Amber) | `#ff9f43` (Tangerine Gold) | **Attention & discovery:** `NEW`/`UPDATED` badges (`.whats-new-badge`, `.boxxy-badge-highlight`), Vibe Mode avatar badge (`.avatar-vibe-badge`), search matches (`.boxxy-search-match`), and `:character` mention tags. |
+| `highlight_fg` | `#201407` | `#111418` | High-contrast ink text/icons rendered on top of solid `highlight` badges. |
 | `ink_border` | `#050505` | `#111418` | Crisp `2px` neo-brutalist outlines and structural pane dividers (`@boxxy_ink`). |
 | `shadow` | `#050505` | `#111418` | Solid offset drop-shadows (`@boxxy_shadow`). |
 
@@ -74,13 +78,22 @@ In `Boxxy Dark` (and by default in community themes), `popover_bg` (`#2e2e32`) m
 | `@popover_bg_color` / `@dialog_bg_color` | `colors.popover_bg` | `popover > contents`, `popover.menu > contents`, `popover.terminal-menu > contents`, `popover.command-palette > contents`, `popover.search-popover > contents`, `.autocomplete-popover contents`, and standalone `adw::Dialog` / `adw::AlertDialog` sheets (`floating-sheet > sheet`, `bottom-sheet > sheet`, `dialog-host > dialog sheet`). |
 | `@popover_fg_color` / `@dialog_fg_color` | `colors.popover_fg` | Menu items (`popover.menu modelbutton`, `popover.terminal-menu modelbutton`), standalone dialog text, and labels inside all popovers. |
 
-### 3.2 Accent & Interactive Highlight Variables
+### 3.2 Identity Color Triad Variables (`accent`, `secondary`, `highlight`)
 
 | CSS `@define-color` Variable | Source Field / Formula | Components Using This Variable |
 | :--- | :--- | :--- |
-| `@accent_bg_color` | `colors.accent` (or Layer 4 override) | Selected terminal tab (`tabbar tab:selected`), selected sidebar row (`.navigation-sidebar > row:selected`), active sidebar switcher button (`viewswitcher > button:checked`), active/pressed tactile buttons (`:active`, `:checked`), `button.suggested-action`, hovered popover menu items (`modelbutton:hover`, `box.linked > button.model:hover`), `switch:checked`, `checkbutton check:checked`, `.character-btn.selected-character`, `.boxxy-theme-tag-pill`, `.editable-avatar-badge:hover`, `.terminal-pane .split-drop-overlay`, `.whats-new-hero` gradient, `.diff-badge-modified`, `.diff-slide-drawer` border. |
-| `@accent_fg_color` | `colors.accent_fg` (or auto-contrasted Layer 4) | High-contrast text and icons inside all `@accent_bg_color` surfaces (`tabbar tab:selected`, `.navigation-sidebar > row:selected`, `viewswitcher > button:checked`, `button.suggested-action`, `modelbutton:hover`, `.boxxy-theme-tag-pill`). |
-| `@accent_color` | `colors.accent` (or Layer 4 override) | Focus outlines on `searchentry:focus-within`, `entry:focus-within`, and `.claw-drawer .boxxy-msgbar:focus-within`; `.bookmark-hero-icon`, `.bookmark-var-chip`, `.avatar-vibe-badge`, `.claw-spinner` fallback, `.diff-badge-modified` text. |
+| `@accent_bg_color` | `colors.accent` (or Layer 4 override) | Selected terminal tab (`tabbar tab:selected`), selected sidebar row (`.navigation-sidebar > row:selected`), active sidebar switcher button (`viewswitcher > button:checked`), active/pressed tactile buttons (`:active`, `:checked`), `button.suggested-action`, hovered popover menu items (`modelbutton:hover`, `box.linked > button.model:hover`), `switch:checked`, `checkbutton check:checked`, `.character-btn.selected-character`, `.editable-avatar-badge:hover`, `.terminal-pane .split-drop-overlay`, `.whats-new-hero` gradient start, `.diff-badge-modified`, `.diff-slide-drawer` border. |
+| `@accent_fg_color` | `colors.accent_fg` (or auto-contrasted Layer 4) | High-contrast text and icons inside all `@accent_bg_color` and `@boxxy_surface_hover` surfaces. |
+| `@accent_color` | `colors.accent` (or Layer 4 override) | Focus outlines on `searchentry:focus-within`, `entry:focus-within`, and `.claw-drawer .boxxy-msgbar:focus-within`; `.bookmark-hero-icon`, `.claw-spinner` fallback, `.diff-badge-modified` text. |
+| `@boxxy_secondary_bg_color` | `colors.secondary` (Layer 1 fallback: `@accent_bg_color`) | Solid comic fill for `button.secondary-action` (Claw drawer `Okay` button), `.claw-round-phase-work` (`● LAP X/N` counter pill), `.detached-shells-pill` (HeaderBar background shells status pill), `.boxxy-theme-tag-pill`, `.bookmark-var-chip`, `.claw-task-kind-badge`, `.boxxy-badge-secondary`, and `.whats-new-hero` mid gradient stop. |
+| `@boxxy_secondary_fg_color` | `colors.secondary_fg` (Layer 1 fallback: `@accent_fg_color`) | High-contrast text/icons on top of `@boxxy_secondary_bg_color` buttons, pills, and chips. |
+| `@boxxy_secondary_color` | OKLCH `readable_color_on_surface(secondary, is_card_dark)` | Contrast-clamped standalone text/icon/border color on `@card_bg_color` (used in subtle washes and `GtkTextTag` `@file` highlighting). |
+| `@boxxy_secondary_subtle` | `alpha(@boxxy_secondary_bg_color, 0.16)` | Translucent secondary wash for Default GTK fallback chips and subtle metadata pills. |
+| `@boxxy_highlight_bg_color` | `colors.highlight` (Layer 1 fallback: `@warning_bg_color`) | Solid discovery/attention fill for `.claw-round-pip-active` (live active lap capsule), `.whats-new-badge`, `.avatar-vibe-badge`, `.detached-shells-pill.warning`, `.boxxy-badge-highlight`, and `.whats-new-hero` end gradient stop. |
+| `@boxxy_highlight_fg_color` | `colors.highlight_fg` (Layer 1 fallback: `@warning_fg_color`) | High-contrast text/icons on top of `@boxxy_highlight_bg_color` badges. |
+| `@boxxy_highlight_color` | OKLCH `readable_color_on_surface(highlight, is_card_dark)` | Contrast-clamped standalone discovery text/border color on `@card_bg_color` (used in Default GTK subtle callouts and `GtkTextTag` `:character` mention highlighting). |
+| `@boxxy_highlight_subtle` | `alpha(@boxxy_highlight_bg_color, 0.22)` | Translucent highlight wash for subtle feature callouts. |
+| `@boxxy_search_match_bg` / `@boxxy_search_match_fg` | `alpha(@boxxy_highlight_bg_color, 0.32)` / `@card_fg_color` | `.boxxy-search-match` text/list filter match highlight without overpowering surrounding badges. |
 
 ### 3.3 Neo-Brutalist Structural & Semantic Status Variables
 
@@ -113,7 +126,7 @@ Boxxy intentionally distinguishes between **floating tactile controls** (which c
 | **Dropdown & Menu List Rows** (`dropdown > popover.menu > contents listview > row`, `popover.menu modelbutton`) | **On Hover (`2px 2px 0px @boxxy_shadow`)** | `2px 2px 0px @boxxy_shadow` | Hovered menu and dropdown items snap instantly (`transition: none`) into `@accent_bg_color` with a `2px solid @boxxy_ink` border and `2px 2px 0px` offset shadow. |
 | **Flat / Embedded Sub-Buttons** (`button.flat`, `tab button.image-button`, `.claw-status-pill button.circular`) | **No** (`box-shadow: none`) | `none` | Embedded close/action icons inside a parent pill or tab that already has its own border. |
 | **Search & Text Entries** (`searchentry`, `entry:not(.flat)`) | **Yes** | `2px 2px 0px @boxxy_shadow` (`2px 3px 0px` on focus) | Gives input fields a recessed/tactile card feel. |
-| **Preference Boxed Lists** (`.boxed-list`, `.boxed-list-separate`, `preferencesgroup listbox`) | **Yes** | `2px 3px 0px @boxxy_shadow` | Structured `8px`-radius preference groups with a `2px solid @boxxy_ink` frame, recessed `1.5px solid alpha(@boxxy_ink, 0.55)` row grooves, and accent-tinted `row.activatable:hover` states. |
+| **Preference Boxed Lists** (`.boxed-list`, `.boxed-list-separate`, `preferencesgroup listbox`) | **Yes** | `2px 3px 0px @boxxy_shadow` | Structured `8px`-radius preference groups with a `2px solid @boxxy_ink` frame, recessed `1.5px solid alpha(@boxxy_ink, 0.55)` row grooves, and recessed `@window_bg_color` `row.activatable:hover` states. |
 | **Standalone Content Cards** (`.card`, `.bookmark-card`) | **Yes** | `3px 4px 0px @boxxy_shadow` | Large elevated content containers (`border-radius: 8px`). |
 | **Scale Sliders & Squared Scrollbars** (`scale > trough > slider`, `scrollbar.overlay-indicator`) | **Yes (Slider) / Inset (Scrollbar)** | `1.5px 2px 0px @boxxy_shadow` | `scale` uses a `24×20px` `@card_fg_color` block grabber (`border-radius: 6px`). Overlay scrollbars reset Libadwaita's negative `-8px` slider margin (`margin: 0; outline-offset: 0;`) and inset the trough (`margin: 3px 5px`) with a `2px`-radius thumb (`6px` rest / `12px` hover) and `inset 0 0 0 1.5px @boxxy_ink` borders so thumbs never overflow or clip at window, dialog, or sidebar edges. |
 | **Popovers & Dialog Sheets** (`popover > contents`, `dialog sheet`) | **Yes** | `4px 5px 0px @boxxy_shadow` | Highest elevation layer floating above the window canvas. |
@@ -168,17 +181,19 @@ Users and community authors can drop `.toml` files into `~/.config/boxxy-termina
 [meta]
 name = "Cotton Candy"                                  # Optional (defaults to filename stem with spaces)
 author = "nukeop"                                      # Optional (defaults to "community")
-description = "Soft pastels in baby pink and blue"     # Optional (defaults to "")
-mode = "light"                                         # Optional: "light" or "dark" (auto-detected from window_bg luminance if omitted)
+description = "Soft pastels in baby pink, sky blue, and lemon candy" # Optional (defaults to "")
+mode = "light"                                         # Optional: "light" or "dark" (auto-detected from window_bg WCAG luminance if omitted)
 tags = ["pastel", "pink", "cute"]                      # Optional: up to 6 tags (first 3 shown as pills in Preferences)
 
 [colors]
-# --- REQUIRED (3 fields) ---
+# --- REQUIRED (5 fields) ---
 window_bg = "#fff5f8"
 window_fg = "#1e1b24"
 accent    = "#ff7eb6"
+secondary = "#7cc6fe"
+highlight = "#ffe066"
 
-# --- OPTIONAL (11 fields — automatically derived if omitted) ---
+# --- OPTIONAL (13 fields — automatically derived if omitted) ---
 sidebar_bg   = "#fce8ef"   # Defaults to `window_bg`
 sidebar_fg   = "#1e1b24"   # Defaults to `window_fg`
 card_bg      = "#ffffff"   # Defaults to `window_bg`
@@ -188,13 +203,15 @@ headerbar_fg = "#1e1b24"   # Defaults to `sidebar_fg`
 popover_bg   = "#fce8ef"   # Defaults to `sidebar_bg` (matches sidebar surface!)
 popover_fg   = "#1e1b24"   # Defaults to `sidebar_fg`
 accent_fg    = "#1e1b24"   # Defaults to `contrast_fg_for_hex(accent)` (#ffffff or #111418)
+secondary_fg = "#1e1b24"   # Defaults to `contrast_fg_for_hex(secondary)`
+highlight_fg = "#1e1b24"   # Defaults to `contrast_fg_for_hex(highlight)`
 ink_border   = "#1e1b24"   # Defaults to "#07080c" (dark mode) or "#111418" (light mode)
 shadow       = "#1e1b24"   # Defaults to `ink_border`
 ```
 
-### 6.3 Automatic Fallback Derivation Chain
+### 6.3 Automatic Surface & Foreground Fallback Chain
 
-A valid community theme only requires **3 colors** (`window_bg`, `window_fg`, `accent`). All remaining tokens derive automatically in `parse_community_theme_toml()`:
+A valid community theme requires **5 core colors** (`window_bg`, `window_fg`, `accent`, `secondary`, `highlight`). All secondary surfaces, ink borders, and readable foreground tokens derive automatically in `parse_community_theme_toml()` (`crates/themes/src/app_theme/community.rs` & `oklch.rs`):
 
 ```text
 window_bg ──┬──► sidebar_bg ──┬──► headerbar_bg
@@ -205,12 +222,14 @@ window_fg ──┬──► sidebar_fg ──┬──► headerbar_fg
             │                 └──► popover_fg
             └──► card_fg
 
-accent ────────► accent_fg (via relative luminance: < 0.38 → #ffffff, >= 0.38 → #111418)
+accent    ─────► accent_fg    (WCAG linearized relative luminance: Y < 0.22 → #ffffff, >= 0.22 → #111418)
+secondary ─────► secondary_fg (WCAG linearized relative luminance)
+highlight ─────► highlight_fg (WCAG linearized relative luminance)
 
 mode (is_dark) ► ink_border (#07080c if dark, #111418 if light) ──► shadow
 ```
 
 ### 6.4 Security & Validation (`sanitize_hex_color`)
 - Every color string in `[colors]` (and any user `custom_accent_color`) is validated through `sanitize_hex_color(raw: &str) -> Option<String>`.
-- Only exact 6-digit (`#RRGGBB`) or 8-digit (`#RRGGBBAA`) ASCII hexadecimal strings are accepted.
+- Only exact 6-digit (`#RRGGBB`) or opaque 8-digit (`#RRGGBBFF`, normalized to `#rrggbb`) ASCII hexadecimal strings are accepted; translucent/transparent `#RRGGBBAA` strings are rejected so solid surface tokens can never become invisible.
 - Any invalid hex or CSS injection attempt (e.g., `#ffffff; @import ...` or arbitrary CSS properties) causes `sanitize_hex_color` to return `None`. If a required field fails validation, the `.toml` file is rejected; if an optional field fails validation, it safely falls back to its derived default.

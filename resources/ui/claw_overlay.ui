@@ -131,6 +131,7 @@
                           <object class="GtkButton" id="inspect_btn">
                             <property name="icon-name">boxxy-bug-symbolic</property>
                             <property name="tooltip-text">Open in Sidebar</property>
+                            <property name="focus-on-click">false</property>
                             <style>
                               <class name="flat"/>
                             </style>
@@ -147,6 +148,9 @@
                         <child>
                           <object class="GtkButton" id="ok_btn">
                             <property name="label">Okay</property>
+                            <style>
+                              <class name="secondary-action"/>
+                            </style>
                           </object>
                         </child>
                         <child>

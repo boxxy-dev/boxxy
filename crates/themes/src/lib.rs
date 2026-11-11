@@ -6,8 +6,11 @@ use std::fs;
 use std::path::PathBuf;
 
 pub mod app_theme;
+pub mod color_dot;
 pub mod preview;
 pub mod selector;
+
+pub use color_dot::ColorDot;
 
 use parking_lot::Mutex;
 use std::collections::HashMap;
@@ -49,17 +52,14 @@ pub fn copy_background_image(src_path: &Path) -> Option<String> {
 }
 
 pub fn delete_background_image(path: &str) {
-    if let Ok(path) = Path::new(path).canonicalize() {
-        if let Some(config_dir) =
+    if let Ok(path) = Path::new(path).canonicalize()
+        && let Some(config_dir) =
             get_schemes_dir().and_then(|p| p.parent().map(|p| p.join("backgrounds")))
-        {
-            if let Ok(config_dir) = config_dir.canonicalize() {
-                // Ensure we only delete files within our backgrounds directory
-                if path.starts_with(config_dir) {
-                    let _ = fs::remove_file(path);
-                }
-            }
-        }
+        && let Ok(config_dir) = config_dir.canonicalize()
+        && path.starts_with(config_dir)
+    {
+        // Ensure we only delete files within our backgrounds directory
+        let _ = fs::remove_file(path);
     }
 }
 
@@ -146,18 +146,26 @@ pub fn load_palette(name: &str) -> Option<ParsedPaletteStatic> {
 
 thread_local! {
     static CURRENT_PROVIDER: RefCell<Option<gtk::CssProvider>> = const { RefCell::new(None) };
+    static LAST_PALETTE_PTR: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
 }
 
 /// Apply a palette to GTK/Adwaita. Pass `None` for pure Adwaita (system theme).
 /// `dark_mode` selects the [Dark] or [Light] variant and forces the Adwaita
 /// colour scheme accordingly.
 pub fn apply_palette(palette: Option<&ParsedPaletteStatic>, dark_mode: bool) {
-    clear_css_provider();
+    let next_css = palette.map(|p| if dark_mode { p.dark.gtk_css } else { p.light.gtk_css });
+    let next_ptr = next_css.map(str::as_ptr).map(|ptr| ptr as usize);
 
-    if let Some(p) = palette {
-        let variant = if dark_mode { &p.dark } else { &p.light };
-        load_css(variant.gtk_css);
+    let unchanged = LAST_PALETTE_PTR.with(|cell| cell.get() == next_ptr);
+    if unchanged {
+        return;
     }
+
+    clear_css_provider();
+    if let Some(css) = next_css {
+        load_css(css);
+    }
+    LAST_PALETTE_PTR.with(|cell| cell.set(next_ptr));
 }
 
 fn clear_css_provider() {
@@ -190,6 +198,9 @@ fn load_css(css: &str) {
 // GtkSourceView theming
 // ---------------------------------------------------------------------------
 
+static WRITTEN_SCHEMES: LazyLock<Mutex<HashMap<PathBuf, usize>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
 /// Apply a palette to a SourceView buffer. Pass `None` for the default scheme.
 pub fn apply_sourceview_palette(
     buffer: &sourceview5::Buffer,
@@ -203,19 +214,32 @@ pub fn apply_sourceview_palette(
     buffer.set_style_scheme(scheme.as_ref());
 }
 
-fn write_and_load_scheme(id: &str, xml: &str) -> Option<sourceview5::StyleScheme> {
+fn write_and_load_scheme(id: &str, xml: &'static str) -> Option<sourceview5::StyleScheme> {
     let schemes_dir = get_schemes_dir()?;
-    let path = schemes_dir.join(format!("{}.xml", id));
-    fs::write(&path, xml).ok()?;
+    let path = schemes_dir.join(format!("{id}.xml"));
+    let xml_ptr = xml.as_ptr() as usize;
 
     let manager = sourceview5::StyleSchemeManager::default();
     let dir_str = schemes_dir.to_str()?;
+    let mut needs_rescan = false;
+
     let mut paths = manager.search_path();
     if !paths.iter().any(|p| p == dir_str) {
         paths.push(dir_str.into());
         manager.set_search_path(&paths.iter().map(|s| s.as_str()).collect::<Vec<_>>());
+        needs_rescan = true;
     }
-    manager.force_rescan();
+
+    let already_written = WRITTEN_SCHEMES.lock().get(&path).copied() == Some(xml_ptr);
+    if !already_written {
+        fs::write(&path, xml).ok()?;
+        WRITTEN_SCHEMES.lock().insert(path, xml_ptr);
+        needs_rescan = true;
+    }
+
+    if needs_rescan {
+        manager.force_rescan();
+    }
     manager.scheme(id)
 }
 

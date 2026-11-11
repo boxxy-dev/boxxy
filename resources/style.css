@@ -1,7 +1,20 @@
-/* Layer 1 Semantic Fallback Tokens (overridden by Layer 3 when AppThemeMode::Boxxy is active) */
+/* Layer 1 Semantic Fallback Tokens (overridden by Layer 3 when AppThemeMode::Boxxy is active;
+   ensures Legacy Adwaita mode stays 100% native and valid) */
 @define-color boxxy_ink alpha(currentColor, 0.28);
 @define-color boxxy_shadow rgba(0, 0, 0, 0.35);
 @define-color boxxy_surface_hover mix(@card_bg_color, @accent_bg_color, 0.82);
+
+@define-color boxxy_secondary_bg_color @accent_bg_color;
+@define-color boxxy_secondary_fg_color @accent_fg_color;
+@define-color boxxy_secondary_color @accent_color;
+@define-color boxxy_secondary_subtle alpha(@accent_bg_color, 0.16);
+
+@define-color boxxy_highlight_bg_color @warning_bg_color;
+@define-color boxxy_highlight_fg_color @warning_fg_color;
+@define-color boxxy_highlight_color @warning_color;
+@define-color boxxy_highlight_subtle alpha(@warning_bg_color, 0.20);
+@define-color boxxy_search_match_bg alpha(@warning_bg_color, 0.30);
+@define-color boxxy_search_match_fg currentColor;
 
 /* TODO: Investigate custom non-expanded tab width sizing in AdwTabBar / AdwTabBox */
 tab > box {
@@ -91,8 +104,56 @@ tabbar tab.tab-slate label { background-image: radial-gradient(circle, alpha(#6f
 	padding: 0px;
 }
 .content-header .start > button,
-.content-header .end > button {
+.content-header .end > button:not(.detached-shells-pill) {
 	margin: 6px 2px;
+}
+
+/* HeaderBar Background Shells Status Indicator Pill (Layer 1 Adwaita Fallback & Geometry) */
+headerbar button.detached-shells-pill,
+button.detached-shells-pill {
+    min-height: 20px;
+    min-width: 0;
+    padding: 2px 9px;
+    margin: 0 4px 0 2px;
+    border-radius: 9999px;
+    background-color: @boxxy_secondary_subtle;
+    background-image: none;
+    color: @boxxy_secondary_color;
+    border: 1px solid alpha(@boxxy_secondary_color, 0.30);
+    box-shadow: none;
+}
+
+headerbar button.detached-shells-pill:hover,
+button.detached-shells-pill:hover {
+    background-color: alpha(@boxxy_secondary_bg_color, 0.26);
+    background-image: none;
+    color: @boxxy_secondary_color;
+}
+
+headerbar button.detached-shells-pill.warning,
+button.detached-shells-pill.warning {
+    background-color: @boxxy_highlight_subtle;
+    color: @boxxy_highlight_color;
+    border-color: alpha(@boxxy_highlight_color, 0.40);
+}
+
+.detached-shells-count {
+    font-size: 0.78em;
+    font-weight: 800;
+    font-variant-numeric: tabular-nums;
+}
+
+/* Secondary Action Button Modifier (Layer 1 Adwaita Fallback) */
+button.secondary-action {
+    background-color: @boxxy_secondary_subtle;
+    background-image: none;
+    color: @boxxy_secondary_color;
+    font-weight: 700;
+}
+
+button.secondary-action:hover {
+    background-color: alpha(@boxxy_secondary_bg_color, 0.26);
+    background-image: none;
 }
 
 /* Adjust Sidebar HeaderBar to match */
@@ -111,8 +172,8 @@ tabbar tab.tab-slate label { background-image: radial-gradient(circle, alpha(#6f
 }
 
 .preferences-editor textview {
-	/* Darken background by 10% */
-	background-color: mix(@theme_bg_color, black, 0.9);
+	/* Subtle surface shift that works in both dark and light modes */
+	background-color: color-mix(in srgb, @window_bg_color 92%, currentColor 8%);
 }
 
 /* Virtualized List History - ensures ListView doesn't have a solid background */
@@ -253,7 +314,7 @@ button.claw-row-copy-btn:hover {
 
 .code-block-header {
 	padding: 2px 4px 2px 0px;
-	background-color: mix(@card_bg_color, black, 0.7);
+	background-color: color-mix(in srgb, @card_bg_color 90%, currentColor 10%);
 	border-radius: 8px 8px 0px 0px;
 	min-height: 0px;
 }
@@ -427,7 +488,7 @@ tabbox separator {
 .claw-drawer .suggested-action {
 }
 
-.claw-drawer button:focus,
+.claw-drawer button:focus-visible,
 .claw-drawer entry:focus-within {
     outline: 2px solid alpha(currentColor, 0.4);
     outline-offset: 0px;
@@ -495,9 +556,9 @@ tabbox separator {
 }
 
 .bookmark-var-chip {
-    background-color: alpha(@accent_bg_color, 0.16);
-    color: @accent_color;
-    border: 1px solid alpha(@accent_color, 0.28);
+    background-color: @boxxy_secondary_subtle;
+    color: @boxxy_secondary_color;
+    border: 1px solid alpha(@boxxy_secondary_color, 0.28);
     border-radius: 6px;
     padding: 1px 7px;
     font-weight: 600;
@@ -726,13 +787,13 @@ boxxyterminalwidget {
 .avatar-vibe-badge {
   border-radius: 9999px;
   background-color: @window_bg_color;
-  color: @accent_color;
-  border: 1.5px solid alpha(@accent_color, 0.55);
+  color: @boxxy_highlight_color;
+  border: 1.5px solid alpha(@boxxy_highlight_color, 0.55);
   box-shadow: 0 1px 4px alpha(black, 0.45);
 }
 
 .avatar-vibe-badge image {
-  color: @accent_color;
+  color: @boxxy_highlight_color;
 }
 
 .avatar-sleep-badge-small {
@@ -982,12 +1043,39 @@ flowbox.viewer-gallery > flowboxchild {
 }
 
 .boxxy-theme-tag-pill {
-    background-color: alpha(@accent_bg_color, 0.2);
-    color: @accent_color;
+    background-color: @boxxy_secondary_subtle;
+    color: @boxxy_secondary_color;
     border-radius: 9999px;
     padding: 1px 8px;
     font-size: 0.78em;
     font-weight: 600;
+}
+
+.boxxy-badge-secondary {
+    background-color: @boxxy_secondary_subtle;
+    color: @boxxy_secondary_color;
+    border: 1px solid alpha(@boxxy_secondary_color, 0.30);
+    border-radius: 9999px;
+    padding: 2px 9px;
+    font-size: 0.76em;
+    font-weight: 700;
+}
+
+.boxxy-badge-highlight {
+    background-color: @boxxy_highlight_subtle;
+    color: @boxxy_highlight_color;
+    border: 1px solid alpha(@boxxy_highlight_color, 0.35);
+    border-radius: 9999px;
+    padding: 2px 9px;
+    font-size: 0.76em;
+    font-weight: 800;
+    letter-spacing: 0.4px;
+}
+
+.boxxy-search-match {
+    background-color: @boxxy_search_match_bg;
+    color: @boxxy_search_match_fg;
+    border-radius: 3px;
 }
 
 .viewer-image-card-footer {
@@ -1042,16 +1130,16 @@ frame.viewer-blockquote {
     background-image: linear-gradient(
         135deg,
         alpha(@accent_bg_color, 0.22) 0%,
-        alpha(currentColor, 0.05) 55%,
-        alpha(@success_color, 0.14) 100%
+        alpha(@boxxy_secondary_bg_color, 0.14) 55%,
+        alpha(@boxxy_highlight_bg_color, 0.18) 100%
     );
     border-bottom: 1px solid alpha(currentColor, 0.10);
 }
 
 .whats-new-badge {
-    background-color: alpha(@success_color, 0.18);
-    color: @success_color;
-    border: 1px solid alpha(@success_color, 0.35);
+    background-color: @boxxy_highlight_subtle;
+    color: @boxxy_highlight_color;
+    border: 1px solid alpha(@boxxy_highlight_color, 0.35);
     border-radius: 9999px;
     padding: 3px 10px;
     font-size: 0.72em;
@@ -1144,6 +1232,12 @@ button.link {
     padding: 0 6px;
 }
 
+.sidebar-pane .boxxy-link,
+.sidebar-toolbar .boxxy-link {
+    padding: 1px 6px;
+    margin-right: -6px;
+}
+
 .boxxy-link:hover {
     background-color: alpha(currentColor, 0.08);
 }
@@ -1165,6 +1259,32 @@ button.whats-new-commit-row {
     padding: 6px 10px;
     border-radius: 9px;
     font-weight: 400;
+    background: transparent;
+    background-color: transparent;
+    background-image: none;
+}
+
+button.whats-new-commit-row:hover,
+button.whats-new-commit-row:focus-visible {
+    background: alpha(@accent_bg_color, 0.18);
+    background-color: alpha(@accent_bg_color, 0.18);
+    background-image: none;
+}
+
+button.whats-new-commit-row:active {
+    background: alpha(@accent_bg_color, 0.28);
+    background-color: alpha(@accent_bg_color, 0.28);
+    background-image: none;
+}
+
+.whats-new-commit-arrow {
+    opacity: 0;
+    transition: opacity 120ms ease;
+}
+
+button.whats-new-commit-row:hover .whats-new-commit-arrow,
+button.whats-new-commit-row:focus-visible .whats-new-commit-arrow {
+    opacity: 0.85;
 }
 
 .whats-new-commit-title {
@@ -1612,8 +1732,8 @@ row.past-session-row button.past-session-options-btn:active {
 }
 
 .claw-round-phase-pill.claw-round-phase-work {
-    background-color: alpha(@accent_bg_color, 0.22);
-    color: @accent_color;
+    background-color: @boxxy_secondary_subtle;
+    color: @boxxy_secondary_color;
 }
 
 .claw-round-phase-pill.claw-round-phase-break {
@@ -1640,7 +1760,7 @@ row.past-session-row button.past-session-options-btn:active {
 
 .claw-round-pip.claw-round-pip-active {
     min-width: 24px;
-    background-color: @accent_color;
+    background-color: @boxxy_highlight_bg_color;
 }
 
 .claw-round-pip.claw-round-pip-resting {
@@ -1689,7 +1809,8 @@ progressbar.claw-round-progress.claw-round-progress-paused progress {
 }
 
 .claw-task-kind-badge {
-    background-color: alpha(currentColor, 0.10);
+    background-color: @boxxy_secondary_subtle;
+    color: @boxxy_secondary_color;
     border-radius: 5px;
     padding: 1px 6px;
     font-size: 0.72em;

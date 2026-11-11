@@ -1865,7 +1865,7 @@ fn populate_whats_new_summary(
                 let chevron = gtk4::Image::builder()
                     .icon_name("boxxy-right-symbolic")
                     .valign(gtk4::Align::Center)
-                    .opacity(0.45)
+                    .css_classes(["whats-new-commit-arrow"])
                     .build();
 
                 row_box.append(&text_col);

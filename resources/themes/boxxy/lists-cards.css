@@ -22,6 +22,15 @@ dialog.alert preferencesgroup {
     box-shadow: 3px 4px 0px @boxxy_shadow;
 }
 
+.bookmark-var-chip {
+    background-color: @boxxy_secondary_bg_color;
+    color: @boxxy_secondary_fg_color;
+    border: var(--boxxy-border-thin) solid @boxxy_ink;
+    border-radius: var(--boxxy-radius-sm);
+    padding: 1px 7px;
+    font-weight: 700;
+}
+
 /* Preferences boxed lists (`.boxed-list`, `.boxed-list-separate`):
    structured Boxxy surface with 8px corners, clean `@boxxy_ink` box-model frame
    (zero grey wireframe), recessed dark row grooves, and crisp accent hover. */
@@ -84,14 +93,15 @@ preferencesgroup listbox > row:only-child {
     border-bottom: none;
 }
 
-/* Activatable preference rows (Terminal Theme, Website, Changelogs, Version):
-   crisp accent-tinted wash + accent-colored title & trailing icon on hover, zero grey flash. */
+/* Activatable preference rows (Themes, Terminal Theme, Website, Changelogs, Version):
+   recessed `@window_bg_color` surface cutout on hover while keeping default text & icon colors. */
 .boxed-list > row.activatable:hover,
 .boxed-list-separate > row.activatable:hover,
 listbox.boxed-list > row.activatable:hover,
 preferencesgroup .boxed-list > row.activatable:hover,
 preferencesgroup listbox > row.activatable:hover {
-    background-color: alpha(@accent_bg_color, 0.14);
+    background: @window_bg_color;
+    background-color: @window_bg_color;
     background-image: none;
 }
 
@@ -100,22 +110,7 @@ preferencesgroup listbox > row.activatable:hover {
 listbox.boxed-list > row.activatable:active,
 preferencesgroup .boxed-list > row.activatable:active,
 preferencesgroup listbox > row.activatable:active {
-    background-color: alpha(@accent_bg_color, 0.24);
+    background: color-mix(in srgb, @window_bg_color 82%, @boxxy_ink 18%);
+    background-color: color-mix(in srgb, @window_bg_color 82%, @boxxy_ink 18%);
     background-image: none;
-}
-
-.boxed-list > row.activatable:hover .title,
-.boxed-list-separate > row.activatable:hover .title,
-listbox.boxed-list > row.activatable:hover .title,
-preferencesgroup .boxed-list > row.activatable:hover .title,
-preferencesgroup listbox > row.activatable:hover .title,
-.boxed-list > row.activatable:hover .suffixes > image,
-.boxed-list-separate > row.activatable:hover .suffixes > image,
-listbox.boxed-list > row.activatable:hover .suffixes > image,
-preferencesgroup .boxed-list > row.activatable:hover .suffixes > image,
-preferencesgroup listbox > row.activatable:hover .suffixes > image,
-.boxed-list > row.activatable:hover image,
-preferencesgroup .boxed-list > row.activatable:hover image {
-    color: @accent_color;
-    opacity: 1.0;
 }

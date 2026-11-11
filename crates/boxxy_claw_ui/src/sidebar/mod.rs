@@ -276,7 +276,7 @@ impl ClawSidebarComponent {
 
         let change_models_lbl = gtk::Label::builder()
             .label("Change…")
-            .css_classes(["caption", "accent"])
+            .css_classes(["caption", "accent", "boxxy-link"])
             .halign(gtk::Align::End)
             .tooltip_text("Select AI Models")
             .build();
@@ -347,7 +347,7 @@ impl ClawSidebarComponent {
 
         let configure_mcp_lbl = gtk::Label::builder()
             .label("Configure…")
-            .css_classes(["caption", "accent"])
+            .css_classes(["caption", "accent", "boxxy-link"])
             .halign(gtk::Align::End)
             .tooltip_text("Configure MCP Servers")
             .build();

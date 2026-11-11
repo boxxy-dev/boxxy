@@ -856,22 +856,32 @@ impl AppWindow {
         });
         content_header.pack_end(&menu_btn);
 
-        // Flat HeaderBar Background Shells button (opens the unified Background Shells dialog)
-        let badge_content = gtk::Box::new(gtk::Orientation::Horizontal, 5);
-        let badge_icon = gtk::Image::from_icon_name("utilities-terminal-symbolic");
+        // Slim status indicator pill for detached Background Shells (opens the unified Background Shells dialog)
+        let badge_content = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+        badge_content.set_valign(gtk::Align::Center);
+        let badge_icon = gtk::Image::builder()
+            .icon_name("utilities-terminal-symbolic")
+            .pixel_size(13)
+            .valign(gtk::Align::Center)
+            .build();
         let detached_count_lbl = gtk::Label::builder()
             .label("0")
-            .css_classes(["caption", "monospace", "heading"])
+            .valign(gtk::Align::Center)
+            .css_classes(["monospace", "detached-shells-count"])
             .build();
         badge_content.append(&badge_icon);
         badge_content.append(&detached_count_lbl);
 
         let detached_btn = gtk::Button::builder()
             .child(&badge_content)
-            .css_classes(["flat"])
+            .css_classes(["flat", "detached-shells-pill"])
+            .valign(gtk::Align::Center)
+            .focus_on_click(false)
+            .margin_end(4)
             .tooltip_text("Background Shells")
             .visible(false)
             .build();
+        detached_btn.set_cursor_from_name(Some("pointer"));
         let tx_detached_btn = tx.clone();
         detached_btn.connect_clicked(move |_| {
             let _ = tx_detached_btn.send_blocking(AppInput::ShowDetachedSessions);

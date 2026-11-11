@@ -1007,6 +1007,10 @@ fn highlight_input_mentions(
         return;
     }
 
+    let (file_hex, char_hex) = boxxy_themes::app_theme::active_mention_colors();
+    file_tag.set_foreground(Some(&file_hex));
+    char_tag.set_foreground(Some(&char_hex));
+
     let chars: Vec<(usize, char)> = text.char_indices().collect();
     let len = chars.len();
     let mut i = 0;

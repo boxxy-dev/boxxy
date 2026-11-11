@@ -1,11 +1,11 @@
 use crate::config::{AppThemeMode, ColorScheme, Settings};
 use adw::prelude::*;
+use boxxy_themes::ColorDot;
 use boxxy_themes::app_theme::{
     ACCENT_PRESETS, AppThemeDefinition, builtin_app_themes, discover_community_themes,
-    ensure_app_themes_dir, resolve_app_theme, sanitize_hex_color,
+    ensure_app_themes_dir, resolve_app_theme,
 };
 use gtk4 as gtk;
-use gtk4::gdk;
 use gtk4::glib;
 use libadwaita as adw;
 use std::cell::RefCell;
@@ -32,47 +32,6 @@ fn open_themes_folder(widget: &impl IsA<gtk::Widget>) {
         toast.set_timeout(3);
         overlay.add_toast(toast);
     }
-}
-
-/// Creates a small static circular color dot widget for theme list rows and accent swatches.
-fn make_static_color_dot(hex: &str, size: i32) -> gtk::Box {
-    static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-    let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let class = format!("theme-preview-dot-{n}");
-
-    let dot = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-    dot.set_size_request(size, size);
-    dot.set_valign(gtk::Align::Center);
-    dot.set_halign(gtk::Align::Center);
-    dot.add_css_class("theme-preview-dot");
-    dot.add_css_class(&class);
-
-    let safe_hex = sanitize_hex_color(hex).unwrap_or_else(|| "#808080".to_string());
-    let provider = gtk::CssProvider::new();
-    let css = format!(
-        ".{class} {{ \
-            background-color: {safe_hex}; \
-            min-width: {size}px; \
-            min-height: {size}px; \
-        }}"
-    );
-    provider.load_from_string(&css);
-
-    if let Some(display) = gdk::Display::default() {
-        gtk::style_context_add_provider_for_display(
-            &display,
-            &provider,
-            gtk::STYLE_PROVIDER_PRIORITY_USER + 50,
-        );
-        let provider_cleanup = provider;
-        dot.connect_destroy(move |_| {
-            if let Some(display) = gdk::Display::default() {
-                gtk::style_context_remove_provider_for_display(&display, &provider_cleanup);
-            }
-        });
-    }
-
-    dot
 }
 
 /// Builds a standardized `AdwActionRow` with tag pills, 4 color preview dots, and an active checkmark.
@@ -103,7 +62,7 @@ fn build_theme_action_row(
     dots_box.set_valign(gtk::Align::Center);
     dots_box.set_margin_start(4);
     for dot_hex in dots {
-        dots_box.append(&make_static_color_dot(dot_hex, 14));
+        dots_box.append(&ColorDot::new(dot_hex, 14));
     }
     suffix_box.append(&dots_box);
 
@@ -213,7 +172,7 @@ pub fn setup_themes_page(
         dot_btn.set_tooltip_text(Some(preset_name));
         dot_btn.add_css_class("flat");
         dot_btn.add_css_class("circular");
-        dot_btn.set_child(Some(&make_static_color_dot(preset_hex, 18)));
+        dot_btn.set_child(Some(&ColorDot::new(preset_hex, 18)));
 
         dot_btn.connect_clicked(move |_| {
             let mut s = s_rc.borrow_mut();
@@ -317,21 +276,21 @@ pub fn setup_themes_page(
             "System Follow",
             "Follow your operating system's dark or light GTK preference.",
             vec!["system".to_string(), "adwaita".to_string()],
-            ["#3584e4", "#fafafa", "#242424", "#1e1e1e"],
+            ["#242424", "#3584e4", "#62a0ea", "#e5a50a"],
             ColorScheme::Default,
         ),
         (
             "System Dark",
             "Standard Libadwaita dark appearance.",
             vec!["dark".to_string(), "adwaita".to_string()],
-            ["#3584e4", "#1e1e1e", "#2d2d2d", "#111111"],
+            ["#1e1e1e", "#3584e4", "#62a0ea", "#f8e45c"],
             ColorScheme::Dark,
         ),
         (
             "System Light",
             "Standard Libadwaita light appearance.",
             vec!["light".to_string(), "adwaita".to_string()],
-            ["#3584e4", "#fafafa", "#ffffff", "#c0bfbc"],
+            ["#fafafa", "#3584e4", "#1c71d8", "#e5a50a"],
             ColorScheme::Light,
         ),
     ];

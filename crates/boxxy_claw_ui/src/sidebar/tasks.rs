@@ -121,7 +121,7 @@ impl TasksSection {
         let on_cancel_all: CancelAllCallback = Rc::new(RefCell::new(None));
         let dismiss_all_lbl = gtk::Label::builder()
             .label("Dismiss all")
-            .css_classes(["caption", "accent"])
+            .css_classes(["caption", "accent", "boxxy-link"])
             .halign(gtk::Align::End)
             .valign(gtk::Align::Center)
             .tooltip_text("Dismiss all pending tasks")
@@ -169,7 +169,7 @@ impl TasksSection {
         let empty_icon = build_task_icon(
             Some(CLOCK_GPA_RESOURCE),
             "boxxy-timer-symbolic",
-            "dim-label",
+            Some("dim-label"),
         );
         empty_card.append(&empty_icon);
 
@@ -384,7 +384,7 @@ impl TasksSection {
 fn build_task_icon(
     gpa_resource_path: Option<&str>,
     fallback_icon: &str,
-    tint_class: &str,
+    tint_class: Option<&str>,
 ) -> gtk::Image {
     let image = if let Some(gpa_path) = gpa_resource_path
         && gio::resources_lookup_data(gpa_path, gio::ResourceLookupFlags::NONE).is_ok()
@@ -404,7 +404,9 @@ fn build_task_icon(
     image.set_halign(gtk::Align::Start);
     image.set_valign(gtk::Align::Center);
     image.add_css_class("claw-task-icon");
-    image.add_css_class(tint_class);
+    if let Some(cls) = tint_class {
+        image.add_css_class(cls);
+    }
     image
 }
 
@@ -439,15 +441,15 @@ fn build_interval_card(
         build_task_icon(
             Some(CLOCK_GPA_RESOURCE),
             "boxxy-timer-symbolic",
-            "dim-label",
+            Some("dim-label"),
         )
     } else {
         match iv.phase {
             IntervalPhase::Work => {
-                build_task_icon(Some(BELL_GPA_RESOURCE), "boxxy-timer-symbolic", "accent")
+                build_task_icon(Some(BELL_GPA_RESOURCE), "boxxy-timer-symbolic", None)
             }
             IntervalPhase::Break => {
-                build_task_icon(Some(CLOCK_GPA_RESOURCE), "boxxy-timer-symbolic", "warning")
+                build_task_icon(Some(CLOCK_GPA_RESOURCE), "boxxy-timer-symbolic", None)
             }
         }
     };
@@ -754,15 +756,15 @@ fn build_single_task_card(
 
     let (icon_badge, kind_badge) = match task.task_type {
         TaskType::Notification => (
-            build_task_icon(Some(BELL_GPA_RESOURCE), "boxxy-timer-symbolic", "accent"),
+            build_task_icon(Some(BELL_GPA_RESOURCE), "boxxy-timer-symbolic", None),
             None,
         ),
         TaskType::Command => (
-            build_task_icon(None, "boxxy-tui-symbolic", "warning"),
+            build_task_icon(None, "boxxy-tui-symbolic", None),
             Some("Command"),
         ),
         TaskType::Query => (
-            build_task_icon(None, "boxxy-chat-symbolic", "accent"),
+            build_task_icon(None, "boxxy-chat-symbolic", None),
             Some("Query"),
         ),
     };

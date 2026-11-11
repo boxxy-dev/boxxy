@@ -951,6 +951,7 @@ dependencies = [
  "boxxy-db",
  "boxxy-preferences",
  "boxxy-sys-utils",
+ "boxxy-themes",
  "boxxy-viewer",
  "chrono",
  "frizbee",

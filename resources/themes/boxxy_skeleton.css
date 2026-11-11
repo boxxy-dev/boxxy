@@ -14,9 +14,11 @@
  *    order and low-specificity control archetypes (`<= (0, 3, 2)`).
  * 4. Reference only semantic `@define-color` variables provided by Layer 3/4
  *    (`@window_bg_color`, `@card_bg_color`, `@sidebar_bg_color`, `@headerbar_bg_color`,
- *    `@popover_bg_color`, `@accent_bg_color`, `@accent_fg_color`, `@boxxy_ink`,
- *    `@boxxy_shadow`, `@boxxy_surface_hover`) and `--boxxy-*` geometry tokens from
- *    `boxxy/tokens.css`.
+ *    `@popover_bg_color`, `@accent_bg_color`, `@accent_fg_color`,
+ *    `@boxxy_secondary_bg_color`, `@boxxy_secondary_fg_color`, `@boxxy_secondary_color`,
+ *    `@boxxy_highlight_bg_color`, `@boxxy_highlight_fg_color`, `@boxxy_highlight_color`,
+ *    `@boxxy_ink`, `@boxxy_shadow`, `@boxxy_surface_hover`) and `--boxxy-*` geometry tokens
+ *    from `boxxy/tokens.css`.
  * ============================================================================ */
 
 @import "boxxy/tokens.css";
