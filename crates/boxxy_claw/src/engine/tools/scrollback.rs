@@ -88,20 +88,29 @@ impl Tool for ReadScrollbackTool {
         };
 
         if let Err(e) = self.tx_ui.send(req).await {
+            self.state.lock().await.pending_scrollbacks.remove(&request_id);
             return Err(std::io::Error::other(format!(
                 "Failed to send scrollback request: {e}"
             )));
         }
 
-        match reply_rx.await {
-            Ok(text) => {
+        match tokio::time::timeout(std::time::Duration::from_secs(5), reply_rx).await {
+            Ok(Ok(text)) => {
                 let out = ReadScrollbackOutput { text };
                 self.approval.finish_tool(Self::NAME, &out).await;
                 Ok(out)
             }
-            Err(e) => Err(std::io::Error::other(format!(
+            Ok(Err(e)) => Err(std::io::Error::other(format!(
                 "Failed to receive scrollback: {e}"
             ))),
+            Err(_) => {
+                self.state.lock().await.pending_scrollbacks.remove(&request_id);
+                let out = ReadScrollbackOutput {
+                    text: "Timed out waiting for terminal scrollback.".to_string(),
+                };
+                self.approval.finish_tool(Self::NAME, &out).await;
+                Ok(out)
+            }
         }
     }
 }

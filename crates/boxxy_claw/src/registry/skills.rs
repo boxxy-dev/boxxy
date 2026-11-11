@@ -47,8 +47,10 @@ impl SkillRegistry {
     pub async fn new(db: Arc<Mutex<Option<Db>>>) -> Self {
         let skills = Arc::new(RwLock::new(Vec::new()));
 
-        // Initial load (skips any user-disabled skills without reading their files)
-        let initial_skills = Self::load_skills_from_disk();
+        // Initial load off the async executor (skips user-disabled skills without reading files)
+        let initial_skills = tokio::task::spawn_blocking(Self::load_skills_from_disk)
+            .await
+            .unwrap_or_default();
         *skills.write().await = initial_skills.clone();
 
         // Initial sync to DB
@@ -65,7 +67,7 @@ impl SkillRegistry {
             let skills_clone = skills.clone();
 
             // The callback runs in a blocking context, so we use a tokio channel to send
-            // events back to the async runtime, or spawn a task.
+            // events back to the async runtime.
             let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
 
             let w = notify::recommended_watcher(move |res: notify::Result<Event>| {
@@ -82,7 +84,7 @@ impl SkillRegistry {
             match w {
                 Ok(mut w) => {
                     if let Err(e) = w.watch(&skills_dir, RecursiveMode::Recursive) {
-                        error!("Failed to watch skills directory: {}", e);
+                        error!("Failed to watch skills directory: {e}");
                     } else {
                         info!(
                             "SkillRegistry: Watching {} for changes.",
@@ -99,11 +101,13 @@ impl SkillRegistry {
                                 // Drain any extra events that arrived during the sleep
                                 while rx.try_recv().is_ok() {}
 
-                                debug!(
-                                    "SkillRegistry: File change detected, reloading skills."
-                                );
-                                boxxy_preferences::Settings::reload();
-                                let new_skills = Self::load_skills_from_disk();
+                                debug!("SkillRegistry: File change detected, reloading skills.");
+                                let new_skills = tokio::task::spawn_blocking(|| {
+                                    boxxy_preferences::Settings::reload();
+                                    Self::load_skills_from_disk()
+                                })
+                                .await
+                                .unwrap_or_default();
                                 *skills_clone.write().await = new_skills.clone();
 
                                 // Sync to DB
@@ -115,10 +119,9 @@ impl SkillRegistry {
                 }
                 Err(e) => {
                     log::warn!(
-                        "Failed to initialize skills watcher: {}. \
+                        "Failed to initialize skills watcher: {e}. \
                         (If os error 24, your system may have exhausted 'fs.inotify.max_user_instances'.) \
-                        Skills will be loaded once but will not hot-reload.",
-                        e
+                        Skills will be loaded once but will not hot-reload."
                     );
                 }
             }
@@ -132,7 +135,9 @@ impl SkillRegistry {
     }
 
     pub async fn reload(&self) {
-        let new_skills = Self::load_skills_from_disk();
+        let new_skills = tokio::task::spawn_blocking(Self::load_skills_from_disk)
+            .await
+            .unwrap_or_default();
         *self.skills.write().await = new_skills.clone();
         let _ = Self::sync_to_db(self.db.clone(), new_skills).await;
     }
@@ -142,25 +147,43 @@ impl SkillRegistry {
     }
 
     pub async fn search_relevant_skills(&self, query: &str, limit: i64) -> Vec<Skill> {
+        let query_tokens = extract_skill_match_tokens(query);
+        if query_tokens.is_empty() {
+            return Vec::new();
+        }
         let fts_query = crate::engine::context::build_fts5_query(query);
         if fts_query.is_empty() {
             return Vec::new();
         }
-        let db_guard = self.db.lock().await;
-        if let Some(db_val) = db_guard.as_ref() {
+        let db_opt = self.db.lock().await.clone();
+        if let Some(db_val) = db_opt {
             let store = Store::new(db_val.pool());
-            if let Ok(records) = store.search_skills(&fts_query, limit).await {
-                // Map records back to Skill structs
+            // Fetch a small candidate pool so we can filter out false-positive hits where a
+            // generic word only matched deep inside a CLI `--help` dump rather than the
+            // skill's `name`, `description`, or `triggers`.
+            let fetch_limit = limit.saturating_mul(4).max(4);
+            if let Ok(records) = store.search_skills(&fts_query, fetch_limit).await {
+                let take_n = usize::try_from(limit.max(0)).unwrap_or(1);
                 return records
                     .into_iter()
+                    .filter(|r| {
+                        skill_header_matches_query(
+                            &r.name,
+                            &r.description,
+                            &r.triggers,
+                            &query_tokens,
+                        )
+                    })
+                    .take(take_n)
                     .map(|r| Skill {
                         frontmatter: SkillFrontmatter {
                             name: r.name,
                             description: r.description,
-                            triggers: r.triggers
+                            triggers: r
+                                .triggers
                                 .split(", ")
                                 .filter(|s| !s.is_empty())
-                                .map(|s| s.to_string())
+                                .map(ToString::to_string)
                                 .collect(),
                             pinned: r.pinned,
                         },
@@ -173,8 +196,8 @@ impl SkillRegistry {
     }
 
     async fn sync_to_db(db: Arc<Mutex<Option<Db>>>, skills: Vec<Skill>) -> anyhow::Result<()> {
-        let db_guard = db.lock().await;
-        if let Some(db_val) = db_guard.as_ref() {
+        let db_opt = db.lock().await.clone();
+        if let Some(db_val) = db_opt {
             let store = Store::new(db_val.pool());
             let records: Vec<SkillRecord> = skills
                 .into_iter()
@@ -206,6 +229,7 @@ impl SkillRegistry {
     /// Loads only enabled skills from `skills_dir`.
     /// Entries whose on-disk `slug` appears in `disabled_skills` are skipped immediately
     /// before opening or reading the markdown file.
+    #[must_use]
     pub fn load_enabled_skills_from_dir(
         skills_dir: &Path,
         disabled_skills: &[String],
@@ -250,9 +274,170 @@ impl SkillRegistry {
     }
 }
 
+/// Conversational and generic action verbs excluded when checking whether a user prompt
+/// genuinely relates to a skill's `name`, `description`, or `triggers`.
+const SKILL_NOISE_WORDS: &[&str] = &[
+    "all",
+    "also",
+    "any",
+    "ask",
+    "boxxy",
+    "can",
+    "change",
+    "check",
+    "code",
+    "command",
+    "commands",
+    "create",
+    "does",
+    "edit",
+    "file",
+    "files",
+    "fix",
+    "for",
+    "from",
+    "good",
+    "great",
+    "hello",
+    "help",
+    "hey",
+    "how",
+    "into",
+    "just",
+    "let",
+    "like",
+    "look",
+    "make",
+    "more",
+    "new",
+    "nice",
+    "now",
+    "okay",
+    "one",
+    "only",
+    "open",
+    "out",
+    "pane",
+    "panes",
+    "please",
+    "put",
+    "read",
+    "run",
+    "say",
+    "script",
+    "see",
+    "set",
+    "show",
+    "some",
+    "split",
+    "splits",
+    "sure",
+    "tab",
+    "tabs",
+    "take",
+    "tell",
+    "terminal",
+    "terminals",
+    "test",
+    "thank",
+    "thanks",
+    "that",
+    "the",
+    "then",
+    "there",
+    "these",
+    "this",
+    "turn",
+    "update",
+    "use",
+    "using",
+    "very",
+    "want",
+    "well",
+    "what",
+    "when",
+    "where",
+    "which",
+    "window",
+    "windows",
+    "with",
+    "work",
+    "write",
+    "you",
+    "your",
+];
+
+fn extract_skill_match_tokens(text: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    for raw in text.split(|c: char| !c.is_alphanumeric()) {
+        if raw.len() < 3 {
+            continue;
+        }
+        let lower = raw.to_ascii_lowercase();
+        if crate::engine::context::is_fts_stopword(&lower)
+            || SKILL_NOISE_WORDS.binary_search(&lower.as_str()).is_ok()
+        {
+            continue;
+        }
+        if !tokens.contains(&lower) {
+            tokens.push(lower);
+        }
+    }
+    tokens
+}
+
+fn skill_header_matches_query(
+    name: &str,
+    description: &str,
+    triggers: &str,
+    query_tokens: &[String],
+) -> bool {
+    let header = format!("{name} {description} {triggers}").to_ascii_lowercase();
+    let header_words: Vec<&str> = header
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| {
+            w.len() >= 3
+                && !crate::engine::context::is_fts_stopword(w)
+                && SKILL_NOISE_WORDS.binary_search(w).is_err()
+        })
+        .collect();
+
+    query_tokens.iter().any(|qt| {
+        header_words.iter().any(|hw| {
+            *hw == qt.as_str()
+                || (qt.len() >= 4 && hw.starts_with(qt.as_str()))
+                || (hw.len() >= 4 && qt.starts_with(*hw))
+        })
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn skill_header_filter_rejects_incidental_body_noise_and_matches_domain_terms() {
+        assert!(
+            SKILL_NOISE_WORDS.windows(2).all(|w| w[0] < w[1]),
+            "SKILL_NOISE_WORDS must remain strictly sorted for binary_search"
+        );
+
+        let greeting_tokens = extract_skill_match_tokens("hey there, is all good and okay?");
+        assert!(!skill_header_matches_query(
+            "Container Inspector",
+            "Inspect OCI container layers and registries",
+            "oci, podman",
+            &greeting_tokens,
+        ));
+
+        let domain_tokens = extract_skill_match_tokens("inspect podman container layers");
+        assert!(skill_header_matches_query(
+            "Container Inspector",
+            "Inspect OCI container layers and registries",
+            "oci, podman",
+            &domain_tokens,
+        ));
+    }
 
     #[test]
     fn disabled_skills_are_not_loaded_until_enabled() {

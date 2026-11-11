@@ -34,10 +34,12 @@ impl ClawSession {
                     };
 
                     self.ensure_initialized(&msg, &mut ctx.is_initialized).await;
-                    self.dispatch_message(msg, &mut ctx).await;
+                    if self.dispatch_message(msg, &mut ctx).await {
+                        break;
+                    }
                 }
                 _ = task_interval.tick() => {
-                    self.tick_scheduled_tasks(&mut ctx).await;
+                    self.tick_scheduled_tasks(&ctx).await;
                 }
             }
         }
@@ -45,7 +47,10 @@ impl ClawSession {
         ctx.workspace.unregister_pane(self.pane_id).await;
     }
 
-    async fn dispatch_message(&mut self, msg: ClawMessage, ctx: &mut RunContext) {
+    /// Processes a single actor message. Returns `true` if the actor loop should exit
+    /// (used to automatically reap transient headless workers once their task completes).
+    #[allow(clippy::too_many_lines)]
+    async fn dispatch_message(&mut self, msg: ClawMessage, ctx: &mut RunContext) -> bool {
         let session_ctx = self.session_context.clone();
 
         match msg {
@@ -67,7 +72,7 @@ impl ClawSession {
                         state_lock.active_speaker = None;
                     }
                     let _ = self.tx_self.send(next_msg).await;
-                    return;
+                    return false;
                 }
 
                 // Check if a multi-character roundtable / debate handoff is queued
@@ -108,16 +113,35 @@ impl ClawSession {
                         None,
                         vec![],
                     ));
-                    return;
+                    return false;
+                }
+
+                // Automatically reap transient headless workers once their delegated turn finishes
+                // and no further backlog items remain.
+                let (is_sleeping, is_headless) = {
+                    let state_lock = self.state.lock().await;
+                    (
+                        state_lock.status == crate::engine::AgentStatus::Sleep,
+                        state_lock.is_headless,
+                    )
+                };
+                if is_headless && ctx.backlog.is_empty() && !is_sleeping {
+                    return true;
                 }
 
                 // Preserve Sleep status if a tool in the turn (`subscribe_to_pane`, `await_tasks`)
-                // already suspended the agent to wait for external events or delegated tasks.
-                let is_sleeping =
-                    self.state.lock().await.status == crate::engine::AgentStatus::Sleep;
+                // already suspended the agent, or Locking status if the session still holds a lock.
                 if !is_sleeping {
+                    let target_state = match ctx
+                        .workspace
+                        .held_lock_for_pane(&self.pane_id)
+                        .await
+                    {
+                        Some(resource) => crate::engine::AgentStatus::Locking { resource },
+                        None => crate::engine::AgentStatus::Waiting,
+                    };
                     let req = crate::engine::TransitionRequest {
-                        target_state: crate::engine::AgentStatus::Waiting,
+                        target_state,
                         source: crate::engine::TriggerSource::System,
                     };
                     self.handle_transition(req, &mut ctx.current_turn, &mut ctx.urgent_backlog)
@@ -136,12 +160,11 @@ impl ClawSession {
                     Ok(summary) => {
                         state_lock.context_quality = crate::engine::ContextQuality::Full;
                         state_lock.history.push(rig::message::Message::user(format!(
-                            "[WHILE_YOU_SLEPT]\n{}",
-                            summary
+                            "[WHILE_YOU_SLEPT]\n{summary}"
                         )));
                     }
                     Err(e) => {
-                        log::warn!("Dreamer fallback triggered: {}", e);
+                        log::warn!("Dreamer fallback triggered: {e}");
                         state_lock.context_quality = crate::engine::ContextQuality::Degraded;
                     }
                 }
@@ -175,8 +198,7 @@ impl ClawSession {
                 if state_lock.status == state {
                     drop(state_lock);
                     log::warn!(
-                        "Watchdog expired for task {:?}. Forcing Faulted state.",
-                        task_id
+                        "Watchdog expired for task {task_id:?}. Forcing Faulted state."
                     );
                     self.handle_transition(
                         crate::engine::TransitionRequest {
@@ -218,6 +240,9 @@ impl ClawSession {
                 drop(state_lock);
 
                 self.clear_ui_history().await;
+                ctx.workspace
+                    .update_pane_tasks(self.pane_id.clone(), Vec::new())
+                    .await;
                 ctx.workspace.unregister_pane(self.pane_id.clone()).await;
             }
             ClawMessage::Evict => {
@@ -235,6 +260,9 @@ impl ClawSession {
 
                 self.clear_ui_history().await;
                 let _ = self.tx_ui.send(ClawEngineEvent::Evicted).await;
+                ctx.workspace
+                    .update_pane_tasks(self.pane_id.clone(), Vec::new())
+                    .await;
                 ctx.workspace.unregister_pane(self.pane_id.clone()).await;
             }
             ClawMessage::ResumeSession {
@@ -278,7 +306,7 @@ impl ClawSession {
                 let model_id = settings
                     .claw_model
                     .as_ref()
-                    .map(|m| format!("{:?}", m))
+                    .map(|m| format!("{m:?}"))
                     .unwrap_or_default();
 
                 let db_for_persistence = self.db.clone();
@@ -349,7 +377,7 @@ impl ClawSession {
                 let status = if process_name.is_empty() {
                     None
                 } else {
-                    Some(format!("Running: {}", process_name))
+                    Some(format!("Running: {process_name}"))
                 };
                 ctx.workspace
                     .set_pane_status(self.pane_id.clone(), status)
@@ -487,8 +515,9 @@ impl ClawSession {
                         )
                         .await
                         .ok()
-                        .and_then(|r| r.ok())
+                        .and_then(std::result::Result::ok)
                         .unwrap_or_default();
+                        let live_snap = live_snap.trim();
                         state.lock().await.pending_scrollbacks.remove(&req_id);
 
                         let alias = workspace
@@ -541,7 +570,7 @@ impl ClawSession {
             ClawMessage::CompleteRunningTerminalCommand { process_name } => {
                 let should_complete = self.state.lock().await.pending_terminal_reply.is_some();
                 if !should_complete {
-                    return;
+                    return false;
                 }
 
                 if let Some(handle) = ctx.current_turn.take() {
@@ -688,5 +717,6 @@ impl ClawSession {
                 self.handle_rebind_pane(ctx, new_pane_id).await;
             }
         }
+        false
     }
 }

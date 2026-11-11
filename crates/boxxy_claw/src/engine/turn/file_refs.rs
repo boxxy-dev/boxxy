@@ -9,7 +9,24 @@ const MAX_TOTAL_REF_BYTES: usize = 128 * 1024;
 const MAX_LINE_CHARS: usize = 2000;
 const BINARY_CHECK_BYTES: usize = 8192;
 const MAX_DIR_ENTRIES: usize = 250;
+const MAX_TEXT_FILE_BYTES: u64 = 5 * 1024 * 1024;
 const MAX_IMAGE_BYTES: u64 = 10 * 1024 * 1024;
+
+const BUILTIN_BLACKLIST: &[&str] = &[
+    "/etc/shadow",
+    "/etc/gshadow",
+    "/etc/sudoers",
+    "/root/.ssh",
+    ".ssh/id_rsa",
+    ".ssh/id_ed25519",
+    ".ssh/id_ed25519_sk",
+    ".ssh/id_ecdsa",
+    ".ssh/id_ecdsa_sk",
+    ".ssh/id_dsa",
+    ".ssh/authorized_keys",
+    ".gnupg/private-keys-v1.d",
+    ".aws/credentials",
+];
 
 #[derive(Debug, Default)]
 pub struct ResolvedFileRefs {
@@ -32,6 +49,7 @@ pub struct FileMentionToken {
 }
 
 /// Extracts `@<path>[#|:start[-end]]` tokens from a user prompt (outside fenced code blocks).
+#[must_use]
 pub fn extract_file_mention_tokens(text: &str) -> Vec<FileMentionToken> {
     let mut results = Vec::new();
     let mut seen = HashSet::new();
@@ -113,42 +131,78 @@ fn split_line_range(token: &str) -> (&str, Option<usize>, Option<usize>) {
     (token, None, None)
 }
 
-fn load_blacklist() -> Vec<String> {
-    let mut blacklisted = vec![
-        "/etc/shadow".to_string(),
-        "/etc/gshadow".to_string(),
-        "/root/.ssh".to_string(),
-        ".ssh/id_rsa".to_string(),
-        ".ssh/id_ed25519".to_string(),
-    ];
-
-    let blacklist_path = boxxy_sys_utils::get_config_dir()
-        .join("boxxyclaw")
-        .join("BLACKLIST.md");
-    if let Ok(content) = std::fs::read_to_string(&blacklist_path) {
-        let custom: Vec<String> = content
+fn merge_blacklist_rules(custom_content: Option<&str>) -> Vec<String> {
+    let mut blacklisted: Vec<String> = BUILTIN_BLACKLIST.iter().map(|&s| s.to_string()).collect();
+    if let Some(content) = custom_content {
+        for rule in content
             .lines()
             .map(str::trim)
             .filter(|l| !l.is_empty() && !l.starts_with('#'))
-            .map(ToString::to_string)
-            .collect();
-        if !custom.is_empty() {
-            blacklisted = custom;
+        {
+            if !blacklisted.iter().any(|existing| existing == rule) {
+                blacklisted.push(rule.to_string());
+            }
         }
     }
     blacklisted
 }
 
-fn is_blacklisted(path: &str, blacklist: &[String]) -> bool {
-    blacklist.iter().any(|b| path.contains(b))
+fn load_blacklist() -> Vec<String> {
+    let blacklist_path = boxxy_sys_utils::get_config_dir()
+        .join("boxxyclaw")
+        .join("BLACKLIST.md");
+    let custom = std::fs::read_to_string(&blacklist_path).ok();
+    merge_blacklist_rules(custom.as_deref())
+}
+
+fn path_matches_blacklist_entry(candidate_path: &str, rule: &str) -> bool {
+    let rule = rule.trim().trim_end_matches('/');
+    if rule.is_empty() {
+        return false;
+    }
+    let cand = candidate_path.trim_end_matches('/');
+    if rule.starts_with('/') {
+        cand == rule
+            || cand
+                .strip_prefix(rule)
+                .is_some_and(|rest| rest.starts_with('/'))
+    } else {
+        if cand == rule
+            || cand
+                .strip_prefix(rule)
+                .is_some_and(|rest| rest.starts_with('/'))
+        {
+            return true;
+        }
+        if let Some(prefix) = cand.strip_suffix(rule)
+            && prefix.ends_with('/')
+        {
+            return true;
+        }
+        let mid_needle = format!("/{rule}/");
+        cand.contains(&mid_needle)
+    }
+}
+
+fn is_blacklisted(resolved_path: &str, path: &Path, blacklist: &[String]) -> bool {
+    let canonical = std::fs::canonicalize(path)
+        .ok()
+        .map(|p| p.to_string_lossy().into_owned());
+    blacklist.iter().any(|rule| {
+        path_matches_blacklist_entry(resolved_path, rule)
+            || canonical
+                .as_deref()
+                .is_some_and(|c| path_matches_blacklist_entry(c, rule))
+    })
 }
 
 fn is_supported_image(path: &str) -> bool {
-    let lower = path.to_lowercase();
-    lower.ends_with(".png")
-        || lower.ends_with(".jpg")
-        || lower.ends_with(".jpeg")
-        || lower.ends_with(".webp")
+    Path::new(path).extension().is_some_and(|ext| {
+        ext.eq_ignore_ascii_case("png")
+            || ext.eq_ignore_ascii_case("jpg")
+            || ext.eq_ignore_ascii_case("jpeg")
+            || ext.eq_ignore_ascii_case("webp")
+    })
 }
 
 /// Resolves all `@<file>` / `@<dir>` / `@<image>` references in `prompt` relative to `cwd`
@@ -173,11 +227,11 @@ fn resolve_tokens_sync(tokens: &[FileMentionToken], cwd: &str) -> ResolvedFileRe
 
     for token in tokens {
         let resolved_path = boxxy_core_toolbox::utils::resolve_path(cwd, &token.path_str);
-        if is_blacklisted(&resolved_path, &blacklist) {
+        let path = Path::new(&resolved_path);
+        if is_blacklisted(&resolved_path, path, &blacklist) {
             continue;
         }
 
-        let path = Path::new(&resolved_path);
         let Ok(meta) = std::fs::metadata(path) else {
             continue;
         };
@@ -200,6 +254,16 @@ fn resolve_tokens_sync(tokens: &[FileMentionToken], cwd: &str) -> ResolvedFileRe
                         meta.len()
                     ));
                 }
+                continue;
+            }
+
+            if meta.len() > MAX_TEXT_FILE_BYTES {
+                sections.push(format!(
+                    "### `{}` (`{}`)\n[File is too large ({} bytes > 5 MB limit) to preload; use `grep_search` or `file_read` if applicable]",
+                    token.raw_token,
+                    resolved_path,
+                    meta.len()
+                ));
                 continue;
             }
 
@@ -277,7 +341,6 @@ fn format_file_ref(
 
     let requested_limit = match (token.start_line, token.end_line) {
         (Some(s), Some(e)) if e >= s => (e - s + 1).min(MAX_LINE_LIMIT),
-        (Some(_), None) => DEFAULT_LINE_LIMIT,
         _ => DEFAULT_LINE_LIMIT,
     };
 
@@ -337,7 +400,7 @@ fn format_directory_ref(raw_token: &str, resolved_path: &str, path: &Path) -> Op
             if ft.is_dir() {
                 dirs.push(format!("{name}/"));
             } else {
-                let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
+                let size = entry.metadata().map_or(0, |m| m.len());
                 files.push(format!("{name} ({size} bytes)"));
             }
         } else {
@@ -404,5 +467,30 @@ mod tests {
         assert!(!resolved.context_block.contains("1: line one"));
         assert_eq!(resolved.read_hashes.len(), 1);
         assert_eq!(resolved.read_hashes[0].0, file_path.to_string_lossy());
+    }
+
+    #[test]
+    fn custom_blacklist_extends_builtin_and_blocks_symlinked_keys() {
+        let merged = merge_blacklist_rules(Some("# comment\nsecrets.toml\n"));
+        assert!(merged.iter().any(|r| r == "/etc/shadow"));
+        assert!(merged.iter().any(|r| r == ".ssh/id_ed25519"));
+        assert!(merged.iter().any(|r| r == "secrets.toml"));
+
+        let tmp = tempfile::tempdir().unwrap();
+        let ssh_dir = tmp.path().join(".ssh");
+        std::fs::create_dir_all(&ssh_dir).unwrap();
+        let secret_key = ssh_dir.join("id_ed25519");
+        std::fs::write(&secret_key, "PRIVATE KEY DATA").unwrap();
+
+        let workspace = tmp.path().join("project");
+        std::fs::create_dir_all(&workspace).unwrap();
+        let link = workspace.join("innocent_note.txt");
+        std::os::unix::fs::symlink(&secret_key, &link).unwrap();
+
+        assert!(is_blacklisted(
+            &link.to_string_lossy(),
+            &link,
+            &merged
+        ));
     }
 }

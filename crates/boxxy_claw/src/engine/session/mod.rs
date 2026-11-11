@@ -8,6 +8,7 @@ use tokio::sync::Mutex;
 mod approvals;
 mod diagnostics;
 mod lifecycle;
+mod resumption;
 pub mod roundtable;
 pub mod run;
 
@@ -53,6 +54,8 @@ pub struct SessionState {
     pub history: Vec<Message>,
     /// Index in `history` up to which messages have already been flushed to `flush_history`.
     pub flushed_watermark: usize,
+    /// Prevents concurrent turns from spawning duplicate background session-title LLM calls.
+    pub title_requested: bool,
     pub pending_lazy_diagnosis: Option<(String, String, String)>,
     pub persistent_agent: Option<crate::engine::agent::ClawAgent>,
     pub current_claw_model: Option<boxxy_model_selection::ModelProvider>,
@@ -85,6 +88,7 @@ pub struct SessionState {
 impl SessionState {
     /// Returns `(agent_name, character_id)` of the character currently speaking in this turn
     /// (falling back to the pane's Host character).
+    #[must_use]
     pub fn effective_speaker(&self) -> (String, String) {
         if let Some(ref spk) = self.active_speaker {
             (spk.display_name.clone(), spk.character_id.clone())
@@ -94,7 +98,8 @@ impl SessionState {
     }
 
     /// Returns true if any tool approval channel or command injection is currently waiting for user action.
-    pub fn has_pending_approval(&self) -> bool {
+    #[must_use]
+    pub const fn has_pending_approval(&self) -> bool {
         self.pending_inject_command
             || self.pending_terminal_reply.is_some()
             || self.pending_file_reply.is_some()
@@ -125,6 +130,7 @@ pub struct ClawSession {
 }
 
 impl ClawSession {
+    #[must_use]
     pub fn new(
         pane_id: String,
     ) -> (
@@ -157,7 +163,7 @@ impl ClawSession {
             db: Arc::new(Mutex::new(None)),
             state: Arc::new(Mutex::new(SessionState {
                 session_id,
-                pane_id: pane_id.clone(),
+                pane_id,
                 agent_name: name,
                 character_id: String::new(),
                 character_display_name: String::new(),
@@ -186,6 +192,7 @@ impl ClawSession {
                 pending_delegations: std::collections::HashMap::new(),
                 history: Vec::new(),
                 flushed_watermark: 0,
+                title_requested: false,
                 pending_lazy_diagnosis: None,
                 persistent_agent: None,
                 current_claw_model: settings.claw_model.clone(),
@@ -218,6 +225,7 @@ impl ClawSession {
         (session, tx, rx_ui)
     }
 
+    #[must_use]
     pub fn with_identity(
         mut self,
         character_id: String,

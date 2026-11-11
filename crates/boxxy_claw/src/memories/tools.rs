@@ -80,13 +80,13 @@ impl Tool for MemoryStoreTool {
             .current_dir()
             .await
             .unwrap_or_else(|| self.current_dir.clone());
-        let db_guard = self.db.lock().await;
-        if let Some(db) = db_guard.as_ref() {
+        let db_opt = self.db.lock().await.clone();
+        if let Some(db) = db_opt {
             let store = Store::new(db.pool());
             // Default to 'global' unless the LLM explicitly passed a non-empty project_path
             // or explicitly set category == "project".
             let project_path = match args.project_path.as_deref().map(str::trim) {
-                Some("") | Some("global") | None => {
+                Some("" | "global") | None => {
                     if args.category.as_deref() == Some("project") && !live_cwd.is_empty() {
                         Some(live_cwd.as_str())
                     } else {
@@ -108,8 +108,7 @@ impl Tool for MemoryStoreTool {
                 )
                 .await
             {
-                Ok(_) => {
-                    drop(db_guard);
+                Ok(()) => {
                     let _ = crate::memories::db::sync_memories_to_markdown(self.db.clone()).await;
                     let result = format!("Successfully stored memory: {}", args.key);
                     self.approval
@@ -118,7 +117,7 @@ impl Tool for MemoryStoreTool {
                     Ok(result)
                 }
                 Err(e) => {
-                    let result = format!("Error storing memory: {}", e);
+                    let result = format!("Error storing memory: {e}");
                     self.approval
                         .report_tool_result(Self::NAME.to_string(), result.clone())
                         .await;
@@ -188,8 +187,8 @@ impl Tool for MemoryDeleteTool {
             .current_dir()
             .await
             .unwrap_or_else(|| self.current_dir.clone());
-        let db_guard = self.db.lock().await;
-        if let Some(db) = db_guard.as_ref() {
+        let db_opt = self.db.lock().await.clone();
+        if let Some(db) = db_opt {
             let store = Store::new(db.pool());
             let project_path = args
                 .project_path
@@ -206,8 +205,7 @@ impl Tool for MemoryDeleteTool {
             };
 
             match res {
-                Ok(_) => {
-                    drop(db_guard);
+                Ok(()) => {
                     let _ = crate::memories::db::sync_memories_to_markdown(self.db.clone()).await;
                     let result = format!("Successfully deleted memory: {}", args.key);
                     self.approval
@@ -216,7 +214,7 @@ impl Tool for MemoryDeleteTool {
                     Ok(result)
                 }
                 Err(e) => {
-                    let result = format!("Error deleting memory: {}", e);
+                    let result = format!("Error deleting memory: {e}");
                     self.approval
                         .report_tool_result(Self::NAME.to_string(), result.clone())
                         .await;

@@ -1,9 +1,10 @@
 use crate::utils::load_prompt_fallback;
-use boxxy_db::store::Store;
 use boxxy_db::Db;
+use boxxy_db::store::Store;
 use boxxy_model_selection::ModelProvider;
 use log::{debug, info};
 use rig::message::Message;
+use std::fmt::Write as _;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -16,7 +17,7 @@ pub struct DemotionExtractor {
 }
 
 impl DemotionExtractor {
-    pub async fn on_demote(&self, session_id: &str, messages: Vec<Message>) {
+    pub fn on_demote(&self, session_id: &str, messages: Vec<Message>) {
         if messages.is_empty() {
             return;
         }
@@ -79,10 +80,10 @@ pub async fn flush_history(
     for msg in evicted_messages {
         match msg {
             Message::System { content } => {
-                text_to_summarize.push_str(&format!("SYSTEM: {}\n", content));
+                let _ = writeln!(text_to_summarize, "SYSTEM: {content}");
             }
             Message::User { content } => {
-                for c in content.iter() {
+                for c in &content {
                     if let rig::message::UserContent::Text(text) = c {
                         let cleaned = clean_user_text_for_flush(&text.text).trim();
                         if !cleaned.is_empty()
@@ -91,21 +92,22 @@ pub async fn flush_history(
                                 crate::engine::turn::history::SESSION_CHECKPOINT_PREFIX,
                             )
                         {
-                            text_to_summarize.push_str(&format!("USER: {}\n", cleaned));
+                            let _ = writeln!(text_to_summarize, "USER: {cleaned}");
                         }
                     }
                 }
             }
             Message::Assistant(turn) => {
-                for c in turn.content.iter() {
+                for c in &turn.content {
                     if let rig::message::AssistantContent::Text(text) = c {
-                        let trimmed = crate::engine::turn::history::strip_speaker_tag(&text.text).trim();
+                        let trimmed =
+                            crate::engine::turn::history::strip_speaker_tag(&text.text).trim();
                         if !trimmed.is_empty()
                             && trimmed != "[SILENT_ACK]"
                             && trimmed != "[Previous task was interrupted by the user]"
                             && trimmed != crate::engine::turn::history::SESSION_CHECKPOINT_ACK
                         {
-                            text_to_summarize.push_str(&format!("ASSISTANT: {}\n", trimmed));
+                            let _ = writeln!(text_to_summarize, "ASSISTANT: {trimmed}");
                         }
                     }
                 }
@@ -130,14 +132,13 @@ pub async fn flush_history(
         "You are a concise memory extraction system. Output only valid JSON.",
     );
 
-    if let Ok(res) = agent.prompt(&flush_prompt).await {
-        if persist_flushed_json(&db, session_id, project_path, &res.0)
+    if let Ok(res) = agent.prompt(&flush_prompt).await
+        && persist_flushed_json(&db, session_id, project_path, &res.0)
             .await
             .unwrap_or(false)
         {
             let _ = crate::memories::db::sync_memories_to_markdown(db.clone()).await;
         }
-    }
 
     info!("Memory Flush complete.");
     Ok(())
@@ -165,16 +166,16 @@ pub(crate) async fn persist_flushed_json(
     };
 
     if let Ok(json) = serde_json::from_str::<serde_json::Value>(raw_json) {
-        let db_guard = db.lock().await;
-        if let Some(db_val) = db_guard.as_ref() {
+        let db_opt = db.lock().await.clone();
+        if let Some(db_val) = db_opt {
             let store = Store::new(db_val.pool());
 
             // 1. Save Facts
-            if let Some(facts) = json.get("facts").and_then(|f| f.as_array()) {
+            if let Some(facts) = json.get("facts").and_then(serde_json::Value::as_array) {
                 for fact in facts {
                     if let (Some(key), Some(content)) = (
-                        fact.get("key").and_then(|k| k.as_str()),
-                        fact.get("content").and_then(|c| c.as_str()),
+                        fact.get("key").and_then(serde_json::Value::as_str),
+                        fact.get("content").and_then(serde_json::Value::as_str),
                     ) {
                         // Implicitly extracted facts are candidates and require reinforcement
                         let _ = crate::engine::context::upsert_candidate_deduped(
@@ -185,16 +186,13 @@ pub(crate) async fn persist_flushed_json(
                             0.5,
                         )
                         .await;
-                        debug!(
-                            "Flushed Fact for project {}: {} -> {}",
-                            project_path, key, content
-                        );
+                        debug!("Flushed Fact for project {project_path}: {key} -> {content}");
                     }
                 }
             }
 
             // 2. Save Summary as an interaction (with 0-token local Jaccard deduplication)
-            if let Some(summary) = json.get("summary").and_then(|s| s.as_str()) {
+            if let Some(summary) = json.get("summary").and_then(serde_json::Value::as_str) {
                 let summary = summary.trim();
                 if !summary.is_empty() && summary != "NO_TECHNICAL_CHANGE" {
                     let mut is_dup = false;
@@ -205,8 +203,8 @@ pub(crate) async fn persist_flushed_json(
                                 crate::engine::context::jaccard_similarity(summary, &r.content);
                             if sim >= 0.70 {
                                 debug!(
-                                    "Local Jaccard duplicate found (ID: {}, sim: {:.2}). Touching timestamp.",
-                                    r.id, sim
+                                    "Local Jaccard duplicate found (ID: {}, sim: {sim:.2}). Touching timestamp.",
+                                    r.id
                                 );
                                 let _ = store.touch_interaction(r.id).await;
                                 is_dup = true;
@@ -237,18 +235,15 @@ pub(crate) async fn persist_flushed_json(
                             .await
                         {
                             log::warn!(
-                                "Failed to store flushed interaction for session {}: {}",
-                                effective_sid,
-                                e
+                                "Failed to store flushed interaction for session {effective_sid}: {e}"
                             );
                         } else {
-                            debug!("Flushed Summary for project {}: {}", project_path, summary);
+                            debug!("Flushed Summary for project {project_path}: {summary}");
                         }
                     }
                 }
             }
 
-            drop(db_guard);
             return Ok(true);
         }
     }

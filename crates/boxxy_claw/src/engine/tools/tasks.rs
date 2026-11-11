@@ -63,7 +63,8 @@ impl Tool for ScheduleTaskTool {
             _ => return Err(std::io::Error::other("Invalid task type")),
         };
 
-        let due_at = Utc::now() + Duration::seconds(args.due_in_seconds);
+        let delay_secs = args.due_in_seconds.max(0);
+        let due_at = Utc::now() + Duration::seconds(delay_secs);
         let id = Uuid::new_v4();
 
         let task = ScheduledTask {
@@ -85,6 +86,8 @@ impl Tool for ScheduleTaskTool {
             )
         };
 
+        persist_pending_tasks(&self.approval.db, &self.approval.session_id, &tasks).await;
+
         let workspace = crate::registry::workspace::global_workspace().await;
         workspace.update_pane_tasks(pane_id, tasks.clone()).await;
 
@@ -100,10 +103,7 @@ impl Tool for ScheduleTaskTool {
         let out = ScheduleTaskOutput {
             success: true,
             task_id: id.to_string(),
-            message: format!(
-                "Task scheduled for {} seconds from now.",
-                args.due_in_seconds
-            ),
+            message: format!("Task scheduled for {delay_secs} seconds from now."),
         };
         self.approval.finish_tool(Self::NAME, &out).await;
         Ok(out)
@@ -217,6 +217,7 @@ impl Tool for CancelTaskTool {
         };
 
         let out = if found {
+            persist_pending_tasks(&self.approval.db, &self.approval.session_id, &tasks).await;
             let workspace = crate::registry::workspace::global_workspace().await;
             workspace.update_pane_tasks(pane_id, tasks.clone()).await;
 
@@ -241,5 +242,67 @@ impl Tool for CancelTaskTool {
         };
         self.approval.finish_tool(Self::NAME, &out).await;
         Ok(out)
+    }
+}
+
+pub(crate) async fn persist_pending_tasks(
+    db_cell: &Arc<Mutex<Option<boxxy_db::Db>>>,
+    session_id: &str,
+    tasks: &[ScheduledTask],
+) {
+    if session_id.is_empty() {
+        return;
+    }
+    let db_opt = db_cell.lock().await.clone();
+    let Some(db) = db_opt else {
+        return;
+    };
+    let Ok(tasks_json) = serde_json::to_string(tasks) else {
+        return;
+    };
+    let _ = sqlx::query(
+        "UPDATE sessions SET pending_tasks_json = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+    )
+    .bind(tasks_json)
+    .bind(session_id)
+    .execute(db.pool())
+    .await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use boxxy_db::store::Store;
+
+    #[tokio::test]
+    async fn persist_pending_tasks_updates_session_row_in_sqlite() {
+        let db = boxxy_db::Db::new_in_memory().await.unwrap();
+        let store = Store::new(db.pool());
+        store
+            .ensure_session_exists("sess-tasks-1", "char-1", "Niko", "/tmp/proj")
+            .await
+            .unwrap();
+
+        let db_arc = Arc::new(Mutex::new(Some(db.clone())));
+        let sample = vec![ScheduledTask {
+            id: Uuid::new_v4(),
+            task_type: TaskType::Notification,
+            payload: "Check build".to_string(),
+            due_at: Utc::now() + Duration::seconds(60),
+            status: TaskStatus::Pending,
+        }];
+
+        persist_pending_tasks(&db_arc, "sess-tasks-1", &sample).await;
+
+        let loaded = store.get_session("sess-tasks-1").await.unwrap().unwrap();
+        let decoded: Vec<ScheduledTask> =
+            serde_json::from_str(loaded.pending_tasks_json.as_deref().unwrap()).unwrap();
+        assert_eq!(decoded.len(), 1);
+        assert_eq!(decoded[0].payload, "Check build");
+
+        // Clearing tasks updates SQLite back to `[]` so fired/cancelled tasks do not resurrect
+        persist_pending_tasks(&db_arc, "sess-tasks-1", &[]).await;
+        let cleared = store.get_session("sess-tasks-1").await.unwrap().unwrap();
+        assert_eq!(cleared.pending_tasks_json.as_deref(), Some("[]"));
     }
 }

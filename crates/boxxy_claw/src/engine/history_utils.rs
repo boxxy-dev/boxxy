@@ -2,7 +2,8 @@ use crate::engine::agent_config::AgentConfig;
 use rig::message::Message;
 use std::borrow::Cow;
 
-pub fn provider_family(model: &Option<boxxy_model_selection::ModelProvider>) -> &'static str {
+#[must_use]
+pub const fn provider_family(model: &Option<boxxy_model_selection::ModelProvider>) -> &'static str {
     match model {
         Some(boxxy_model_selection::ModelProvider::Gemini(_, _)) => "gemini",
         Some(boxxy_model_selection::ModelProvider::Ollama(_)) => "ollama",
@@ -29,14 +30,14 @@ pub fn provider_family(model: &Option<boxxy_model_selection::ModelProvider>) -> 
 /// and `rig_core::completion::history::adapt` automatically canonicalizes foreign
 /// provider blocks (stripping incompatible signatures, opaque items, and normalizing
 /// tool call IDs) at request preparation time.
+#[must_use]
 pub fn maybe_sanitize_history<'a>(
     history: &'a [Message],
     old_config: Option<&AgentConfig>,
     new_config: &AgentConfig,
 ) -> Cow<'a, [Message]> {
     let family_changed = old_config
-        .map(|old| provider_family(&old.model) != provider_family(&new_config.model))
-        .unwrap_or(false);
+        .is_some_and(|old| provider_family(&old.model) != provider_family(&new_config.model));
 
     if family_changed {
         Cow::Owned(history.to_vec())

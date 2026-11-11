@@ -30,12 +30,13 @@ impl ClawApprovalHandler {
         boxxy_telemetry::track_tool_use(tool_name).await;
     }
 
-    pub async fn finish_tool<T: Serialize + ?Sized>(&self, tool_name: &'static str, output: &T) {
-        self.report_tool_result(
-            tool_name.to_string(),
-            serde_json::to_string(output).unwrap_or_default(),
-        )
-        .await;
+    pub async fn finish_tool<T: Serialize + Sync + ?Sized>(
+        &self,
+        tool_name: &'static str,
+        output: &T,
+    ) {
+        let json = serde_json::to_string(output).unwrap_or_default();
+        self.report_tool_result(tool_name.to_string(), json).await;
     }
 }
 
@@ -370,20 +371,15 @@ impl ApprovalHandler for ClawApprovalHandler {
         path: &str,
         disk_content: Option<&str>,
     ) -> Option<String> {
-        let Some(disk) = disk_content else {
-            return None;
-        };
-        let state = self.state.lock().await;
-        let Some(&known_hash) = state.read_file_hashes.get(path) else {
-            return None;
-        };
+        let disk = disk_content?;
+        let known_hash = *self.state.lock().await.read_file_hashes.get(path)?;
         let current_hash = boxxy_core_toolbox::hash_file_content(disk);
-        if current_hash != known_hash {
+        if current_hash == known_hash {
+            None
+        } else {
             Some(format!(
                 "File `{path}` has been modified on disk since you last read or edited it. Call `file_read` on `{path}` first so you do not overwrite manual user changes."
             ))
-        } else {
-            None
         }
     }
 

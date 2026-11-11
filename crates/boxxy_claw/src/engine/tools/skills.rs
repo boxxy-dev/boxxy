@@ -14,6 +14,7 @@ pub struct ActivateSkillOutput {
 
 /// Tool for dynamically loading the full content of a skill from the Toolbox.
 pub struct ActivateSkillTool {
+    pub pane_id: String,
     pub approval: std::sync::Arc<dyn boxxy_core_toolbox::ApprovalHandler>,
 }
 
@@ -55,16 +56,29 @@ impl Tool for ActivateSkillTool {
         boxxy_telemetry::track_tool_use(Self::NAME).await;
         let registry = crate::registry::skills::global_registry().await;
         let all_skills = registry.get_skills().await;
+        let target_norm = args.name.trim().replace(['-', '_'], " ").to_lowercase();
 
-        let out = if let Some(skill) = all_skills
-            .into_iter()
-            .find(|s| s.frontmatter.name == args.name)
-        {
+        let matched = all_skills.iter().find(|s| {
+            s.frontmatter.name.eq_ignore_ascii_case(args.name.trim())
+                || s.frontmatter
+                    .name
+                    .replace(['-', '_'], " ")
+                    .to_lowercase()
+                    == target_norm
+        });
+
+        let out = if let Some(skill) = matched {
+            if !self.pane_id.is_empty() {
+                crate::registry::workspace::global_workspace()
+                    .await
+                    .add_pane_skill(&self.pane_id, skill.frontmatter.name.clone())
+                    .await;
+            }
             ActivateSkillOutput {
                 success: true,
                 content: format!(
                     "Skill '{}' activated. FULL INSTRUCTIONS:\n\n{}\n\nCRITICAL DIRECTIVE: You have successfully activated this skill. Stop activating skills and proceed immediately to answer the user's prompt using these instructions.",
-                    args.name, skill.content
+                    skill.frontmatter.name, skill.content
                 ),
             }
         } else {

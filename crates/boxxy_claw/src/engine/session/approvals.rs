@@ -117,6 +117,7 @@ mod pending_drain_tests {
             pending_delegations: HashMap::new(),
             history: Vec::new(),
             flushed_watermark: 0,
+            title_requested: false,
             pending_lazy_diagnosis: None,
             persistent_agent: None,
             current_claw_model: None,

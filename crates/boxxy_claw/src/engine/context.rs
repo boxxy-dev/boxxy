@@ -1,19 +1,31 @@
 use log::debug;
 
-/// Scans the config directory for characters to build the session context.
+/// Resolves the character's role/personality (consulting `CHARACTER_CACHE` first and
+/// falling back to disk only if unseeded) plus optional `CLAW_STATE.md` long-term memory.
+#[must_use]
 pub fn load_session_context(character_id: &str) -> String {
     let mut context = String::new();
 
-    if let Ok(characters) = boxxy_claw_protocol::character_loader::load_characters() {
-        if let Some(char_info) = characters.into_iter().find(|c| c.config.id == character_id) {
-            context.push_str("\n--- CHARACTER ROLE ---\n");
-            context.push_str(&char_info.config.duties);
-            context.push('\n');
+    let cached = boxxy_claw_protocol::characters::CHARACTER_CACHE.load();
+    let found_in_cache = cached
+        .iter()
+        .find(|c| c.config.id == character_id)
+        .cloned();
+    let resolved_char = found_in_cache.or_else(|| {
+        boxxy_claw_protocol::character_loader::load_characters()
+            .ok()?
+            .into_iter()
+            .find(|c| c.config.id == character_id)
+    });
 
-            context.push_str("\n--- CHARACTER PERSONALITY ---\n");
-            context.push_str(&char_info.config.personality);
-            context.push('\n');
-        }
+    if let Some(char_info) = resolved_char {
+        context.push_str("\n--- CHARACTER ROLE ---\n");
+        context.push_str(&char_info.config.duties);
+        context.push('\n');
+
+        context.push_str("\n--- CHARACTER PERSONALITY ---\n");
+        context.push_str(&char_info.config.personality);
+        context.push('\n');
     }
 
     let config_dir = boxxy_sys_utils::get_config_dir();
@@ -48,11 +60,16 @@ const FTS_STOPWORDS: &[&str] = &[
     "your",
 ];
 
+pub(crate) fn is_fts_stopword(word: &str) -> bool {
+    FTS_STOPWORDS.binary_search(&word).is_ok()
+}
+
 /// Builds a safe, sub-millisecond SQLite FTS5 BM25 query from a raw natural-language prompt
 /// without making any network or LLM calls.
 ///
 /// Extracts alphanumeric/underscore/hyphen tokens, removes common stopwords, deduplicates,
 /// and joins up to 12 high-signal tokens using `OR` with prefix matching (`"token"*`).
+#[must_use]
 pub fn build_fts5_query(query: &str) -> String {
     let mut seen = std::collections::HashSet::new();
     let mut terms = Vec::new();
@@ -140,6 +157,7 @@ fn tokenize_for_similarity(s: &str) -> std::collections::HashSet<String> {
 
 /// Computes word-level Jaccard similarity (0.0 to 1.0) between two strings in pure Rust.
 /// Used for sub-millisecond local deduplication of episodic interaction summaries.
+#[must_use]
 pub fn jaccard_similarity(a: &str, b: &str) -> f64 {
     let set_a = tokenize_for_similarity(a);
     let set_b = tokenize_for_similarity(b);
@@ -163,6 +181,7 @@ pub fn jaccard_similarity(a: &str, b: &str) -> f64 {
 
 /// Returns `true` if a candidate memory fact (`key`, `content`) is a semantic
 /// duplicate of any already-injected `(existing_key, existing_content)` pair.
+#[must_use]
 pub fn is_duplicate_memory_fact(
     key: &str,
     content: &str,
@@ -261,7 +280,7 @@ pub async fn retrieve_memories(
 
         // Fast, zero-LLM local FTS5 query tokenization (0ms latency)
         let fts_query = build_fts5_query(query);
-        debug!("Local FTS5 memory search query: {}", fts_query);
+        debug!("Local FTS5 memory search query: {fts_query}");
 
         // Search both episodic interactions and long-term facts
         let mut result = String::new();
@@ -437,8 +456,8 @@ mod tests {
 
     #[test]
     fn test_jaccard_similarity_identifies_duplicates() {
-        let a = "* Listed the video files located in `/home/user/Videos` and its subdirectories.";
-        let b = "* Listed video files in `/home/user/Videos` and subdirectories.";
+        let a = "* Listed the media files located in `/workspace/media` and its subdirectories.";
+        let b = "* Listed media files in `/workspace/media` and subdirectories.";
         let sim = jaccard_similarity(a, b);
         assert!(sim >= 0.75, "Expected high similarity, got {sim}");
 

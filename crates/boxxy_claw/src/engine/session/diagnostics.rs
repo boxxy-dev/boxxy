@@ -23,7 +23,7 @@ impl ClawSession {
     }
 
     pub(super) async fn handle_command_finished(
-        &mut self,
+        &self,
         exit_code: i32,
         snapshot: String,
         cwd: String,
@@ -137,7 +137,7 @@ impl ClawSession {
     }
 
     pub(super) async fn handle_request_lazy_diagnosis(
-        &mut self,
+        &self,
         session_ctx: &str,
         env: &Arc<dyn ClawEnvironment>,
         current_turn: &mut Option<tokio::task::JoinHandle<()>>,

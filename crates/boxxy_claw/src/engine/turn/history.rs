@@ -5,13 +5,14 @@ pub const SESSION_CHECKPOINT_PREFIX: &str = "[SESSION_CHECKPOINT]";
 pub const SESSION_CHECKPOINT_ACK: &str = "Understood. Retaining session checkpoint context.";
 
 /// Maximum characters retained per tool result in turns older than the freshness window
-/// (matches OpenCode V2's `TRANSCRIPT_CLIP = 2000` in `session/compaction.ts`).
+/// (matches `OpenCode` V2's `TRANSCRIPT_CLIP = 2000` in `session/compaction.ts`).
 const TRANSCRIPT_CLIP_CHARS: usize = 2_000;
 const TRANSCRIPT_CLIP_SUFFIX: &str =
     "\n...[stale tool output clipped — re-run file_read or grep_search if current contents are needed]";
 
 /// Returns `true` if `msg` is the start of a real user exchange (contains user text,
 /// is not a tool-result continuation, and is not a synthetic checkpoint/roundtable header).
+#[must_use]
 pub fn is_exchange_start(msg: &Message) -> bool {
     let Message::User { content } = msg else {
         return false;
@@ -38,6 +39,7 @@ pub fn is_exchange_start(msg: &Message) -> bool {
 /// keeping at least `min_kept_exchanges` full recent exchanges intact.
 ///
 /// Never cuts inside a multi-step tool loop (`Assistant(ToolCall)` ↔ `User(ToolResult)`).
+#[must_use]
 pub fn find_safe_exchange_cut(history: &[Message], min_kept_exchanges: usize) -> Option<usize> {
     let exchange_starts: Vec<usize> = history
         .iter()
@@ -57,6 +59,7 @@ pub fn find_safe_exchange_cut(history: &[Message], min_kept_exchanges: usize) ->
 /// Builds a rolling in-session `[SESSION_CHECKPOINT]` (User + Assistant pair) summarizing
 /// evicted exchanges so multi-hour coding sessions retain task goals, modified files, and
 /// conclusions at index `0..2` of `SessionState.history` with 0ms latency and zero DB schema changes.
+#[must_use]
 pub fn build_checkpoint_pair(evicted: &[Message]) -> Option<(Message, Message)> {
     const MAX_CHECKPOINT_CHARS: usize = 3_200;
     let mut prior_checkpoint = String::new();
@@ -77,19 +80,19 @@ pub fn build_checkpoint_pair(evicted: &[Message]) -> Option<(Message, Message)> 
             line.push_str(&format!("- **User:** {q}"));
         }
         if !tools.is_empty() {
-            if !line.is_empty() {
-                line.push_str(" | ");
-            } else {
+            if line.is_empty() {
                 line.push_str("- ");
+            } else {
+                line.push_str(" | ");
             }
             line.push_str(&format!("**Tools:** {}", tools.join(", ")));
             tools.clear();
         }
         if let Some(r) = reply.take() {
-            if !line.is_empty() {
-                line.push_str(" | ");
-            } else {
+            if line.is_empty() {
                 line.push_str("- ");
+            } else {
+                line.push_str(" | ");
             }
             line.push_str(&format!("**Outcome:** {r}"));
         }
@@ -101,7 +104,7 @@ pub fn build_checkpoint_pair(evicted: &[Message]) -> Option<(Message, Message)> 
     for msg in evicted {
         match msg {
             Message::User { content } => {
-                for item in content.iter() {
+                for item in content {
                     if let rig::message::UserContent::Text(t) = item {
                         let trimmed = t.text.trim();
                         if let Some(rest) = trimmed.strip_prefix(SESSION_CHECKPOINT_PREFIX) {
@@ -136,7 +139,7 @@ pub fn build_checkpoint_pair(evicted: &[Message]) -> Option<(Message, Message)> 
                 }
             }
             Message::Assistant(turn) => {
-                for item in turn.content.iter() {
+                for item in &turn.content {
                     match item {
                         rig::message::AssistantContent::ToolCall(tc) => {
                             let name = &tc.function.name;
@@ -146,16 +149,14 @@ pub fn build_checkpoint_pair(evicted: &[Message]) -> Option<(Message, Message)> 
                                 .get("path")
                                 .or_else(|| tc.function.arguments.get("command"))
                                 .or_else(|| tc.function.arguments.get("pattern"))
-                                .and_then(|v| v.as_str())
-                                .map(|s| {
+                                .and_then(|v| v.as_str()).map_or_else(|| name.to_string(), |s| {
                                     let end = s.floor_char_boundary(48);
                                     if end < s.len() {
                                         format!("{name}({}...)", &s[..end])
                                     } else {
                                         format!("{name}({s})")
                                     }
-                                })
-                                .unwrap_or_else(|| name.to_string());
+                                });
                             if current_tools.len() < 8 && !current_tools.contains(&arg_hint) {
                                 current_tools.push(arg_hint);
                             }
@@ -231,6 +232,7 @@ pub fn build_checkpoint_pair(evicted: &[Message]) -> Option<(Message, Message)> 
 
 /// Prefixes an assistant text response with an internal speaker attribution header
 /// so multi-character roundtable sessions know which character authored each turn.
+#[must_use]
 pub fn tag_assistant_text(character_id: &str, display_name: &str, text: &str) -> String {
     if character_id.is_empty() && display_name.is_empty() {
         return text.to_string();
@@ -240,6 +242,7 @@ pub fn tag_assistant_text(character_id: &str, display_name: &str, text: &str) ->
 }
 
 /// Parses `[SPEAKER_ID:<id>|NAME:<name>]\n<body>`, returning `(id, name, body)`.
+#[must_use]
 pub fn parse_speaker_tag(text: &str) -> Option<(&str, &str, &str)> {
     let rest = text.strip_prefix(SPEAKER_PREFIX)?;
     let newline_idx = rest.find('\n')?;
@@ -250,6 +253,7 @@ pub fn parse_speaker_tag(text: &str) -> Option<(&str, &str, &str)> {
 }
 
 /// Strips the internal `[SPEAKER_ID:...|NAME:...]\n` prefix if present.
+#[must_use]
 pub fn strip_speaker_tag(text: &str) -> &str {
     if let Some((_, _, body)) = parse_speaker_tag(text) {
         body
@@ -284,6 +288,7 @@ fn clip_json_strings_in_place(val: &mut serde_json::Value) {
 }
 
 /// Prepares the history for a new chat completion using default (single-speaker) perspective.
+#[must_use]
 pub fn prepare_query_history(history: Vec<Message>, history_len: usize) -> Vec<Message> {
     prepare_query_history_for_speaker(history, history_len, "", "")
 }
@@ -295,6 +300,7 @@ pub fn prepare_query_history(history: Vec<Message>, history_len: usize) -> Vec<M
 /// - Pure-text Assistant messages authored by *other* characters in a roundtable are converted
 ///   into `Message::User` blocks (`[Character <Name> said]: ...`) so the active speaker stays
 ///   strictly in its own persona without blending voices.
+#[must_use]
 pub fn prepare_query_history_for_speaker(
     history: Vec<Message>,
     history_len: usize,
@@ -384,7 +390,7 @@ pub fn prepare_query_history_for_speaker(
                         // Safeguard 1: Never delete the Message or ToolResult wrapper/call_id.
                         // Only clip oversized inner text or JSON strings (> 2,000 chars) in the outgoing
                         // LLM history copy so UI renderers and provider tool pairing stay intact.
-                        for tc in tool_res.content.iter_mut() {
+                        for tc in &mut tool_res.content {
                             match tc {
                                 rig::message::ToolResultContent::Text(t) => {
                                     if t.text.len() > TRANSCRIPT_CLIP_CHARS
@@ -421,9 +427,9 @@ pub fn prepare_query_history_for_speaker(
                     .any(|c| matches!(c, rig::message::AssistantContent::ToolCall(_)));
 
                 let mut other_speaker: Option<(String, String)> = None;
-                for item in turn.content.iter_mut() {
-                    if let rig::message::AssistantContent::Text(t) = item {
-                        if let Some((spk_id, spk_name, body)) = parse_speaker_tag(&t.text) {
+                for item in &mut turn.content {
+                    if let rig::message::AssistantContent::Text(t) = item
+                        && let Some((spk_id, spk_name, body)) = parse_speaker_tag(&t.text) {
                             let is_other = !current_speaker_id.is_empty()
                                 && !spk_id.is_empty()
                                 && spk_id != current_speaker_id;
@@ -434,7 +440,6 @@ pub fn prepare_query_history_for_speaker(
                                 other_speaker = Some((spk_name_owned, body_owned));
                             }
                         }
-                    }
                 }
 
                 if let Some((spk_name, body)) = other_speaker {

@@ -1,3 +1,4 @@
+#[must_use]
 pub fn extract_command_and_clean(text: &str) -> (Option<String>, String) {
     // IMPORTANT: This function extracts markdown code blocks (`bash`, `fish`, etc.)
     // so that the UI can pop up an "Accept & Run" drawer.

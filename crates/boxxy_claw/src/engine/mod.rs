@@ -43,11 +43,12 @@ pub fn persist_visual_event(
     }
 }
 
-/// Extension trait to keep the from_engine_event logic in the engine crate for now
+/// Extension trait to keep the `from_engine_event` logic in the engine crate for now
 pub struct PersistentClawRowExt;
 
 impl PersistentClawRowExt {
     #[must_use]
+    #[allow(clippy::too_many_lines)]
     pub fn from_engine_event(
         pane_id: String,
         event: &ClawEngineEvent,
@@ -202,7 +203,6 @@ impl PersistentClawRowExt {
                 pane_id,
                 content: text.clone(),
             }),
-            ClawEngineEvent::ToolCallStarted { .. } => None,
             _ => None,
         }
     }

@@ -7,6 +7,7 @@ const BOOKMARK_GENERATOR_MD: &str =
 const AI_CHAT_MD: &str = include_str!("../../../resources/prompts/ai_chat.md");
 const PRIVACY_POLICY_MD: &str = include_str!("../../../resources/prompts/privacy_policy.md");
 
+#[must_use]
 pub fn load_prompt_fallback(_resource_path: &str, filename: &str) -> String {
     match filename {
         "claw.md" => CLAW_MD.to_string(),

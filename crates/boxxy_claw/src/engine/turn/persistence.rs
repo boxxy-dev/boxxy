@@ -47,7 +47,7 @@ pub async fn perform_persistence(ctx: PersistenceContext, state: Arc<Mutex<Sessi
         && let Some(cut) = super::history::find_safe_exchange_cut(&state_lock.history, 6)
     {
         let mut kept = state_lock.history.split_off(cut);
-        let demoted = std::mem::replace(&mut state_lock.history, Vec::new());
+        let demoted = std::mem::take(&mut state_lock.history);
         let demoted_len = demoted.len();
         let already_flushed = state_lock.flushed_watermark.min(demoted_len);
         let mut new_watermark = state_lock.flushed_watermark.saturating_sub(demoted_len);
@@ -78,70 +78,14 @@ pub async fn perform_persistence(ctx: PersistenceContext, state: Arc<Mutex<Sessi
     let session_id_for_db = ctx.session_id.clone();
     let cwd_for_db = ctx.cwd.clone();
     let pinned_for_db = state_lock.pinned;
-    let total_tokens_for_db = state_lock.total_tokens as i64;
-    let context_tokens_for_db = state_lock.context_tokens as i64;
+    let total_tokens_for_db = i64::try_from(state_lock.total_tokens).unwrap_or(i64::MAX);
+    let context_tokens_for_db = i64::try_from(state_lock.context_tokens).unwrap_or(i64::MAX);
     let total_cost_for_db = state_lock.total_cost_usd;
     let model_id = ctx
         .settings
         .claw_model
         .as_ref()
-        .map(|m| format!("{:?}", m))
-        .unwrap_or_default();
-
-    // Safely extract the Db clone before spawning to prevent race conditions with Deactivate/Evict
-    let db_val = {
-        let db_guard = ctx.db.lock().await;
-        db_guard.as_ref().cloned()
-    };
-
-    if let Some(db_for_persistence) = db_val.clone() {
-        let session_id_copy = session_id_for_db.clone();
-        let agent_name_copy = agent_name_for_db.clone();
-        let char_id_copy = character_id_for_db.clone();
-        let char_disp_copy = character_display_name_for_db.clone();
-        let hist_copy = history_json.clone();
-        let tasks_copy = pending_tasks_json.clone();
-        let cwd_copy = cwd_for_db.clone();
-        let model_copy = model_id.clone();
-
-        tokio::spawn(async move {
-            let store = boxxy_db::store::Store::new(db_for_persistence.pool());
-            let _ = store
-                .upsert_session_state(
-                    &session_id_copy,
-                    &agent_name_copy,
-                    &char_id_copy,
-                    &char_disp_copy,
-                    "", // title is updated separately
-                    &hist_copy,
-                    &tasks_copy,
-                    &agent_name_copy,
-                    &cwd_copy,
-                    &model_copy,
-                    pinned_for_db,
-                    total_tokens_for_db,
-                    context_tokens_for_db,
-                    total_cost_for_db,
-                )
-                .await;
-        });
-    }
-
-    if !evicted_messages.is_empty() {
-        let extractor = crate::engine::summarization::history::DemotionExtractor {
-            db: ctx.db.clone(),
-            claw_model: ctx
-                .settings
-                .memory_model
-                .clone()
-                .or(ctx.settings.claw_model.clone()),
-            creds: creds.clone(),
-            project_path: ctx.cwd.clone(),
-        };
-        extractor
-            .on_demote(ctx.session_id.as_str(), evicted_messages)
-            .await;
-    }
+        .map_or_else(String::new, |m| format!("{m:?}"));
 
     // Extract the session's first user query from `history` (stripping dynamic context blocks)
     // so that if Turn 1 was interrupted/rejected before completion, the title is still generated
@@ -153,7 +97,10 @@ pub async fn perform_persistence(ctx: PersistenceContext, state: Arc<Mutex<Sessi
             if let rig::message::Message::User { content } = m {
                 content.iter().find_map(|c| {
                     if let rig::message::UserContent::Text(t) = c {
-                        let cleaned = crate::engine::summarization::history::clean_user_text_for_flush(&t.text);
+                        let cleaned =
+                            crate::engine::summarization::history::clean_user_text_for_flush(
+                                &t.text,
+                            );
                         let trimmed = cleaned.trim();
                         if !trimmed.is_empty()
                             && !trimmed.starts_with("[WHILE_YOU_SLEPT]")
@@ -170,64 +117,102 @@ pub async fn perform_persistence(ctx: PersistenceContext, state: Arc<Mutex<Sessi
         })
         .unwrap_or_else(|| ctx.user_query.clone());
 
+    let should_attempt_title =
+        !state_lock.title_requested && !initial_user_query.trim().is_empty();
+    if should_attempt_title {
+        state_lock.title_requested = true;
+    }
+
     drop(state_lock);
 
-    // Background Task: Session Title Generation (only runs on Turn 1 when title is empty).
-    // Note: Per-turn LLM summarization and fact extraction are intentionally omitted here
-    // (OpenClaw Batch Model). Episodic summaries and candidate facts are extracted in batches
-    // when messages are evicted via `DemotionHook`, or when the session enters Sleep/Deactivate/Evict.
-    let db_clone = ctx.db.clone();
-    let session_id_clone = ctx.session_id.clone();
-    let user_query_clone = initial_user_query;
-    let creds_clone = creds.clone();
-    let settings_clone = ctx.settings.clone();
-
-    tokio::spawn(async move {
-        let needs_title = {
-            let db_guard = db_clone.lock().await;
-            if let Some(db) = &*db_guard {
-                let store = boxxy_db::store::Store::new(db.pool());
-                match store.get_session(&session_id_clone).await {
-                    Ok(Some(s)) => s.title.as_deref().unwrap_or("").trim().is_empty(),
-                    _ => true,
-                }
-            } else {
-                false
-            }
+    if !evicted_messages.is_empty() {
+        let extractor = crate::engine::summarization::history::DemotionExtractor {
+            db: ctx.db.clone(),
+            claw_model: ctx
+                .settings
+                .memory_model
+                .clone()
+                .or_else(|| ctx.settings.claw_model.clone()),
+            creds: creds.clone(),
+            project_path: ctx.cwd.clone(),
         };
+        extractor.on_demote(ctx.session_id.as_str(), evicted_messages);
+    }
 
-        if needs_title && !user_query_clone.trim().is_empty() {
+    // Safely extract the Db clone before spawning to prevent race conditions with Deactivate/Evict
+    let db_val = ctx.db.lock().await.clone();
+
+    if let Some(db_for_persistence) = db_val {
+        let state_for_title = state;
+        let settings_clone = ctx.settings;
+
+        // Run session upsert FIRST and then conditionally generate the session title
+        // inside the same task so `UPDATE sessions SET title = ?` never races ahead of `INSERT`.
+        tokio::spawn(async move {
+            let store = boxxy_db::store::Store::new(db_for_persistence.pool());
+            let _ = store
+                .upsert_session_state(
+                    &session_id_for_db,
+                    &agent_name_for_db,
+                    &character_id_for_db,
+                    &character_display_name_for_db,
+                    "", // title is updated separately once generated
+                    &history_json,
+                    &pending_tasks_json,
+                    &agent_name_for_db,
+                    &cwd_for_db,
+                    &model_id,
+                    pinned_for_db,
+                    total_tokens_for_db,
+                    context_tokens_for_db,
+                    total_cost_for_db,
+                )
+                .await;
+
+            if !should_attempt_title {
+                return;
+            }
+
+            let needs_title = match store.get_session(&session_id_for_db).await {
+                Ok(Some(s)) => s.title.as_deref().unwrap_or("").trim().is_empty(),
+                _ => false,
+            };
+            if !needs_title {
+                return;
+            }
+
+            let title_model = settings_clone
+                .memory_model
+                .clone()
+                .or_else(|| settings_clone.claw_model.clone());
             let title_agent = boxxy_ai_core::create_agent(
-                &settings_clone
-                    .memory_model
-                    .clone()
-                    .or(settings_clone.claw_model.clone()),
-                &creds_clone,
+                &title_model,
+                &creds,
                 "You are a conversation title generator. Summarize the user's prompt in 3 to 6 words. MUST BE UNDER 40 CHARACTERS. Output ONLY the raw title, no quotes, no punctuation. Capitalize it like a title.",
             );
 
-            if let Ok(res) = title_agent.prompt(&user_query_clone).await {
-                let title = res
-                    .0
-                    .trim()
-                    .trim_matches('"')
-                    .trim_matches('\'')
-                    .to_string();
-                if !title.is_empty() {
-                    let db_guard = db_clone.lock().await;
-                    if let Some(db) = &*db_guard {
-                        let store = boxxy_db::store::Store::new(db.pool());
-                        let _ = store.update_session_title(&session_id_clone, &title).await;
-                        log::info!(
-                            "Generated session title for {}: {}",
-                            session_id_clone,
-                            title
-                        );
+            match title_agent.prompt(&initial_user_query).await {
+                Ok((raw_title, _, _)) => {
+                    let title = raw_title
+                        .trim()
+                        .trim_matches('"')
+                        .trim_matches('\'')
+                        .trim()
+                        .to_string();
+                    if title.is_empty() {
+                        state_for_title.lock().await.title_requested = false;
+                    } else {
+                        let _ = store.update_session_title(&session_id_for_db, &title).await;
+                        log::info!("Generated session title for {session_id_for_db}: {title}");
                     }
                 }
+                Err(_) => {
+                    // Allow retry on a subsequent turn if transient network/API failure occurred
+                    state_for_title.lock().await.title_requested = false;
+                }
             }
-        }
-    });
+        });
+    }
 }
 
 #[cfg(test)]

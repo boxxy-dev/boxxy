@@ -103,32 +103,29 @@ impl Tool for SpawnAgentTool {
             )));
         }
 
-        let out = match tokio::time::timeout(std::time::Duration::from_secs(3), reply_rx).await {
-            Ok(Ok((pane_id, alias))) => {
-                let workspace = global_workspace().await;
-                let resolved_alias = if alias.is_empty() {
-                    workspace
-                        .get_pane_alias(&pane_id)
-                        .await
-                        .unwrap_or_else(|| pane_id.clone())
-                } else {
-                    alias
-                };
-                SpawnAgentOutput {
-                    pane_id: Some(pane_id.clone()),
-                    alias: Some(resolved_alias.clone()),
-                    message: format!(
-                        "Spawned new terminal pane '{resolved_alias}' (pane_id: {pane_id}). You can now pass `target_pane: \"{resolved_alias}\"` to `terminal_exec`, `read_pane_buffer`, `send_keystrokes_to_pane`, or `subscribe_to_pane`."
-                    ),
-                }
+        let out = if let Ok(Ok((pane_id, alias))) = tokio::time::timeout(std::time::Duration::from_secs(3), reply_rx).await {
+            let workspace = global_workspace().await;
+            let resolved_alias = if alias.is_empty() {
+                workspace
+                    .get_pane_alias(&pane_id)
+                    .await
+                    .unwrap_or_else(|| pane_id.clone())
+            } else {
+                alias
+            };
+            SpawnAgentOutput {
+                pane_id: Some(pane_id.clone()),
+                alias: Some(resolved_alias.clone()),
+                message: format!(
+                    "Spawned new terminal pane '{resolved_alias}' (pane_id: {pane_id}). You can now pass `target_pane: \"{resolved_alias}\"` to `terminal_exec`, `read_pane_buffer`, `send_keystrokes_to_pane`, or `subscribe_to_pane`."
+                ),
             }
-            _ => {
-                self.state.lock().await.pending_spawns.remove(&request_id);
-                SpawnAgentOutput {
-                    pane_id: None,
-                    alias: None,
-                    message: "Successfully requested to spawn a new pane.".to_string(),
-                }
+        } else {
+            self.state.lock().await.pending_spawns.remove(&request_id);
+            SpawnAgentOutput {
+                pane_id: None,
+                alias: None,
+                message: "Successfully requested to spawn a new pane.".to_string(),
             }
         };
         self.approval.finish_tool(Self::NAME, &out).await;

@@ -70,7 +70,7 @@ impl Tool for SetAgentStateTool {
 
             log::debug!("Sending TransitionRequest to Sleep...");
             if let Err(e) = tx_self.send(ClawMessage::Transition(req)).await {
-                log::error!("Failed to send TransitionRequest: {}", e);
+                log::error!("Failed to send TransitionRequest: {e}");
             } else {
                 log::debug!("Successfully sent TransitionRequest to Sleep.");
             }

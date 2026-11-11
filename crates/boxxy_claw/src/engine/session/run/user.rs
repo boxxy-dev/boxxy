@@ -94,10 +94,10 @@ impl ClawSession {
 
         let snapshots = {
             let mut state_lock = self.state.lock().await;
-            if !state_lock.current_turn_snapshots.is_empty() {
-                std::mem::take(&mut state_lock.current_turn_snapshots)
-            } else {
+            if state_lock.current_turn_snapshots.is_empty() {
                 std::mem::take(&mut state_lock.last_turn_snapshots)
+            } else {
+                std::mem::take(&mut state_lock.current_turn_snapshots)
             }
         };
 
@@ -174,9 +174,7 @@ impl ClawSession {
         let catalog = get_active_catalog();
         let host_slug = catalog
             .iter()
-            .find(|c| c.config.id == self.character_id)
-            .map(|c| c.config.name.clone())
-            .unwrap_or_else(|| self.name.to_lowercase().replace(' ', "-"));
+            .find(|c| c.config.id == self.character_id).map_or_else(|| self.name.to_lowercase().replace(' ', "-"), |c| c.config.name.clone());
 
         let host = SpeakerIdentity {
             character_id: self.character_id.clone(),
@@ -317,7 +315,7 @@ impl ClawSession {
     }
 
     pub(super) async fn handle_claw_query(
-        &mut self,
+        &self,
         ctx: &mut RunContext,
         session_ctx: &str,
         query: String,
@@ -505,7 +503,7 @@ impl ClawSession {
     }
 
     pub(super) async fn handle_user_message(
-        &mut self,
+        &self,
         ctx: &mut RunContext,
         session_ctx: &str,
         message: String,
@@ -620,7 +618,7 @@ impl ClawSession {
     }
 
     pub(super) async fn handle_delegated_task(
-        &mut self,
+        &self,
         ctx: &mut RunContext,
         source_agent_name: String,
         prompt: String,
@@ -674,8 +672,7 @@ impl ClawSession {
         let _ = self.tx_ui.send(incoming_event).await;
 
         let full_prompt = format!(
-            "*Task delegated from agent '{}'*: {}",
-            caller_display_name, prompt
+            "*Task delegated from agent '{caller_display_name}'*: {prompt}"
         );
 
         debug!(

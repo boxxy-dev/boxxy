@@ -11,11 +11,10 @@ pub fn process_snapshot(snapshot: &str, last_snapshot_hash: &mut Option<u64>) ->
         hasher.finish()
     };
 
-    if let Some(prev_hash) = last_snapshot_hash {
-        if *prev_hash == current_hash {
+    if let Some(prev_hash) = last_snapshot_hash
+        && *prev_hash == current_hash {
             final_snapshot = "[TERMINAL_SNAPSHOT: NO_CHANGE]".to_string();
         }
-    }
     *last_snapshot_hash = Some(current_hash);
 
     // 2. Security/Noise: Strip passwords and clear-screen sequences

@@ -27,24 +27,16 @@ use std::sync::Arc;
 
 #[derive(Clone)]
 pub struct ClawAgent {
-    inner: ClawAgentInner,
+    agent: Agent,
+    provider_name: String,
+    model_name: String,
     preamble: String,
     pub(crate) config: AgentConfig,
     mcp_statuses: Vec<(String, bool)>,
 }
 
-#[derive(Clone)]
-enum ClawAgentInner {
-    Ready {
-        agent: Agent,
-        provider_name: String,
-        model_name: String,
-    },
-    #[allow(dead_code)]
-    Error(String),
-}
-
 impl ClawAgent {
+    #[must_use]
     pub fn matches_config(&self, candidate: &AgentConfig) -> bool {
         &self.config == candidate
             && **boxxy_claw_protocol::characters::MCP_STATUS_CACHE.load() == self.mcp_statuses
@@ -70,20 +62,8 @@ impl ClawAgent {
 
         let msg = prompt.into();
 
-        let (agent, provider_name, model_name) = match &self.inner {
-            ClawAgentInner::Ready {
-                agent,
-                provider_name,
-                model_name,
-            } => (agent, provider_name.clone(), model_name.clone()),
-            ClawAgentInner::Error(e) => {
-                return Err(rig::completion::PromptError::Provider(
-                    rig::error::ProviderError::Provider(e.clone()),
-                ));
-            }
-        };
-
-        let res_result = agent
+        let res_result = self
+            .agent
             .prompt(msg)
             .history(history)
             .add_hook(hook)
@@ -109,44 +89,42 @@ impl ClawAgent {
                 );
 
                 // Track Invocations
-                boxxy_telemetry::track_ai_invocation(&provider_name, &model_name, "claw").await;
+                boxxy_telemetry::track_ai_invocation(&self.provider_name, &self.model_name, "claw")
+                    .await;
 
                 // Track Latency
                 boxxy_telemetry::track_ai_latency(
-                    &model_name,
-                    &provider_name,
-                    duration.as_millis() as u64,
+                    &self.model_name,
+                    &self.provider_name,
+                    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX),
                     "claw",
                 )
                 .await;
 
                 // Track Tokens
                 boxxy_telemetry::track_ai_tokens(
-                    &model_name,
-                    &provider_name,
+                    &self.model_name,
+                    &self.provider_name,
                     "input",
                     usage.input_tokens.unwrap_or(0),
                     "claw",
                 )
                 .await;
                 boxxy_telemetry::track_ai_tokens(
-                    &model_name,
-                    &provider_name,
+                    &self.model_name,
+                    &self.provider_name,
                     "output",
                     usage.output_tokens.unwrap_or(0),
                     "claw",
                 )
                 .await;
 
-                let is_explicit = std::env::var("BOXXY_DEBUG_CONTEXT")
-                    .map(|v| v == "1")
-                    .unwrap_or(false);
+                let is_explicit = std::env::var("BOXXY_DEBUG_CONTEXT").is_ok_and(|v| v == "1");
 
                 if is_explicit {
                     log::info!(
                         target: "model-context",
-                        "\n=== MODEL RESPONSE ===\n{}\n======================\n",
-                        output
+                        "\n=== MODEL RESPONSE ===\n{output}\n======================\n"
                     );
                 }
 
@@ -159,15 +137,12 @@ impl ClawAgent {
                 Ok((output, Some(wrapper), Some(res.messages)))
             }
             Err(e) => {
-                let is_explicit = std::env::var("BOXXY_DEBUG_CONTEXT")
-                    .map(|v| v == "1")
-                    .unwrap_or(false);
+                let is_explicit = std::env::var("BOXXY_DEBUG_CONTEXT").is_ok_and(|v| v == "1");
 
                 if is_explicit {
                     log::info!(
                         target: "model-context",
-                        "\n=== MODEL ERROR ===\n{:?}\n===================\n",
-                        e
+                        "\n=== MODEL ERROR ===\n{e:?}\n===================\n"
                     );
                 }
                 Err(e)
@@ -176,8 +151,7 @@ impl ClawAgent {
     }
 }
 
-#[must_use]
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 pub async fn create_claw_agent(
     config: &AgentConfig,
     env: &Arc<dyn ClawEnvironment>,
@@ -256,6 +230,7 @@ pub async fn create_claw_agent(
             approval: approval_handler.clone(),
         })
         .tool(ActivateSkillTool {
+            pane_id: pane_id.clone(),
             approval: approval_handler.clone(),
         })
         .tool(TerminalCommandTool {
@@ -368,6 +343,13 @@ pub async fn create_claw_agent(
         })
         .tool(
             crate::engine::tools::orchestration::OrchestrateAgentTool {
+                approval: approval_handler.clone(),
+            },
+        )
+        .tool(
+            crate::engine::tools::orchestration::RequestAssistanceTool {
+                pane_id: pane_id.clone(),
+                state: state.clone(),
                 approval: approval_handler.clone(),
             },
         )
@@ -501,7 +483,7 @@ pub async fn create_claw_agent(
     final_preamble = final_preamble.replace("{{available_skills}}", "");
 
     if !config.preamble.is_empty() {
-        final_preamble.push_str("\n");
+        final_preamble.push('\n');
         final_preamble.push_str(&config.preamble);
     }
 
@@ -509,8 +491,7 @@ pub async fn create_claw_agent(
     if let Some(user_name) = &config.user_name {
         final_preamble.push_str("\n\n[USER INFO]\n");
         final_preamble.push_str(&format!(
-            "The user's name is: {}.\nYou should address them by this name when appropriate.",
-            user_name
+            "The user's name is: {user_name}.\nYou should address them by this name when appropriate."
         ));
     }
 
@@ -556,14 +537,10 @@ pub async fn create_claw_agent(
 
     let agent = builder.build();
 
-    let inner = ClawAgentInner::Ready {
+    Ok(ClawAgent {
         agent,
         provider_name,
         model_name,
-    };
-
-    Ok(ClawAgent {
-        inner,
         preamble: final_preamble,
         config: config.clone(),
         mcp_statuses,

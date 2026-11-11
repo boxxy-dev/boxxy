@@ -17,6 +17,7 @@ pub struct AgentConfig {
 }
 
 impl AgentConfig {
+    #[must_use]
     pub fn from_env(
         settings: &boxxy_preferences::Settings,
         web_search_local_enabled: bool,
@@ -49,16 +50,16 @@ impl AgentConfig {
         }
     }
 
+    #[must_use]
     pub fn model_label(&self) -> String {
         self.model
-            .as_ref()
-            .map(|p| p.format_label())
-            .unwrap_or_else(|| "default".into())
+            .as_ref().map_or_else(|| "default".into(), boxxy_model_selection::ModelProvider::format_label)
     }
 }
 
 /// Dynamically resolves the active web search engine name for a Claw session
 /// based on the current settings and pane-local web search toggle.
+#[must_use]
 pub fn resolve_active_search_label(
     settings: &boxxy_preferences::Settings,
     web_search_local_enabled: bool,
@@ -71,37 +72,33 @@ pub fn resolve_active_search_label(
         && settings
             .claw_model
             .as_ref()
-            .is_some_and(|m| m.supports_native_search())
+            .is_some_and(boxxy_model_selection::ModelProvider::supports_native_search)
     {
         return "Native";
     }
 
-    if !settings
+    if settings
         .get_effective_api_key(boxxy_core_toolbox::TavilyProvider::NAME)
         .trim()
-        .is_empty()
-    {
-        boxxy_core_toolbox::TavilyProvider::NAME
-    } else {
+        .is_empty() {
         "Off"
+    } else {
+        boxxy_core_toolbox::TavilyProvider::NAME
     }
 }
 
 /// Formats the session status line displaying active Claw model, Dreams model, and Search engine.
+#[must_use]
 pub fn format_session_models_banner(
     settings: &boxxy_preferences::Settings,
     web_search_local_enabled: bool,
 ) -> String {
     let claw_label = settings
         .claw_model
-        .as_ref()
-        .map(|m| m.format_label())
-        .unwrap_or_else(|| "Default".to_string());
+        .as_ref().map_or_else(|| "Default".to_string(), boxxy_model_selection::ModelProvider::format_label);
     let memory_label = settings
         .memory_model
-        .as_ref()
-        .map(|m| m.format_label())
-        .unwrap_or_else(|| "Default".to_string());
+        .as_ref().map_or_else(|| "Default".to_string(), boxxy_model_selection::ModelProvider::format_label);
     let search_label = resolve_active_search_label(settings, web_search_local_enabled);
     format!("Claw: {claw_label} ● Dreams: {memory_label} ● Search: {search_label}")
 }

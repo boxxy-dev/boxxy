@@ -109,7 +109,7 @@ impl Tool for TerminalCommandTool {
                 None => {
                     return Ok(TerminalCommandOutput {
                         success: false,
-                        output: format!("Target pane '{}' not found in workspace.", target_raw),
+                        output: format!("Target pane '{target_raw}' not found in workspace."),
                     });
                 }
             }
@@ -171,7 +171,7 @@ impl Tool for TerminalCommandTool {
             character_id: character_id.clone(),
             command: args.command.clone(),
             explanation: explanation_display,
-            target_pane_id: resolved_target_id,
+            target_pane_id: resolved_target_id.clone(),
             target_pane_label: resolved_target_label,
             auto_approve,
             usage: None,
@@ -185,6 +185,15 @@ impl Tool for TerminalCommandTool {
         );
 
         if let Err(e) = self.tx_ui.send(event).await {
+            if let Some(ref tid) = resolved_target_id {
+                let _ = workspace
+                    .complete_pending_command(tid, 1, "Failed to dispatch to UI".to_string())
+                    .await;
+            } else {
+                let mut state = self.state.lock().await;
+                state.pending_terminal_reply = None;
+                state.pending_proposal_summary = None;
+            }
             return Err(std::io::Error::other(format!(
                 "Failed to send terminal command proposal to UI: {e}"
             )));
@@ -194,35 +203,27 @@ impl Tool for TerminalCommandTool {
         let _ = self
             .tx_ui
             .send(ClawEngineEvent::AgentThinking {
-                agent_name,
-                character_id,
+                agent_name: agent_name.clone(),
+                character_id: character_id.clone(),
                 is_thinking: true,
             })
             .await;
 
-        match result {
-            Ok(Ok(output)) => Ok(TerminalCommandOutput {
+        let out = match result {
+            Ok(Ok(output)) => TerminalCommandOutput {
                 success: true,
                 output,
-            }),
-            Ok(Err(err)) => {
-                // If it's a specific user reject, pass it directly
-                if err == "[USER_EXPLICIT_REJECT]" {
-                    Ok(TerminalCommandOutput {
-                        success: false,
-                        output: err,
-                    })
-                } else {
-                    Ok(TerminalCommandOutput {
-                        success: false,
-                        output: err,
-                    })
-                }
-            }
-            Err(_) => Ok(TerminalCommandOutput {
+            },
+            Ok(Err(err)) => TerminalCommandOutput {
+                success: false,
+                output: err,
+            },
+            Err(_) => TerminalCommandOutput {
                 success: false,
                 output: "Internal error waiting for terminal command result.".to_string(),
-            }),
-        }
+            },
+        };
+
+        Ok(out)
     }
 }

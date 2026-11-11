@@ -32,7 +32,8 @@ impl Tool for SummonHeadlessWorkerTool {
     type Output = SummonHeadlessOutput;
 
     fn description(&self) -> String {
-        "Spawns a background agent with a specific profile to complete a task. Use this when you want to continue working in your pane while another agent handles a sub-task. The results will be delivered back to you.".to_string()
+        "Spawns a background agent with a specific profile to complete a task. Use this when you want to continue working in your pane while another agent handles a sub-task. The results will be delivered back to you."
+            .to_string()
     }
 
     fn parameters(&self) -> serde_json::Value {
@@ -60,64 +61,82 @@ impl Tool for SummonHeadlessWorkerTool {
         self.approval.begin_tool(Self::NAME).await;
         let task_id = uuid::Uuid::new_v4();
 
-        let (my_pane_id, my_session_id, my_name, reply_rx) = {
-            let mut state = self.state.lock().await;
-            let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-            state.pending_delegations.insert(task_id, reply_tx);
+        let (my_pane_id, my_session_id, my_name, my_cwd, tx_self) = {
+            let state = self.state.lock().await;
             (
                 state.pane_id.clone(),
                 uuid::Uuid::parse_str(&state.session_id).unwrap_or_default(),
                 state.agent_name.clone(),
-                reply_rx,
+                state.current_dir.clone(),
+                state.tx_self.clone(),
             )
         };
 
         let workspace = crate::registry::workspace::global_workspace().await;
-        workspace.register_delegated_task(task_id).await;
+        let mut watch_rx = workspace.register_delegated_task(task_id).await;
 
-        // Create and spawn the headless session
+        // Create and spawn the headless session sharing the parent's working directory
         let (session, tx_child) =
             ClawSession::new_headless(my_pane_id, my_session_id, &my_name, args.profile);
 
+        let child_pane_id = session.pane_id.clone();
+        let child_session_id = session.session_id.clone();
         let child_name = session.name.clone();
+        if !my_cwd.is_empty() {
+            session.state.lock().await.current_dir.clone_from(&my_cwd);
+        }
+        workspace
+            .register_pane_tx(child_pane_id.clone(), tx_child.clone())
+            .await;
+        workspace
+            .update_pane_state(
+                child_pane_id,
+                Some(child_session_id),
+                Some(child_name.clone()),
+                if my_cwd.is_empty() {
+                    "/".to_string()
+                } else {
+                    my_cwd
+                },
+                None,
+                None,
+            )
+            .await;
+
         session.start(self.env.clone());
 
         // Send the delegated task with correlation ID
-        let _ = tx_child
+        if let Err(e) = tx_child
             .send(crate::engine::ClawMessage::DelegatedTask {
-                source_agent_name: my_name.clone(),
+                source_agent_name: my_name,
                 prompt: args.prompt,
                 request_id: task_id,
             })
-            .await;
-
-        // Register the task in our own state so we can await it
+            .await
         {
-            let mut state = self.state.lock().await;
-            state.pending_tasks.push(crate::engine::ScheduledTask {
-                id: task_id,
-                payload: format!("Headless worker {} finished task.", child_name),
-                status: crate::engine::TaskStatus::Pending,
-                task_type: crate::engine::TaskType::Notification,
-                due_at: chrono::Utc::now(),
-            });
+            workspace.remove_delegated_task(task_id).await;
+            return Err(std::io::Error::other(format!(
+                "Failed to dispatch task to headless worker: {e}"
+            )));
+        }
 
-            // Re-broadcast back to ourselves when it finishes
-            let tx_self = state.tx_self.clone();
-            tokio::spawn(async move {
-                if let Ok(result) = reply_rx.await {
+        // Notify parent session if it is sleeping on `awaiting_tasks` when the worker completes
+        tokio::spawn(async move {
+            while watch_rx.changed().await.is_ok() {
+                let maybe_res = watch_rx.borrow_and_update().clone();
+                if let Some(result) = maybe_res {
                     let _ = tx_self
                         .send(crate::engine::ClawMessage::TaskCompletedEvent { task_id, result })
                         .await;
+                    break;
                 }
-            });
-        }
+            }
+        });
 
         let out = SummonHeadlessOutput {
             task_id: task_id.to_string(),
             message: format!(
-                "Successfully summoned headless worker '{}' (Task ID: {}). Use `await_tasks` to wait for its completion.",
-                child_name, task_id
+                "Successfully summoned headless worker '{child_name}' (Task ID: {task_id}). Use `await_tasks` to wait for its completion."
             ),
         };
         self.approval.finish_tool(Self::NAME, &out).await;

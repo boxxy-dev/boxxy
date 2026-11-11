@@ -1,5 +1,6 @@
 pub mod file_refs;
 pub mod history;
+mod incognito;
 pub mod persistence;
 pub mod skills;
 pub mod snapshot;
@@ -31,10 +32,10 @@ pub fn spawn_turn(
     image_attachments: Vec<String>,
 ) -> tokio::task::JoinHandle<()> {
     let prompt_clone = prompt.to_string();
-    let session_id_clone = session_id.clone();
+    let session_id_clone = session_id;
     let snapshot_clone = snapshot.to_string();
-    let cwd_clone = cwd.clone();
-    let mut images_clone = image_attachments.clone();
+    let cwd_clone = cwd;
+    let mut images_clone = image_attachments;
     let session_ctx_clone = _session_ctx.to_string();
 
     tokio::spawn(async move {
@@ -69,7 +70,7 @@ pub fn spawn_turn(
             .await;
 
         if is_incognito {
-            run_incognito_turn(
+            incognito::run_incognito_turn(
                 pane_id,
                 agent_name,
                 character_id,
@@ -135,8 +136,7 @@ pub fn spawn_turn(
                     ""
                 };
                 radar.push_str(&format!(
-                    "- PID {}: `{}` in `{}` (idle {}s){}\n",
-                    pid, proc_label, shell_cwd, idle_secs, wait_note
+                    "- PID {pid}: `{proc_label}` in `{shell_cwd}` (idle {idle_secs}s){wait_note}\n"
                 ));
             }
             radar.push_str("----------------------------------");
@@ -180,8 +180,7 @@ pub fn spawn_turn(
             let home_status = all_agents
                 .iter()
                 .find(|a| &a.id == home_pane_id)
-                .map(|a| a.status.as_str())
-                .unwrap_or("Idle");
+                .map_or("Idle", |a| a.status.as_str());
             guest_home_context = format!(
                 "\n--- YOUR HOME PANE CONTEXT (SWARM PEER BRIDGE) ---\n\
                 You are actively claimed in your own home terminal pane `{alias}` (ID: `{home_pane_id}`, CWD: `{home_cwd}`, Status: `{home_status}`).\n\
@@ -336,8 +335,7 @@ pub fn spawn_turn(
             );
 
             let full_prompt = format!(
-                "{}\n\n{}\n\nTerminal Snapshot:\n```\n{}\n```",
-                prompt_clone, turn_context, final_snapshot_text
+                "{prompt_clone}\n\n{turn_context}\n\nTerminal Snapshot:\n```\n{final_snapshot_text}\n```"
             );
 
             // --- AMNESIA FIX: IMMEDIATE PUSH ---
@@ -383,7 +381,7 @@ pub fn spawn_turn(
         );
         let agent = match persistent_agent {
             Some(agent) if agent.matches_config(&config) => agent,
-            _ => crate::engine::agent::create_claw_agent(
+            _ => match crate::engine::agent::create_claw_agent(
                 &config,
                 &env,
                 &cwd_clone,
@@ -395,7 +393,55 @@ pub fn spawn_turn(
                 mcp_handle,
             )
             .await
-            .expect("Failed to create claw agent"),
+            {
+                Ok(created) => created,
+                Err(err) => {
+                    let _ = tx_ui
+                        .send(ClawEngineEvent::AgentThinking {
+                            agent_name: agent_name.clone(),
+                            character_id: character_id.clone(),
+                            is_thinking: false,
+                        })
+                        .await;
+                    {
+                        let mut state_lock = state.lock().await;
+                        state_lock.active_speaker = None;
+                        state_lock.next_roundtable_turn = None;
+                        state_lock.roundtable.clear();
+                    }
+                    log::warn!(
+                        "Pane {pane_id} ({agent_name}): Failed to create Claw agent: {err}"
+                    );
+                    let err_card = ClawEngineEvent::DiagnosisComplete {
+                        agent_name: agent_name.clone(),
+                        character_id: character_id.clone(),
+                        diagnosis: format!("**Configuration Error:** {err}"),
+                        usage: None,
+                        typewriter: false,
+                    };
+                    persist_visual_event(
+                        db.clone(),
+                        session_id_clone.clone(),
+                        pane_id.clone(),
+                        &err_card,
+                    );
+                    let _ = tx_ui.send(err_card).await;
+                    if let Some(request_id) = delegate_reply_id {
+                        let err_str = format!("Error: {err}");
+                        workspace
+                            .complete_delegated_task(request_id, err_str.clone())
+                            .await;
+                        let _ = tx_ui
+                            .send(ClawEngineEvent::DelegatedTaskReply {
+                                request_id,
+                                result: err_str,
+                            })
+                            .await;
+                    }
+                    let _ = tx_self.send(ClawMessage::TurnFinished).await;
+                    return;
+                }
+            },
         };
 
         if !speaker.is_guest {
@@ -410,19 +456,7 @@ pub fn spawn_turn(
             &host_agent_name,
         );
 
-        let query_for_chat = if !images_clone.is_empty() {
-            let mut contents = vec![rig::message::UserContent::text(full_prompt.clone())];
-            for b64 in images_clone {
-                contents.push(rig::message::UserContent::image_base64(
-                    b64,
-                    Some(rig::message::ImageMediaType::PNG),
-                    None,
-                ));
-            }
-            rig::message::Message::User { content: contents }
-        } else {
-            rig::message::Message::user(full_prompt.clone())
-        };
+        let query_for_chat = build_user_message_with_images(full_prompt.clone(), images_clone);
 
         let start_time = std::time::Instant::now();
         match agent.chat(query_for_chat, final_history).await {
@@ -458,19 +492,7 @@ pub fn spawn_turn(
                 }
 
                 if duration.as_secs() >= 7 {
-                    let mut summary = response.trim().to_string();
-                    if summary.is_empty() {
-                        summary = "Task completed silently.".to_string();
-                    } else if summary.lines().count() > 1 || summary.len() > 100 {
-                        // Extract first non-empty line
-                        if let Some(first_line) = summary.lines().find(|l| !l.trim().is_empty()) {
-                            summary = first_line.trim().to_string();
-                            if summary.len() > 100 {
-                                summary.truncate(97);
-                                summary.push_str("...");
-                            }
-                        }
-                    }
+                    let summary = summarize_long_task_completion(&response);
 
                     let _ = tx_ui
                         .send(ClawEngineEvent::LongTaskCompleted {
@@ -506,7 +528,7 @@ pub fn spawn_turn(
                             .skip_while(|m| matches!(m, rig::message::Message::User { .. }))
                             .collect();
                         if let Some(rig::message::Message::Assistant(turn)) = new_tail.last_mut() {
-                            for item in turn.content.iter_mut() {
+                            for item in &mut turn.content {
                                 if let rig::message::AssistantContent::Text(t) = item {
                                     t.text = history::tag_assistant_text(
                                         &character_id,
@@ -565,19 +587,24 @@ pub fn spawn_turn(
                 let mut had_blocking_proposal = false;
                 if clean_diagnosis.trim() == "[SILENT_ACK]" {
                     info!(
-                        "Pane {} ({}): Agent acknowledged rejection silently.",
-                        pane_id, agent_name
+                        "Pane {pane_id} ({agent_name}): Agent acknowledged rejection silently."
                     );
                     had_blocking_proposal = true;
                     let _ = tx_ui.send(ClawEngineEvent::DismissDrawer).await;
                 } else if clean_diagnosis.trim().is_empty() && command_opt.is_none() {
                     info!(
-                        "Pane {} ({}): Agent response was empty.",
-                        pane_id, agent_name
+                        "Pane {pane_id} ({agent_name}): Agent response was empty."
                     );
                 } else if let Some(command) = command_opt {
                     let latest_settings = boxxy_preferences::Settings::load();
+                    // If this turn already created or modified files (`file_write` / `replace_in_file`),
+                    // a trailing markdown ```bash block in prose is almost always an optional
+                    // "Run it with:" suggestion rather than an explicit execution tool call —
+                    // present it as "Accept & Run" instead of silently auto-running it in Vibe Mode.
+                    let turn_modified_files =
+                        !state.lock().await.current_turn_snapshots.is_empty();
                     let auto_approve = vibe_enabled
+                        && !turn_modified_files
                         && crate::engine::vibe_guard::is_safe_vibe_command(
                             &command,
                             &cwd_clone,
@@ -705,16 +732,14 @@ pub fn spawn_turn(
                 }
 
                 log::error!(
-                    "Pane {} ({}): Boxxy-Claw agent failed: {e}",
-                    pane_id,
-                    agent_name
+                    "Pane {pane_id} ({agent_name}): Boxxy-Claw agent failed: {e}"
                 );
 
-                let error_msg = format!("{}", e);
+                let error_msg = format!("{e}");
                 let friendly_msg = if error_msg.contains("does not support tools") {
                     "**Error:** The selected Ollama model does not support tool calling.\n\nBoxxy-Claw requires a highly capable reasoning model with native tool support (like `llama3.2`, `qwen2.5`, or `mistral`) to interact with your system.\n\nPlease select a different model for Boxxy-Claw in the Model Selection menu (Ctrl+Shift+P).".to_string()
                 } else {
-                    format!("**Boxxy-Claw encountered an error:**\n```\n{}\n```", e)
+                    format!("**Boxxy-Claw encountered an error:**\n```\n{e}\n```")
                 };
 
                 let event = ClawEngineEvent::DiagnosisComplete {
@@ -733,7 +758,7 @@ pub fn spawn_turn(
                 let _ = tx_ui.send(event).await;
 
                 if let Some(request_id) = delegate_reply_id {
-                    let err_res = format!("Error: {}", e);
+                    let err_res = format!("Error: {e}");
                     workspace
                         .complete_delegated_task(request_id, err_res.clone())
                         .await;
@@ -750,157 +775,84 @@ pub fn spawn_turn(
     })
 }
 
-/// Executes an ephemeral `/incognito` turn:
-/// - Sends ONLY the raw user prompt (and any pasted images) + in-memory incognito conversation history.
-/// - Strips all system/user/terminal/memory/skill/workspace context (`0` tools, `0` MCP).
-/// - Performs zero database writes, zero title generation, and zero memory extraction.
-#[allow(clippy::too_many_arguments)]
-async fn run_incognito_turn(
-    pane_id: String,
-    agent_name: String,
-    character_id: String,
-    prompt: String,
-    images: Vec<String>,
-    session_ctx: String,
-    state: Arc<Mutex<SessionState>>,
-    tx_ui: async_channel::Sender<ClawEngineEvent>,
-    tx_self: async_channel::Sender<ClawMessage>,
-) {
-    let settings = boxxy_preferences::Settings::load();
-    let preamble = if session_ctx.trim().is_empty() {
-        crate::utils::load_prompt_fallback(
-            "/dev/boxxy/BoxxyTerminal/prompts/ai_chat.md",
-            "ai_chat.md",
-        )
+fn sniff_base64_image_media_type(b64: &str) -> rig::message::ImageMediaType {
+    let trimmed = b64.trim();
+    if trimmed.starts_with("/9j/") {
+        rig::message::ImageMediaType::JPEG
+    } else if trimmed.starts_with("UklGR") {
+        rig::message::ImageMediaType::WEBP
+    } else if trimmed.starts_with("R0lGOD") {
+        rig::message::ImageMediaType::GIF
     } else {
-        session_ctx
-    };
-
-    let (history, history_len, api_keys, ollama_url) = {
-        let mut state_lock = state.lock().await;
-        // Push ONLY the user's raw text — zero identity, CWD, snapshot, memories, or user profile.
-        state_lock
-            .history
-            .push(rig::message::Message::user(prompt.clone()));
-        let h = state_lock.history.clone();
-        let l = h.len();
-        (
-            h,
-            l,
-            state_lock.api_keys.clone(),
-            state_lock.ollama_url.clone(),
-        )
-    };
-
-    let mut effective_keys = api_keys.read().await.clone();
-    if effective_keys.is_empty() {
-        effective_keys = settings.get_effective_api_keys();
+        rig::message::ImageMediaType::PNG
     }
-    let mut effective_ollama = ollama_url.read().await.clone();
-    if effective_ollama.is_empty() {
-        effective_ollama = settings.ollama_base_url.clone();
+}
+
+fn build_user_message_with_images(prompt: String, images: Vec<String>) -> rig::message::Message {
+    if images.is_empty() {
+        return rig::message::Message::user(prompt);
     }
-    let creds = boxxy_ai_core::AiCredentials::new(effective_keys, effective_ollama)
-        .with_custom_endpoints(settings.openai_compatible_endpoints.clone());
+    let mut contents = vec![rig::message::UserContent::text(prompt)];
+    for b64 in images {
+        let media_type = sniff_base64_image_media_type(&b64);
+        contents.push(rig::message::UserContent::image_base64(
+            b64,
+            Some(media_type),
+            None,
+        ));
+    }
+    rig::message::Message::User { content: contents }
+}
 
-    let agent = boxxy_ai_core::create_agent(&settings.claw_model, &creds, &preamble);
-
-    let final_history =
-        history::prepare_query_history_for_speaker(history, history_len, &character_id, &agent_name);
-
-    let query_for_chat = if !images.is_empty() {
-        let mut contents = vec![rig::message::UserContent::text(prompt)];
-        for b64 in images {
-            contents.push(rig::message::UserContent::image_base64(
-                b64,
-                Some(rig::message::ImageMediaType::PNG),
-                None,
-            ));
-        }
-        rig::message::Message::User { content: contents }
+fn summarize_long_task_completion(response: &str) -> String {
+    let trimmed = response.trim();
+    if trimmed.is_empty() {
+        return "Task completed silently.".to_string();
+    }
+    let first_line = trimmed
+        .lines()
+        .find(|l| !l.trim().is_empty())
+        .unwrap_or(trimmed)
+        .trim();
+    if first_line.len() > 100 {
+        let cut = first_line.floor_char_boundary(97);
+        format!("{}...", &first_line[..cut])
     } else {
-        rig::message::Message::user(prompt)
-    };
+        first_line.to_string()
+    }
+}
 
-    match agent.chat(query_for_chat, final_history).await {
-        Ok((response, usage_opt, _messages)) => {
-            let _ = tx_ui
-                .send(ClawEngineEvent::AgentThinking {
-                    agent_name: agent_name.clone(),
-                    character_id: character_id.clone(),
-                    is_thinking: false,
-                })
-                .await;
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-            let clean_response = response.trim().to_string();
-            let context_window = boxxy_ai_core::model_context_window_with_endpoints(
-                &settings.claw_model,
-                &settings.openai_compatible_endpoints,
-            );
-            let usage_wrapper = usage_opt.map(|u| {
-                let mut w = boxxy_claw_protocol::UsageWrapper::from(u);
-                w.context_window = context_window;
-                w
-            });
-
-            {
-                let mut state_lock = state.lock().await;
-                state_lock
-                    .history
-                    .push(rig::message::Message::assistant(clean_response.clone()));
-                if let Some(ref usage) = usage_wrapper {
-                    state_lock.total_tokens += usage.total_tokens();
-                    let ctx = usage.effective_context_tokens();
-                    if ctx > 0 {
-                        state_lock.context_tokens = ctx;
-                    }
-                    if let Some(cost) = usage.cost_usd
-                        && cost.is_finite()
-                        && cost > 0.0
-                    {
-                        state_lock.total_cost_usd += cost;
-                    }
-                }
-            }
-
-            if !clean_response.is_empty() {
-                let _ = tx_ui
-                    .send(ClawEngineEvent::DiagnosisComplete {
-                        agent_name,
-                        character_id,
-                        diagnosis: clean_response,
-                        usage: usage_wrapper,
-                        typewriter: false,
-                    })
-                    .await;
-            }
-        }
-        Err(e) => {
-            let _ = tx_ui
-                .send(ClawEngineEvent::AgentThinking {
-                    agent_name: agent_name.clone(),
-                    character_id: character_id.clone(),
-                    is_thinking: false,
-                })
-                .await;
-
-            log::error!(
-                "Pane {} ({}): Incognito chat failed: {e}",
-                pane_id,
-                agent_name
-            );
-
-            let _ = tx_ui
-                .send(ClawEngineEvent::DiagnosisComplete {
-                    agent_name,
-                    character_id,
-                    diagnosis: format!("**Incognito chat encountered an error:**\n```\n{e}\n```"),
-                    usage: None,
-                    typewriter: false,
-                })
-                .await;
-        }
+    #[test]
+    fn summarize_long_task_completion_handles_multibyte_utf8_at_boundary() {
+        // Place a 4-byte emoji right across byte index 97
+        let prefix = "a".repeat(95);
+        let input = format!("{prefix}🦀🔥 extra trailing text\nsecond line");
+        let summary = summarize_long_task_completion(&input);
+        assert!(summary.ends_with("..."));
+        assert!(summary.len() <= 100);
     }
 
-    let _ = tx_self.send(ClawMessage::TurnFinished).await;
+    #[test]
+    fn sniffs_jpeg_webp_gif_and_png_base64_prefixes() {
+        assert_eq!(
+            sniff_base64_image_media_type("/9j/4AAQSkZJRgABAQ"),
+            rig::message::ImageMediaType::JPEG
+        );
+        assert_eq!(
+            sniff_base64_image_media_type("UklGRh4AAABXRUJQVlA4"),
+            rig::message::ImageMediaType::WEBP
+        );
+        assert_eq!(
+            sniff_base64_image_media_type("R0lGODlhAQABAIAAAP"),
+            rig::message::ImageMediaType::GIF
+        );
+        assert_eq!(
+            sniff_base64_image_media_type("iVBORw0KGgoAAAANSUhEUg"),
+            rig::message::ImageMediaType::PNG
+        );
+    }
 }

@@ -3,9 +3,9 @@ use boxxy_db::Db;
 use boxxy_db::store::Store;
 use boxxy_model_selection::ModelProvider;
 use log::debug;
-use std::fs::OpenOptions;
-use std::io::Write;
+use std::fmt::Write as _;
 use std::sync::Arc;
+use tokio::io::AsyncWriteExt as _;
 use tokio::sync::Mutex;
 
 pub struct DreamOrchestrator {
@@ -15,7 +15,8 @@ pub struct DreamOrchestrator {
 }
 
 impl DreamOrchestrator {
-    pub fn new(
+    #[must_use]
+    pub const fn new(
         db: Arc<Mutex<Option<Db>>>,
         creds: AiCredentials,
         memory_model: Option<ModelProvider>,
@@ -27,19 +28,19 @@ impl DreamOrchestrator {
         }
     }
 
+    /// Executes a complete three-phase background Dream Cycle.
+    ///
+    /// # Errors
+    /// Returns an error if querying SQLite, calling the memory LLM, or parsing its JSON output fails.
     pub async fn run_cycle(&self) -> anyhow::Result<()> {
         debug!("🧠 Starting Dream Cycle...");
 
         // Phase 1: Ingestion
-        let interactions = {
-            let db_guard = self.db.lock().await;
-            if let Some(db) = db_guard.as_ref() {
-                let store = Store::new(db.pool());
-                store.get_undreamed_interactions().await?
-            } else {
-                return Ok(());
-            }
+        let db_opt = self.db.lock().await.clone();
+        let Some(db) = db_opt else {
+            return Ok(());
         };
+        let interactions = Store::new(db.pool()).get_undreamed_interactions().await?;
 
         if interactions.is_empty() {
             debug!("No new interactions to dream about.");
@@ -82,14 +83,13 @@ impl DreamOrchestrator {
         );
 
         let prompt = format!(
-            "Consolidate these interactions into permanent memories and patterns:\n\n{}",
-            interactions_text
+            "Consolidate these interactions into permanent memories and patterns:\n\n{interactions_text}"
         );
 
         let (response, _, _) = agent
             .prompt(&prompt)
             .await
-            .map_err(|e| anyhow::anyhow!("LLM Error: {:?}", e))?;
+            .map_err(|e| anyhow::anyhow!("LLM Error: {e:?}"))?;
 
         let (promoted_memories, patterns) =
             self.apply_dream_response(&interactions, &response).await?;
@@ -109,6 +109,9 @@ impl DreamOrchestrator {
     /// Parses the LLM JSON payload (stripping optional markdown code fences) and
     /// executes Phase 3 (candidate upsert, conflict resolution, threshold promotion,
     /// marking interactions as dreamed, and updating `last_dream_at`).
+    ///
+    /// # Errors
+    /// Returns an error if `response` is not valid JSON or if promoting memories in SQLite fails.
     pub async fn apply_dream_response(
         &self,
         interactions: &[boxxy_db::models::Interaction],
@@ -116,11 +119,10 @@ impl DreamOrchestrator {
     ) -> anyhow::Result<(Vec<(String, String, i64, f64)>, Vec<String>)> {
         let cleaned = extract_json_object(response);
         let json: serde_json::Value = serde_json::from_str(cleaned).map_err(|e| {
-            log::warn!("Dream Cycle: failed to parse LLM JSON response: {}", e);
+            log::warn!("Dream Cycle: failed to parse LLM JSON response: {e}");
             anyhow::anyhow!("Dream Cycle JSON parse error: {e}")
         })?;
 
-        // Phase 3: REM (Promotion & Diary)
         let interaction_ids: Vec<i64> = interactions.iter().map(|i| i.id).collect();
         let mut session_ids: Vec<String> =
             interactions.iter().map(|i| i.session_id.clone()).collect();
@@ -128,116 +130,98 @@ impl DreamOrchestrator {
         session_ids.dedup();
 
         let mut promoted_memories = Vec::new();
-        let mut patterns = Vec::new();
-
-        {
-            let db_guard = self.db.lock().await;
-            if let Some(db) = db_guard.as_ref() {
-                let store = Store::new(db.pool());
-
-                // 1. Process Facts (Candidates)
-                if let Some(facts) = json.get("facts").and_then(|f| f.as_array()) {
-                    for fact in facts {
-                        if let (Some(key), Some(content)) = (
-                            fact.get("key").and_then(|k| k.as_str()),
-                            fact.get("content").and_then(|c| c.as_str()),
-                        ) {
-                            let path = fact
-                                .get("project_path")
-                                .and_then(|p| p.as_str())
-                                .unwrap_or("global");
-                            let path_opt = if path == "global" { None } else { Some(path) };
-                            let confidence = fact
-                                .get("confidence_score")
-                                .and_then(|c| c.as_f64())
-                                .unwrap_or(0.5);
-
-                            let _ = crate::engine::context::upsert_candidate_deduped(
-                                &store, key, path_opt, content, confidence,
-                            )
-                            .await;
-                            debug!("Dreaming stored Candidate Fact: {} -> {}", key, content);
-                        }
-                    }
-                }
-
-                // 2. Handle Conflicts
-                if let Some(conflicts) = json.get("conflicts").and_then(|c| c.as_array()) {
-                    for conflict in conflicts {
-                        if let Some(key) = conflict.get("key").and_then(|k| k.as_str()) {
-                            // Find all paths where this key exists and demote them
-                            let paths = store.get_memory_paths(key).await.unwrap_or_default();
-                            let mut demoted_any = false;
-                            for path in &paths {
-                                let path_opt = if path == "global" {
-                                    None
-                                } else {
-                                    Some(path.as_str())
-                                };
-                                if store
-                                    .demote_memory_by_key(key, path_opt)
-                                    .await
-                                    .unwrap_or(false)
-                                {
-                                    demoted_any = true;
-                                    debug!(
-                                        "Dream Cycle demoted conflicted key '{}' in path '{}'",
-                                        key, path
-                                    );
-                                }
-                            }
-
-                            if !demoted_any {
-                                debug!(
-                                    "Dream Cycle conflict reported for key '{}', but no demotable memory was found.",
-                                    key
-                                );
-                            }
-
-                            if let Some(resolved) =
-                                conflict.get("resolved_content").and_then(|c| c.as_str())
-                            {
-                                // Re-candidate the fix. We default to 'global' if we demoted something global,
-                                // otherwise we use the first path we found or just global.
-                                let target_path = if paths.contains(&"global".to_string()) {
-                                    None
-                                } else {
-                                    paths.first().map(|p| p.as_str())
-                                };
-                                let _ = store
-                                    .upsert_dream_candidate(key, target_path, resolved, 0.9)
-                                    .await;
-                                debug!(
-                                    "Dream Cycle re-candidated resolved key: {} -> {}",
-                                    key, resolved
-                                );
-                            }
-                        }
-                    }
-                }
-
-                // 3. Promote Threshold Memories (Deep Sleep)
-                promoted_memories = store.promote_threshold_memories(2, 0.8).await?;
-
-                // Mark interactions as dreamed
-                let _ = store.mark_interactions_as_dreamed(&interaction_ids).await;
-
-                // Update session dream timestamps
-                for sid in session_ids {
-                    let _ = store.update_session_dream_timestamp(&sid).await;
-                }
+        let db_opt = self.db.lock().await.clone();
+        if let Some(db) = db_opt {
+            let store = Store::new(db.pool());
+            Self::upsert_dream_facts(&store, &json).await;
+            Self::resolve_dream_conflicts(&store, &json).await;
+            promoted_memories = store.promote_threshold_memories(2, 0.8).await?;
+            let _ = store.mark_interactions_as_dreamed(&interaction_ids).await;
+            for sid in session_ids {
+                let _ = store.update_session_dream_timestamp(&sid).await;
             }
         }
 
-        if let Some(pats) = json.get("patterns").and_then(|p| p.as_array()) {
-            for pat in pats {
-                if let Some(p) = pat.as_str() {
-                    patterns.push(p.to_string());
-                }
-            }
-        }
+        let patterns = json
+            .get("patterns")
+            .and_then(serde_json::Value::as_array)
+            .map(|pats| {
+                pats.iter()
+                    .filter_map(serde_json::Value::as_str)
+                    .map(ToString::to_string)
+                    .collect()
+            })
+            .unwrap_or_default();
 
         Ok((promoted_memories, patterns))
+    }
+
+    async fn upsert_dream_facts(store: &Store<'_>, json: &serde_json::Value) {
+        let Some(facts) = json.get("facts").and_then(serde_json::Value::as_array) else {
+            return;
+        };
+        for fact in facts {
+            if let (Some(key), Some(content)) = (
+                fact.get("key").and_then(serde_json::Value::as_str),
+                fact.get("content").and_then(serde_json::Value::as_str),
+            ) {
+                let path = fact
+                    .get("project_path")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("global");
+                let path_opt = (path != "global").then_some(path);
+                let confidence = fact
+                    .get("confidence_score")
+                    .and_then(serde_json::Value::as_f64)
+                    .unwrap_or(0.5)
+                    .clamp(0.0, 1.0);
+
+                let _ = crate::engine::context::upsert_candidate_deduped(
+                    store, key, path_opt, content, confidence,
+                )
+                .await;
+                debug!("Dreaming stored Candidate Fact: {key} -> {content}");
+            }
+        }
+    }
+
+    async fn resolve_dream_conflicts(store: &Store<'_>, json: &serde_json::Value) {
+        let Some(conflicts) = json.get("conflicts").and_then(serde_json::Value::as_array) else {
+            return;
+        };
+        for conflict in conflicts {
+            let Some(key) = conflict.get("key").and_then(serde_json::Value::as_str) else {
+                continue;
+            };
+            let paths = store.get_memory_paths(key).await.unwrap_or_default();
+            let mut demoted_any = false;
+            for path in &paths {
+                let path_opt = (path != "global").then_some(path.as_str());
+                if store.demote_memory_by_key(key, path_opt).await.unwrap_or(false) {
+                    demoted_any = true;
+                    debug!("Dream Cycle demoted conflicted key '{key}' in path '{path}'");
+                }
+            }
+            if !demoted_any {
+                debug!(
+                    "Dream Cycle conflict reported for key '{key}', but no demotable memory was found."
+                );
+            }
+            if let Some(resolved) = conflict
+                .get("resolved_content")
+                .and_then(serde_json::Value::as_str)
+            {
+                let target_path = if paths.iter().any(|p| p == "global") {
+                    None
+                } else {
+                    paths.first().map(String::as_str)
+                };
+                let _ = store
+                    .upsert_dream_candidate(key, target_path, resolved, 0.9)
+                    .await;
+                debug!("Dream Cycle re-candidated resolved key: {key} -> {resolved}");
+            }
+        }
     }
 
     async fn append_to_dream_diary(
@@ -252,29 +236,29 @@ impl DreamOrchestrator {
         let config_dir = boxxy_sys_utils::get_config_dir();
         let dreams_md_path = config_dir.join("boxxyclaw").join("DREAMS.md");
         if let Some(parent) = dreams_md_path.parent() {
-            let _ = std::fs::create_dir_all(parent);
+            tokio::fs::create_dir_all(parent).await?;
         }
-
-        let mut file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&dreams_md_path)?;
 
         let timestamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
-        writeln!(file, "## 🌙 Dream Cycle - {}", timestamp)?;
-
+        let mut entry = String::new();
+        let _ = writeln!(entry, "## 🌙 Dream Cycle - {timestamp}");
         for (key, content, count, score) in promoted {
-            writeln!(
-                file,
-                "- 🛡️ Verified: {} -> \"{}\" ({} observations, {:.2} confidence)",
-                key, content, count, score
-            )?;
+            let _ = writeln!(
+                entry,
+                "- 🛡️ Verified: {key} -> \"{content}\" ({count} observations, {score:.2} confidence)"
+            );
         }
-
         for pat in patterns {
-            writeln!(file, "- Pattern: {}", pat)?;
+            let _ = writeln!(entry, "- Pattern: {pat}");
         }
-        writeln!(file)?;
+        entry.push('\n');
+
+        let mut file = tokio::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&dreams_md_path)
+            .await?;
+        file.write_all(entry.as_bytes()).await?;
         Ok(())
     }
 }

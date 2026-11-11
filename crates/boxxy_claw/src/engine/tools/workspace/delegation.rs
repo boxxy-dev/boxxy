@@ -60,12 +60,15 @@ impl Tool for DelegateTaskTool {
         let workspace = global_workspace().await;
         let request_id = uuid::Uuid::new_v4();
 
-        let my_name = {
+        let (my_name, my_pane_id) = {
             let state = self.state.lock().await;
-            state.agent_name.clone()
+            (state.agent_name.clone(), state.pane_id.clone())
         };
 
-        if args.agent_name.to_lowercase() == my_name.to_lowercase() {
+        let resolved_target_id = workspace.resolve_pane_id_by_name(&args.agent_name).await;
+        if args.agent_name.eq_ignore_ascii_case(&my_name)
+            || resolved_target_id.as_deref() == Some(my_pane_id.as_str())
+        {
             let out = DelegateTaskOutput {
                 response: "Error: You cannot delegate a task to yourself.".to_string(),
             };
@@ -73,7 +76,9 @@ impl Tool for DelegateTaskTool {
             return Ok(out);
         }
 
-        let out = if let Some(tx) = workspace.get_pane_tx_by_name(&args.agent_name).await {
+        let out = if let Some(ref tid) = resolved_target_id
+            && let Some(tx) = workspace.get_pane_tx_by_id(tid).await
+        {
             workspace.register_delegated_task(request_id).await;
             let req = crate::engine::ClawMessage::DelegatedTask {
                 source_agent_name: my_name,
@@ -82,8 +87,9 @@ impl Tool for DelegateTaskTool {
             };
 
             if let Err(e) = tx.send(req).await {
+                workspace.remove_delegated_task(request_id).await;
                 DelegateTaskOutput {
-                    response: format!("Failed to send task to agent: {}", e),
+                    response: format!("Failed to send task to agent: {e}"),
                 }
             } else {
                 match workspace
@@ -166,12 +172,26 @@ impl Tool for DelegateTaskAsyncTool {
         let workspace = global_workspace().await;
         let request_id = uuid::Uuid::new_v4();
 
-        let my_name = {
+        let (my_name, my_pane_id) = {
             let state = self.state.lock().await;
-            state.agent_name.clone()
+            (state.agent_name.clone(), state.pane_id.clone())
         };
 
-        let out = if let Some(tx) = workspace.get_pane_tx_by_name(&args.agent_name).await {
+        let resolved_target_id = workspace.resolve_pane_id_by_name(&args.agent_name).await;
+        if args.agent_name.eq_ignore_ascii_case(&my_name)
+            || resolved_target_id.as_deref() == Some(my_pane_id.as_str())
+        {
+            let out = DelegateTaskAsyncOutput {
+                task_id: String::new(),
+                message: "Error: You cannot delegate a task to yourself.".to_string(),
+            };
+            self.approval.finish_tool(Self::NAME, &out).await;
+            return Ok(out);
+        }
+
+        let out = if let Some(ref tid) = resolved_target_id
+            && let Some(tx) = workspace.get_pane_tx_by_id(tid).await
+        {
             workspace.register_delegated_task(request_id).await;
             let req = crate::engine::ClawMessage::DelegatedTask {
                 source_agent_name: my_name,
@@ -180,19 +200,20 @@ impl Tool for DelegateTaskAsyncTool {
             };
 
             if let Err(e) = tx.send(req).await {
+                workspace.remove_delegated_task(request_id).await;
                 DelegateTaskAsyncOutput {
-                    task_id: "".to_string(),
-                    message: format!("Failed to send task to agent: {}", e),
+                    task_id: String::new(),
+                    message: format!("Failed to send task to agent: {e}"),
                 }
             } else {
                 DelegateTaskAsyncOutput {
                     task_id: request_id.to_string(),
-                    message: format!("Task delegated successfully. Task ID: {}", request_id),
+                    message: format!("Task delegated successfully. Task ID: {request_id}"),
                 }
             }
         } else {
             DelegateTaskAsyncOutput {
-                task_id: "".to_string(),
+                task_id: String::new(),
                 message: format!("Agent '{}' not found.", args.agent_name),
             }
         };
@@ -277,7 +298,7 @@ impl Tool for SendKeystrokesTool {
             })
             .await
         {
-            log::error!("SendKeystrokesTool failed to send event: {}", e);
+            log::error!("SendKeystrokesTool failed to send event: {e}");
             return Err(std::io::Error::other(format!(
                 "Failed to send keystrokes: {e}"
             )));
@@ -376,7 +397,7 @@ impl Tool for SendCommandToPaneTool {
             if let Err(e) = tx.send(req).await {
                 return Ok(SendCommandOutput {
                     success: false,
-                    message: format!("Failed to send command to agent: {}", e),
+                    message: format!("Failed to send command to agent: {e}"),
                 });
             }
 

@@ -7,6 +7,7 @@ pub const MAX_ROUNDTABLE_ROUNDS: u8 = 20;
 
 /// Returns the user-configured maximum number of autonomous character-to-character
 /// roundtable turns from `Settings`, clamped to `1..=100` (defaulting to `20`).
+#[must_use]
 pub fn configured_max_roundtable_rounds() -> u8 {
     boxxy_preferences::Settings::load()
         .max_roundtable_turns
@@ -15,6 +16,7 @@ pub fn configured_max_roundtable_rounds() -> u8 {
 
 /// Extracts an explicit turn/round count requested in a user prompt (e.g. `"for 3 turns"`, `"4 rounds"`),
 /// capped at the user's configured global permission limit.
+#[must_use]
 pub fn resolve_turn_limit_for_prompt(prompt: &str) -> u8 {
     let configured_max = configured_max_roundtable_rounds();
     let words: Vec<&str> = prompt.split_whitespace().collect();
@@ -38,7 +40,7 @@ pub fn resolve_turn_limit_for_prompt(prompt: &str) -> u8 {
 /// has reached a natural conclusion or requires user input to proceed.
 pub const YIELD_TO_USER_MARKER: &str = "[YIELD_TO_USER]";
 
-/// Identity of the character executing a specific turn in a pane's ClawSession.
+/// Identity of the character executing a specific turn in a pane's `ClawSession`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SpeakerIdentity {
     pub character_id: String,
@@ -119,6 +121,7 @@ impl Default for RoundtableState {
 }
 
 impl RoundtableState {
+    #[must_use]
     pub fn is_active(&self) -> bool {
         self.remaining_rounds > 0 && (!self.speaker_queue.is_empty() || self.auto_alternate)
     }
@@ -293,7 +296,7 @@ impl RoundtableState {
         }
 
         if self.participants.is_empty() {
-            self.participants.push(host.clone());
+            self.participants.push(host);
         }
         if !self
             .participants
@@ -506,10 +509,10 @@ impl RoundtableState {
             .unwrap_or(0);
         let next_idx = (idx + 1) % self.participants.len();
         let candidate = &self.participants[next_idx];
-        if candidate.character_id != current_character_id {
-            Some(candidate.clone())
-        } else {
+        if candidate.character_id == current_character_id {
             None
+        } else {
+            Some(candidate.clone())
         }
     }
 }
@@ -525,6 +528,7 @@ pub fn get_active_catalog() -> Vec<CharacterInfo> {
 
 /// Formats a character slug like `"niko-una"` or `"levi-kujo"` into `"Niko Una"` / `"Levi Kujo"`,
 /// matching `boxxy_claw_ui`'s header rendering.
+#[must_use]
 pub fn format_character_title(slug_or_name: &str) -> String {
     slug_or_name
         .split(['-', ' '])
@@ -637,6 +641,7 @@ pub fn resolve_speaker_token(
 }
 
 /// Extracts all `:<character>` (or non-file `@<character>`) mentions from a text string in order of appearance.
+#[must_use]
 pub fn extract_mentioned_characters(
     text: &str,
     host_pane_id: &str,
@@ -665,6 +670,7 @@ pub fn extract_mentioned_characters(
 }
 
 /// Parses a user message to determine whether it triggers `/stop`, `/debate`, or `@character` roundtable chat.
+#[must_use]
 pub fn parse_user_roundtable_intent(
     raw_input: &str,
     host: &SpeakerIdentity,
@@ -759,8 +765,8 @@ pub fn parse_user_roundtable_intent(
         // If the user didn't explicitly `@mention` a guest in `/debate <topic>`,
         // check if the first word of `<topic>` is a character name (e.g. `/debate levi rust vs c`),
         // otherwise pick the first other character in the catalog.
-        if guests.is_empty() && !topic_words.is_empty() {
-            if let Some(mut spk) =
+        if guests.is_empty() && !topic_words.is_empty()
+            && let Some(mut spk) =
                 resolve_speaker_token(topic_words[0], &host.character_id, "", catalog)
                 && spk.character_id != host.character_id
             {
@@ -768,13 +774,11 @@ pub fn parse_user_roundtable_intent(
                 guests.push(spk);
                 topic_words.remove(0);
             }
-        }
 
-        if guests.is_empty() {
-            if let Some(other) = catalog.iter().find(|c| c.config.id != host.character_id) {
+        if guests.is_empty()
+            && let Some(other) = catalog.iter().find(|c| c.config.id != host.character_id) {
                 guests.push(speaker_from_info(other, &host.character_id, ""));
             }
-        }
 
         let topic = if topic_words.is_empty() {
             "Have a lively in-character conversation and debate about the current terminal workspace and your favorite engineering approaches.".to_string()

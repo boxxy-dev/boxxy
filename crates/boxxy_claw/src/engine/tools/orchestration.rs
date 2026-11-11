@@ -74,29 +74,60 @@ impl Tool for SubscribeToPaneTool {
             .await;
         boxxy_telemetry::track_tool_use(Self::NAME).await;
         let workspace = global_workspace().await;
-        let target_pane_id = workspace.resolve_pane_id_by_name(&args.agent_name).await;
+        let is_wildcard = matches!(
+            args.agent_name.trim().to_ascii_lowercase().as_str(),
+            "" | "*" | "any" | "all"
+        );
+        let target_pane_id = if is_wildcard {
+            None
+        } else {
+            workspace.resolve_pane_id_by_name(&args.agent_name).await
+        };
 
         let filter = match args.event_type.as_str() {
-            "process_exit" | "command_exit" => EventFilter::ProcessExited {
-                pane_id: target_pane_id,
-            },
+            "process_exit" | "command_exit" => {
+                if !is_wildcard && target_pane_id.is_none() {
+                    let res = SubscribeOutput {
+                        message: format!(
+                            "Error: Target pane '{}' not found in workspace.",
+                            args.agent_name
+                        ),
+                    };
+                    self.approval.finish_tool(Self::NAME, &res).await;
+                    return Ok(res);
+                }
+                EventFilter::ProcessExited {
+                    pane_id: target_pane_id,
+                }
+            }
             "output_match" => {
                 if let (Some(target_id), Some(re)) = (target_pane_id, args.regex) {
+                    if let Err(e) = regex::RegexBuilder::new(&re).size_limit(1 << 20).build() {
+                        let res = SubscribeOutput {
+                            message: format!("Error: Invalid or overly complex regex '{re}': {e}"),
+                        };
+                        self.approval.finish_tool(Self::NAME, &res).await;
+                        return Ok(res);
+                    }
                     EventFilter::OutputMatch {
                         pane_id: target_id,
                         regex: re,
                     }
                 } else {
-                    return Ok(SubscribeOutput {
+                    let res = SubscribeOutput {
                         message: "Error: 'output_match' requires a valid agent_name and regex."
                             .to_string(),
-                    });
+                    };
+                    self.approval.finish_tool(Self::NAME, &res).await;
+                    return Ok(res);
                 }
             }
             _ => {
-                return Ok(SubscribeOutput {
+                let res = SubscribeOutput {
                     message: format!("Error: Unknown event_type '{}'", args.event_type),
-                });
+                };
+                self.approval.finish_tool(Self::NAME, &res).await;
+                return Ok(res);
             }
         };
 
@@ -202,9 +233,13 @@ impl Tool for AcquireLockTool {
             .acquire_lock(self.pane_id.clone(), args.resource.clone())
             .await
         {
-            Ok(_) => {
+            Ok(()) => {
+                let status = AgentStatus::Locking {
+                    resource: args.resource.clone(),
+                };
                 let (agent_name, character_id) = {
-                    let state = self.state.lock().await;
+                    let mut state = self.state.lock().await;
+                    state.status = status.clone();
                     (state.agent_name.clone(), state.character_id.clone())
                 };
 
@@ -213,9 +248,7 @@ impl Tool for AcquireLockTool {
                     .send(ClawEngineEvent::SessionStateChanged {
                         agent_name,
                         character_id,
-                        status: AgentStatus::Locking {
-                            resource: args.resource.clone(),
-                        },
+                        status,
                     })
                     .await;
 
@@ -223,12 +256,7 @@ impl Tool for AcquireLockTool {
                     success: true,
                     message: format!("Successfully locked '{}'.", args.resource),
                 };
-                self.approval
-                    .report_tool_result(
-                        Self::NAME.to_string(),
-                        serde_json::to_string(&res).unwrap_or_default(),
-                    )
-                    .await;
+                self.approval.finish_tool(Self::NAME, &res).await;
                 Ok(res)
             }
             Err(e) => {
@@ -236,12 +264,7 @@ impl Tool for AcquireLockTool {
                     success: false,
                     message: e,
                 };
-                self.approval
-                    .report_tool_result(
-                        Self::NAME.to_string(),
-                        serde_json::to_string(&res).unwrap_or_default(),
-                    )
-                    .await;
+                self.approval.finish_tool(Self::NAME, &res).await;
                 Ok(res)
             }
         }
@@ -293,8 +316,16 @@ impl Tool for ReleaseLockTool {
             .release_lock(self.pane_id.clone(), args.resource.clone())
             .await;
 
+        let next_status = match workspace.held_lock_for_pane(&self.pane_id).await {
+            Some(remaining) => AgentStatus::Locking {
+                resource: remaining,
+            },
+            None => AgentStatus::Waiting,
+        };
+
         let (agent_name, character_id) = {
-            let state = self.state.lock().await;
+            let mut state = self.state.lock().await;
+            state.status = next_status.clone();
             (state.agent_name.clone(), state.character_id.clone())
         };
 
@@ -303,7 +334,7 @@ impl Tool for ReleaseLockTool {
             .send(ClawEngineEvent::SessionStateChanged {
                 agent_name,
                 character_id,
-                status: AgentStatus::Waiting,
+                status: next_status,
             })
             .await;
 
@@ -311,12 +342,7 @@ impl Tool for ReleaseLockTool {
             success: true,
             message: format!("Released lock on '{}'.", args.resource),
         };
-        self.approval
-            .report_tool_result(
-                Self::NAME.to_string(),
-                serde_json::to_string(&res).unwrap_or_default(),
-            )
-            .await;
+        self.approval.finish_tool(Self::NAME, &res).await;
         Ok(res)
     }
 }
@@ -661,9 +687,7 @@ impl Tool for InviteCharacterTool {
             let state = self.state.lock().await;
             let host_slug = catalog
                 .iter()
-                .find(|c| c.config.id == state.character_id)
-                .map(|c| c.config.name.clone())
-                .unwrap_or_else(|| state.agent_name.to_lowercase().replace(' ', "-"));
+                .find(|c| c.config.id == state.character_id).map_or_else(|| state.agent_name.to_lowercase().replace(' ', "-"), |c| c.config.name.clone());
             let host = crate::engine::session::roundtable::SpeakerIdentity {
                 character_id: state.character_id.clone(),
                 display_name: state.agent_name.clone(),
@@ -703,16 +727,14 @@ impl Tool for InviteCharacterTool {
                     InviteCharacterOutput {
                         success: true,
                         message: format!(
-                            "Invited {} (@{}) to the overlay conversation (turn limit: {}). Conclude your current message addressing {} so they can immediately take the next turn in the overlay.",
-                            guest_name, guest_slug, max_rounds, guest_name
+                            "Invited {guest_name} (@{guest_slug}) to the overlay conversation (turn limit: {max_rounds}). Conclude your current message addressing {guest_name} so they can immediately take the next turn in the overlay."
                         ),
                     }
                 } else {
                     InviteCharacterOutput {
                         success: false,
                         message: format!(
-                            "Character chat turn limit ({}) has already been reached for this exchange. Conclude your current message and return control to the user.",
-                            max_rounds
+                            "Character chat turn limit ({max_rounds}) has already been reached for this exchange. Conclude your current message and return control to the user."
                         ),
                     }
                 }
@@ -728,6 +750,116 @@ impl Tool for InviteCharacterTool {
                     "Character '{}' not found. Available characters: {}",
                     args.character,
                     available.join(", ")
+                ),
+            }
+        };
+
+        self.approval.finish_tool(Self::NAME, &out).await;
+        Ok(out)
+    }
+}
+
+#[derive(Deserialize)]
+pub struct RequestAssistanceArgs {
+    #[serde(alias = "skill", alias = "domain")]
+    pub capability: String,
+    pub prompt: String,
+}
+
+#[derive(Serialize)]
+pub struct RequestAssistanceOutput {
+    pub success: bool,
+    pub routed_to: Option<String>,
+    pub response: String,
+}
+
+pub struct RequestAssistanceTool {
+    pub pane_id: String,
+    pub state: Arc<Mutex<crate::engine::session::SessionState>>,
+    pub approval: Arc<ClawApprovalHandler>,
+}
+
+impl Tool for RequestAssistanceTool {
+    const NAME: &'static str = "request_assistance";
+
+    type Error = std::io::Error;
+    type Args = RequestAssistanceArgs;
+    type Output = RequestAssistanceOutput;
+
+    fn description(&self) -> String {
+        "Route a task or question to a specialized peer agent in the workspace based on capability, active skill, or working directory (e.g. 'rust', 'css', 'docker') and wait synchronously for their response."
+            .to_string()
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "capability": {
+                    "type": "string",
+                    "description": "The required capability, skill, or domain (e.g. 'rust', 'rust-expert', 'frontend')."
+                },
+                "prompt": {
+                    "type": "string",
+                    "description": "Detailed instructions or question for the matched specialist peer."
+                }
+            },
+            "required": ["capability", "prompt"]
+        })
+    }
+
+    async fn call(
+        &self,
+        _context: &mut ToolContext,
+        args: Self::Args,
+    ) -> Result<Self::Output, Self::Error> {
+        self.approval.begin_tool(Self::NAME).await;
+        let workspace = global_workspace().await;
+
+        let my_name = self.state.lock().await.agent_name.clone();
+
+        let out = if let Some((_peer_id, peer_name, tx)) = workspace
+            .find_peer_for_capability(&args.capability, &self.pane_id)
+            .await
+        {
+            let request_id = uuid::Uuid::new_v4();
+            workspace.register_delegated_task(request_id).await;
+            let req = crate::engine::ClawMessage::DelegatedTask {
+                source_agent_name: my_name,
+                prompt: args.prompt,
+                request_id,
+            };
+            if let Err(e) = tx.send(req).await {
+                workspace.remove_delegated_task(request_id).await;
+                RequestAssistanceOutput {
+                    success: false,
+                    routed_to: Some(peer_name),
+                    response: format!("Failed to send task to specialist peer: {e}"),
+                }
+            } else {
+                match workspace
+                    .wait_for_delegated_task(request_id, std::time::Duration::from_secs(120))
+                    .await
+                {
+                    Ok(response) => RequestAssistanceOutput {
+                        success: true,
+                        routed_to: Some(peer_name),
+                        response,
+                    },
+                    Err(e) => RequestAssistanceOutput {
+                        success: false,
+                        routed_to: Some(peer_name),
+                        response: format!("Specialist peer failed to respond: {e}"),
+                    },
+                }
+            }
+        } else {
+            RequestAssistanceOutput {
+                success: false,
+                routed_to: None,
+                response: format!(
+                    "No active peer agent matched capability '{}'. Check GLOBAL RADAR or use `summon_headless_worker`.",
+                    args.capability
                 ),
             }
         };
@@ -822,5 +954,130 @@ mod tests {
         assert_eq!(state_guard.status, AgentStatus::Sleep);
         assert_eq!(state_guard.awaiting_tasks, vec![t1, t2]);
         assert!(rx_ui.try_recv().is_ok());
+    }
+
+    #[tokio::test]
+    async fn lock_tools_track_session_status_and_request_assistance_routes_to_peer() {
+        let (session, _tx, _rx_ui) = ClawSession::new("pane_caller".to_string());
+        let state = session.state.clone();
+        let tx_ui = session.tx_ui.clone();
+        let approval = Arc::new(ClawApprovalHandler {
+            tx_ui: tx_ui.clone(),
+            state: state.clone(),
+            db: Arc::new(Mutex::new(None)),
+            session_id: session.session_id.clone(),
+            pane_id: "pane_caller".to_string(),
+        });
+
+        // 1. Acquire two locks, release one -> status stays Locking until second is released
+        let acq = AcquireLockTool {
+            pane_id: "pane_caller".to_string(),
+            state: state.clone(),
+            tx_ui: tx_ui.clone(),
+            approval: approval.clone(),
+        };
+        let rel = ReleaseLockTool {
+            pane_id: "pane_caller".to_string(),
+            state: state.clone(),
+            tx_ui: tx_ui.clone(),
+            approval: approval.clone(),
+        };
+        let mut ctx = ToolContext::default();
+        acq.call(
+            &mut ctx,
+            LockArgs {
+                resource: "./src/parser.rs".to_string(),
+            },
+        )
+        .await
+        .unwrap();
+        acq.call(
+            &mut ctx,
+            LockArgs {
+                resource: "src/lexer.rs".to_string(),
+            },
+        )
+        .await
+        .unwrap();
+        assert!(matches!(
+            state.lock().await.status,
+            AgentStatus::Locking { .. }
+        ));
+
+        // Release normalized `src/parser.rs` -> `src/lexer.rs` is still locked!
+        rel.call(
+            &mut ctx,
+            LockArgs {
+                resource: "src/parser.rs".to_string(),
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            state.lock().await.status,
+            AgentStatus::Locking {
+                resource: "src/lexer.rs".to_string()
+            }
+        );
+
+        rel.call(
+            &mut ctx,
+            LockArgs {
+                resource: "src/lexer.rs".to_string(),
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(state.lock().await.status, AgentStatus::Waiting);
+
+        // 2. RequestAssistanceTool routes to a specialist peer and awaits its reply
+        let workspace = global_workspace().await;
+        let (peer_tx, peer_rx) = async_channel::unbounded();
+        workspace
+            .register_pane_tx("pane_rust_spec".to_string(), peer_tx)
+            .await;
+        workspace
+            .update_pane_state(
+                "pane_rust_spec".to_string(),
+                None,
+                Some("Rust_Pane".to_string()),
+                "/tmp/proj".to_string(),
+                None,
+                None,
+            )
+            .await;
+        workspace
+            .update_pane_skills("pane_rust_spec".to_string(), vec!["rust-expert".to_string()])
+            .await;
+
+        let ws_responder = workspace.clone();
+        tokio::spawn(async move {
+            if let Ok(crate::engine::ClawMessage::DelegatedTask { request_id, .. }) =
+                peer_rx.recv().await
+            {
+                ws_responder
+                    .complete_delegated_task(request_id, "Lifetime issue fixed.".to_string())
+                    .await;
+            }
+        });
+
+        let assist_tool = RequestAssistanceTool {
+            pane_id: "pane_caller".to_string(),
+            state,
+            approval,
+        };
+        let out = assist_tool
+            .call(
+                &mut ctx,
+                RequestAssistanceArgs {
+                    capability: "rust".to_string(),
+                    prompt: "Check borrow lifetime".to_string(),
+                },
+            )
+            .await
+            .unwrap();
+        assert!(out.success);
+        assert_eq!(out.routed_to.as_deref(), Some("Rust_Pane"));
+        assert_eq!(out.response, "Lifetime issue fixed.");
     }
 }
