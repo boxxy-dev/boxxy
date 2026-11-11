@@ -213,6 +213,15 @@ pub const BOXXY_THEME_CREATOR_SLUG: &str = "boxxy-theme-creator";
 pub const BOXXY_THEME_CREATOR_SKILL: &str =
     include_str!("../../../resources/skills/boxxy-theme-creator/SKILL.md");
 
+pub const BOXXY_SELF_DEV_SLUG: &str = "boxxy-self-dev";
+pub const BOXXY_SELF_DEV_SKILL: &str =
+    include_str!("../../../resources/skills/boxxy-self-dev/SKILL.md");
+
+const BUNDLED_DEFAULT_OFF_SKILLS: &[(&str, &str)] = &[
+    (BOXXY_THEME_CREATOR_SLUG, BOXXY_THEME_CREATOR_SKILL),
+    (BOXXY_SELF_DEV_SLUG, BOXXY_SELF_DEV_SKILL),
+];
+
 // --- User Profile ---
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
 pub struct UserProfile {
@@ -422,7 +431,10 @@ fn default_app_theme_id() -> String {
 }
 
 fn default_disabled_skills() -> Vec<String> {
-    vec![BOXXY_THEME_CREATOR_SLUG.to_string()]
+    vec![
+        BOXXY_THEME_CREATOR_SLUG.to_string(),
+        BOXXY_SELF_DEV_SLUG.to_string(),
+    ]
 }
 
 const fn default_smart_tab_naming() -> bool {
@@ -474,24 +486,30 @@ You can add your own sensitive paths here. One path per line. Lines starting wit
             let _ = fs::create_dir_all(&skills_dir);
         }
 
-        // Seed and always overwrite bundled Boxxy Theme Creator skill on startup
+        // Seed and always overwrite bundled skills on startup
         // (disabled by default only on first creation so user toggle state is preserved)
-        let theme_skill_dir = skills_dir.join(BOXXY_THEME_CREATOR_SLUG);
-        let theme_skill_file = theme_skill_dir.join("SKILL.md");
-        let is_new_skill = !theme_skill_file.exists();
-        let _ = fs::create_dir_all(&theme_skill_dir);
-        let _ = fs::write(&theme_skill_file, BOXXY_THEME_CREATOR_SKILL);
-        if is_new_skill {
+        let mut newly_seeded_slugs: Vec<&str> = Vec::new();
+        for &(slug, content) in BUNDLED_DEFAULT_OFF_SKILLS {
+            let skill_dir = skills_dir.join(slug);
+            let skill_file = skill_dir.join("SKILL.md");
+            let is_new_skill = !skill_file.exists();
+            let _ = fs::create_dir_all(&skill_dir);
+            let _ = fs::write(&skill_file, content);
+            if is_new_skill {
+                newly_seeded_slugs.push(slug);
+            }
+        }
+        if !newly_seeded_slugs.is_empty() {
             let current = Self::load();
-            if !current
-                .disabled_skills
-                .iter()
-                .any(|s| s == BOXXY_THEME_CREATOR_SLUG)
-            {
-                let mut updated = (*current).clone();
-                updated
-                    .disabled_skills
-                    .push(BOXXY_THEME_CREATOR_SLUG.to_string());
+            let mut updated = (*current).clone();
+            let mut changed = false;
+            for slug in newly_seeded_slugs {
+                if !updated.disabled_skills.iter().any(|s| s == slug) {
+                    updated.disabled_skills.push(slug.to_string());
+                    changed = true;
+                }
+            }
+            if changed {
                 updated.save();
             }
         }
@@ -1050,7 +1068,10 @@ mod tests {
         assert!(legacy.use_native_search);
         assert!(legacy.nautilus_integration);
         assert!(legacy.smart_tab_naming);
-        assert_eq!(legacy.disabled_skills, vec!["boxxy-theme-creator"]);
+        assert_eq!(
+            legacy.disabled_skills,
+            vec!["boxxy-theme-creator", "boxxy-self-dev"]
+        );
         assert_eq!(legacy.app_theme_mode, AppThemeMode::Boxxy);
         assert_eq!(legacy.app_theme_id, "boxxy-dark");
         assert!(legacy.custom_accent_color.is_none());
@@ -1155,5 +1176,24 @@ mod tests {
             parsed.install_id.as_deref(),
             Some("preserved-install-uuid")
         );
+    }
+
+    #[test]
+    fn bundled_default_off_skills_have_valid_frontmatter() {
+        for &(slug, content) in BUNDLED_DEFAULT_OFF_SKILLS {
+            let (fm, body) = boxxy_claw_protocol::skill_loader::parse_frontmatter_block(content)
+                .unwrap_or_else(|| panic!("Bundled skill '{slug}' has invalid YAML frontmatter"));
+            assert!(!fm.name.trim().is_empty(), "Skill '{slug}' missing name");
+            assert!(
+                !fm.description.trim().is_empty(),
+                "Skill '{slug}' missing description"
+            );
+            assert!(
+                !fm.triggers.is_empty(),
+                "Skill '{slug}' should define at least one trigger"
+            );
+            assert!(!fm.pinned, "Default-off skill '{slug}' must not be pinned");
+            assert!(!body.trim().is_empty(), "Skill '{slug}' body is empty");
+        }
     }
 }
