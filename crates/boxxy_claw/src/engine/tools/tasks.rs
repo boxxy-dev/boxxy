@@ -1,4 +1,5 @@
 use crate::engine::{ClawEngineEvent, ScheduledTask, TaskStatus, TaskType};
+use boxxy_claw_protocol::{IntervalPhase, IntervalSchedule};
 use chrono::{Duration, Utc};
 use rig::tool::{Tool, ToolContext};
 use serde::{Deserialize, Serialize};
@@ -11,6 +12,12 @@ pub struct ScheduleTaskArgs {
     pub due_in_seconds: i64,
     pub task_type: String, // "notification", "command", "query"
     pub payload: String,
+    #[serde(default)]
+    pub rounds: Option<u32>,
+    #[serde(default)]
+    pub break_seconds: Option<u32>,
+    #[serde(default)]
+    pub round_label: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -34,16 +41,37 @@ impl Tool for ScheduleTaskTool {
     type Output = ScheduleTaskOutput;
 
     fn description(&self) -> String {
-        "Schedule a task to be executed later. Types: 'notification' (reminder), 'command' (a directive for yourself), 'query' (ask a question).".to_string()
+        "Schedule a one-off reminder/task OR a multi-round interval timer (boxing laps, Pomodoro, HIIT, workouts, study blocks) in a SINGLE call. Types: 'notification' (reminder/timer), 'command' (directive for yourself), 'query' (prompt). When the user asks for multiple rounds, laps, or work/break intervals, ALWAYS pass `rounds` (>= 2) and `break_seconds` in ONE single `schedule_task` call (setting `due_in_seconds` to the duration of one active round and `payload` to the session title like 'Boxing') instead of calling `schedule_task` multiple times — the UI renders a dedicated live round tracker card.".to_string()
     }
 
     fn parameters(&self) -> serde_json::Value {
         serde_json::json!({
             "type": "object",
             "properties": {
-                "due_in_seconds": { "type": "integer", "description": "Seconds from now when the task should trigger." },
-                "task_type": { "type": "string", "enum": ["notification", "command", "query"] },
-                "payload": { "type": "string", "description": "The message to show (notification) or a prompt/directive for yourself to evaluate when the timer hits zero (command/query)." }
+                "due_in_seconds": {
+                    "type": "integer",
+                    "description": "Seconds from now when a single task triggers, OR the duration in seconds of each active round/lap when `rounds >= 2`."
+                },
+                "task_type": {
+                    "type": "string",
+                    "enum": ["notification", "command", "query"]
+                },
+                "payload": {
+                    "type": "string",
+                    "description": "Reminder message (single notification), session title such as 'Boxing' or 'Pomodoro' (when `rounds >= 2`), or directive/prompt (command/query)."
+                },
+                "rounds": {
+                    "type": "integer",
+                    "description": "Optional number of rounds/laps (`>= 2`) for repeating interval sessions (e.g. 6 for a 6-round boxing session). Round 1 starts immediately."
+                },
+                "break_seconds": {
+                    "type": "integer",
+                    "description": "Optional rest/break duration in seconds between rounds when `rounds >= 2` (e.g. 20 for a 20s break between rounds; 0 for back-to-back laps)."
+                },
+                "round_label": {
+                    "type": "string",
+                    "description": "Optional singular unit name for each interval when `rounds >= 2` (e.g. 'Round', 'Lap', 'Pomodoro', 'Set'). Defaults to 'Round'."
+                }
             },
             "required": ["due_in_seconds", "task_type", "payload"]
         })
@@ -63,8 +91,55 @@ impl Tool for ScheduleTaskTool {
             _ => return Err(std::io::Error::other("Invalid task type")),
         };
 
-        let delay_secs = args.due_in_seconds.max(0);
-        let due_at = Utc::now() + Duration::seconds(delay_secs);
+        let now = Utc::now();
+        let total_rounds = args.rounds.unwrap_or(1).clamp(1, 200);
+        let (due_at, interval, confirm_msg) = if total_rounds >= 2
+            && task_type == TaskType::Notification
+        {
+            let work_secs = u32::try_from(args.due_in_seconds.clamp(1, 86_400)).unwrap_or(60);
+            let break_secs = args.break_seconds.unwrap_or(0).min(86_400);
+            let label = args
+                .round_label
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .unwrap_or("Round")
+                .to_string();
+            let first_due = now + Duration::seconds(i64::from(work_secs));
+            let schedule = IntervalSchedule {
+                total_rounds,
+                current_round: 1,
+                work_secs,
+                break_secs,
+                phase: IntervalPhase::Work,
+                phase_started_at: now,
+                round_label: label.clone(),
+            };
+            let msg = if break_secs > 0 {
+                format!(
+                    "Started {total_rounds}-{} interval session '{}' ({} 1/{total_rounds} active now: {work_secs}s each with {break_secs}s breaks).",
+                    label.to_lowercase(),
+                    args.payload,
+                    label
+                )
+            } else {
+                format!(
+                    "Started {total_rounds}-{} interval session '{}' ({} 1/{total_rounds} active now: {work_secs}s each).",
+                    label.to_lowercase(),
+                    args.payload,
+                    label
+                )
+            };
+            (first_due, Some(schedule), msg)
+        } else {
+            let delay_secs = args.due_in_seconds.max(0);
+            (
+                now + Duration::seconds(delay_secs),
+                None,
+                format!("Task scheduled for {delay_secs} seconds from now."),
+            )
+        };
+
         let id = Uuid::new_v4();
 
         let task = ScheduledTask {
@@ -73,6 +148,8 @@ impl Tool for ScheduleTaskTool {
             payload: args.payload,
             due_at,
             status: TaskStatus::Pending,
+            interval,
+            paused_remaining_ms: None,
         };
 
         let (agent_name, character_id, tasks, pane_id) = {
@@ -103,7 +180,7 @@ impl Tool for ScheduleTaskTool {
         let out = ScheduleTaskOutput {
             success: true,
             task_id: id.to_string(),
-            message: format!("Task scheduled for {delay_secs} seconds from now."),
+            message: confirm_msg,
         };
         self.approval.finish_tool(Self::NAME, &out).await;
         Ok(out)
@@ -290,6 +367,8 @@ mod tests {
             payload: "Check build".to_string(),
             due_at: Utc::now() + Duration::seconds(60),
             status: TaskStatus::Pending,
+            interval: None,
+            paused_remaining_ms: None,
         }];
 
         persist_pending_tasks(&db_arc, "sess-tasks-1", &sample).await;

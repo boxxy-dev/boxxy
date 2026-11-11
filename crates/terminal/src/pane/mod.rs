@@ -526,7 +526,8 @@ impl TerminalPaneComponent {
                             .strip_prefix("/resume ")
                             .map(str::trim)
                             .is_some_and(|s| !s.is_empty());
-                        if is_resume_cmd || incognito_inline_opt.as_ref().is_some_and(String::is_empty)
+                        if is_resume_cmd
+                            || incognito_inline_opt.as_ref().is_some_and(String::is_empty)
                         {
                             inner_arc.borrow().msg_bar.entry.grab_focus();
                         }
@@ -576,8 +577,9 @@ impl TerminalPaneComponent {
                                     return;
                                 }
                                 let agent = crate::get_agent().await;
-                                let char_id = boxxy_claw_protocol::characters::INCOGNITO_CHARACTER_ID
-                                    .to_string();
+                                let char_id =
+                                    boxxy_claw_protocol::characters::INCOGNITO_CHARACTER_ID
+                                        .to_string();
                                 *pending_rc.borrow_mut() = char_id.clone();
                                 if let Ok((session_id, sub_guard)) = agent
                                     .create_claw_session_with_sender(
@@ -641,14 +643,14 @@ impl TerminalPaneComponent {
                                                     || s.pane_id == claim.holder_id
                                             })
                                         {
-                                            let _ = crate::TERMINAL_EVENT_BUS.send(
-                                                crate::TerminalEvent {
+                                            let _ =
+                                                crate::TERMINAL_EVENT_BUS
+                                                    .send(crate::TerminalEvent {
                                                     id: String::new(),
                                                     kind: crate::TerminalEventKind::RestoreDetached(
                                                         s.pid, s.cwd,
                                                     ),
-                                                },
-                                            );
+                                                });
                                             return;
                                         }
                                     } else {
@@ -664,15 +666,16 @@ impl TerminalPaneComponent {
                                 // If resuming a past session, claim the session's original character
                                 // (falling back to the next/first available character if it was removed)
                                 // rather than the pre-selected default character in the picker.
-                                let resolved_resume_char_id =
-                                    if let Some(ref resume_id) = resume_id_opt {
-                                        boxxy_claw_widget::msgbar::autocomplete::resolve_session_character_id(
+                                let resolved_resume_char_id = if let Some(ref resume_id) =
+                                    resume_id_opt
+                                {
+                                    boxxy_claw_widget::msgbar::autocomplete::resolve_session_character_id(
                                             resume_id,
                                         )
                                         .await
-                                    } else {
-                                        None
-                                    };
+                                } else {
+                                    None
+                                };
 
                                 let char_id = if let Some(resume_char_id) = resolved_resume_char_id
                                 {
@@ -1025,11 +1028,7 @@ impl TerminalPaneComponent {
                     }
 
                     // Enabling Vibe Mode: check if current working directory is trusted.
-                    let cwd = inner_arc
-                        .borrow()
-                        .working_dir
-                        .clone()
-                        .unwrap_or_default();
+                    let cwd = inner_arc.borrow().working_dir.clone().unwrap_or_default();
                     let current_settings = boxxy_preferences::Settings::load();
 
                     if current_settings.is_dir_vibe_trusted(&cwd) {
@@ -1074,7 +1073,10 @@ impl TerminalPaneComponent {
                                 .close_response("ok")
                                 .build();
                             dialog.add_response("ok", "OK");
-                            libadwaita::prelude::AdwDialogExt::present(&dialog, Some(&parent_widget));
+                            libadwaita::prelude::AdwDialogExt::present(
+                                &dialog,
+                                Some(&parent_widget),
+                            );
                         }
                         Ok(valid_dir) => {
                             let dialog = libadwaita::AlertDialog::builder()
@@ -1139,7 +1141,10 @@ impl TerminalPaneComponent {
                                 }
                             });
 
-                            libadwaita::prelude::AdwDialogExt::present(&dialog, Some(&parent_widget));
+                            libadwaita::prelude::AdwDialogExt::present(
+                                &dialog,
+                                Some(&parent_widget),
+                            );
                         }
                     }
                 },
@@ -1480,10 +1485,7 @@ impl TerminalPaneComponent {
 
         let tx = self.claw_sender.clone();
         glib::spawn_future_local(async move {
-            let snapshot = terminal
-                .get_text_snapshot(100, 0)
-                .await
-                .unwrap_or_default();
+            let snapshot = terminal.get_text_snapshot(100, 0).await.unwrap_or_default();
             let has_session = session_id_ref.lock().await.is_some();
 
             if !has_session {
@@ -1760,9 +1762,36 @@ impl TerminalPaneComponent {
     }
 
     pub fn cancel_task(&self, task_id: uuid::Uuid) {
+        self.pending_tasks.borrow_mut().retain(|t| t.id != task_id);
+        let has_remaining = self.has_pending_tasks();
+        if let Some(ind) = &self.inner.borrow().claw_indicator {
+            ind.set_has_tasks(has_remaining);
+        }
         let _ = self
             .claw_sender
             .send_blocking(ClawMessage::CancelTask { task_id });
+    }
+
+    pub fn toggle_pause_task(&self, task_id: uuid::Uuid) {
+        if let Some(task) = self
+            .pending_tasks
+            .borrow_mut()
+            .iter_mut()
+            .find(|t| t.id == task_id)
+        {
+            task.toggle_pause_now();
+        }
+        let _ = self
+            .claw_sender
+            .send_blocking(ClawMessage::TogglePauseTask { task_id });
+    }
+
+    pub fn cancel_all_tasks(&self) {
+        self.pending_tasks.borrow_mut().clear();
+        if let Some(ind) = &self.inner.borrow().claw_indicator {
+            ind.set_has_tasks(false);
+        }
+        let _ = self.claw_sender.send_blocking(ClawMessage::CancelAllTasks);
     }
 
     pub fn write_all(&self, data: Vec<u8>) {
@@ -2481,7 +2510,8 @@ impl TerminalPaneComponent {
             needs_frosted_glass = prev_effective_frosted != next_effective_frosted;
         }
 
-        self.claw_popover.set_bottom_gap(settings.overlay_bottom_gap);
+        self.claw_popover
+            .set_bottom_gap(settings.overlay_bottom_gap);
 
         self.msgbar_shortcut
             .set_trigger(Some(parse_accel_trigger(&settings.claw_msgbar_shortcut)));
@@ -2555,9 +2585,7 @@ impl TerminalPaneComponent {
         }
 
         if needs_mouse_autohide {
-            inner
-                .terminal
-                .set_mouse_autohide(settings.mouse_autohide);
+            inner.terminal.set_mouse_autohide(settings.mouse_autohide);
         }
 
         if needs_palette && let Some(palette) = palette_opt {

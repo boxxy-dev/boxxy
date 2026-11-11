@@ -173,6 +173,15 @@ pub(crate) async fn build_pending_tasks_snapshot(
         let due_at_unix = task.due_at.timestamp();
         let remaining_secs = (task.due_at - now).num_seconds().max(0);
 
+        let display_payload = if let Some(ref iv) = task.interval {
+            format!(
+                "{} ({} {}/{})",
+                task.payload, iv.round_label, iv.current_round, iv.total_rounds
+            )
+        } else {
+            task.payload
+        };
+
         out.push(boxxy_claw_protocol::PendingTaskInfo {
             id: task.id,
             pane_id,
@@ -181,7 +190,7 @@ pub(crate) async fn build_pending_tasks_snapshot(
             character_name,
             character_slug,
             task_type: task.task_type,
-            payload: task.payload,
+            payload: display_payload,
             due_at_unix,
             remaining_secs,
             is_detached: pty_detached || claim_detached,

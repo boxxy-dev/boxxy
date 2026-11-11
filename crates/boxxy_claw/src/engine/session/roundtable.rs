@@ -654,8 +654,8 @@ pub fn extract_mentioned_characters(
             if trimmed_punct.contains(['/', '.', '#', ':']) {
                 continue;
             }
-            let candidate =
-                trimmed_punct.trim_end_matches(|c: char| !c.is_alphanumeric() && c != '-' && c != '_');
+            let candidate = trimmed_punct
+                .trim_end_matches(|c: char| !c.is_alphanumeric() && c != '-' && c != '_');
             if !candidate.is_empty()
                 && let Some(spk) = resolve_speaker_token(candidate, "", host_pane_id, catalog)
                 && !results
@@ -713,8 +713,7 @@ pub fn parse_user_roundtable_intent(
 
         for word in rest.split_whitespace() {
             if word.starts_with(['@', ':'])
-                && let Some(mut spk) =
-                    resolve_speaker_token(word, &host.character_id, "", catalog)
+                && let Some(mut spk) = resolve_speaker_token(word, &host.character_id, "", catalog)
             {
                 spk.is_guest = spk.character_id != host.character_id;
                 if spk.character_id != host.character_id
@@ -746,8 +745,7 @@ pub fn parse_user_roundtable_intent(
 
         for word in rest.split_whitespace() {
             if word.starts_with(['@', ':'])
-                && let Some(mut spk) =
-                    resolve_speaker_token(word, &host.character_id, "", catalog)
+                && let Some(mut spk) = resolve_speaker_token(word, &host.character_id, "", catalog)
             {
                 spk.is_guest = spk.character_id != host.character_id;
                 if spk.character_id != host.character_id
@@ -765,20 +763,22 @@ pub fn parse_user_roundtable_intent(
         // If the user didn't explicitly `@mention` a guest in `/debate <topic>`,
         // check if the first word of `<topic>` is a character name (e.g. `/debate levi rust vs c`),
         // otherwise pick the first other character in the catalog.
-        if guests.is_empty() && !topic_words.is_empty()
+        if guests.is_empty()
+            && !topic_words.is_empty()
             && let Some(mut spk) =
                 resolve_speaker_token(topic_words[0], &host.character_id, "", catalog)
-                && spk.character_id != host.character_id
-            {
-                spk.is_guest = true;
-                guests.push(spk);
-                topic_words.remove(0);
-            }
+            && spk.character_id != host.character_id
+        {
+            spk.is_guest = true;
+            guests.push(spk);
+            topic_words.remove(0);
+        }
 
         if guests.is_empty()
-            && let Some(other) = catalog.iter().find(|c| c.config.id != host.character_id) {
-                guests.push(speaker_from_info(other, &host.character_id, ""));
-            }
+            && let Some(other) = catalog.iter().find(|c| c.config.id != host.character_id)
+        {
+            guests.push(speaker_from_info(other, &host.character_id, ""));
+        }
 
         let topic = if topic_words.is_empty() {
             "Have a lively in-character conversation and debate about the current terminal workspace and your favorite engineering approaches.".to_string()
@@ -916,12 +916,8 @@ mod tests {
         let cat = sample_catalog();
         let host = host_niko();
 
-        let intent = parse_user_roundtable_intent(
-            "/debate @levi-kujo Rust vs C++",
-            &host,
-            false,
-            &cat,
-        );
+        let intent =
+            parse_user_roundtable_intent("/debate @levi-kujo Rust vs C++", &host, false, &cat);
         assert_eq!(
             intent,
             UserRoundtableIntent::Debate {
@@ -948,12 +944,8 @@ mod tests {
         }
 
         // `@levi` mention
-        let mention = parse_user_roundtable_intent(
-            "@levi what do you think of this?",
-            &host,
-            false,
-            &cat,
-        );
+        let mention =
+            parse_user_roundtable_intent("@levi what do you think of this?", &host, false, &cat);
         if let UserRoundtableIntent::Mention {
             mentioned,
             multi_turn,
@@ -987,8 +979,7 @@ mod tests {
         }
 
         // `/drama <prompt>` without `@character` stays single-character (no auto-picked guest)
-        let solo_drama =
-            parse_user_roundtable_intent("/drama hello Rikka!", &host, false, &cat);
+        let solo_drama = parse_user_roundtable_intent("/drama hello Rikka!", &host, false, &cat);
         if let UserRoundtableIntent::Drama { guests, topic } = solo_drama {
             assert!(guests.is_empty());
             assert_eq!(topic, "hello Rikka!");
@@ -1033,7 +1024,11 @@ mod tests {
         let levi = resolve_speaker_token("levi", "id-niko", "pane-1", &cat).unwrap();
 
         let mut rt = RoundtableState::default();
-        rt.start_debate(host.clone(), vec![levi.clone()], "Tokio vs async-std".into());
+        rt.start_debate(
+            host.clone(),
+            vec![levi.clone()],
+            "Tokio vs async-std".into(),
+        );
         assert_eq!(rt.remaining_rounds, MAX_ROUNDTABLE_ROUNDS);
 
         // Pop initial speaker (Host: Niko)
@@ -1043,9 +1038,13 @@ mod tests {
         // Simulate 20 back-and-forth rounds
         let mut current = first;
         let mut count = 0;
-        while let Some((next, _prompt)) =
-            rt.on_turn_completed(&current, "I disagree with your point!", false, "pane-1", &cat)
-        {
+        while let Some((next, _prompt)) = rt.on_turn_completed(
+            &current,
+            "I disagree with your point!",
+            false,
+            "pane-1",
+            &cat,
+        ) {
             assert_ne!(next.character_id, current.character_id);
             current = next;
             count += 1;

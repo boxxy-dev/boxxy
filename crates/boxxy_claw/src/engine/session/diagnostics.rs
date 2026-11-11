@@ -91,8 +91,7 @@ impl ClawSession {
             state_lock.pending_inject_command = false;
 
             if !agent_originated {
-                state_lock.pending_lazy_diagnosis =
-                    Some((prompt, snapshot, cwd));
+                state_lock.pending_lazy_diagnosis = Some((prompt, snapshot, cwd));
                 drop(state_lock);
                 let character_id = self.character_id.clone();
                 let _ = self

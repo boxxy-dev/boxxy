@@ -68,7 +68,9 @@
 .navigation-sidebar > row button.past-session-options-btn:hover,
 .navigation-sidebar > row button.past-session-options-btn.menu-open,
 .navigation-sidebar > row button.past-session-options-btn:active {
+    background: @window_bg_color;
     background-color: @window_bg_color;
+    background-image: none;
     color: @window_fg_color;
     box-shadow: none;
 }
@@ -132,3 +134,167 @@ dialog stackswitcher > button:checked label {
     color: @accent_fg_color;
     font-weight: 700;
 }
+
+/* ── Claw Sidebar: Pending Tasks Cards & Empty State (Tab-Style Ink Border, Zero Shadow) ── */
+
+.claw-tasks-count-pill {
+    background-color: @accent_bg_color;
+    color: @accent_fg_color;
+    border: var(--boxxy-border-thin) solid @boxxy_ink;
+    border-radius: var(--boxxy-radius-pill);
+    padding: 0px 7px;
+    font-size: 0.74em;
+    font-weight: 700;
+}
+
+.claw-tasks-empty-card {
+    background-color: @card_bg_color;
+    color: @card_fg_color;
+    border: none;
+    border-radius: var(--boxxy-radius-md);
+    outline: var(--boxxy-border-width) solid @boxxy_ink;
+    outline-offset: -2px;
+    box-shadow: none;
+    padding: 8px 10px;
+    min-height: 0;
+}
+
+.claw-task-icon {
+    background: transparent;
+    background-color: transparent;
+    border: none;
+}
+
+.claw-task-card {
+    background-color: @card_bg_color;
+    color: @card_fg_color;
+    border: none;
+    border-radius: var(--boxxy-radius-md);
+    outline: var(--boxxy-border-width) solid @boxxy_ink;
+    outline-offset: -2px;
+    box-shadow: none;
+    padding: 7px 8px 7px 10px;
+    min-height: 0;
+    transition: none;
+}
+
+.claw-task-card:hover {
+    background-color: @card_bg_color;
+    outline: var(--boxxy-border-width) solid @boxxy_ink;
+    outline-offset: -2px;
+    box-shadow: none;
+}
+
+/* Embedded Task Pause (`⏸`/`▶`) & Dismiss (`×`) Buttons inside `.claw-task-card` —
+   100% transparent at rest, exact `@window_bg_color` borderless circle on hover
+   (with `background-image: none` so Libadwaita's `.flat:hover` white veil never lightens it) */
+.claw-task-card button.claw-task-dismiss-btn {
+    background: transparent;
+    background-color: transparent;
+    background-image: none;
+    border: none;
+    outline: none;
+    border-radius: var(--boxxy-radius-pill);
+    box-shadow: none;
+    transition: none;
+}
+
+.claw-task-card button.claw-task-dismiss-btn:hover,
+.claw-task-card button.claw-task-dismiss-btn:active {
+    background: @window_bg_color;
+    background-color: @window_bg_color;
+    background-image: none;
+    color: @window_fg_color;
+    border: none;
+    outline: none;
+    box-shadow: none;
+    opacity: 1.0;
+}
+
+.claw-task-card:hover button.claw-task-dismiss-btn:hover image,
+.claw-task-card button.claw-task-dismiss-btn:hover image,
+.claw-task-card button.claw-task-dismiss-btn:active image {
+    color: @window_fg_color;
+}
+
+/* ── Multi-Round Interval Session Card (`.claw-round-card`) ──────────────── */
+
+.claw-task-card.claw-round-card {
+    padding: 9px 10px 11px 10px;
+}
+
+.claw-round-phase-pill {
+    border-radius: var(--boxxy-radius-sm);
+    padding: 2px 9px;
+}
+
+.claw-round-phase-pill.claw-round-phase-work {
+    background-color: @accent_bg_color;
+    color: @accent_fg_color;
+    border: var(--boxxy-border-thin) solid @boxxy_ink;
+}
+
+.claw-round-phase-pill.claw-round-phase-break {
+    background-color: @warning_bg_color;
+    color: @warning_fg_color;
+    border: var(--boxxy-border-thin) solid @boxxy_ink;
+}
+
+.claw-round-phase-pill.claw-round-phase-paused {
+    background-color: @window_bg_color;
+    color: @card_fg_color;
+    border: var(--boxxy-border-thin) solid @boxxy_ink;
+}
+
+.claw-round-pip {
+    min-width: 9px;
+    min-height: 9px;
+    border-radius: var(--boxxy-radius-pill);
+    background-color: @window_bg_color;
+    border: var(--boxxy-border-thin) solid @boxxy_ink;
+}
+
+.claw-round-pip.claw-round-pip-done {
+    background-color: @accent_bg_color;
+    border-color: @boxxy_ink;
+}
+
+.claw-round-pip.claw-round-pip-active {
+    min-width: 24px;
+    background-color: @accent_bg_color;
+    border-color: @boxxy_ink;
+}
+
+.claw-round-pip.claw-round-pip-resting {
+    min-width: 20px;
+    background-color: @warning_bg_color;
+    border-color: @boxxy_ink;
+}
+
+.claw-round-pip.claw-round-pip-paused {
+    min-width: 22px;
+    background-color: alpha(@card_fg_color, 0.35);
+    border-color: @boxxy_ink;
+}
+
+progressbar.claw-round-progress trough {
+    background-color: @window_bg_color;
+    border: var(--boxxy-border-thin) solid @boxxy_ink;
+    border-radius: var(--boxxy-radius-pill);
+    min-height: 8px;
+}
+
+progressbar.claw-round-progress progress {
+    background-color: @accent_bg_color;
+    border-radius: var(--boxxy-radius-pill);
+    min-height: 6px;
+}
+
+progressbar.claw-round-progress.claw-round-progress-break progress {
+    background-color: @warning_bg_color;
+}
+
+progressbar.claw-round-progress.claw-round-progress-paused progress {
+    background-color: alpha(@card_fg_color, 0.36);
+}
+

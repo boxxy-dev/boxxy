@@ -4,9 +4,7 @@ use boxxy_db::Db;
 use log::info;
 
 use crate::engine::session::ClawSession;
-use crate::engine::{
-    ClawEngineEvent, ClawEnvironment, ClawMessage, context::load_session_context,
-};
+use crate::engine::{ClawEngineEvent, ClawEnvironment, ClawMessage, context::load_session_context};
 
 pub mod context;
 mod proposals;
@@ -132,11 +130,7 @@ impl ClawSession {
                 // Preserve Sleep status if a tool in the turn (`subscribe_to_pane`, `await_tasks`)
                 // already suspended the agent, or Locking status if the session still holds a lock.
                 if !is_sleeping {
-                    let target_state = match ctx
-                        .workspace
-                        .held_lock_for_pane(&self.pane_id)
-                        .await
-                    {
+                    let target_state = match ctx.workspace.held_lock_for_pane(&self.pane_id).await {
                         Some(resource) => crate::engine::AgentStatus::Locking { resource },
                         None => crate::engine::AgentStatus::Waiting,
                     };
@@ -197,9 +191,7 @@ impl ClawSession {
                 let state_lock = self.state.lock().await;
                 if state_lock.status == state {
                     drop(state_lock);
-                    log::warn!(
-                        "Watchdog expired for task {task_id:?}. Forcing Faulted state."
-                    );
+                    log::warn!("Watchdog expired for task {task_id:?}. Forcing Faulted state.");
                     self.handle_transition(
                         crate::engine::TransitionRequest {
                             target_state: crate::engine::AgentStatus::Faulted {
@@ -350,8 +342,7 @@ impl ClawSession {
                     let settings = boxxy_preferences::Settings::load();
                     state_lock.current_search_label =
                         crate::engine::agent_config::resolve_active_search_label(
-                            &settings,
-                            enabled,
+                            &settings, enabled,
                         )
                         .to_string();
                     let _ = self
@@ -498,7 +489,11 @@ impl ClawSession {
                         // Capture a fresh live snapshot of the target pane to include in the result.
                         let req_id = uuid::Uuid::new_v4();
                         let (snap_tx, snap_rx) = tokio::sync::oneshot::channel();
-                        state.lock().await.pending_scrollbacks.insert(req_id, snap_tx);
+                        state
+                            .lock()
+                            .await
+                            .pending_scrollbacks
+                            .insert(req_id, snap_tx);
                         let _ = tx_ui
                             .send(ClawEngineEvent::RequestScrollback {
                                 agent_name,
@@ -509,14 +504,12 @@ impl ClawSession {
                                 request_id: req_id,
                             })
                             .await;
-                        let live_snap = tokio::time::timeout(
-                            std::time::Duration::from_millis(500),
-                            snap_rx,
-                        )
-                        .await
-                        .ok()
-                        .and_then(std::result::Result::ok)
-                        .unwrap_or_default();
+                        let live_snap =
+                            tokio::time::timeout(std::time::Duration::from_millis(500), snap_rx)
+                                .await
+                                .ok()
+                                .and_then(std::result::Result::ok)
+                                .unwrap_or_default();
                         let live_snap = live_snap.trim();
                         state.lock().await.pending_scrollbacks.remove(&req_id);
 
@@ -535,9 +528,7 @@ impl ClawSession {
                                 )
                             }
                         } else if !live_snap.is_empty() {
-                            format!(
-                                "Command launched in `{alias}`.\nLive snapshot:\n{live_snap}"
-                            )
+                            format!("Command launched in `{alias}`.\nLive snapshot:\n{live_snap}")
                         } else {
                             format!("Command launched in `{alias}`.")
                         };
@@ -685,6 +676,16 @@ impl ClawSession {
             }
             ClawMessage::CancelTask { task_id } => {
                 self.handle_cancel_task(ctx, task_id).await;
+            }
+            ClawMessage::TogglePauseTask { task_id } => {
+                self.handle_toggle_pause_task(ctx, task_id).await;
+            }
+            ClawMessage::CancelAllTasks => {
+                self.handle_cancel_all_tasks(ctx).await;
+            }
+            ClawMessage::ScheduledTaskTriggered { prompt } => {
+                self.handle_scheduled_task_triggered(ctx, &session_ctx, prompt)
+                    .await;
             }
             ClawMessage::SubscriptionEvent { event } => {
                 self.handle_subscription_event(ctx, &session_ctx, event)

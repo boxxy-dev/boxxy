@@ -723,6 +723,8 @@ mod tests {
                     payload: "Wake me up".to_string(),
                     due_at: chrono::Utc::now() + chrono::Duration::seconds(120),
                     status: boxxy_claw_protocol::TaskStatus::Pending,
+                    interval: None,
+                    paused_remaining_ms: None,
                 }],
             )
             .await;

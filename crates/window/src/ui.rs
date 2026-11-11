@@ -84,6 +84,8 @@ impl AppWindow {
         let app_menu = AppMenuComponent::new();
 
         let tx_claw_cancel = tx.clone();
+        let tx_claw_pause = tx.clone();
+        let tx_claw_cancel_all = tx.clone();
         let tx_claw_soft_clear = tx.clone();
         let tx_claw_resume = tx.clone();
         let claw = ClawSidebarComponent::new(
@@ -94,6 +96,12 @@ impl AppWindow {
                 let _ = tx_claw_soft_clear.send_blocking(AppInput::ClearClawHistory(None));
             },
         );
+        claw.set_on_toggle_pause_task(move |task_id| {
+            let _ = tx_claw_pause.send_blocking(AppInput::TogglePauseTask(task_id, None));
+        });
+        claw.set_on_cancel_all_tasks(move || {
+            let _ = tx_claw_cancel_all.send_blocking(AppInput::CancelAllTasks(None));
+        });
         claw.set_on_resume_session(move |session_id, override_character_id| {
             let _ = tx_claw_resume.send_blocking(AppInput::ResumeClawSession(
                 session_id,

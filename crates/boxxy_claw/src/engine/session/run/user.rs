@@ -103,7 +103,8 @@ impl ClawSession {
 
         if snapshots.is_empty() {
             return Some(
-                "Nothing to undo — no file edits have been recorded in the recent turn.".to_string(),
+                "Nothing to undo — no file edits have been recorded in the recent turn."
+                    .to_string(),
             );
         }
 
@@ -174,7 +175,11 @@ impl ClawSession {
         let catalog = get_active_catalog();
         let host_slug = catalog
             .iter()
-            .find(|c| c.config.id == self.character_id).map_or_else(|| self.name.to_lowercase().replace(' ', "-"), |c| c.config.name.clone());
+            .find(|c| c.config.id == self.character_id)
+            .map_or_else(
+                || self.name.to_lowercase().replace(' ', "-"),
+                |c| c.config.name.clone(),
+            );
 
         let host = SpeakerIdentity {
             character_id: self.character_id.clone(),
@@ -218,9 +223,7 @@ impl ClawSession {
                 let resolved_guests: Vec<SpeakerIdentity> = guests
                     .into_iter()
                     .map(|mut g| {
-                        if let Some(info) =
-                            catalog.iter().find(|c| c.config.id == g.character_id)
-                        {
+                        if let Some(info) = catalog.iter().find(|c| c.config.id == g.character_id) {
                             g = crate::engine::session::roundtable::speaker_from_info(
                                 info,
                                 &self.character_id,
@@ -246,9 +249,7 @@ impl ClawSession {
                 let resolved_guests: Vec<SpeakerIdentity> = guests
                     .into_iter()
                     .map(|mut g| {
-                        if let Some(info) =
-                            catalog.iter().find(|c| c.config.id == g.character_id)
-                        {
+                        if let Some(info) = catalog.iter().find(|c| c.config.id == g.character_id) {
                             g = crate::engine::session::roundtable::speaker_from_info(
                                 info,
                                 &self.character_id,
@@ -276,9 +277,7 @@ impl ClawSession {
                 let resolved_mentions: Vec<SpeakerIdentity> = mentioned
                     .into_iter()
                     .map(|mut m| {
-                        if let Some(info) =
-                            catalog.iter().find(|c| c.config.id == m.character_id)
-                        {
+                        if let Some(info) = catalog.iter().find(|c| c.config.id == m.character_id) {
                             m = crate::engine::session::roundtable::speaker_from_info(
                                 info,
                                 &self.character_id,
@@ -644,17 +643,17 @@ impl ClawSession {
             .unwrap_or_default();
 
         let catalog = crate::engine::session::roundtable::get_active_catalog();
-        let (caller_display_name, caller_character_id) =
-            if let Some(resolved) = crate::engine::session::roundtable::resolve_speaker_token(
+        let (caller_display_name, caller_character_id) = if let Some(resolved) =
+            crate::engine::session::roundtable::resolve_speaker_token(
                 &source_agent_name,
                 &self.character_id,
                 &self.pane_id,
                 &catalog,
             ) {
-                (resolved.display_name, resolved.character_id)
-            } else {
-                (source_agent_name.clone(), String::new())
-            };
+            (resolved.display_name, resolved.character_id)
+        } else {
+            (source_agent_name.clone(), String::new())
+        };
 
         let incoming_event = ClawEngineEvent::DiagnosisComplete {
             agent_name: caller_display_name.clone(),
@@ -671,9 +670,7 @@ impl ClawSession {
         );
         let _ = self.tx_ui.send(incoming_event).await;
 
-        let full_prompt = format!(
-            "*Task delegated from agent '{caller_display_name}'*: {prompt}"
-        );
+        let full_prompt = format!("*Task delegated from agent '{caller_display_name}'*: {prompt}");
 
         debug!(
             "Pane {} ({}): Received delegated task from {}.",

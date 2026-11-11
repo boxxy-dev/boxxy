@@ -642,8 +642,20 @@ mod tests {
         let mod_row = &hunk.rows[3];
         assert_eq!(mod_row.left.kind, DiffLineKind::Delete);
         assert_eq!(mod_row.right.kind, DiffLineKind::Insert);
-        assert!(mod_row.left.spans.iter().any(|s| s.emphasized && s.text.contains("10")));
-        assert!(mod_row.right.spans.iter().any(|s| s.emphasized && s.text.contains("42")));
+        assert!(
+            mod_row
+                .left
+                .spans
+                .iter()
+                .any(|s| s.emphasized && s.text.contains("10"))
+        );
+        assert!(
+            mod_row
+                .right
+                .spans
+                .iter()
+                .any(|s| s.emphasized && s.text.contains("42"))
+        );
 
         // Row 4 is the unbalanced extra insertion; left side must be Empty filler
         let extra_row = &hunk.rows[4];

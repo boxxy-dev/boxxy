@@ -44,9 +44,10 @@ pub(super) fn setup_preview(terminal: &TerminalWidget, inner: &Rc<RefCell<PaneIn
     let inner_for_primary = Rc::downgrade(inner);
 
     primary_gesture.connect_pressed(move |gesture: &gtk::GestureClick, _n_press, x, y| {
-        let (Some(inner), Some(term_for_primary_click)) =
-            (inner_for_primary.upgrade(), term_for_primary_click.upgrade())
-        else {
+        let (Some(inner), Some(term_for_primary_click)) = (
+            inner_for_primary.upgrade(),
+            term_for_primary_click.upgrade(),
+        ) else {
             return;
         };
         let state = gesture.current_event_state();

@@ -80,11 +80,7 @@ pub fn parse_frontmatter_block(content: &str) -> Option<(SkillFrontmatter, &str)
     if !(content.starts_with("---\n") || content.starts_with("---\r\n")) {
         return None;
     }
-    let after_open = if content.starts_with("---\r\n") {
-        5
-    } else {
-        4
-    };
+    let after_open = if content.starts_with("---\r\n") { 5 } else { 4 };
     let rest = &content[after_open..];
     let end_idx = rest.find("\n---")?;
     let frontmatter_str = &rest[..end_idx];
@@ -254,7 +250,11 @@ mod tests {
     fn is_skill_disabled_matches_slug_or_name() {
         let disabled = vec!["rust-helper".to_string(), "Docker Admin".to_string()];
         assert!(is_skill_disabled(&disabled, "rust-helper", "Rust Helper"));
-        assert!(is_skill_disabled(&disabled, "docker-folder", "Docker Admin"));
+        assert!(is_skill_disabled(
+            &disabled,
+            "docker-folder",
+            "Docker Admin"
+        ));
         assert!(!is_skill_disabled(&disabled, "git-flow", "Git Flow"));
     }
 }

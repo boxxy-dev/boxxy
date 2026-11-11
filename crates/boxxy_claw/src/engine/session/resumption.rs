@@ -14,7 +14,10 @@ impl ClawSession {
         current_dir: &str,
         is_initialized: &mut bool,
     ) {
-        info!("Resuming session {} in pane {}...", session_id, self.pane_id);
+        info!(
+            "Resuming session {} in pane {}...",
+            session_id, self.pane_id
+        );
 
         let workspace = crate::registry::workspace::global_workspace().await;
         workspace.evict_session(&session_id).await;
@@ -45,8 +48,10 @@ impl ClawSession {
                 let prev_char_id = session.character_id.clone();
                 let prev_name = if !session.character_display_name.trim().is_empty() {
                     session.character_display_name.clone()
-                } else if let Some(n) =
-                    session.agent_name.as_deref().filter(|s| !s.trim().is_empty())
+                } else if let Some(n) = session
+                    .agent_name
+                    .as_deref()
+                    .filter(|s| !s.trim().is_empty())
                 {
                     n.to_string()
                 } else {
@@ -211,16 +216,12 @@ impl ClawSession {
                                     character_id,
                                     ..
                                 } => {
-                                    if character_id
-                                        .as_deref()
-                                        .is_none_or(|s| s.trim().is_empty())
+                                    if character_id.as_deref().is_none_or(|s| s.trim().is_empty())
                                         && !prev_char_id.is_empty()
                                     {
                                         *character_id = Some(prev_char_id.clone());
                                     }
-                                    if agent_name
-                                        .as_deref()
-                                        .is_none_or(|s| s.trim().is_empty())
+                                    if agent_name.as_deref().is_none_or(|s| s.trim().is_empty())
                                         && !prev_name.is_empty()
                                     {
                                         *agent_name = Some(prev_name.clone());
@@ -256,10 +257,7 @@ impl ClawSession {
                     }
 
                     if !rows.is_empty() {
-                        let _ = self
-                            .tx_ui
-                            .send(ClawEngineEvent::RestoreHistory(rows))
-                            .await;
+                        let _ = self.tx_ui.send(ClawEngineEvent::RestoreHistory(rows)).await;
                     }
                 }
 
@@ -318,12 +316,11 @@ impl ClawSession {
                     &settings,
                     web_search_enabled,
                 );
-                let search_label =
-                    crate::engine::agent_config::resolve_active_search_label(
-                        &settings,
-                        web_search_enabled,
-                    )
-                    .to_string();
+                let search_label = crate::engine::agent_config::resolve_active_search_label(
+                    &settings,
+                    web_search_enabled,
+                )
+                .to_string();
 
                 {
                     let mut state_lock = self.state.lock().await;
@@ -472,10 +469,7 @@ impl ClawSession {
                     })
                     .collect();
                 if !rows.is_empty() {
-                    let _ = self
-                        .tx_ui
-                        .send(ClawEngineEvent::RestoreHistory(rows))
-                        .await;
+                    let _ = self.tx_ui.send(ClawEngineEvent::RestoreHistory(rows)).await;
                 }
             }
         }

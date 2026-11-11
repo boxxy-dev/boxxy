@@ -14,10 +14,7 @@ boxxy-preferences = { path = "../preferences" }
 boxxy-sys-utils = { workspace = true }
 boxxy-viewer = { path = "../viewer" }
 boxxy-core-widgets = { path = "../core_widgets" }
-anyhow.workspace = true
 serde = { workspace = true }
 serde_json = { workspace = true }
-log = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
-rig = { workspace = true }

@@ -160,7 +160,6 @@ pub fn spawn_dispatch(
                         Some(agent_name.clone()),
                         Some(character_id.clone()),
                         command,
-                        |_| {},
                     );
                     if *auto_approve {
                         if let Some(target_id) = target_pane_id
@@ -206,9 +205,9 @@ pub fn spawn_dispatch(
                     if let Some(usage) = usage {
                         record_usage(&session_usage, usage);
                     }
-                    let resolved_diff = diff
-                        .clone()
-                        .unwrap_or_else(|| boxxy_claw_protocol::FileDiff::fallback_new(path, content));
+                    let resolved_diff = diff.clone().unwrap_or_else(|| {
+                        boxxy_claw_protocol::FileDiff::fallback_new(path, content)
+                    });
                     boxxy_claw_ui::add_file_diff_row_with_mode(
                         &overlay_store,
                         id.clone(),
@@ -246,8 +245,6 @@ pub fn spawn_dispatch(
                         Some(agent_name.clone()),
                         Some(character_id.clone()),
                         path,
-                        |_| {},
-                        |_| {},
                     );
                     overlay.show(
                         OverlayMode::Claw,
@@ -274,8 +271,6 @@ pub fn spawn_dispatch(
                         Some(character_id.clone()),
                         *pid,
                         process_name,
-                        |_| {},
-                        |_| {},
                     );
                     overlay.show(
                         OverlayMode::Claw,
@@ -304,7 +299,6 @@ pub fn spawn_dispatch(
                         Some(agent_name.clone()),
                         Some(character_id.clone()),
                         command,
-                        |_| {},
                     );
                     overlay.show(
                         OverlayMode::Claw,
@@ -330,8 +324,6 @@ pub fn spawn_dispatch(
                         id.clone(),
                         Some(agent_name.clone()),
                         Some(character_id.clone()),
-                        |_| {},
-                        |_| {},
                     );
                     overlay.show(
                         OverlayMode::Claw,
@@ -356,8 +348,6 @@ pub fn spawn_dispatch(
                         Some(agent_name.clone()),
                         Some(character_id.clone()),
                         text,
-                        |_| {},
-                        |_| {},
                     );
                     overlay.show(
                         OverlayMode::Claw,
@@ -395,7 +385,6 @@ pub fn spawn_dispatch(
                         Some(agent_name.clone()),
                         Some(character_id.clone()),
                         command,
-                        |_| {},
                     );
                     if *auto_approve {
                         if let Some(target_id) = target_pane_id
@@ -631,9 +620,8 @@ pub fn spawn_dispatch(
                             restored_tools = restored_tools.saturating_add(1);
                         }
                         if row.is_overlay_visible() {
-                            overlay_items.push(boxxy_claw_ui::row_object::ClawRowObject::new(
-                                row.clone(),
-                            ));
+                            overlay_items
+                                .push(boxxy_claw_ui::row_object::ClawRowObject::new(row.clone()));
                         }
                     }
                     let mut su = session_usage.get();

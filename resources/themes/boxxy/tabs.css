@@ -73,7 +73,9 @@ tabbar tab button.flat:hover,
 tabbar tab button.image-button:active,
 tabbar tab button.tab-close-btn:active,
 tabbar tab button.flat:active {
+    background: @window_bg_color;
     background-color: @window_bg_color;
+    background-image: none;
     color: @window_fg_color;
     box-shadow: none;
 }

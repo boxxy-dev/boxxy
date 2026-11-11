@@ -340,7 +340,9 @@ pub fn settings_changed(inner: &mut AppWindowInner, settings: Settings) {
     };
     inner.frosted_container.set_tint_color(bg_rgba);
     inner.frosted_container.set_opacity(settings.opacity);
-    inner.frosted_container.set_frosted_glass(settings.frosted_glass);
+    inner
+        .frosted_container
+        .set_frosted_glass(settings.frosted_glass);
 
     if settings.frosted_glass && settings.opacity < 1.0 {
         inner.window.add_css_class("frosted-glass-active");

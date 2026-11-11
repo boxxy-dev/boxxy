@@ -34,6 +34,72 @@ impl ClawSession {
             .await;
     }
 
+    pub(super) async fn handle_toggle_pause_task(&self, ctx: &RunContext, task_id: uuid::Uuid) {
+        let now = chrono::Utc::now();
+        let maybe_updated = {
+            let mut state_lock = self.state.lock().await;
+            let Some(task) = state_lock
+                .pending_tasks
+                .iter_mut()
+                .find(|t| t.id == task_id && t.status == TaskStatus::Pending)
+            else {
+                return;
+            };
+            toggle_task_pause_state(task, now);
+            Some((
+                state_lock.agent_name.clone(),
+                state_lock.character_id.clone(),
+                state_lock.pending_tasks.clone(),
+            ))
+        };
+
+        if let Some((agent_name, character_id, tasks)) = maybe_updated {
+            crate::engine::tools::tasks::persist_pending_tasks(&self.db, &self.session_id, &tasks)
+                .await;
+
+            ctx.workspace
+                .update_pane_tasks(self.pane_id.clone(), tasks.clone())
+                .await;
+
+            let _ = self
+                .tx_ui
+                .send(ClawEngineEvent::TaskStatusChanged {
+                    agent_name,
+                    character_id,
+                    tasks,
+                })
+                .await;
+        }
+    }
+
+    pub(super) async fn handle_cancel_all_tasks(&self, ctx: &RunContext) {
+        let (agent_name, character_id, tasks) = {
+            let mut state_lock = self.state.lock().await;
+            state_lock.pending_tasks.clear();
+            (
+                state_lock.agent_name.clone(),
+                state_lock.character_id.clone(),
+                Vec::new(),
+            )
+        };
+
+        crate::engine::tools::tasks::persist_pending_tasks(&self.db, &self.session_id, &tasks)
+            .await;
+
+        ctx.workspace
+            .update_pane_tasks(self.pane_id.clone(), Vec::new())
+            .await;
+
+        let _ = self
+            .tx_ui
+            .send(ClawEngineEvent::TaskStatusChanged {
+                agent_name,
+                character_id,
+                tasks,
+            })
+            .await;
+    }
+
     pub(super) async fn handle_subscription_event(
         &self,
         ctx: &mut RunContext,
@@ -109,9 +175,7 @@ impl ClawSession {
                     name,
                     payload,
                 } => {
-                    format!(
-                        "WAKEUP: Custom event `{name}` from `{source_agent}`: {payload}"
-                    )
+                    format!("WAKEUP: Custom event `{name}` from `{source_agent}`: {payload}")
                 }
             };
 
@@ -212,27 +276,97 @@ impl ClawSession {
         }
     }
 
+    pub(super) async fn handle_scheduled_task_triggered(
+        &self,
+        ctx: &mut RunContext,
+        session_ctx: &str,
+        prompt: String,
+    ) {
+        if ctx.current_turn.is_some() {
+            ctx.backlog
+                .push_back(ClawMessage::ScheduledTaskTriggered { prompt });
+            return;
+        }
+
+        let current_status = self.state.lock().await.status.clone();
+        if current_status == crate::engine::AgentStatus::Sleep {
+            let req = crate::engine::TransitionRequest {
+                target_state: crate::engine::AgentStatus::Waiting,
+                source: crate::engine::TriggerSource::System,
+            };
+            self.handle_transition(req, &mut ctx.current_turn, &mut ctx.urgent_backlog)
+                .await;
+        }
+
+        let snapshot = ctx
+            .workspace
+            .get_pane_snapshot(self.pane_id.clone())
+            .await
+            .unwrap_or_default();
+        let cwd = ctx
+            .workspace
+            .get_pane_cwd(self.pane_id.clone())
+            .await
+            .unwrap_or_else(|| ctx.current_dir.clone());
+        ctx.current_dir.clone_from(&cwd);
+        self.ensure_session_persisted(&cwd).await;
+
+        self.send_ui(ClawEngineEvent::UserMessage {
+            content: prompt.clone(),
+            images: Vec::new(),
+        })
+        .await;
+
+        ctx.current_turn = Some(spawn_turn(
+            self.pane_id.clone(),
+            self.session_id.clone(),
+            self.name.clone(),
+            &prompt,
+            &snapshot,
+            session_ctx,
+            cwd,
+            false,
+            ctx.env.clone(),
+            self.db.clone(),
+            self.state.clone(),
+            self.tx_ui.clone(),
+            self.tx_self.clone(),
+            None,
+            vec![],
+        ));
+    }
+
     pub(super) async fn tick_scheduled_tasks(&self, ctx: &RunContext) {
         let now = chrono::Utc::now();
-        let mut completed_id: Option<uuid::Uuid> = None;
-        let mut completed_payload: Option<String> = None;
+        let mut completed_events: Vec<(uuid::Uuid, Option<String>)> = Vec::new();
 
-        let maybe_completed = {
+        let maybe_changed = {
             let mut state_lock = self.state.lock().await;
-            let mut any_due = false;
 
             for task in &mut state_lock.pending_tasks {
-                if task.due_at <= now && task.status == TaskStatus::Pending {
-                    any_due = true;
-                    if completed_id.is_none() {
-                        completed_id = Some(task.id);
+                if !task.is_paused() && task.due_at <= now && task.status == TaskStatus::Pending {
+                    if let Some(step_msg) = advance_interval_step(task, now) {
+                        completed_events.push((task.id, Some(step_msg.clone())));
+                        let text = format!("🔔 {step_msg}");
+                        let tx_ui = self.tx_ui.clone();
+                        let db = self.db.clone();
+                        let session_id = self.session_id.clone();
+                        let pane_id = self.pane_id.clone();
+                        tokio::spawn(async move {
+                            let event = ClawEngineEvent::SystemMessage { text };
+                            persist_visual_event(db, session_id, pane_id, &event);
+                            let _ = tx_ui.send(event).await;
+                        });
+                        continue;
                     }
-                    if completed_payload.is_none() && task.task_type == TaskType::Notification {
-                        completed_payload = Some(task.payload.clone());
-                    }
+
+                    let notif_msg =
+                        (task.task_type == TaskType::Notification).then(|| task.payload.clone());
+                    completed_events.push((task.id, notif_msg));
+
                     match task.task_type {
                         TaskType::Notification => {
-                            let text = task.payload.clone();
+                            let text = format!("🔔 Reminder: {}", task.payload);
                             let tx_ui = self.tx_ui.clone();
                             let db = self.db.clone();
                             let session_id = self.session_id.clone();
@@ -244,54 +378,20 @@ impl ClawSession {
                             });
                         }
                         TaskType::Command => {
-                            let payload = task.payload.clone();
+                            let prompt = format!("[SCHEDULED COMMAND TRIGGERED] {}", task.payload);
                             let tx_self = self.tx_self.clone();
-                            let pane_id = self.pane_id.clone();
-                            let fallback_cwd = ctx.current_dir.clone();
-                            let workspace = ctx.workspace.clone();
                             tokio::spawn(async move {
-                                let snapshot = workspace
-                                    .get_pane_snapshot(pane_id.clone())
-                                    .await
-                                    .unwrap_or_default();
-                                let cwd = workspace
-                                    .get_pane_cwd(pane_id)
-                                    .await
-                                    .unwrap_or(fallback_cwd);
                                 let _ = tx_self
-                                    .send(ClawMessage::UserMessage {
-                                        message: format!(
-                                            "[SCHEDULED COMMAND TRIGGERED] {payload}"
-                                        ),
-                                        snapshot,
-                                        cwd,
-                                        image_attachments: vec![],
-                                    })
+                                    .send(ClawMessage::ScheduledTaskTriggered { prompt })
                                     .await;
                             });
                         }
                         TaskType::Query => {
-                            let message = task.payload.clone();
+                            let prompt = task.payload.clone();
                             let tx_self = self.tx_self.clone();
-                            let pane_id = self.pane_id.clone();
-                            let fallback_cwd = ctx.current_dir.clone();
-                            let workspace = ctx.workspace.clone();
                             tokio::spawn(async move {
-                                let snapshot = workspace
-                                    .get_pane_snapshot(pane_id.clone())
-                                    .await
-                                    .unwrap_or_default();
-                                let cwd = workspace
-                                    .get_pane_cwd(pane_id)
-                                    .await
-                                    .unwrap_or(fallback_cwd);
                                 let _ = tx_self
-                                    .send(ClawMessage::UserMessage {
-                                        message,
-                                        snapshot,
-                                        cwd,
-                                        image_attachments: vec![],
-                                    })
+                                    .send(ClawMessage::ScheduledTaskTriggered { prompt })
                                     .await;
                             });
                         }
@@ -300,7 +400,7 @@ impl ClawSession {
                 }
             }
 
-            if any_due {
+            if !completed_events.is_empty() {
                 state_lock
                     .pending_tasks
                     .retain(|t| t.status == TaskStatus::Pending);
@@ -314,7 +414,7 @@ impl ClawSession {
             }
         };
 
-        if let Some((agent_name, character_id, tasks)) = maybe_completed {
+        if let Some((agent_name, character_id, tasks)) = maybe_changed {
             crate::engine::tools::tasks::persist_pending_tasks(&self.db, &self.session_id, &tasks)
                 .await;
 
@@ -331,15 +431,190 @@ impl ClawSession {
                 })
                 .await;
 
-            let _ = self
-                .tx_ui
-                .send(ClawEngineEvent::TaskCompleted {
-                    agent_name,
-                    task_id: completed_id.unwrap_or_else(uuid::Uuid::nil),
-                    character_id,
-                    message: completed_payload,
-                })
-                .await;
+            for (task_id, message) in completed_events {
+                let _ = self
+                    .tx_ui
+                    .send(ClawEngineEvent::TaskCompleted {
+                        agent_name: agent_name.clone(),
+                        task_id,
+                        character_id: character_id.clone(),
+                        message,
+                    })
+                    .await;
+            }
         }
+    }
+}
+
+fn toggle_task_pause_state(
+    task: &mut crate::engine::ScheduledTask,
+    now: chrono::DateTime<chrono::Utc>,
+) {
+    task.toggle_pause_at(now);
+}
+
+fn format_duration_brief(secs: u32) -> String {
+    if secs < 60 {
+        format!("{secs}s")
+    } else if secs.is_multiple_of(60) {
+        format!("{}m", secs / 60)
+    } else {
+        format!("{}m {}s", secs / 60, secs % 60)
+    }
+}
+
+/// Advances a multi-round `IntervalSchedule` when its current phase hits `due_at`,
+/// mutating `task` in-place (keeping `Pending` across intermediate phases and setting
+/// `Completed` after the final work round) and returning the bell notification text.
+fn advance_interval_step(
+    task: &mut crate::engine::ScheduledTask,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Option<String> {
+    use boxxy_claw_protocol::IntervalPhase;
+
+    let iv = task.interval.as_mut()?;
+    let title = task.payload.trim();
+    let unit = if iv.round_label.trim().is_empty() {
+        "Round"
+    } else {
+        iv.round_label.trim()
+    };
+
+    let msg = match iv.phase {
+        IntervalPhase::Work => {
+            if iv.current_round >= iv.total_rounds {
+                let plural = format!("{}s", unit.to_lowercase());
+                let done_msg = format!("{title} — All {} {plural} complete!", iv.total_rounds);
+                task.status = TaskStatus::Completed;
+                return Some(done_msg);
+            }
+
+            if iv.break_secs > 0 {
+                let completed_round = iv.current_round;
+                let rest_str = format_duration_brief(iv.break_secs);
+                iv.phase = IntervalPhase::Break;
+                iv.phase_started_at = now;
+                task.due_at = now + chrono::Duration::seconds(i64::from(iv.break_secs));
+                format!(
+                    "{title} — {unit} {completed_round}/{} complete! Rest for {rest_str}.",
+                    iv.total_rounds
+                )
+            } else {
+                let completed_round = iv.current_round;
+                iv.current_round += 1;
+                iv.phase = IntervalPhase::Work;
+                iv.phase_started_at = now;
+                task.due_at = now + chrono::Duration::seconds(i64::from(iv.work_secs));
+                let work_str = format_duration_brief(iv.work_secs);
+                format!(
+                    "{title} — {unit} {completed_round}/{} complete! Start {unit} {}/{} ({work_str}).",
+                    iv.total_rounds, iv.current_round, iv.total_rounds
+                )
+            }
+        }
+        IntervalPhase::Break => {
+            iv.current_round = (iv.current_round + 1).min(iv.total_rounds);
+            iv.phase = IntervalPhase::Work;
+            iv.phase_started_at = now;
+            task.due_at = now + chrono::Duration::seconds(i64::from(iv.work_secs));
+            let work_str = format_duration_brief(iv.work_secs);
+            format!(
+                "{title} — Break over! Start {unit} {}/{} ({work_str}).",
+                iv.current_round, iv.total_rounds
+            )
+        }
+    };
+
+    Some(msg)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use boxxy_claw_protocol::{IntervalPhase, IntervalSchedule, ScheduledTask};
+    use chrono::{Duration, Utc};
+
+    #[test]
+    fn multi_round_interval_progresses_through_work_and_breaks_without_trailing_break() {
+        let t0 = Utc::now();
+        let mut task = ScheduledTask {
+            id: uuid::Uuid::new_v4(),
+            task_type: TaskType::Notification,
+            payload: "Workout".to_string(),
+            due_at: t0 + Duration::seconds(60),
+            status: TaskStatus::Pending,
+            interval: Some(IntervalSchedule {
+                total_rounds: 2,
+                current_round: 1,
+                work_secs: 60,
+                break_secs: 20,
+                phase: IntervalPhase::Work,
+                phase_started_at: t0,
+                round_label: "Round".to_string(),
+            }),
+            paused_remaining_ms: None,
+        };
+
+        // End of Round 1 -> enters 20s Break
+        let t1 = t0 + Duration::seconds(60);
+        let m1 = advance_interval_step(&mut task, t1).unwrap();
+        assert_eq!(m1, "Workout — Round 1/2 complete! Rest for 20s.");
+        assert_eq!(task.status, TaskStatus::Pending);
+        assert_eq!(task.interval.as_ref().unwrap().phase, IntervalPhase::Break);
+        assert_eq!(task.interval.as_ref().unwrap().current_round, 1);
+        assert_eq!(task.due_at, t1 + Duration::seconds(20));
+
+        // End of Break -> enters Round 2 Work
+        let t2 = t1 + Duration::seconds(20);
+        let m2 = advance_interval_step(&mut task, t2).unwrap();
+        assert_eq!(m2, "Workout — Break over! Start Round 2/2 (1m).");
+        assert_eq!(task.status, TaskStatus::Pending);
+        assert_eq!(task.interval.as_ref().unwrap().phase, IntervalPhase::Work);
+        assert_eq!(task.interval.as_ref().unwrap().current_round, 2);
+        assert_eq!(task.due_at, t2 + Duration::seconds(60));
+
+        // End of Round 2 (final round) -> completes immediately with no extra break
+        let t3 = t2 + Duration::seconds(60);
+        let m3 = advance_interval_step(&mut task, t3).unwrap();
+        assert_eq!(m3, "Workout — All 2 rounds complete!");
+        assert_eq!(task.status, TaskStatus::Completed);
+    }
+
+    #[test]
+    fn toggle_task_pause_state_freezes_and_restores_remaining_time_and_phase_progress() {
+        let t0 = Utc::now();
+        let mut task = ScheduledTask {
+            id: uuid::Uuid::new_v4(),
+            task_type: TaskType::Notification,
+            payload: "Workout".to_string(),
+            due_at: t0 + Duration::seconds(60),
+            status: TaskStatus::Pending,
+            interval: Some(IntervalSchedule {
+                total_rounds: 6,
+                current_round: 2,
+                work_secs: 60,
+                break_secs: 20,
+                phase: IntervalPhase::Work,
+                phase_started_at: t0,
+                round_label: "Lap".to_string(),
+            }),
+            paused_remaining_ms: None,
+        };
+
+        // Pause 25 seconds into the 60s lap (35s left)
+        let t_pause = t0 + Duration::seconds(25);
+        toggle_task_pause_state(&mut task, t_pause);
+        assert!(task.is_paused());
+        assert_eq!(task.paused_remaining_ms, Some(35_000));
+
+        // Resume 5 minutes later -> still 35s left, and `phase_started_at` reflects 25s elapsed
+        let t_resume = t_pause + Duration::minutes(5);
+        toggle_task_pause_state(&mut task, t_resume);
+        assert!(!task.is_paused());
+        assert_eq!(task.due_at, t_resume + Duration::seconds(35));
+        assert_eq!(
+            task.interval.as_ref().unwrap().phase_started_at,
+            t_resume - Duration::seconds(25)
+        );
     }
 }

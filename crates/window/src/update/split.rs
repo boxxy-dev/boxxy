@@ -122,11 +122,9 @@ pub fn move_pane_to_split(
         return;
     };
 
-    inner.tabs[target_tab_idx].controller.insert_pane_split(
-        extracted,
-        &target_pane_id,
-        direction,
-    );
+    inner.tabs[target_tab_idx]
+        .controller
+        .insert_pane_split(extracted, &target_pane_id, direction);
 
     let target_widget = inner.tabs[target_tab_idx].controller.widget().clone();
     let target_page = inner.tab_view.page(&target_widget);

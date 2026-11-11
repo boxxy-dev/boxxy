@@ -117,9 +117,7 @@ pub fn handle_terminal_event(
                     inner
                         .claw
                         .set_session_usage(inner.tabs[pos].controller.get_session_usage());
-                    inner
-                        .claw
-                        .update_tasks(inner.tabs[pos].get_pending_tasks());
+                    inner.claw.update_tasks(inner.tabs[pos].get_pending_tasks());
                 }
             }
             TerminalEventKind::PaneFocused(_) => {
@@ -146,9 +144,7 @@ pub fn handle_terminal_event(
                     inner
                         .claw
                         .set_session_usage(inner.tabs[pos].controller.get_session_usage());
-                    inner
-                        .claw
-                        .update_tasks(inner.tabs[pos].get_pending_tasks());
+                    inner.claw.update_tasks(inner.tabs[pos].get_pending_tasks());
                 }
             }
             TerminalEventKind::FocusClawSidebar => {
@@ -274,12 +270,8 @@ pub fn handle_terminal_event(
                                 let new_ctrl = super::tabs::new_tab_with_intent(inner, intent);
                                 new_ctrl.active_pane_id()
                             }
-                            SpawnLocation::VerticalSplit => {
-                                source_ctrl.split_vertical(intent)
-                            }
-                            SpawnLocation::HorizontalSplit => {
-                                source_ctrl.split_horizontal(intent)
-                            }
+                            SpawnLocation::VerticalSplit => source_ctrl.split_vertical(intent),
+                            SpawnLocation::HorizontalSplit => source_ctrl.split_horizontal(intent),
                         };
 
                         if let Some(req_id) = request_id {
@@ -384,17 +376,18 @@ pub fn handle_terminal_event(
                             });
                         }
                     }
-                    ClawEngineEvent::TaskStatusChanged { tasks, .. } => {
+                    ClawEngineEvent::TaskStatusChanged { .. } => {
                         let widget = inner.tabs[pos].controller.widget();
                         let page = inner.tab_view.page(widget);
 
                         super::tabs::sync_tab_running_icons(inner);
 
-                        // Update sidebar if this is the active tab
-                        if let Some(selected) = inner.tab_view.selected_page() {
-                            if selected == page {
-                                inner.claw.update_tasks(tasks);
-                            }
+                        // Update sidebar only from the active pane of the selected tab so
+                        // background split panes never overwrite the focused pane's tasks.
+                        if let Some(selected) = inner.tab_view.selected_page()
+                            && selected == page
+                        {
+                            inner.claw.update_tasks(inner.tabs[pos].get_pending_tasks());
                         }
                     }
                     ClawEngineEvent::TaskCompleted {
@@ -408,28 +401,47 @@ pub fn handle_terminal_event(
                             crate::sound::play_timer_completion_sound();
                         }
 
-                        let raw_first =
-                            agent_name.split_whitespace().next().unwrap_or(&agent_name);
-                        let first_name = {
-                            let mut c = raw_first.chars();
-                            match c.next() {
-                                None => String::new(),
-                                Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
-                            }
-                        };
+                        let mut resolved_name = agent_name.clone();
                         let mut icon_path = "boxxyclaw-symbolic".to_string();
+                        let mut char_color: Option<String> = None;
+                        let mut avatar_file_path: Option<String> = None;
 
                         let registry = boxxy_claw_protocol::characters::CHARACTER_CACHE.load();
-                        if let Some(info) = registry.iter().find(|c| c.config.id == *character_id) {
+                        let fallback_names = [agent_name.as_str()];
+                        if let Some(info) = boxxy_claw_protocol::characters::find_character_exact(
+                            &registry,
+                            &character_id,
+                            &fallback_names,
+                        ) {
+                            if !info.config.display_name.trim().is_empty() {
+                                resolved_name.clone_from(&info.config.display_name);
+                            } else {
+                                resolved_name = info.config.name.replace('-', " ");
+                            }
+                            char_color = Some(info.config.color.clone());
                             if info.has_avatar {
                                 let mut path = boxxy_sys_utils::get_config_dir();
                                 path.push("boxxyclaw");
                                 path.push("characters");
                                 path.push(&info.config.name);
                                 path.push("AVATAR.png");
-                                icon_path = path.to_string_lossy().to_string();
+                                let path_str = path.to_string_lossy().to_string();
+                                icon_path.clone_from(&path_str);
+                                avatar_file_path = Some(path_str);
                             }
                         }
+
+                        let raw_first = resolved_name
+                            .split([' ', '-'])
+                            .find(|s| !s.is_empty())
+                            .unwrap_or("Claw");
+                        let first_name = {
+                            let mut c = raw_first.chars();
+                            match c.next() {
+                                None => "Claw".to_string(),
+                                Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+                            }
+                        };
 
                         let display_message = message
                             .clone()
@@ -439,7 +451,7 @@ pub fn handle_terminal_event(
                             crate::widgets::notification::Notification {
                                 id: uuid::Uuid::new_v4().to_string(),
                                 level: crate::widgets::notification::NotificationLevel::Info,
-                                title: format!("{} sends a reminder", first_name),
+                                title: format!("{} reminds", first_name),
                                 message: display_message,
                                 icon_name: icon_path,
                                 actions: vec![crate::widgets::notification::NotificationAction {
@@ -449,6 +461,9 @@ pub fn handle_terminal_event(
                                 }],
                                 details: Vec::new(),
                                 suppress_toast: false,
+                                character_name: Some(first_name),
+                                character_color: char_color,
+                                avatar_path: avatar_file_path,
                             },
                         ));
                     }
@@ -463,8 +478,7 @@ pub fn handle_terminal_event(
                             crate::sound::play_task_completion_sound();
                         }
 
-                        let raw_first =
-                            agent_name.split_whitespace().next().unwrap_or(&agent_name);
+                        let raw_first = agent_name.split_whitespace().next().unwrap_or(&agent_name);
                         let first_name = {
                             let mut c = raw_first.chars();
                             match c.next() {
@@ -501,6 +515,9 @@ pub fn handle_terminal_event(
                                 details: Vec::new(),
                                 // Redundant because the agent's message is already in the Claw overlay
                                 suppress_toast: true,
+                                character_name: None,
+                                character_color: None,
+                                avatar_path: None,
                             },
                         ));
                     }
@@ -519,6 +536,9 @@ pub fn handle_terminal_event(
                                 }],
                                 details: Vec::new(),
                                 suppress_toast: false,
+                                character_name: None,
+                                character_color: None,
+                                avatar_path: None,
                             },
                         ));
                     }
@@ -539,12 +559,7 @@ pub fn handle_terminal_event(
                 target_pane_id,
                 direction,
             } => {
-                super::split::move_pane_to_split(
-                    inner,
-                    source_pane_id,
-                    target_pane_id,
-                    direction,
-                );
+                super::split::move_pane_to_split(inner, source_pane_id, target_pane_id, direction);
             }
             TerminalEventKind::RestoreDetached(_, _) => {}
         }

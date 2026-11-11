@@ -36,9 +36,7 @@ pub(crate) fn export_and_open_scrollback(terminal: &TerminalWidget) {
             }
             let file = gio::File::for_path(&path);
             let launcher = gtk::FileLauncher::new(Some(&file));
-            let root_win = term
-                .root()
-                .and_then(|r| r.downcast::<gtk::Window>().ok());
+            let root_win = term.root().and_then(|r| r.downcast::<gtk::Window>().ok());
             launcher.launch(root_win.as_ref(), gio::Cancellable::NONE, |_| {});
         }
     });
@@ -349,7 +347,7 @@ pub(super) fn setup_split_drag_and_drop(
     callback: std::sync::Arc<dyn Fn(PaneOutput) + Send + Sync + 'static>,
     pane_id: String,
 ) {
-    let is_lane_visible = Rc::new( std::cell::Cell::new(false));
+    let is_lane_visible = Rc::new(std::cell::Cell::new(false));
     let is_dragging = Rc::new(std::cell::Cell::new(false));
 
     let hide_lane = {

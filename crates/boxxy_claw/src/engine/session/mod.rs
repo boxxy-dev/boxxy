@@ -31,7 +31,8 @@ pub struct SessionState {
     pub ollama_url: Arc<tokio::sync::RwLock<String>>,
     pub pending_terminal_reply: Option<tokio::sync::oneshot::Sender<Result<String, String>>>,
     pub pending_inject_command: bool,
-    pub pending_file_reply: Option<tokio::sync::oneshot::Sender<boxxy_core_toolbox::ApprovalOutcome>>,
+    pub pending_file_reply:
+        Option<tokio::sync::oneshot::Sender<boxxy_core_toolbox::ApprovalOutcome>>,
     pub pending_file_delete_reply:
         Option<tokio::sync::oneshot::Sender<boxxy_core_toolbox::ApprovalOutcome>>,
     pub pending_kill_process_reply:
@@ -232,8 +233,7 @@ impl ClawSession {
         character_display_name: String,
         session_id: String,
     ) -> Self {
-        let is_incognito =
-            boxxy_claw_protocol::characters::is_incognito_character(&character_id);
+        let is_incognito = boxxy_claw_protocol::characters::is_incognito_character(&character_id);
         self.name = character_display_name.clone();
         self.character_id = character_id.clone();
         self.incognito = is_incognito;
@@ -314,6 +314,9 @@ impl ClawSession {
                 | ClawMessage::TaskCompletedEvent { .. }
                 | ClawMessage::CommandFinished { .. }
                 | ClawMessage::RebindPane { .. }
+                | ClawMessage::CancelTask { .. }
+                | ClawMessage::TogglePauseTask { .. }
+                | ClawMessage::CancelAllTasks
         )
     }
 
@@ -352,5 +355,45 @@ impl ClawSession {
                 Err(_) => return None,
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn cancel_task_messages_bypass_active_turn_backlog() {
+        let (tx, rx) = async_channel::unbounded();
+        let mut urgent_backlog = VecDeque::new();
+        let mut backlog = VecDeque::new();
+
+        // Queue a scheduled trigger and soft-clear while a turn is active — both must wait in
+        // `backlog` without aborting the active turn, whereas `CancelTask` bypasses immediately.
+        tx.send(ClawMessage::ScheduledTaskTriggered {
+            prompt: "[SCHEDULED COMMAND TRIGGERED] echo hi".to_string(),
+        })
+        .await
+        .unwrap();
+        let id = uuid::Uuid::new_v4();
+        tx.send(ClawMessage::CancelTask { task_id: id })
+            .await
+            .unwrap();
+
+        let next = ClawSession::get_next_msg(&rx, &mut urgent_backlog, &mut backlog, true)
+            .await
+            .expect("CancelTask should be yielded immediately during an active turn");
+        assert!(matches!(next, ClawMessage::CancelTask { task_id } if task_id == id));
+        assert_eq!(backlog.len(), 1);
+        assert!(matches!(
+            backlog.front(),
+            Some(ClawMessage::ScheduledTaskTriggered { .. })
+        ));
+
+        tx.send(ClawMessage::CancelAllTasks).await.unwrap();
+        let clear_all = ClawSession::get_next_msg(&rx, &mut urgent_backlog, &mut backlog, true)
+            .await
+            .expect("CancelAllTasks should also bypass the active turn backlog");
+        assert!(matches!(clear_all, ClawMessage::CancelAllTasks));
     }
 }

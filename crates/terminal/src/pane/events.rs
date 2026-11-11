@@ -212,11 +212,7 @@ pub(super) fn wire_terminal_events(
             let tx = tx_osc_clone.clone();
             let pane_id = id_for_osc.clone();
             let pane = inner_rc.borrow().terminal.clone();
-            let cwd = inner_rc
-                .borrow()
-                .working_dir
-                .clone()
-                .unwrap_or_default();
+            let cwd = inner_rc.borrow().working_dir.clone().unwrap_or_default();
             gtk::glib::spawn_future_local(async move {
                 if let Some(snapshot) = pane.get_text_snapshot(100, 0).await {
                     if is_active {

@@ -179,12 +179,7 @@ impl TerminalComponent {
     }
 
     pub fn get_pane_ids(&self) -> Vec<String> {
-        self.inner
-            .borrow()
-            .panes
-            .keys()
-            .cloned()
-            .collect()
+        self.inner.borrow().panes.keys().cloned().collect()
     }
 
     pub fn has_pane(&self, pane_id: &str) -> bool {
@@ -411,9 +406,7 @@ impl TerminalComponent {
             }
             PaneOutput::AltScreenChanged(id, is_alt) => {
                 let mut inner = self.inner.borrow_mut();
-                if !is_alt
-                    && let Some(pane) = inner.panes.get_mut(&id)
-                {
+                if !is_alt && let Some(pane) = inner.panes.get_mut(&id) {
                     pane.title = pane.controller.last_title();
                 }
                 if inner.active_pane_id == id {
@@ -687,6 +680,26 @@ impl TerminalComponent {
         }
     }
 
+    pub fn toggle_pause_task_by_id(&self, pane_id: &str, task_id: uuid::Uuid) -> bool {
+        let inner = self.inner.borrow();
+        if let Some(pane_data) = inner.panes.get(pane_id) {
+            pane_data.controller.toggle_pause_task(task_id);
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn cancel_all_tasks_by_id(&self, pane_id: &str) -> bool {
+        let inner = self.inner.borrow();
+        if let Some(pane_data) = inner.panes.get(pane_id) {
+            pane_data.controller.cancel_all_tasks();
+            true
+        } else {
+            false
+        }
+    }
+
     pub fn active_pane_id(&self) -> String {
         self.inner.borrow().active_pane_id.clone()
     }
@@ -871,12 +884,11 @@ impl TerminalComponent {
                 continue;
             }
             let claim_opt = claims.iter().find(|c| &c.holder_id == pane_id);
-            if claim_opt
-                .is_some_and(|c| boxxy_claw_protocol::characters::is_incognito_character(&c.character_id))
-                || boxxy_claw_protocol::characters::is_incognito_character(
-                    &data.controller.agent_name(),
-                )
-            {
+            if claim_opt.is_some_and(|c| {
+                boxxy_claw_protocol::characters::is_incognito_character(&c.character_id)
+            }) || boxxy_claw_protocol::characters::is_incognito_character(
+                &data.controller.agent_name(),
+            ) {
                 continue;
             }
             if data.controller.is_claw_active() || claim_opt.is_some() {
@@ -893,7 +905,9 @@ impl TerminalComponent {
                         let mut chars = word.chars();
                         match chars.next() {
                             None => String::new(),
-                            Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+                            Some(first) => {
+                                first.to_uppercase().collect::<String>() + chars.as_str()
+                            }
                         }
                     })
                     .collect::<Vec<_>>()

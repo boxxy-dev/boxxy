@@ -434,6 +434,7 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
         }
         AppInput::ShowToast(req) => {
             let toast = adw::Toast::new(&req.message);
+            toast.set_use_markup(false);
             toast.set_timeout(req.timeout_secs);
             inner.toast_overlay.add_toast(toast);
         }
@@ -489,6 +490,7 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
             inner.notifications.push(ready.clone());
 
             let toast = adw::Toast::new(&ready.message);
+            toast.set_use_markup(false);
 
             if is_update {
                 toast.set_timeout(0); // Permanent until dismissed
@@ -619,7 +621,12 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
                     }
                 });
             } else {
-                toast.set_timeout(5);
+                if let Some(rich_widget) = build_character_reminder_toast_widget(&ready) {
+                    toast.set_custom_title(Some(&rich_widget));
+                    toast.set_timeout(6);
+                } else {
+                    toast.set_timeout(5);
+                }
             }
 
             // Only show the in-app toast if it's not suppressed.
@@ -1117,10 +1124,8 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
 
             if let Some(sponsor_btn) = builder.object::<gtk4::Button>("sponsor_tile_btn") {
                 sponsor_btn.connect_clicked(move |_| {
-                    let sponsor_url = format!(
-                        "https://github.com/sponsors/{}",
-                        crate::updater::REPO_OWNER,
-                    );
+                    let sponsor_url =
+                        format!("https://github.com/sponsors/{}", crate::updater::REPO_OWNER,);
                     let _ = gtk4::gio::AppInfo::launch_default_for_uri(
                         &sponsor_url,
                         None::<&gtk4::gio::AppLaunchContext>,
@@ -1251,30 +1256,78 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
             }
         }
         AppInput::CancelTask(task_id, pane_id) => {
-            let id = if let Some(id) = pane_id {
-                Some(id)
-            } else {
-                // Get active pane ID from selected tab
-                if let Some(page) = inner.tab_view.selected_page() {
-                    let child = page.child();
-                    if let Some(pos) = inner
-                        .tabs
-                        .iter()
-                        .position(|c| c.controller.widget() == &child)
-                    {
-                        Some(inner.tabs[pos].controller.active_pane_id())
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                }
-            };
+            let id = pane_id.or_else(|| {
+                let page = inner.tab_view.selected_page()?;
+                let child = page.child();
+                inner
+                    .tabs
+                    .iter()
+                    .find(|c| c.controller.widget() == &child)
+                    .map(|t| t.controller.active_pane_id())
+            });
 
             if let Some(id) = id {
                 for tab in &inner.tabs {
                     if tab.controller.cancel_task_by_id(&id, task_id) {
                         break;
+                    }
+                }
+                tabs::sync_tab_running_icons(&inner);
+                if let Some(page) = inner.tab_view.selected_page() {
+                    let child = page.child();
+                    if let Some(tc) = inner.tabs.iter().find(|c| c.controller.widget() == &child) {
+                        inner.claw.update_tasks(tc.get_pending_tasks());
+                    }
+                }
+            }
+        }
+        AppInput::TogglePauseTask(task_id, pane_id) => {
+            let id = pane_id.or_else(|| {
+                let page = inner.tab_view.selected_page()?;
+                let child = page.child();
+                inner
+                    .tabs
+                    .iter()
+                    .find(|c| c.controller.widget() == &child)
+                    .map(|t| t.controller.active_pane_id())
+            });
+
+            if let Some(id) = id {
+                for tab in &inner.tabs {
+                    if tab.controller.toggle_pause_task_by_id(&id, task_id) {
+                        break;
+                    }
+                }
+                if let Some(page) = inner.tab_view.selected_page() {
+                    let child = page.child();
+                    if let Some(tc) = inner.tabs.iter().find(|c| c.controller.widget() == &child) {
+                        inner.claw.update_tasks(tc.get_pending_tasks());
+                    }
+                }
+            }
+        }
+        AppInput::CancelAllTasks(pane_id) => {
+            let id = pane_id.or_else(|| {
+                let page = inner.tab_view.selected_page()?;
+                let child = page.child();
+                inner
+                    .tabs
+                    .iter()
+                    .find(|c| c.controller.widget() == &child)
+                    .map(|t| t.controller.active_pane_id())
+            });
+
+            if let Some(id) = id {
+                for tab in &inner.tabs {
+                    if tab.controller.cancel_all_tasks_by_id(&id) {
+                        break;
+                    }
+                }
+                tabs::sync_tab_running_icons(&inner);
+                if let Some(page) = inner.tab_view.selected_page() {
+                    let child = page.child();
+                    if let Some(tc) = inner.tabs.iter().find(|c| c.controller.widget() == &child) {
+                        inner.claw.update_tasks(tc.get_pending_tasks());
                     }
                 }
             }
@@ -1835,4 +1888,89 @@ fn populate_whats_new_summary(
     } else if let Some(stats_card) = builder.object::<gtk4::Box>("stats_card") {
         stats_card.set_visible(false);
     }
+}
+
+fn build_character_reminder_toast_widget(
+    notif: &crate::widgets::notification::Notification,
+) -> Option<gtk4::Widget> {
+    let char_name = notif
+        .character_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())?;
+
+    let root = gtk4::Box::new(gtk4::Orientation::Horizontal, 10);
+    root.set_valign(gtk4::Align::Center);
+    root.set_margin_top(2);
+    root.set_margin_bottom(2);
+    root.set_margin_start(2);
+
+    let avatar = adw::Avatar::new(28, Some(char_name), true);
+    avatar.set_valign(gtk4::Align::Center);
+    avatar.set_hexpand(false);
+    avatar.set_vexpand(false);
+    if let Some(ref path) = notif.avatar_path
+        && let Ok(texture) = gtk4::gdk::Texture::from_filename(path)
+    {
+        avatar.set_custom_image(Some(&texture));
+    }
+    root.append(&avatar);
+
+    let text_vbox = gtk4::Box::new(gtk4::Orientation::Vertical, 1);
+    text_vbox.set_valign(gtk4::Align::Center);
+    text_vbox.set_hexpand(true);
+    text_vbox.set_vexpand(false);
+
+    let header_hbox = gtk4::Box::new(gtk4::Orientation::Horizontal, 4);
+    header_hbox.set_halign(gtk4::Align::Start);
+    header_hbox.set_valign(gtk4::Align::Center);
+
+    let name_lbl = gtk4::Label::builder()
+        .css_classes(["caption", "heading"])
+        .halign(gtk4::Align::Start)
+        .valign(gtk4::Align::Center)
+        .xalign(0.0)
+        .build();
+    let escaped_name = gtk4::glib::markup_escape_text(char_name);
+    let is_valid_hex = notif.character_color.as_deref().is_some_and(|c| {
+        c.strip_prefix('#').is_some_and(|h| {
+            matches!(h.len(), 3 | 4 | 6 | 8) && h.chars().all(|ch| ch.is_ascii_hexdigit())
+        })
+    });
+    if let Some(ref color) = notif.character_color
+        && is_valid_hex
+    {
+        name_lbl.set_markup(&format!(
+            "<span foreground=\"{color}\"><b>{escaped_name}</b></span>"
+        ));
+    } else {
+        name_lbl.set_markup(&format!("<b>{escaped_name}</b>"));
+    }
+    header_hbox.append(&name_lbl);
+
+    let verb_lbl = gtk4::Label::builder()
+        .label("reminds")
+        .css_classes(["caption", "dim-label"])
+        .halign(gtk4::Align::Start)
+        .valign(gtk4::Align::Center)
+        .xalign(0.0)
+        .build();
+    header_hbox.append(&verb_lbl);
+    text_vbox.append(&header_hbox);
+
+    let msg_lbl = gtk4::Label::builder()
+        .label(&notif.message)
+        .css_classes(["claw-toast-message"])
+        .halign(gtk4::Align::Start)
+        .xalign(0.0)
+        .wrap(true)
+        .wrap_mode(gtk4::pango::WrapMode::WordChar)
+        .max_width_chars(46)
+        .lines(2)
+        .ellipsize(gtk4::pango::EllipsizeMode::End)
+        .build();
+    text_vbox.append(&msg_lbl);
+
+    root.append(&text_vbox);
+    Some(root.upcast())
 }

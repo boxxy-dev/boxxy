@@ -1547,7 +1547,197 @@ row.past-session-row button.past-session-options-btn:active {
     border-top: 1px dashed alpha(currentColor, 0.18);
 }
 
+/* --- Claw Sidebar: Pending Tasks Section (Layer 1 Fallback) --- */
+.claw-tasks-scroll,
+.claw-tasks-scroll > viewport {
+    background: transparent;
+    background-color: transparent;
+    border: none;
+    box-shadow: none;
+}
 
+.claw-tasks-count-pill {
+    background-color: alpha(@accent_bg_color, 0.22);
+    color: @accent_color;
+    border-radius: 9999px;
+    padding: 1px 7px;
+    font-size: 0.74em;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+}
 
+.claw-tasks-empty-card {
+    background-color: @card_bg_color;
+    color: @card_fg_color;
+    border: 1px solid alpha(currentColor, 0.12);
+    border-radius: 10px;
+    padding: 8px 10px;
+    min-height: 0;
+}
 
+.claw-task-icon {
+    background: transparent;
+    background-color: transparent;
+    border: none;
+}
+
+.claw-task-card {
+    background-color: @card_bg_color;
+    color: @card_fg_color;
+    border: 1px solid alpha(currentColor, 0.12);
+    border-radius: 10px;
+    padding: 6px 8px 6px 10px;
+    min-height: 0;
+    transition: background-color 140ms ease;
+}
+
+.claw-toast-message {
+    font-size: 0.94em;
+    font-weight: 600;
+    line-height: 1.25;
+}
+
+/* --- Multi-Round Interval Session Card (Layer 1 Fallback — Adwaita) --- */
+.claw-round-card {
+    padding: 9px 10px 11px 10px;
+}
+
+.claw-round-phase-pill {
+    border-radius: 9999px;
+    padding: 2px 10px;
+    font-size: 0.72em;
+    font-weight: 800;
+    letter-spacing: 0.45px;
+    font-variant-numeric: tabular-nums;
+}
+
+.claw-round-phase-pill.claw-round-phase-work {
+    background-color: alpha(@accent_bg_color, 0.22);
+    color: @accent_color;
+}
+
+.claw-round-phase-pill.claw-round-phase-break {
+    background-color: alpha(@warning_bg_color, 0.25);
+    color: @warning_color;
+}
+
+.claw-round-phase-pill.claw-round-phase-paused {
+    background-color: alpha(currentColor, 0.12);
+    color: inherit;
+    opacity: 0.85;
+}
+
+.claw-round-pip {
+    min-width: 9px;
+    min-height: 9px;
+    border-radius: 9999px;
+    background-color: alpha(currentColor, 0.16);
+}
+
+.claw-round-pip.claw-round-pip-done {
+    background-color: @accent_bg_color;
+}
+
+.claw-round-pip.claw-round-pip-active {
+    min-width: 24px;
+    background-color: @accent_color;
+}
+
+.claw-round-pip.claw-round-pip-resting {
+    min-width: 20px;
+    background-color: @warning_bg_color;
+}
+
+.claw-round-pip.claw-round-pip-paused {
+    min-width: 22px;
+    background-color: alpha(currentColor, 0.38);
+}
+
+.claw-round-timer {
+    font-size: 0.88em;
+    font-weight: 800;
+}
+
+progressbar.claw-round-progress trough {
+    background-color: alpha(currentColor, 0.12);
+    border-radius: 9999px;
+    min-height: 8px;
+}
+
+progressbar.claw-round-progress progress {
+    background-color: @accent_bg_color;
+    border-radius: 9999px;
+    min-height: 8px;
+}
+
+progressbar.claw-round-progress.claw-round-progress-break progress {
+    background-color: @warning_bg_color;
+}
+
+progressbar.claw-round-progress.claw-round-progress-paused progress {
+    background-color: alpha(currentColor, 0.35);
+}
+
+.claw-task-card:hover {
+    background-color: mix(@card_bg_color, @accent_bg_color, 0.06);
+}
+
+.claw-task-payload {
+    font-size: 0.92em;
+    font-weight: 600;
+    line-height: 1.25;
+}
+
+.claw-task-kind-badge {
+    background-color: alpha(currentColor, 0.10);
+    border-radius: 5px;
+    padding: 1px 6px;
+    font-size: 0.72em;
+    font-weight: 700;
+}
+
+.claw-task-countdown {
+    color: @accent_color;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+}
+
+.claw-task-countdown.claw-task-countdown-urgent {
+    color: @warning_color;
+}
+
+button.claw-task-dismiss-btn {
+    min-width: 28px;
+    min-height: 28px;
+    padding: 0;
+    background: transparent;
+    background-color: transparent;
+    background-image: none;
+    border: none;
+    outline: none;
+    box-shadow: none;
+    border-radius: 9999px;
+    opacity: 0.78;
+    transition: opacity 140ms ease, background-color 140ms ease, color 140ms ease;
+}
+
+button.claw-task-dismiss-btn image {
+    -gtk-icon-size: 15px;
+}
+
+.claw-task-card:hover button.claw-task-dismiss-btn {
+    opacity: 1.0;
+}
+
+button.claw-task-dismiss-btn:hover,
+button.claw-task-dismiss-btn:active {
+    opacity: 1.0;
+    background: alpha(black, 0.28);
+    background-color: alpha(black, 0.28);
+    background-image: none;
+    color: @window_fg_color;
+    border: none;
+    outline: none;
+    box-shadow: none;
+}
 

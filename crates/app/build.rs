@@ -79,6 +79,7 @@ fn main() {
     <file compressed="true" alias="icons/boxxy-edit-copy-symbolic.svg">icons/boxxy-edit-copy-symbolic.svg</file>
     <file compressed="true" alias="icons/boxxy-folder-open-symbolic.svg">icons/boxxy-folder-open-symbolic.svg</file>
     <file compressed="true" alias="icons/boxxy-media-playback-start-symbolic.svg">icons/boxxy-media-playback-start-symbolic.svg</file>
+    <file compressed="true" alias="icons/boxxy-media-playback-pause-symbolic.svg">icons/boxxy-media-playback-pause-symbolic.svg</file>
     <file compressed="true" alias="icons/boxxy-media-playback-stop-symbolic.svg">icons/boxxy-media-playback-stop-symbolic.svg</file>
     <file compressed="true" alias="icons/boxxy-object-select-symbolic.svg">icons/boxxy-object-select-symbolic.svg</file>
     <file compressed="true" alias="icons/boxxy-object-select-2-symbolic.svg">icons/boxxy-object-select-2-symbolic.svg</file>
@@ -218,6 +219,9 @@ fn main() {
     println!("cargo:rerun-if-changed=../../resources/icons/boxxy-folder-open-symbolic.svg");
     println!(
         "cargo:rerun-if-changed=../../resources/icons/boxxy-media-playback-start-symbolic.svg"
+    );
+    println!(
+        "cargo:rerun-if-changed=../../resources/icons/boxxy-media-playback-pause-symbolic.svg"
     );
     println!("cargo:rerun-if-changed=../../resources/icons/boxxy-media-playback-stop-symbolic.svg");
     println!("cargo:rerun-if-changed=../../resources/icons/boxxy-object-select-symbolic.svg");

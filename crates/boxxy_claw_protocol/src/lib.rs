@@ -56,6 +56,35 @@ pub enum TaskStatus {
     Cancelled,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum IntervalPhase {
+    Work,
+    Break,
+}
+
+fn default_round_label() -> String {
+    "Round".to_string()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct IntervalSchedule {
+    /// Total number of rounds / laps (`>= 2`).
+    pub total_rounds: u32,
+    /// 1-based index of the active or just-completed round (`1..=total_rounds`).
+    pub current_round: u32,
+    /// Duration of each active round / lap in seconds.
+    pub work_secs: u32,
+    /// Rest / break duration between rounds in seconds (`0` for back-to-back laps).
+    pub break_secs: u32,
+    /// Current phase (`Work` vs `Break`).
+    pub phase: IntervalPhase,
+    /// UTC timestamp when the current phase started (drives UI progress bar).
+    pub phase_started_at: DateTime<Utc>,
+    /// Display unit for each round (e.g. `"Round"`, `"Lap"`, `"Pomodoro"`).
+    #[serde(default = "default_round_label")]
+    pub round_label: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScheduledTask {
     pub id: Uuid,
@@ -63,6 +92,46 @@ pub struct ScheduledTask {
     pub payload: String,
     pub due_at: DateTime<Utc>,
     pub status: TaskStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub interval: Option<IntervalSchedule>,
+    /// Remaining milliseconds frozen when the user pauses a task/round (`None` = running).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paused_remaining_ms: Option<i64>,
+}
+
+impl ScheduledTask {
+    #[must_use]
+    pub const fn is_paused(&self) -> bool {
+        self.paused_remaining_ms.is_some()
+    }
+
+    pub fn toggle_pause_at(&mut self, now: DateTime<Utc>) {
+        if let Some(rem_ms) = self.paused_remaining_ms.take() {
+            let clamped_ms = rem_ms.max(0);
+            self.due_at = now + chrono::Duration::milliseconds(clamped_ms);
+            if let Some(ref mut iv) = self.interval {
+                let phase_secs = match iv.phase {
+                    IntervalPhase::Work => iv.work_secs,
+                    IntervalPhase::Break => iv.break_secs,
+                }
+                .max(1);
+                let total_ms = i64::from(phase_secs) * 1000;
+                let elapsed_ms = (total_ms - clamped_ms).clamp(0, total_ms);
+                iv.phase_started_at = now - chrono::Duration::milliseconds(elapsed_ms);
+            }
+        } else {
+            let rem_ms = self
+                .due_at
+                .signed_duration_since(now)
+                .num_milliseconds()
+                .max(0);
+            self.paused_remaining_ms = Some(rem_ms);
+        }
+    }
+
+    pub fn toggle_pause_now(&mut self) {
+        self.toggle_pause_at(Utc::now());
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -408,6 +477,13 @@ pub enum ClawMessage {
     ToggleVibe(bool),
     CancelTask {
         task_id: Uuid,
+    },
+    TogglePauseTask {
+        task_id: Uuid,
+    },
+    CancelAllTasks,
+    ScheduledTaskTriggered {
+        prompt: String,
     },
     SubscriptionEvent {
         event: ClawEvent,

@@ -29,6 +29,12 @@ pub struct Notification {
     /// If true, the notification will not be displayed as an in-app `adw::Toast`.
     /// Useful for background tasks where the result is already visible in the Claw overlay.
     pub suppress_toast: bool,
+    #[serde(default)]
+    pub character_name: Option<String>,
+    #[serde(default)]
+    pub character_color: Option<String>,
+    #[serde(default)]
+    pub avatar_path: Option<String>,
 }
 
 impl Notification {
@@ -73,6 +79,9 @@ impl Notification {
             ],
             details,
             suppress_toast: false,
+            character_name: None,
+            character_color: None,
+            avatar_path: None,
         }
     }
 
@@ -97,6 +106,9 @@ impl Notification {
             ],
             details: vec![("Version".to_string(), version.to_string())],
             suppress_toast: false,
+            character_name: None,
+            character_color: None,
+            avatar_path: None,
         }
     }
 
@@ -114,6 +126,9 @@ impl Notification {
             }],
             details: Vec::new(),
             suppress_toast: false,
+            character_name: None,
+            character_color: None,
+            avatar_path: None,
         }
     }
 }

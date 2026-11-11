@@ -36,9 +36,8 @@ impl ClawSession {
         }
 
         session.name = name;
-        session.session_context = format!(
-            "You are a specialized transient background worker. {profile}\n"
-        );
+        session.session_context =
+            format!("You are a specialized transient background worker. {profile}\n");
 
         (session, tx)
     }
@@ -104,7 +103,11 @@ impl ClawSession {
         });
     }
 
-    pub(super) async fn ensure_initialized(&mut self, msg: &ClawMessage, is_initialized: &mut bool) {
+    pub(super) async fn ensure_initialized(
+        &mut self,
+        msg: &ClawMessage,
+        is_initialized: &mut bool,
+    ) {
         if *is_initialized {
             return;
         }
@@ -112,6 +115,7 @@ impl ClawSession {
         let needs_initialization = match msg {
             ClawMessage::ClawQuery { .. }
             | ClawMessage::UserMessage { .. }
+            | ClawMessage::ScheduledTaskTriggered { .. }
             | ClawMessage::DelegatedTask { .. }
             | ClawMessage::RequestLazyDiagnosis
             | ClawMessage::SleepToggle { .. }
@@ -427,7 +431,10 @@ impl ClawSession {
         };
 
         let model_label = |m: &Option<_>| -> String {
-            m.as_ref().map_or_else(|| "Default".to_string(), |p: &boxxy_model_selection::ModelProvider| p.format_label())
+            m.as_ref().map_or_else(
+                || "Default".to_string(),
+                |p: &boxxy_model_selection::ModelProvider| p.format_label(),
+            )
         };
 
         let (old_claw, old_memory, old_search) = {

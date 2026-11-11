@@ -55,10 +55,7 @@ impl ClawHost for PaneClawHost {
         // bookmark-runs cache dir, make it executable, then inject the
         // path with a leading space so it doesn't pollute shell history.
         let config_dir = boxxy_sys_utils::get_config_dir();
-        let runs_dir = config_dir
-            .join("cache")
-            .join("bookmarks")
-            .join("runs");
+        let runs_dir = config_dir.join("cache").join("bookmarks").join("runs");
         if !runs_dir.exists() {
             let _ = std::fs::create_dir_all(&runs_dir);
         }

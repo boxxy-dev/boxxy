@@ -158,7 +158,7 @@ pub fn sync_tab_running_icons(inner: &AppWindowInner) {
             if let Some(source) = tc.working_anim_source.borrow_mut().take() {
                 source.remove();
             }
-        let existing = tc.category_svg.borrow().clone();
+            let existing = tc.category_svg.borrow().clone();
             if let Some((_, svg)) = existing {
                 let empty_idx = empty_state_index(&svg);
                 *tc.category_svg.borrow_mut() = Some((ApplicationCategory::Idle, svg.clone()));
@@ -466,7 +466,10 @@ pub fn new_tab_in_dir(inner: &mut AppWindowInner, working_dir: Option<String>) {
     let _ = new_tab_internal(inner, None, working_dir, None);
 }
 
-pub fn new_tab_with_intent(inner: &mut AppWindowInner, intent: Option<String>) -> TerminalComponent {
+pub fn new_tab_with_intent(
+    inner: &mut AppWindowInner,
+    intent: Option<String>,
+) -> TerminalComponent {
     new_tab_internal(inner, intent, None, None)
 }
 
@@ -691,8 +694,11 @@ pub fn close_tab_request(
     };
 
     let pids = inner.tabs[pos].controller.get_pids();
-    let pane_ids: std::collections::HashSet<String> =
-        inner.tabs[pos].controller.get_pane_ids().into_iter().collect();
+    let pane_ids: std::collections::HashSet<String> = inner.tabs[pos]
+        .controller
+        .get_pane_ids()
+        .into_iter()
+        .collect();
     let active_claw_panes = inner.tabs[pos].controller.get_active_claw_panes();
     let inner_clone = inner_ref.clone();
     gtk4::glib::spawn_future_local(async move {
@@ -791,7 +797,9 @@ pub fn close_tab_request(
                 sync_tab_titles(&mut inner);
             }
             inner_clone.borrow().tab_view.close_page_finish(&page, true);
-            let _ = tx.send(crate::state::AppInput::RefreshDetachedSessions).await;
+            let _ = tx
+                .send(crate::state::AppInput::RefreshDetachedSessions)
+                .await;
             return;
         }
 
@@ -940,7 +948,9 @@ pub fn close_tab_request(
                 sync_tab_titles(&mut inner);
             }
             inner_clone.borrow().tab_view.close_page_finish(&page, true);
-            let _ = tx.send(crate::state::AppInput::RefreshDetachedSessions).await;
+            let _ = tx
+                .send(crate::state::AppInput::RefreshDetachedSessions)
+                .await;
         } else if response == "close" {
             let controller_opt = {
                 let inner = inner_clone.borrow();

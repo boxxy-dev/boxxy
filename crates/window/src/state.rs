@@ -169,6 +169,8 @@ pub enum AppInput {
     StartWhatsNewClaw(String),
     GrabFocus,
     CancelTask(uuid::Uuid, Option<String>), // (task_id, pane_id)
+    TogglePauseTask(uuid::Uuid, Option<String>), // (task_id, pane_id)
+    CancelAllTasks(Option<String>),         // (pane_id)
     ClearClawHistory(Option<String>),       // (pane_id)
     ResumeClawSession(String, Option<String>), // (session_id, override_character_id)
     ShowDetachedSessions,
@@ -246,8 +248,8 @@ impl AppWindowInner {
 
     pub fn is_dialog_or_popover_open(win: &adw::ApplicationWindow) -> bool {
         use gtk::prelude::{GtkWindowExt, WidgetExt};
-        use libadwaita::prelude::AdwApplicationWindowExt;
         use libadwaita::glib::types::StaticType;
+        use libadwaita::prelude::AdwApplicationWindowExt;
 
         win.visible_dialog().is_some()
             || win

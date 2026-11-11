@@ -110,9 +110,7 @@ pub fn save_character_color(char_dir: &Path, new_color: &str) -> Result<()> {
         if !replaced && trimmed.starts_with("color") && trimmed[5..].trim_start().starts_with('=') {
             replaced = true;
             lines.push(format!("color = \"{new_color}\""));
-            if needs_default_color_line
-                && let Some(ref orig) = original_color
-            {
+            if needs_default_color_line && let Some(ref orig) = original_color {
                 lines.push(format!("default_color = \"{orig}\""));
             }
         } else {
