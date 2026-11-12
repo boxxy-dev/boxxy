@@ -530,7 +530,10 @@ pub fn setup_appearance_page(
             background_image_row_clone.upcast_ref(),
             "background image wallpaper picture",
         );
-        let t1 = match_row(theme_row_clone.upcast_ref(), "terminal theme");
+        let t1 = match_row(
+            theme_row_clone.upcast_ref(),
+            "terminal colors terminal theme",
+        );
         let t_op = match_row(
             opacity_row_clone.upcast_ref(),
             "opacity transparent background tint",

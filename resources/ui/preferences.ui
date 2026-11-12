@@ -286,7 +286,7 @@
                                 </child>
                                 <child>
                                   <object class="AdwActionRow" id="theme_row">
-                                    <property name="title" translatable="yes">Terminal Theme</property>
+                                    <property name="title" translatable="yes">Terminal Colors</property>
                                     <property name="activatable">True</property>
                                     <child type="suffix">
                                       <object class="GtkImage">

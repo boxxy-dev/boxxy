@@ -93,6 +93,12 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
             let win: gtk4::Window = inner.window.clone().upcast();
             inner.ensure_preferences().show(&win);
         }
+        AppInput::OpenThemesPreferences => {
+            let win: gtk4::Window = inner.window.clone().upcast();
+            let prefs = inner.ensure_preferences();
+            prefs.show_page("themes");
+            prefs.show(&win);
+        }
         AppInput::OpenApisPreferences => {
             let win: gtk4::Window = inner.window.clone().upcast();
             let prefs = inner.ensure_preferences();

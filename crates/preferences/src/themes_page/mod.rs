@@ -268,7 +268,7 @@ pub fn setup_themes_page(
     let legacy_group = adw::PreferencesGroup::new();
     legacy_group.set_title("Legacy Adwaita Themes");
     legacy_group.set_description(Some(
-        "Note: Support for Legacy Adwaita themes may be dropped in a future release.",
+        "You can still use standard Adwaita themes, though our main focus is on Boxxy themes.",
     ));
 
     let legacy_specs = [

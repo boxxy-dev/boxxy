@@ -129,7 +129,7 @@ impl CommandPaletteComponent {
                 shortcut: None,
             },
             CommandItem {
-                title: "Claw".to_string(),
+                title: "Claw Sidebar".to_string(),
                 action: "win.claw".to_string(),
                 parameter: None,
                 shortcut: None,
@@ -147,10 +147,16 @@ impl CommandPaletteComponent {
                 shortcut: None,
             },
             CommandItem {
-                title: "Themes".to_string(),
-                action: "win.themes".to_string(),
+                title: "Terminal Colors".to_string(),
+                action: "win.terminal-colors".to_string(),
                 parameter: None,
                 shortcut: Some("<Primary><Shift>K".to_string()),
+            },
+            CommandItem {
+                title: "App Themes".to_string(),
+                action: "win.app-themes".to_string(),
+                parameter: None,
+                shortcut: None,
             },
             CommandItem {
                 title: "Preferences".to_string(),
