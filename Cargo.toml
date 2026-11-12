@@ -87,7 +87,7 @@ zbus = { version = "6.2.1", features = ["tokio", "p2p"] }
 libc = "0.2"
 ashpd = { version = "0.14.0", features = ["open_uri"] }
 gstreamer = "0.25.4"
-image = { version = "0.25", features = ["jpeg", "png", "webp"] }
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "gif", "bmp"] }
 gsk4 = "0.11"
 regex = "1.13.1"
 parking_lot = "0.13.0"
@@ -136,3 +136,22 @@ opentelemetry-stdout = { version = "0.33.1", features = ["metrics"] }
 serial_test = "4.0.1"
 frizbee = "0.13.0"
 ignore = "0.4.34"
+
+# Optimize pure-Rust image codecs in dev/test builds so 4K/8K JPEG/PNG/WebP decoding
+# runs at near-release SIMD speed during `--dev` sessions without affecting incremental builds.
+[profile.dev.package.image]
+opt-level = 2
+[profile.dev.package.zune-jpeg]
+opt-level = 2
+[profile.dev.package.zune-core]
+opt-level = 2
+[profile.dev.package.zune-inflate]
+opt-level = 2
+[profile.dev.package.png]
+opt-level = 2
+[profile.dev.package.image-webp]
+opt-level = 2
+[profile.dev.package.fdeflate]
+opt-level = 2
+[profile.dev.package.miniz_oxide]
+opt-level = 2

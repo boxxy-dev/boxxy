@@ -11,7 +11,7 @@ pub const DEFAULT_USER_COLOR: &str = "#0461be";
 pub struct EffectiveUserProfile {
     pub display_name: String,
     pub color: String,
-    pub avatar_path: Option<PathBuf>,
+    pub avatar_path: PathBuf,
 }
 
 pub fn current() -> EffectiveUserProfile {
@@ -50,9 +50,8 @@ pub fn configure_avatar(avatar: &adw::Avatar, profile: &EffectiveUserProfile) {
     avatar.set_text(Some(&profile.display_name));
     avatar.set_custom_image(None::<&gdk::Texture>);
 
-    if let Some(path) = &profile.avatar_path
-        && path.exists()
-        && let Ok(texture) = gdk::Texture::from_filename(path)
+    if profile.avatar_path.exists()
+        && let Ok(texture) = gdk::Texture::from_filename(&profile.avatar_path)
     {
         avatar.set_custom_image(Some(&texture));
     }

@@ -3,7 +3,10 @@ name = "boxxy-assets"
 version = "0.1.0"
 edition = "2024"
 
+[lints]
+workspace = true
+
 [dependencies]
+boxxy-sys-utils.workspace = true
 image.workspace = true
 thiserror.workspace = true
-boxxy-sys-utils.workspace = true

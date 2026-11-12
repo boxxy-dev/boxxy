@@ -28,7 +28,7 @@
             <property name="margin-top">8</property>
             <property name="margin-bottom">8</property>
 
-            <!-- Interactive Crop Canvas Frame -->
+            <!-- Interactive Crop Canvas Frame (with Loading Stack) -->
             <child>
               <object class="GtkFrame">
                 <property name="hexpand">true</property>
@@ -37,11 +37,53 @@
                   <class name="avatar-crop-well"/>
                 </style>
                 <child>
-                  <object class="GtkDrawingArea" id="crop_canvas">
+                  <object class="GtkStack" id="canvas_stack">
                     <property name="hexpand">true</property>
                     <property name="vexpand">true</property>
-                    <property name="content-width">380</property>
-                    <property name="content-height">360</property>
+                    <property name="transition-type">crossfade</property>
+                    <property name="transition-duration">140</property>
+
+                    <child>
+                      <object class="GtkStackPage">
+                        <property name="name">loading</property>
+                        <property name="child">
+                          <object class="GtkBox">
+                            <property name="orientation">vertical</property>
+                            <property name="spacing">12</property>
+                            <property name="halign">center</property>
+                            <property name="valign">center</property>
+                            <child>
+                              <object class="AdwSpinner">
+                                <property name="width-request">32</property>
+                                <property name="height-request">32</property>
+                              </object>
+                            </child>
+                            <child>
+                              <object class="GtkLabel" id="loading_label">
+                                <property name="label">Loading image…</property>
+                                <style>
+                                  <class name="dim-label"/>
+                                </style>
+                              </object>
+                            </child>
+                          </object>
+                        </property>
+                      </object>
+                    </child>
+
+                    <child>
+                      <object class="GtkStackPage">
+                        <property name="name">ready</property>
+                        <property name="child">
+                          <object class="GtkDrawingArea" id="crop_canvas">
+                            <property name="hexpand">true</property>
+                            <property name="vexpand">true</property>
+                            <property name="content-width">380</property>
+                            <property name="content-height">360</property>
+                          </object>
+                        </property>
+                      </object>
+                    </child>
                   </object>
                 </child>
               </object>
@@ -49,7 +91,7 @@
 
             <!-- Live Preview and Size Controls -->
             <child>
-              <object class="GtkBox">
+              <object class="GtkBox" id="controls_box">
                 <property name="orientation">horizontal</property>
                 <property name="spacing">12</property>
                 <property name="margin-top">2</property>

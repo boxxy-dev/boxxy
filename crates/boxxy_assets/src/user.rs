@@ -1,17 +1,29 @@
-use std::fs;
 use std::path::PathBuf;
 
-/// Gets the `~/.config/boxxy-terminal/user/` directory, creating it if it doesn't exist.
-pub fn get_user_dir() -> Option<PathBuf> {
-    let config_dir = boxxy_sys_utils::get_config_dir();
-    let user_dir = config_dir.join("user");
-    if !user_dir.exists() {
-        let _ = fs::create_dir_all(&user_dir);
-    }
-    Some(user_dir)
+/// Resolves the `<config_dir>/user/` directory without performing disk I/O.
+///
+/// Callers writing files inside this directory should create it first
+/// (for example via `tokio::fs::create_dir_all`).
+#[must_use]
+pub fn get_user_dir() -> PathBuf {
+    boxxy_sys_utils::get_config_dir().join("user")
 }
 
-/// Gets the path to `~/.config/boxxy-terminal/user/AVATAR.png`
-pub fn get_user_avatar_path() -> Option<PathBuf> {
-    get_user_dir().map(|dir| dir.join("AVATAR.png"))
+/// Resolves the `<config_dir>/user/AVATAR.png` path without performing disk I/O.
+#[must_use]
+pub fn get_user_avatar_path() -> PathBuf {
+    get_user_dir().join("AVATAR.png")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolves_user_paths_under_config_dir() {
+        let user_dir = get_user_dir();
+        let avatar_path = get_user_avatar_path();
+        assert!(user_dir.ends_with("user"));
+        assert_eq!(avatar_path, user_dir.join("AVATAR.png"));
+    }
 }

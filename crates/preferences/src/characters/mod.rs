@@ -54,9 +54,7 @@ pub fn setup_characters_page(
         }
     });
 
-    let avatar_exists = boxxy_assets::user::get_user_avatar_path()
-        .as_ref()
-        .is_some_and(|path| path.exists());
+    let avatar_exists = boxxy_assets::user::get_user_avatar_path().exists();
     user_avatar.set_remove_tooltip("Remove custom avatar");
     user_avatar.set_removable(avatar_exists);
 
@@ -70,20 +68,21 @@ pub fn setup_characters_page(
             let avatar_btn_toast = avatar_btn_toast.clone();
 
             glib::spawn_future_local(async move {
-                if let Some(user_avatar_path) = boxxy_assets::user::get_user_avatar_path() {
-                    if tokio::fs::write(&user_avatar_path, &output.png_bytes)
+                let user_dir = boxxy_assets::user::get_user_dir();
+                let user_avatar_path = user_dir.join("AVATAR.png");
+                if tokio::fs::create_dir_all(&user_dir).await.is_ok()
+                    && tokio::fs::write(&user_avatar_path, &output.png_bytes)
                         .await
                         .is_ok()
-                    {
-                        user_profile::configure_avatar(
-                            user_avatar_upload.avatar(),
-                            &user_profile::effective(&s_rc_upload.borrow()),
-                        );
-                        user_avatar_upload.set_removable(true);
-                        add_preferences_toast(&avatar_btn_toast, "Avatar updated");
-                    } else {
-                        add_preferences_toast(&avatar_btn_toast, "Failed to save avatar.");
-                    }
+                {
+                    user_profile::configure_avatar(
+                        user_avatar_upload.avatar(),
+                        &user_profile::effective(&s_rc_upload.borrow()),
+                    );
+                    user_avatar_upload.set_removable(true);
+                    add_preferences_toast(&avatar_btn_toast, "Avatar updated");
+                } else {
+                    add_preferences_toast(&avatar_btn_toast, "Failed to save avatar.");
                 }
             });
         }
@@ -102,8 +101,8 @@ pub fn setup_characters_page(
         let user_avatar_remove = user_avatar_remove.clone();
 
         glib::spawn_future_local(async move {
-            if let Some(path) = boxxy_assets::user::get_user_avatar_path()
-                && let Err(e) = tokio::fs::remove_file(&path).await
+            let path = boxxy_assets::user::get_user_avatar_path();
+            if let Err(e) = tokio::fs::remove_file(&path).await
                 && e.kind() != std::io::ErrorKind::NotFound
             {
                 log::error!("Failed to remove user avatar: {}", e);
