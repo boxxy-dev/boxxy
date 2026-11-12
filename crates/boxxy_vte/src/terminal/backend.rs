@@ -467,7 +467,13 @@ impl TerminalBackend {
         let bytes = if bracketed {
             let mut buf = Vec::with_capacity(text.len() + 12);
             buf.extend_from_slice(b"\x1b[200~");
-            buf.extend_from_slice(text.as_bytes());
+            for &b in text.as_bytes() {
+                // Strip raw ESC bytes so pasted/dropped text cannot prematurely
+                // close `\x1b[201~` and escape bracketed-paste mode.
+                if b != 0x1b {
+                    buf.push(b);
+                }
+            }
             buf.extend_from_slice(b"\x1b[201~");
             buf
         } else {

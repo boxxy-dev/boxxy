@@ -6,6 +6,7 @@ use gtk4::subclass::prelude::*;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 
+mod dnd;
 mod gestures;
 mod kitty;
 mod painter;
@@ -291,6 +292,7 @@ impl ObjectImpl for TerminalWidget {
         obj.set_can_focus(true);
 
         self.setup_controllers();
+        self.setup_drag_and_drop();
     }
 }
 
@@ -729,6 +731,18 @@ impl TerminalWidget {
         backend.render_state.load().export_ansi_snapshot()
     }
 
+    pub(crate) fn paste_text(&self, text: &str) {
+        if text.is_empty() {
+            return;
+        }
+        if let Some(b) = self.backend.borrow().as_ref() {
+            if !b.is_alt_screen() && self.scroll_on_keystroke.get() {
+                b.scroll_display(crate::engine::grid::Scroll::Bottom);
+            }
+            b.paste(text.to_string());
+        }
+    }
+
     pub(crate) fn paste_clipboard(&self) {
         let cb = self.obj().clipboard();
         let ow = self.obj().downgrade();
@@ -736,9 +750,8 @@ impl TerminalWidget {
             if let Ok(Some(text)) = cb.read_text_future().await
                 && !text.is_empty()
                 && let Some(w) = ow.upgrade()
-                && let Some(b) = w.imp().backend.borrow().as_ref()
             {
-                b.paste(text.to_string());
+                w.imp().paste_text(text.as_str());
             }
         });
     }

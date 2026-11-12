@@ -195,6 +195,76 @@ impl AttachmentManager {
         let b64 = glib::base64_encode(&bytes).to_string();
         self.add_attachment("Image".to_string(), b64, true);
     }
+
+    pub fn handle_dropped_files(
+        &self,
+        files: Vec<gtk::gio::File>,
+        entry: &gtk::TextView,
+        working_dir: Option<&str>,
+    ) -> bool {
+        if files.is_empty() {
+            return false;
+        }
+
+        let mut text_tokens = Vec::new();
+        for file in files {
+            if let Some(path) = file.path() {
+                if is_supported_image_path(&path) {
+                    let mgr = self.clone();
+                    glib::spawn_future_local(async move {
+                        if let Ok((bytes, _)) = file.load_bytes_future().await
+                            && let Ok(texture) = gdk::Texture::from_bytes(&bytes)
+                        {
+                            mgr.attach_texture(texture);
+                        }
+                    });
+                    continue;
+                }
+
+                let display_path = working_dir
+                    .map(Path::new)
+                    .and_then(|cwd| path.strip_prefix(cwd).ok())
+                    .filter(|rel| !rel.as_os_str().is_empty())
+                    .unwrap_or(&path);
+                let path_str = display_path.to_string_lossy();
+                if path_str.chars().any(char::is_whitespace) {
+                    text_tokens.push(path_str.into_owned());
+                } else {
+                    text_tokens.push(format!("@{path_str}"));
+                }
+            } else {
+                let uri = file.uri();
+                if !uri.is_empty() {
+                    text_tokens.push(uri.to_string());
+                }
+            }
+        }
+
+        entry.grab_focus();
+        if !text_tokens.is_empty() {
+            let buf = entry.buffer();
+            buf.delete_selection(true, true);
+            let cursor_offset = buf.cursor_position();
+            let needs_leading_space = if cursor_offset > 0 {
+                let prev = buf.iter_at_offset(cursor_offset - 1);
+                let cur = buf.iter_at_offset(cursor_offset);
+                buf.text(&prev, &cur, false)
+                    .chars()
+                    .next_back()
+                    .is_some_and(|c| !c.is_whitespace())
+            } else {
+                false
+            };
+            let mut insertion = String::new();
+            if needs_leading_space {
+                insertion.push(' ');
+            }
+            insertion.push_str(&text_tokens.join(" "));
+            insertion.push(' ');
+            buf.insert_at_cursor(&insertion);
+        }
+        true
+    }
 }
 
 fn build_text_preview_tooltip(content: &str) -> String {
@@ -215,6 +285,17 @@ fn build_text_preview_tooltip(content: &str) -> String {
     preview
 }
 
+fn is_supported_image_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| {
+            ext.eq_ignore_ascii_case("png")
+                || ext.eq_ignore_ascii_case("jpg")
+                || ext.eq_ignore_ascii_case("jpeg")
+                || ext.eq_ignore_ascii_case("webp")
+        })
+}
+
 fn try_load_image_from_pasted_path(text: &str) -> Option<gdk::Texture> {
     let trimmed = text.trim();
     if trimmed.contains('\n') {
@@ -227,17 +308,8 @@ fn try_load_image_from_pasted_path(text: &str) -> Option<gdk::Texture> {
         trimmed.to_string()
     };
 
-    let lower = path_str.to_lowercase();
-    let is_supported_img = lower.ends_with(".png")
-        || lower.ends_with(".jpg")
-        || lower.ends_with(".jpeg")
-        || lower.ends_with(".webp");
-    if !is_supported_img {
-        return None;
-    }
-
     let path = Path::new(&path_str);
-    if !path.is_file() {
+    if !is_supported_image_path(path) || !path.is_file() {
         return None;
     }
     gdk::Texture::from_filename(path).ok()

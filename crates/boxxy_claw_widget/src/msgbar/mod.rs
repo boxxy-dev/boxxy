@@ -694,6 +694,32 @@ impl MsgBarComponent {
         });
         entry.add_controller(key_ctrl);
 
+        // Intercept file drops in Capture phase before `GtkTextView`'s built-in
+        // text drop handler can insert raw `file:///...` URIs.
+        let file_drop = gtk::DropTarget::new(glib::Type::INVALID, gtk::gdk::DragAction::COPY);
+        file_drop.set_propagation_phase(gtk::PropagationPhase::Capture);
+        file_drop.set_types(&[
+            gtk::gdk::FileList::static_type(),
+            gtk::gio::File::static_type(),
+        ]);
+        {
+            let drop_att_mgr = attachment_mgr.clone();
+            let drop_entry = entry.clone();
+            let drop_cwd = working_dir.clone();
+            file_drop.connect_drop(move |_, value, _, _| {
+                let files = if let Ok(list) = value.get::<gtk::gdk::FileList>() {
+                    list.files()
+                } else if let Ok(file) = value.get::<gtk::gio::File>() {
+                    vec![file]
+                } else {
+                    return false;
+                };
+                let cwd = drop_cwd.borrow().clone();
+                drop_att_mgr.handle_dropped_files(files, &drop_entry, cwd.as_deref())
+            });
+        }
+        widget.add_controller(file_drop);
+
         Self {
             widget,
             entry,

@@ -31,7 +31,7 @@ The crate exposes a single public widget — `TerminalWidget` — that provides 
 
 ### Internalized ANSI Engine
 
-The core terminal logic is located in `src/engine/`, with `src/engine/term/` organized into focused modules (`mod.rs`, `render_state.rs`, `modes.rs`, `cursor.rs`, `buffer.rs`, `handler.rs`, `cell.rs`, `color.rs`, `search.rs`, `tests.rs`) and the GTK widget implementation in `src/terminal/imp/` (`mod.rs`, `painter.rs`, `gestures.rs`, `kitty.rs`). We have fully absorbed and refactored the terminal engine to be:
+The core terminal logic is located in `src/engine/`, with `src/engine/term/` organized into focused modules (`mod.rs`, `render_state.rs`, `modes.rs`, `cursor.rs`, `buffer.rs`, `handler.rs`, `cell.rs`, `color.rs`, `search.rs`, `tests.rs`) and the GTK widget implementation in `src/terminal/imp/` (`mod.rs`, `painter.rs`, `gestures.rs`, `dnd.rs`, `kitty.rs`). We have fully absorbed and refactored the terminal engine to be:
 1. **Asynchronous:** Uses `tokio::io::unix::AsyncFd` for non-blocking PTY I/O.
 2. **Lock-Free:** The UI thread never blocks on the PTY thread. Instead, it reads a cheap, atomic snapshot of the visible grid (`RenderState`) via `arc-swap`.
 3. **Event-Driven CWD:** Natively parses **OSC 7** sequences to provide instantaneous directory tracking that works over SSH and through Flatpak sandboxes.
@@ -57,7 +57,7 @@ The `TerminalWidget` GObject wrapper.
 | `select_all()` | Selects all non-empty scrollback and viewport lines (`Msg::SelectAll`) without appending trailing blank rows below the cursor. |
 | `clear_scrollback()` / `reset_terminal()` | Clears scrollback history (`CSI 3 J`) or performs a full terminal state reset (`RIS`, clearing stuck mouse modes and alternate screen). |
 | `dump_buffer(include_scrollback)` | Asynchronously extracts the visible screen or full scrollback + screen plain text. |
-| `paste_clipboard()` / `paste_primary()` | Paste from clipboard/primary selection with automatic bracketed-paste wrapping (`\x1b[200~...\x1b[201~`) when the app has enabled `BRACKETED_PASTE` mode. |
+| `paste_clipboard()` / `paste_primary()` / `paste_text(text)` | Paste from clipboard, primary selection, or direct text/file drops (`dnd.rs`: `gdk::FileList`, `gio::File`, `file://` URI lists, and plain text, with POSIX shell quoting for spaces/metacharacters) with automatic bracketed-paste wrapping (`\x1b[200~...\x1b[201~`) when the app has enabled `BRACKETED_PASTE` mode. |
 | `is_mouse_mode()` | Returns `true` if the running app has enabled any mouse-reporting mode (1000/1002/1003). |
 
 ---

@@ -75,6 +75,10 @@ impl TerminalWidget {
         self.imp().paste_clipboard();
     }
 
+    pub fn paste_text(&self, text: &str) {
+        self.imp().paste_text(text);
+    }
+
     pub fn has_selection(&self) -> bool {
         self.imp().has_selection()
     }
@@ -677,10 +681,8 @@ impl TerminalWidget {
             };
             if let Some(text) = text_opt {
                 log::info!("Terminal: Pasting text from PRIMARY/fallback, len={}", text.len());
-                if let Some(widget) = obj_weak.upgrade()
-                    && let Some(backend) = widget.imp().backend.borrow().as_ref()
-                {
-                    backend.paste(text.to_string());
+                if let Some(widget) = obj_weak.upgrade() {
+                    widget.imp().paste_text(text.as_str());
                 }
             } else {
                 log::warn!("Terminal: PRIMARY paste failed or empty");

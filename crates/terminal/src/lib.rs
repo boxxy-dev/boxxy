@@ -15,7 +15,7 @@ pub use boxxy_agent::ipc::pty::DetachedSessionInfo;
 pub use boxxy_claw_widget::{ClawHost, Proposal};
 pub use component::{Direction, ExtractedPane, TerminalComponent};
 pub use events::*;
-pub use pane::gestures::PANE_DND_PREFIX;
+pub use pane::gestures::PaneDragPayload;
 
 use crate::agent_manager::AgentManager;
 use std::collections::HashMap;

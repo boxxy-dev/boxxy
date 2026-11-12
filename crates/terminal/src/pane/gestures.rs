@@ -297,7 +297,11 @@ pub(super) fn setup_gestures(
     terminal.add_controller(motion_ctrl);
 }
 
-pub const PANE_DND_PREFIX: &str = "boxxy-pane:";
+/// Dedicated in-process GType for pane split drag-and-drop so external file or
+/// text drags never match the split `DropTarget` or flash `.split-drop-overlay`.
+#[derive(Clone, Debug, PartialEq, Eq, glib::Boxed)]
+#[boxed_type(name = "BoxxyPaneDragPayload")]
+pub struct PaneDragPayload(pub String);
 
 fn calc_drop_direction(width: f64, height: f64, x: f64, y: f64) -> crate::Direction {
     if width <= 0.0 || height <= 0.0 {
@@ -429,7 +433,7 @@ pub(super) fn setup_split_drag_and_drop(
     let drag_source = gtk::DragSource::new();
     drag_source.set_actions(gdk::DragAction::MOVE);
     {
-        let payload = format!("{PANE_DND_PREFIX}{pane_id}");
+        let payload = PaneDragPayload(pane_id.clone());
         drag_source.connect_prepare(move |_, _, _| {
             Some(gdk::ContentProvider::for_value(&payload.to_value()))
         });
@@ -494,17 +498,24 @@ pub(super) fn setup_split_drag_and_drop(
     drag_handle.add_controller(drag_source);
 
     // DropTarget on the pane overlay to accept dragged panes and preview the split half.
-    let drop_target = gtk::DropTarget::new(glib::Type::STRING, gdk::DragAction::MOVE);
+    // Using `PaneDragPayload::static_type()` ensures external file/text drags never match
+    // at GDK format negotiation time and never flash the split overlay during async preload.
+    let drop_target = gtk::DropTarget::new(PaneDragPayload::static_type(), gdk::DragAction::MOVE);
     drop_target.set_preload(true);
+    {
+        let is_self_dragging = is_dragging;
+        drop_target.connect_accept(move |_, drop| {
+            !is_self_dragging.get() && drop.formats().contains_type(PaneDragPayload::static_type())
+        });
+    }
     {
         let drop_overlay_w = drop_overlay.downgrade();
         let target_id = pane_id.clone();
         drop_target.connect_value_notify(move |tgt| {
             let valid = tgt
                 .value()
-                .and_then(|v| v.get::<String>().ok())
-                .and_then(|s| s.strip_prefix(PANE_DND_PREFIX).map(str::to_string))
-                .is_some_and(|src_id| src_id != target_id);
+                .and_then(|v| v.get::<PaneDragPayload>().ok())
+                .is_some_and(|p| p.0 != target_id);
             if !valid {
                 if let Some(ov) = drop_overlay_w.upgrade() {
                     set_drop_overlay_direction(&ov, None);
@@ -520,10 +531,9 @@ pub(super) fn setup_split_drag_and_drop(
         drop_target.connect_motion(move |tgt, x, y| {
             if let Some(val) = tgt.value() {
                 let valid = val
-                    .get::<String>()
+                    .get::<PaneDragPayload>()
                     .ok()
-                    .and_then(|s| s.strip_prefix(PANE_DND_PREFIX).map(str::to_string))
-                    .is_some_and(|src_id| src_id != target_id);
+                    .is_some_and(|p| p.0 != target_id);
                 if !valid {
                     if let Some(ov) = drop_overlay_w.upgrade() {
                         set_drop_overlay_direction(&ov, None);
@@ -557,11 +567,7 @@ pub(super) fn setup_split_drag_and_drop(
             if let Some(ov) = drop_overlay_w.upgrade() {
                 set_drop_overlay_direction(&ov, None);
             }
-            let Some(source_pane_id) = value
-                .get::<String>()
-                .ok()
-                .and_then(|s| s.strip_prefix(PANE_DND_PREFIX).map(str::to_string))
-            else {
+            let Ok(PaneDragPayload(source_pane_id)) = value.get::<PaneDragPayload>() else {
                 return false;
             };
             if source_pane_id == target_id {
