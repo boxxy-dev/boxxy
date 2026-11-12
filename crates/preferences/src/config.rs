@@ -519,14 +519,9 @@ You can add your own sensitive paths here. One path per line. Lines starting wit
     }
 
     pub fn get_nautilus_extension_path() -> Option<PathBuf> {
-        if let Ok(val) = std::env::var("BOXXY_CONFIG_DIR") {
-            let trimmed = val.trim();
-            if !trimmed.is_empty() && PathBuf::from(trimmed).is_absolute() {
-                return Some(
-                    boxxy_sys_utils::get_config_dir()
-                        .join("nautilus-python/extensions/open_with_boxxy.py"),
-                );
-            }
+        let active_cfg = boxxy_sys_utils::get_config_dir();
+        if active_cfg != boxxy_sys_utils::get_stable_config_dir() {
+            return Some(active_cfg.join("nautilus-python/extensions/open_with_boxxy.py"));
         }
 
         let home = std::env::var_os("HOME").map(PathBuf::from)?;

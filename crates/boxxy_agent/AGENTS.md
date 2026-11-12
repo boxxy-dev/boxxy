@@ -6,9 +6,11 @@ Host-level daemon that sits between the Boxxy UI and the operating system. It ow
 
 A single instance serves all open UI windows per instance namespace. It is launched by the UI on demand via `ensure_agent_running` and claims `boxxy_sys_utils::agent_bus_name()` (`dev.boxxy.BoxxyAgent` in production, `dev.boxxy.BoxxyAgent.Devel` with `--dev` / `BOXXY_DEV=1`, or `dev.boxxy.BoxxyAgent.Devel.i_<slug>` with `--instance <slug>` / `BOXXY_INSTANCE=<slug>`) on the session bus; a second launch in the same namespace detects the existing instance and exits. All CLI subcommands (`stop`, `restart`, `list-sessions`, `status`) accept `--dev`, `--instance <slug>`, and `--ephemeral`.
 
-## Binary Entry Points
+## Binary Entry Points & CLI Boundary
 
-The `boxxy-agent` binary accepts subcommands in addition to starting the daemon:
+`boxxy-agent` is the low-level host daemon binary (managed automatically by `boxxy-terminal`). For everyday CLI inspection and control across Native, Nix, and Flatpak, users run `boxxy-terminal +agent <status|sessions|stop|restart>` (implemented in `boxxy-cli` on top of `boxxy_agent::cli_ops`).
+
+The `boxxy-agent` binary itself also accepts subcommands (all supporting `--dev`, `--instance <slug>`, `--ephemeral`, `--sync-settings`, `--config-dir <path>`, and `--debug-context`):
 
 - `boxxy-agent` / `boxxy-agent start`: claims the session-bus name and runs the daemon loop.
 - `boxxy-agent stop`: talks to a running daemon over D-Bus, flushes telemetry, and requests a clean exit.

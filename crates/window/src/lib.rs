@@ -12,5 +12,5 @@ pub mod update;
 pub mod updater;
 pub mod widgets;
 
-pub use init::AppInit;
+pub use init::{AppInit, TabLaunchSpec};
 pub use ui::AppWindow;

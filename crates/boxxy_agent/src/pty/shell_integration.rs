@@ -359,26 +359,31 @@ pub fn apply_shell_integration(
         return;
     }
 
-    // Respect explicit opt-out via BOXXY_SHELL_INTEGRATION=0
-    if find_env_var(env, "BOXXY_SHELL_INTEGRATION").as_deref() == Some("0") {
+    // Respect explicit opt-out via BOXXY_SHELL_INTEGRATION=0 (or false/off)
+    if find_env_var(env, "BOXXY_SHELL_INTEGRATION")
+        .as_deref()
+        .is_some_and(boxxy_sys_utils::env::is_shell_integration_disabled_value)
+    {
         return;
     }
 
-    // Do not inject into non-interactive `-c` commands or custom rc invocations
-    let has_custom_flags = argv.iter().skip(1).any(|arg| {
-        matches!(
-            arg.as_str(),
-            "-c" | "--commands"
-                | "--rcfile"
-                | "--init-file"
-                | "--norc"
-                | "--posix"
-                | "-f"
-                | "--no-rcs"
-                | "--no-config-file"
-        )
+    // Do not inject into non-interactive `-c` commands, custom rc invocations,
+    // or script executions (`bash deploy.sh` where a positional script path is present).
+    let has_custom_or_script_args = argv.iter().skip(1).any(|arg| {
+        !arg.starts_with('-')
+            || matches!(
+                arg.as_str(),
+                "-c" | "--commands"
+                    | "--rcfile"
+                    | "--init-file"
+                    | "--norc"
+                    | "--posix"
+                    | "-f"
+                    | "--no-rcs"
+                    | "--no-config-file"
+            )
     });
-    if has_custom_flags {
+    if has_custom_or_script_args {
         return;
     }
 
@@ -529,5 +534,16 @@ mod tests {
         let mut env2 = vec![("BOXXY_SHELL_INTEGRATION".to_string(), "0".to_string())];
         apply_shell_integration(&mut argv2, &mut env2, tmp.path());
         assert_eq!(argv2, vec!["/bin/bash"]);
+
+        // Positional script execution (`-e bash script.sh arg1`) must never append `--rcfile`
+        let mut script_argv = vec![
+            "/bin/bash".to_string(),
+            "script.sh".to_string(),
+            "arg1".to_string(),
+        ];
+        let mut script_env = Vec::new();
+        apply_shell_integration(&mut script_argv, &mut script_env, tmp.path());
+        assert_eq!(script_argv, vec!["/bin/bash", "script.sh", "arg1"]);
+        assert!(script_env.is_empty());
     }
 }

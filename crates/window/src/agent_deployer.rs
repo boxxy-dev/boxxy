@@ -272,20 +272,15 @@ async fn spawn_agent(host_path: &PathBuf) -> Result<bool> {
         }
     }
 
+    let daemon_env = boxxy_sys_utils::env::daemon_spawn_env(&expected_config_dir);
+
     if is_flatpak() {
         info!("Spawning agent on host: {}", host_path.display());
         let mut cmd = Command::new("flatpak-spawn");
-        if let Ok(val) = std::env::var("BOXXY_DEBUG_CONTEXT") {
-            cmd.args(["--env=BOXXY_DEBUG_CONTEXT=".to_string() + &val]);
-        }
-        if let Some(slug) = boxxy_sys_utils::instance_id() {
-            cmd.args([format!("--env=BOXXY_INSTANCE={slug}")]);
-        }
-        if boxxy_sys_utils::is_ephemeral_mode() {
-            cmd.args(["--env=BOXXY_EPHEMERAL=1".to_string()]);
+        for (k, v) in &daemon_env {
+            cmd.arg(format!("--env={k}={v}"));
         }
         cmd.args([
-            format!("--env=BOXXY_CONFIG_DIR={}", expected_config_dir.to_string_lossy()),
             "--host".to_string(),
             host_path.to_string_lossy().into_owned(),
             "--background".to_string(),
@@ -299,16 +294,9 @@ async fn spawn_agent(host_path: &PathBuf) -> Result<bool> {
             host_path.display()
         );
         let mut cmd = Command::new(host_path);
-        if let Ok(val) = std::env::var("BOXXY_DEBUG_CONTEXT") {
-            cmd.env("BOXXY_DEBUG_CONTEXT", val);
+        for (k, v) in &daemon_env {
+            cmd.env(k, v);
         }
-        if let Some(slug) = boxxy_sys_utils::instance_id() {
-            cmd.env("BOXXY_INSTANCE", slug);
-        }
-        if boxxy_sys_utils::is_ephemeral_mode() {
-            cmd.env("BOXXY_EPHEMERAL", "1");
-        }
-        cmd.env("BOXXY_CONFIG_DIR", expected_config_dir);
         cmd.arg("--background")
             .spawn()
             .context("Failed to spawn native agent")?;

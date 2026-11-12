@@ -92,8 +92,13 @@ pub(super) fn wire_terminal_events(
     let active_for_exit = is_claw_active.clone();
     terminal.on_exit(move |code| {
         active_for_exit.set(false);
+        let mut hold = false;
         if let Some(inner_rc) = inner_for_exit.upgrade() {
-            let session_opt = inner_rc.borrow_mut().mark_pty_exited();
+            let (session_opt, pane_hold) = {
+                let mut inner_mut = inner_rc.borrow_mut();
+                (inner_mut.mark_pty_exited(), inner_mut.hold_on_exit)
+            };
+            hold = pane_hold;
             let Some(session_arc) = session_opt else {
                 return;
             };
@@ -108,7 +113,14 @@ pub(super) fn wire_terminal_events(
                 }
             });
         }
-        cb_clone(PaneOutput::Exited(id_clone.clone(), code));
+        if hold {
+            cb_clone(PaneOutput::ForegroundProcessChanged(
+                id_clone.clone(),
+                String::new(),
+            ));
+        } else {
+            cb_clone(PaneOutput::Exited(id_clone.clone(), code));
+        }
     });
 
     let cb_clone = callback.clone();

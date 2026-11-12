@@ -7,9 +7,11 @@ license.workspace = true
 name = "boxxy-app"
 
 [features]
-disable-self-update = ["boxxy-window/disable-self-update"]
+disable-self-update = ["boxxy-window/disable-self-update", "boxxy-cli/disable-self-update"]
 
 [dependencies]
+boxxy-cli.workspace = true
+serde_json.workspace = true
 tokio.workspace = true
 gtk4.workspace = true
 libadwaita.workspace = true

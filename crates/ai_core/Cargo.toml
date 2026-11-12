@@ -15,3 +15,4 @@ log.workspace = true
 tokio = { workspace = true, features = ["full"] }
 rig.workspace = true
 boxxy-model-selection = { path = "../model_selection" }
+boxxy-sys-utils.workspace = true

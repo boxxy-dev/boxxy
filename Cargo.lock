@@ -799,6 +799,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "boxxy-model-selection",
+ "boxxy-sys-utils",
  "log",
  "rig",
  "serde",
@@ -813,6 +814,7 @@ dependencies = [
  "anyhow",
  "boxxy-bookmarks",
  "boxxy-claw",
+ "boxxy-cli",
  "boxxy-db",
  "boxxy-preferences",
  "boxxy-sys-utils",
@@ -827,6 +829,7 @@ dependencies = [
  "gtk4",
  "libadwaita",
  "log",
+ "serde_json",
  "sysinfo",
  "tokio",
 ]
@@ -967,6 +970,29 @@ dependencies = [
  "tempfile",
  "tokio",
  "uuid",
+]
+
+[[package]]
+name = "boxxy-cli"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "boxxy-agent",
+ "boxxy-claw-protocol",
+ "boxxy-mcp",
+ "boxxy-preferences",
+ "boxxy-sys-utils",
+ "boxxy-themes",
+ "clap",
+ "clap_complete",
+ "log",
+ "reqwest 0.13.5",
+ "serde",
+ "serde_json",
+ "serial_test",
+ "tempfile",
+ "tokio",
+ "toml",
 ]
 
 [[package]]

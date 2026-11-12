@@ -26,6 +26,7 @@ members = [
     "crates/scenario_runner",
     "crates/sys_utils",
     "crates/boxxy_assets",
+    "crates/cli",
     ]
 
 [workspace.package]
@@ -136,6 +137,9 @@ opentelemetry-stdout = { version = "0.33.1", features = ["metrics"] }
 serial_test = "4.0.1"
 frizbee = "0.13.0"
 ignore = "0.4.34"
+clap = { version = "4.6", features = ["derive"] }
+clap_complete = "4.6"
+boxxy-cli = { path = "crates/cli" }
 
 # Optimize pure-Rust image codecs in dev/test builds so 4K/8K JPEG/PNG/WebP decoding
 # runs at near-release SIMD speed during `--dev` sessions without affecting incremental builds.

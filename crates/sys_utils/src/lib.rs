@@ -1,4 +1,5 @@
 pub mod dev_mode;
+pub mod env;
 
 pub use dev_mode::{
     CliDevOverrides, DEVEL_AGENT_BUS_NAME, DEVEL_GTK_APP_ID, STABLE_AGENT_BUS_NAME,
@@ -49,6 +50,16 @@ struct FrankfurterResponse {
 /// Does **not** create the directory; that's the caller's job (most call
 /// sites already do `fs::create_dir_all` before writing).
 pub fn get_config_dir() -> PathBuf {
+    if let Some(cli_dir) = dev_mode::cli_config_dir() {
+        if cli_dir.is_absolute() {
+            return cli_dir;
+        }
+        log::warn!(
+            "--config-dir is set but is not an absolute path: '{}'. Ignoring and falling back.",
+            cli_dir.display()
+        );
+    }
+
     if let Ok(val) = std::env::var("BOXXY_CONFIG_DIR") {
         let trimmed = val.trim();
         if !trimmed.is_empty() {
@@ -227,14 +238,6 @@ mod tests {
     use serial_test::{is_locked_serially, serial};
     use std::ffi::OsString;
 
-    const ENV_KEYS: &[&str] = &[
-        "BOXXY_CONFIG_DIR",
-        "BOXXY_DEV",
-        "BOXXY_INSTANCE",
-        "BOXXY_EPHEMERAL",
-        "BOXXY_SYNC_SETTINGS",
-    ];
-
     /// RAII guard that mutates `BOXXY_*` config/dev environment variables and CLI
     /// overrides for the duration of a test and restores prior state on drop.
     /// Also asserts that the caller holds the `config_dir` serial lock.
@@ -249,11 +252,12 @@ mod tests {
                 is_locked_serially(Some("config_dir")),
                 "Tests mutating BOXXY_CONFIG_DIR must be annotated with #[serial(config_dir)]"
             );
-            let previous_env = ENV_KEYS
+            let previous_env = env::ENV_SPECS
                 .iter()
-                .map(|&k| (k, std::env::var_os(k)))
+                .filter(|s| s.name.starts_with("BOXXY_"))
+                .map(|s| (s.name, std::env::var_os(s.name)))
                 .collect::<Vec<_>>();
-            for &k in ENV_KEYS {
+            for (k, _) in &previous_env {
                 unsafe { std::env::remove_var(k) };
             }
             if let Some(v) = value {
@@ -546,5 +550,56 @@ mod tests {
         drop(guard_two);
         let _guard_three = dev_mode::prepare_ephemeral_dir_in(&eph).expect("third lock");
         assert!(!eph.join("live_session.db").exists());
+    }
+
+    #[test]
+    #[serial(config_dir)]
+    fn test_env_registry_daemon_propagation_and_pty_scrubbing() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let cfg = tmp.path().join("custom-cfg");
+        let _guard = ConfigDirEnvGuard::set(None);
+
+        configure_dev_options(CliDevOverrides {
+            dev: true,
+            ephemeral: true,
+            debug_context: true,
+            config_dir: Some(cfg.clone()),
+            ..Default::default()
+        });
+        assert_eq!(get_config_dir(), cfg);
+        assert!(env::debug_context());
+
+        unsafe {
+            std::env::set_var(
+                "BOXXY_TELEMETRY_ENDPOINT",
+                "https://collector.example.com/v1/metrics",
+            );
+        }
+
+        let spawned = env::daemon_spawn_env(&cfg);
+        assert!(spawned.contains(&("BOXXY_DEBUG_CONTEXT", "1".to_string())));
+        assert!(spawned.contains(&("BOXXY_INSTANCE", "dev".to_string())));
+        assert!(spawned.contains(&("BOXXY_EPHEMERAL", "1".to_string())));
+        assert!(spawned.contains(&(
+            "BOXXY_TELEMETRY_ENDPOINT",
+            "https://collector.example.com/v1/metrics".to_string()
+        )));
+        assert!(spawned.contains(&("BOXXY_CONFIG_DIR", cfg.to_string_lossy().into_owned())));
+
+        let mut pty_env = vec![
+            ("PATH".to_string(), "/usr/bin".to_string()),
+            ("BOXXY_DEV".to_string(), "1".to_string()),
+            ("BOXXY_DEBUG_CONTEXT".to_string(), "1".to_string()),
+            ("BOXXY_ORIG_ZDOTDIR".to_string(), "/tmp/zdot".to_string()),
+            ("BOXXY_SHELL_INTEGRATION".to_string(), "false".to_string()),
+        ];
+        env::scrub_child_pty_env(&mut pty_env);
+        assert_eq!(
+            pty_env,
+            vec![
+                ("PATH".to_string(), "/usr/bin".to_string()),
+                ("BOXXY_SHELL_INTEGRATION".to_string(), "0".to_string()),
+            ]
+        );
     }
 }

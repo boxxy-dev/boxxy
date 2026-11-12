@@ -23,9 +23,13 @@ fn attach_process_watchers(
             && let Some(inner) = inner_weak_exit.upgrade()
         {
             active_for_exit.set(false);
-            let (session_opt, cb) = {
+            let (session_opt, hold, cb) = {
                 let mut inner_mut = inner.borrow_mut();
-                (inner_mut.mark_pty_exited(), inner_mut.callback.clone())
+                (
+                    inner_mut.mark_pty_exited(),
+                    inner_mut.hold_on_exit,
+                    inner_mut.callback.clone(),
+                )
             };
             let Some(session_arc) = session_opt else {
                 return;
@@ -40,7 +44,14 @@ fn attach_process_watchers(
                     let _ = agent.unregister_workspace_pane(pane_id_for_rpc).await;
                 }
             });
-            cb(PaneOutput::Exited(id_for_exit, exit_code));
+            if hold {
+                cb(PaneOutput::ForegroundProcessChanged(
+                    id_for_exit,
+                    String::new(),
+                ));
+            } else {
+                cb(PaneOutput::Exited(id_for_exit, exit_code));
+            }
         }
     });
 
@@ -111,7 +122,7 @@ impl TerminalPaneComponent {
         let agent_name_reattach = self.agent_name.clone();
 
         glib::spawn_future_local(async move {
-            let (reattach_pid, layout_tag, settings, working_dir) = {
+            let (reattach_pid, command_override, layout_tag, settings, working_dir) = {
                 let mut inner = inner_rc.borrow_mut();
                 let settings = inner
                     .current_settings
@@ -119,6 +130,7 @@ impl TerminalPaneComponent {
                     .unwrap_or_else(|| (*Settings::load()).clone());
                 (
                     inner.reattach_pid.take(),
+                    inner.command_override.take(),
                     inner.layout_tag.clone(),
                     settings,
                     inner.working_dir.clone(),
@@ -273,7 +285,19 @@ impl TerminalPaneComponent {
                 }
             };
 
-            let cmd = if settings.use_custom_command && !settings.custom_command.trim().is_empty() {
+            let cmd = if let Some(cli_argv) = command_override.filter(|v| !v.is_empty()) {
+                // If `-e` received a single shell-like string containing whitespace (e.g.
+                // `-e "cargo test && echo done"`) and no literal file with that name exists,
+                // evaluate it via `$SHELL -c`; otherwise execute `argv` directly.
+                if cli_argv.len() == 1
+                    && cli_argv[0].chars().any(char::is_whitespace)
+                    && !std::path::Path::new(&cli_argv[0]).is_file()
+                {
+                    vec![shell, "-c".into(), cli_argv[0].clone()]
+                } else {
+                    cli_argv
+                }
+            } else if settings.use_custom_command && !settings.custom_command.trim().is_empty() {
                 match glib::shell_parse_argv(&settings.custom_command) {
                     Ok(argv) if !argv.is_empty() => argv
                         .into_iter()
@@ -407,7 +431,17 @@ impl TerminalPaneComponent {
 
                             let _ = agent.set_foreground_tracking(pid, true).await;
                         }
-                        Err(e) => log::error!("Failed to spawn process via agent: {e:#}"),
+                        Err(e) => {
+                            log::error!("Failed to spawn process via agent: {e:#}");
+                            let msg = format!(
+                                "\x1b[1;31mFailed to execute command:\x1b[0m {e}\r\n"
+                            );
+                            let mut inner = inner_rc.borrow_mut();
+                            inner.hold_on_exit = true;
+                            inner
+                                .terminal
+                                .attach_pty_with_replay(master_fd, msg.into_bytes());
+                        }
                     }
                 }
                 Err(e) => log::error!("Failed to create PTY via agent: {e:#}"),

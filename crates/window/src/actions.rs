@@ -32,15 +32,17 @@ pub fn setup_actions(
     add_action!("new-window", AppInput::NewWindow);
     add_action!("new-tab", AppInput::NewTab);
 
-    let new_tab_dir = gio::SimpleAction::new("new-tab-dir", Some(gtk4::glib::VariantTy::STRING));
-    let s_tab_dir = sender.clone();
-    new_tab_dir.connect_activate(move |_, param| {
-        if let Some(dir) = param.and_then(|p| p.get::<String>()) {
-            let dir_opt = (!dir.is_empty()).then_some(dir);
-            let _ = s_tab_dir.send_blocking(AppInput::NewTabInDir(dir_opt));
+    let new_tab_launch =
+        gio::SimpleAction::new("new-tab-launch", Some(gtk4::glib::VariantTy::STRING));
+    let s_tab_launch = sender.clone();
+    new_tab_launch.connect_activate(move |_, param| {
+        if let Some(raw_json) = param.and_then(|p| p.get::<String>())
+            && let Ok(spec) = serde_json::from_str::<crate::init::TabLaunchSpec>(&raw_json)
+        {
+            let _ = s_tab_launch.send_blocking(AppInput::NewTabLaunch(spec));
         }
     });
-    action_group.add_action(&new_tab_dir);
+    action_group.add_action(&new_tab_launch);
     add_action!("detached-sessions", AppInput::ShowDetachedSessions);
     add_action!("close-tab", AppInput::CloseActiveTab);
     add_action!("toggle-sidebar", AppInput::ToggleSidebar);

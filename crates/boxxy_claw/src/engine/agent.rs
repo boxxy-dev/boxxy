@@ -119,7 +119,7 @@ impl ClawAgent {
                 )
                 .await;
 
-                let is_explicit = std::env::var("BOXXY_DEBUG_CONTEXT").is_ok_and(|v| v == "1");
+                let is_explicit = boxxy_sys_utils::env::debug_context();
 
                 if is_explicit {
                     log::info!(
@@ -137,7 +137,7 @@ impl ClawAgent {
                 Ok((output, Some(wrapper), Some(res.messages)))
             }
             Err(e) => {
-                let is_explicit = std::env::var("BOXXY_DEBUG_CONTEXT").is_ok_and(|v| v == "1");
+                let is_explicit = boxxy_sys_utils::env::debug_context();
 
                 if is_explicit {
                     log::info!(

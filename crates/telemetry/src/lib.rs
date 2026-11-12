@@ -99,7 +99,7 @@ fn is_telemetry_enabled() -> bool {
         }
     }
     if boxxy_sys_utils::is_dev_instance()
-        && std::env::var_os("BOXXY_TELEMETRY_ENDPOINT").is_none()
+        && boxxy_sys_utils::env::telemetry_endpoint().is_none()
     {
         return false;
     }
@@ -302,7 +302,7 @@ pub async fn init() {
         .clone()
         .unwrap_or_else(|| "unknown".to_string());
 
-    let endpoint = std::env::var("BOXXY_TELEMETRY_ENDPOINT").unwrap_or_else(|_| {
+    let endpoint = boxxy_sys_utils::env::telemetry_endpoint().unwrap_or_else(|| {
         "https://qfwhesnmixgmczkdnvsu.supabase.co/functions/v1/telemetry-ingest".to_string()
     });
     let api_key = "sb_publishable_Z-SbIil88PSj3ri24CM7aw_8vzsCFie";

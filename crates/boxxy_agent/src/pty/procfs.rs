@@ -120,10 +120,47 @@ pub(crate) fn read_foreground_tpgid(pid: u32) -> Option<u32> {
     (tpgid != 0 && tpgid != pgrp).then_some(tpgid)
 }
 
+/// Returns `true` when `pid` itself is a direct command (`boxxy-terminal -e nvim`,
+/// `exec btop`, or `sh -c ...`) rather than an interactive login/subshell prompt.
+pub(crate) fn is_non_shell_root_process(pid: u32) -> bool {
+    if let Ok(cmdline) = std::fs::read(format!("/proc/{pid}/cmdline")) {
+        let args: Vec<&[u8]> = cmdline
+            .split(|&b| b == 0)
+            .filter(|s| !s.is_empty())
+            .collect();
+        if args.iter().skip(1).any(|&arg| arg == b"-c") {
+            return true;
+        }
+    }
+    if let Ok(comm) = std::fs::read_to_string(format!("/proc/{pid}/comm")) {
+        let name = comm.trim();
+        let is_shell = matches!(
+            name,
+            "sh" | "bash"
+                | "zsh"
+                | "fish"
+                | "dash"
+                | "nu"
+                | "ksh"
+                | "tcsh"
+                | "csh"
+                | "elvish"
+                | "xonsh"
+        );
+        if !name.is_empty() && !is_shell {
+            return true;
+        }
+    }
+    false
+}
+
 /// Reads the foreground process name from `/proc` for `pid`, resolving wrappers
-/// (`sudo`, `doas`, `env`) and interpreter-launched CLI tools via `/proc/<tpgid>/cmdline`.
+/// (`sudo`, `doas`, `env`), interpreter-launched CLI tools via `/proc/<tpgid>/cmdline`,
+/// and direct non-shell root processes (`boxxy-terminal -e <cmd>` or `exec <cmd>`).
 pub(crate) fn get_foreground_process(pid: u32) -> fdo::Result<String> {
-    let Some(tpgid) = read_foreground_tpgid(pid) else {
+    let Some(tpgid) =
+        read_foreground_tpgid(pid).or_else(|| is_non_shell_root_process(pid).then_some(pid))
+    else {
         return Ok(String::new());
     };
 
@@ -148,7 +185,9 @@ pub(crate) fn get_foreground_process(pid: u32) -> fdo::Result<String> {
 /// any process in that foreground group is blocked on a TTY read (`wchan` in
 /// `n_tty_read` / `tty_read`). Never flags the shell prompt itself.
 pub(crate) fn inspect_foreground_state(shell_pid: u32) -> (String, bool) {
-    let Some(tpgid) = read_foreground_tpgid(shell_pid) else {
+    let Some(tpgid) = read_foreground_tpgid(shell_pid)
+        .or_else(|| is_non_shell_root_process(shell_pid).then_some(shell_pid))
+    else {
         return (String::new(), false);
     };
 
@@ -184,35 +223,8 @@ pub(crate) fn shell_has_active_process(shell_pid: u32) -> bool {
         return true;
     }
 
-    // If the root process was spawned with `-c` (non-interactive command script)
-    // or exec'd into a non-shell binary (e.g. `top`, `nvim`), treat it as active.
-    if let Ok(cmdline) = std::fs::read(format!("/proc/{shell_pid}/cmdline")) {
-        let args: Vec<&[u8]> = cmdline
-            .split(|&b| b == 0)
-            .filter(|s| !s.is_empty())
-            .collect();
-        if args.iter().skip(1).any(|&arg| arg == b"-c") {
-            return true;
-        }
-    }
-    if let Ok(comm) = std::fs::read_to_string(format!("/proc/{shell_pid}/comm")) {
-        let name = comm.trim();
-        let is_shell = matches!(
-            name,
-            "sh" | "bash"
-                | "zsh"
-                | "fish"
-                | "dash"
-                | "nu"
-                | "ksh"
-                | "tcsh"
-                | "csh"
-                | "elvish"
-                | "xonsh"
-        );
-        if !name.is_empty() && !is_shell {
-            return true;
-        }
+    if is_non_shell_root_process(shell_pid) {
+        return true;
     }
 
     let has_fg = get_foreground_process(shell_pid)
@@ -222,6 +234,17 @@ pub(crate) fn shell_has_active_process(shell_pid: u32) -> bool {
         return true;
     }
     !collect_descendant_processes(shell_pid).is_empty()
+}
+
+pub(crate) fn collect_active_pty_processes(root_pid: u32) -> Vec<(u32, String)> {
+    let mut list = Vec::new();
+    if is_non_shell_root_process(root_pid)
+        && let Some(name) = read_process_display_name(root_pid)
+    {
+        list.push((root_pid, name));
+    }
+    list.extend(collect_descendant_processes(root_pid));
+    list
 }
 
 fn is_pid_wchan_tty_read(pid: u32) -> bool {
@@ -394,5 +417,29 @@ mod tests {
 
         let after_exit = collect_descendant_processes(my_pid);
         assert!(!after_exit.iter().any(|(pid, _)| *pid == child_pid));
+    }
+
+    #[test]
+    fn direct_non_shell_root_process_reports_foreground_and_active_entry() {
+        let mut child = std::process::Command::new("sleep")
+            .arg("5")
+            .spawn()
+            .expect("spawn sleep");
+        let child_pid = child.id();
+
+        assert!(is_non_shell_root_process(child_pid));
+        let fg = get_foreground_process(child_pid).expect("fg process");
+        assert_eq!(fg, "sleep");
+
+        let active = collect_active_pty_processes(child_pid);
+        assert!(
+            active
+                .iter()
+                .any(|(pid, name)| *pid == child_pid && name.contains("sleep")),
+            "expected direct -e root process {child_pid} in {active:?}"
+        );
+
+        let _ = child.kill();
+        let _ = child.wait();
     }
 }

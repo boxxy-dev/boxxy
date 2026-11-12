@@ -123,9 +123,20 @@ impl TerminalController {
     }
 }
 
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct TabLaunchSpec {
+    pub working_dir: Option<String>,
+    pub command: Option<Vec<String>>,
+    pub hold: bool,
+    pub title: Option<String>,
+}
+
 pub struct AppInit {
     pub incoming_tab_view: Option<libadwaita::TabView>,
     pub working_dir: Option<String>,
+    pub initial_command: Option<Vec<String>>,
+    pub hold: bool,
+    pub initial_title: Option<String>,
 }
 
 impl AppInit {
@@ -133,6 +144,19 @@ impl AppInit {
         Self {
             incoming_tab_view: None,
             working_dir: None,
+            initial_command: None,
+            hold: false,
+            initial_title: None,
+        }
+    }
+
+    pub fn from_tab_launch(spec: TabLaunchSpec) -> Self {
+        Self {
+            incoming_tab_view: None,
+            working_dir: spec.working_dir,
+            initial_command: spec.command,
+            hold: spec.hold,
+            initial_title: spec.title,
         }
     }
 }

@@ -26,7 +26,7 @@ libc = { workspace = true }
 futures-util = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
-clap = { version = "4", features = ["derive"] }
+clap.workspace = true
 notify = { workspace = true }
 notify-debouncer-mini = { workspace = true }
 walkdir = "2.5.0"

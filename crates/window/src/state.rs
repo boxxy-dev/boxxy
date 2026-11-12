@@ -9,7 +9,7 @@ use libadwaita as adw;
 use std::cell::Cell;
 use std::rc::Rc;
 
-use crate::init::TerminalController;
+use crate::init::{TabLaunchSpec, TerminalController};
 use crate::widgets::notification::Notification;
 
 /// Carries everything needed to display an in-app toast.
@@ -85,7 +85,7 @@ pub enum AppInput {
     NewWindow,
     NewTab,
     EnsureInitialTab,
-    NewTabInDir(Option<String>),
+    NewTabLaunch(TabLaunchSpec),
     CloseTabRequest(usize),
     MoveTabToNewWindowRequest(usize),
     SetTabColor(usize, TabColor),
@@ -214,7 +214,7 @@ pub struct AppWindowInner {
     pub toast_overlay: adw::ToastOverlay,
     pub frosted_container: crate::widgets::frosted_glass::FrostedGlassContainer,
     pub notifications: Vec<Notification>,
-    pub initial_working_dir: Option<String>,
+    pub initial_launch: Option<TabLaunchSpec>,
     pub force_close: Rc<Cell<bool>>,
     pub tx: async_channel::Sender<AppInput>,
 }

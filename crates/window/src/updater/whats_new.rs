@@ -350,7 +350,7 @@ pub(crate) fn check_and_record_commit_transition_in(
 /// 3. `~/.config/boxxy-terminal/last_seen_commit` transition detection for Nix, Flatpak,
 ///    and system package manager upgrades.
 pub fn take_whats_new_pending() -> Option<WhatsNewPending> {
-    if let Ok(sim) = std::env::var("BOXXY_SIMULATE_UPDATE")
+    if let Some(sim) = boxxy_sys_utils::env::simulate_update_raw()
         && let Some(pending) = parse_simulate_update_range(&sim)
     {
         log::info!(
@@ -410,7 +410,7 @@ pub fn save_last_whats_new(pending: &WhatsNewPending) {
 /// Loads the last update commit range for the "What's New" Command Palette action,
 /// falling back to `BOXXY_SIMULATE_UPDATE` or the latest 5 commits ending at `CURRENT_COMMIT`.
 pub fn load_last_whats_new() -> WhatsNewPending {
-    if let Ok(sim) = std::env::var("BOXXY_SIMULATE_UPDATE")
+    if let Some(sim) = boxxy_sys_utils::env::simulate_update_raw()
         && let Some(pending) = parse_simulate_update_range(&sim)
     {
         return pending;

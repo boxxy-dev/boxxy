@@ -37,8 +37,8 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
                 tabs::new_tab(&mut inner);
             }
         }
-        AppInput::NewTabInDir(dir) => {
-            tabs::new_tab_in_dir(&mut inner, dir);
+        AppInput::NewTabLaunch(spec) => {
+            tabs::new_tab_launch(&mut inner, spec);
         }
         AppInput::CloseTabRequest(key) => {
             tabs::close_tab_request(inner_ref, &mut inner, key);

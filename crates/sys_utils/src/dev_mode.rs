@@ -11,12 +11,14 @@ pub const DEVEL_AGENT_BUS_NAME: &str = "dev.boxxy.BoxxyAgent.Devel";
 
 const EPHEMERAL_LOCK_FILE: &str = ".ephemeral.lock";
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct CliDevOverrides {
     pub dev: bool,
     pub instance: Option<String>,
     pub ephemeral: bool,
     pub sync_settings: bool,
+    pub config_dir: Option<PathBuf>,
+    pub debug_context: bool,
 }
 
 static CLI_OVERRIDES: RwLock<CliDevOverrides> = RwLock::new(CliDevOverrides {
@@ -24,6 +26,8 @@ static CLI_OVERRIDES: RwLock<CliDevOverrides> = RwLock::new(CliDevOverrides {
     instance: None,
     ephemeral: false,
     sync_settings: false,
+    config_dir: None,
+    debug_context: false,
 });
 
 static INTERNED_STRINGS: LazyLock<RwLock<HashMap<String, &'static str>>> =
@@ -32,9 +36,17 @@ static INTERNED_STRINGS: LazyLock<RwLock<HashMap<String, &'static str>>> =
 static EPHEMERAL_SESSION_LOCK: OnceLock<File> = OnceLock::new();
 
 /// Registers CLI-level development flags (`--dev`, `--instance`, `--ephemeral`,
-/// `--sync-settings`) early in `main()` before `Settings::init()` runs.
+/// `--sync-settings`, `--config-dir`, `--debug-context`) early in `main()` before `Settings::init()` runs.
 pub fn configure_dev_options(overrides: CliDevOverrides) {
     *CLI_OVERRIDES.write() = overrides;
+}
+
+pub(crate) fn cli_config_dir() -> Option<PathBuf> {
+    CLI_OVERRIDES.read().config_dir.clone()
+}
+
+pub(crate) fn cli_debug_context() -> bool {
+    CLI_OVERRIDES.read().debug_context
 }
 
 fn intern_static(s: String) -> &'static str {
@@ -50,14 +62,7 @@ fn intern_static(s: String) -> &'static str {
     leaked
 }
 
-fn env_truthy(var_name: &str) -> bool {
-    std::env::var(var_name).is_ok_and(|val| {
-        matches!(
-            val.trim().to_ascii_lowercase().as_str(),
-            "1" | "true" | "yes" | "on"
-        )
-    })
-}
+use crate::env::env_truthy;
 
 /// Sanitizes an arbitrary instance name into a safe `[a-z0-9_-]` slug (max 48 chars).
 #[must_use]
@@ -215,9 +220,12 @@ pub fn prepare_dev_environment() {
     }
 
     let target_dir = crate::get_config_dir();
-    let has_explicit_config_override = std::env::var("BOXXY_CONFIG_DIR")
-        .ok()
-        .is_some_and(|v| Path::new(v.trim()).is_absolute());
+    let has_explicit_config_override = cli_config_dir()
+        .as_ref()
+        .is_some_and(|p| p.is_absolute())
+        || std::env::var("BOXXY_CONFIG_DIR")
+            .ok()
+            .is_some_and(|v| Path::new(v.trim()).is_absolute());
 
     if is_ephemeral_mode() && !has_explicit_config_override {
         if let Some(lock_file) = prepare_ephemeral_dir_in(&target_dir) {

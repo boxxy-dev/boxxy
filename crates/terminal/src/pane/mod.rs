@@ -200,6 +200,8 @@ pub(crate) struct PaneInner {
     pub(super) n_rows: i64,
     pub(super) pid: Option<u32>,
     pub(super) reattach_pid: Option<u32>,
+    pub(super) command_override: Option<Vec<String>>,
+    pub(super) hold_on_exit: bool,
     pub(super) force_terminate_on_close: bool,
     pub(super) already_handled_close: bool,
     pub session_id: std::sync::Arc<tokio::sync::Mutex<Option<String>>>,
@@ -235,11 +237,16 @@ impl PaneInner {
         }
         self.already_handled_close = true;
         self.pid = None;
+        self.foreground_process = None;
         self.claw_event_tx.close();
         self.claw_msg_tx.close();
         self.process_subscriptions.clear();
         *self.claw_subscription.lock() = None;
-        self.terminal.detach_pty();
+        // When `--hold` is active, let VTE's `EventLoop` finish draining the PTY up to
+        // `EIO` and publish its final `Immediate` render snapshot instead of aborting early.
+        if !self.hold_on_exit {
+            self.terminal.detach_pty();
+        }
         Some(self.session_id.clone())
     }
 }
@@ -454,6 +461,8 @@ impl TerminalPaneComponent {
             n_rows: 0,
             pid: None,
             reattach_pid: init.reattach_pid,
+            command_override: init.command,
+            hold_on_exit: init.hold,
             force_terminate_on_close: false,
             already_handled_close: false,
             session_id: session_id_for_inner,

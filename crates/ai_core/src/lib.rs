@@ -776,10 +776,8 @@ impl AgentHook for ModelContextHook {
         let prompt = event.prompt.clone();
         let history = event.history.to_vec();
 
-        // Check if model-context debugging is explicitly enabled via dedicated env var
-        let is_explicit = std::env::var("BOXXY_DEBUG_CONTEXT")
-            .map(|v| v == "1")
-            .unwrap_or(false);
+        // Check if model-context debugging is explicitly enabled via CLI or BOXXY_DEBUG_CONTEXT
+        let is_explicit = boxxy_sys_utils::env::debug_context();
 
         async move {
             if is_explicit {
@@ -805,9 +803,7 @@ impl AgentHook for ModelContextHook {
             .zip(event.tool_args())
             .map(|(n, a)| (n.to_string(), a.to_string()));
 
-        let is_explicit = std::env::var("BOXXY_DEBUG_CONTEXT")
-            .map(|v| v == "1")
-            .unwrap_or(false);
+        let is_explicit = boxxy_sys_utils::env::debug_context();
 
         async move {
             if is_explicit && let Some((tool_name, args)) = tool_call {
@@ -864,9 +860,7 @@ impl BoxxyAgent {
             .add_hook(hook)
             .await;
 
-        let is_explicit = std::env::var("BOXXY_DEBUG_CONTEXT")
-            .map(|v| v == "1")
-            .unwrap_or(false);
+        let is_explicit = boxxy_sys_utils::env::debug_context();
 
         match res_result {
             Ok(res) => {
@@ -921,9 +915,7 @@ impl BoxxyAgent {
             .add_hook(hook)
             .await;
 
-        let is_explicit = std::env::var("BOXXY_DEBUG_CONTEXT")
-            .map(|v| v == "1")
-            .unwrap_or(false);
+        let is_explicit = boxxy_sys_utils::env::debug_context();
 
         match res_result {
             Ok(res) => {

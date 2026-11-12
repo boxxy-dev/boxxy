@@ -159,6 +159,8 @@ impl TerminalComponent {
                 spawn_intent: intent,
                 reattach_pid,
                 layout_tag: Some(layout_tag),
+                command: None,
+                hold: false,
             },
             move |msg: PaneOutput| {
                 let _ = tx.send(msg);

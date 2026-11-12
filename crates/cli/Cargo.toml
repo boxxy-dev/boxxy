@@ -1,0 +1,31 @@
+[package]
+name = "boxxy-cli"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description = "Ghostty-style CLI parser, +action dispatcher, and headless diagnostics for Boxxy Terminal."
+license.workspace = true
+
+[features]
+disable-self-update = ["boxxy-sys-utils/disable-self-update", "boxxy-agent/disable-self-update"]
+
+[dependencies]
+anyhow.workspace = true
+boxxy-agent = { path = "../boxxy_agent" }
+boxxy-claw-protocol = { path = "../boxxy_claw_protocol" }
+boxxy-mcp.workspace = true
+boxxy-preferences = { path = "../preferences" }
+boxxy-sys-utils.workspace = true
+boxxy-themes.workspace = true
+clap.workspace = true
+clap_complete.workspace = true
+log.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+toml.workspace = true
+
+[dev-dependencies]
+serial_test.workspace = true
+tempfile.workspace = true

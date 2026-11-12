@@ -1,8 +1,17 @@
-use boxxy_window::{AppInit, AppWindow};
-use gtk4::{gio, glib};
+use boxxy_cli::{LaunchTarget, ParseOutcome};
+use boxxy_window::{AppInit, AppWindow, TabLaunchSpec};
+use gtk4::gio;
 use libadwaita::prelude::*;
+use std::process::ExitCode;
 
-fn main() {
+fn main() -> ExitCode {
+    // Parse CLI flags and dispatch any headless `+action`, `--help`, or `--version`
+    // immediately before touching GTK, GResources, or background runtimes.
+    let launch_req = match boxxy_cli::dispatch_from_env() {
+        ParseOutcome::Exit(code) => return code,
+        ParseOutcome::Launch(req) => req,
+    };
+
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
         .filter_module("zbus", log::LevelFilter::Warn)
         .filter_module("tracing", log::LevelFilter::Warn)
@@ -15,169 +24,19 @@ fn main() {
         .filter_module("rustls", log::LevelFilter::Warn)
         .init();
 
-    // Parse early isolated dev-mode CLI flags (`--dev`, `--instance`, `--ephemeral`,
-    // `--sync-settings`) before initializing Settings or waiting on restarting parents.
-    boxxy_sys_utils::configure_dev_options(parse_early_dev_args());
-    boxxy_sys_utils::prepare_dev_environment();
+    // Apply isolated dev-mode / config-dir / debug-context overrides so `gtk_app_id()`
+    // resolves the right GApplication bus name before `app.run_with_args()`.
+    boxxy_sys_utils::configure_dev_options(launch_req.dev.clone());
 
-    // When spawned by `Updater::apply_update_and_restart()`, the old `boxxy-terminal`
-    // process calls `spawn()` followed immediately by `std::process::exit(0)`. Because
-    // tearing down a GUI process's address space (`exit_mmap`) in the kernel takes several
-    // milliseconds before its D-Bus socket is closed (`exit_files`), reaching `app.run()`
-    // too quickly causes GIO to see `dev.boxxy.BoxxyTerminal` as still owned by the dying
-    // parent, forward `--new-window` to the dying instance, and exit immediately without
-    // opening a window. Waiting for the parent `boxxy-terminal` PID to finish exiting
-    // eliminates this race for both older and newer builds.
+    // When spawned by `Updater::apply_update_and_restart()`, wait for the dying parent
+    // `boxxy-terminal` process to release `dev.boxxy.BoxxyTerminal` on D-Bus so GIO
+    // does not forward `--new-window` to the exiting parent and quit immediately.
     if !boxxy_sys_utils::is_dev_instance() {
-        wait_for_restarting_parent();
+        wait_for_restarting_parent(launch_req.replace_existing);
     }
 
-    // Enter the global tokio runtime context so tokio::spawn works everywhere.
+    // Enter the global tokio runtime context so tokio::spawn works everywhere on the main thread.
     let _rt_guard = boxxy_sys_utils::runtime().enter();
-
-    // Pre-load configuration into memory before GTK touches the window system.
-    // This completely removes disk I/O from the critical window mapping path.
-    boxxy_preferences::Settings::init();
-    boxxy_preferences::AppState::init();
-
-    // Ensure all default files, bookmarks cache, and the built-in model catalog index
-    // are initialized in the background on startup, without blocking the UI thread.
-    tokio::spawn(async {
-        boxxy_bookmarks::manager::BookmarksManager::init();
-        boxxy_preferences::Settings::ensure_claw_skills();
-    });
-
-    // Register the agent deployment/version check hook so `get_agent()` always
-    // ensures the daemon is running and up to date before connecting.
-    boxxy_terminal::register_agent_ensure_hook(|| async {
-        if let Err(e) = boxxy_window::agent_deployer::ensure_agent_running().await {
-            log::error!("Failed to ensure agent is running: {}", e);
-        }
-    });
-
-    // Ensure the background agent is deployed and running on the host.
-    // We then proceed to other agent-dependent tasks once it's ready.
-    tokio::spawn(async {
-        // Fetch API keys from host environment in the background
-        let agent = boxxy_terminal::get_agent().await;
-
-        let is_flatpak = std::env::var("FLATPAK_ID").is_ok();
-        let mut keys_to_check: Vec<(String, String)> = [
-            ("GEMINI_API_KEY", "Gemini"),
-            ("ANTHROPIC_API_KEY", "Anthropic"),
-            ("OPENAI_API_KEY", "OpenAI"),
-            ("OPENROUTER_API_KEY", "OpenRouter"),
-            ("DEEPSEEK_API_KEY", "DeepSeek"),
-            ("MOONSHOT_API_KEY", "Moonshot"),
-            ("XAI_API_KEY", "xAI"),
-            ("ZAI_API_KEY", "Z.ai"),
-            ("MISTRAL_API_KEY", "Mistral"),
-            ("MINIMAX_API_KEY", "MiniMax"),
-            ("GROQ_API_KEY", "Groq"),
-            ("OPENCODE_API_KEY", "OpenCode Zen"),
-            ("OPENCODE_API_KEY", "OpenCode Go"),
-        ]
-        .into_iter()
-        .map(|(k, v)| (k.to_string(), v.to_string()))
-        .collect();
-
-        for ep in &boxxy_preferences::Settings::load().openai_compatible_endpoints {
-            if let Some(env_var) = ep
-                .api_key_env
-                .as_deref()
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-            {
-                keys_to_check.push((env_var.to_string(), ep.name.clone()));
-            }
-        }
-
-        let mut found_any = false;
-        for (env_var, provider) in keys_to_check {
-            let key_opt = if is_flatpak {
-                agent.proxy().get_environment_variable(env_var).await.ok()
-            } else {
-                std::env::var(&env_var).ok()
-            };
-            if let Some(key) = key_opt
-                && !key.is_empty()
-            {
-                boxxy_preferences::Settings::set_env_api_key(&provider, key);
-                found_any = true;
-            }
-        }
-
-        if found_any {
-            let settings = boxxy_preferences::Settings::load();
-            let _ = boxxy_preferences::SETTINGS_EVENT_BUS.send((*settings).clone());
-        }
-
-        // Always push effective credentials to the daemon, whether env vars
-        // were found or not. The keys the user configures in Settings →
-        // APIs live only in `settings.json` and would never reach the
-        // daemon via the env-scan path. `get_effective_api_keys()` merges
-        // env overrides on top of the JSON-stored keys.
-        let settings = boxxy_preferences::Settings::load();
-        let _ = agent
-            .update_credentials(
-                settings.get_effective_api_keys(),
-                settings.ollama_base_url.clone(),
-            )
-            .await;
-
-        // Yield briefly so the initial terminal pane's PTY spawn completes with zero
-        // contention before background telemetry and GStreamer pre-warming run.
-        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
-        boxxy_window::sound::ensure_gstreamer_init();
-
-        // Track app.launch after `get_agent()` has synchronized the shared `session_id`
-        // with `boxxy-agent` and allows querying the real host shell (even inside Flatpak).
-        boxxy_telemetry::init_db().await;
-        {
-            use sysinfo::System;
-            let os = if is_flatpak {
-                // Inside the Flatpak sandbox, /etc/os-release belongs to the GNOME Platform
-                // runtime, not the host. /run/host/os-release or /run/host/etc/os-release has the host OS.
-                std::fs::read_to_string("/run/host/os-release")
-                    .or_else(|_| std::fs::read_to_string("/run/host/etc/os-release"))
-                    .ok()
-                    .and_then(|content| {
-                        content
-                            .lines()
-                            .find(|l| l.starts_with("NAME="))
-                            .map(|l| {
-                                l.trim_start_matches("NAME=")
-                                    .trim_matches(['"', '\''])
-                                    .trim()
-                                    .to_string()
-                            })
-                    })
-                    .unwrap_or_else(|| System::name().unwrap_or_else(|_| "Unknown".to_string()))
-            } else {
-                System::name().unwrap_or_else(|_| "Unknown".to_string())
-            };
-            let arch = System::cpu_arch();
-            let version = env!("CARGO_PKG_VERSION");
-            let pkg_type = if is_flatpak { "flatpak" } else { "native" };
-            let shell = agent
-                .get_preferred_shell()
-                .await
-                .ok()
-                .filter(|s| !s.trim().is_empty())
-                .unwrap_or_else(|| std::env::var("SHELL").unwrap_or_else(|_| "unknown".to_string()));
-            let desktop =
-                std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_else(|_| "unknown".to_string());
-            let theme = {
-                let s = boxxy_preferences::Settings::load();
-                boxxy_telemetry::resolve_theme_telemetry(s.app_theme_mode, &s.app_theme_id)
-            };
-
-            boxxy_telemetry::track_launch(&os, &arch, pkg_type, version, &shell, &desktop, theme)
-                .await;
-        }
-    });
-
-    gio::resources_register_include!("compiled.gresource").expect("Failed to register resources.");
 
     let app = libadwaita::Application::builder()
         .application_id(boxxy_sys_utils::gtk_app_id())
@@ -187,146 +46,168 @@ fn main() {
         )
         .build();
 
+    // `connect_startup` runs strictly on the primary GUI instance (never on secondary
+    // `boxxy-terminal --tab` / `--present` forwarders), avoiding duplicate file seeding,
+    // agent startup-token claims, GStreamer init, and `app.launch` telemetry.
     app.connect_startup(|_| {
+        boxxy_sys_utils::prepare_dev_environment();
+
+        gio::resources_register_include!("compiled.gresource")
+            .expect("Failed to register resources.");
         gtk4::Window::set_default_icon_name(boxxy_sys_utils::STABLE_GTK_APP_ID);
+
+        boxxy_preferences::Settings::init();
+        boxxy_preferences::AppState::init();
+
+        tokio::spawn(async {
+            boxxy_bookmarks::manager::BookmarksManager::init();
+            boxxy_preferences::Settings::ensure_claw_skills();
+        });
+
+        boxxy_terminal::register_agent_ensure_hook(|| async {
+            if let Err(e) = boxxy_window::agent_deployer::ensure_agent_running().await {
+                log::error!("Failed to ensure agent is running: {}", e);
+            }
+        });
+
+        tokio::spawn(async {
+            let agent = boxxy_terminal::get_agent().await;
+
+            let is_flatpak = std::env::var("FLATPAK_ID").is_ok();
+            let mut keys_to_check: Vec<(String, String)> =
+                boxxy_sys_utils::env::PROVIDER_ENV_KEY_MAP
+                    .iter()
+                    .map(|&(k, v)| (k.to_string(), v.to_string()))
+                    .collect();
+
+            for ep in &boxxy_preferences::Settings::load().openai_compatible_endpoints {
+                if let Some(env_var) = ep
+                    .api_key_env
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                {
+                    keys_to_check.push((env_var.to_string(), ep.name.clone()));
+                }
+            }
+
+            let mut found_any = false;
+            for (env_var, provider) in keys_to_check {
+                let key_opt = if is_flatpak {
+                    agent.proxy().get_environment_variable(env_var).await.ok()
+                } else {
+                    std::env::var(&env_var).ok()
+                };
+                if let Some(key) = key_opt
+                    && !key.is_empty()
+                {
+                    boxxy_preferences::Settings::set_env_api_key(&provider, key);
+                    found_any = true;
+                }
+            }
+
+            if found_any {
+                let settings = boxxy_preferences::Settings::load();
+                let _ = boxxy_preferences::SETTINGS_EVENT_BUS.send((*settings).clone());
+            }
+
+            let settings = boxxy_preferences::Settings::load();
+            let _ = agent
+                .update_credentials(
+                    settings.get_effective_api_keys(),
+                    settings.ollama_base_url.clone(),
+                )
+                .await;
+
+            tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+            boxxy_window::sound::ensure_gstreamer_init();
+
+            boxxy_telemetry::init_db().await;
+            {
+                use sysinfo::System;
+                let os = if is_flatpak {
+                    std::fs::read_to_string("/run/host/os-release")
+                        .or_else(|_| std::fs::read_to_string("/run/host/etc/os-release"))
+                        .ok()
+                        .and_then(|content| {
+                            content
+                                .lines()
+                                .find(|l| l.starts_with("NAME="))
+                                .map(|l| {
+                                    l.trim_start_matches("NAME=")
+                                        .trim_matches(['"', '\''])
+                                        .trim()
+                                        .to_string()
+                                })
+                        })
+                        .unwrap_or_else(|| System::name().unwrap_or_else(|_| "Unknown".to_string()))
+                } else {
+                    System::name().unwrap_or_else(|_| "Unknown".to_string())
+                };
+                let arch = System::cpu_arch();
+                let version = env!("CARGO_PKG_VERSION");
+                let pkg_type = if is_flatpak { "flatpak" } else { "native" };
+                let shell = agent
+                    .get_preferred_shell()
+                    .await
+                    .ok()
+                    .filter(|s| !s.trim().is_empty())
+                    .unwrap_or_else(|| {
+                        std::env::var("SHELL").unwrap_or_else(|_| "unknown".to_string())
+                    });
+                let desktop =
+                    std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_else(|_| "unknown".to_string());
+                let theme = {
+                    let s = boxxy_preferences::Settings::load();
+                    boxxy_telemetry::resolve_theme_telemetry(s.app_theme_mode, &s.app_theme_id)
+                };
+
+                boxxy_telemetry::track_launch(&os, &arch, pkg_type, version, &shell, &desktop, theme)
+                    .await;
+            }
+        });
     });
 
-    app.add_main_option(
-        "dev",
-        glib::Char::from(0),
-        glib::OptionFlags::NONE,
-        glib::OptionArg::None,
-        "Run as an isolated development instance alongside Stable Boxxy",
-        None,
-    );
-    app.add_main_option(
-        "instance",
-        glib::Char::from(0),
-        glib::OptionFlags::NONE,
-        glib::OptionArg::String,
-        "Run as a named isolated development instance",
-        Some("SLUG"),
-    );
-    app.add_main_option(
-        "ephemeral",
-        glib::Char::from(0),
-        glib::OptionFlags::NONE,
-        glib::OptionArg::None,
-        "Run an isolated dev instance with clean factory-default settings",
-        None,
-    );
-    app.add_main_option(
-        "sync-settings",
-        glib::Char::from(0),
-        glib::OptionFlags::NONE,
-        glib::OptionArg::None,
-        "Refresh dev instance settings from Stable Boxxy before launching",
-        None,
-    );
-
-    app.add_main_option(
-        "new-window",
-        glib::Char::from(0),
-        glib::OptionFlags::NONE,
-        glib::OptionArg::None,
-        "Open a new window",
-        None,
-    );
-    app.add_main_option(
-        "present",
-        glib::Char::from(0),
-        glib::OptionFlags::NONE,
-        glib::OptionArg::None,
-        "Present the active window if one is open, or launch a new window",
-        None,
-    );
-    app.add_main_option(
-        "tab",
-        glib::Char::from(b't'),
-        glib::OptionFlags::NONE,
-        glib::OptionArg::None,
-        "Open a new tab in the active window",
-        None,
-    );
-    app.add_main_option(
-        "working-directory",
-        glib::Char::from(b'd'),
-        glib::OptionFlags::NONE,
-        glib::OptionArg::String,
-        "Set the terminal's working directory",
-        Some("DIR"),
-    );
-
     app.connect_command_line(|app, cmdline| {
-        let options = cmdline.options_dict();
-        let present_only = options.contains("present");
-        let new_tab = options.contains("tab");
+        let remote_cwd = cmdline.cwd();
+        let req = match boxxy_cli::parse_remote_launch(cmdline.arguments(), remote_cwd.as_deref()) {
+            Ok(r) => r,
+            Err(err) => {
+                log::error!("Invalid remote command-line payload: {err}");
+                return 2.into();
+            }
+        };
 
-        // Resolve working directory from `--working-directory` (`-d`) or first positional argument.
-        let explicit_dir = options
-            .lookup::<String>("working-directory")
-            .ok()
-            .flatten()
-            .filter(|s| !s.trim().is_empty())
-            .or_else(|| {
-                cmdline
-                    .arguments()
-                    .into_iter()
-                    .skip(1)
-                    .find(|arg| !arg.to_string_lossy().starts_with('-'))
-                    .map(|arg| arg.to_string_lossy().into_owned())
-            })
-            .and_then(|raw| {
-                let file = cmdline.create_file_for_arg(&raw);
-                file.path().map(|p| {
-                    if p.is_file() {
-                        p.parent()
-                            .unwrap_or(&p)
-                            .to_string_lossy()
-                            .into_owned()
-                    } else {
-                        p.to_string_lossy().into_owned()
-                    }
-                })
-            });
+        let spec = TabLaunchSpec {
+            working_dir: req.working_dir.map(|p| p.to_string_lossy().into_owned()),
+            command: req.command,
+            hold: req.hold,
+            title: req.title,
+        };
+        let has_explicit_payload =
+            spec.working_dir.is_some() || spec.command.is_some() || spec.title.is_some();
 
         let has_window = app.active_window().is_some();
 
         if !has_window {
-            // First launch, or no active windows. Create the first window in the requested directory.
-            AppWindow::new(
-                app,
-                AppInit {
-                    incoming_tab_view: None,
-                    working_dir: explicit_dir,
-                },
-            );
-        } else if present_only {
-            // Companion applets / shortcut helpers pass `--present` to raise the active
-            // window with a Wayland activation token without spawning an extra window.
+            AppWindow::new(app, AppInit::from_tab_launch(spec));
+        } else if req.target == LaunchTarget::Present {
             if let Some(window) = app.active_window() {
                 window.present();
             }
-        } else if new_tab {
-            // Open a new tab in the active window (optionally in `explicit_dir`) and focus it.
+        } else if req.target == LaunchTarget::NewTab {
             if let Some(window) = app.active_window() {
-                let dir_arg = explicit_dir.unwrap_or_default().to_variant();
-                let _ = window.activate_action("win.new-tab-dir", Some(&dir_arg));
+                if let Ok(json) = serde_json::to_string(&spec) {
+                    let variant = json.to_variant();
+                    let _ = window.activate_action("win.new-tab-launch", Some(&variant));
+                }
                 window.present();
             }
-        } else if explicit_dir.is_some() {
-            // Open a new window directly in `explicit_dir`.
-            AppWindow::new(
-                app,
-                AppInit {
-                    incoming_tab_view: None,
-                    working_dir: explicit_dir,
-                },
-            );
+        } else if has_explicit_payload {
+            AppWindow::new(app, AppInit::from_tab_launch(spec));
         } else if let Some(window) = app.active_window() {
-            // Any secondary CLI or desktop Exec invocation (`boxxy-terminal` or
-            // `boxxy-terminal --new-window`) opens a new window, preserving the
-            // active tab's CWD if configured.
+            // Secondary invocation with no explicit CWD/command opens a new window
+            // (preserving the active tab's CWD when `preserve_working_dir` is enabled).
             let _ = window.activate_action("win.new-window", None);
         }
 
@@ -348,13 +229,14 @@ fn main() {
         boxxy_bookmarks::manager::BookmarksManager::clean_runs_dir();
     });
 
-    let exit_code = app.run();
+    let gapp_args = launch_req.to_gapplication_args("boxxy-terminal");
+    let exit_code: i32 = app.run_with_args(&gapp_args).into();
 
-    std::process::exit(exit_code.into());
+    ExitCode::from(exit_code.clamp(0, 255) as u8)
 }
 
 #[cfg(unix)]
-fn wait_for_restarting_parent() {
+fn wait_for_restarting_parent(replace_existing: bool) {
     let initial_ppid = std::os::unix::process::parent_id();
     if initial_ppid <= 1 {
         return;
@@ -380,65 +262,10 @@ fn wait_for_restarting_parent() {
         // Allow the session D-Bus daemon to process the parent's closed socket
         // and release `dev.boxxy.BoxxyTerminal` before GApplication registers.
         std::thread::sleep(std::time::Duration::from_millis(150));
-    } else if std::env::args().any(|a| a == "--gapplication-replace") {
+    } else if replace_existing {
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
 }
 
 #[cfg(not(unix))]
-fn wait_for_restarting_parent() {}
-
-fn parse_early_dev_args() -> boxxy_sys_utils::CliDevOverrides {
-    parse_early_dev_args_from(std::env::args().skip(1))
-}
-
-fn parse_early_dev_args_from<I, S>(iter: I) -> boxxy_sys_utils::CliDevOverrides
-where
-    I: IntoIterator<Item = S>,
-    S: AsRef<str>,
-{
-    let mut overrides = boxxy_sys_utils::CliDevOverrides::default();
-    let mut args = iter.into_iter();
-    while let Some(raw) = args.next() {
-        let arg = raw.as_ref();
-        if arg == "--" {
-            break;
-        } else if arg == "--dev" {
-            overrides.dev = true;
-        } else if arg == "--ephemeral" {
-            overrides.ephemeral = true;
-        } else if arg == "--sync-settings" {
-            overrides.sync_settings = true;
-        } else if arg == "--instance" {
-            overrides.instance = args.next().map(|s| s.as_ref().to_string());
-        } else if let Some(val) = arg.strip_prefix("--instance=") {
-            overrides.instance = Some(val.to_string());
-        }
-    }
-    overrides
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parse_early_dev_args_handles_flags_and_double_dash() {
-        let parsed = parse_early_dev_args_from([
-            "--dev",
-            "--sync-settings",
-            "--instance",
-            "wt-83",
-            "--",
-            "--ephemeral",
-        ]);
-        assert!(parsed.dev);
-        assert!(parsed.sync_settings);
-        assert_eq!(parsed.instance.as_deref(), Some("wt-83"));
-        assert!(!parsed.ephemeral);
-
-        let eq_parsed = parse_early_dev_args_from(["--instance=alpha", "--ephemeral"]);
-        assert_eq!(eq_parsed.instance.as_deref(), Some("alpha"));
-        assert!(eq_parsed.ephemeral);
-    }
-}
+fn wait_for_restarting_parent(_replace_existing: bool) {}

@@ -4,6 +4,8 @@ pub struct TerminalInit {
     pub working_dir: Option<String>,
     pub spawn_intent: Option<String>,
     pub reattach_pid: Option<u32>,
+    pub command: Option<Vec<String>>,
+    pub hold: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -59,6 +61,8 @@ pub struct PaneInit {
     pub spawn_intent: Option<String>,
     pub reattach_pid: Option<u32>,
     pub layout_tag: Option<String>,
+    pub command: Option<Vec<String>>,
+    pub hold: bool,
 }
 
 #[derive(Debug, Clone)]

@@ -177,6 +177,7 @@ where
             let mut resize_pending: Option<(WindowSize, bool)> = None;
             let mut last_snapshot_at: Option<tokio::time::Instant> = None;
             let mut pending_coalesced_render = false;
+            let mut pty_closed = false;
 
             let resize_sleep = tokio::time::sleep(Duration::from_millis(25));
             tokio::pin!(resize_sleep);
@@ -223,11 +224,19 @@ where
                 let needs_write = state.needs_write();
 
                 let write_fut = async {
-                    if needs_write {
+                    if !pty_closed && needs_write {
                         // The PTY reader and writer use the same underlying FD in our implementation.
                         // Return the readiness guard so we only clear edge-triggered EPOLLOUT
                         // readiness if `pty_write` actually observes `WouldBlock`.
                         async_pty_reader.writable().await
+                    } else {
+                        std::future::pending().await
+                    }
+                };
+
+                let read_fut = async {
+                    if !pty_closed {
+                        async_pty_reader.readable().await
                     } else {
                         std::future::pending().await
                     }
@@ -240,8 +249,10 @@ where
                         let mut needs_render = false;
                         match msg {
                             Ok(Msg::Input(input)) => {
-                                log::trace!("EventLoop: received Msg::Input, len={}", input.len());
-                                state.write_list.push_back(input);
+                                if !pty_closed {
+                                    log::trace!("EventLoop: received Msg::Input, len={}", input.len());
+                                    state.write_list.push_back(input);
+                                }
                             },
                             Ok(Msg::ReplayOutput(bytes)) => {
                                 state.parser.advance(&mut self.terminal, &bytes);
@@ -270,13 +281,15 @@ where
                                         Scroll::Bottom => -50,
                                     };
 
-                                    if lines > 0 {
-                                        for _ in 0..lines {
-                                            state.write_list.push_back(Cow::Borrowed(seq_up));
-                                        }
-                                    } else if lines < 0 {
-                                        for _ in 0..-lines {
-                                            state.write_list.push_back(Cow::Borrowed(seq_down));
+                                    if !pty_closed {
+                                        if lines > 0 {
+                                            for _ in 0..lines {
+                                                state.write_list.push_back(Cow::Borrowed(seq_up));
+                                            }
+                                        } else if lines < 0 {
+                                            for _ in 0..-lines {
+                                                state.write_list.push_back(Cow::Borrowed(seq_down));
+                                            }
                                         }
                                     }
                                 } else {
@@ -335,7 +348,7 @@ where
                             Ok(Msg::SetVisible(visible)) => {
                                 if self.terminal.is_visible != visible {
                                     self.terminal.is_visible = visible;
-                                    if self.terminal.mode().contains(crate::engine::term::TermMode::VISIBILITY_REPORTS) {
+                                    if !pty_closed && self.terminal.mode().contains(crate::engine::term::TermMode::VISIBILITY_REPORTS) {
                                         let report = crate::engine::term::visibility_report(visible);
                                         state.write_list.push_back(Cow::Borrowed(report.as_bytes()));
                                     }
@@ -494,7 +507,9 @@ where
 
                     _ = resize_sleep_fut => {
                         if let Some((window_size, resize_grid)) = resize_pending.take() {
-                            self.pty.on_resize(window_size);
+                            if !pty_closed {
+                                self.pty.on_resize(window_size);
+                            }
                             if resize_grid {
                                 self.terminal.resize(window_size);
                                 self.publish_render_state(
@@ -516,13 +531,21 @@ where
                             Ok(true) => guard.clear_ready(),
                             Ok(false) => {}
                             Err(err) => {
+                                #[cfg(target_os = "linux")]
+                                if err.raw_os_error() == Some(libc::EIO) {
+                                    guard.clear_ready();
+                                    pty_closed = true;
+                                    state.write_list.clear();
+                                    state.writing = None;
+                                    continue 'event_loop;
+                                }
                                 error!("Error writing to PTY in event loop: {err}");
                                 break 'event_loop;
                             }
                         }
                     }
 
-                    read_guard = async_pty_reader.readable() => {
+                    read_guard = read_fut => {
                         let Ok(mut guard) = read_guard else {
                             break 'event_loop;
                         };
@@ -531,8 +554,13 @@ where
                             last_snapshot_at.is_some_and(|last| last.elapsed() < interval);
                         match self.pty_read(&mut state, &mut buf, pipe.as_mut(), in_coalesce_window) {
                             Ok((false, _, _)) => {
-                                // EOF Reached
+                                // EOF reached: disarm PTY I/O, notify listener, and keep
+                                // servicing UI scroll/selection/search/snapshot messages
+                                // until `detach_pty()` sends `Msg::Shutdown`.
                                 guard.clear_ready();
+                                pty_closed = true;
+                                state.write_list.clear();
+                                state.writing = None;
                                 self.event_proxy.send_event(Event::Exit);
                                 self.terminal.exit();
                                 self.publish_render_state(
@@ -540,7 +568,6 @@ where
                                     &mut last_snapshot_at,
                                     &mut pending_coalesced_render,
                                 );
-                                break 'event_loop;
                             }
                             Ok((true, needs_coalesced_render, would_block)) => {
                                 if needs_coalesced_render {
@@ -569,8 +596,12 @@ where
                             Err(err) => {
                                 #[cfg(target_os = "linux")]
                                 if err.raw_os_error() == Some(libc::EIO) {
-                                    // PTY closed (child exited)
+                                    // PTY slave closed: disarm PTY I/O while keeping UI
+                                    // scroll/selection/search/snapshot handling live for `--hold`.
                                     guard.clear_ready();
+                                    pty_closed = true;
+                                    state.write_list.clear();
+                                    state.writing = None;
                                     self.event_proxy.send_event(Event::Exit);
                                     self.terminal.exit();
                                     self.publish_render_state(
@@ -578,7 +609,7 @@ where
                                         &mut last_snapshot_at,
                                         &mut pending_coalesced_render,
                                     );
-                                    break 'event_loop;
+                                    continue 'event_loop;
                                 }
                                 error!("Error reading from PTY in event loop: {err}");
                                 break 'event_loop;
@@ -597,9 +628,9 @@ where
                     }
 
                     sig_guard = async {
-                        match &async_signals {
-                            Some(signals) => signals.readable().await.unwrap(),
-                            None => std::future::pending().await,
+                        match (&async_signals, pty_closed) {
+                            (Some(signals), false) => signals.readable().await.unwrap(),
+                            _ => std::future::pending().await,
                         }
                     } => {
                         let mut guard = sig_guard;
@@ -610,13 +641,15 @@ where
                             if self.drain_on_exit {
                                 let _ = self.pty_read(&mut state, &mut buf, pipe.as_mut(), false);
                             }
+                            pty_closed = true;
+                            state.write_list.clear();
+                            state.writing = None;
                             self.terminal.exit();
                             self.publish_render_state(
                                 RenderPriority::Immediate,
                                 &mut last_snapshot_at,
                                 &mut pending_coalesced_render,
                             );
-                            break 'event_loop;
                         }
                         guard.clear_ready();
                     }

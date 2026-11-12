@@ -74,7 +74,7 @@ impl AppWindow {
                     &app,
                     AppInit {
                         incoming_tab_view: Some(new_tab_view.clone()),
-                        working_dir: None,
+                        ..AppInit::new()
                     },
                 );
             }
@@ -399,7 +399,12 @@ impl AppWindow {
             toast_overlay,
             frosted_container: frosted_container.clone(),
             notifications: Vec::new(),
-            initial_working_dir: init.working_dir.clone(),
+            initial_launch: Some(crate::init::TabLaunchSpec {
+                working_dir: init.working_dir.clone(),
+                command: init.initial_command.clone(),
+                hold: init.hold,
+                title: init.initial_title.clone(),
+            }),
             force_close,
             tx: tx.clone(),
         };
@@ -492,9 +497,13 @@ impl AppWindow {
         // terminal widget and its background color/opacity are rendered on Frame 1 with
         // zero transparent gap. If an external companion queued detached sessions to restore,
         // this initial blank tab is closed once the restored tabs are attached.
+        let is_blank_initial_tab =
+            init.initial_command.is_none() && init.working_dir.is_none() && init.initial_title.is_none();
         let initial_tab_id = if !is_drag_window && inner_ref.borrow().tabs.is_empty() {
             crate::update::update(&inner_ref, AppInput::NewTab);
-            inner_ref.borrow().tabs.first().map(|t| t.id.clone())
+            is_blank_initial_tab
+                .then(|| inner_ref.borrow().tabs.first().map(|t| t.id.clone()))
+                .flatten()
         } else {
             None
         };

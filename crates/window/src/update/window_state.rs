@@ -290,8 +290,8 @@ pub fn new_window(inner: &AppWindowInner) {
         AppWindow::new(
             &app,
             AppInit {
-                incoming_tab_view: None,
                 working_dir,
+                ..AppInit::new()
             },
         );
     }

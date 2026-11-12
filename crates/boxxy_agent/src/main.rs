@@ -1,21 +1,23 @@
 use anyhow::{Context, Result};
-use boxxy_agent::daemon;
-use boxxy_agent::ipc::{connect_agent_proxy, connect_maintenance_proxy, connect_pty_proxy};
+use boxxy_agent::{cli_ops, daemon};
 use clap::{Parser, Subcommand};
 use log::info;
-use zbus::Connection;
+use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
 #[command(
     name = "boxxy-agent",
-    version,
-    about = "Boxxy host-side maintenance daemon"
+    version = concat!(env!("CARGO_PKG_VERSION"), "+", env!("GIT_HASH")),
+    about = "Host-side privileged daemon for Boxxy Terminal",
+    long_about = "Host-side privileged daemon for Boxxy Terminal.\n\n\
+        Normally started and upgraded automatically by `boxxy-terminal`.\n\
+        For everyday inspection and control from the CLI, prefer `boxxy-terminal +agent <subcommand>`."
 )]
 struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
 
-    /// Run headlessly: spawn daemon and exit immediately.
+    /// Run headlessly: double-fork into the background and exit immediately.
     #[arg(long)]
     background: bool,
 
@@ -35,6 +37,14 @@ struct Cli {
     #[arg(long, global = true)]
     sync_settings: bool,
 
+    /// Override the active configuration and SQLite directory (must be an absolute path).
+    #[arg(long, global = true, value_name = "ABS_PATH")]
+    config_dir: Option<PathBuf>,
+
+    /// Log full LLM system prompts, history, and tool payloads on `model-context`.
+    #[arg(long, global = true)]
+    debug_context: bool,
+
     /// Skip the singleton check (for debugging only).
     #[arg(long, hide = true)]
     no_singleton: bool,
@@ -42,16 +52,16 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Commands {
-    /// Start the daemon (default).
+    /// Start the daemon in the foreground (default when no subcommand is given).
     Start,
-    /// Stop the running daemon gracefully.
+    /// Stop the running daemon gracefully after flushing telemetry.
     Stop,
-    /// Restart the running daemon (self-upgrade).
+    /// Restart the running daemon in-place (`exec()`), preserving child shells.
     Restart,
-    /// List PTY sessions the daemon has kept alive after the UI closed
-    /// (persistence must be enabled in Preferences → Advanced).
+    /// List detached PTY sessions kept alive in the background.
+    #[command(visible_alias = "sessions")]
     ListSessions,
-    /// Show daemon status, power state, Dream Cycle state, and active sessions.
+    /// Show daemon version, power state, Dream Cycle state, and active session counts.
     Status,
 }
 
@@ -70,99 +80,42 @@ fn main() -> Result<()> {
         instance: cli.instance.clone(),
         ephemeral: cli.ephemeral,
         sync_settings: cli.sync_settings,
+        config_dir: cli.config_dir.clone(),
+        debug_context: cli.debug_context,
     });
 
-    // Handle subcommands that don't require the daemon to start
+    // Handle subcommands that talk to an already-running daemon over D-Bus
     if let Some(cmd) = &cli.command {
         match cmd {
             Commands::Stop => {
                 return run_async(async {
-                    let conn = Connection::session().await?;
-                    let proxy = connect_agent_proxy(&conn).await?;
                     info!(
                         "Requesting daemon stop ({})...",
                         boxxy_sys_utils::agent_bus_name()
                     );
-                    proxy.request_stop().await?;
-                    Ok(())
+                    cli_ops::request_stop().await
                 });
             }
             Commands::Restart => {
                 return run_async(async {
-                    let conn = Connection::session().await?;
-                    let proxy = connect_agent_proxy(&conn).await?;
                     info!(
                         "Requesting daemon restart ({})...",
                         boxxy_sys_utils::agent_bus_name()
                     );
-                    proxy.request_reload().await?;
-                    Ok(())
+                    cli_ops::request_restart().await
                 });
             }
             Commands::ListSessions => {
                 return run_async(async {
-                    let conn = Connection::session().await?;
-                    let proxy = connect_pty_proxy(&conn).await?;
-                    let sessions = proxy.list_detached_sessions_detailed().await?;
-                    if sessions.is_empty() {
-                        println!("No detached PTY sessions.");
-                    } else {
-                        println!(
-                            "{:>8}  {:>8}  {:<16}  {:<10}  {:<30}  PANE_ID",
-                            "PID", "IDLE_S", "PROCESS", "STATE", "CWD"
-                        );
-                        for s in sessions {
-                            let proc_label = if s.foreground_process.is_empty() {
-                                "(shell)".to_string()
-                            } else {
-                                s.foreground_process
-                            };
-                            let state_label = if s.waiting_for_input {
-                                "INPUT_WAIT"
-                            } else {
-                                "DETACHED"
-                            };
-                            println!(
-                                "{:>8}  {:>8}  {:<16}  {:<10}  {:<30}  {}",
-                                s.pid, s.idle_secs, proc_label, state_label, s.cwd, s.pane_id
-                            );
-                        }
-                    }
+                    let sessions = cli_ops::query_detached_sessions().await?;
+                    cli_ops::print_sessions_human(&sessions);
                     Ok(())
                 });
             }
             Commands::Status => {
                 return run_async(async {
-                    let conn = Connection::session().await?;
-                    let agent_proxy = connect_agent_proxy(&conn).await?;
-                    let maint_proxy = connect_maintenance_proxy(&conn).await?;
-                    let pty_proxy = connect_pty_proxy(&conn).await?;
-
-                    let version = agent_proxy.get_version().await.unwrap_or_default();
-                    let config_dir = agent_proxy.get_config_dir().await.unwrap_or_default();
-                    let maint_status = maint_proxy
-                        .get_maintenance_status()
-                        .await
-                        .unwrap_or_else(|_| "unknown".to_string());
-                    let on_battery = maint_proxy.is_on_battery().await.unwrap_or(false);
-                    let claw_sessions = agent_proxy.list_claw_sessions().await.unwrap_or_default();
-                    let detached_ptys = pty_proxy
-                        .list_detached_sessions_detailed()
-                        .await
-                        .unwrap_or_default();
-
-                    println!(
-                        "Boxxy Agent v{version} ({})",
-                        boxxy_sys_utils::agent_bus_name()
-                    );
-                    println!("  Config Dir:        {config_dir}");
-                    println!(
-                        "  Power Source:      {}",
-                        if on_battery { "Battery" } else { "AC" }
-                    );
-                    println!("  Dream Cycle:       {maint_status}");
-                    println!("  Active Claw Panes: {}", claw_sessions.len());
-                    println!("  Detached Shells:   {}", detached_ptys.len());
+                    let report = cli_ops::query_status().await?;
+                    cli_ops::print_status_human(&report);
                     Ok(())
                 });
             }
@@ -180,12 +133,10 @@ fn main() -> Result<()> {
 
     // Hydrate the settings cache from disk BEFORE starting the runtime —
     // the claw engine reads model selection from `Settings::load()`, which
-    // is backed by a process-global `OnceLock` cache. Without this init
-    // the daemon would always see the default Settings (no model selected),
-    // even though the UI process has correctly configured one.
+    // is backed by a process-global cache.
     boxxy_preferences::Settings::init();
 
-    // Now start the async runtime ONLY in the final daemon process
+    // Start the async runtime ONLY in the final daemon process (after any fork).
     run_async(async move {
         let resolved_config_dir = boxxy_sys_utils::get_config_dir();
         info!(
@@ -215,7 +166,7 @@ fn main() -> Result<()> {
     })
 }
 
-/// Helper to run a future to completion using a new Tokio runtime.
+/// Helper to run a future to completion using a dedicated Tokio runtime.
 fn run_async<F: std::future::Future<Output = Result<()>>>(f: F) -> Result<()> {
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -252,8 +203,6 @@ fn daemonize() -> Result<()> {
                             libc::dup2(fd, libc::STDOUT_FILENO);
                             libc::dup2(fd, libc::STDERR_FILENO);
                         }
-                        // If stdin/stdout/stderr was already closed before launch, `open`
-                        // received FD 0, 1, or 2; consume ownership so `drop` does not close it.
                         if fd <= libc::STDERR_FILENO {
                             let _ = dev_null.into_raw_fd();
                         }

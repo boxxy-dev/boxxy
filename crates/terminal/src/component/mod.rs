@@ -115,6 +115,8 @@ impl TerminalComponent {
                 spawn_intent: init.spawn_intent,
                 reattach_pid: init.reattach_pid,
                 layout_tag: Some(format!("{}::0::root", init.id)),
+                command: init.command,
+                hold: init.hold,
             },
             move |output: PaneOutput| {
                 let _ = initial_tx.send(output);

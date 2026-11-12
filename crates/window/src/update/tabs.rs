@@ -462,15 +462,15 @@ pub fn new_tab(inner: &mut AppWindowInner) {
     new_tab_with_intent(inner, None);
 }
 
-pub fn new_tab_in_dir(inner: &mut AppWindowInner, working_dir: Option<String>) {
-    let _ = new_tab_internal(inner, None, working_dir, None);
+pub fn new_tab_launch(inner: &mut AppWindowInner, spec: crate::init::TabLaunchSpec) {
+    let _ = new_tab_internal(inner, None, spec, None);
 }
 
 pub fn new_tab_with_intent(
     inner: &mut AppWindowInner,
     intent: Option<String>,
 ) -> TerminalComponent {
-    new_tab_internal(inner, intent, None, None)
+    new_tab_internal(inner, intent, crate::init::TabLaunchSpec::default(), None)
 }
 
 pub fn new_tab_reattach(
@@ -478,7 +478,15 @@ pub fn new_tab_reattach(
     pid: u32,
     working_dir: Option<String>,
 ) -> TerminalComponent {
-    new_tab_internal(inner, None, working_dir, Some(pid))
+    new_tab_internal(
+        inner,
+        None,
+        crate::init::TabLaunchSpec {
+            working_dir,
+            ..Default::default()
+        },
+        Some(pid),
+    )
 }
 
 /// Restores a batch of detached sessions, grouping sessions that originated from
@@ -531,13 +539,15 @@ fn parse_layout_tag(tag: &str) -> (&str, usize, bool) {
 fn new_tab_internal(
     inner: &mut AppWindowInner,
     intent: Option<String>,
-    explicit_working_dir: Option<String>,
+    explicit_launch: crate::init::TabLaunchSpec,
     reattach_pid: Option<u32>,
 ) -> TerminalComponent {
     let id = uuid::Uuid::new_v4().to_string();
+    let initial = inner.initial_launch.take().unwrap_or_default();
 
-    let working_dir = explicit_working_dir
-        .or_else(|| inner.initial_working_dir.take())
+    let working_dir = explicit_launch
+        .working_dir
+        .or(initial.working_dir)
         .or_else(|| {
             if inner.current_settings.preserve_working_dir {
                 inner.tab_view.selected_page().and_then(|page| {
@@ -553,11 +563,17 @@ fn new_tab_internal(
             }
         });
 
+    let command = explicit_launch.command.or(initial.command);
+    let hold = explicit_launch.hold || initial.hold;
+    let custom_title = explicit_launch.title.or(initial.title);
+
     let controller = TerminalComponent::new(TerminalInit {
         id: id.clone(),
         working_dir: working_dir.clone(),
         spawn_intent: intent,
         reattach_pid,
+        command,
+        hold,
     });
 
     let parsed = load_palette(inner.current_settings.theme.as_str());
@@ -619,7 +635,7 @@ fn new_tab_internal(
         indicator_svg: std::rc::Rc::new(std::cell::RefCell::new(None)),
         working_anim_source: std::rc::Rc::new(std::cell::RefCell::new(None)),
         tab_color,
-        custom_title: None,
+        custom_title,
     };
     inner.tabs.push(tc);
     sync_tab_titles(inner);
@@ -1026,7 +1042,7 @@ pub fn move_tab_to_new_window_request(inner: &mut AppWindowInner, key: usize) {
             &app,
             AppInit {
                 incoming_tab_view: Some(new_tab_view.clone()),
-                working_dir: None,
+                ..AppInit::new()
             },
         );
 

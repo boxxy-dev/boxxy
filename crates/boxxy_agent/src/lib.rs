@@ -1,5 +1,6 @@
 pub mod character_watcher;
 pub mod claw;
+pub mod cli_ops;
 pub mod core;
 pub mod daemon;
 pub mod ipc;

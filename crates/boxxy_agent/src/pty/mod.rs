@@ -23,30 +23,11 @@ fn is_leaked_multiplexer_prefix(key: &str) -> bool {
         || key.starts_with("VSCODE_")
 }
 
-/// Parent-shell Boxxy session markers that must be scrubbed from both the daemon's
-/// inherited environment and `SpawnOptions.env` (which `boxxy-app` populates via
-/// `std::env::vars()` on native builds) *before* `apply_shell_integration` runs.
-/// Note: `BOXXY_SHELL_INTEGRATION=0` is preserved so explicit user opt-outs still work.
-const LEAKED_DAEMON_PARENT_VARS: &[&str] = &[
-    "BOXXY_SHELL_INTEGRATION_LOADED",
-    "BOXXY_SHELL_INTEGRATION_XDG_DIR",
-    "BOXXY_LOGIN_SHELL",
-    "BOXXY_ORIG_ZDOTDIR",
-    "BOXXY_WINDOW_ID",
-    "BOXXY_DEV",
-    "BOXXY_INSTANCE",
-    "BOXXY_EPHEMERAL",
-    "BOXXY_SYNC_SETTINGS",
-    "BOXXY_CONFIG_DIR",
-];
-
+/// Scrubs parent-shell Boxxy session markers from `SpawnOptions.env` using the
+/// canonical registry in `boxxy_sys_utils::env` while preserving explicit
+/// `BOXXY_SHELL_INTEGRATION=0` (`false`/`off`) opt-outs.
 fn scrub_inherited_boxxy_env(env: &mut Vec<(String, String)>) {
-    env.retain(|(k, v)| {
-        if k == "BOXXY_SHELL_INTEGRATION" {
-            return v == "0";
-        }
-        !LEAKED_DAEMON_PARENT_VARS.contains(&k.as_str())
-    });
+    boxxy_sys_utils::env::scrub_child_pty_env(env);
 }
 
 const LEAKED_MULTIPLEXER_EXACT: &[&str] = &["STY", "WINDOW", "WT_SESSION"];
@@ -321,7 +302,7 @@ impl PtySubsystem {
         for key in LEAKED_MULTIPLEXER_EXACT {
             cmd.env_remove(key);
         }
-        for key in LEAKED_DAEMON_PARENT_VARS {
+        for key in boxxy_sys_utils::env::scrubbed_pty_var_names() {
             cmd.env_remove(key);
         }
         cmd.env_remove("BOXXY_SHELL_INTEGRATION");
@@ -630,7 +611,7 @@ impl PtySubsystem {
     }
 
     async fn get_running_processes(&self, pid: u32) -> fdo::Result<Vec<(u32, String)>> {
-        Ok(collect_descendant_processes(pid))
+        Ok(procfs::collect_active_pty_processes(pid))
     }
 
     async fn signal_process_group(&self, pid: u32, signal: i32) -> fdo::Result<()> {
