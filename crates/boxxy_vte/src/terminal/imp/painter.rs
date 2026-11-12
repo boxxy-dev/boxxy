@@ -264,8 +264,11 @@ impl super::TerminalWidget {
 
             // ── Viewport Search Scan (Cached by Generation & Offset) ───────────
             if let Some(query) = self.search_query.borrow().as_ref() {
+                const MAX_VISIBLE_SEARCH_MATCHES: usize = 256;
+
                 let case_sensitive = self.search_case_sensitive.get();
                 let case_insensitive = !case_sensitive;
+                let literal_opt = self.search_literal.borrow().clone();
 
                 let needs_rescan = {
                     let cache = self.search_viewport_cache.borrow();
@@ -276,35 +279,13 @@ impl super::TerminalWidget {
                 };
 
                 if needs_rescan {
-                    // Get or compile regex
-                    let mut cached = self.cached_search_regex.borrow_mut();
-                    let re = if let Some((q, ci, re)) = cached.as_ref()
-                        && q == query
-                        && *ci == case_insensitive
-                    {
-                        Some(re.clone())
-                    } else {
-                        match regex::RegexBuilder::new(query)
-                            .case_insensitive(case_insensitive)
-                            .build()
-                        {
-                            Ok(re) => {
-                                *cached = Some((query.clone(), case_insensitive, re.clone()));
-                                Some(re)
-                            }
-                            Err(_) => None,
-                        }
-                    };
-                    drop(cached);
-
                     let mut visible_matches = self.visible_search_matches.borrow_mut();
                     visible_matches.clear();
 
-                    if let Some(re) = re {
-                        let mut visible_text =
-                            String::with_capacity(state.screen_lines * state.columns);
-                        let mut byte_to_point =
-                            Vec::with_capacity(state.screen_lines * state.columns);
+                    let build_viewport_text = || {
+                        let cap = state.screen_lines * (state.columns + 1);
+                        let mut visible_text = String::with_capacity(cap);
+                        let mut byte_to_point = Vec::with_capacity(cap);
 
                         for row in 0..state.screen_lines {
                             for col in 0..state.columns {
@@ -344,11 +325,20 @@ impl super::TerminalWidget {
                             }
                         }
 
-                        for m in re.find_iter(&visible_text) {
-                            if let (Some(&start_point), Some(&(mut end_point))) = (
-                                byte_to_point.get(m.start()),
-                                byte_to_point.get(m.end().saturating_sub(1)),
-                            ) {
+                        (visible_text, byte_to_point)
+                    };
+
+                    let push_byte_span =
+                        |matches: &mut Vec<crate::engine::selection::SelectionRange>,
+                         byte_to_point: &[Point],
+                         start_b: usize,
+                         end_b: usize| {
+                            if end_b <= start_b {
+                                return;
+                            }
+                            if let (Some(&start_point), Some(&(mut end_point))) =
+                                (byte_to_point.get(start_b), byte_to_point.get(end_b - 1))
+                            {
                                 // Expand end_point to include the trailing spacer column when a
                                 // match ends on a 2-column wide character or emoji/flag cluster.
                                 if state.cell(end_point).flags.contains(Flags::WIDE_CHAR)
@@ -356,11 +346,96 @@ impl super::TerminalWidget {
                                 {
                                     end_point.column.0 += 1;
                                 }
-                                visible_matches.push(crate::engine::selection::SelectionRange {
+                                matches.push(crate::engine::selection::SelectionRange {
                                     start: start_point,
                                     end: end_point,
                                     is_block: false,
                                 });
+                            }
+                        };
+
+                    // Fast SIMD `memchr::memmem` path for plain literal queries (case-sensitive
+                    // UTF-8 or case-insensitive ASCII), avoiding regex compilation and overhead
+                    // during 120 Hz TUI updates (`top`, `btop`, builds).
+                    let used_simd_literal = if let Some(ref lit) = literal_opt
+                        && (case_sensitive || lit.is_ascii())
+                    {
+                        let (visible_text, byte_to_point) = build_viewport_text();
+                        let needle_len = lit.len();
+                        if case_sensitive {
+                            let finder = memchr::memmem::Finder::new(lit.as_bytes());
+                            for start_b in finder
+                                .find_iter(visible_text.as_bytes())
+                                .take(MAX_VISIBLE_SEARCH_MATCHES)
+                            {
+                                push_byte_span(
+                                    &mut visible_matches,
+                                    &byte_to_point,
+                                    start_b,
+                                    start_b + needle_len,
+                                );
+                            }
+                        } else {
+                            let needle_lower: Vec<u8> =
+                                lit.bytes().map(|b| b.to_ascii_lowercase()).collect();
+                            let hay_lower: Vec<u8> = visible_text
+                                .bytes()
+                                .map(|b| b.to_ascii_lowercase())
+                                .collect();
+                            let finder = memchr::memmem::Finder::new(&needle_lower);
+                            for start_b in finder
+                                .find_iter(&hay_lower)
+                                .take(MAX_VISIBLE_SEARCH_MATCHES)
+                            {
+                                push_byte_span(
+                                    &mut visible_matches,
+                                    &byte_to_point,
+                                    start_b,
+                                    start_b + needle_len,
+                                );
+                            }
+                        }
+                        true
+                    } else {
+                        false
+                    };
+
+                    if !used_simd_literal {
+                        let mut cached = self.cached_search_regex.borrow_mut();
+                        let re = if let Some((q, ci, re)) = cached.as_ref()
+                            && q == query
+                            && *ci == case_insensitive
+                        {
+                            Some(re.clone())
+                        } else {
+                            match regex::RegexBuilder::new(query)
+                                .case_insensitive(case_insensitive)
+                                .build()
+                            {
+                                Ok(re) => {
+                                    *cached = Some((query.clone(), case_insensitive, re.clone()));
+                                    Some(re)
+                                }
+                                Err(_) => None,
+                            }
+                        };
+                        drop(cached);
+
+                        if let Some(re) = re {
+                            let (visible_text, byte_to_point) = build_viewport_text();
+                            for m in re.find_iter(&visible_text) {
+                                if m.end() <= m.start() {
+                                    continue;
+                                }
+                                push_byte_span(
+                                    &mut visible_matches,
+                                    &byte_to_point,
+                                    m.start(),
+                                    m.end(),
+                                );
+                                if visible_matches.len() >= MAX_VISIBLE_SEARCH_MATCHES {
+                                    break;
+                                }
                             }
                         }
                     }

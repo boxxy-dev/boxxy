@@ -287,14 +287,6 @@ pub(super) fn setup_gestures(
         gtk::glib::Propagation::Proceed
     });
     terminal.add_controller(scroll_ctrl);
-
-    let mouse_coords = Rc::new(RefCell::new((0.0, 0.0)));
-    let motion_ctrl = gtk::EventControllerMotion::new();
-    let mc_clone = mouse_coords.clone();
-    motion_ctrl.connect_motion(move |_, x, y| {
-        *mc_clone.borrow_mut() = (x, y);
-    });
-    terminal.add_controller(motion_ctrl);
 }
 
 /// Dedicated in-process GType for pane split drag-and-drop so external file or

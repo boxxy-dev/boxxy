@@ -819,4 +819,54 @@ mod tests {
             Some("token-alpha")
         );
     }
+
+    #[tokio::test]
+    async fn search_anchors_at_visible_viewport_when_scrolled_into_history() {
+        use crate::engine::grid::Scroll;
+        use crate::engine::index::Direction;
+
+        let mut fds = [0i32; 2];
+        assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0);
+        let read_fd = unsafe { OwnedFd::from_raw_fd(fds[0]) };
+        let write_fd = unsafe { OwnedFd::from_raw_fd(fds[1]) };
+
+        let (tx, rx) = async_channel::unbounded::<Event>();
+        let backend = TerminalBackend::from_fd(tx, read_fd);
+
+        let mut payload = Vec::new();
+        payload.extend_from_slice(b"needle-history\r\n");
+        for i in 0..38 {
+            payload.extend_from_slice(format!("filler-line-{i:02}\r\n").as_bytes());
+        }
+        payload.extend_from_slice(b"needle-bottom\r\n");
+
+        unsafe {
+            libc::write(
+                write_fd.as_raw_fd(),
+                payload.as_ptr() as *const _,
+                payload.len(),
+            );
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        while rx.try_recv().is_ok() {}
+        backend.clear_pending_wakeups();
+
+        // Scroll up to the top of scrollback so `needle-history` is in the viewport
+        // and `needle-bottom` is below it.
+        backend.scroll_display(Scroll::Top);
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        while rx.try_recv().is_ok() {}
+        backend.clear_pending_wakeups();
+
+        // Searching upward (`Left`) from the scrolled-up viewport must select
+        // `needle-history` on screen rather than jumping down to `needle-bottom`.
+        backend.search("needle-[a-z]+".to_string(), Direction::Left, false, true);
+        let _ = tokio::time::timeout(std::time::Duration::from_millis(100), rx.recv())
+            .await
+            .expect("search wakeup");
+        assert_eq!(
+            backend.render_state.load().selection_text().as_deref(),
+            Some("needle-history")
+        );
+    }
 }

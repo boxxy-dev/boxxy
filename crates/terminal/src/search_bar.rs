@@ -1,7 +1,8 @@
 use boxxy_vte::terminal::TerminalWidget;
 use gtk4 as gtk;
+use gtk4::glib;
 use gtk4::prelude::*;
-use std::cell::RefCell;
+use std::cell::Cell;
 use std::rc::Rc;
 
 const PCRE2_CASELESS: u32 = 0x00000008;
@@ -18,13 +19,71 @@ fn escape_regex(s: &str) -> String {
     escaped
 }
 
+fn apply_search_query(
+    term: &glib::WeakRef<TerminalWidget>,
+    entry: &gtk::SearchEntry,
+    regex: bool,
+    words: bool,
+    case: bool,
+    force_on_alt_screen: bool,
+) {
+    if let Some(t) = term.upgrade() {
+        let text = entry.text();
+        if text.is_empty() {
+            t.search_set_regex(None, 0);
+            return;
+        }
+
+        // On active TUI / alternate-screen views (`top`, `btop`, `vim`), wait for
+        // at least 2 characters while passively typing so single-letter prefixes
+        // don't highlight hundreds of cells across 120 Hz redraws. Explicit
+        // navigation (`Enter`, `Shift+Enter`, `^` / `v`) bypasses this via `force_on_alt_screen`.
+        if !force_on_alt_screen && t.is_alt_screen() && text.chars().nth(1).is_none() {
+            t.search_set_regex(None, 0);
+            return;
+        }
+
+        t.search_set_wrap_around(true);
+
+        if !regex && !words {
+            let escaped = escape_regex(text.as_str());
+            t.search_set_literal(text.as_str(), &escaped, case);
+            return;
+        }
+
+        let mut flags = PCRE2_MULTILINE;
+        if !case {
+            flags |= PCRE2_CASELESS;
+        }
+
+        let mut query = text.to_string();
+        if !regex {
+            query = escape_regex(&query);
+        }
+        if words {
+            query = format!("\\b{query}\\b");
+        }
+
+        t.search_set_regex(Some(&query), flags);
+    }
+}
+
+fn dismiss_search_bar(revealer: &gtk::Revealer, terminal: &glib::WeakRef<TerminalWidget>) {
+    revealer.set_can_target(false);
+    revealer.set_reveal_child(false);
+    if let Some(term) = terminal.upgrade() {
+        term.search_set_regex(None, 0);
+        term.grab_focus();
+    }
+}
+
 pub struct SearchBarComponent {
     revealer: gtk::Revealer,
     entry: gtk::SearchEntry,
-    terminal: Rc<RefCell<Option<TerminalWidget>>>,
-    use_regex: Rc<RefCell<bool>>,
-    whole_words: Rc<RefCell<bool>>,
-    match_case: Rc<RefCell<bool>>,
+    terminal: Rc<glib::WeakRef<TerminalWidget>>,
+    use_regex: Rc<Cell<bool>>,
+    whole_words: Rc<Cell<bool>>,
+    match_case: Rc<Cell<bool>>,
 }
 
 impl Default for SearchBarComponent {
@@ -69,9 +128,11 @@ impl SearchBarComponent {
         popover.set_has_arrow(false);
         popover.set_autohide(true);
         popover.add_css_class("search-popover");
-        // Parent AFTER the button exists but BEFORE it is realised – that is
-        // fine because set_parent only stores the reference.
         popover.set_parent(&settings_btn);
+        let popover_for_destroy = popover.clone();
+        settings_btn.connect_destroy(move |_| {
+            popover_for_destroy.unparent();
+        });
 
         let popover_box = gtk::Box::new(gtk::Orientation::Vertical, 6);
         popover_box.set_margin_top(8);
@@ -90,8 +151,7 @@ impl SearchBarComponent {
         popover_box.append(&use_regex_chk);
         popover.set_child(Some(&popover_box));
 
-        // Toggle popover on button click
-        let popover_toggle = popover.clone();
+        let popover_toggle = popover;
         settings_btn.connect_clicked(move |_| {
             if popover_toggle.is_visible() {
                 popover_toggle.popdown();
@@ -110,19 +170,13 @@ impl SearchBarComponent {
 
         revealer.set_child(Some(&container));
 
-        let use_regex = Rc::new(RefCell::new(false));
-        let whole_words = Rc::new(RefCell::new(false));
-        let match_case = Rc::new(RefCell::new(false));
-
-        let terminal = Rc::new(RefCell::new(None));
-
         let component = Self {
             revealer,
             entry,
-            terminal,
-            use_regex,
-            whole_words,
-            match_case,
+            terminal: Rc::new(glib::WeakRef::new()),
+            use_regex: Rc::new(Cell::new(false)),
+            whole_words: Rc::new(Cell::new(false)),
+            match_case: Rc::new(Cell::new(false)),
         };
 
         component.setup_signals(
@@ -141,16 +195,22 @@ impl SearchBarComponent {
         &self.revealer
     }
 
-    pub fn set_terminal(&self, terminal: TerminalWidget) {
-        *self.terminal.borrow_mut() = Some(terminal);
+    pub fn set_terminal(&self, terminal: &TerminalWidget) {
+        self.terminal.set(Some(terminal));
     }
 
     pub fn reveal(&self) {
-        if let Some(term) = self.terminal.borrow().as_ref()
+        let mut updated_entry = false;
+        if let Some(term) = self.terminal.upgrade()
             && let Some(sel) = term.selected_text()
             && let Some(first_line) = sel.lines().map(str::trim).find(|l| !l.is_empty())
+            && self.entry.text().as_str() != first_line
         {
             self.entry.set_text(first_line);
+            updated_entry = true;
+        }
+        if !updated_entry {
+            self.apply_current_query();
         }
         self.revealer.set_can_target(true);
         self.revealer.set_reveal_child(true);
@@ -158,13 +218,19 @@ impl SearchBarComponent {
         self.entry.select_region(0, -1);
     }
 
+    fn apply_current_query(&self) {
+        apply_search_query(
+            &self.terminal,
+            &self.entry,
+            self.use_regex.get(),
+            self.whole_words.get(),
+            self.match_case.get(),
+            false,
+        );
+    }
+
     pub fn hide(&self) {
-        self.revealer.set_can_target(false);
-        self.revealer.set_reveal_child(false);
-        if let Some(term) = self.terminal.borrow().as_ref() {
-            term.search_set_regex(None, 0);
-            term.grab_focus();
-        }
+        dismiss_search_bar(&self.revealer, &self.terminal);
     }
 
     pub fn is_visible(&self) -> bool {
@@ -180,173 +246,158 @@ impl SearchBarComponent {
         whole_words_chk: &gtk::CheckButton,
         use_regex_chk: &gtk::CheckButton,
     ) {
-        let update_search = Rc::new(
-            move |term: &Rc<RefCell<Option<TerminalWidget>>>,
-                  entry: &gtk::SearchEntry,
-                  regex: bool,
-                  words: bool,
-                  case: bool| {
-                if let Some(t) = term.borrow().as_ref() {
-                    let text = entry.text();
-                    if text.is_empty() {
-                        t.search_set_regex(None, 0);
-                        return;
+        let navigate = {
+            let term = self.terminal.clone();
+            let entry = self.entry.clone();
+            let regex = self.use_regex.clone();
+            let words = self.whole_words.clone();
+            let case = self.match_case.clone();
+            Rc::new(move |upward: bool| {
+                // Flush any un-debounced `SearchEntry` text (and bypass the 1-char
+                // alt-screen filter) before stepping through scrollback.
+                apply_search_query(&term, &entry, regex.get(), words.get(), case.get(), true);
+                if let Some(t) = term.upgrade() {
+                    if upward {
+                        t.search_find_previous();
+                    } else {
+                        t.search_find_next();
                     }
-
-                    let mut flags = PCRE2_MULTILINE;
-                    if !case {
-                        flags |= PCRE2_CASELESS;
-                    }
-
-                    let mut query = text.to_string();
-                    if !regex {
-                        query = escape_regex(&query);
-                    }
-                    if words {
-                        query = format!("\\b{}\\b", query);
-                    }
-
-                    t.search_set_regex(Some(&query), flags);
-                    t.search_set_wrap_around(true);
                 }
-            },
-        );
+            })
+        };
 
-        // Entry changed
-        let update_clone = update_search.clone();
         let term_clone1 = self.terminal.clone();
         let regex1 = self.use_regex.clone();
         let words1 = self.whole_words.clone();
         let case1 = self.match_case.clone();
         self.entry.connect_search_changed(move |e| {
-            update_clone(
+            apply_search_query(
                 &term_clone1,
                 e,
-                *regex1.borrow(),
-                *words1.borrow(),
-                *case1.borrow(),
+                regex1.get(),
+                words1.get(),
+                case1.get(),
+                false,
             );
         });
 
         // Enter key – search upward
-        let term_activate = self.terminal.clone();
+        let nav_activate = navigate.clone();
         self.entry.connect_activate(move |_| {
-            if let Some(t) = term_activate.borrow().as_ref() {
-                t.search_find_previous();
-            }
+            nav_activate(true);
         });
 
-        // SearchEntry next/prev (swapped intentionally)
-        let term_next_match = self.terminal.clone();
+        // SearchEntry next/prev (Ctrl+G / Ctrl+Shift+G, swapped intentionally for terminal bottom-up order)
+        let nav_next = navigate.clone();
         self.entry.connect_next_match(move |_| {
-            if let Some(t) = term_next_match.borrow().as_ref() {
-                t.search_find_previous();
-            }
+            nav_next(true);
         });
 
-        let term_prev_match = self.terminal.clone();
+        let nav_prev = navigate.clone();
         self.entry.connect_previous_match(move |_| {
-            if let Some(t) = term_prev_match.borrow().as_ref() {
-                t.search_find_next();
-            }
+            nav_prev(false);
         });
 
-        // Match Case toggle
         let match_case_ref_c = self.match_case.clone();
-        let update_clone2 = update_search.clone();
         let term_clone2 = self.terminal.clone();
         let entry_clone2 = self.entry.clone();
         let regex2 = self.use_regex.clone();
         let words2 = self.whole_words.clone();
         match_case_chk.connect_toggled(move |c| {
-            *match_case_ref_c.borrow_mut() = c.is_active();
-            update_clone2(
+            match_case_ref_c.set(c.is_active());
+            apply_search_query(
                 &term_clone2,
                 &entry_clone2,
-                *regex2.borrow(),
-                *words2.borrow(),
+                regex2.get(),
+                words2.get(),
                 c.is_active(),
+                false,
             );
         });
 
-        // Whole Words toggle
         let whole_words_ref_c = self.whole_words.clone();
-        let update_clone3 = update_search.clone();
         let term_clone3 = self.terminal.clone();
         let entry_clone3 = self.entry.clone();
         let regex3 = self.use_regex.clone();
         let case3 = self.match_case.clone();
         whole_words_chk.connect_toggled(move |c| {
-            *whole_words_ref_c.borrow_mut() = c.is_active();
-            update_clone3(
+            whole_words_ref_c.set(c.is_active());
+            apply_search_query(
                 &term_clone3,
                 &entry_clone3,
-                *regex3.borrow(),
+                regex3.get(),
                 c.is_active(),
-                *case3.borrow(),
+                case3.get(),
+                false,
             );
         });
 
-        // Use Regex toggle
         let use_regex_ref_c = self.use_regex.clone();
-        let update_clone4 = update_search.clone();
         let term_clone4 = self.terminal.clone();
         let entry_clone4 = self.entry.clone();
         let words4 = self.whole_words.clone();
         let case4 = self.match_case.clone();
         use_regex_chk.connect_toggled(move |c| {
-            *use_regex_ref_c.borrow_mut() = c.is_active();
-            update_clone4(
+            use_regex_ref_c.set(c.is_active());
+            apply_search_query(
                 &term_clone4,
                 &entry_clone4,
                 c.is_active(),
-                *words4.borrow(),
-                *case4.borrow(),
+                words4.get(),
+                case4.get(),
+                false,
             );
         });
 
-        // Down / Up buttons
-        let term_down = self.terminal.clone();
+        let nav_down = navigate.clone();
         down_btn.connect_clicked(move |_| {
-            if let Some(t) = term_down.borrow().as_ref() {
-                t.search_find_next();
-            }
+            nav_down(false);
         });
 
-        let term_up = self.terminal.clone();
+        let nav_up = navigate.clone();
         up_btn.connect_clicked(move |_| {
-            if let Some(t) = term_up.borrow().as_ref() {
-                t.search_find_previous();
-            }
+            nav_up(true);
         });
 
-        // Close button
-        let rev_clone = self.revealer.clone();
+        let rev_clone = self.revealer.downgrade();
         let term_focus = self.terminal.clone();
         close_btn.connect_clicked(move |_| {
-            rev_clone.set_reveal_child(false);
-            if let Some(t) = term_focus.borrow().as_ref() {
-                t.search_set_regex(None, 0);
-                t.grab_focus();
+            if let Some(rev) = rev_clone.upgrade() {
+                dismiss_search_bar(&rev, &term_focus);
             }
         });
 
-        // Escape key closes the bar
-        let rev_clone2 = self.revealer.clone();
+        let rev_clone2 = self.revealer.downgrade();
         let term_focus2 = self.terminal.clone();
+        let nav_shift_enter = navigate;
         let ev_ctrl = gtk::EventControllerKey::new();
-        ev_ctrl.connect_key_pressed(move |_, keyval, _, _| {
+        ev_ctrl.set_propagation_phase(gtk::PropagationPhase::Capture);
+        ev_ctrl.connect_key_pressed(move |_, keyval, _, state| {
             if keyval == gtk::gdk::Key::Escape {
-                rev_clone2.set_reveal_child(false);
-                if let Some(t) = term_focus2.borrow().as_ref() {
-                    t.search_set_regex(None, 0);
-                    t.grab_focus();
+                if let Some(rev) = rev_clone2.upgrade() {
+                    dismiss_search_bar(&rev, &term_focus2);
                 }
+                gtk::glib::Propagation::Stop
+            } else if (keyval == gtk::gdk::Key::Return || keyval == gtk::gdk::Key::KP_Enter)
+                && state.contains(gtk::gdk::ModifierType::SHIFT_MASK)
+            {
+                nav_shift_enter(false);
                 gtk::glib::Propagation::Stop
             } else {
                 gtk::glib::Propagation::Proceed
             }
         });
         self.entry.add_controller(ev_ctrl);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::escape_regex;
+
+    #[test]
+    fn escape_regex_escapes_pcre_metacharacters() {
+        assert_eq!(escape_regex("foo.bar[0]+(a|b)"), r"foo\.bar\[0\]\+\(a\|b\)");
+        assert_eq!(escape_regex("plain_word"), "plain_word");
     }
 }

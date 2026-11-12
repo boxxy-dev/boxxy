@@ -700,12 +700,47 @@ impl TerminalWidget {
     pub fn search_set_regex(&self, regex: Option<&str>, flags: u32) {
         let imp = self.imp();
         if let Some(r) = regex {
-            let query = r.to_string();
-            let case_insensitive = (flags & 0x00000008) != 0; // PCRE2_CASELESS
-            imp.search_query.replace(Some(query));
-            imp.search_case_sensitive.set(!case_insensitive);
+            let case_sensitive = (flags & 0x00000008) == 0; // PCRE2_CASELESS
+            let changed = imp.search_query.borrow().as_deref() != Some(r)
+                || imp.search_literal.borrow().is_some()
+                || imp.search_case_sensitive.get() != case_sensitive;
+            if changed {
+                imp.search_query.replace(Some(r.to_string()));
+                imp.search_literal.replace(None);
+                imp.search_case_sensitive.set(case_sensitive);
+                if let Some(backend) = imp.backend.borrow().as_ref() {
+                    backend.clear_selection();
+                }
+                self.queue_draw();
+            }
         } else {
-            imp.search_query.replace(None);
+            let had_query = imp.search_query.replace(None).is_some();
+            imp.search_literal.replace(None);
+            if let Some(backend) = imp.backend.borrow().as_ref() {
+                backend.clear_selection();
+            }
+            if had_query {
+                self.queue_draw();
+            }
+        }
+    }
+
+    /// Sets a plain literal substring query so viewport highlighting can use
+    /// the zero-regex SIMD `memchr::memmem` fast path while keeping `escaped_regex`
+    /// ready for full-scrollback `Enter` / `^` / `v` navigation.
+    pub fn search_set_literal(&self, literal: &str, escaped_regex: &str, case_sensitive: bool) {
+        if literal.is_empty() {
+            self.search_set_regex(None, 0);
+            return;
+        }
+        let imp = self.imp();
+        let changed = imp.search_literal.borrow().as_deref() != Some(literal)
+            || imp.search_query.borrow().as_deref() != Some(escaped_regex)
+            || imp.search_case_sensitive.get() != case_sensitive;
+        if changed {
+            imp.search_query.replace(Some(escaped_regex.to_string()));
+            imp.search_literal.replace(Some(literal.to_string()));
+            imp.search_case_sensitive.set(case_sensitive);
             if let Some(backend) = imp.backend.borrow().as_ref() {
                 backend.clear_selection();
             }

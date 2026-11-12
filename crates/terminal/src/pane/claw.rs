@@ -8,6 +8,7 @@ use gtk4 as gtk;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn setup_claw(
     widget: &gtk::Overlay,
     inner: &Rc<RefCell<PaneInner>>,
@@ -178,7 +179,7 @@ pub(super) fn setup_claw(
             host_cancel.send_claw(ClawMessage::Abort);
         },
         move || {
-            host_lazy.send_claw(ClawMessage::RequestLazyDiagnosis {});
+            host_lazy.send_claw(ClawMessage::RequestLazyDiagnosis);
         },
         move || {
             if let Some((diag, proposal)) = pending_diag_clone.borrow_mut().take() {

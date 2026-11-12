@@ -1,7 +1,40 @@
 use gtk4 as gtk;
 use gtk4::prelude::*;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MediaKind {
+    Image,
+    Video,
+}
+
+/// Classifies a URI or path by media extension with zero heap allocations.
+pub(crate) fn classify_media_uri(raw: &str) -> Option<MediaKind> {
+    let trimmed = raw.trim().trim_matches(|c| c == '\'' || c == '"');
+    let without_query = trimmed.split(['?', '#']).next().unwrap_or(trimmed);
+    let (_, ext) = without_query.rsplit_once('.')?;
+
+    if ext.eq_ignore_ascii_case("png")
+        || ext.eq_ignore_ascii_case("jpg")
+        || ext.eq_ignore_ascii_case("jpeg")
+        || ext.eq_ignore_ascii_case("gif")
+        || ext.eq_ignore_ascii_case("webp")
+        || ext.eq_ignore_ascii_case("bmp")
+        || ext.eq_ignore_ascii_case("svg")
+    {
+        Some(MediaKind::Image)
+    } else if ext.eq_ignore_ascii_case("mp4")
+        || ext.eq_ignore_ascii_case("webm")
+        || ext.eq_ignore_ascii_case("mkv")
+        || ext.eq_ignore_ascii_case("avi")
+        || ext.eq_ignore_ascii_case("mov")
+    {
+        Some(MediaKind::Video)
+    } else {
+        None
+    }
+}
 
 #[derive(Clone)]
 pub struct ImagePreviewPopover {
@@ -12,7 +45,7 @@ pub struct ImagePreviewPopover {
     pending_task: Rc<RefCell<Option<gtk::glib::SourceId>>>,
     hide_task: Rc<RefCell<Option<gtk::glib::SourceId>>>,
     active_uri: Rc<RefCell<Option<String>>>,
-    is_pinned: Rc<RefCell<bool>>,
+    is_pinned: Rc<Cell<bool>>,
 }
 
 impl Default for ImagePreviewPopover {
@@ -79,7 +112,7 @@ impl ImagePreviewPopover {
 
         popover.set_child(Some(&clamp));
 
-        let is_pinned = Rc::new(RefCell::new(false));
+        let is_pinned = Rc::new(Cell::new(false));
         let is_pinned_clone = is_pinned.clone();
         let active_uri = Rc::new(RefCell::new(None));
         let active_uri_clone = active_uri.clone();
@@ -88,7 +121,7 @@ impl ImagePreviewPopover {
         let video_stream_clone = video_stream.clone();
 
         popover.connect_closed(move |_| {
-            *is_pinned_clone.borrow_mut() = false;
+            is_pinned_clone.set(false);
             *active_uri_clone.borrow_mut() = None;
             picture_clone.set_file(None::<&gtk::gio::File>);
             video_stream_clone.set_file(None::<&gtk::gio::File>);
@@ -125,7 +158,7 @@ impl ImagePreviewPopover {
     }
 
     pub fn show_preview(&self, uri: &str, x: f64, y: f64, is_hover: bool) {
-        if is_hover && *self.is_pinned.borrow() {
+        if is_hover && self.is_pinned.get() {
             // Do not override a pinned preview with a hover preview
             return;
         }
@@ -138,39 +171,20 @@ impl ImagePreviewPopover {
             && current == uri
         {
             if !is_hover {
-                // Upgrade to pinned
-                *self.is_pinned.borrow_mut() = true;
+                self.is_pinned.set(true);
                 self.popover.set_autohide(true);
             }
             return;
         }
 
+        let Some(media_kind) = classify_media_uri(uri) else {
+            return;
+        };
+
         self.cancel_pending();
         *self.active_uri.borrow_mut() = Some(uri.to_string());
 
-        // Trim common enclosure characters from the URI before checking the extension.
-        // This helps with URIs that might contain literal quotes from the shell.
         let uri_trimmed = uri.trim_matches(|c| c == '\'' || c == '"');
-        let uri_lower = uri_trimmed.to_lowercase();
-
-        let is_image = uri_lower.ends_with(".png")
-            || uri_lower.ends_with(".jpg")
-            || uri_lower.ends_with(".jpeg")
-            || uri_lower.ends_with(".gif")
-            || uri_lower.ends_with(".webp")
-            || uri_lower.ends_with(".bmp")
-            || uri_lower.ends_with(".svg");
-
-        let is_video = uri_lower.ends_with(".mp4")
-            || uri_lower.ends_with(".webm")
-            || uri_lower.ends_with(".mkv")
-            || uri_lower.ends_with(".avi")
-            || uri_lower.ends_with(".mov");
-
-        if !is_image && !is_video {
-            return;
-        }
-
         let normalized_uri = crate::pane::preview::normalize_file_uri(uri_trimmed);
         let file = gtk::gio::File::for_uri(&normalized_uri);
 
@@ -189,26 +203,28 @@ impl ImagePreviewPopover {
         let pending_task_clone = self.pending_task.clone();
         let task_id =
             gtk::glib::timeout_add_local(std::time::Duration::from_millis(timeout_ms), move || {
-                if is_image {
-                    stack_clone.set_visible_child_name("image");
-                    picture_clone.set_file(Some(&file));
-                    video_stream_clone.set_file(None::<&gtk::gio::File>);
-                } else if is_video {
-                    stack_clone.set_visible_child_name("video");
-                    video_stream_clone.set_file(Some(&file));
-                    video_stream_clone.play();
-                    picture_clone.set_file(None::<&gtk::gio::File>);
+                match media_kind {
+                    MediaKind::Image => {
+                        stack_clone.set_visible_child_name("image");
+                        picture_clone.set_file(Some(&file));
+                        video_stream_clone.set_file(None::<&gtk::gio::File>);
+                    }
+                    MediaKind::Video => {
+                        stack_clone.set_visible_child_name("video");
+                        video_stream_clone.set_file(Some(&file));
+                        video_stream_clone.play();
+                        picture_clone.set_file(None::<&gtk::gio::File>);
+                    }
                 }
 
                 popover_clone.set_autohide(!is_hover);
                 if !is_hover {
-                    *is_pinned_clone.borrow_mut() = true;
+                    is_pinned_clone.set(true);
                 }
 
                 popover_clone.set_pointing_to(Some(&rect));
                 popover_clone.popup();
 
-                // Clear the stored source ID so we don't try to remove it later
                 *pending_task_clone.borrow_mut() = None;
 
                 gtk::glib::ControlFlow::Break
@@ -218,7 +234,7 @@ impl ImagePreviewPopover {
     }
 
     pub fn hide_preview_if_not_pinned(&self) {
-        if !*self.is_pinned.borrow() {
+        if !self.is_pinned.get() {
             self.cancel_hide();
 
             let popover_clone = self.popover.clone();
@@ -245,7 +261,6 @@ impl ImagePreviewPopover {
         self.cancel_hide();
         *self.active_uri.borrow_mut() = None;
         self.popover.popdown();
-        // Unload the image and video to save memory
         self.picture.set_file(None::<&gtk::gio::File>);
         self.video_stream.set_file(None::<&gtk::gio::File>);
     }
@@ -260,5 +275,23 @@ impl ImagePreviewPopover {
         if let Some(source_id) = self.hide_task.borrow_mut().take() {
             source_id.remove();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{MediaKind, classify_media_uri};
+
+    #[test]
+    fn classify_media_uri_handles_case_quotes_and_queries() {
+        assert_eq!(
+            classify_media_uri("file:///tmp/photo.PNG"),
+            Some(MediaKind::Image)
+        );
+        assert_eq!(
+            classify_media_uri("'https://example.com/clip.webm?token=1#t=2'"),
+            Some(MediaKind::Video)
+        );
+        assert_eq!(classify_media_uri("file:///tmp/archive.tar.gz"), None);
     }
 }

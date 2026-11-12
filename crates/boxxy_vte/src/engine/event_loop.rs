@@ -380,7 +380,19 @@ where
                                     && let Some((_, _, ref mut searcher)) = state.cached_search
                                 {
                                     use crate::engine::grid::Dimensions;
-                                    let mut origin = self.terminal.grid().cursor.point;
+                                    use crate::engine::index::Line;
+                                    // Anchor initial search at the user's current viewport rather
+                                    // than the live cursor so searching while scrolled up finds
+                                    // matches on or right above the visible screen first.
+                                    let display_offset = self.terminal.grid().display_offset() as i32;
+                                    let mut origin = if direction == Direction::Right {
+                                        Point::new(Line(-display_offset), Column(0))
+                                    } else {
+                                        Point::new(
+                                            Line(self.terminal.screen_lines() as i32 - 1 - display_offset),
+                                            self.terminal.last_column(),
+                                        )
+                                    };
                                     let mut at_unwrapped_end = false;
                                     if let Some(ref sel) = self.terminal.selection
                                         && let Some(range) = sel.to_range(&self.terminal)

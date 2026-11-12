@@ -23,17 +23,20 @@ mod claw_host;
 mod events;
 pub mod gestures;
 pub(crate) mod preview;
+mod session;
+mod spawn;
 mod ui;
 
 pub(crate) use claw_host::PaneClawHost;
 
 pub type PendingDiagnosis = Rc<RefCell<Option<(String, crate::TerminalProposal)>>>;
+type PaneCallback = std::sync::Arc<dyn Fn(PaneOutput) + Send + Sync + 'static>;
 
 /// GTK key names for characters that users commonly type literally in accelerator
-/// strings (e.g. "/" instead of "slash").  `gtk_accelerator_parse` only accepts
-/// the symbolic names, so bare characters must be normalised before parsing.
+/// strings (e.g. "/" instead of "slash"). `gtk_accelerator_parse` only accepts
+/// symbolic names, so bare characters are normalized before parsing.
 fn normalize_accel(accel: &str) -> String {
-    let key_start = accel.rfind('>').map(|i| i + 1).unwrap_or(0);
+    let key_start = accel.rfind('>').map_or(0, |i| i + 1);
     let key = match &accel[key_start..] {
         "/" => "slash",
         "?" => "question",
@@ -76,24 +79,35 @@ fn parse_accel_trigger(accel: &str) -> gtk::ShortcutTrigger {
         .unwrap_or_else(|| gtk::ShortcutTrigger::parse_string("<Ctrl>slash").unwrap())
 }
 
+const fn is_actionable_claw_msg(msg: &ClawMessage) -> bool {
+    matches!(
+        msg,
+        ClawMessage::ClawQuery { .. }
+            | ClawMessage::UserMessage { .. }
+            | ClawMessage::ResumeSession { .. }
+            | ClawMessage::Initialize
+            | ClawMessage::RequestLazyDiagnosis
+    )
+}
+
 #[derive(Clone)]
 pub struct TerminalPaneComponent {
     widget: gtk::Overlay,
-    inner: Rc<RefCell<PaneInner>>,
+    pub(super) inner: Rc<RefCell<PaneInner>>,
     _search_bar: Rc<SearchBarComponent>,
-    claw_popover: TerminalOverlay,
-    claw_indicator: ClawIndicator,
+    pub(super) claw_popover: TerminalOverlay,
+    pub(super) claw_indicator: ClawIndicator,
 
     pending_sleep_diagnosis: PendingDiagnosis,
-    claw_sender: async_channel::Sender<ClawMessage>,
+    pub(super) claw_sender: async_channel::Sender<ClawMessage>,
 
     pub is_claw_active: Rc<Cell<bool>>,
     pub session_status: Rc<RefCell<AgentStatus>>,
     pub is_pinned: Rc<Cell<bool>>,
-    is_web_search: Rc<Cell<bool>>,
-    is_vibe: Rc<Cell<bool>>,
-    agent_name: Rc<RefCell<String>>,
-    msg_bar: Rc<MsgBarComponent>,
+    pub(super) is_web_search: Rc<Cell<bool>>,
+    pub(super) is_vibe: Rc<Cell<bool>>,
+    pub(super) agent_name: Rc<RefCell<String>>,
+    pub(super) msg_bar: Rc<MsgBarComponent>,
     pub session_usage: Rc<Cell<SessionUsage>>,
     pending_tasks: Rc<RefCell<Vec<ScheduledTask>>>,
     msgbar_shortcut: gtk::Shortcut,
@@ -102,9 +116,8 @@ pub struct TerminalPaneComponent {
 impl Drop for PaneInner {
     fn drop(&mut self) {
         crate::unregister_live_pane(&self.id);
-        // Close per-pane channels immediately so `spawn_dispatch` (which holds
-        // strong references to `PaneClawHost`, `TerminalOverlay`, and `MsgBarComponent`)
-        // and the UI-to-agent forwarder task exit right away.
+        // Close per-pane channels immediately so `spawn_dispatch` and the
+        // UI-to-agent forwarder task exit right away.
         self.claw_event_tx.close();
         self.claw_msg_tx.close();
         self.process_subscriptions.clear();
@@ -115,12 +128,8 @@ impl Drop for PaneInner {
             return;
         }
 
-        // Read the live setting here rather than snapshotting it at
-        // spawn time — that way toggling persistence in Preferences
-        // takes effect on the very next pane close, not just on panes
-        // opened after the toggle. Explicitly closing a single split or
-        // idle tab sets `force_terminate_on_close = true` so it doesn't
-        // linger in the background.
+        // Read the live setting here rather than snapshotting at spawn time so
+        // toggling persistence in Preferences takes effect on the very next close.
         let persist = Settings::load().pty_persistence && !self.force_terminate_on_close;
 
         let session_arc = self.session_id.clone();
@@ -145,36 +154,26 @@ impl Drop for PaneInner {
         };
 
         if persist {
-            log::info!(
-                "PaneInner dropping (pid={}): pty_persistence on → detaching into daemon",
-                pid
-            );
+            log::info!("PaneInner dropping (pid={pid}): pty_persistence on → detaching into daemon");
             let snapshot = self.export_snapshot_with_title();
             self.terminal.detach_pty();
             glib::spawn_future_local(async move {
                 let agent = crate::get_agent().await;
-                // Set the flag then detach. Order matters: detach()
-                // only keeps the shell alive if persistence is already
-                // on at decision time.
                 let _ = agent.set_persistence(pid, true).await;
                 match agent.detach_with_snapshot(pid, snapshot).await {
-                    Ok(1) => log::info!("pid={} detached into background", pid),
+                    Ok(1) => log::info!("pid={pid} detached into background"),
                     Ok(0) => log::info!(
-                        "pid={} terminated (unexpectedly — persistence may be off on daemon)",
-                        pid
+                        "pid={pid} terminated (unexpectedly — persistence may be off on daemon)"
                     ),
                     Ok(3) => log::warn!(
-                        "pid={} detached without buffer (daemon has no stored FD — shell will block when kernel PTY buffer fills)",
-                        pid
+                        "pid={pid} detached without buffer (daemon has no stored FD)"
                     ),
-                    Ok(code) => log::debug!("pid={} detach returned code {}", pid, code),
-                    Err(e) => log::warn!("pid={} detach failed: {}", pid, e),
+                    Ok(code) => log::debug!("pid={pid} detach returned code {code}"),
+                    Err(e) => log::warn!("pid={pid} detach failed: {e}"),
                 }
             });
         } else {
-            // Non-persistent path: disable persistence on the daemon and
-            // SIGTERM the process group so shells and their children are cleaned up.
-            log::info!("PaneInner dropping (pid={}): killing process group", pid);
+            log::info!("PaneInner dropping (pid={pid}): killing process group");
             self.terminal.detach_pty();
             glib::spawn_future_local(async move {
                 let agent = crate::get_agent().await;
@@ -212,10 +211,8 @@ pub(crate) struct PaneInner {
     pub(super) claw_indicator: Option<ClawIndicator>,
     pub(super) claw_popover: Option<TerminalOverlay>,
     pub(super) msg_bar: Rc<MsgBarComponent>,
-    pub(super) callback: std::sync::Arc<dyn Fn(PaneOutput) + Send + Sync + 'static>,
-    pub(super) callback_slot: std::sync::Arc<
-        parking_lot::RwLock<std::sync::Arc<dyn Fn(PaneOutput) + Send + Sync + 'static>>,
-    >,
+    pub(super) callback: PaneCallback,
+    pub(super) callback_slot: std::sync::Arc<parking_lot::RwLock<PaneCallback>>,
 }
 
 impl PaneInner {
@@ -262,17 +259,11 @@ impl TerminalPaneComponent {
         let (pid, snapshot) = {
             let mut inner = self.inner.borrow_mut();
             inner.already_handled_close = true;
-            // Close per-pane channels and drop the router subscription BEFORE
-            // calling `detach_session_sync` so the closing pane cannot consume
-            // events meant for a future reattached pane, and GTK widget drops
-            // cannot later treat this pane as an unhandled close.
             inner.claw_event_tx.close();
             inner.claw_msg_tx.close();
             inner.process_subscriptions.clear();
             *inner.claw_subscription.lock() = None;
             let snap = inner.export_snapshot_with_title();
-            // Shut down this pane's EventLoop and close its master_fd BEFORE
-            // handing the session to the daemon's background reader.
             inner.terminal.detach_pty();
             (inner.pid, snap)
         };
@@ -316,10 +307,6 @@ impl TerminalPaneComponent {
         }
     }
 
-    /// Explicitly release the Claw session in the daemon. Called from the
-    /// tab-close path where we have a synchronous handle on the pane.
-    /// Do NOT rely solely on PaneInner::drop for this — GTK closures hold
-    /// Rc clones of inner, so drop may fire very late or not at all.
     pub fn end_session(&self) {
         let (session_arc, pane_id) = {
             let inner = self.inner.borrow();
@@ -352,15 +339,13 @@ impl TerminalPaneComponent {
 
     pub fn new<F: Fn(PaneOutput) + Send + Sync + 'static>(init: PaneInit, callback: F) -> Self {
         let settings = boxxy_preferences::Settings::load();
-        let initial_cb: std::sync::Arc<dyn Fn(PaneOutput) + Send + Sync + 'static> =
-            std::sync::Arc::new(callback);
+        let initial_cb: PaneCallback = std::sync::Arc::new(callback);
         let callback_slot = std::sync::Arc::new(parking_lot::RwLock::new(initial_cb));
         let slot_for_proxy = callback_slot.clone();
-        let callback: std::sync::Arc<dyn Fn(PaneOutput) + Send + Sync + 'static> =
-            std::sync::Arc::new(move |output: PaneOutput| {
-                let cb = slot_for_proxy.read().clone();
-                cb(output);
-            });
+        let callback: PaneCallback = std::sync::Arc::new(move |output: PaneOutput| {
+            let cb = slot_for_proxy.read().clone();
+            cb(output);
+        });
         let id = init.id;
 
         let (
@@ -382,36 +367,36 @@ impl TerminalPaneComponent {
         let session_id_arc: std::sync::Arc<tokio::sync::Mutex<Option<String>>> =
             std::sync::Arc::new(tokio::sync::Mutex::new(None));
         let session_id_for_init = session_id_arc.clone();
+        let session_id_for_inner = session_id_arc;
 
-        // Expose it to inner so claw_host can update it
-        let session_id_for_inner = session_id_arc.clone();
         let claw_sender_clone = claw_event_tx.clone();
         let claw_event_tx_for_inner = claw_event_tx;
-        // Clone for the first-message path (event forwarding from new session)
         let event_sender_for_first_msg = claw_sender_clone.clone();
 
-        // Shared pre-selection state: the overlay populates this when the user
-        // clicks a character button; the msgbar reads it when creating the
-        // session on the first outgoing message.
         let pending_character: Rc<RefCell<String>> = Rc::new(RefCell::new(String::new()));
         let pending_char_for_msgbar = pending_character.clone();
-        let pending_char_for_overlay = pending_character.clone();
+        let pending_char_for_overlay = pending_character;
 
-        // Do not auto-spawn the Claw session. The user will select a character via the Overlay first.
-        // The overlay will start in "Selection Mode" because there is no identity yet.
+        // Forward messages from the UI to the daemon's Claw session. If an
+        // actionable message arrives while `create_claw_session_with_sender` is
+        // still in flight over D-Bus, wait briefly for `session_id` to populate
+        // instead of dropping the user's request.
         gtk::glib::spawn_future_local(async move {
             let agent = crate::get_agent().await;
-
-            // Forward messages from UI to agent. Wait until session_id is populated.
-            let rx_from_ui = rx_from_ui;
-            let session_id_ref = session_id_for_init.clone();
+            let session_id_ref = session_id_for_init;
 
             tokio::spawn(async move {
                 while let Ok(msg) = rx_from_ui.recv().await {
-                    let sid: Option<String> = {
-                        let lock = session_id_ref.lock().await;
-                        lock.clone()
-                    };
+                    let mut sid = session_id_ref.lock().await.clone();
+                    if sid.is_none() && is_actionable_claw_msg(&msg) {
+                        for _ in 0..40 {
+                            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+                            sid = session_id_ref.lock().await.clone();
+                            if sid.is_some() {
+                                break;
+                            }
+                        }
+                    }
                     if let Some(session_id) = sid {
                         let _ = agent.post_claw_message(session_id, msg).await;
                     }
@@ -432,761 +417,59 @@ impl TerminalPaneComponent {
         let session_usage = Rc::new(Cell::new(SessionUsage::default()));
         let pending_tasks: Rc<RefCell<Vec<ScheduledTask>>> = Rc::new(RefCell::new(Vec::new()));
 
-        let (msg_bar, inner) = {
-            let tx_msg = claw_sender.clone();
-            let tx_claw_toggle = claw_sender.clone();
-            let tx_sleep_toggle = claw_sender.clone();
-            let cb_msg = callback.clone();
-            let id_msg = id.clone();
-            let cb_toggle = callback.clone();
-            let id_toggle = id.clone();
-            let cb_sleep = callback.clone();
-            let id_sleep = id.clone();
-            let cb_pin = callback.clone();
-            let id_pin = id.clone();
-            let cb_web_search = callback.clone();
-            let id_web_search = id.clone();
-            let cb_vibe = callback.clone();
-            let id_vibe = id.clone();
+        let inner_weak_ref: session::DeferredInnerWeak = Rc::new(RefCell::new(None));
+        let msg_bar = session::build_msg_bar(
+            &id,
+            &claw_sender,
+            event_sender_for_first_msg,
+            &callback,
+            &inner_weak_ref,
+            pending_char_for_msgbar,
+            &is_claw_active,
+            &session_status,
+            &is_pinned,
+            &is_web_search,
+            &is_vibe,
+            &agent_name,
+            &session_usage,
+            &pending_tasks,
+        );
 
-            // We need a weak ref for the msg_bar callbacks, but inner isn't created yet.
-            // We'll use a RefCell<Option<Weak<RefCell<PaneInner>>>> that we fill later.
-            let inner_weak_ref: Rc<RefCell<Option<std::rc::Weak<RefCell<PaneInner>>>>> =
-                Rc::new(RefCell::new(None));
-            let inner_weak_for_msg = inner_weak_ref.clone();
-            let inner_weak_for_cancel = inner_weak_ref.clone();
-            let inner_weak_for_active = inner_weak_ref.clone();
-            let inner_weak_for_sleep = inner_weak_ref.clone();
-            let inner_weak_for_pin = inner_weak_ref.clone();
-            let inner_weak_for_web_search = inner_weak_ref.clone();
-            let inner_weak_for_vibe = inner_weak_ref.clone();
+        msg_bar.set_web_search_visible(settings.enable_web_search);
+        msg_bar.set_working_dir(init.working_dir.clone());
 
-            let is_claw_active_for_msg = is_claw_active.clone();
-            let session_status_for_msg = session_status.clone();
-            let is_pinned_for_msg = is_pinned.clone();
-            let is_web_search_for_msg = is_web_search.clone();
-            let is_vibe_for_msg = is_vibe.clone();
+        let inner = Rc::new(RefCell::new(PaneInner {
+            terminal: terminal.clone(),
+            scrolled_window,
+            working_dir: init.working_dir,
+            last_title: None,
+            foreground_process: None,
+            id: id.clone(),
+            layout_tag: init.layout_tag.unwrap_or_else(|| id.clone()),
+            current_settings: None,
+            hide_scrollbars: false,
+            is_dimmed: false,
+            size_dismiss_source: None,
+            n_columns: 0,
+            n_rows: 0,
+            pid: None,
+            reattach_pid: init.reattach_pid,
+            force_terminate_on_close: false,
+            already_handled_close: false,
+            session_id: session_id_for_inner,
+            claw_event_tx: claw_event_tx_for_inner,
+            claw_msg_tx: claw_sender.clone(),
+            process_subscriptions: Vec::new(),
+            claw_subscription: std::sync::Arc::new(parking_lot::Mutex::new(None)),
+            claw_indicator: None,
+            claw_popover: None,
+            msg_bar: msg_bar.clone(),
+            callback: callback.clone(),
+            callback_slot,
+        }));
 
-            let is_claw_active_for_active = is_claw_active.clone();
-            let session_status_for_active = session_status.clone();
-            let is_pinned_for_active = is_pinned.clone();
-            let is_web_search_for_active = is_web_search.clone();
-            let is_vibe_for_active = is_vibe.clone();
-            let agent_name_for_active = agent_name.clone();
-            let session_usage_for_active = session_usage.clone();
-            let pending_tasks_for_active = pending_tasks.clone();
-
-            let is_claw_active_for_sleep = is_claw_active.clone();
-            let session_status_for_sleep = session_status.clone();
-            let is_pinned_for_sleep = is_pinned.clone();
-            let is_web_search_for_sleep = is_web_search.clone();
-            let is_vibe_for_sleep = is_vibe.clone();
-
-            let session_status_for_pin = session_status.clone();
-            let is_pinned_for_pin = is_pinned.clone();
-            let is_web_search_for_pin = is_web_search.clone();
-            let is_vibe_for_pin = is_vibe.clone();
-
-            let session_status_for_web_search = session_status.clone();
-            let is_pinned_for_web_search = is_pinned.clone();
-            let is_web_search_for_web_search = is_web_search.clone();
-            let is_vibe_for_web_search = is_vibe.clone();
-
-            let session_status_for_vibe = session_status.clone();
-            let is_pinned_for_vibe = is_pinned.clone();
-            let is_web_search_for_vibe = is_web_search.clone();
-            let is_vibe_for_vibe = is_vibe.clone();
-
-            let tx_pin_toggle = claw_sender.clone();
-            let tx_web_search_toggle = claw_sender.clone();
-            let tx_vibe_toggle = claw_sender.clone();
-            let pending_char_for_toggle = pending_char_for_msgbar.clone();
-            let event_sender_for_toggle = event_sender_for_first_msg.clone();
-            let msg_bar = Rc::new(MsgBarComponent::new(
-                move |(query, images)| {
-                    if let Some(inner_arc) = inner_weak_for_msg
-                        .borrow()
-                        .as_ref()
-                        .and_then(|w| w.upgrade())
-                    {
-                        let pane = inner_arc.borrow().terminal.clone();
-                        let trimmed_query = query.trim();
-                        let incognito_inline_opt =
-                            if trimmed_query.eq_ignore_ascii_case("/incognito") {
-                                Some(String::new())
-                            } else if trimmed_query
-                                .get(..11)
-                                .is_some_and(|p| p.eq_ignore_ascii_case("/incognito "))
-                            {
-                                Some(trimmed_query[11..].trim().to_string())
-                            } else {
-                                None
-                            };
-                        let is_resume_cmd = query
-                            .strip_prefix("/resume ")
-                            .map(str::trim)
-                            .is_some_and(|s| !s.is_empty());
-                        if is_resume_cmd
-                            || incognito_inline_opt.as_ref().is_some_and(String::is_empty)
-                        {
-                            inner_arc.borrow().msg_bar.entry.grab_focus();
-                        }
-
-                        if !is_claw_active_for_msg.get() {
-                            is_claw_active_for_msg.set(true);
-                            if *session_status_for_msg.borrow() == AgentStatus::Off {
-                                *session_status_for_msg.borrow_mut() = AgentStatus::Waiting;
-                            }
-                            if let Some(ind) = &inner_arc.borrow().claw_indicator {
-                                ind.set_visible(true);
-                            }
-                            inner_arc.borrow().msg_bar.update_ui(
-                                session_status_for_msg.borrow().clone(),
-                                is_pinned_for_msg.get(),
-                                is_web_search_for_msg.get(),
-                                is_vibe_for_msg.get(),
-                            );
-                            cb_msg(PaneOutput::ClawStateChanged(
-                                id_msg.clone(),
-                                true,
-                                matches!(*session_status_for_msg.borrow(), AgentStatus::Sleep),
-                            ));
-                        }
-
-                        let pending_rc = pending_char_for_msgbar.clone();
-                        let pane_id = id_msg.clone();
-                        let session_id_ref = inner_arc.borrow().session_id.clone();
-                        let claw_sub_ref = inner_arc.borrow().claw_subscription.clone();
-                        let event_tx = event_sender_for_first_msg.clone();
-                        let cwd = inner_arc.borrow().working_dir.clone().unwrap_or_default();
-                        let tx = tx_msg.clone();
-                        let initial_vibe = is_vibe_for_msg.get();
-                        let initial_web = is_web_search_for_msg.get();
-
-                        glib::spawn_future_local(async move {
-                            let snapshot = if incognito_inline_opt.is_some() {
-                                String::new()
-                            } else {
-                                pane.get_text_snapshot(100, 0).await.unwrap_or_default()
-                            };
-                            let has_session = session_id_ref.lock().await.is_some();
-
-                            if let Some(inline_incognito_query) = incognito_inline_opt {
-                                if has_session {
-                                    // /incognito is only allowed when starting a new session
-                                    return;
-                                }
-                                let agent = crate::get_agent().await;
-                                let char_id =
-                                    boxxy_claw_protocol::characters::INCOGNITO_CHARACTER_ID
-                                        .to_string();
-                                *pending_rc.borrow_mut() = char_id.clone();
-                                if let Ok((session_id, sub_guard)) = agent
-                                    .create_claw_session_with_sender(
-                                        pane_id,
-                                        char_id,
-                                        event_tx.clone(),
-                                    )
-                                    .await
-                                {
-                                    if session_id.is_empty() {
-                                        return;
-                                    }
-                                    *claw_sub_ref.lock() = Some(sub_guard);
-                                    *session_id_ref.lock().await = Some(session_id.clone());
-                                    let _ = agent
-                                        .post_claw_message(
-                                            session_id.clone(),
-                                            ClawMessage::Initialize,
-                                        )
-                                        .await;
-                                    if !inline_incognito_query.is_empty() {
-                                        let _ = agent
-                                            .post_claw_message(
-                                                session_id,
-                                                ClawMessage::ClawQuery {
-                                                    query: inline_incognito_query,
-                                                    snapshot: String::new(),
-                                                    cwd: String::new(),
-                                                    image_attachments: images,
-                                                },
-                                            )
-                                            .await;
-                                    }
-                                }
-                                return;
-                            }
-
-                            let resume_id_opt = query
-                                .strip_prefix("/resume ")
-                                .map(str::trim)
-                                .filter(|s| !s.is_empty())
-                                .map(str::to_string);
-
-                            // If `/resume <id>` targets a session that is currently running in the
-                            // background (or active in another open pane), reattach or focus it
-                            // instead of creating a conflicting session.
-                            if let Some(ref resume_id) = resume_id_opt {
-                                let existing_claim = boxxy_claw_protocol::characters::CLAIMS_CACHE
-                                    .load()
-                                    .iter()
-                                    .find(|c| c.session_id == *resume_id && c.holder_id != pane_id)
-                                    .cloned();
-                                if let Some(claim) = existing_claim {
-                                    let agent = crate::get_agent().await;
-                                    if claim.owner_bus_name.is_empty() {
-                                        if let Ok(detached) =
-                                            agent.list_detached_sessions_detailed().await
-                                            && let Some(s) = detached.into_iter().find(|s| {
-                                                s.session_id == *resume_id
-                                                    || s.character_id == claim.character_id
-                                                    || s.pane_id == claim.holder_id
-                                            })
-                                        {
-                                            let _ =
-                                                crate::TERMINAL_EVENT_BUS
-                                                    .send(crate::TerminalEvent {
-                                                    id: String::new(),
-                                                    kind: crate::TerminalEventKind::RestoreDetached(
-                                                        s.pid, s.cwd,
-                                                    ),
-                                                });
-                                            return;
-                                        }
-                                    } else {
-                                        let _ = agent.request_focus_pane(claim.holder_id).await;
-                                        return;
-                                    }
-                                }
-                            }
-
-                            if !has_session {
-                                let agent = crate::get_agent().await;
-
-                                // If resuming a past session, claim the session's original character
-                                // (falling back to the next/first available character if it was removed)
-                                // rather than the pre-selected default character in the picker.
-                                let resolved_resume_char_id = if let Some(ref resume_id) =
-                                    resume_id_opt
-                                {
-                                    boxxy_claw_widget::msgbar::autocomplete::resolve_session_character_id(
-                                            resume_id,
-                                        )
-                                        .await
-                                } else {
-                                    None
-                                };
-
-                                let char_id = if let Some(resume_char_id) = resolved_resume_char_id
-                                {
-                                    *pending_rc.borrow_mut() = resume_char_id.clone();
-                                    resume_char_id
-                                } else {
-                                    let pending = pending_rc.borrow().clone();
-                                    if pending.is_empty() {
-                                        boxxy_claw_protocol::characters::CHARACTER_CACHE
-                                            .load()
-                                            .first()
-                                            .map(|c| c.config.id.clone())
-                                            .unwrap_or_default()
-                                    } else {
-                                        pending
-                                    }
-                                };
-
-                                if let Ok((session_id, sub_guard)) = agent
-                                    .create_claw_session_with_sender(
-                                        pane_id,
-                                        char_id,
-                                        event_tx.clone(),
-                                    )
-                                    .await
-                                {
-                                    if session_id.is_empty() {
-                                        return;
-                                    }
-                                    if let Some(resume_id) = resume_id_opt {
-                                        let resume_guard = agent
-                                            .subscribe_claw_session(resume_id.clone(), event_tx);
-                                        *claw_sub_ref.lock() = Some(resume_guard);
-                                        *session_id_ref.lock().await = Some(resume_id.clone());
-                                        let _ = agent
-                                            .post_claw_message(
-                                                session_id,
-                                                ClawMessage::ResumeSession {
-                                                    session_id: resume_id,
-                                                    character_id: None,
-                                                },
-                                            )
-                                            .await;
-                                    } else {
-                                        *claw_sub_ref.lock() = Some(sub_guard);
-                                        *session_id_ref.lock().await = Some(session_id.clone());
-                                        if initial_vibe {
-                                            let _ = agent
-                                                .post_claw_message(
-                                                    session_id.clone(),
-                                                    ClawMessage::ToggleVibe(true),
-                                                )
-                                                .await;
-                                        }
-                                        let _ = agent
-                                            .post_claw_message(
-                                                session_id.clone(),
-                                                ClawMessage::ToggleWebSearch(initial_web),
-                                            )
-                                            .await;
-                                        let _ = agent
-                                            .post_claw_message(
-                                                session_id.clone(),
-                                                ClawMessage::Initialize,
-                                            )
-                                            .await;
-                                        let _ = agent
-                                            .post_claw_message(
-                                                session_id,
-                                                ClawMessage::ClawQuery {
-                                                    query,
-                                                    snapshot,
-                                                    cwd,
-                                                    image_attachments: images,
-                                                },
-                                            )
-                                            .await;
-                                    }
-                                }
-                                return;
-                            }
-
-                            // Session already exists — send through the established pump.
-                            if let Some(resume_id) = resume_id_opt {
-                                let agent = crate::get_agent().await;
-                                let resume_guard =
-                                    agent.subscribe_claw_session(resume_id.clone(), event_tx);
-                                *claw_sub_ref.lock() = Some(resume_guard);
-                                let _ = tx
-                                    .send(ClawMessage::ResumeSession {
-                                        session_id: resume_id.clone(),
-                                        character_id: None,
-                                    })
-                                    .await;
-                                *session_id_ref.lock().await = Some(resume_id);
-                                return;
-                            }
-                            let _ = tx
-                                .send(ClawMessage::ClawQuery {
-                                    query,
-                                    snapshot,
-                                    cwd,
-                                    image_attachments: images,
-                                })
-                                .await;
-                        });
-                    }
-                },
-                move || {
-                    if let Some(inner_arc) = inner_weak_for_cancel
-                        .borrow()
-                        .as_ref()
-                        .and_then(|w| w.upgrade())
-                    {
-                        let pane = inner_arc.borrow().terminal.clone();
-                        pane.set_focusable(true);
-                        pane.grab_focus();
-                    }
-                },
-                move |active| {
-                    if is_claw_active_for_active.get() != active || !active {
-                        is_claw_active_for_active.set(active);
-                        let mut session_refs = None;
-                        if let Some(inner_arc) = inner_weak_for_active
-                            .borrow()
-                            .as_ref()
-                            .and_then(|w| w.upgrade())
-                        {
-                            let mut status = session_status_for_active.borrow().clone();
-                            if active && status == AgentStatus::Off {
-                                status = AgentStatus::Waiting;
-                                *session_status_for_active.borrow_mut() = status.clone();
-                            } else if !active {
-                                status = AgentStatus::Off;
-                                *session_status_for_active.borrow_mut() = status.clone();
-                                is_pinned_for_active.set(false);
-                                is_vibe_for_active.set(false);
-                                *agent_name_for_active.borrow_mut() = String::new();
-                                *pending_char_for_toggle.borrow_mut() = String::new();
-                                session_usage_for_active.set(SessionUsage::default());
-                                pending_tasks_for_active.borrow_mut().clear();
-                                inner_arc.borrow().msg_bar.clear_character();
-                                if let Some(popover) = &inner_arc.borrow().claw_popover {
-                                    popover.reset_for_exit();
-                                }
-                                let pane = inner_arc.borrow().terminal.clone();
-                                pane.set_focusable(true);
-                                pane.grab_focus();
-                            }
-
-                            inner_arc.borrow().msg_bar.update_ui(
-                                status.clone(),
-                                is_pinned_for_active.get(),
-                                is_web_search_for_active.get(),
-                                is_vibe_for_active.get(),
-                            );
-                            if let Some(ind) = &inner_arc.borrow().claw_indicator {
-                                if !active {
-                                    ind.set_identity("", "");
-                                    ind.set_has_tasks(false);
-                                    ind.set_vibe(false);
-                                    ind.set_mode(AgentStatus::Off);
-                                    ind.hide();
-                                }
-                                ind.set_visible(active);
-                            }
-                            session_refs = Some((
-                                inner_arc.borrow().session_id.clone(),
-                                inner_arc.borrow().claw_subscription.clone(),
-                            ));
-                        }
-                        cb_toggle(PaneOutput::ClawStateChanged(
-                            id_toggle.clone(),
-                            active,
-                            matches!(*session_status_for_active.borrow(), AgentStatus::Sleep),
-                        ));
-                        let tx = tx_claw_toggle.clone();
-                        let pane_id = id_toggle.clone();
-                        if active {
-                            let pending = pending_char_for_toggle.borrow().clone();
-                            let event_tx = event_sender_for_toggle.clone();
-                            glib::spawn_future_local(async move {
-                                if let Some((session_id_ref, claw_sub_ref)) = session_refs
-                                    && session_id_ref.lock().await.is_none()
-                                {
-                                    let agent = crate::get_agent().await;
-                                    let char_id = if pending.is_empty() {
-                                        boxxy_claw_protocol::characters::CHARACTER_CACHE
-                                            .load()
-                                            .first()
-                                            .map(|c| c.config.id.clone())
-                                            .unwrap_or_default()
-                                    } else {
-                                        pending
-                                    };
-                                    if let Ok((sid, sub_guard)) = agent
-                                        .create_claw_session_with_sender(pane_id, char_id, event_tx)
-                                        .await
-                                        && !sid.is_empty()
-                                    {
-                                        *claw_sub_ref.lock() = Some(sub_guard);
-                                        *session_id_ref.lock().await = Some(sid.clone());
-                                        let _ = agent
-                                            .post_claw_message(sid, ClawMessage::Initialize)
-                                            .await;
-                                        return;
-                                    }
-                                }
-                                let _ = tx.send(ClawMessage::Initialize).await;
-                            });
-                        } else {
-                            if let Some((_, ref claw_sub_ref)) = session_refs {
-                                *claw_sub_ref.lock() = None;
-                            }
-                            let cb_after_exit = cb_toggle.clone();
-                            glib::spawn_future_local(async move {
-                                if let Some((session_id_ref, _)) = session_refs {
-                                    let _ = session_id_ref.lock().await.take();
-                                }
-                                let agent = crate::get_agent().await;
-                                let _ = agent.release_holder(pane_id.clone()).await;
-                                boxxy_claw_widget::msgbar::autocomplete::refresh_resume_sessions_async(None);
-                                cb_after_exit(PaneOutput::ClawStateChanged(pane_id, false, false));
-                            });
-                        }
-                    }
-                },
-                move |sleep| {
-                    let currently_sleeping =
-                        matches!(*session_status_for_sleep.borrow(), AgentStatus::Sleep);
-                    if currently_sleeping != sleep {
-                        let new_status = if sleep {
-                            AgentStatus::Sleep
-                        } else {
-                            AgentStatus::Waiting
-                        };
-                        *session_status_for_sleep.borrow_mut() = new_status.clone();
-
-                        if let Some(inner_arc) = inner_weak_for_sleep
-                            .borrow()
-                            .as_ref()
-                            .and_then(|w| w.upgrade())
-                        {
-                            inner_arc.borrow().msg_bar.update_ui(
-                                new_status,
-                                is_pinned_for_sleep.get(),
-                                is_web_search_for_sleep.get(),
-                                is_vibe_for_sleep.get(),
-                            );
-                        }
-                        cb_sleep(PaneOutput::ClawStateChanged(
-                            id_sleep.clone(),
-                            is_claw_active_for_sleep.get(),
-                            sleep,
-                        ));
-                        let tx = tx_sleep_toggle.clone();
-                        glib::spawn_future_local(async move {
-                            let _ = tx.send(ClawMessage::SleepToggle(sleep)).await;
-                        });
-                    }
-                },
-                move |pinned| {
-                    if is_pinned_for_pin.get() != pinned {
-                        is_pinned_for_pin.set(pinned);
-                        if let Some(inner_arc) = inner_weak_for_pin
-                            .borrow()
-                            .as_ref()
-                            .and_then(|w| w.upgrade())
-                        {
-                            inner_arc.borrow().msg_bar.update_ui(
-                                session_status_for_pin.borrow().clone(),
-                                pinned,
-                                is_web_search_for_pin.get(),
-                                is_vibe_for_pin.get(),
-                            );
-                        }
-                        cb_pin(PaneOutput::ClawEvent(
-                            id_pin.clone(),
-                            ClawEngineEvent::PinStatusChanged(pinned),
-                        ));
-                        let tx = tx_pin_toggle.clone();
-                        glib::spawn_future_local(async move {
-                            let _ = tx.send(ClawMessage::TogglePin(pinned)).await;
-                        });
-                    }
-                },
-                move |enabled| {
-                    if is_web_search_for_web_search.get() != enabled {
-                        is_web_search_for_web_search.set(enabled);
-                        if let Some(inner_arc) = inner_weak_for_web_search
-                            .borrow()
-                            .as_ref()
-                            .and_then(|w| w.upgrade())
-                        {
-                            inner_arc.borrow().msg_bar.update_ui(
-                                session_status_for_web_search.borrow().clone(),
-                                is_pinned_for_web_search.get(),
-                                enabled,
-                                is_vibe_for_web_search.get(),
-                            );
-                        }
-                        cb_web_search(PaneOutput::ClawEvent(
-                            id_web_search.clone(),
-                            ClawEngineEvent::WebSearchStatusChanged(enabled),
-                        ));
-                        let tx = tx_web_search_toggle.clone();
-                        glib::spawn_future_local(async move {
-                            let _ = tx.send(ClawMessage::ToggleWebSearch(enabled)).await;
-                        });
-                    }
-                },
-                move |enabled| {
-                    if is_vibe_for_vibe.get() == enabled {
-                        return;
-                    }
-                    let Some(inner_arc) = inner_weak_for_vibe
-                        .borrow()
-                        .as_ref()
-                        .and_then(|w| w.upgrade())
-                    else {
-                        return;
-                    };
-
-                    if !enabled {
-                        is_vibe_for_vibe.set(false);
-                        {
-                            let inner_b = inner_arc.borrow();
-                            inner_b.msg_bar.update_ui(
-                                session_status_for_vibe.borrow().clone(),
-                                is_pinned_for_vibe.get(),
-                                is_web_search_for_vibe.get(),
-                                false,
-                            );
-                            if let Some(ind) = &inner_b.claw_indicator {
-                                ind.set_vibe(false);
-                            }
-                            if let Some(pop) = &inner_b.claw_popover {
-                                pop.refresh_character_selector("");
-                            }
-                        }
-                        cb_vibe(PaneOutput::ClawEvent(
-                            id_vibe.clone(),
-                            ClawEngineEvent::VibeStatusChanged(false),
-                        ));
-                        let tx = tx_vibe_toggle.clone();
-                        glib::spawn_future_local(async move {
-                            let _ = tx.send(ClawMessage::ToggleVibe(false)).await;
-                        });
-                        return;
-                    }
-
-                    // Enabling Vibe Mode: check if current working directory is trusted.
-                    let cwd = inner_arc.borrow().working_dir.clone().unwrap_or_default();
-                    let current_settings = boxxy_preferences::Settings::load();
-
-                    if current_settings.is_dir_vibe_trusted(&cwd) {
-                        is_vibe_for_vibe.set(true);
-                        {
-                            let inner_b = inner_arc.borrow();
-                            inner_b.msg_bar.update_ui(
-                                session_status_for_vibe.borrow().clone(),
-                                is_pinned_for_vibe.get(),
-                                is_web_search_for_vibe.get(),
-                                true,
-                            );
-                            if let Some(ind) = &inner_b.claw_indicator {
-                                ind.set_vibe(true);
-                            }
-                            if let Some(pop) = &inner_b.claw_popover {
-                                pop.refresh_character_selector("");
-                            }
-                        }
-                        cb_vibe(PaneOutput::ClawEvent(
-                            id_vibe.clone(),
-                            ClawEngineEvent::VibeStatusChanged(true),
-                        ));
-                        let tx = tx_vibe_toggle.clone();
-                        glib::spawn_future_local(async move {
-                            let _ = tx.send(ClawMessage::ToggleVibe(true)).await;
-                        });
-                        return;
-                    }
-
-                    // CWD is not yet in `vibe_trusted_dirs`. Check if it is eligible to be trusted.
-                    let parent_widget = inner_arc.borrow().terminal.clone();
-                    use libadwaita::prelude::AlertDialogExt;
-                    match boxxy_preferences::config::validate_vibe_trusted_dir(&cwd) {
-                        Err(reason) => {
-                            let dialog = libadwaita::AlertDialog::builder()
-                                .heading("Cannot Enable Vibe Mode Here")
-                                .body(format!(
-                                    "{reason}\n\nNavigate to a project folder (for example, cd ~/Projects or cd ~/test) or manage trusted folders in Preferences → Toolbox & Permissions."
-                                ))
-                                .default_response("ok")
-                                .close_response("ok")
-                                .build();
-                            dialog.add_response("ok", "OK");
-                            libadwaita::prelude::AdwDialogExt::present(
-                                &dialog,
-                                Some(&parent_widget),
-                            );
-                        }
-                        Ok(valid_dir) => {
-                            let dialog = libadwaita::AlertDialog::builder()
-                                .heading("Trust Folder for Vibe Mode?")
-                                .body(format!(
-                                    "Allow characters in Vibe Mode to automatically run safe commands and edit files inside:\n\n{valid_dir}\n\n(including its subfolders) without asking each time? You can manage trusted folders anytime in Preferences → Toolbox & Permissions."
-                                ))
-                                .default_response("trust")
-                                .close_response("cancel")
-                                .build();
-                            dialog.add_response("cancel", "Cancel");
-                            dialog.add_response("trust", "Trust & Enable");
-                            dialog.set_response_appearance(
-                                "trust",
-                                libadwaita::ResponseAppearance::Suggested,
-                            );
-
-                            let inner_for_resp = inner_arc.clone();
-                            let is_vibe_resp = is_vibe_for_vibe.clone();
-                            let status_resp = session_status_for_vibe.clone();
-                            let pin_resp = is_pinned_for_vibe.clone();
-                            let web_resp = is_web_search_for_vibe.clone();
-                            let cb_resp = cb_vibe.clone();
-                            let id_resp = id_vibe.clone();
-                            let tx_resp = tx_vibe_toggle.clone();
-
-                            dialog.connect_response(None, move |_, response| {
-                                if response == "trust" {
-                                    let dir_to_save = valid_dir.clone();
-                                    boxxy_preferences::Settings::update(move |s| {
-                                        if !s.vibe_trusted_dirs.contains(&dir_to_save) {
-                                            s.vibe_trusted_dirs.push(dir_to_save.clone());
-                                        }
-                                    });
-
-                                    is_vibe_resp.set(true);
-                                    {
-                                        let inner_b = inner_for_resp.borrow();
-                                        inner_b.msg_bar.update_ui(
-                                            status_resp.borrow().clone(),
-                                            pin_resp.get(),
-                                            web_resp.get(),
-                                            true,
-                                        );
-                                        if let Some(ind) = &inner_b.claw_indicator {
-                                            ind.set_vibe(true);
-                                        }
-                                        if let Some(pop) = &inner_b.claw_popover {
-                                            pop.refresh_character_selector("");
-                                        }
-                                    }
-                                    cb_resp(PaneOutput::ClawEvent(
-                                        id_resp.clone(),
-                                        ClawEngineEvent::VibeStatusChanged(true),
-                                    ));
-                                    let tx = tx_resp.clone();
-                                    glib::spawn_future_local(async move {
-                                        let agent = crate::get_agent().await;
-                                        let _ = agent.notify_settings_invalidated().await;
-                                        let _ = tx.send(ClawMessage::ToggleVibe(true)).await;
-                                    });
-                                }
-                            });
-
-                            libadwaita::prelude::AdwDialogExt::present(
-                                &dialog,
-                                Some(&parent_widget),
-                            );
-                        }
-                    }
-                },
-            ));
-
-            msg_bar.set_web_search_visible(settings.enable_web_search);
-            msg_bar.set_working_dir(init.working_dir.clone());
-
-            let inner = Rc::new(RefCell::new(PaneInner {
-                terminal: terminal.clone(),
-                scrolled_window,
-                working_dir: init.working_dir,
-                last_title: None,
-                foreground_process: None,
-                id: id.clone(),
-                layout_tag: init.layout_tag.unwrap_or_else(|| id.clone()),
-                current_settings: None,
-                hide_scrollbars: false,
-                is_dimmed: false,
-                size_dismiss_source: None,
-                n_columns: 0,
-                n_rows: 0,
-                pid: None,
-                reattach_pid: init.reattach_pid,
-                force_terminate_on_close: false,
-                already_handled_close: false,
-                session_id: session_id_for_inner,
-                claw_event_tx: claw_event_tx_for_inner,
-                claw_msg_tx: claw_sender.clone(),
-                process_subscriptions: Vec::new(),
-                claw_subscription: std::sync::Arc::new(parking_lot::Mutex::new(None)),
-                claw_indicator: None,
-                claw_popover: None,
-                msg_bar: msg_bar.clone(),
-                callback: callback.clone(),
-                callback_slot,
-            }));
-
-            *inner_weak_ref.borrow_mut() = Some(Rc::downgrade(&inner));
-            crate::register_live_pane(id.clone(), Rc::downgrade(&inner));
-            (msg_bar, inner)
-        };
+        *inner_weak_ref.borrow_mut() = Some(Rc::downgrade(&inner));
+        crate::register_live_pane(id.clone(), Rc::downgrade(&inner));
 
         gestures::setup_gestures(
             &terminal,
@@ -1197,53 +480,6 @@ impl TerminalPaneComponent {
         );
         preview::setup_preview(&terminal, &inner);
 
-        let inner_clone_resize = Rc::downgrade(&inner);
-        let size_revealer_clone = size_revealer.clone();
-        let size_label_clone = size_label.clone();
-        let terminal_clone = terminal.clone();
-
-        let resize_detector = gtk::DrawingArea::new();
-        resize_detector.set_can_target(false);
-        resize_detector.connect_resize(move |_, _, _| {
-            if let Some(inner_rc) = inner_clone_resize.upgrade() {
-                let mut inner = inner_rc.borrow_mut();
-                let cols = terminal_clone.column_count() as i64;
-                let rows = terminal_clone.row_count() as i64;
-
-                if cols != inner.n_columns || rows != inner.n_rows {
-                    inner.n_columns = cols;
-                    inner.n_rows = rows;
-
-                    if cols > 0 && rows > 0 {
-                        size_label_clone.set_label(&format!("{} × {}", cols, rows));
-                        size_revealer_clone.set_reveal_child(true);
-
-                        if let Some(source) = inner.size_dismiss_source.take() {
-                            source.remove();
-                        }
-
-                        let revealer_weak = size_revealer_clone.downgrade();
-                        let inner_weak = Rc::downgrade(&inner_rc);
-                        let source = glib::timeout_add_local(
-                            std::time::Duration::from_millis(1000),
-                            move || {
-                                if let Some(rev) = revealer_weak.upgrade() {
-                                    rev.set_reveal_child(false);
-                                }
-                                if let Some(inner) = inner_weak.upgrade() {
-                                    inner.borrow_mut().size_dismiss_source = None;
-                                }
-                                glib::ControlFlow::Break
-                            },
-                        );
-
-                        inner.size_dismiss_source = Some(source);
-                    }
-                }
-            }
-        });
-        widget.add_overlay(&resize_detector);
-
         events::wire_terminal_events(
             &terminal,
             &inner,
@@ -1253,9 +489,6 @@ impl TerminalPaneComponent {
             callback.clone(),
             id.clone(),
         );
-        // Msgbar is embedded inside the claw overlay drawer — not a pane
-        // overlay anymore. setup_claw receives it and appends it into the
-        // drawer's msgbar_slot.
 
         let (claw_popover, pending_sleep_diagnosis) = claw::setup_claw(
             &widget,
@@ -1296,49 +529,107 @@ impl TerminalPaneComponent {
             &drag_handle,
             &search_bar_rc,
             &claw_popover,
-            callback.clone(),
-            id.clone(),
+            callback,
+            id,
         );
 
-        // Keep popover height capped to the live pane height.
-        let claw_popover_for_resize = claw_popover.clone();
-        let height_detector = gtk::DrawingArea::new();
-        height_detector.set_can_target(false);
-        height_detector.connect_resize(move |_, _w, h| {
-            claw_popover_for_resize.update_pane_height(h);
-        });
-        widget.add_overlay(&height_detector);
+        // Single pass-through resize observer driving both the `cols × rows` OSD
+        // and the Claw drawer's live max-height cap.
+        let inner_clone_resize = Rc::downgrade(&inner);
+        let size_revealer_weak = size_revealer.downgrade();
+        let size_label_weak = size_label.downgrade();
+        let terminal_weak = terminal.downgrade();
+        let resize_detector = gtk::DrawingArea::new();
+        resize_detector.set_can_target(false);
+        resize_detector.connect_resize(move |_, _w, h| {
+            let Some(inner_rc) = inner_clone_resize.upgrade() else {
+                return;
+            };
+            let popover_opt = inner_rc.borrow().claw_popover.clone();
+            if let Some(pop) = popover_opt {
+                pop.update_pane_height(h);
+            }
 
-        // Ctrl+/ opens the claw drawer (if closed) and focuses the merged
-        // msgbar entry. Never hides the drawer: the agent may be waiting
-        // for a message and silently dismissing the only input surface
-        // would strand the user.
+            let Some(term) = terminal_weak.upgrade() else {
+                return;
+            };
+            let cols = term.column_count() as i64;
+            let rows = term.row_count() as i64;
+
+            let mut inner = inner_rc.borrow_mut();
+            if cols != inner.n_columns || rows != inner.n_rows {
+                inner.n_columns = cols;
+                inner.n_rows = rows;
+
+                if cols > 0
+                    && rows > 0
+                    && let (Some(lbl), Some(rev)) =
+                        (size_label_weak.upgrade(), size_revealer_weak.upgrade())
+                {
+                    lbl.set_label(&format!("{cols} × {rows}"));
+                    rev.set_reveal_child(true);
+
+                    if let Some(source) = inner.size_dismiss_source.take() {
+                        source.remove();
+                    }
+
+                    let revealer_weak = rev.downgrade();
+                    let inner_weak = Rc::downgrade(&inner_rc);
+                    let source = glib::timeout_add_local(
+                        std::time::Duration::from_millis(1000),
+                        move || {
+                            if let Some(r) = revealer_weak.upgrade() {
+                                r.set_reveal_child(false);
+                            }
+                            if let Some(i) = inner_weak.upgrade() {
+                                i.borrow_mut().size_dismiss_source = None;
+                            }
+                            glib::ControlFlow::Break
+                        },
+                    );
+
+                    inner.size_dismiss_source = Some(source);
+                }
+            }
+        });
+        widget.add_overlay(&resize_detector);
+
+        // Ctrl+/ opens the claw drawer (if closed) and focuses the merged msgbar entry.
         let shortcut_controller = gtk::ShortcutController::new();
         shortcut_controller.set_propagation_phase(gtk::PropagationPhase::Capture);
 
-        let msg_bar_sc = msg_bar.clone();
-        let terminal_sc = terminal.clone();
+        let inner_weak_sc = Rc::downgrade(&inner);
         let session_status_sc = session_status.clone();
         let is_pinned_sc = is_pinned.clone();
         let is_web_search_sc = is_web_search.clone();
         let is_vibe_sc = is_vibe.clone();
         let agent_name_sc = agent_name.clone();
-        let claw_popover_sc = claw_popover.clone();
         let action = gtk::CallbackAction::new(move |_, _| {
-            terminal_sc.set_focusable(false);
-            // Refresh toggle visuals from live state before presenting.
-            msg_bar_sc.update_ui(
-                session_status_sc.borrow().clone(),
-                is_pinned_sc.get(),
-                is_web_search_sc.get(),
-                is_vibe_sc.get(),
-            );
-            let aname = agent_name_sc.borrow().clone();
-            claw_popover_sc.show_input_only(&aname);
+            if let Some(inner_rc) = inner_weak_sc.upgrade() {
+                let (term, mb, pop_opt) = {
+                    let b = inner_rc.borrow();
+                    (
+                        b.terminal.clone(),
+                        b.msg_bar.clone(),
+                        b.claw_popover.clone(),
+                    )
+                };
+                term.set_focusable(false);
+                mb.update_ui(
+                    session_status_sc.borrow().clone(),
+                    is_pinned_sc.get(),
+                    is_web_search_sc.get(),
+                    is_vibe_sc.get(),
+                );
+                if let Some(pop) = pop_opt {
+                    let aname = agent_name_sc.borrow().clone();
+                    pop.show_input_only(&aname);
+                }
+            }
             gtk::glib::Propagation::Stop
         });
 
-        let initial_trigger = parse_accel_trigger(&Settings::load().claw_msgbar_shortcut);
+        let initial_trigger = parse_accel_trigger(&settings.claw_msgbar_shortcut);
         let msgbar_shortcut = gtk::Shortcut::builder()
             .trigger(&initial_trigger)
             .action(&action)
@@ -1435,244 +726,6 @@ impl TerminalPaneComponent {
         });
     }
 
-    /// Starts the Claw overlay with the default character and submits `query`,
-    /// provided no Claw session is already active on this pane.
-    pub fn start_claw_query_with_default_character(&self, query: String) -> bool {
-        if self.is_claw_active.get() {
-            return false;
-        }
-
-        let (pane_id, session_id_ref, claw_sub_ref, event_tx, cwd, cb) = {
-            let inner = self.inner.borrow();
-            (
-                inner.id.clone(),
-                inner.session_id.clone(),
-                inner.claw_subscription.clone(),
-                inner.claw_event_tx.clone(),
-                inner.working_dir.clone().unwrap_or_default(),
-                inner.callback.clone(),
-            )
-        };
-
-        let Some(chosen) =
-            boxxy_claw_protocol::characters::find_first_available_character(Some(&pane_id))
-        else {
-            return false;
-        };
-        let char_id = chosen.config.id.clone();
-        let display_name = if chosen.config.display_name.is_empty() {
-            "Agent".to_string()
-        } else {
-            chosen.config.display_name.clone()
-        };
-
-        self.is_claw_active.set(true);
-        *self.session_status.borrow_mut() = AgentStatus::Waiting;
-        self.claw_indicator.set_visible(true);
-        self.msg_bar.update_ui(
-            AgentStatus::Waiting,
-            self.is_pinned.get(),
-            self.is_web_search.get(),
-            self.is_vibe.get(),
-        );
-        cb(PaneOutput::ClawStateChanged(pane_id.clone(), true, false));
-
-        let terminal = self.terminal();
-        terminal.set_focusable(false);
-        self.claw_popover.show_chat_only(&display_name);
-        self.claw_popover.enter_waiting_state();
-        self.claw_popover.grab_input_focus();
-
-        let tx = self.claw_sender.clone();
-        glib::spawn_future_local(async move {
-            let snapshot = terminal.get_text_snapshot(100, 0).await.unwrap_or_default();
-            let has_session = session_id_ref.lock().await.is_some();
-
-            if !has_session {
-                let agent = crate::get_agent().await;
-                if let Ok((session_id, sub_guard)) = agent
-                    .create_claw_session_with_sender(pane_id, char_id, event_tx)
-                    .await
-                    && !session_id.is_empty()
-                {
-                    *claw_sub_ref.lock() = Some(sub_guard);
-                    *session_id_ref.lock().await = Some(session_id.clone());
-                    let _ = agent
-                        .post_claw_message(session_id.clone(), ClawMessage::Initialize)
-                        .await;
-                    let _ = agent
-                        .post_claw_message(
-                            session_id,
-                            ClawMessage::ClawQuery {
-                                query,
-                                snapshot,
-                                cwd,
-                                image_attachments: vec![],
-                            },
-                        )
-                        .await;
-                }
-            } else {
-                let _ = tx
-                    .send(ClawMessage::ClawQuery {
-                        query,
-                        snapshot,
-                        cwd,
-                        image_attachments: vec![],
-                    })
-                    .await;
-            }
-        });
-
-        true
-    }
-
-    pub fn resume_session(&self, resume_id: &str, override_character_id: Option<String>) {
-        let resume_id = resume_id.trim().to_string();
-        if resume_id.is_empty() {
-            return;
-        }
-
-        let (pane_id, session_id_ref, claw_sub_ref, event_tx) = {
-            let inner = self.inner.borrow();
-            (
-                inner.id.clone(),
-                inner.session_id.clone(),
-                inner.claw_subscription.clone(),
-                inner.claw_event_tx.clone(),
-            )
-        };
-
-        // Check if `resume_id` is already an active background or open session
-        // BEFORE mutating this pane's Claw state so reattaching/focusing doesn't
-        // leave the current empty pane in a half-activated state.
-        let existing_claim = boxxy_claw_protocol::characters::CLAIMS_CACHE
-            .load()
-            .iter()
-            .find(|c| c.session_id == resume_id && c.holder_id != pane_id)
-            .cloned();
-        if let Some(claim) = existing_claim {
-            glib::spawn_future_local(async move {
-                let agent = crate::get_agent().await;
-                if claim.owner_bus_name.is_empty() {
-                    if let Ok(detached) = agent.list_detached_sessions_detailed().await
-                        && let Some(s) = detached.into_iter().find(|s| {
-                            s.session_id == resume_id
-                                || s.character_id == claim.character_id
-                                || s.pane_id == claim.holder_id
-                        })
-                    {
-                        let _ = crate::TERMINAL_EVENT_BUS.send(crate::TerminalEvent {
-                            id: String::new(),
-                            kind: crate::TerminalEventKind::RestoreDetached(s.pid, s.cwd),
-                        });
-                    }
-                } else {
-                    let _ = agent.request_focus_pane(claim.holder_id).await;
-                }
-            });
-            return;
-        }
-
-        if !self.is_claw_active.get() {
-            self.is_claw_active.set(true);
-            let mut status = self.session_status.borrow().clone();
-            if status == AgentStatus::Off {
-                status = AgentStatus::Waiting;
-                *self.session_status.borrow_mut() = status.clone();
-            }
-            self.claw_indicator.set_visible(true);
-            self.msg_bar.update_ui(
-                status.clone(),
-                self.is_pinned.get(),
-                self.is_web_search.get(),
-                self.is_vibe.get(),
-            );
-            let (cb, pane_id) = {
-                let inner = self.inner.borrow();
-                (inner.callback.clone(), inner.id.clone())
-            };
-            cb(PaneOutput::ClawStateChanged(
-                pane_id,
-                true,
-                matches!(status, AgentStatus::Sleep),
-            ));
-        }
-
-        let tx = self.claw_sender.clone();
-        let claw_popover = self.claw_popover.clone();
-        let agent_name_rc = self.agent_name.clone();
-        let msg_bar = self.msg_bar.clone();
-        let terminal = self.terminal();
-
-        glib::spawn_future_local(async move {
-            let has_session = session_id_ref.lock().await.is_some();
-            if !has_session {
-                let agent = crate::get_agent().await;
-                let char_id = if let Some(ref cid) =
-                    override_character_id.as_ref().filter(|s| !s.is_empty())
-                {
-                    (*cid).clone()
-                } else {
-                    boxxy_claw_widget::msgbar::autocomplete::resolve_session_character_id(
-                        &resume_id,
-                    )
-                    .await
-                    .unwrap_or_else(|| {
-                        boxxy_claw_protocol::characters::CHARACTER_CACHE
-                            .load()
-                            .first()
-                            .map(|c| c.config.id.clone())
-                            .unwrap_or_default()
-                    })
-                };
-
-                if let Ok((session_id, _sub_guard)) = agent
-                    .create_claw_session_with_sender(pane_id, char_id, event_tx.clone())
-                    .await
-                {
-                    if session_id.is_empty() {
-                        return;
-                    }
-                    let resume_guard = agent.subscribe_claw_session(resume_id.clone(), event_tx);
-                    *claw_sub_ref.lock() = Some(resume_guard);
-                    *session_id_ref.lock().await = Some(resume_id.clone());
-                    let _ = agent
-                        .post_claw_message(
-                            session_id,
-                            ClawMessage::ResumeSession {
-                                session_id: resume_id,
-                                character_id: override_character_id,
-                            },
-                        )
-                        .await;
-                }
-            } else {
-                let agent = crate::get_agent().await;
-                let resume_guard = agent.subscribe_claw_session(resume_id.clone(), event_tx);
-                *claw_sub_ref.lock() = Some(resume_guard);
-                let _ = tx
-                    .send(ClawMessage::ResumeSession {
-                        session_id: resume_id.clone(),
-                        character_id: override_character_id,
-                    })
-                    .await;
-                *session_id_ref.lock().await = Some(resume_id);
-            }
-
-            glib::timeout_add_local_once(std::time::Duration::from_millis(80), move || {
-                terminal.set_focusable(false);
-                let aname = agent_name_rc.borrow().clone();
-                if !aname.is_empty() {
-                    claw_popover.show_input_only(&aname);
-                } else {
-                    claw_popover.show_chat_only("Agent");
-                }
-                msg_bar.entry.grab_focus();
-            });
-        });
-    }
-
     pub fn get_total_tokens(&self) -> u64 {
         self.session_usage.get().total_tokens
     }
@@ -1750,7 +803,7 @@ impl TerminalPaneComponent {
     }
 
     pub async fn get_text_snapshot(&self, max_lines: usize, offset_lines: usize) -> Option<String> {
-        let terminal = self.terminal().clone();
+        let terminal = self.terminal();
         terminal.get_text_snapshot(max_lines, offset_lines).await
     }
 
@@ -1798,477 +851,6 @@ impl TerminalPaneComponent {
         self.inner.borrow().terminal.write_all(data);
     }
 
-    pub fn spawn(&self) {
-        let inner_rc = self.inner.clone();
-        let id = self.id();
-        let claw_sender = self.claw_sender.clone();
-        let is_claw_active_cell = self.is_claw_active.clone();
-        let session_status_cell = self.session_status.clone();
-        let is_pinned_cell = self.is_pinned.clone();
-        let is_web_search_cell = self.is_web_search.clone();
-        let is_vibe_cell = self.is_vibe.clone();
-        let claw_popover_reattach = self.claw_popover.clone();
-        let agent_name_reattach = self.agent_name.clone();
-
-        glib::spawn_future_local(async move {
-            let (reattach_pid, layout_tag) = {
-                let mut inner = inner_rc.borrow_mut();
-                (inner.reattach_pid.take(), inner.layout_tag.clone())
-            };
-            let settings = inner_rc
-                .borrow()
-                .current_settings
-                .clone()
-                .unwrap_or_else(|| (*Settings::load()).clone());
-            let working_dir = inner_rc.borrow().working_dir.clone();
-
-            let agent = crate::get_agent().await;
-
-            // Reattach path: restore buffered output and attach existing PTY master FD.
-            if let Some(pid) = reattach_pid {
-                match agent.reattach(pid).await {
-                    Ok((replay_bytes, master_fd)) => {
-                        {
-                            let mut inner = inner_rc.borrow_mut();
-                            inner.pid = Some(pid);
-                        }
-                        let _ = agent.set_pane_id(pid, layout_tag).await;
-
-                        // If this detached PTY had a backgrounded ClawSession, rebind it
-                        // to this newly created pane so the character badge, conversation
-                        // history, and pending reminders are restored immediately.
-                        let (event_tx, session_id_ref, claw_sub_ref) = {
-                            let inner = inner_rc.borrow();
-                            (
-                                inner.claw_event_tx.clone(),
-                                inner.session_id.clone(),
-                                inner.claw_subscription.clone(),
-                            )
-                        };
-                        if let Ok(Some((sid, sub_guard))) = agent
-                            .reattach_holder_by_pid_with_sender(pid, id.clone(), event_tx)
-                            .await
-                        {
-                            *claw_sub_ref.lock() = Some(sub_guard);
-                            *session_id_ref.lock().await = Some(sid);
-                            is_claw_active_cell.set(true);
-                            *session_status_cell.borrow_mut() = AgentStatus::Waiting;
-                            {
-                                let inner = inner_rc.borrow();
-                                if let Some(ind) = &inner.claw_indicator {
-                                    ind.set_visible(true);
-                                }
-                                inner.msg_bar.update_ui(
-                                    AgentStatus::Waiting,
-                                    is_pinned_cell.get(),
-                                    is_web_search_cell.get(),
-                                    is_vibe_cell.get(),
-                                );
-                                (inner.callback)(PaneOutput::ClawStateChanged(
-                                    id.clone(),
-                                    true,
-                                    false,
-                                ));
-                            }
-                            let pop = claw_popover_reattach.clone();
-                            let aname = agent_name_reattach.clone();
-                            glib::timeout_add_local_once(
-                                std::time::Duration::from_millis(60),
-                                move || {
-                                    let name = aname.borrow().clone();
-                                    if !name.is_empty() && !pop.is_visible() {
-                                        pop.show_chat_only(&name);
-                                    }
-                                },
-                            );
-                        }
-
-                        let has_osc_title = replay_bytes
-                            .windows(4)
-                            .any(|w| w == b"\x1b]0;" || w == b"\x1b]2;");
-
-                        inner_rc
-                            .borrow()
-                            .terminal
-                            .attach_pty_with_replay(master_fd, replay_bytes);
-
-                        if let Ok(cwd) = agent.get_cwd(pid).await
-                            && !cwd.is_empty()
-                        {
-                            inner_rc.borrow_mut().working_dir = Some(cwd.clone());
-                            let cb = inner_rc.borrow().callback.clone();
-                            cb(PaneOutput::DirectoryChanged(id.clone(), cwd.clone()));
-
-                            if !has_osc_title {
-                                let pretty_cwd = if let Ok(home) = std::env::var("HOME")
-                                    && !home.is_empty()
-                                    && cwd.starts_with(&home)
-                                {
-                                    format!("~{}", &cwd[home.len()..])
-                                } else {
-                                    cwd.clone()
-                                };
-                                inner_rc.borrow_mut().last_title = Some(pretty_cwd.clone());
-                                cb(PaneOutput::TitleChanged(id.clone(), pretty_cwd));
-                            }
-                            let _ = agent
-                                .update_workspace_pane(
-                                    id.clone(),
-                                    cwd,
-                                    String::new(),
-                                    String::new(),
-                                    String::new(),
-                                )
-                                .await;
-                        } else {
-                            let _ = agent
-                                .update_workspace_pane(
-                                    id.clone(),
-                                    working_dir.clone().unwrap_or_default(),
-                                    String::new(),
-                                    String::new(),
-                                    String::new(),
-                                )
-                                .await;
-                        }
-
-                        let (exit_rx, exit_guard) = agent.subscribe_process_exit(pid).await;
-                        let (fg_rx, fg_guard) = agent.subscribe_foreground_process(pid);
-                        {
-                            let mut inner = inner_rc.borrow_mut();
-                            inner.process_subscriptions.push(exit_guard);
-                            inner.process_subscriptions.push(fg_guard);
-                        }
-
-                        let inner_weak_exit = Rc::downgrade(&inner_rc);
-                        let id_for_exit = id.clone();
-                        let active_for_exit = is_claw_active_cell.clone();
-                        glib::spawn_future_local(async move {
-                            if let Ok(exit_code) = exit_rx.recv().await
-                                && let Some(inner) = inner_weak_exit.upgrade()
-                            {
-                                active_for_exit.set(false);
-                                let (session_opt, cb) = {
-                                    let mut inner_mut = inner.borrow_mut();
-                                    (inner_mut.mark_pty_exited(), inner_mut.callback.clone())
-                                };
-                                let Some(session_arc) = session_opt else {
-                                    return;
-                                };
-                                let pane_id = id_for_exit.clone();
-                                glib::spawn_future_local(async move {
-                                    let sid = session_arc.lock().await.take();
-                                    let agent = crate::get_agent().await;
-                                    if sid.is_some() {
-                                        let _ = agent.release_holder(pane_id).await;
-                                    } else {
-                                        let _ = agent.unregister_workspace_pane(pane_id).await;
-                                    }
-                                });
-                                cb(PaneOutput::Exited(id_for_exit, exit_code));
-                            }
-                        });
-
-                        let inner_weak_fg = Rc::downgrade(&inner_rc);
-                        let claw_tx = claw_sender.clone();
-                        let id_for_fg = id.clone();
-                        let active_for_fg = is_claw_active_cell.clone();
-                        glib::spawn_future_local(async move {
-                            while let Ok(process_name) = fg_rx.recv().await {
-                                let Some(inner) = inner_weak_fg.upgrade() else {
-                                    break;
-                                };
-                                if active_for_fg.get() {
-                                    let _ = claw_tx
-                                        .send(ClawMessage::ForegroundProcessChanged {
-                                            process_name: process_name.clone(),
-                                        })
-                                        .await;
-                                } else {
-                                    let status = if process_name.is_empty() {
-                                        "Idle".to_string()
-                                    } else {
-                                        format!("Running: {process_name}")
-                                    };
-                                    let pane_id = id_for_fg.clone();
-                                    glib::spawn_future_local(async move {
-                                        let agent = crate::get_agent().await;
-                                        let _ = agent
-                                            .update_workspace_pane(
-                                                pane_id,
-                                                String::new(),
-                                                String::new(),
-                                                String::new(),
-                                                status,
-                                            )
-                                            .await;
-                                    });
-                                }
-                                let cb = {
-                                    let mut inner_mut = inner.borrow_mut();
-                                    let new_fg =
-                                        (!process_name.is_empty()).then(|| process_name.clone());
-                                    if new_fg.is_none() && inner_mut.foreground_process.is_some() {
-                                        inner_mut.last_title = None;
-                                    }
-                                    inner_mut.foreground_process = new_fg;
-                                    inner_mut.callback.clone()
-                                };
-                                cb(PaneOutput::ForegroundProcessChanged(
-                                    id_for_fg.clone(),
-                                    process_name,
-                                ));
-                            }
-                        });
-
-                        let _ = agent.set_foreground_tracking(pid, true).await;
-                        return;
-                    }
-                    Err(e) => {
-                        log::warn!(
-                            "Failed to reattach to detached pid={}: {:#}; spawning fresh shell",
-                            pid,
-                            e
-                        );
-                    }
-                }
-            }
-
-            let (shell_res, pty_res) =
-                tokio::join!(agent.get_preferred_shell(), agent.create_pty());
-
-            let shell = match shell_res {
-                Ok(s) => s,
-                Err(e) => {
-                    log::warn!("get_preferred_shell failed: {:#}, falling back", e);
-                    crate::get_host_shell()
-                }
-            };
-
-            let cmd = if settings.use_custom_command && !settings.custom_command.trim().is_empty() {
-                match glib::shell_parse_argv(&settings.custom_command) {
-                    Ok(argv) if !argv.is_empty() => argv
-                        .into_iter()
-                        .map(|os| os.to_string_lossy().into_owned())
-                        .collect(),
-                    _ => vec![
-                        "/bin/sh".into(),
-                        "-c".into(),
-                        settings.custom_command.clone(),
-                    ],
-                }
-            } else {
-                let mut c = vec![shell];
-                if settings.login_shell {
-                    c.push("--login".into());
-                }
-                c
-            };
-
-            match pty_res {
-                Ok(master_fd) => {
-                    let mut env: Vec<(String, String)> = if is_flatpak() {
-                        Vec::new()
-                    } else {
-                        std::env::vars().collect()
-                    };
-                    env.push(("TERM".to_string(), "xterm-256color".to_string()));
-                    env.push(("COLORTERM".to_string(), "truecolor".to_string()));
-                    env.push(("TERM_PROGRAM".to_string(), "Boxxy".to_string()));
-                    env.push((
-                        "TERM_PROGRAM_VERSION".to_string(),
-                        env!("CARGO_PKG_VERSION").to_string(),
-                    ));
-
-                    env.push(("VTE_VERSION".to_string(), "7600".to_string()));
-
-                    let (cols, rows) = {
-                        let inner = inner_rc.borrow();
-                        let c = if inner.n_columns > 0 {
-                            inner.n_columns as u16
-                        } else {
-                            80
-                        };
-                        let r = if inner.n_rows > 0 {
-                            inner.n_rows as u16
-                        } else {
-                            24
-                        };
-                        (c, r)
-                    };
-
-                    let initial_cwd = working_dir.unwrap_or_default();
-                    let options = boxxy_agent::ipc::pty::SpawnOptions {
-                        cwd: initial_cwd.clone(),
-                        argv: cmd,
-                        env,
-                        cols,
-                        rows,
-                        pane_id: id.clone(),
-                    };
-
-                    use std::os::unix::io::{AsRawFd, FromRawFd};
-                    let master_fd_for_agent = unsafe {
-                        let raw = libc::dup(master_fd.as_raw_fd());
-                        zbus::OwnedFd::from(std::os::unix::io::OwnedFd::from_raw_fd(raw))
-                    };
-
-                    match agent.spawn_process(master_fd_for_agent, options).await {
-                        Ok(pid) => {
-                            // Attach the PTY to the terminal widget immediately so the VTE
-                            // reader loop begins rendering the shell prompt without waiting
-                            // on post-spawn metadata RPCs.
-                            {
-                                let mut inner = inner_rc.borrow_mut();
-                                inner.pid = Some(pid);
-                                inner.terminal.attach_pty(master_fd);
-                            }
-
-                            let effective_cwd = if !initial_cwd.is_empty() {
-                                initial_cwd
-                            } else {
-                                agent
-                                    .get_cwd(pid)
-                                    .await
-                                    .ok()
-                                    .filter(|c| !c.is_empty())
-                                    .or_else(|| std::env::var("HOME").ok())
-                                    .unwrap_or_default()
-                            };
-                            {
-                                let mut inner = inner_rc.borrow_mut();
-                                if inner.working_dir.is_none() && !effective_cwd.is_empty() {
-                                    inner.working_dir = Some(effective_cwd.clone());
-                                    inner.msg_bar.set_working_dir(Some(effective_cwd.clone()));
-                                }
-                            }
-                            if !effective_cwd.is_empty() {
-                                let cb = inner_rc.borrow().callback.clone();
-                                cb(PaneOutput::DirectoryChanged(
-                                    id.clone(),
-                                    effective_cwd.clone(),
-                                ));
-                            }
-                            let _ = tokio::join!(
-                                agent.set_pane_id(pid, layout_tag),
-                                agent.update_workspace_pane(
-                                    id.clone(),
-                                    effective_cwd,
-                                    String::new(),
-                                    String::new(),
-                                    String::new(),
-                                ),
-                            );
-
-                            let (exit_rx, exit_guard) = agent.subscribe_process_exit(pid).await;
-                            let (fg_rx, fg_guard) = agent.subscribe_foreground_process(pid);
-                            {
-                                let mut inner = inner_rc.borrow_mut();
-                                inner.process_subscriptions.push(exit_guard);
-                                inner.process_subscriptions.push(fg_guard);
-                            }
-
-                            let inner_weak_exit = Rc::downgrade(&inner_rc);
-                            let id_for_exit = id.clone();
-                            let active_for_exit = is_claw_active_cell.clone();
-                            glib::spawn_future_local(async move {
-                                if let Ok(exit_code) = exit_rx.recv().await
-                                    && let Some(inner) = inner_weak_exit.upgrade()
-                                {
-                                    active_for_exit.set(false);
-                                    let (session_opt, cb) = {
-                                        let mut inner_mut = inner.borrow_mut();
-                                        (inner_mut.mark_pty_exited(), inner_mut.callback.clone())
-                                    };
-                                    let Some(session_arc) = session_opt else {
-                                        return;
-                                    };
-                                    let pane_id = id_for_exit.clone();
-                                    glib::spawn_future_local(async move {
-                                        let sid = session_arc.lock().await.take();
-                                        let agent = crate::get_agent().await;
-                                        if sid.is_some() {
-                                            let _ = agent.release_holder(pane_id).await;
-                                        } else {
-                                            let _ = agent.unregister_workspace_pane(pane_id).await;
-                                        }
-                                    });
-                                    cb(PaneOutput::Exited(id_for_exit, exit_code));
-                                }
-                            });
-
-                            let inner_weak_fg = Rc::downgrade(&inner_rc);
-                            let claw_tx = claw_sender.clone();
-                            let id_for_fg = id.clone();
-                            let active_for_fg = is_claw_active_cell.clone();
-                            glib::spawn_future_local(async move {
-                                while let Ok(process_name) = fg_rx.recv().await {
-                                    let Some(inner) = inner_weak_fg.upgrade() else {
-                                        break;
-                                    };
-                                    if active_for_fg.get() {
-                                        // Update AI Engine immediately
-                                        let _ = claw_tx
-                                            .send(ClawMessage::ForegroundProcessChanged {
-                                                process_name: process_name.clone(),
-                                            })
-                                            .await;
-                                    } else {
-                                        let status = if process_name.is_empty() {
-                                            "Idle".to_string()
-                                        } else {
-                                            format!("Running: {process_name}")
-                                        };
-                                        let pane_id = id_for_fg.clone();
-                                        glib::spawn_future_local(async move {
-                                            let agent = crate::get_agent().await;
-                                            let _ = agent
-                                                .update_workspace_pane(
-                                                    pane_id,
-                                                    String::new(),
-                                                    String::new(),
-                                                    String::new(),
-                                                    status,
-                                                )
-                                                .await;
-                                        });
-                                    }
-
-                                    // Notify UI for overlays/indicators
-                                    let cb = {
-                                        let mut inner_mut = inner.borrow_mut();
-                                        let new_fg = (!process_name.is_empty())
-                                            .then(|| process_name.clone());
-                                        if new_fg.is_none()
-                                            && inner_mut.foreground_process.is_some()
-                                        {
-                                            inner_mut.last_title = None;
-                                        }
-                                        inner_mut.foreground_process = new_fg;
-                                        inner_mut.callback.clone()
-                                    };
-                                    cb(PaneOutput::ForegroundProcessChanged(
-                                        id_for_fg.clone(),
-                                        process_name,
-                                    ));
-                                }
-                            });
-
-                            // CWD tracking is now handled entirely via OSC 7 events
-                            // registered in events::setup_terminal_events.
-
-                            // Enable foreground process tracking on all open panes so GLOBAL RADAR
-                            // knows when a companion pane is running `make`, `vim`, etc.
-                            let _ = agent.set_foreground_tracking(pid, true).await;
-                        }
-                        Err(e) => log::error!("Failed to spawn process via agent: {:#}", e),
-                    }
-                }
-                Err(e) => log::error!("Failed to create PTY via agent: {:#}", e),
-            }
-        });
-    }
-
     pub fn copy(&self) {
         self.inner.borrow().terminal.copy_clipboard();
     }
@@ -2308,17 +890,15 @@ impl TerminalPaneComponent {
             self.inner.borrow().id,
             keys
         );
-        let mut unescaped = keys.to_string();
-        // Fallback for LLMs that literally output "\u001b" text instead of JSON escapes
-        unescaped = unescaped.replace("\\u001b", "\x1b");
-        unescaped = unescaped.replace("\\e", "\x1b");
-        unescaped = unescaped.replace("\\r", "\r");
-        unescaped = unescaped.replace("\\n", "\n");
-        unescaped = unescaped.replace("\\t", "\t");
-        unescaped = unescaped.replace("\\x03", "\x03");
-        unescaped = unescaped.replace("\\x04", "\x04");
+        let unescaped = keys
+            .replace("\\u001b", "\x1b")
+            .replace("\\e", "\x1b")
+            .replace("\\r", "\r")
+            .replace("\\n", "\n")
+            .replace("\\t", "\t")
+            .replace("\\x03", "\x03")
+            .replace("\\x04", "\x04");
 
-        log::debug!("Unescaped bytes: {:?}", unescaped.as_bytes());
         self.inner
             .borrow()
             .terminal
@@ -2330,9 +910,6 @@ impl TerminalPaneComponent {
     }
 
     pub fn grab_focus(&self) {
-        // With the msgbar embedded in the drawer, "input is active" maps
-        // to "drawer is visible" — the msgbar's own is_active flag stays
-        // latched on in embedded mode and can't be used as the signal.
         if self.claw_popover.is_visible() {
             self.claw_popover.grab_input_focus();
         } else {
@@ -2350,55 +927,8 @@ impl TerminalPaneComponent {
 
     pub fn set_session_status(&self, status: AgentStatus) {
         *self.session_status.borrow_mut() = status.clone();
-
         self.msg_bar.set_status(status.clone());
         self.claw_indicator.set_mode(status);
-    }
-
-    pub fn set_claw_active(&self, active: bool) {
-        if self.is_claw_active.get() == active {
-            return;
-        }
-
-        self.is_claw_active.set(active);
-
-        let pid = self.inner.borrow().pid;
-        if let Some(pid) = pid {
-            glib::spawn_future_local(async move {
-                let agent = crate::get_agent().await;
-                let _ = agent.set_foreground_tracking(pid, true).await;
-            });
-        }
-
-        // Update badge visibility
-        self.claw_indicator.set_visible(active);
-
-        let status = if active {
-            AgentStatus::Waiting
-        } else {
-            AgentStatus::Off
-        };
-        *self.session_status.borrow_mut() = status.clone();
-
-        // Sync MsgBar toggle state
-        self.msg_bar.update_ui(
-            status,
-            self.is_pinned.get(),
-            self.is_web_search.get(),
-            self.is_vibe.get(),
-        );
-
-        // If turning ON, tell the session to Initialize
-        let tx = self.claw_sender.clone();
-        if active {
-            glib::spawn_future_local(async move {
-                let _ = tx.send(ClawMessage::Initialize).await;
-            });
-        } else {
-            glib::spawn_future_local(async move {
-                let _ = tx.send(ClawMessage::Deactivate).await;
-            });
-        }
     }
 
     pub fn reload_claw(&self) {
@@ -2417,8 +947,7 @@ impl TerminalPaneComponent {
     }
 
     pub fn clear_claw_history(&self) {
-        // No-op: clearing is now handled strictly in the sidebar UI
-        // to keep the database/resume history intact as requested.
+        // Handled strictly in the sidebar UI to preserve persisted database history.
     }
 
     pub fn open_in_files(&self) {
@@ -2428,23 +957,29 @@ impl TerminalPaneComponent {
         let uri = if wd.starts_with("file://") {
             wd.clone()
         } else {
-            format!("file://{}", wd)
+            format!("file://{wd}")
         };
-
         let path = wd.strip_prefix("file://").unwrap_or(&wd).to_string();
 
         gtk4::glib::spawn_future_local(async move {
             if is_flatpak() {
-                if let Ok(dir) = std::fs::File::open(&path) {
-                    use std::os::fd::AsFd;
-                    let req = ashpd::desktop::open_uri::OpenDirectoryRequest::default()
-                        .send(&dir.as_fd())
-                        .await;
-                    if let Err(e) = req {
-                        eprintln!("Failed to open directory via ashpd: {}", e);
+                let open_res = boxxy_sys_utils::runtime()
+                    .spawn_blocking({
+                        let p = path.clone();
+                        move || std::fs::File::open(p)
+                    })
+                    .await;
+                match open_res {
+                    Ok(Ok(dir)) => {
+                        use std::os::fd::AsFd;
+                        if let Err(e) = ashpd::desktop::open_uri::OpenDirectoryRequest::default()
+                            .send(&dir.as_fd())
+                            .await
+                        {
+                            log::warn!("Failed to open directory via ashpd: {e}");
+                        }
                     }
-                } else {
-                    eprintln!("Failed to open directory for ashpd: {}", path);
+                    _ => log::warn!("Failed to open directory for ashpd: {path}"),
                 }
             } else {
                 let _ = gio::AppInfo::launch_default_for_uri(&uri, None::<&gio::AppLaunchContext>);
@@ -2472,27 +1007,26 @@ impl TerminalPaneComponent {
                     .set_web_search_visible(settings.enable_web_search);
 
                 if !settings.enable_web_search {
-                    // Force disable if globally disallowed
                     self.is_web_search.set(false);
-                    let _ = self
-                        .claw_sender
-                        .send_blocking(ClawMessage::ToggleWebSearch(false));
+                    if self.is_claw_active.get() {
+                        let _ = self
+                            .claw_sender
+                            .try_send(ClawMessage::ToggleWebSearch(false));
+                    }
                     self.msg_bar.update_ui(
                         self.session_status.borrow().clone(),
                         self.is_pinned.get(),
                         false,
                         self.is_vibe.get(),
                     );
-                } else {
-                    // If enabled, send current local state to ensure it's synced
+                } else if self.is_claw_active.get() {
                     let _ = self
                         .claw_sender
-                        .send_blocking(ClawMessage::ToggleWebSearch(self.is_web_search.get()));
+                        .try_send(ClawMessage::ToggleWebSearch(self.is_web_search.get()));
                 }
             }
 
             needs_font = p.font_name != settings.font_name || p.font_size != settings.font_size;
-
             needs_padding = p.padding != settings.padding;
             needs_cell = (p.cell_height_scale - settings.cell_height_scale).abs() > 1e-6
                 || (p.cell_width_scale - settings.cell_width_scale).abs() > 1e-6;
@@ -2512,7 +1046,6 @@ impl TerminalPaneComponent {
 
         self.claw_popover
             .set_bottom_gap(settings.overlay_bottom_gap);
-
         self.msgbar_shortcut
             .set_trigger(Some(parse_accel_trigger(&settings.claw_msgbar_shortcut)));
 
@@ -2545,9 +1078,6 @@ impl TerminalPaneComponent {
                 settings.font_name, settings.font_size
             ));
             inner.terminal.set_font(Some(&font_desc));
-            // Msgbar uses the default app font (chat chrome, not shell);
-            // apply_font is a no-op but we leave the call here so any
-            // future per-msgbar font setting can flow through.
             self.msg_bar.apply_font(&font_desc);
         }
 
@@ -2619,9 +1149,18 @@ impl TerminalPaneComponent {
     pub fn set_dimmed(&self, dimmed: bool) {
         let mut inner = self.inner.borrow_mut();
         inner.is_dimmed = dimmed;
-
-        // Instead of making the GTK widget transparent (which drops the alpha of the background color too),
-        // we tell the VTE renderer to dim its text.
         inner.terminal.set_dimmed(dimmed);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_accel;
+
+    #[test]
+    fn normalize_accel_translates_literal_punctuation() {
+        assert_eq!(normalize_accel("<Ctrl>/"), "<Ctrl>slash");
+        assert_eq!(normalize_accel("<Ctrl><Shift>?"), "<Ctrl><Shift>question");
+        assert_eq!(normalize_accel("<Alt>Return"), "<Alt>Return");
     }
 }

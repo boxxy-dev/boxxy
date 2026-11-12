@@ -91,7 +91,7 @@ pub(super) fn build_ui() -> (
     widget.add_overlay(&size_revealer);
 
     let search_bar = SearchBarComponent::new();
-    search_bar.set_terminal(terminal.clone());
+    search_bar.set_terminal(&terminal);
     widget.add_overlay(search_bar.widget());
 
     let search_bar_rc = Rc::new(search_bar);

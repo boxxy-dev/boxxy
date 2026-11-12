@@ -1,5 +1,5 @@
 use super::PaneInner;
-use crate::preview::ImagePreviewPopover;
+use crate::preview::{ImagePreviewPopover, classify_media_uri};
 use boxxy_preferences::ImagePreviewTrigger;
 use boxxy_vte::terminal::TerminalWidget;
 use gtk4 as gtk;
@@ -84,19 +84,7 @@ pub(super) fn setup_preview(terminal: &TerminalWidget, inner: &Rc<RefCell<PaneIn
                         s.image_preview_trigger.clone()
                     });
 
-                if trigger == ImagePreviewTrigger::Click
-                    && (hyperlink.to_lowercase().ends_with(".png")
-                        || hyperlink.to_lowercase().ends_with(".jpg")
-                        || hyperlink.to_lowercase().ends_with(".jpeg")
-                        || hyperlink.to_lowercase().ends_with(".gif")
-                        || hyperlink.to_lowercase().ends_with(".webp")
-                        || hyperlink.to_lowercase().ends_with(".bmp")
-                        || hyperlink.to_lowercase().ends_with(".svg")
-                        || hyperlink.to_lowercase().ends_with(".mp4")
-                        || hyperlink.to_lowercase().ends_with(".webm")
-                        || hyperlink.to_lowercase().ends_with(".mkv")
-                        || hyperlink.to_lowercase().ends_with(".avi")
-                        || hyperlink.to_lowercase().ends_with(".mov"))
+                if trigger == ImagePreviewTrigger::Click && classify_media_uri(&hyperlink).is_some()
                 {
                     gesture.set_state(gtk::EventSequenceState::Claimed);
                     let preview =
@@ -135,19 +123,7 @@ pub(super) fn setup_preview(terminal: &TerminalWidget, inner: &Rc<RefCell<PaneIn
 
         if trigger == ImagePreviewTrigger::Hover {
             if let Some(hyperlink) = term_for_motion.check_hyperlink_at(x, y) {
-                if hyperlink.to_lowercase().ends_with(".png")
-                    || hyperlink.to_lowercase().ends_with(".jpg")
-                    || hyperlink.to_lowercase().ends_with(".jpeg")
-                    || hyperlink.to_lowercase().ends_with(".gif")
-                    || hyperlink.to_lowercase().ends_with(".webp")
-                    || hyperlink.to_lowercase().ends_with(".bmp")
-                    || hyperlink.to_lowercase().ends_with(".svg")
-                    || hyperlink.to_lowercase().ends_with(".mp4")
-                    || hyperlink.to_lowercase().ends_with(".webm")
-                    || hyperlink.to_lowercase().ends_with(".mkv")
-                    || hyperlink.to_lowercase().ends_with(".avi")
-                    || hyperlink.to_lowercase().ends_with(".mov")
-                {
+                if classify_media_uri(&hyperlink).is_some() {
                     let preview = get_or_init_preview(&preview_clone_motion, &term_for_motion);
                     preview.show_preview(&hyperlink, x, y, true);
                 } else {
