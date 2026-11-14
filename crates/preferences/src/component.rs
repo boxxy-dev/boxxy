@@ -20,6 +20,7 @@ pub struct PreferencesComponent {
     theme_row: adw::ActionRow,
     chat_width_spin: adw::SpinRow,
     overlay_font_scale_spin: adw::SpinRow,
+    always_show_code_blocks_switch: adw::SwitchRow,
     font_button: gtk::FontDialogButton,
     settings_rc: Rc<RefCell<Settings>>,
     handle_escape: Rc<dyn Fn()>,
@@ -213,6 +214,8 @@ impl PreferencesComponent {
         let font_button = appearance_widgets.font_button;
         let overlay_font_scale_spin: adw::SpinRow =
             builder.object("overlay_font_scale_spin").unwrap();
+        let always_show_code_blocks_switch: adw::SwitchRow =
+            builder.object("always_show_code_blocks_switch").unwrap();
 
         // Search filtering logic
         let search_entry: gtk::SearchEntry = builder.object("search_entry").unwrap();
@@ -280,6 +283,7 @@ impl PreferencesComponent {
             theme_row,
             chat_width_spin,
             overlay_font_scale_spin,
+            always_show_code_blocks_switch,
             font_button,
             settings_rc,
             handle_escape,
@@ -398,6 +402,10 @@ impl PreferencesComponent {
         {
             self.overlay_font_scale_spin
                 .set_value(settings.overlay_font_scale as f64);
+        }
+        if self.always_show_code_blocks_switch.is_active() != settings.always_show_code_blocks {
+            self.always_show_code_blocks_switch
+                .set_active(settings.always_show_code_blocks);
         }
         let mut desc = gtk::pango::FontDescription::new();
         desc.set_family(&settings.font_name);

@@ -135,6 +135,12 @@ impl CommandPaletteComponent {
                 shortcut: None,
             },
             CommandItem {
+                title: "Toggle Claw Code & Diff Blocks".to_string(),
+                action: "win.toggle-claw-code-blocks".to_string(),
+                parameter: None,
+                shortcut: Some("<Primary><Shift>D".to_string()),
+            },
+            CommandItem {
                 title: "Bookmarks".to_string(),
                 action: "win.bookmarks".to_string(),
                 parameter: None,

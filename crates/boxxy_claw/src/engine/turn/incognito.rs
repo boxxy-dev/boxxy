@@ -63,8 +63,49 @@ pub(super) async fn run_incognito_turn(
         history::prepare_query_history_for_speaker(history, history_len, &character_id, &agent_name);
 
     let query_for_chat = build_user_message_with_images(prompt, images);
+    let mut incognito_trace: Vec<boxxy_claw_protocol::TurnTraceItem> = Vec::new();
+    let tx_for_thoughts = tx_ui.clone();
+    let name_for_thoughts = agent_name.clone();
+    let cid_for_thoughts = character_id.clone();
+    let tx_for_text = tx_ui.clone();
+    let name_for_text = agent_name.clone();
+    let cid_for_text = character_id.clone();
 
-    match agent.chat(query_for_chat, final_history).await {
+    match agent
+        .chat_streaming(
+            query_for_chat,
+            final_history,
+            |raw_thought, dur_ms| {
+                if let Some((summary, clean_body)) =
+                    boxxy_claw_protocol::extract_reasoning_summary(&raw_thought)
+                {
+                    let item = boxxy_claw_protocol::TurnTraceItem::Thought {
+                        summary,
+                        content: clean_body,
+                        duration_ms: Some(dur_ms),
+                    };
+                    incognito_trace.push(item.clone());
+                    let _ = tx_for_thoughts.try_send(ClawEngineEvent::TurnTraceProgress {
+                        agent_name: name_for_thoughts.clone(),
+                        character_id: cid_for_thoughts.clone(),
+                        item: Some(item),
+                        active_status: None,
+                    });
+                }
+            },
+            |partial_text| {
+                let cleaned = partial_text.trim_start();
+                if !cleaned.is_empty() {
+                    let _ = tx_for_text.try_send(ClawEngineEvent::AssistantTextDelta {
+                        agent_name: name_for_text.clone(),
+                        character_id: cid_for_text.clone(),
+                        text: cleaned.to_string(),
+                    });
+                }
+            },
+        )
+        .await
+    {
         Ok((response, usage_opt, _messages)) => {
             let _ = tx_ui
                 .send(ClawEngineEvent::AgentThinking {
@@ -105,12 +146,13 @@ pub(super) async fn run_incognito_turn(
                 }
             }
 
-            if !clean_response.is_empty() {
+            if !clean_response.is_empty() || !incognito_trace.is_empty() {
                 let _ = tx_ui
                     .send(ClawEngineEvent::DiagnosisComplete {
                         agent_name,
                         character_id,
                         diagnosis: clean_response,
+                        trace: incognito_trace,
                         usage: usage_wrapper,
                         typewriter: false,
                     })
@@ -133,6 +175,7 @@ pub(super) async fn run_incognito_turn(
                     agent_name,
                     character_id,
                     diagnosis: format!("**Incognito chat encountered an error:**\n```\n{e}\n```"),
+                    trace: incognito_trace,
                     usage: None,
                     typewriter: false,
                 })

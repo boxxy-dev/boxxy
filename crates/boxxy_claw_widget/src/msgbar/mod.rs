@@ -476,6 +476,20 @@ impl MsgBarComponent {
                     return;
                 }
 
+                if original_text.trim() == "/code" && attachment_mgr.get_attachments().is_empty() {
+                    if !is_incognito_active {
+                        history
+                            .borrow_mut()
+                            .push(original_text, Vec::new());
+                    }
+                    buf.set_text("");
+                    let settings = boxxy_preferences::Settings::update(|s| {
+                        s.always_show_code_blocks = !s.always_show_code_blocks;
+                    });
+                    boxxy_viewer::set_always_expand_code_blocks(settings.always_show_code_blocks);
+                    return;
+                }
+
                 if original_text.trim() == "/clear" && attachment_mgr.get_attachments().is_empty() {
                     if !is_incognito_active {
                         history
@@ -585,6 +599,7 @@ impl MsgBarComponent {
                             | "/sleep"
                             | "/pin"
                             | "/web"
+                            | "/code"
                             | "/clear"
                             | "/exit"
                             | "/stop"

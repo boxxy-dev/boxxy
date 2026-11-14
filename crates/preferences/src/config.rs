@@ -333,6 +333,8 @@ pub struct Settings {
     pub colored_tabs: bool,
     #[serde(default = "default_overlay_bottom_gap")]
     pub overlay_bottom_gap: bool,
+    #[serde(default)]
+    pub always_show_code_blocks: bool,
     pub enable_tips: bool,
     #[serde(default = "default_overlay_font_scale")]
     pub overlay_font_scale: u32,
@@ -409,6 +411,7 @@ impl Default for Settings {
             enable_task_sounds: true,
             colored_tabs: false,
             overlay_bottom_gap: default_overlay_bottom_gap(),
+            always_show_code_blocks: false,
             enable_tips: true,
             overlay_font_scale: default_overlay_font_scale(),
             currency: Currency::Usd,

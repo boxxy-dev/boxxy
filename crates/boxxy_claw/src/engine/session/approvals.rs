@@ -140,6 +140,7 @@ mod pending_drain_tests {
             read_file_hashes: HashMap::new(),
             current_turn_snapshots: Vec::new(),
             last_turn_snapshots: Vec::new(),
+            current_turn_trace: Vec::new(),
         }
     }
 

@@ -821,6 +821,12 @@
                                   </object>
                                 </child>
                                 <child>
+                                  <object class="AdwSwitchRow" id="always_show_code_blocks_switch">
+                                    <property name="title" translatable="yes">Always Show Code and Diff Blocks</property>
+                                    <property name="subtitle" translatable="yes">Expand file edit diffs and long code blocks inline by default instead of tucking them into the turn trace (Ctrl+Shift+D).</property>
+                                  </object>
+                                </child>
+                                <child>
                                   <object class="AdwSwitchRow" id="enable_tips_switch">
                                     <property name="title">Show usage tips</property>
                                     <property name="subtitle">Display rotating usage hints in the Claw drawer while the agent is thinking.</property>

@@ -25,6 +25,33 @@ use syntect::util::LinesWithEndings;
 /// into `CODE_CHUNK_LINES`-line `GtkLabel` slices so GTK4/GSK frustum-culls off-screen slices.
 pub const VIRTUALIZE_LINE_THRESHOLD: usize = 200;
 pub const CODE_CHUNK_LINES: usize = 100;
+/// Settled fenced code blocks exceeding this line count auto-collapse into a compact 1-line bar
+/// when `always_expand_code_blocks()` is `false`.
+pub const AUTO_COLLAPSE_CODE_LINES: usize = 12;
+
+static ALWAYS_EXPAND_CODE_BLOCKS: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+static CODE_BLOCKS_POLICY_GEN: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(1);
+
+/// Updates the global fenced-code-block visibility policy (`Ctrl+Shift+D` / `/code` / Preferences).
+pub fn set_always_expand_code_blocks(always_expand: bool) {
+    let prev = ALWAYS_EXPAND_CODE_BLOCKS.swap(always_expand, Ordering::Relaxed);
+    if prev != always_expand {
+        CODE_BLOCKS_POLICY_GEN.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+/// Returns `true` when all fenced code blocks should render expanded regardless of line count.
+#[must_use]
+pub fn always_expand_code_blocks() -> bool {
+    ALWAYS_EXPAND_CODE_BLOCKS.load(Ordering::Relaxed)
+}
+
+#[must_use]
+pub fn code_blocks_policy_generation() -> u64 {
+    CODE_BLOCKS_POLICY_GEN.load(Ordering::Relaxed)
+}
 
 const SYNC_HIGHLIGHT_MAX_BYTES: usize = 8_192;
 const SYNC_HIGHLIGHT_MAX_LINES: usize = 80;
@@ -470,14 +497,23 @@ mod imp {
     #[derive(Default)]
     pub struct CodeBlockWidget {
         pub(super) frame: RefCell<Option<gtk::Frame>>,
+        pub(super) collapsed_bar: RefCell<Option<gtk::Box>>,
+        pub(super) collapsed_title: RefCell<Option<gtk::Label>>,
+        pub(super) body_revealer: RefCell<Option<gtk::Revealer>>,
+        pub(super) collapse_btn: RefCell<Option<gtk::Button>>,
         pub(super) scroll: RefCell<Option<gtk::ScrolledWindow>>,
         pub(super) chunks_box: RefCell<Option<gtk::Box>>,
         pub(super) lang_pill: RefCell<Option<gtk::Label>>,
         pub(super) copy_btn: RefCell<Option<gtk::Button>>,
+        pub(super) collapsed_copy_btn: RefCell<Option<gtk::Button>>,
         pub(super) chunk_labels: RefCell<Vec<gtk::Label>>,
         pub(super) applied_chunks: RefCell<Vec<ChunkStamp>>,
         pub(super) lang: RefCell<String>,
         pub(super) raw_code: RefCell<String>,
+        pub(super) line_count: Cell<usize>,
+        pub(super) is_streaming: Cell<bool>,
+        pub(super) user_expanded_override: Cell<Option<bool>>,
+        pub(super) last_policy_gen: Cell<u64>,
         pub(super) last_card_dark: Cell<Option<bool>>,
         pub(super) local_serial: Cell<u64>,
         pub(super) stream_lexer: RefCell<Option<StreamCodeLexer>>,
@@ -530,6 +566,18 @@ mod imp {
                     }
                 });
             }
+            let current_policy = code_blocks_policy_generation();
+            let prev_policy = self.last_policy_gen.replace(current_policy);
+            if prev_policy != 0 && prev_policy != current_policy {
+                let obj_weak = self.obj().downgrade();
+                glib::idle_add_local_once(move || {
+                    if let Some(obj) = obj_weak.upgrade() {
+                        obj.imp().user_expanded_override.set(None);
+                        obj.sync_collapse_presentation();
+                        obj.queue_resize();
+                    }
+                });
+            }
             self.parent_snapshot(snapshot);
         }
     }
@@ -561,6 +609,47 @@ impl CodeBlockWidget {
         frame.set_overflow(gtk::Overflow::Hidden);
         frame.set_hexpand(true);
 
+        let card_vbox = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        card_vbox.set_hexpand(true);
+
+        // Compact 1-line bar shown when long (> 12 lines) settled code blocks auto-collapse
+        let collapsed_bar = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        collapsed_bar.add_css_class("code-header");
+        collapsed_bar.add_css_class("viewer-code-collapsed-bar");
+        collapsed_bar.set_visible(false);
+
+        let expand_btn = gtk::Button::builder()
+            .css_classes(["flat", "viewer-code-expand-trigger"])
+            .hexpand(true)
+            .focus_on_click(false)
+            .tooltip_text("Click to expand code block (or press Ctrl+Shift+D for all)")
+            .build();
+        let expand_inner = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        let chevron = gtk::Image::from_icon_name("boxxy-pan-end-symbolic");
+        chevron.set_pixel_size(14);
+        chevron.add_css_class("dim-label");
+        expand_inner.append(&chevron);
+
+        let collapsed_title = gtk::Label::new(None);
+        collapsed_title.add_css_class("monospace");
+        collapsed_title.add_css_class("caption");
+        collapsed_title.set_halign(gtk::Align::Start);
+        collapsed_title.set_hexpand(true);
+        collapsed_title.set_ellipsize(pango::EllipsizeMode::End);
+        expand_inner.append(&collapsed_title);
+        expand_btn.set_child(Some(&expand_inner));
+        collapsed_bar.append(&expand_btn);
+
+        let collapsed_copy_btn = gtk::Button::builder()
+            .icon_name("boxxy-edit-copy-symbolic")
+            .css_classes(["flat", "circular", "viewer-code-copy-btn"])
+            .tooltip_text("Copy to clipboard")
+            .valign(gtk::Align::Center)
+            .focus_on_click(false)
+            .build();
+        collapsed_bar.append(&collapsed_copy_btn);
+        card_vbox.append(&collapsed_bar);
+
         let overlay = gtk::Overlay::new();
         overlay.set_hexpand(true);
 
@@ -584,7 +673,7 @@ impl CodeBlockWidget {
             .build();
         overlay.set_child(Some(&scroll));
 
-        // OpenCode-style top-end floating action overlay: subtle language pill + hover-revealed Copy button
+        // OpenCode-style top-end floating action overlay: subtle language pill + hover-revealed Copy/Collapse buttons
         let action_bar = gtk::Box::new(gtk::Orientation::Horizontal, 4);
         action_bar.add_css_class("viewer-code-overlay-bar");
         action_bar.set_halign(gtk::Align::End);
@@ -601,6 +690,16 @@ impl CodeBlockWidget {
         lang_pill.set_visible(false);
         action_bar.append(&lang_pill);
 
+        let collapse_btn = gtk::Button::builder()
+            .icon_name("boxxy-expand-vertical-symbolic")
+            .css_classes(["flat", "circular", "viewer-code-copy-btn"])
+            .tooltip_text("Collapse code block")
+            .valign(gtk::Align::Center)
+            .focus_on_click(false)
+            .visible(false)
+            .build();
+        action_bar.append(&collapse_btn);
+
         let copy_btn = gtk::Button::builder()
             .icon_name("boxxy-edit-copy-symbolic")
             .css_classes(["flat", "circular", "viewer-code-copy-btn"])
@@ -609,38 +708,79 @@ impl CodeBlockWidget {
             .focus_on_click(false)
             .build();
 
-        let obj_weak = obj.downgrade();
-        copy_btn.connect_clicked(move |btn| {
-            let Some(widget) = obj_weak.upgrade() else {
-                return;
-            };
-            if let Some(display) = gdk::Display::default() {
-                display
-                    .clipboard()
-                    .set_text(&widget.imp().raw_code.borrow());
-                btn.set_icon_name("boxxy-object-select-symbolic");
-                btn.add_css_class("copied");
-                let b_weak = btn.downgrade();
-                glib::timeout_add_local_once(Duration::from_millis(1500), move || {
-                    if let Some(b) = b_weak.upgrade() {
-                        b.set_icon_name("boxxy-edit-copy-symbolic");
-                        b.remove_css_class("copied");
-                    }
-                });
-            }
-        });
+        let wire_copy = |btn: &gtk::Button, target: &Self| {
+            let obj_weak = target.downgrade();
+            btn.connect_clicked(move |btn| {
+                let Some(widget) = obj_weak.upgrade() else {
+                    return;
+                };
+                if let Some(display) = gdk::Display::default() {
+                    display
+                        .clipboard()
+                        .set_text(&widget.imp().raw_code.borrow());
+                    btn.set_icon_name("boxxy-object-select-symbolic");
+                    btn.add_css_class("copied");
+                    let b_weak = btn.downgrade();
+                    glib::timeout_add_local_once(Duration::from_millis(1500), move || {
+                        if let Some(b) = b_weak.upgrade() {
+                            b.set_icon_name("boxxy-edit-copy-symbolic");
+                            b.remove_css_class("copied");
+                        }
+                    });
+                }
+            });
+        };
+        wire_copy(&copy_btn, &obj);
+        wire_copy(&collapsed_copy_btn, &obj);
+
+        {
+            let obj_weak = obj.downgrade();
+            expand_btn.connect_clicked(move |_| {
+                if let Some(w) = obj_weak.upgrade() {
+                    w.imp().user_expanded_override.set(Some(true));
+                    w.sync_collapse_presentation();
+                    w.queue_resize();
+                }
+            });
+        }
+        {
+            let obj_weak = obj.downgrade();
+            collapse_btn.connect_clicked(move |_| {
+                if let Some(w) = obj_weak.upgrade() {
+                    w.imp().user_expanded_override.set(Some(false));
+                    w.sync_collapse_presentation();
+                    w.queue_resize();
+                }
+            });
+        }
+
         action_bar.append(&copy_btn);
         overlay.add_overlay(&action_bar);
 
-        frame.set_child(Some(&overlay));
+        let body_revealer = gtk::Revealer::builder()
+            .transition_type(gtk::RevealerTransitionType::SlideDown)
+            .transition_duration(160)
+            .reveal_child(true)
+            .hexpand(true)
+            .child(&overlay)
+            .build();
+        card_vbox.append(&body_revealer);
+
+        frame.set_child(Some(&card_vbox));
         frame.set_parent(&obj);
 
         let imp = obj.imp();
         *imp.frame.borrow_mut() = Some(frame);
+        *imp.collapsed_bar.borrow_mut() = Some(collapsed_bar);
+        *imp.collapsed_title.borrow_mut() = Some(collapsed_title);
+        *imp.body_revealer.borrow_mut() = Some(body_revealer);
+        *imp.collapse_btn.borrow_mut() = Some(collapse_btn);
         *imp.scroll.borrow_mut() = Some(scroll);
         *imp.chunks_box.borrow_mut() = Some(chunks_box);
         *imp.lang_pill.borrow_mut() = Some(lang_pill);
         *imp.copy_btn.borrow_mut() = Some(copy_btn);
+        *imp.collapsed_copy_btn.borrow_mut() = Some(collapsed_copy_btn);
+        imp.last_policy_gen.set(code_blocks_policy_generation());
         imp.chunk_labels.borrow_mut().push(first_label);
 
         obj
@@ -656,13 +796,27 @@ impl CodeBlockWidget {
         imp.applied_chunks.borrow_mut().clear();
         imp.raw_code.borrow_mut().clear();
         imp.lang.borrow_mut().clear();
+        imp.line_count.set(0);
+        imp.is_streaming.set(false);
+        imp.user_expanded_override.set(None);
+        imp.last_policy_gen.set(code_blocks_policy_generation());
         self.set_margin_bottom(12);
         self.remove_css_class("streaming-active");
 
+        if let Some(ref bar) = *imp.collapsed_bar.borrow() {
+            bar.set_visible(false);
+        }
+        if let Some(ref rev) = *imp.body_revealer.borrow() {
+            rev.set_reveal_child(true);
+        }
         if let Some(ref scroll) = *imp.scroll.borrow() {
             scroll.hadjustment().set_value(0.0);
         }
         if let Some(ref btn) = *imp.copy_btn.borrow() {
+            btn.set_icon_name("boxxy-edit-copy-symbolic");
+            btn.remove_css_class("copied");
+        }
+        if let Some(ref btn) = *imp.collapsed_copy_btn.borrow() {
             btn.set_icon_name("boxxy-edit-copy-symbolic");
             btn.remove_css_class("copied");
         }
@@ -693,16 +847,67 @@ impl CodeBlockWidget {
             .count()
     }
 
+    /// Returns `true` if the code block body is currently expanded.
+    #[must_use]
+    pub fn is_expanded(&self) -> bool {
+        self.imp()
+            .body_revealer
+            .borrow()
+            .as_ref()
+            .is_none_or(gtk::Revealer::reveals_child)
+    }
+
+    fn sync_collapse_presentation(&self) {
+        let imp = self.imp();
+        let line_count = imp.line_count.get();
+        let is_streaming = imp.is_streaming.get();
+        let can_collapse = !is_streaming && line_count > AUTO_COLLAPSE_CODE_LINES;
+
+        let expanded = if !can_collapse {
+            true
+        } else if let Some(user_choice) = imp.user_expanded_override.get() {
+            user_choice
+        } else {
+            always_expand_code_blocks()
+        };
+
+        if let Some(ref title_lbl) = *imp.collapsed_title.borrow() {
+            let lang = imp.lang.borrow();
+            let lang_label = if lang.is_empty() { "code" } else { lang.as_str() };
+            title_lbl.set_text(&format!("{lang_label} · {line_count} lines"));
+        }
+        if let Some(ref bar) = *imp.collapsed_bar.borrow() {
+            bar.set_visible(!expanded);
+        }
+        if let Some(ref rev) = *imp.body_revealer.borrow() {
+            rev.set_reveal_child(expanded);
+        }
+        if let Some(ref cbtn) = *imp.collapse_btn.borrow() {
+            cbtn.set_visible(can_collapse && expanded);
+        }
+    }
+
     /// Updates this code block widget in-place for `lang` and `raw_code`.
     pub fn update_code(&self, lang: &str, raw_code: &str, ctx: &RenderContext) {
         let imp = self.imp();
         let next_serial = imp.local_serial.get().wrapping_add(1);
         imp.local_serial.set(next_serial);
+        imp.is_streaming.set(ctx.is_streaming);
+        let current_policy = code_blocks_policy_generation();
+        if imp.last_policy_gen.replace(current_policy) != current_policy {
+            imp.user_expanded_override.set(None);
+        }
 
         let norm_lang = normalize_fence_language(lang);
         let is_shell = is_shell_language(&norm_lang);
         let is_dark = is_card_surface_dark();
         imp.last_card_dark.set(Some(is_dark));
+
+        let code_changed = *imp.raw_code.borrow() != raw_code;
+        if code_changed && !ctx.is_streaming {
+            // Do not carry a manual override across unrelated recycled rows
+            imp.user_expanded_override.set(None);
+        }
 
         {
             let mut stored_lang = imp.lang.borrow_mut();
@@ -906,6 +1111,14 @@ impl CodeBlockWidget {
             return;
         };
 
+        let line_count = if display_code.is_empty() {
+            0
+        } else {
+            newline_offsets.len() + 1
+        };
+        imp.line_count.set(line_count);
+        self.sync_collapse_presentation();
+
         let ranges = compute_chunk_ranges(display_code.len(), newline_offsets);
         let needed = ranges.len();
 
@@ -1107,6 +1320,36 @@ mod tests {
             widget.reset_for_pool();
             widget.update_code("bash", "ls -la\n", &settled_ctx);
             assert_eq!(widget.active_chunk_count(), 1);
+            assert!(widget.is_expanded());
+        });
+    }
+
+    #[test]
+    fn code_block_smart_threshold_collapses_long_settled_blocks_unless_toggled_on() {
+        crate::run_gtk_test(|| {
+            set_always_expand_code_blocks(false);
+            let widget = CodeBlockWidget::new();
+            let settled_ctx = RenderContext::default();
+
+            // Short snippet (4 lines <= 12) stays expanded by default
+            widget.update_code("rust", "let a = 1;\nlet b = 2;\nlet c = 3;\nlet d = 4;\n", &settled_ctx);
+            assert!(widget.is_expanded());
+
+            // Long snippet (20 lines > 12) collapses by default
+            let mut twenty_lines = String::new();
+            for i in 0..20 {
+                twenty_lines.push_str(&format!("let v_{i} = {i};\n"));
+            }
+            widget.update_code("rust", &twenty_lines, &settled_ctx);
+            assert!(!widget.is_expanded());
+
+            // Toggling global policy to Always On expands long blocks
+            set_always_expand_code_blocks(true);
+            widget.update_code("rust", &twenty_lines, &settled_ctx);
+            assert!(widget.is_expanded());
+
+            // Reset policy back to default false for other tests
+            set_always_expand_code_blocks(false);
         });
     }
 }

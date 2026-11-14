@@ -68,6 +68,15 @@ impl ApprovalHandler for ClawApprovalHandler {
             );
 
         if auto_approve {
+            {
+                let mut state = self.state.lock().await;
+                state
+                    .current_turn_trace
+                    .push(boxxy_claw_protocol::TurnTraceItem::Edit {
+                        diff: diff.clone(),
+                        auto_approved: true,
+                    });
+            }
             let event = ClawEngineEvent::ProposeFileWrite {
                 agent_name,
                 character_id,
@@ -102,11 +111,11 @@ impl ApprovalHandler for ClawApprovalHandler {
         }
 
         let event = ClawEngineEvent::ProposeFileWrite {
-            agent_name,
-            character_id,
+            agent_name: agent_name.clone(),
+            character_id: character_id.clone(),
             path,
             content,
-            diff: Some(diff),
+            diff: Some(diff.clone()),
             auto_approve: false,
             usage: None,
         };
@@ -122,7 +131,28 @@ impl ApprovalHandler for ClawApprovalHandler {
             return ApprovalOutcome::Rejected;
         }
 
-        rx.await.unwrap_or(ApprovalOutcome::Rejected)
+        let outcome = rx.await.unwrap_or(ApprovalOutcome::Rejected);
+        if matches!(outcome, ApprovalOutcome::Approved) {
+            let edit_item = boxxy_claw_protocol::TurnTraceItem::Edit {
+                diff,
+                auto_approved: false,
+            };
+            self.state
+                .lock()
+                .await
+                .current_turn_trace
+                .push(edit_item.clone());
+            let _ = self
+                .tx_ui
+                .send(ClawEngineEvent::TurnTraceProgress {
+                    agent_name,
+                    character_id,
+                    item: Some(edit_item),
+                    active_status: None,
+                })
+                .await;
+        }
+        outcome
     }
 
     async fn propose_file_delete(&self, path: String) -> ApprovalOutcome {
@@ -303,10 +333,26 @@ impl ApprovalHandler for ClawApprovalHandler {
     }
 
     async fn report_tool_result(&self, tool_name: String, result: String) {
+        let trace_item = boxxy_claw_protocol::tool_result_to_trace_item(&tool_name, &result);
         let (agent_name, character_id) = {
-            let state = self.state.lock().await;
+            let mut state = self.state.lock().await;
+            if let Some(ref item) = trace_item {
+                state.current_turn_trace.push(item.clone());
+            }
             state.effective_speaker()
         };
+
+        if let Some(item) = trace_item {
+            let _ = self
+                .tx_ui
+                .send(ClawEngineEvent::TurnTraceProgress {
+                    agent_name: agent_name.clone(),
+                    character_id: character_id.clone(),
+                    item: Some(item),
+                    active_status: None,
+                })
+                .await;
+        }
 
         let event = ClawEngineEvent::ToolResult {
             agent_name,

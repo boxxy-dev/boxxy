@@ -224,6 +224,47 @@ impl Tool for TerminalCommandTool {
             },
         };
 
+        if !out.output.contains("[USER_EXPLICIT_REJECT]") {
+            let cmd_first = args.command.lines().next().unwrap_or(&args.command).trim();
+            let short_cmd = if cmd_first.len() > 72 {
+                format!("$ {}…", &cmd_first[..cmd_first.floor_char_boundary(72)])
+            } else {
+                format!("$ {cmd_first}")
+            };
+            let preview_trimmed = out.output.trim();
+            let preview = if preview_trimmed.is_empty() {
+                None
+            } else if preview_trimmed.len() <= 800 {
+                Some(preview_trimmed.to_string())
+            } else {
+                Some(format!(
+                    "{}…",
+                    &preview_trimmed[..preview_trimmed.floor_char_boundary(800)]
+                ))
+            };
+            let cmd_item = boxxy_claw_protocol::TurnTraceItem::Tool {
+                tool_name: Self::NAME.to_string(),
+                category: boxxy_claw_protocol::TraceCategory::Command,
+                label: short_cmd,
+                preview,
+                failed: !out.success,
+            };
+            self.state
+                .lock()
+                .await
+                .current_turn_trace
+                .push(cmd_item.clone());
+            let _ = self
+                .tx_ui
+                .send(ClawEngineEvent::TurnTraceProgress {
+                    agent_name,
+                    character_id,
+                    item: Some(cmd_item),
+                    active_status: None,
+                })
+                .await;
+        }
+
         Ok(out)
     }
 }

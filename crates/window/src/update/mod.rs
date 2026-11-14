@@ -168,6 +168,23 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
         AppInput::SettingsChanged(settings) => {
             window_state::settings_changed(&mut inner, settings);
         }
+        AppInput::ToggleClawCodeBlocks => {
+            let settings = boxxy_preferences::Settings::update(|s| {
+                s.always_show_code_blocks = !s.always_show_code_blocks;
+            });
+            let enabled = settings.always_show_code_blocks;
+            let _ = inner
+                .tx
+                .send_blocking(AppInput::SettingsChanged((*settings).clone()));
+            let toast_msg = if enabled {
+                "Claw Code & Diff Blocks: Always Expanded"
+            } else {
+                "Claw Code & Diff Blocks: Collapsed in Trace"
+            };
+            let _ = inner.tx.send_blocking(AppInput::ShowToast(
+                crate::state::ToastRequest::ephemeral(toast_msg),
+            ));
+        }
         AppInput::ZoomIn => {
             if is_active_tab_claw_drawer_visible(&inner) {
                 boxxy_terminal::TerminalComponent::zoom_in_claw_overlay();

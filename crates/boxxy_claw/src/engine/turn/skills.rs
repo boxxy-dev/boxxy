@@ -1,8 +1,9 @@
 use std::fmt::Write as _;
 
-pub async fn build_skills_context(prompt: &str, pane_id: &str) -> (String, String) {
+pub async fn build_skills_context(prompt: &str, pane_id: &str) -> (String, String, Vec<String>) {
     let mut active_skills_text = String::new();
     let mut available_skills_text = String::new();
+    let mut explicitly_triggered = Vec::new();
     let query_lower = prompt.to_lowercase();
 
     let registry = crate::registry::skills::global_registry().await;
@@ -13,19 +14,23 @@ pub async fn build_skills_context(prompt: &str, pane_id: &str) -> (String, Strin
     // 2. Pinned & Keyword Fallback: Include pinned skills or skills explicitly triggered by keywords
     let all_skills = registry.get_skills().await;
     for skill in &all_skills {
-        if active_skills
-            .iter()
-            .any(|s| s.frontmatter.name == skill.frontmatter.name)
-        {
-            continue;
-        }
-
         let triggered = skill.frontmatter.pinned
             || skill
                 .frontmatter
                 .triggers
                 .iter()
                 .any(|trigger| !trigger.is_empty() && query_lower.contains(&trigger.to_lowercase()));
+
+        if triggered {
+            explicitly_triggered.push(skill.frontmatter.name.clone());
+        }
+
+        if active_skills
+            .iter()
+            .any(|s| s.frontmatter.name == skill.frontmatter.name)
+        {
+            continue;
+        }
 
         if triggered {
             active_skills.push(skill.clone());
@@ -81,5 +86,9 @@ pub async fn build_skills_context(prompt: &str, pane_id: &str) -> (String, Strin
         }
     }
 
-    (active_skills_text, available_skills_text)
+    (
+        active_skills_text,
+        available_skills_text,
+        explicitly_triggered,
+    )
 }

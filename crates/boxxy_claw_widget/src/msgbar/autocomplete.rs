@@ -441,6 +441,25 @@ impl CompletionProvider for CommandCompletionProvider {
             });
         }
 
+        if "code".contains(&query_lower) || "diffs".contains(&query_lower) {
+            let currently_always = boxxy_preferences::Settings::load().always_show_code_blocks;
+            let subtitle = if currently_always {
+                "Collapse code and diff blocks into trace (Ctrl+Shift+D)"
+            } else {
+                "Always expand code and diff blocks inline (Ctrl+Shift+D)"
+            };
+            items.push(CompletionItem {
+                display_name: "/code".to_string(),
+                replacement_text: "/code".to_string(),
+                icon_name: None,
+                icon_path: None,
+                secondary_text: Some(subtitle.to_string()),
+                badge_text: None,
+                badge_color: None,
+                disabled: false,
+            });
+        }
+
         if "clear".contains(&query_lower) {
             items.push(CompletionItem {
                 display_name: "/clear".to_string(),
@@ -840,6 +859,13 @@ mod tests {
             .find(|i| i.display_name == "/incognito")
             .expect("/incognito present");
         assert!(!inc_item.disabled);
+        let code_item = initial_items
+            .iter()
+            .find(|i| i.display_name == "/code")
+            .expect("/code present");
+        assert!(!code_item.disabled);
+        let diffs_alias = provider.get_completions("diffs");
+        assert!(diffs_alias.iter().any(|i| i.display_name == "/code"));
         let exit_item = initial_items
             .iter()
             .find(|i| i.display_name == "/exit")

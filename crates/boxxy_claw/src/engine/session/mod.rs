@@ -84,6 +84,8 @@ pub struct SessionState {
     /// Pre-edit file snapshots from the most recently completed turn that modified files,
     /// used when `current_turn_snapshots` is empty at the time the user invokes `/undo`.
     pub last_turn_snapshots: Vec<(String, Option<String>)>,
+    /// Chronological reasoning, tool, skill, and diff items recorded during the active turn.
+    pub current_turn_trace: Vec<boxxy_claw_protocol::TurnTraceItem>,
 }
 
 impl SessionState {
@@ -220,6 +222,7 @@ impl ClawSession {
                 read_file_hashes: std::collections::HashMap::new(),
                 current_turn_snapshots: Vec::new(),
                 last_turn_snapshots: Vec::new(),
+                current_turn_trace: Vec::new(),
             })),
         };
 

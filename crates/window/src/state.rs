@@ -112,6 +112,7 @@ pub enum AppInput {
     SettingsChanged(Settings),
     ShowThemesSidebar,
     ShowClawSidebar,
+    ToggleClawCodeBlocks,
     ShowBookmarksSidebar,
     ExecuteBookmark(String, String, String), // Name, Filename, Script
     ExecuteInNewTab(String, String, String), // Name, Filename, Script

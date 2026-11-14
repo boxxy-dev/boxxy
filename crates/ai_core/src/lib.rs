@@ -893,6 +893,123 @@ impl BoxxyAgent {
         }
     }
 
+    pub async fn chat_streaming<P, FReasoning, FText>(
+        &self,
+        prompt: P,
+        history: Vec<Message>,
+        mut on_reasoning_done: FReasoning,
+        mut on_text_delta: FText,
+    ) -> Result<
+        (
+            String,
+            Option<rig::completion::Usage>,
+            Option<Vec<Message>>,
+        ),
+        rig::completion::PromptError,
+    >
+    where
+        P: Into<Message> + Send,
+        FReasoning: FnMut(String, u64) + Send,
+        FText: FnMut(&str) + Send,
+    {
+        use futures_util::StreamExt as _;
+
+        let hook = ModelContextHook {
+            preamble: self.preamble.clone(),
+        };
+
+        let msg = prompt.into();
+
+        let agent = match &self.inner {
+            BoxxyAgentInner::Ready(agent) => agent,
+            BoxxyAgentInner::Error(e) => {
+                return Err(rig::completion::PromptError::Provider(
+                    rig::error::ProviderError::Provider(e.clone()),
+                ));
+            }
+        };
+
+        let mut stream = agent.prompt(msg).history(history).add_hook(hook).stream();
+        let mut reasoning_starts: std::collections::HashMap<usize, std::time::Instant> =
+            std::collections::HashMap::new();
+        let mut text_buf = String::new();
+        let mut last_emit = std::time::Instant::now()
+            .checked_sub(std::time::Duration::from_millis(100))
+            .unwrap_or_else(std::time::Instant::now);
+        let mut final_res: Option<rig::agent::PromptResponse> = None;
+
+        while let Some(item_res) = stream.next().await {
+            match item_res {
+                Ok(rig::agent::MultiTurnStreamItem::StreamAssistantItem(
+                    rig::streaming::Item::Event(ev),
+                )) => match ev {
+                    rig::streaming::StreamEvent::Start {
+                        part,
+                        kind: rig::streaming::PartKind::Reasoning,
+                        ..
+                    } => {
+                        reasoning_starts.insert(part.index(), std::time::Instant::now());
+                    }
+                    rig::streaming::StreamEvent::End {
+                        part,
+                        content: rig::message::AssistantContent::Reasoning(r),
+                    } => {
+                        let dur_ms = reasoning_starts
+                            .remove(&part.index())
+                            .map_or(0, |t0| {
+                                u64::try_from(t0.elapsed().as_millis()).unwrap_or(u64::MAX)
+                            });
+                        on_reasoning_done(r.text, dur_ms);
+                    }
+                    rig::streaming::StreamEvent::Text { text, .. } => {
+                        text_buf.push_str(&text);
+                        if last_emit.elapsed() >= std::time::Duration::from_millis(45) {
+                            last_emit = std::time::Instant::now();
+                            on_text_delta(&text_buf);
+                        }
+                    }
+                    _ => {}
+                },
+                Ok(rig::agent::MultiTurnStreamItem::ModelTurnRetried { .. }) => {
+                    reasoning_starts.clear();
+                    text_buf.clear();
+                }
+                Ok(rig::agent::MultiTurnStreamItem::FinalResponse(res)) => {
+                    final_res = Some(res);
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    if boxxy_sys_utils::env::debug_context() {
+                        log::info!(
+                            target: "model-context",
+                            "\n=== MODEL ERROR ===\n{e:?}\n===================\n"
+                        );
+                    }
+                    return Err(e);
+                }
+            }
+        }
+
+        let Some(res) = final_res else {
+            return Err(rig::completion::PromptError::Provider(
+                rig::error::ProviderError::Provider(
+                    "Model stream ended before FinalResponse".to_string(),
+                ),
+            ));
+        };
+
+        let raw_output = res.output();
+        let output = append_citations_to_output(&res.messages, &raw_output);
+        if boxxy_sys_utils::env::debug_context() {
+            log::info!(
+                target: "model-context",
+                "\n=== MODEL RESPONSE ===\n{output}\n======================\n"
+            );
+        }
+        let usage = enrich_usage_with_endpoints_cost(res.usage, &self.provider, &self.endpoints);
+        Ok((output, Some(usage), Some(res.messages)))
+    }
+
     pub async fn prompt(
         &self,
         prompt: &str,

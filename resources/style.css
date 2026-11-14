@@ -280,6 +280,129 @@ button.claw-row-copy-btn:hover {
     animation: claw-avatar-pulse 1.8s ease-in-out infinite;
 }
 
+@keyframes claw-dot-blink {
+    0%, 80%, 100% {
+        opacity: 0.25;
+        transform: scale(0.85);
+    }
+    40% {
+        opacity: 1.0;
+        transform: scale(1.15);
+    }
+}
+
+.claw-working-dots .claw-working-dot {
+    border-radius: 9999px;
+    background-color: currentColor;
+    animation: claw-dot-blink 1.25s ease-in-out infinite;
+}
+
+.claw-working-dots .claw-working-dot.claw-dot-2 {
+    animation-delay: 200ms;
+}
+
+.claw-working-dots .claw-working-dot.claw-dot-3 {
+    animation-delay: 400ms;
+}
+
+/* OpenCode-style collapsible turn activity trace (+ commands, edits, thoughts, reads, tools) */
+.claw-trace-container {
+    margin-top: 1px;
+    margin-bottom: 4px;
+}
+
+.claw-trace-container button.claw-trace-summary-btn {
+    min-height: 22px;
+    min-width: 0;
+    padding: 1px 6px 1px 2px;
+    border-radius: 5px;
+    background-image: none;
+    background-color: transparent;
+    font-size: 0.88em;
+    opacity: 0.65;
+    transition: opacity 140ms ease, background-color 140ms ease;
+}
+
+.claw-trace-container button.claw-trace-summary-btn:hover {
+    opacity: 0.96;
+    background-color: alpha(currentColor, 0.06);
+}
+
+.claw-trace-container button.claw-trace-summary-btn:disabled {
+    color: inherit;
+    opacity: 0.68;
+}
+
+.claw-trace-glyph {
+    font-weight: 700;
+    opacity: 0.85;
+}
+
+.claw-trace-skill-line {
+    padding-left: 4px;
+    font-size: 0.82em;
+    opacity: 0.62;
+}
+
+.claw-trace-rail {
+    border-left: 2px solid alpha(currentColor, 0.14);
+    margin-left: 6px;
+    margin-top: 2px;
+    margin-bottom: 4px;
+    padding-left: 10px;
+}
+
+.claw-trace-rail button.claw-trace-item-btn {
+    min-height: 20px;
+    min-width: 0;
+    padding: 1px 6px 1px 2px;
+    border-radius: 4px;
+    background-image: none;
+    background-color: transparent;
+    font-size: 0.86em;
+    opacity: 0.78;
+    transition: opacity 140ms ease, background-color 140ms ease;
+}
+
+.claw-trace-rail button.claw-trace-item-btn:hover {
+    opacity: 1.0;
+    background-color: alpha(currentColor, 0.06);
+}
+
+.claw-trace-rail button.claw-trace-item-btn:disabled {
+    color: inherit;
+    opacity: 0.72;
+}
+
+.claw-trace-rail button.claw-trace-thought-btn {
+    color: @warning_color;
+    opacity: 0.82;
+}
+
+.claw-trace-rail button.claw-trace-thought-btn:hover {
+    opacity: 1.0;
+}
+
+.claw-thought-body {
+    border-left: 2px solid alpha(currentColor, 0.16);
+    margin-left: 6px;
+    margin-top: 3px;
+    margin-bottom: 4px;
+    padding-left: 10px;
+    opacity: 0.76;
+    font-size: 0.92em;
+}
+
+.claw-trace-preview {
+    margin-left: 14px;
+    margin-top: 2px;
+    margin-bottom: 4px;
+    padding: 6px 8px;
+    border-radius: 6px;
+    background-color: alpha(currentColor, 0.05);
+    opacity: 0.82;
+}
+
 .claw-virtual-row .heading {
 	/*font-weight: bold;*/
     font-size: 1.05em;
@@ -1653,6 +1776,27 @@ frame.viewer-code-block {
 
 frame.viewer-code-block.viewer-code-shell {
     border-color: alpha(currentColor, 0.16);
+}
+
+.viewer-code-block .viewer-code-collapsed-bar {
+    border-bottom: none;
+    padding: 2px 6px 2px 4px;
+}
+
+.viewer-code-block .viewer-code-collapsed-bar button.viewer-code-expand-trigger {
+    min-height: 24px;
+    padding: 2px 6px;
+    background-image: none;
+    opacity: 0.82;
+}
+
+.viewer-code-block .viewer-code-collapsed-bar button.viewer-code-expand-trigger:hover {
+    opacity: 1.0;
+}
+
+.viewer-code-block .viewer-code-collapsed-bar button.viewer-code-copy-btn {
+    opacity: 0.68;
+    background-color: transparent;
 }
 
 .code-header {

@@ -10,7 +10,10 @@ pub use parser::markdown::{
     write_escaped_pango, write_escaped_pango_attr,
 };
 pub use registry::ViewerRegistry;
-pub use renderer::code::CodeBlockWidget;
+pub use renderer::code::{
+    AUTO_COLLAPSE_CODE_LINES, CodeBlockWidget, always_expand_code_blocks,
+    code_blocks_policy_generation, set_always_expand_code_blocks,
+};
 pub use renderer::{BlockRenderer, RenderContext};
 pub use widget::StructuredViewer;
 

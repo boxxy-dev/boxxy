@@ -25,6 +25,14 @@ use rig::message::Message;
 use rig::tool::server::ToolServer;
 use std::sync::Arc;
 
+pub struct TurnStreamContext {
+    pub tx_ui: async_channel::Sender<ClawEngineEvent>,
+    pub state: Arc<tokio::sync::Mutex<SessionState>>,
+    pub agent_name: String,
+    pub character_id: String,
+    pub stream_visible_text: bool,
+}
+
 #[derive(Clone)]
 pub struct ClawAgent {
     agent: Agent,
@@ -54,6 +62,25 @@ impl ClawAgent {
         ),
         rig::completion::PromptError,
     > {
+        self.chat_streaming(prompt, history, None).await
+    }
+
+    #[allow(clippy::too_many_lines)]
+    pub async fn chat_streaming<P: Into<Message> + Send>(
+        &self,
+        prompt: P,
+        history: Vec<Message>,
+        stream_ctx: Option<TurnStreamContext>,
+    ) -> Result<
+        (
+            String,
+            Option<boxxy_claw_protocol::UsageWrapper>,
+            Option<Vec<Message>>,
+        ),
+        rig::completion::PromptError,
+    > {
+        use futures_util::StreamExt as _;
+
         let start = std::time::Instant::now();
 
         let hook = ModelContextHook {
@@ -62,12 +89,220 @@ impl ClawAgent {
 
         let msg = prompt.into();
 
-        let res_result = self
-            .agent
-            .prompt(msg)
-            .history(history)
-            .add_hook(hook)
-            .await;
+        let res_result: Result<rig::agent::PromptResponse, rig::completion::PromptError> =
+            if let Some(sctx) = stream_ctx {
+                let mut stream = self
+                    .agent
+                    .prompt(msg)
+                    .history(history)
+                    .add_hook(hook)
+                    .stream();
+
+                let mut reasoning_parts: std::collections::HashMap<
+                    usize,
+                    (std::time::Instant, String, Option<String>),
+                > = std::collections::HashMap::new();
+                let mut step_text = String::new();
+                let mut had_streamed_text = false;
+                let mut last_ui_push = std::time::Instant::now()
+                    .checked_sub(std::time::Duration::from_millis(100))
+                    .unwrap_or_else(std::time::Instant::now);
+                let mut final_res: Option<rig::agent::PromptResponse> = None;
+
+                while let Some(item_res) = stream.next().await {
+                    match item_res {
+                        Ok(rig::agent::MultiTurnStreamItem::StreamAssistantItem(
+                            rig::streaming::Item::Event(ev),
+                        )) => match ev {
+                            rig::streaming::StreamEvent::Start {
+                                part,
+                                kind: rig::streaming::PartKind::Reasoning,
+                                ..
+                            } => {
+                                reasoning_parts.insert(
+                                    part.index(),
+                                    (std::time::Instant::now(), String::new(), None),
+                                );
+                                let _ = sctx
+                                    .tx_ui
+                                    .send(ClawEngineEvent::TurnTraceProgress {
+                                        agent_name: sctx.agent_name.clone(),
+                                        character_id: sctx.character_id.clone(),
+                                        item: None,
+                                        active_status: Some("Thinking…".to_string()),
+                                    })
+                                    .await;
+                            }
+                            rig::streaming::StreamEvent::Reasoning { part, text } => {
+                                if let Some((_, buf, last_title)) =
+                                    reasoning_parts.get_mut(&part.index())
+                                {
+                                    buf.push_str(&text);
+                                    if let Some(title) =
+                                        boxxy_claw_protocol::live_reasoning_title(buf)
+                                        && last_title.as_deref() != Some(title.as_str())
+                                    {
+                                        *last_title = Some(title.clone());
+                                        let _ = sctx
+                                            .tx_ui
+                                            .send(ClawEngineEvent::TurnTraceProgress {
+                                                agent_name: sctx.agent_name.clone(),
+                                                character_id: sctx.character_id.clone(),
+                                                item: None,
+                                                active_status: Some(format!(
+                                                    "Thinking: {title}…"
+                                                )),
+                                            })
+                                            .await;
+                                    }
+                                }
+                            }
+                            rig::streaming::StreamEvent::End {
+                                part,
+                                content: rig::message::AssistantContent::Reasoning(r),
+                            } => {
+                                let duration_ms =
+                                    reasoning_parts.remove(&part.index()).map(|(t0, _, _)| {
+                                        u64::try_from(t0.elapsed().as_millis()).unwrap_or(u64::MAX)
+                                    });
+                                if let Some((summary, clean_body)) =
+                                    boxxy_claw_protocol::extract_reasoning_summary(&r.text)
+                                {
+                                    let thought = boxxy_claw_protocol::TurnTraceItem::Thought {
+                                        summary,
+                                        content: clean_body,
+                                        duration_ms,
+                                    };
+                                    sctx.state
+                                        .lock()
+                                        .await
+                                        .current_turn_trace
+                                        .push(thought.clone());
+                                    let _ = sctx
+                                        .tx_ui
+                                        .send(ClawEngineEvent::TurnTraceProgress {
+                                            agent_name: sctx.agent_name.clone(),
+                                            character_id: sctx.character_id.clone(),
+                                            item: Some(thought),
+                                            active_status: None,
+                                        })
+                                        .await;
+                                }
+                            }
+                            rig::streaming::StreamEvent::Start {
+                                kind: rig::streaming::PartKind::ToolCall,
+                                name: Some(tool_name),
+                                ..
+                            } => {
+                                step_text.clear();
+                                if had_streamed_text {
+                                    had_streamed_text = false;
+                                    let _ = sctx
+                                        .tx_ui
+                                        .send(ClawEngineEvent::AssistantTextDelta {
+                                            agent_name: sctx.agent_name.clone(),
+                                            character_id: sctx.character_id.clone(),
+                                            text: String::new(),
+                                        })
+                                        .await;
+                                }
+                                let status_str =
+                                    boxxy_claw_protocol::busy_tool_label(tool_name.as_str(), true);
+                                let _ = sctx
+                                    .tx_ui
+                                    .send(ClawEngineEvent::TurnTraceProgress {
+                                        agent_name: sctx.agent_name.clone(),
+                                        character_id: sctx.character_id.clone(),
+                                        item: None,
+                                        active_status: Some(status_str),
+                                    })
+                                    .await;
+                            }
+                            rig::streaming::StreamEvent::Text { text, .. } => {
+                                step_text.push_str(&text);
+                                if sctx.stream_visible_text
+                                    && last_ui_push.elapsed() >= std::time::Duration::from_millis(45)
+                                {
+                                    let trimmed_lead = step_text.trim_start();
+                                    let speaker_tag_pending = trimmed_lead
+                                        .starts_with("[SPEAKER_ID:")
+                                        && !trimmed_lead.contains(']');
+                                    if !speaker_tag_pending {
+                                        let cleaned =
+                                            crate::engine::turn::history::strip_speaker_tag(
+                                                &step_text,
+                                            )
+                                            .replace(
+                                                crate::engine::session::roundtable::YIELD_TO_USER_MARKER,
+                                                "",
+                                            );
+                                        let trimmed = cleaned.trim();
+                                        let is_silent_ack_prefix =
+                                            !trimmed.is_empty() && "[SILENT_ACK]".starts_with(trimmed);
+                                        if !trimmed.is_empty()
+                                            && trimmed != "[SILENT_ACK]"
+                                            && !is_silent_ack_prefix
+                                        {
+                                            had_streamed_text = true;
+                                            last_ui_push = std::time::Instant::now();
+                                            let _ = sctx
+                                                .tx_ui
+                                                .send(ClawEngineEvent::AssistantTextDelta {
+                                                    agent_name: sctx.agent_name.clone(),
+                                                    character_id: sctx.character_id.clone(),
+                                                    text: cleaned.trim_start().to_string(),
+                                                })
+                                                .await;
+                                        }
+                                    }
+                                }
+                            }
+                            _ => {}
+                        },
+                        Ok(
+                            rig::agent::MultiTurnStreamItem::ModelTurnRetried { .. }
+                            | rig::agent::MultiTurnStreamItem::ToolCall { .. }
+                            | rig::agent::MultiTurnStreamItem::ToolResult { .. },
+                        ) => {
+                            step_text.clear();
+                            if had_streamed_text {
+                                had_streamed_text = false;
+                                let _ = sctx
+                                    .tx_ui
+                                    .send(ClawEngineEvent::AssistantTextDelta {
+                                        agent_name: sctx.agent_name.clone(),
+                                        character_id: sctx.character_id.clone(),
+                                        text: String::new(),
+                                    })
+                                    .await;
+                            }
+                        }
+                        Ok(rig::agent::MultiTurnStreamItem::FinalResponse(res)) => {
+                            final_res = Some(res);
+                        }
+                        Ok(_) => {}
+                        Err(e) => {
+                            return {
+                                if boxxy_sys_utils::env::debug_context() {
+                                    log::info!(
+                                        target: "model-context",
+                                        "\n=== MODEL ERROR ===\n{e:?}\n===================\n"
+                                    );
+                                }
+                                Err(e)
+                            };
+                        }
+                    }
+                }
+
+                final_res.ok_or_else(|| {
+                    rig::completion::PromptError::Provider(rig::error::ProviderError::Provider(
+                        "Agent stream terminated before FinalResponse".to_string(),
+                    ))
+                })
+            } else {
+                self.agent.prompt(msg).history(history).add_hook(hook).await
+            };
 
         let duration = start.elapsed();
 

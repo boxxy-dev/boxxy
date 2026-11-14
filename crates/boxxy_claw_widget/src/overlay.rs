@@ -74,13 +74,14 @@ impl TerminalOverlay {
         let revealer: gtk::Revealer = builder.object("root_revealer").unwrap();
         let main_drawer: gtk::Box = builder.object("main_drawer").unwrap();
         let initial_settings = Settings::load();
+        boxxy_viewer::set_always_expand_code_blocks(initial_settings.always_show_code_blocks);
         set_overlay_zoom_pct(initial_settings.overlay_font_scale);
         revealer.set_margin_bottom(if initial_settings.overlay_bottom_gap {
             80
         } else {
             0
         });
-        Self::attach_zoom_controllers(&main_drawer);
+        Self::attach_zoom_controllers(&main_drawer, &host);
         let indicator_slot: gtk::Box = builder.object("indicator_slot").unwrap();
         let character_selector_box: gtk::Box = builder.object("character_selector_box").unwrap();
 
@@ -158,6 +159,18 @@ impl TerminalOverlay {
             if removed > 0 && added == 0 && store.n_items() == 0 {
                 history_store_for_sync.remove_all();
                 diag_viewer_for_sync.park_for_recycle();
+                return;
+            }
+            if removed > 0 && added == 0 {
+                // Mirror tail/item removals (such as pruning an empty cancelled working placeholder)
+                // while respecting temporary `/clear` offsets in `history_store_for_sync`.
+                let vis_n = history_store_for_sync.n_items();
+                let full_after = store.n_items();
+                let full_before = full_after + removed;
+                if vis_n > 0 && pos + removed == full_before {
+                    let drop_count = removed.min(vis_n);
+                    history_store_for_sync.splice(vis_n - drop_count, drop_count, &[] as &[glib::Object]);
+                }
                 return;
             }
             if added > 0 {
@@ -644,6 +657,7 @@ impl TerminalOverlay {
             if !trimmed.starts_with("/resume ")
                 && !trimmed.starts_with("/btw ")
                 && !trimmed.eq_ignore_ascii_case("/incognito")
+                && !trimmed.eq_ignore_ascii_case("/code")
             {
                 overlay_for_submit.enter_waiting_state();
             }
@@ -652,6 +666,44 @@ impl TerminalOverlay {
         let overlay_for_clear = s.clone();
         s.msg_bar.set_on_clear_hook(move || {
             overlay_for_clear.clear_visible_history();
+        });
+
+        // Reactively sync `always_show_code_blocks` across all open overlays whenever toggled
+        // via Ctrl+Shift+D, Command Palette, `/code`, or Preferences.
+        let history_store_for_policy = s.history_store.clone();
+        let revealer_weak_for_policy = s.revealer.downgrade();
+        let last_always_code = Rc::new(Cell::new(initial_settings.always_show_code_blocks));
+        let mut rx_settings = boxxy_preferences::SETTINGS_EVENT_BUS.subscribe();
+        gtk::glib::spawn_future_local(async move {
+            loop {
+                match rx_settings.recv().await {
+                    Ok(next_settings) => {
+                        let Some(_rev) = revealer_weak_for_policy.upgrade() else {
+                            break;
+                        };
+                        if last_always_code.replace(next_settings.always_show_code_blocks)
+                            != next_settings.always_show_code_blocks
+                        {
+                            boxxy_claw_ui::apply_code_blocks_visibility_policy(
+                                &history_store_for_policy,
+                                next_settings.always_show_code_blocks,
+                            );
+                        }
+                    }
+                    Err(boxxy_preferences::config::BroadcastRecvError::Lagged(_)) => {
+                        let latest = Settings::load();
+                        if last_always_code.replace(latest.always_show_code_blocks)
+                            != latest.always_show_code_blocks
+                        {
+                            boxxy_claw_ui::apply_code_blocks_visibility_policy(
+                                &history_store_for_policy,
+                                latest.always_show_code_blocks,
+                            );
+                        }
+                    }
+                    Err(boxxy_preferences::config::BroadcastRecvError::Closed) => break,
+                }
+            }
         });
 
         // Reactively refresh the character selector whenever the catalog or claims change.
@@ -1032,6 +1084,19 @@ impl TerminalOverlay {
         });
     }
 
+    /// Extends sticky-bottom auto-scrolling during live streaming deltas when the user
+    /// has not manually scrolled up away from the bottom.
+    pub fn nudge_sticky_scroll(&self) {
+        if *self.current_mode.borrow() != OverlayMode::Claw {
+            return;
+        }
+        let adj = self.history_scroll.vadjustment();
+        let at_bottom = (adj.value() + adj.page_size() - adj.upper()).abs() < 80.0;
+        if at_bottom || self.history_sticky.get() {
+            self.scroll_to_latest();
+        }
+    }
+
     /// Force the visible scroll (history or bookmark preview) to its bottom edge.
     /// Used on reveal so the user always lands on the latest content.
     fn scroll_to_latest(&self) {
@@ -1299,9 +1364,33 @@ impl TerminalOverlay {
         }
     }
 
-    fn attach_zoom_controllers(drawer: &gtk::Box) {
+    fn attach_zoom_controllers(drawer: &gtk::Box, host: &Rc<dyn ClawHost>) {
         let zoom_controller = gtk::ShortcutController::new();
         zoom_controller.set_propagation_phase(gtk::PropagationPhase::Capture);
+
+        if let Some(trigger) =
+            gtk::ShortcutTrigger::parse_string("<Control><Shift>d|<Control><Shift>D")
+        {
+            let host_for_toggle = host.clone();
+            let action = gtk::CallbackAction::new(move |_, _| {
+                let settings = Settings::update(|s| {
+                    s.always_show_code_blocks = !s.always_show_code_blocks;
+                });
+                let msg = if settings.always_show_code_blocks {
+                    "Claw Code & Diff Blocks: Always Expanded"
+                } else {
+                    "Claw Code & Diff Blocks: Collapsed in Trace"
+                };
+                host_for_toggle.notify(msg.to_string());
+                gtk::glib::Propagation::Stop
+            });
+            zoom_controller.add_shortcut(
+                gtk::Shortcut::builder()
+                    .trigger(&trigger)
+                    .action(&action)
+                    .build(),
+            );
+        }
 
         if let Some(trigger) = gtk::ShortcutTrigger::parse_string(
             "<Control>plus|<Control>equal|<Control>KP_Add|<Control><Shift>plus|<Control><Shift>equal",

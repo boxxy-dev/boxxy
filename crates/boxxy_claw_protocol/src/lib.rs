@@ -2,10 +2,15 @@ pub mod character_loader;
 pub mod characters;
 pub mod diff;
 pub mod skill_loader;
+pub mod trace;
 
 pub use diff::{
     DiffCell, DiffHunk, DiffKind, DiffLineKind, DiffPairRow, DiffSpan, DiffStats, FileDiff,
     MAX_DIFF_RENDER_ROWS,
+};
+pub use trace::{
+    ActivitySummary, TraceCategory, TurnTraceItem, busy_tool_label, coalesce_restored_history,
+    extract_reasoning_summary, live_reasoning_title, tool_result_to_trace_item,
 };
 
 use chrono::{DateTime, Utc};
@@ -319,6 +324,8 @@ pub enum PersistentClawRow {
         agent_name: Option<String>,
         character_id: Option<String>,
         content: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        trace: Vec<TurnTraceItem>,
         usage: Option<UsageWrapper>,
     },
     User {
@@ -333,6 +340,8 @@ pub enum PersistentClawRow {
         character_id: Option<String>,
         diagnosis: String,
         command: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        trace: Vec<TurnTraceItem>,
         usage: Option<UsageWrapper>,
     },
     ProcessList {
@@ -537,9 +546,26 @@ pub enum ClawEngineEvent {
         agent_name: String,
         character_id: String,
         diagnosis: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        trace: Vec<TurnTraceItem>,
         usage: Option<UsageWrapper>,
         #[serde(default)]
         typewriter: bool,
+    },
+    /// Live reasoning/tool/skill trace update during an active turn.
+    TurnTraceProgress {
+        agent_name: String,
+        character_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        item: Option<TurnTraceItem>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        active_status: Option<String>,
+    },
+    /// Coalesced live text snapshot for the visible prose of the active turn.
+    AssistantTextDelta {
+        agent_name: String,
+        character_id: String,
+        text: String,
     },
     /// Forces the UI to cleanly close the Claw drawer and reset action states.
     /// Emitted when the agent silently acknowledges a user rejection ([SILENT_ACK]).
@@ -551,6 +577,8 @@ pub enum ClawEngineEvent {
         character_id: String,
         command: String,
         diagnosis: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        trace: Vec<TurnTraceItem>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         target_pane_id: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]

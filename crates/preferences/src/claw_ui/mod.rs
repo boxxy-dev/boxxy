@@ -12,6 +12,8 @@ pub fn setup_claw_ui_page(
 ) -> Box<dyn Fn(&str) -> bool> {
     let overlay_bottom_gap_switch: adw::SwitchRow =
         builder.object("overlay_bottom_gap_switch").unwrap();
+    let always_show_code_blocks_switch: adw::SwitchRow =
+        builder.object("always_show_code_blocks_switch").unwrap();
     let enable_tips_switch: adw::SwitchRow = builder.object("enable_tips_switch").unwrap();
     let overlay_font_scale_spin: adw::SpinRow =
         builder.object("overlay_font_scale_spin").unwrap();
@@ -52,6 +54,7 @@ pub fn setup_claw_ui_page(
     {
         let s = settings_rc.borrow();
         overlay_bottom_gap_switch.set_active(s.overlay_bottom_gap);
+        always_show_code_blocks_switch.set_active(s.always_show_code_blocks);
         enable_tips_switch.set_active(s.enable_tips);
         let scale_adj = gtk::Adjustment::new(
             s.overlay_font_scale.clamp(60, 220) as f64,
@@ -123,6 +126,23 @@ pub fn setup_claw_ui_page(
         let mut s = s_rc.borrow_mut();
         if s.overlay_bottom_gap != val {
             s.overlay_bottom_gap = val;
+            s.save();
+            cb(s.clone());
+        }
+    });
+
+    // Always-show-code-blocks toggle
+    let s_rc = settings_rc.clone();
+    let cb = on_change.clone();
+    let is_up = is_updating.clone();
+    always_show_code_blocks_switch.connect_active_notify(move |row: &adw::SwitchRow| {
+        if is_up.get() {
+            return;
+        }
+        let val = row.is_active();
+        let mut s = s_rc.borrow_mut();
+        if s.always_show_code_blocks != val {
+            s.always_show_code_blocks = val;
             s.save();
             cb(s.clone());
         }
@@ -247,6 +267,7 @@ pub fn setup_claw_ui_page(
     let group_claw_ui_behavior_clone = group_claw_ui_behavior.clone();
     let group_claw_ui_shortcuts_clone = group_claw_ui_shortcuts.clone();
     let overlay_bottom_gap_switch_clone = overlay_bottom_gap_switch.clone();
+    let always_show_code_blocks_switch_clone = always_show_code_blocks_switch.clone();
     let enable_tips_switch_clone = enable_tips_switch.clone();
     let overlay_font_scale_spin_clone = overlay_font_scale_spin.clone();
     let currency_combo_clone = currency_combo.clone();
@@ -281,6 +302,11 @@ pub fn setup_claw_ui_page(
             "leave bottom space gap overlay drawer terminal behind margin",
         );
 
+        let always_code = match_row(
+            always_show_code_blocks_switch_clone.upcast_ref(),
+            "always show code and diff blocks expand collapse trace ctrl shift d",
+        );
+
         let tips = match_row(
             enable_tips_switch_clone.upcast_ref(),
             "tips usage hints rotating help",
@@ -305,7 +331,7 @@ pub fn setup_claw_ui_page(
             "reset default claw ui shortcut keybinding",
         );
 
-        let behavior_visible = bottom_gap || tips || font_scale || currency;
+        let behavior_visible = bottom_gap || always_code || tips || font_scale || currency;
         let sounds_visible = timer_sounds || task_sounds;
         let identity_visible = hide_badge;
         let shortcut_visible = s_accel || reset_shortcut;

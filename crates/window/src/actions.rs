@@ -29,6 +29,7 @@ pub fn setup_actions(
     add_action!("terminal-colors", AppInput::ShowThemesSidebar);
     add_action!("app-themes", AppInput::OpenThemesPreferences);
     add_action!("claw", AppInput::ShowClawSidebar);
+    add_action!("toggle-claw-code-blocks", AppInput::ToggleClawCodeBlocks);
     add_action!("new-window", AppInput::NewWindow);
     add_action!("new-tab", AppInput::NewTab);
 

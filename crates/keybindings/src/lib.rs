@@ -66,6 +66,10 @@ pub const MESSAGE_BAR: Keybinding = Keybinding {
     trigger: "<Ctrl>slash",
     action_name: "win.message-bar", // Note: handled manually in pane/mod.rs
 };
+pub const TOGGLE_CLAW_CODE_BLOCKS: Keybinding = Keybinding {
+    trigger: "<Ctrl><Shift>d",
+    action_name: "win.toggle-claw-code-blocks",
+};
 
 pub const SPLIT_DOWN: Keybinding = Keybinding {
     trigger: "<Ctrl><Shift>e",
@@ -130,6 +134,7 @@ pub fn get_shortcuts_by_category() -> Vec<ShortcutCategory> {
                 ("Command Palette", COMMAND_PALETTE),
                 ("Toggle Sidebar", TOGGLE_SIDEBAR),
                 ("Ask Boxxy-Claw", MESSAGE_BAR),
+                ("Toggle Claw Code and Diff Blocks", TOGGLE_CLAW_CODE_BLOCKS),
                 ("Preferences", PREFERENCES),
             ],
         },
@@ -196,6 +201,10 @@ pub fn bind_shortcuts(app: &libadwaita::Application) {
     app.set_accels_for_action(PASTE.action_name, &[PASTE.trigger]);
     app.set_accels_for_action(SELECT_ALL.action_name, &[SELECT_ALL.trigger]);
     app.set_accels_for_action(OPEN_SCROLLBACK.action_name, &[OPEN_SCROLLBACK.trigger]);
+    app.set_accels_for_action(
+        TOGGLE_CLAW_CODE_BLOCKS.action_name,
+        &[TOGGLE_CLAW_CODE_BLOCKS.trigger],
+    );
     app.set_accels_for_action(SPLIT_DOWN.action_name, &[SPLIT_DOWN.trigger]);
     app.set_accels_for_action(SPLIT_RIGHT.action_name, &[SPLIT_RIGHT.trigger]);
     app.set_accels_for_action(CLOSE_PANE.action_name, &[CLOSE_PANE.trigger]);

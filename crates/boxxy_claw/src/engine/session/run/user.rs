@@ -443,6 +443,7 @@ impl ClawSession {
                 agent_name: self.name.clone(),
                 character_id: self.character_id.clone(),
                 diagnosis: undo_msg,
+                trace: Vec::new(),
                 usage: None,
                 typewriter: false,
             })
@@ -458,6 +459,7 @@ impl ClawSession {
                     agent_name: self.name.clone(),
                     character_id: self.character_id.clone(),
                     diagnosis: status_msg,
+                    trace: Vec::new(),
                     usage: None,
                     typewriter: false,
                 })
@@ -572,6 +574,7 @@ impl ClawSession {
                     agent_name: self.name.clone(),
                     character_id: self.character_id.clone(),
                     diagnosis: undo_msg,
+                    trace: Vec::new(),
                     usage: None,
                     typewriter: false,
                 })
@@ -587,6 +590,7 @@ impl ClawSession {
                         agent_name: self.name.clone(),
                         character_id: self.character_id.clone(),
                         diagnosis: status_msg,
+                        trace: Vec::new(),
                         usage: None,
                         typewriter: false,
                     })
@@ -659,6 +663,7 @@ impl ClawSession {
             agent_name: caller_display_name.clone(),
             character_id: caller_character_id,
             diagnosis: prompt.clone(),
+            trace: Vec::new(),
             usage: None,
             typewriter: false,
         };

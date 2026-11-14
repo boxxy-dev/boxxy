@@ -103,7 +103,7 @@ pub fn spawn_turn(
         let settings = boxxy_preferences::Settings::load();
 
         // 1. Build Skills Context & Pre-Load `@file` References
-        let (active_skills_text, available_skills_text) =
+        let (active_skills_text, available_skills_text, triggered_skill_names) =
             skills::build_skills_context(&prompt_clone, &pane_id).await;
         let skills_context = format!("{active_skills_text}{available_skills_text}");
         let resolved_file_refs =
@@ -212,6 +212,14 @@ pub fn spawn_turn(
             if !state_lock.current_turn_snapshots.is_empty() {
                 state_lock.last_turn_snapshots =
                     std::mem::take(&mut state_lock.current_turn_snapshots);
+            }
+            state_lock.current_turn_trace.clear();
+            for skill_name in &triggered_skill_names {
+                state_lock
+                    .current_turn_trace
+                    .push(boxxy_claw_protocol::TurnTraceItem::Skill {
+                        name: skill_name.clone(),
+                    });
             }
             let drama_mode = state_lock.roundtable.drama_mode;
 
@@ -416,6 +424,7 @@ pub fn spawn_turn(
                         agent_name: agent_name.clone(),
                         character_id: character_id.clone(),
                         diagnosis: format!("**Configuration Error:** {err}"),
+                        trace: Vec::new(),
                         usage: None,
                         typewriter: false,
                     };
@@ -456,10 +465,33 @@ pub fn spawn_turn(
             &host_agent_name,
         );
 
+        for skill_name in &triggered_skill_names {
+            let _ = tx_ui
+                .send(ClawEngineEvent::TurnTraceProgress {
+                    agent_name: agent_name.clone(),
+                    character_id: character_id.clone(),
+                    item: Some(boxxy_claw_protocol::TurnTraceItem::Skill {
+                        name: skill_name.clone(),
+                    }),
+                    active_status: None,
+                })
+                .await;
+        }
+
         let query_for_chat = build_user_message_with_images(full_prompt.clone(), images_clone);
+        let stream_ctx = crate::engine::agent::TurnStreamContext {
+            tx_ui: tx_ui.clone(),
+            state: state.clone(),
+            agent_name: agent_name.clone(),
+            character_id: character_id.clone(),
+            stream_visible_text: !drama_mode,
+        };
 
         let start_time = std::time::Instant::now();
-        match agent.chat(query_for_chat, final_history).await {
+        match agent
+            .chat_streaming(query_for_chat, final_history, Some(stream_ctx))
+            .await
+        {
             Ok((response, usage, messages)) => {
                 let duration = start_time.elapsed();
                 let _ = tx_ui
@@ -475,6 +507,20 @@ pub fn spawn_turn(
                         boxxy_ai_core::extract_native_search_summary(msgs)
                 {
                     boxxy_telemetry::track_tool_use("native_web_search").await;
+                    if let Some(item) = boxxy_claw_protocol::tool_result_to_trace_item(
+                        "native_web_search",
+                        &search_summary,
+                    ) {
+                        state.lock().await.current_turn_trace.push(item.clone());
+                        let _ = tx_ui
+                            .send(ClawEngineEvent::TurnTraceProgress {
+                                agent_name: agent_name.clone(),
+                                character_id: character_id.clone(),
+                                item: Some(item),
+                                active_status: None,
+                            })
+                            .await;
+                    }
                     let tool_event = ClawEngineEvent::ToolResult {
                         agent_name: agent_name.clone(),
                         character_id: character_id.clone(),
@@ -584,6 +630,11 @@ pub fn spawn_turn(
                     clean_diagnosis = extracted.1;
                 }
 
+                let completed_trace = {
+                    let mut state_lock = state.lock().await;
+                    std::mem::take(&mut state_lock.current_turn_trace)
+                };
+
                 let mut had_blocking_proposal = false;
                 if clean_diagnosis.trim() == "[SILENT_ACK]" {
                     info!(
@@ -591,7 +642,10 @@ pub fn spawn_turn(
                     );
                     had_blocking_proposal = true;
                     let _ = tx_ui.send(ClawEngineEvent::DismissDrawer).await;
-                } else if clean_diagnosis.trim().is_empty() && command_opt.is_none() {
+                } else if clean_diagnosis.trim().is_empty()
+                    && command_opt.is_none()
+                    && completed_trace.is_empty()
+                {
                     info!(
                         "Pane {pane_id} ({agent_name}): Agent response was empty."
                     );
@@ -616,6 +670,7 @@ pub fn spawn_turn(
                         character_id: character_id.clone(),
                         command,
                         diagnosis: clean_diagnosis.clone(),
+                        trace: completed_trace,
                         target_pane_id: None,
                         target_pane_label: None,
                         auto_approve,
@@ -634,6 +689,7 @@ pub fn spawn_turn(
                         agent_name: agent_name.clone(),
                         character_id: character_id.clone(),
                         diagnosis: clean_diagnosis.clone(),
+                        trace: completed_trace,
                         usage,
                         typewriter: drama_mode,
                     };
@@ -721,7 +777,7 @@ pub fn spawn_turn(
                         .await;
                 }
 
-                {
+                let completed_trace = {
                     let mut state_lock = state.lock().await;
                     if !speaker.is_guest {
                         state_lock.persistent_agent = Some(agent);
@@ -729,7 +785,8 @@ pub fn spawn_turn(
                     state_lock.active_speaker = None;
                     state_lock.next_roundtable_turn = None;
                     state_lock.roundtable.clear();
-                }
+                    std::mem::take(&mut state_lock.current_turn_trace)
+                };
 
                 log::error!(
                     "Pane {pane_id} ({agent_name}): Boxxy-Claw agent failed: {e}"
@@ -746,6 +803,7 @@ pub fn spawn_turn(
                     agent_name: agent_name.clone(),
                     character_id: character_id.clone(),
                     diagnosis: friendly_msg,
+                    trace: completed_trace,
                     usage: None,
                     typewriter: false,
                 };

@@ -63,6 +63,7 @@ impl PersistentClawRowExt {
                 agent_name,
                 character_id,
                 diagnosis,
+                trace,
                 usage,
                 ..
             } => Some(PersistentClawRow::Diagnosis {
@@ -70,6 +71,7 @@ impl PersistentClawRowExt {
                 agent_name: Some(agent_name.clone()),
                 character_id: Some(character_id.clone()),
                 content: diagnosis.clone(),
+                trace: trace.clone(),
                 usage: usage.clone(),
             }),
             ClawEngineEvent::InjectCommand {
@@ -77,6 +79,7 @@ impl PersistentClawRowExt {
                 character_id,
                 command,
                 diagnosis,
+                trace,
                 usage,
                 ..
             } => Some(PersistentClawRow::Suggested {
@@ -85,6 +88,7 @@ impl PersistentClawRowExt {
                 character_id: Some(character_id.clone()),
                 diagnosis: diagnosis.clone(),
                 command: command.clone(),
+                trace: trace.clone(),
                 usage: usage.clone(),
             }),
             ClawEngineEvent::ProposeFileWrite {
@@ -119,6 +123,7 @@ impl PersistentClawRowExt {
                 agent_name: Some(agent_name.clone()),
                 character_id: Some(character_id.clone()),
                 content: format!("Proposed file deletion: `{path}`"),
+                trace: Vec::new(),
                 usage: usage.clone(),
             }),
             ClawEngineEvent::ProposeKillProcess {
@@ -133,6 +138,7 @@ impl PersistentClawRowExt {
                 agent_name: Some(agent_name.clone()),
                 character_id: Some(character_id.clone()),
                 content: format!("Proposed killing process: {process_name} (PID: {pid})"),
+                trace: Vec::new(),
                 usage: usage.clone(),
             }),
             ClawEngineEvent::ProposeGetClipboard {
@@ -144,6 +150,7 @@ impl PersistentClawRowExt {
                 agent_name: Some(agent_name.clone()),
                 character_id: Some(character_id.clone()),
                 content: "Proposed reading from clipboard.".to_string(),
+                trace: Vec::new(),
                 usage: usage.clone(),
             }),
             ClawEngineEvent::ProposeSetClipboard {
@@ -156,6 +163,7 @@ impl PersistentClawRowExt {
                 agent_name: Some(agent_name.clone()),
                 character_id: Some(character_id.clone()),
                 content: format!("Proposed writing to clipboard:\n```\n{text}\n```"),
+                trace: Vec::new(),
                 usage: usage.clone(),
             }),
             ClawEngineEvent::ProposeTerminalCommand {
@@ -171,6 +179,7 @@ impl PersistentClawRowExt {
                 character_id: Some(character_id.clone()),
                 diagnosis: explanation.clone(),
                 command: command.clone(),
+                trace: Vec::new(),
                 usage: usage.clone(),
             }),
             ClawEngineEvent::ToolResult {

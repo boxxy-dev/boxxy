@@ -23,7 +23,9 @@ impl BlockRenderer for DiffRenderer {
         matches!(
             block,
             ContentBlock::Custom { schema, .. }
-                if schema == "file_diff" || schema == "file_diff_compact"
+                if schema == "file_diff"
+                    || schema == "file_diff_compact"
+                    || schema == "file_diff_collapsed"
         )
     }
 
@@ -43,30 +45,57 @@ impl BlockRenderer for DiffRenderer {
             return err_lbl.upcast();
         };
 
-        let allow_auto_collapse = schema == "file_diff_compact";
-        build_diff_card_with_mode(&prepared, is_dark, allow_auto_collapse).upcast()
+        let collapse_policy = match schema.as_str() {
+            "file_diff_collapsed" => DiffCollapsePolicy::AlwaysCollapsed,
+            "file_diff_compact" => DiffCollapsePolicy::CollapseLarge,
+            _ => DiffCollapsePolicy::AlwaysExpanded,
+        };
+        build_diff_card_with_policy(&prepared, is_dark, collapse_policy).upcast()
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiffCollapsePolicy {
+    AlwaysExpanded,
+    CollapseLarge,
+    AlwaysCollapsed,
 }
 
 #[must_use]
 pub fn build_diff_card(prepared: &Arc<PreparedDiff>, is_dark: bool) -> ResponsiveDiffContainer {
-    build_diff_card_with_mode(prepared, is_dark, false)
+    build_diff_card_with_policy(prepared, is_dark, DiffCollapsePolicy::AlwaysExpanded)
 }
 
 #[must_use]
-#[allow(clippy::too_many_lines)]
 pub fn build_diff_card_with_mode(
     prepared: &Arc<PreparedDiff>,
     is_dark: bool,
     allow_auto_collapse: bool,
 ) -> ResponsiveDiffContainer {
-    // Safeguard:
-    // - Pending approval diffs (`allow_auto_collapse == false`) ALWAYS start expanded.
-    // - Small diffs (`<= 12` changed lines) ALWAYS start expanded.
-    // - Auto-approved / history diffs with `> 12` changed lines start collapsed AND defer
-    //   body widget construction until expanded (matching OpenCode's `PatchTool` `defer: true`).
+    build_diff_card_with_policy(
+        prepared,
+        is_dark,
+        if allow_auto_collapse {
+            DiffCollapsePolicy::CollapseLarge
+        } else {
+            DiffCollapsePolicy::AlwaysExpanded
+        },
+    )
+}
+
+#[must_use]
+#[allow(clippy::too_many_lines)]
+pub fn build_diff_card_with_policy(
+    prepared: &Arc<PreparedDiff>,
+    is_dark: bool,
+    policy: DiffCollapsePolicy,
+) -> ResponsiveDiffContainer {
     let total_changed_lines = prepared.stats.added_lines + prepared.stats.removed_lines;
-    let initial_expanded = !allow_auto_collapse || total_changed_lines <= 12;
+    let initial_expanded = match policy {
+        DiffCollapsePolicy::AlwaysExpanded => true,
+        DiffCollapsePolicy::CollapseLarge => total_changed_lines <= 12,
+        DiffCollapsePolicy::AlwaysCollapsed => false,
+    };
 
     let frame = gtk::Frame::new(None);
     frame.add_css_class("view");

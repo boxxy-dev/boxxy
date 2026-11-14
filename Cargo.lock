@@ -800,6 +800,7 @@ dependencies = [
  "async-trait",
  "boxxy-model-selection",
  "boxxy-sys-utils",
+ "futures-util",
  "log",
  "rig",
  "serde",

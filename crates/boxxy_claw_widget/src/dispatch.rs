@@ -12,9 +12,13 @@
 
 use crate::msgbar::MsgBarComponent;
 use crate::{ClawHost, ClawIndicator, OverlayMode, TerminalOverlay, state::OverlayState};
-use boxxy_claw_protocol::{AgentStatus, ClawEngineEvent, ClawMessage, SessionUsage, UsageWrapper};
+use boxxy_claw_protocol::{
+    AgentStatus, ClawEngineEvent, ClawMessage, SessionUsage, TurnTraceItem, UsageWrapper,
+};
+use boxxy_claw_ui::row_object::ClawRowObject;
 use gtk4 as gtk;
 use gtk4::gio::prelude::ListModelExt;
+use gtk4::glib::object::CastNone;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
@@ -26,6 +30,54 @@ fn record_usage(cell: &Cell<SessionUsage>, u: &UsageWrapper) {
     cell.set(su);
 }
 
+fn ensure_working_row(
+    overlay_store: &gtk::gio::ListStore,
+    slot: &RefCell<Option<ClawRowObject>>,
+    pane_id: &str,
+    agent_name: &str,
+    character_id: &str,
+) -> ClawRowObject {
+    if let Some(existing) = slot.borrow().clone() {
+        existing.ensure_speaker(agent_name, character_id);
+        if !existing.is_working() {
+            existing.set_working(true);
+        }
+        return existing;
+    }
+
+    let created = boxxy_claw_ui::add_working_turn_row(
+        overlay_store,
+        pane_id.to_string(),
+        (!agent_name.is_empty()).then(|| agent_name.to_string()),
+        (!character_id.is_empty()).then(|| character_id.to_string()),
+    );
+    *slot.borrow_mut() = Some(created.clone());
+    created
+}
+
+fn settle_or_prune_working_row(
+    overlay_store: &gtk::gio::ListStore,
+    slot: &RefCell<Option<ClawRowObject>>,
+) {
+    let Some(row) = slot.borrow_mut().take() else {
+        return;
+    };
+    row.set_pending_approval_diff(None);
+    row.set_working(false);
+
+    if row.is_empty_working_placeholder() {
+        let n = overlay_store.n_items();
+        for idx in (0..n).rev() {
+            if let Some(item) = overlay_store.item(idx).and_downcast::<ClawRowObject>()
+                && item == row
+            {
+                overlay_store.remove(idx);
+                break;
+            }
+        }
+    }
+}
+
 /// Wire a `ClawEngineEvent` receiver into the drawer UI.
 ///
 /// The signature is wide because the dispatcher is the single point
@@ -33,7 +85,7 @@ fn record_usage(cell: &Cell<SessionUsage>, u: &UsageWrapper) {
 /// widget-held UI (overlay, indicator). Keeping them as explicit
 /// parameters makes the data flow grep-able — no hidden globals,
 /// no magic context object.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 pub fn spawn_dispatch(
     claw_rx: async_channel::Receiver<ClawEngineEvent>,
     host: Rc<dyn ClawHost>,
@@ -50,6 +102,7 @@ pub fn spawn_dispatch(
     pending_tasks: Rc<RefCell<Vec<boxxy_claw_protocol::ScheduledTask>>>,
 ) {
     let overlay_store = overlay.history_store();
+    let active_turn_row: Rc<RefCell<Option<ClawRowObject>>> = Rc::new(RefCell::new(None));
 
     gtk::glib::spawn_future_local(async move {
         while let Ok(event) = claw_rx.recv().await {
@@ -58,8 +111,18 @@ pub fn spawn_dispatch(
                     *session_status.borrow_mut() = status.clone();
                     msg_bar.set_status(status.clone());
                     indicator.set_mode(status.clone());
+                    if matches!(
+                        status,
+                        AgentStatus::Waiting
+                            | AgentStatus::Sleep
+                            | AgentStatus::Off
+                            | AgentStatus::Faulted { .. }
+                    ) {
+                        settle_or_prune_working_row(&overlay_store, &active_turn_row);
+                    }
                 }
                 ClawEngineEvent::UserMessage { content, images } => {
+                    settle_or_prune_working_row(&overlay_store, &active_turn_row);
                     boxxy_claw_ui::add_user_row(
                         &overlay_store,
                         id.clone(),
@@ -69,25 +132,86 @@ pub fn spawn_dispatch(
                 }
                 ClawEngineEvent::ToolCallStarted {
                     agent_name: event_agent_name,
-                    character_id: _,
+                    character_id,
                     tool_name,
                 } => {
+                    let row = ensure_working_row(
+                        &overlay_store,
+                        &active_turn_row,
+                        &id,
+                        event_agent_name,
+                        character_id,
+                    );
+                    row.set_active_status(Some(boxxy_claw_protocol::busy_tool_label(
+                        tool_name, false,
+                    )));
                     overlay.set_tool_started(event_agent_name, tool_name);
+                    overlay.nudge_sticky_scroll();
+                }
+                ClawEngineEvent::TurnTraceProgress {
+                    agent_name: event_agent_name,
+                    character_id,
+                    item,
+                    active_status,
+                } => {
+                    let row = ensure_working_row(
+                        &overlay_store,
+                        &active_turn_row,
+                        &id,
+                        event_agent_name,
+                        character_id,
+                    );
+                    if let Some(status) = active_status {
+                        row.set_active_status(Some(status.clone()));
+                    }
+                    if let Some(trace_item) = item {
+                        row.push_trace_item(trace_item.clone());
+                    }
+                    overlay.nudge_sticky_scroll();
+                }
+                ClawEngineEvent::AssistantTextDelta {
+                    agent_name: event_agent_name,
+                    character_id,
+                    text,
+                } => {
+                    let row = ensure_working_row(
+                        &overlay_store,
+                        &active_turn_row,
+                        &id,
+                        event_agent_name,
+                        character_id,
+                    );
+                    row.set_active_status(None);
+                    row.set_streaming_prose(text);
+                    overlay.nudge_sticky_scroll();
                 }
                 ClawEngineEvent::AgentThinking {
                     is_thinking,
                     agent_name: event_agent_name,
-                    character_id: _,
+                    character_id,
                 } => {
                     if *is_thinking {
                         if !event_agent_name.is_empty() {
                             overlay.set_active_agent(event_agent_name);
                         }
+                        if !event_agent_name.is_empty() || !character_id.is_empty() {
+                            let _ = ensure_working_row(
+                                &overlay_store,
+                                &active_turn_row,
+                                &id,
+                                event_agent_name,
+                                character_id,
+                            );
+                        }
                         if !overlay.is_visible() && !host.has_foreground_process() {
                             overlay.show_chat_only(event_agent_name);
                         }
                         overlay.set_thinking(true);
+                        overlay.nudge_sticky_scroll();
                     } else {
+                        if let Some(ref row) = *active_turn_row.borrow() {
+                            row.set_active_status(None);
+                        }
                         overlay.set_thinking(false);
                     }
                 }
@@ -98,6 +222,7 @@ pub fn spawn_dispatch(
                 ClawEngineEvent::DismissDrawer => {
                     // Explicitly close the drawer from the backend. This happens when
                     // the user rejects a proposal, and the agent outputs [SILENT_ACK].
+                    settle_or_prune_working_row(&overlay_store, &active_turn_row);
                     overlay.hide();
                 }
                 ClawEngineEvent::FocusPane => {
@@ -105,6 +230,7 @@ pub fn spawn_dispatch(
                 }
                 ClawEngineEvent::DiagnosisComplete {
                     diagnosis,
+                    trace,
                     agent_name,
                     character_id,
                     usage,
@@ -113,14 +239,27 @@ pub fn spawn_dispatch(
                     if let Some(usage) = usage {
                         record_usage(&session_usage, usage);
                     }
-                    boxxy_claw_ui::add_diagnosis_row_with_typewriter(
-                        &overlay_store,
-                        id.clone(),
-                        Some(agent_name.clone()),
-                        Some(character_id.clone()),
-                        diagnosis,
-                        *typewriter,
-                    );
+                    let taken = active_turn_row.borrow_mut().take();
+                    if let Some(row) = taken {
+                        row.finalize_diagnosis(
+                            Some(agent_name.clone()),
+                            Some(character_id.clone()),
+                            diagnosis.clone(),
+                            trace.clone(),
+                            usage.clone(),
+                            *typewriter,
+                        );
+                    } else {
+                        boxxy_claw_ui::add_diagnosis_row_with_trace(
+                            &overlay_store,
+                            id.clone(),
+                            Some(agent_name.clone()),
+                            Some(character_id.clone()),
+                            diagnosis,
+                            trace.clone(),
+                            *typewriter,
+                        );
+                    }
                     if overlay.is_visible() || !host.has_foreground_process() {
                         overlay.show(
                             OverlayMode::Claw,
@@ -136,6 +275,7 @@ pub fn spawn_dispatch(
                 ClawEngineEvent::InjectCommand {
                     command,
                     diagnosis,
+                    trace,
                     agent_name,
                     character_id,
                     target_pane_id,
@@ -146,22 +286,27 @@ pub fn spawn_dispatch(
                     if let Some(usage) = usage {
                         record_usage(&session_usage, usage);
                     }
-                    if !diagnosis.is_empty() {
-                        boxxy_claw_ui::add_diagnosis_row(
+                    let taken = active_turn_row.borrow_mut().take();
+                    if let Some(row) = taken {
+                        row.finalize_suggested(
+                            Some(agent_name.clone()),
+                            Some(character_id.clone()),
+                            diagnosis.clone(),
+                            command.clone(),
+                            trace.clone(),
+                            usage.clone(),
+                        );
+                    } else {
+                        boxxy_claw_ui::add_suggested_row_with_trace(
                             &overlay_store,
                             id.clone(),
                             Some(agent_name.clone()),
                             Some(character_id.clone()),
                             diagnosis,
+                            command,
+                            trace.clone(),
                         );
                     }
-                    boxxy_claw_ui::add_approval_row(
-                        &overlay_store,
-                        id.clone(),
-                        Some(agent_name.clone()),
-                        Some(character_id.clone()),
-                        command,
-                    );
                     if *auto_approve {
                         if let Some(target_id) = target_pane_id
                             .as_deref()
@@ -209,15 +354,25 @@ pub fn spawn_dispatch(
                     let resolved_diff = diff.clone().unwrap_or_else(|| {
                         boxxy_claw_protocol::FileDiff::fallback_new(path, content)
                     });
-                    boxxy_claw_ui::add_file_diff_row_with_mode(
+                    let row = ensure_working_row(
                         &overlay_store,
-                        id.clone(),
-                        Some(agent_name.clone()),
-                        Some(character_id.clone()),
-                        resolved_diff.clone(),
-                        *auto_approve,
+                        &active_turn_row,
+                        &id,
+                        agent_name,
+                        character_id,
                     );
-                    if !*auto_approve {
+                    if *auto_approve {
+                        // Fold completed auto-approved edit directly into the turn's `+ N edits` trace.
+                        row.push_trace_item(TurnTraceItem::Edit {
+                            diff: resolved_diff,
+                            auto_approved: true,
+                        });
+                        overlay.nudge_sticky_scroll();
+                    } else {
+                        // Display the expanded diff inside the active turn row while awaiting approval;
+                        // once approved, `TurnTraceProgress` folds it into `+ N edits`.
+                        row.set_working(false);
+                        row.set_pending_approval_diff(Some(&resolved_diff));
                         overlay.show(
                             OverlayMode::Claw,
                             agent_name,
@@ -240,13 +395,18 @@ pub fn spawn_dispatch(
                     if let Some(usage) = usage {
                         record_usage(&session_usage, usage);
                     }
-                    boxxy_claw_ui::add_file_delete_approval_row(
-                        &overlay_store,
-                        id.clone(),
-                        Some(agent_name.clone()),
-                        Some(character_id.clone()),
-                        path,
-                    );
+                    if let Some(ref row) = *active_turn_row.borrow() {
+                        row.set_working(false);
+                        row.set_active_status(Some(format!("Confirm deleting `{path}`…")));
+                    } else {
+                        boxxy_claw_ui::add_file_delete_approval_row(
+                            &overlay_store,
+                            id.clone(),
+                            Some(agent_name.clone()),
+                            Some(character_id.clone()),
+                            path,
+                        );
+                    }
                     overlay.show(
                         OverlayMode::Claw,
                         agent_name,
@@ -265,14 +425,21 @@ pub fn spawn_dispatch(
                     if let Some(usage) = usage {
                         record_usage(&session_usage, usage);
                     }
-                    boxxy_claw_ui::add_kill_process_approval_row(
-                        &overlay_store,
-                        id.clone(),
-                        Some(agent_name.clone()),
-                        Some(character_id.clone()),
-                        *pid,
-                        process_name,
-                    );
+                    if let Some(ref row) = *active_turn_row.borrow() {
+                        row.set_working(false);
+                        row.set_active_status(Some(format!(
+                            "Confirm killing {process_name} (PID {pid})…"
+                        )));
+                    } else {
+                        boxxy_claw_ui::add_kill_process_approval_row(
+                            &overlay_store,
+                            id.clone(),
+                            Some(agent_name.clone()),
+                            Some(character_id.clone()),
+                            *pid,
+                            process_name,
+                        );
+                    }
                     overlay.show(
                         OverlayMode::Claw,
                         agent_name,
@@ -294,13 +461,18 @@ pub fn spawn_dispatch(
                     if let Some(usage) = usage {
                         record_usage(&session_usage, usage);
                     }
-                    boxxy_claw_ui::add_approval_row(
-                        &overlay_store,
-                        id.clone(),
-                        Some(agent_name.clone()),
-                        Some(character_id.clone()),
-                        command,
-                    );
+                    if let Some(ref row) = *active_turn_row.borrow() {
+                        row.set_working(false);
+                        row.set_active_status(Some(format!("Confirm launching `{command}`…")));
+                    } else {
+                        boxxy_claw_ui::add_approval_row(
+                            &overlay_store,
+                            id.clone(),
+                            Some(agent_name.clone()),
+                            Some(character_id.clone()),
+                            command,
+                        );
+                    }
                     overlay.show(
                         OverlayMode::Claw,
                         agent_name,
@@ -320,12 +492,17 @@ pub fn spawn_dispatch(
                     if let Some(usage) = usage {
                         record_usage(&session_usage, usage);
                     }
-                    boxxy_claw_ui::add_clipboard_get_approval_row(
-                        &overlay_store,
-                        id.clone(),
-                        Some(agent_name.clone()),
-                        Some(character_id.clone()),
-                    );
+                    if let Some(ref row) = *active_turn_row.borrow() {
+                        row.set_working(false);
+                        row.set_active_status(Some("Confirm clipboard read…".to_string()));
+                    } else {
+                        boxxy_claw_ui::add_clipboard_get_approval_row(
+                            &overlay_store,
+                            id.clone(),
+                            Some(agent_name.clone()),
+                            Some(character_id.clone()),
+                        );
+                    }
                     overlay.show(
                         OverlayMode::Claw,
                         agent_name,
@@ -343,13 +520,18 @@ pub fn spawn_dispatch(
                     if let Some(usage) = usage {
                         record_usage(&session_usage, usage);
                     }
-                    boxxy_claw_ui::add_clipboard_set_approval_row(
-                        &overlay_store,
-                        id.clone(),
-                        Some(agent_name.clone()),
-                        Some(character_id.clone()),
-                        text,
-                    );
+                    if let Some(ref row) = *active_turn_row.borrow() {
+                        row.set_working(false);
+                        row.set_active_status(Some("Confirm clipboard write…".to_string()));
+                    } else {
+                        boxxy_claw_ui::add_clipboard_set_approval_row(
+                            &overlay_store,
+                            id.clone(),
+                            Some(agent_name.clone()),
+                            Some(character_id.clone()),
+                            text,
+                        );
+                    }
                     overlay.show(
                         OverlayMode::Claw,
                         agent_name,
@@ -371,23 +553,15 @@ pub fn spawn_dispatch(
                     if let Some(usage) = usage {
                         record_usage(&session_usage, usage);
                     }
-                    if !explanation.is_empty() {
-                        boxxy_claw_ui::add_diagnosis_row(
-                            &overlay_store,
-                            id.clone(),
-                            Some(agent_name.clone()),
-                            Some(character_id.clone()),
-                            explanation,
-                        );
-                    }
-                    boxxy_claw_ui::add_approval_row(
+                    let row = ensure_working_row(
                         &overlay_store,
-                        id.clone(),
-                        Some(agent_name.clone()),
-                        Some(character_id.clone()),
-                        command,
+                        &active_turn_row,
+                        &id,
+                        agent_name,
+                        character_id,
                     );
                     if *auto_approve {
+                        row.set_active_status(Some(format!("Running `{command}`…")));
                         if let Some(target_id) = target_pane_id
                             .as_deref()
                             .filter(|tid| !tid.is_empty() && *tid != id.as_str())
@@ -406,6 +580,10 @@ pub fn spawn_dispatch(
                             host.grab_focus();
                         }
                     } else {
+                        row.set_working(false);
+                        if !explanation.is_empty() {
+                            row.set_streaming_prose(explanation);
+                        }
                         overlay.show(
                             OverlayMode::Claw,
                             agent_name,
@@ -497,6 +675,7 @@ pub fn spawn_dispatch(
                     overlay.refresh_character_selector("");
                 }
                 ClawEngineEvent::Evicted => {
+                    settle_or_prune_working_row(&overlay_store, &active_turn_row);
                     *pending_tasks.borrow_mut() = Vec::new();
                     indicator.set_vibe(false);
                     indicator.set_evicted(true);
@@ -512,9 +691,6 @@ pub fn spawn_dispatch(
                     );
                 }
                 ClawEngineEvent::RequestCwdSwitch { path } => {
-                    // Host decides how/whether to cd — busy check,
-                    // path validation, and user notifications on failure
-                    // all live on the host side.
                     host.cd(path.clone());
                 }
                 ClawEngineEvent::SystemMessage { text } => {
@@ -528,9 +704,6 @@ pub fn spawn_dispatch(
                     character_id: _,
                     ..
                 } => {
-                    // Hide the badge while a TUI owns the host —
-                    // scrollback requests during vim/less would
-                    // otherwise be visually noisy without being useful.
                     indicator.set_visible(!host.is_busy());
 
                     let max_lines = *max_lines;
@@ -551,16 +724,19 @@ pub fn spawn_dispatch(
                         });
                     });
                 }
-                ClawEngineEvent::ProposalResolved { .. } => {
+                ClawEngineEvent::ProposalResolved { approved, .. } => {
+                    if let Some(ref row) = *active_turn_row.borrow() {
+                        row.set_pending_approval_diff(None);
+                        if *approved {
+                            row.set_working(true);
+                        }
+                    }
                     overlay.set_state(OverlayState::Idle);
                 }
                 ClawEngineEvent::RequestSpawnAgent { .. }
                 | ClawEngineEvent::RequestCloseAgent { .. }
                 | ClawEngineEvent::RequestReattachShell { .. }
-                | ClawEngineEvent::InjectKeystrokes { .. } => {
-                    // Handled upstream by the window orchestrator via
-                    // forward_event — no widget side-effect here.
-                }
+                | ClawEngineEvent::InjectKeystrokes { .. } => {}
                 ClawEngineEvent::ToolResult {
                     tool_name,
                     result,
@@ -574,8 +750,6 @@ pub fn spawn_dispatch(
                     }
                     session_usage.set(su);
                     if tool_name == "run_background_command" {
-                        // Surface a brief confirmation in the overlay so the user
-                        // sees the launch result without opening the sidebar.
                         let notice = serde_json::from_str::<serde_json::Value>(result)
                             .ok()
                             .and_then(|v| {
@@ -595,7 +769,6 @@ pub fn spawn_dispatch(
                             boxxy_claw_ui::add_system_message_row(&overlay_store, id.clone(), &msg);
                         }
 
-                        // Pending to Idle guard
                         if matches!(*overlay.state().borrow(), OverlayState::Pending) {
                             overlay.set_state(OverlayState::Idle);
                         }
@@ -609,8 +782,7 @@ pub fn spawn_dispatch(
                     indicator.set_has_tasks(has_pending);
                 }
                 ClawEngineEvent::RestoreHistory(rows) => {
-                    // Bulk append history items to minimize UI layout passes.
-                    let mut overlay_items = Vec::with_capacity(rows.len());
+                    *active_turn_row.borrow_mut() = None;
                     let mut restored_tools: u64 = 0;
                     for row in rows {
                         if matches!(
@@ -620,9 +792,12 @@ pub fn spawn_dispatch(
                         ) {
                             restored_tools = restored_tools.saturating_add(1);
                         }
+                    }
+                    let coalesced = boxxy_claw_protocol::coalesce_restored_history(rows.clone());
+                    let mut overlay_items = Vec::with_capacity(coalesced.len());
+                    for row in coalesced {
                         if row.is_overlay_visible() {
-                            overlay_items
-                                .push(boxxy_claw_ui::row_object::ClawRowObject::new(row.clone()));
+                            overlay_items.push(ClawRowObject::new(row));
                         }
                     }
                     let mut su = session_usage.get();
@@ -636,10 +811,7 @@ pub fn spawn_dispatch(
                 ClawEngineEvent::TaskCompleted { .. }
                 | ClawEngineEvent::LongTaskCompleted { .. }
                 | ClawEngineEvent::PushGlobalNotification { .. }
-                | ClawEngineEvent::DelegatedTaskReply { .. } => {
-                    // Routed by the window orchestrator / swarm layer;
-                    // forwarded below.
-                }
+                | ClawEngineEvent::DelegatedTaskReply { .. } => {}
             }
 
             host.forward_event(event);
