@@ -1,3 +1,4 @@
+use boxxy_claw_ui::{format_relative_age, prettify_character_name, resolve_character_display_name};
 use boxxy_core_widgets::autocomplete::{CompletionItem, CompletionProvider};
 use gtk4 as gtk;
 use gtk4::prelude::*;
@@ -97,7 +98,8 @@ pub struct FileCompletionProvider {
 }
 
 impl FileCompletionProvider {
-    pub fn new(
+    #[must_use]
+    pub const fn new(
         working_dir: std::rc::Rc<std::cell::RefCell<Option<String>>>,
         entry_weak: Option<gtk::glib::WeakRef<gtk::TextView>>,
     ) -> Self {
@@ -119,23 +121,9 @@ impl CompletionProvider for FileCompletionProvider {
     }
 }
 
-fn format_character_title(name: &str) -> String {
-    name.split(['-', ' '])
-        .filter(|s| !s.is_empty())
-        .map(|word| {
-            let mut chars = word.chars();
-            match chars.next() {
-                None => String::new(),
-                Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
-fn format_character_display(name: &str, duties: &str) -> String {
-    let title = format_character_title(name);
-    let role = duties.trim();
+fn format_character_display(info: &boxxy_claw_protocol::characters::CharacterInfo) -> String {
+    let title = resolve_character_display_name(info);
+    let role = info.config.duties.trim();
     if role.is_empty() {
         title
     } else {
@@ -143,12 +131,72 @@ fn format_character_display(name: &str, duties: &str) -> String {
     }
 }
 
+fn collect_peer_character_completions(
+    current_cid: Option<&str>,
+    query_lower: &str,
+    taken_label: &str,
+    available_label: &str,
+    format_replacement: impl Fn(&str) -> String,
+) -> Vec<CompletionItem> {
+    let mut items = Vec::new();
+    let registry = boxxy_claw_protocol::characters::CHARACTER_CACHE.load();
+    let claims = boxxy_claw_protocol::characters::CLAIMS_CACHE.load();
+    let chars_dir = boxxy_claw_protocol::character_loader::get_characters_dir().ok();
+
+    for info in registry.iter() {
+        if current_cid == Some(info.config.id.as_str()) {
+            continue;
+        }
+        if info.config.name.to_lowercase().contains(query_lower)
+            || info
+                .config
+                .display_name
+                .to_lowercase()
+                .contains(query_lower)
+            || info.config.duties.to_lowercase().contains(query_lower)
+        {
+            let is_taken = claims
+                .iter()
+                .any(|claim| claim.character_id == info.config.id);
+            let secondary_text = if is_taken {
+                taken_label.to_string()
+            } else {
+                available_label.to_string()
+            };
+            let avatar_path = if info.has_avatar {
+                chars_dir.as_ref().map(|d| {
+                    d.join(&info.config.name)
+                        .join("AVATAR.png")
+                        .to_string_lossy()
+                        .into_owned()
+                })
+            } else {
+                None
+            };
+
+            items.push(CompletionItem {
+                display_name: format_character_display(info),
+                replacement_text: format_replacement(&info.config.name),
+                icon_name: Some("boxxy-chat-symbolic".to_string()),
+                icon_path: avatar_path,
+                secondary_text: Some(secondary_text),
+                badge_text: None,
+                badge_color: Some(info.config.color.clone()),
+                disabled: false,
+            });
+        }
+    }
+
+    items
+}
+
 pub struct AgentCompletionProvider {
     character_id: std::rc::Rc<std::cell::RefCell<Option<String>>>,
 }
 
 impl AgentCompletionProvider {
-    pub fn new(character_id: std::rc::Rc<std::cell::RefCell<Option<String>>>) -> Self {
+    #[must_use]
+    pub const fn new(character_id: std::rc::Rc<std::cell::RefCell<Option<String>>>) -> Self {
         Self { character_id }
     }
 }
@@ -160,66 +208,14 @@ impl CompletionProvider for AgentCompletionProvider {
 
     fn get_completions(&self, query: &str) -> Vec<CompletionItem> {
         let query_lower = query.to_lowercase();
-        let mut items = Vec::new();
-
-        let registry = boxxy_claw_protocol::characters::CHARACTER_CACHE.load();
-        let claims = boxxy_claw_protocol::characters::CLAIMS_CACHE.load();
-        let chars_dir = boxxy_claw_protocol::character_loader::get_characters_dir().ok();
         let current_cid = self.character_id.borrow().clone();
-
-        for info in registry.iter() {
-            if current_cid.as_deref() == Some(info.config.id.as_str()) {
-                continue;
-            }
-            if info.config.name.to_lowercase().contains(&query_lower)
-                || info
-                    .config
-                    .display_name
-                    .to_lowercase()
-                    .contains(&query_lower)
-                || info.config.duties.to_lowercase().contains(&query_lower)
-            {
-                let badge_color = Some(info.config.color.clone());
-
-                let is_taken = claims
-                    .iter()
-                    .any(|claim| claim.character_id == info.config.id);
-
-                let secondary_text = if is_taken {
-                    "In Use".to_string()
-                } else {
-                    "Available".to_string()
-                };
-                let icon_name = "boxxy-chat-symbolic".to_string();
-
-                let avatar_path = if info.has_avatar {
-                    chars_dir.as_ref().map(|d| {
-                        d.join(&info.config.name)
-                            .join("AVATAR.png")
-                            .to_string_lossy()
-                            .into_owned()
-                    })
-                } else {
-                    None
-                };
-
-                items.push(CompletionItem {
-                    display_name: format_character_display(
-                        &info.config.name,
-                        &info.config.duties,
-                    ),
-                    replacement_text: format!(":{}", info.config.name),
-                    icon_name: Some(icon_name),
-                    icon_path: avatar_path,
-                    secondary_text: Some(secondary_text),
-                    badge_text: None,
-                    badge_color,
-                    disabled: false,
-                });
-            }
-        }
-
-        items
+        collect_peer_character_completions(
+            current_cid.as_deref(),
+            &query_lower,
+            "In Use",
+            "Available",
+            |slug| format!(":{slug}"),
+        )
     }
 }
 
@@ -233,7 +229,8 @@ pub struct CommandCompletionProvider {
 }
 
 impl CommandCompletionProvider {
-    pub fn new(
+    #[must_use]
+    pub const fn new(
         claw_state: std::rc::Rc<std::cell::Cell<bool>>,
         character_id: std::rc::Rc<std::cell::RefCell<Option<String>>>,
         sleep_state: std::rc::Rc<std::cell::Cell<bool>>,
@@ -257,6 +254,7 @@ impl CompletionProvider for CommandCompletionProvider {
         "/".to_string()
     }
 
+    #[allow(clippy::too_many_lines)]
     fn get_completions(&self, query: &str) -> Vec<CompletionItem> {
         // Pre-warm the `/resume ` session cache as soon as the user types `/`
         // so it is already populated in memory before `/resume ` is completed.
@@ -502,27 +500,7 @@ fn generate_color(name: &str) -> String {
     let g = ((hash >> 8) & 0xFF) as u8 % 150 + 50;
     let b = ((hash >> 16) & 0xFF) as u8 % 150 + 50;
 
-    format!("rgb({}, {}, {})", r, g, b)
-}
-
-fn get_relative_age(updated_at: &str) -> String {
-    use chrono::{NaiveDateTime, Utc};
-    if let Ok(ndt) = NaiveDateTime::parse_from_str(updated_at, "%Y-%m-%d %H:%M:%S") {
-        let now = Utc::now().naive_utc();
-        let duration = now.signed_duration_since(ndt);
-
-        if duration.num_days() > 0 {
-            format!("{}d", duration.num_days())
-        } else if duration.num_hours() > 0 {
-            format!("{}h", duration.num_hours())
-        } else if duration.num_minutes() > 0 {
-            format!("{}m", duration.num_minutes())
-        } else {
-            "now".to_string()
-        }
-    } else {
-        "unknown".to_string()
-    }
+    format!("rgb({r}, {g}, {b})")
 }
 
 pub struct DebateCompletionProvider {
@@ -530,7 +508,8 @@ pub struct DebateCompletionProvider {
 }
 
 impl DebateCompletionProvider {
-    pub fn new(character_id: std::rc::Rc<std::cell::RefCell<Option<String>>>) -> Self {
+    #[must_use]
+    pub const fn new(character_id: std::rc::Rc<std::cell::RefCell<Option<String>>>) -> Self {
         Self { character_id }
     }
 }
@@ -541,67 +520,20 @@ impl CompletionProvider for DebateCompletionProvider {
     }
 
     fn get_completions(&self, query: &str) -> Vec<CompletionItem> {
-        let query_trimmed = query.trim_start_matches(['@', ':']).to_lowercase();
         // Once the user has already typed a space after the :character (entering the topic),
         // hide the character picker so they can type their debate topic freely.
         if query.trim_start().contains(' ') {
             return Vec::new();
         }
-
-        let mut items = Vec::new();
-        let registry = boxxy_claw_protocol::characters::CHARACTER_CACHE.load();
-        let claims = boxxy_claw_protocol::characters::CLAIMS_CACHE.load();
-        let chars_dir = boxxy_claw_protocol::character_loader::get_characters_dir().ok();
+        let query_trimmed = query.trim_start_matches(['@', ':']).to_lowercase();
         let current_cid = self.character_id.borrow().clone();
-
-        for info in registry.iter() {
-            if current_cid.as_deref() == Some(info.config.id.as_str()) {
-                continue;
-            }
-            if info.config.name.to_lowercase().contains(&query_trimmed)
-                || info
-                    .config
-                    .display_name
-                    .to_lowercase()
-                    .contains(&query_trimmed)
-                || info.config.duties.to_lowercase().contains(&query_trimmed)
-            {
-                let is_taken = claims
-                    .iter()
-                    .any(|claim| claim.character_id == info.config.id);
-                let secondary_text = if is_taken {
-                    "Active Peer (Swarm)".to_string()
-                } else {
-                    "Available Guest".to_string()
-                };
-                let avatar_path = if info.has_avatar {
-                    chars_dir.as_ref().map(|d| {
-                        d.join(&info.config.name)
-                            .join("AVATAR.png")
-                            .to_string_lossy()
-                            .into_owned()
-                    })
-                } else {
-                    None
-                };
-
-                items.push(CompletionItem {
-                    display_name: format_character_display(
-                        &info.config.name,
-                        &info.config.duties,
-                    ),
-                    replacement_text: format!("/debate :{} ", info.config.name),
-                    icon_name: Some("boxxy-chat-symbolic".to_string()),
-                    icon_path: avatar_path,
-                    secondary_text: Some(secondary_text),
-                    badge_text: None,
-                    badge_color: Some(info.config.color.clone()),
-                    disabled: false,
-                });
-            }
-        }
-
-        items
+        collect_peer_character_completions(
+            current_cid.as_deref(),
+            &query_trimmed,
+            "Active Peer (Swarm)",
+            "Available Guest",
+            |slug| format!("/debate :{slug} "),
+        )
     }
 }
 
@@ -610,7 +542,8 @@ pub struct DramaCompletionProvider {
 }
 
 impl DramaCompletionProvider {
-    pub fn new(character_id: std::rc::Rc<std::cell::RefCell<Option<String>>>) -> Self {
+    #[must_use]
+    pub const fn new(character_id: std::rc::Rc<std::cell::RefCell<Option<String>>>) -> Self {
         Self { character_id }
     }
 }
@@ -621,65 +554,18 @@ impl CompletionProvider for DramaCompletionProvider {
     }
 
     fn get_completions(&self, query: &str) -> Vec<CompletionItem> {
-        let query_trimmed = query.trim_start_matches(['@', ':']).to_lowercase();
         if query.trim_start().contains(' ') {
             return Vec::new();
         }
-
-        let mut items = Vec::new();
-        let registry = boxxy_claw_protocol::characters::CHARACTER_CACHE.load();
-        let claims = boxxy_claw_protocol::characters::CLAIMS_CACHE.load();
-        let chars_dir = boxxy_claw_protocol::character_loader::get_characters_dir().ok();
+        let query_trimmed = query.trim_start_matches(['@', ':']).to_lowercase();
         let current_cid = self.character_id.borrow().clone();
-
-        for info in registry.iter() {
-            if current_cid.as_deref() == Some(info.config.id.as_str()) {
-                continue;
-            }
-            if info.config.name.to_lowercase().contains(&query_trimmed)
-                || info
-                    .config
-                    .display_name
-                    .to_lowercase()
-                    .contains(&query_trimmed)
-                || info.config.duties.to_lowercase().contains(&query_trimmed)
-            {
-                let is_taken = claims
-                    .iter()
-                    .any(|claim| claim.character_id == info.config.id);
-                let secondary_text = if is_taken {
-                    "Active Peer (Swarm)".to_string()
-                } else {
-                    "Available Guest".to_string()
-                };
-                let avatar_path = if info.has_avatar {
-                    chars_dir.as_ref().map(|d| {
-                        d.join(&info.config.name)
-                            .join("AVATAR.png")
-                            .to_string_lossy()
-                            .into_owned()
-                    })
-                } else {
-                    None
-                };
-
-                items.push(CompletionItem {
-                    display_name: format_character_display(
-                        &info.config.name,
-                        &info.config.duties,
-                    ),
-                    replacement_text: format!("/drama :{} ", info.config.name),
-                    icon_name: Some("boxxy-chat-symbolic".to_string()),
-                    icon_path: avatar_path,
-                    secondary_text: Some(secondary_text),
-                    badge_text: None,
-                    badge_color: Some(info.config.color.clone()),
-                    disabled: false,
-                });
-            }
-        }
-
-        items
+        collect_peer_character_completions(
+            current_cid.as_deref(),
+            &query_trimmed,
+            "Active Peer (Swarm)",
+            "Available Guest",
+            |slug| format!("/drama :{slug} "),
+        )
     }
 }
 
@@ -689,7 +575,8 @@ pub struct ResumeCompletionProvider {
 }
 
 impl ResumeCompletionProvider {
-    pub fn new(entry_weak: Option<gtk::glib::WeakRef<gtk::TextView>>) -> Self {
+    #[must_use]
+    pub const fn new(entry_weak: Option<gtk::glib::WeakRef<gtk::TextView>>) -> Self {
         Self { entry_weak }
     }
 }
@@ -699,6 +586,7 @@ impl CompletionProvider for ResumeCompletionProvider {
         "/resume ".to_string()
     }
 
+    #[allow(clippy::too_many_lines)]
     fn get_completions(&self, query: &str) -> Vec<CompletionItem> {
         let query_lower = query.trim().to_lowercase();
         let mut items = Vec::new();
@@ -706,11 +594,8 @@ impl CompletionProvider for ResumeCompletionProvider {
         let current_rev = *boxxy_claw_protocol::characters::subscribe_registry_changes().borrow();
         let (needs_refresh, sessions) = {
             let cache = RESUME_SESSIONS_CACHE.read();
-            let stale = cache
-                .0
-                .map(|last| last.elapsed() >= CACHE_TTL)
-                .unwrap_or(true)
-                || cache.1 != current_rev;
+            let stale =
+                cache.0.is_none_or(|last| last.elapsed() >= CACHE_TTL) || cache.1 != current_rev;
             (stale, cache.2.clone())
         };
 
@@ -732,11 +617,10 @@ impl CompletionProvider for ResumeCompletionProvider {
             let char_name = session.agent_name.clone().unwrap_or_default();
             let msg_count = session.message_count;
 
-            let age = if let Some(updated_at) = session.updated_at {
-                get_relative_age(&updated_at)
-            } else {
-                "unknown".to_string()
-            };
+            let age = session.updated_at.as_deref().map_or_else(
+                || "unknown".to_string(),
+                |ts| format_relative_age(ts, "unknown"),
+            );
 
             let fallback_names = [
                 session.character_display_name.as_str(),
@@ -749,15 +633,16 @@ impl CompletionProvider for ResumeCompletionProvider {
                 &fallback_names,
             );
 
-            let badge_text = char_info
-                .map(|c| format_character_title(&c.config.display_name))
-                .unwrap_or_else(|| {
-                    if !session.character_display_name.is_empty() {
-                        format_character_title(&session.character_display_name)
+            let badge_text = char_info.map_or_else(
+                || {
+                    if session.character_display_name.is_empty() {
+                        prettify_character_name(&char_name)
                     } else {
-                        format_character_title(&char_name)
+                        prettify_character_name(&session.character_display_name)
                     }
-                });
+                },
+                resolve_character_display_name,
+            );
 
             if query_lower.is_empty()
                 || title.to_lowercase().contains(&query_lower)
@@ -765,8 +650,7 @@ impl CompletionProvider for ResumeCompletionProvider {
                 || badge_text.to_lowercase().contains(&query_lower)
             {
                 let badge_color = char_info
-                    .map(|c| c.config.color.clone())
-                    .unwrap_or_else(|| generate_color(&badge_text));
+                    .map_or_else(|| generate_color(&badge_text), |c| c.config.color.clone());
 
                 let mut is_disabled = false;
                 let mut display_age = age;
@@ -799,16 +683,14 @@ impl CompletionProvider for ResumeCompletionProvider {
                     "boxxy-boxxyclaw-symbolic".to_string()
                 };
 
-                let avatar_path = char_info
-                    .filter(|info| info.has_avatar)
-                    .and_then(|info| {
-                        chars_dir.as_ref().map(|d| {
-                            d.join(&info.config.name)
-                                .join("AVATAR.png")
-                                .to_string_lossy()
-                                .into_owned()
-                        })
-                    });
+                let avatar_path = char_info.filter(|info| info.has_avatar).and_then(|info| {
+                    chars_dir.as_ref().map(|d| {
+                        d.join(&info.config.name)
+                            .join("AVATAR.png")
+                            .to_string_lossy()
+                            .into_owned()
+                    })
+                });
 
                 items.push(CompletionItem {
                     display_name: format!("{title} [{msg_count} msgs]"),

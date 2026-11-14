@@ -7,6 +7,7 @@ use std::cell::OnceCell;
 use std::rc::Rc;
 
 /// Renders the `list_processes` custom block into a compact columnar list.
+///
 /// Two payload schemas are accepted — the object form (new tool output) and
 /// the tuple form (legacy persisted rows) — so sessions restored from the DB
 /// don't silently fail to render.
@@ -136,9 +137,10 @@ impl BlockRenderer for ProcessListRenderer {
     }
 }
 
-/// Returns the shared registry used by every Claw `StructuredViewer`:
-/// the standard text/code/image renderers plus the custom `list_processes`
-/// renderer. Cached per UI thread so recycled `ListView` rows share one `Rc`.
+/// Returns the shared registry used by every Claw `StructuredViewer`.
+///
+/// Includes the standard text/code/image renderers plus the custom `list_processes`
+/// renderer, cached per UI thread so recycled `ListView` rows share one `Rc`.
 #[must_use]
 pub fn get_claw_viewer_registry() -> Rc<ViewerRegistry> {
     thread_local! {

@@ -14,15 +14,18 @@ use libadwaita as adw;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OverlayMode {
     Claw,
     Bookmark,
 }
 
+type TurnSubmittedHook = Rc<RefCell<Option<Rc<dyn Fn()>>>>;
+
 #[derive(Clone)]
 pub struct TerminalOverlay {
     revealer: gtk::Revealer,
+    bottom_area: gtk::Box,
     indicator: ClawIndicator,
     indicator_slot: gtk::Box,
     character_selector_box: gtk::Box,
@@ -31,6 +34,7 @@ pub struct TerminalOverlay {
     history_list: gtk::ListView,
     history_store: gio::ListStore,
     full_history_store: gio::ListStore,
+    clear_offset: Rc<Cell<u32>>,
     diagnosis_viewer: StructuredViewer,
     command_view: gtk::TextView,
     template_entry: gtk::Entry,
@@ -49,6 +53,7 @@ pub struct TerminalOverlay {
     current_mode: Rc<RefCell<OverlayMode>>,
     active_agent: Rc<RefCell<String>>,
     history_sticky: Rc<Cell<bool>>,
+    sticky_timer: Rc<RefCell<Option<gtk::glib::SourceId>>>,
     is_auto_scrolling: Rc<Cell<bool>>,
     scroll_idle_queued: Rc<Cell<bool>>,
     last_pane_height: Rc<Cell<i32>>,
@@ -57,12 +62,15 @@ pub struct TerminalOverlay {
     esc_interrupt_label: gtk::Label,
     esc_interrupt_armed: Rc<Cell<bool>>,
     esc_interrupt_timer: Rc<RefCell<Option<gtk::glib::SourceId>>>,
+    on_turn_submitted: TurnSubmittedHook,
     /// Character name pre-selected in the picker before any session starts.
     selected_character: Rc<RefCell<String>>,
     host: Rc<dyn ClawHost>,
 }
 
 impl TerminalOverlay {
+    #[must_use]
+    #[allow(clippy::too_many_lines, clippy::needless_pass_by_value)]
     pub fn new(
         indicator: ClawIndicator,
         msg_bar: Rc<MsgBarComponent>,
@@ -73,6 +81,7 @@ impl TerminalOverlay {
 
         let revealer: gtk::Revealer = builder.object("root_revealer").unwrap();
         let main_drawer: gtk::Box = builder.object("main_drawer").unwrap();
+        let bottom_area: gtk::Box = builder.object("bottom_area").unwrap();
         let initial_settings = Settings::load();
         boxxy_viewer::set_always_expand_code_blocks(initial_settings.always_show_code_blocks);
         set_overlay_zoom_pct(initial_settings.overlay_font_scale);
@@ -153,72 +162,83 @@ impl TerminalOverlay {
         history_scroll.set_child(Some(&history_list));
 
         let full_history_store = gio::ListStore::new::<boxxy_claw_ui::row_object::ClawRowObject>();
+        let clear_offset = Rc::new(Cell::new(0u32));
+        let clear_offset_sync = clear_offset.clone();
         let history_store_for_sync = history_store.clone();
         let diag_viewer_for_sync = diagnosis_viewer.clone();
         full_history_store.connect_items_changed(move |store, pos, removed, added| {
-            if removed > 0 && added == 0 && store.n_items() == 0 {
-                history_store_for_sync.remove_all();
-                diag_viewer_for_sync.park_for_recycle();
-                return;
-            }
-            if removed > 0 && added == 0 {
-                // Mirror tail/item removals (such as pruning an empty cancelled working placeholder)
-                // while respecting temporary `/clear` offsets in `history_store_for_sync`.
-                let vis_n = history_store_for_sync.n_items();
-                let full_after = store.n_items();
-                let full_before = full_after + removed;
-                if vis_n > 0 && pos + removed == full_before {
-                    let drop_count = removed.min(vis_n);
-                    history_store_for_sync.splice(vis_n - drop_count, drop_count, &[] as &[glib::Object]);
-                }
-                return;
-            }
-            if added > 0 {
-                let mut batch = Vec::with_capacity(added as usize);
-                for i in pos..(pos + added) {
-                    if let Some(obj) = store
-                        .item(i)
-                        .and_downcast::<boxxy_claw_ui::row_object::ClawRowObject>()
-                    {
-                        batch.push(obj);
+            let full_after = store.n_items();
+            // Full reset or session restore (`remove_all()` or `splice(0, prev_len, &restored)`).
+            if full_after == 0 || (pos == 0 && removed > 0 && full_after == added) {
+                clear_offset_sync.set(0);
+                if full_after == 0 {
+                    history_store_for_sync.remove_all();
+                    diag_viewer_for_sync.park_for_recycle();
+                } else {
+                    let mut batch = Vec::with_capacity(added as usize);
+                    for i in 0..added {
+                        if let Some(obj) = store
+                            .item(i)
+                            .and_downcast::<boxxy_claw_ui::row_object::ClawRowObject>()
+                        {
+                            batch.push(obj);
+                        }
                     }
-                }
-                if pos == 0 && removed > 0 && store.n_items() == added {
                     history_store_for_sync.splice(0, history_store_for_sync.n_items(), &batch);
-                } else if !batch.is_empty() {
-                    history_store_for_sync.extend_from_slice(&batch);
+                }
+                return;
+            }
+
+            let old_offset = clear_offset_sync.get();
+            let (new_offset, vis_pos, vis_removed, add_range) =
+                compute_visible_slice_delta(old_offset, pos, removed, added);
+            clear_offset_sync.set(new_offset);
+
+            let vis_len = history_store_for_sync.n_items();
+            let clamped_pos = vis_pos.min(vis_len);
+            let clamped_removed = vis_removed.min(vis_len.saturating_sub(clamped_pos));
+
+            if clamped_removed == 0 && add_range.is_empty() {
+                return;
+            }
+
+            let mut batch = Vec::with_capacity(add_range.len());
+            for i in add_range {
+                if let Some(obj) = store
+                    .item(i)
+                    .and_downcast::<boxxy_claw_ui::row_object::ClawRowObject>()
+                {
+                    batch.push(obj);
                 }
             }
+            history_store_for_sync.splice(clamped_pos, clamped_removed, &batch);
         });
 
-        // Improved auto-scroll logic (Fractal-style).
-        // 1. On items_changed: arm a "sticky to bottom" flag for 1200ms.
-        // 2. On value_changed: if the user scrolls up manually, clear the sticky flag.
-        // 3. On notify::upper: if sticky and we were at the bottom, snap to latest.
+        // Improved auto-scroll logic (Fractal-style) without stealing focus across splits:
+        // 1. On items_changed: arm/extend a 1200ms sticky-bottom window via a single SourceId.
+        // 2. On value_changed: if the user scrolls up manually, cancel sticky mode immediately.
+        // 3. On notify::upper: if sticky and near the bottom, keep pinned to latest.
         let history_sticky = Rc::new(Cell::new(false));
+        let sticky_timer: Rc<RefCell<Option<gtk::glib::SourceId>>> = Rc::new(RefCell::new(None));
         let is_auto_scrolling = Rc::new(Cell::new(false));
         let scroll_idle_queued = Rc::new(Cell::new(false));
         let prev_upper = Rc::new(Cell::new(0.0));
 
         let sticky = history_sticky.clone();
+        let sticky_timer_items = sticky_timer.clone();
         let list_items = history_list.clone();
         let is_auto_items = is_auto_scrolling.clone();
         let idle_queued_items = scroll_idle_queued.clone();
-        let msg_bar_items = msg_bar.clone();
-        let revealer_items = revealer.clone();
         history_store.connect_items_changed(move |s, _, _, _| {
             if s.n_items() == 0 {
                 return;
             }
-            let was_idle = !sticky.get();
-            sticky.set(true);
+            arm_sticky_scroll(&sticky, &sticky_timer_items);
 
             if !idle_queued_items.replace(true) {
                 let lv = list_items.clone();
                 let is_auto = is_auto_items.clone();
                 let queued_flag = idle_queued_items.clone();
-                let msg_bar_for_focus = msg_bar_items.clone();
-                let rev_for_focus = revealer_items.clone();
                 gtk::glib::idle_add_local_once(move || {
                     queued_flag.set(false);
                     let live_n = lv.model().map_or(0, |m| m.n_items());
@@ -227,31 +247,16 @@ impl TerminalOverlay {
                     }
                     is_auto.set(true);
                     lv.scroll_to(live_n - 1, gtk::ListScrollFlags::NONE, None);
-                    if rev_for_focus.reveals_child()
-                        && msg_bar_for_focus.entry.is_sensitive()
-                        && msg_bar_for_focus.widget.is_visible()
-                        && !msg_bar_for_focus.entry.has_focus()
-                        && msg_bar_for_focus.entry.focus_child().is_none()
-                    {
-                        msg_bar_for_focus.entry.grab_focus();
-                    }
                     gtk::glib::idle_add_local_once(move || {
                         is_auto.set(false);
                     });
-                });
-            }
-
-            if was_idle {
-                let sticky_timer = sticky.clone();
-                gtk::glib::timeout_add_local(std::time::Duration::from_millis(1200), move || {
-                    sticky_timer.set(false);
-                    gtk::glib::ControlFlow::Break
                 });
             }
         });
 
         let adj = history_scroll.vadjustment();
         let sticky_val = history_sticky.clone();
+        let sticky_timer_val = sticky_timer.clone();
         let is_auto = is_auto_scrolling.clone();
         let prev_val = Rc::new(Cell::new(adj.value()));
         adj.connect_value_changed(move |a| {
@@ -264,10 +269,13 @@ impl TerminalOverlay {
             let at_bottom = (current_val + a.page_size() - a.upper()).abs() < 60.0;
 
             // If the user scrolls up away from the bottom, clear the sticky flag
-            // so we don't yank them back down.
+            // and cancel any pending timer so we don't yank them back down.
             if current_val < old_val - 1.0 {
                 if !at_bottom {
                     sticky_val.set(false);
+                    if let Some(tid) = sticky_timer_val.borrow_mut().take() {
+                        tid.remove();
+                    }
                 }
             } else if at_bottom {
                 // If they scroll back down to the true bottom, re-arm auto-scroll.
@@ -276,11 +284,9 @@ impl TerminalOverlay {
         });
 
         let sticky_upper = history_sticky.clone();
-        let prev_u = prev_upper.clone();
+        let prev_u = prev_upper;
         let is_auto_upper = is_auto_scrolling.clone();
         let list_upper = history_list.clone();
-        let msg_bar_for_upper = msg_bar.clone();
-        let revealer_for_upper = revealer.clone();
         adj.connect_notify_local(Some("upper"), move |a, _| {
             let new_upper = a.upper();
             let old_upper = prev_u.replace(new_upper);
@@ -293,19 +299,11 @@ impl TerminalOverlay {
             let at_bottom = a.value() + a.page_size() >= old_upper - 60.0;
             if at_bottom {
                 is_auto_upper.set(true);
-                let n = list_upper.model().map(|m| m.n_items()).unwrap_or(0);
+                let n = list_upper.model().map_or(0, |m| m.n_items());
                 if n > 0 {
                     list_upper.scroll_to(n - 1, gtk::ListScrollFlags::NONE, None);
                 }
                 a.set_value(new_upper - a.page_size());
-                if revealer_for_upper.reveals_child()
-                    && msg_bar_for_upper.entry.is_sensitive()
-                    && msg_bar_for_upper.widget.is_visible()
-                    && !msg_bar_for_upper.entry.has_focus()
-                    && msg_bar_for_upper.entry.focus_child().is_none()
-                {
-                    msg_bar_for_upper.entry.grab_focus();
-                }
                 let is_auto_idle = is_auto_upper.clone();
                 gtk::glib::idle_add_local_once(move || {
                     is_auto_idle.set(false);
@@ -331,12 +329,12 @@ impl TerminalOverlay {
         let host_vis = host.clone();
         let revealer_for_target = revealer.clone();
         revealer.connect_reveal_child_notify(move |rev| {
-            let revealed = rev.reveals_child();
-            host_vis.set_focusable(!revealed);
-            if !revealed {
+            let is_open = rev.reveals_child();
+            host_vis.set_focusable(!is_open);
+            if !is_open {
                 host_vis.grab_focus();
             }
-            revealer_for_target.set_can_target(revealed);
+            revealer_for_target.set_can_target(is_open);
         });
 
         let state = Rc::new(RefCell::new(OverlayState::Idle));
@@ -347,30 +345,32 @@ impl TerminalOverlay {
 
         let s = Self {
             revealer: revealer.clone(),
+            bottom_area,
             indicator: indicator.clone(),
-            indicator_slot: indicator_slot.clone(),
-            character_selector_box: character_selector_box.clone(),
-            single_scroll: single_scroll.clone(),
-            history_scroll: history_scroll.clone(),
-            diagnosis_viewer: diagnosis_viewer.clone(),
+            indicator_slot,
+            character_selector_box,
+            single_scroll,
+            history_scroll,
+            diagnosis_viewer,
             command_view: command_view.clone(),
             template_entry: template_entry.clone(),
-            msgbar_slot: msgbar_slot.clone(),
+            msgbar_slot,
             msg_bar: msg_bar.clone(),
             accept_btn: accept_btn.clone(),
             reject_btn: reject_btn.clone(),
             ok_btn: ok_btn.clone(),
             approve_file_btn: approve_file_btn.clone(),
             inspect_btn: inspect_btn.clone(),
-            command_frame: command_frame.clone(),
-            template_box: template_box.clone(),
+            command_frame,
+            template_box,
             file_action_box: file_action_box.clone(),
-            action_box: action_box.clone(),
+            action_box,
             state: state.clone(),
             current_mode: current_mode.clone(),
-            active_agent: active_agent.clone(),
-            history_sticky: history_sticky.clone(),
-            is_auto_scrolling: is_auto_scrolling.clone(),
+            active_agent,
+            history_sticky,
+            sticky_timer,
+            is_auto_scrolling,
             scroll_idle_queued,
             last_pane_height,
             bottom_gap,
@@ -378,10 +378,12 @@ impl TerminalOverlay {
             esc_interrupt_label: esc_interrupt_label.clone(),
             esc_interrupt_armed: esc_interrupt_armed.clone(),
             esc_interrupt_timer: esc_interrupt_timer.clone(),
+            on_turn_submitted: Rc::new(RefCell::new(None)),
             selected_character: pending_character,
-            history_list: history_list.clone(),
-            history_store: history_store.clone(),
-            full_history_store: full_history_store.clone(),
+            history_list,
+            history_store,
+            full_history_store,
+            clear_offset,
             host: host.clone(),
         };
 
@@ -410,7 +412,7 @@ impl TerminalOverlay {
         // input bar so the user can continue their conversation. In Bookmark mode
         // the button is "Close" and dismisses the drawer.
         let host_reject = host.clone();
-        let cm_reject = current_mode.clone();
+        let cm_reject = current_mode;
         let dismiss_reject = dismiss_and_refocus.clone();
         let overlay_for_reject = s.clone();
         reject_btn.connect_clicked(move |_| {
@@ -423,13 +425,8 @@ impl TerminalOverlay {
             }
         });
 
-        let host_ok = host.clone();
-        let cm_ok = current_mode.clone();
         let dismiss_ok = dismiss_and_refocus.clone();
         ok_btn.connect_clicked(move |_| {
-            if *cm_ok.borrow() == OverlayMode::Claw {
-                host_ok.send_claw(ClawMessage::CancelPending);
-            }
             dismiss_ok();
         });
 
@@ -502,7 +499,7 @@ impl TerminalOverlay {
         // path. That filesystem logic now lives in `PaneClawHost` so the
         // widget stays IO-free.
         let host_accept = host.clone();
-        let cmd_view_clone = command_view.clone();
+        let cmd_view_clone = command_view;
         let state_for_accept = state.clone();
         let template_entry_clone = template_entry.clone();
         let dismiss_accept = dismiss_and_refocus.clone();
@@ -521,22 +518,21 @@ impl TerminalOverlay {
                     placeholders,
                 } => {
                     let input_str = template_entry_clone.text().to_string();
-                    let values: Vec<String> =
-                        input_str.split(',').map(|s| s.trim().to_string()).collect();
+                    let values: Vec<String> = input_str
+                        .splitn(placeholders.len().max(1), ',')
+                        .map(|s| s.trim().to_string())
+                        .collect();
                     let mut expanded = script;
                     for (i, name) in placeholders.iter().enumerate() {
                         if let Some(val) = values.get(i) {
-                            let pattern = format!("{{{{{{{}}}}}}}", name);
+                            let pattern = format!("{{{{{{{name}}}}}}}");
                             expanded = expanded.replace(&pattern, val);
                         }
                     }
                     host_accept.execute_script(&filename, expanded);
                     dismiss_accept();
                 }
-                Proposal::Command {
-                    target_pane_id,
-                    ..
-                } => {
+                Proposal::Command { target_pane_id, .. } => {
                     let buffer = cmd_view_clone.buffer();
                     let start = buffer.start_iter();
                     let end = buffer.end_iter();
@@ -569,7 +565,7 @@ impl TerminalOverlay {
             }
         });
 
-        let accept_btn_clone = accept_btn.clone();
+        let accept_btn_clone = accept_btn;
         template_entry.connect_activate(move |_| {
             if accept_btn_clone.is_visible() && accept_btn_clone.is_sensitive() {
                 accept_btn_clone.emit_clicked();
@@ -582,17 +578,21 @@ impl TerminalOverlay {
         // - Priority 2 (`OverlayState::Thinking`): 1st Esc hides any active tip and shows yellow
         //   "Press Escape again to interrupt" next to the thinking pill for 3 seconds;
         //   2nd Esc within 3 seconds interrupts the agent and re-focuses the input bar.
-        // - Priority 3 (`ok_btn` visible in `OverlayState::Idle` / `Pending`): Esc closes the drawer.
-        let ok_btn_for_esc = ok_btn.clone();
-        let state_for_esc = state.clone();
-        let esc_armed_for_ctrl = esc_interrupt_armed.clone();
-        let esc_timer_for_ctrl = esc_interrupt_timer.clone();
-        let esc_label_for_ctrl = esc_interrupt_label.clone();
-        let tips_for_esc = tips_cycle.clone();
-        let indicator_for_esc = indicator.clone();
+        // - Priority 3 (`OverlayState::Action`): Rejects the active proposal (or closes Bookmark preview).
+        // - Priority 4 (`ok_btn` visible in `OverlayState::Idle` / `Pending`): Esc closes the drawer.
+        let ok_btn_for_esc = ok_btn;
+        let reject_btn_for_esc = reject_btn;
+        let reject_file_btn_for_esc = reject_file_btn;
+        let file_action_box_for_esc = file_action_box;
+        let state_for_esc = state;
+        let esc_armed_for_ctrl = esc_interrupt_armed;
+        let esc_timer_for_ctrl = esc_interrupt_timer;
+        let esc_label_for_ctrl = esc_interrupt_label;
+        let tips_for_esc = tips_cycle;
+        let indicator_for_esc = indicator;
         let overlay_for_esc = s.clone();
         let revealer_for_esc = revealer.clone();
-        let msg_bar_for_esc = msg_bar.clone();
+        let msg_bar_for_esc = msg_bar;
         let esc_controller = gtk::EventControllerKey::new();
         esc_controller.set_propagation_phase(gtk::PropagationPhase::Capture);
         esc_controller.connect_key_pressed(move |_, key, _, _| {
@@ -640,6 +640,16 @@ impl TerminalOverlay {
                     }
                     return gtk::glib::Propagation::Stop;
                 }
+                if matches!(*state_for_esc.borrow(), OverlayState::Action(_)) {
+                    if file_action_box_for_esc.is_visible() {
+                        reject_file_btn_for_esc.emit_clicked();
+                        return gtk::glib::Propagation::Stop;
+                    }
+                    if reject_btn_for_esc.is_visible() {
+                        reject_btn_for_esc.emit_clicked();
+                        return gtk::glib::Propagation::Stop;
+                    }
+                }
                 if ok_btn_for_esc.is_visible() {
                     ok_btn_for_esc.emit_clicked();
                     return gtk::glib::Propagation::Stop;
@@ -654,8 +664,14 @@ impl TerminalOverlay {
         let overlay_for_submit = s.clone();
         s.msg_bar.set_on_submit_hook(move |text| {
             let trimmed = text.trim();
-            if !trimmed.starts_with("/resume ")
-                && !trimmed.starts_with("/btw ")
+            let is_resume = trimmed
+                .get(..8)
+                .is_some_and(|p| p.eq_ignore_ascii_case("/resume "));
+            let is_btw = trimmed
+                .get(..5)
+                .is_some_and(|p| p.eq_ignore_ascii_case("/btw "));
+            if !is_resume
+                && !is_btw
                 && !trimmed.eq_ignore_ascii_case("/incognito")
                 && !trimmed.eq_ignore_ascii_case("/code")
             {
@@ -676,32 +692,21 @@ impl TerminalOverlay {
         let mut rx_settings = boxxy_preferences::SETTINGS_EVENT_BUS.subscribe();
         gtk::glib::spawn_future_local(async move {
             loop {
-                match rx_settings.recv().await {
-                    Ok(next_settings) => {
-                        let Some(_rev) = revealer_weak_for_policy.upgrade() else {
-                            break;
-                        };
-                        if last_always_code.replace(next_settings.always_show_code_blocks)
-                            != next_settings.always_show_code_blocks
-                        {
-                            boxxy_claw_ui::apply_code_blocks_visibility_policy(
-                                &history_store_for_policy,
-                                next_settings.always_show_code_blocks,
-                            );
-                        }
-                    }
+                let next_always = match rx_settings.recv().await {
+                    Ok(next_settings) => next_settings.always_show_code_blocks,
                     Err(boxxy_preferences::config::BroadcastRecvError::Lagged(_)) => {
-                        let latest = Settings::load();
-                        if last_always_code.replace(latest.always_show_code_blocks)
-                            != latest.always_show_code_blocks
-                        {
-                            boxxy_claw_ui::apply_code_blocks_visibility_policy(
-                                &history_store_for_policy,
-                                latest.always_show_code_blocks,
-                            );
-                        }
+                        Settings::load().always_show_code_blocks
                     }
                     Err(boxxy_preferences::config::BroadcastRecvError::Closed) => break,
+                };
+                let Some(_rev) = revealer_weak_for_policy.upgrade() else {
+                    break;
+                };
+                if last_always_code.replace(next_always) != next_always {
+                    boxxy_claw_ui::apply_code_blocks_visibility_policy(
+                        &history_store_for_policy,
+                        next_always,
+                    );
                 }
             }
         });
@@ -728,6 +733,7 @@ impl TerminalOverlay {
     /// `dispatch` writes every overlay-visible `ClawEngineEvent` into this
     /// store unconditionally so the full session is retained even when the
     /// visible view is cleared.
+    #[must_use]
     pub fn history_store(&self) -> gio::ListStore {
         self.full_history_store.clone()
     }
@@ -735,6 +741,7 @@ impl TerminalOverlay {
     /// Temporarily clears the visible conversation history from the main overlay
     /// view without deleting the session's underlying history.
     pub fn clear_visible_history(&self) {
+        self.clear_offset.set(self.full_history_store.n_items());
         self.history_store.remove_all();
         self.diagnosis_viewer.park_for_recycle();
     }
@@ -744,6 +751,7 @@ impl TerminalOverlay {
     /// selector reappears the next time the drawer is opened.
     pub fn reset_for_exit(&self) {
         *self.active_agent.borrow_mut() = String::new();
+        self.clear_offset.set(0);
         self.full_history_store.remove_all();
         self.history_store.remove_all();
         self.diagnosis_viewer.park_for_recycle();
@@ -751,7 +759,7 @@ impl TerminalOverlay {
     }
 
     /// Called whenever the parent pane is resized. Caps the scroll window height
-    /// so the popover never overflows the visible terminal area minus the gap.
+    /// so the popover never overflows the visible terminal area minus the gap and bottom chrome.
     pub fn update_pane_height(&self, pane_height: i32) {
         self.last_pane_height.set(pane_height);
         self.recompute_max_content_height();
@@ -759,7 +767,8 @@ impl TerminalOverlay {
 
     pub fn set_bottom_gap(&self, enabled: bool) {
         if self.bottom_gap.replace(enabled) != enabled {
-            self.revealer.set_margin_bottom(if enabled { 80 } else { 0 });
+            self.revealer
+                .set_margin_bottom(if enabled { 80 } else { 0 });
             self.recompute_max_content_height();
         }
     }
@@ -769,17 +778,21 @@ impl TerminalOverlay {
         if pane_height <= 0 {
             return;
         }
-        // 80px bottom gap (when enabled) + ~12px top padding.
+        // 80px bottom gap (when enabled) + ~12px top padding + `#bottom_area` chrome height.
         let v_pad = if self.bottom_gap.get() { 92 } else { 12 };
-        let effective = (pane_height - v_pad).max(100);
+        let nat_bottom_h = self.bottom_area.preferred_size().1.height();
+        let bottom_h = self.bottom_area.height().max(nat_bottom_h).max(96);
+        let effective = (pane_height - v_pad - bottom_h).max(80);
         self.single_scroll.set_max_content_height(effective);
         self.history_scroll.set_max_content_height(effective);
     }
 
-    pub fn widget(&self) -> &gtk::Revealer {
+    #[must_use]
+    pub const fn widget(&self) -> &gtk::Revealer {
         &self.revealer
     }
 
+    #[must_use]
     pub fn state(&self) -> Rc<RefCell<OverlayState>> {
         self.state.clone()
     }
@@ -803,9 +816,16 @@ impl TerminalOverlay {
         self.sync_action_state();
     }
 
+    pub fn connect_turn_submitted<F: Fn() + 'static>(&self, f: F) {
+        *self.on_turn_submitted.borrow_mut() = Some(Rc::new(f));
+    }
+
     /// Transitions the overlay into the active thinking state (hiding any pending proposal
     /// or `Okay` button and surfacing the thinking indicator pill).
     pub fn enter_waiting_state(&self) {
+        if let Some(cb) = self.on_turn_submitted.borrow().as_ref().cloned() {
+            cb();
+        }
         let agent_name = self.active_agent.borrow().clone();
         self.indicator.show_thinking(&agent_name, None);
         self.set_state(OverlayState::Thinking);
@@ -819,10 +839,10 @@ impl TerminalOverlay {
                 self.indicator.show_thinking(&agent_name, None);
                 self.set_state(OverlayState::Thinking);
             }
-            (OverlayState::Thinking, false) | (OverlayState::Pending, false) => {
+            (OverlayState::Thinking | OverlayState::Pending, false) => {
                 self.set_state(OverlayState::Idle);
             }
-            (OverlayState::Idle, false) | (OverlayState::Action(_), false) => {}
+            (OverlayState::Idle | OverlayState::Action(_), false) => {}
         }
     }
 
@@ -879,12 +899,12 @@ impl TerminalOverlay {
                     Some(&host_id),
                 );
                 if let Some(info) = first_free {
-                    *pending = info.config.id.clone();
+                    pending.clone_from(&info.config.id);
                 } else if pending.is_empty() {
                     // All characters are in use — fall back to first so the
                     // picker is never completely blank.
                     if let Some(first) = registry.first() {
-                        *pending = first.config.id.clone();
+                        pending.clone_from(&first.config.id);
                     }
                 }
                 // If every character is taken and pending already has a value,
@@ -949,7 +969,7 @@ impl TerminalOverlay {
             let overlay_clone = self.clone();
             let char_id = info.config.id.clone();
             btn.connect_clicked(move |_| {
-                *selected_rc.borrow_mut() = char_id.clone();
+                selected_rc.borrow_mut().clone_from(&char_id);
                 overlay_clone.refresh_character_selector("");
             });
 
@@ -995,8 +1015,9 @@ impl TerminalOverlay {
                 placeholders,
                 ..
             } => {
-                let mut display_cmd = script.lines().take(15).collect::<Vec<_>>().join("\n");
-                if script.lines().count() > 15 {
+                let mut lines = script.lines();
+                let mut display_cmd = lines.by_ref().take(15).collect::<Vec<_>>().join("\n");
+                if lines.next().is_some() {
                     display_cmd.push_str("\n\n... (truncated for preview)");
                 }
                 self.command_view.buffer().set_text(&display_cmd);
@@ -1009,8 +1030,9 @@ impl TerminalOverlay {
                 content,
                 diff,
             } if mode == OverlayMode::Bookmark => {
-                let resolved_diff = diff
-                    .unwrap_or_else(|| boxxy_claw_protocol::FileDiff::fallback_new(&path, &content));
+                let resolved_diff = diff.unwrap_or_else(|| {
+                    boxxy_claw_protocol::FileDiff::fallback_new(&path, &content)
+                });
                 if let Ok(diff_json) = serde_json::to_string(&resolved_diff) {
                     self.diagnosis_viewer
                         .append_custom_block("file_diff", &diff_json);
@@ -1022,31 +1044,33 @@ impl TerminalOverlay {
         self.revealer.set_reveal_child(true);
         self.scroll_to_latest();
 
-        let ok_btn = self.ok_btn.clone();
-        let accept_btn = self.accept_btn.clone();
-        let approve_file_btn = self.approve_file_btn.clone();
-        let template_box = self.template_box.clone();
-        let template_entry = self.template_entry.clone();
-        let msg_bar = self.msg_bar.clone();
+        // Only move keyboard focus into the drawer if this pane currently owns window focus
+        // (or in Bookmark mode, which is always triggered by a direct user action), preventing
+        // background split panes from stealing focus mid-keystroke.
+        let pane_owns_focus = mode == OverlayMode::Bookmark
+            || self.revealer.parent().map_or_else(
+                || self.revealer.focus_child().is_some(),
+                |p| p.focus_child().is_some(),
+            );
 
-        // The OK button is only a dismiss affordance — it doesn't need
-        // default focus, because Esc already closes the drawer and
-        // the user's mental model is "keep typing". Focus goes to the
-        // input in Claw mode, or to the action the user must decide
-        // on (Accept / Approve-file / template variables).
-        let _ = ok_btn; // retained for clarity
-        gtk4::glib::timeout_add_local(std::time::Duration::from_millis(50), move || {
-            if template_box.is_visible() {
-                template_entry.grab_focus();
-            } else if accept_btn.is_visible() {
-                accept_btn.grab_focus();
-            } else if approve_file_btn.is_visible() {
-                approve_file_btn.grab_focus();
-            } else if mode == OverlayMode::Claw {
-                msg_bar.entry.grab_focus();
-            }
-            gtk4::glib::ControlFlow::Break
-        });
+        if pane_owns_focus {
+            let accept_btn = self.accept_btn.clone();
+            let approve_file_btn = self.approve_file_btn.clone();
+            let template_box = self.template_box.clone();
+            let template_entry = self.template_entry.clone();
+            let msg_bar = self.msg_bar.clone();
+            gtk4::glib::timeout_add_local_once(std::time::Duration::from_millis(50), move || {
+                if template_box.is_visible() {
+                    template_entry.grab_focus();
+                } else if accept_btn.is_visible() {
+                    accept_btn.grab_focus();
+                } else if approve_file_btn.is_visible() {
+                    approve_file_btn.grab_focus();
+                } else if mode == OverlayMode::Claw && msg_bar.entry.is_sensitive() {
+                    msg_bar.entry.grab_focus();
+                }
+            });
+        }
     }
 
     pub fn show_chat_only(&self, agent_name: &str) {
@@ -1065,12 +1089,12 @@ impl TerminalOverlay {
 
     pub fn show_input_only(&self, agent_name: &str) {
         self.msg_bar.set_working_dir(self.host.working_dir());
-        if !self.revealer.reveals_child() {
+        if self.revealer.reveals_child() {
+            self.refresh_character_selector(agent_name);
+        } else {
             // Drawer is closed → present the "chat only" shell so the user
             // gets a clean prompt aimed at this pane's agent.
             self.show_chat_only(agent_name);
-        } else {
-            self.refresh_character_selector(agent_name);
         }
 
         // Auto-scroll to the newest row so reopening lands on the latest
@@ -1098,31 +1122,20 @@ impl TerminalOverlay {
     }
 
     /// Force the visible scroll (history or bookmark preview) to its bottom edge.
-    /// Used on reveal so the user always lands on the latest content.
+    /// Used on reveal and streaming deltas without touching keyboard focus.
     fn scroll_to_latest(&self) {
         if *self.current_mode.borrow() == OverlayMode::Claw {
             let n = self.history_store.n_items();
             if n == 0 {
                 return;
             }
-            // Arm the same 1200ms sticky window used on items_changed.
-            let was_idle = !self.history_sticky.get();
-            self.history_sticky.set(true);
-            if was_idle {
-                let sticky_timer = self.history_sticky.clone();
-                gtk::glib::timeout_add_local(std::time::Duration::from_millis(1200), move || {
-                    sticky_timer.set(false);
-                    gtk::glib::ControlFlow::Break
-                });
-            }
+            arm_sticky_scroll(&self.history_sticky, &self.sticky_timer);
 
             if !self.scroll_idle_queued.replace(true) {
                 let adj = self.history_scroll.vadjustment();
                 let list = self.history_list.clone();
                 let is_auto = self.is_auto_scrolling.clone();
                 let queued_flag = self.scroll_idle_queued.clone();
-                let msg_bar_for_scroll = self.msg_bar.clone();
-                let rev_for_scroll = self.revealer.clone();
                 gtk::glib::idle_add_local_once(move || {
                     queued_flag.set(false);
                     let live_n = list.model().map_or(0, |m| m.n_items());
@@ -1132,14 +1145,6 @@ impl TerminalOverlay {
                     is_auto.set(true);
                     list.scroll_to(live_n - 1, gtk::ListScrollFlags::NONE, None);
                     adj.set_value(adj.upper() - adj.page_size());
-                    if rev_for_scroll.reveals_child()
-                        && msg_bar_for_scroll.entry.is_sensitive()
-                        && msg_bar_for_scroll.widget.is_visible()
-                        && !msg_bar_for_scroll.entry.has_focus()
-                        && msg_bar_for_scroll.entry.focus_child().is_none()
-                    {
-                        msg_bar_for_scroll.entry.grab_focus();
-                    }
                     gtk::glib::idle_add_local_once(move || {
                         is_auto.set(false);
                     });
@@ -1195,10 +1200,12 @@ impl TerminalOverlay {
         self.indicator_slot.set_visible(visible);
     }
 
+    #[must_use]
     pub fn is_visible(&self) -> bool {
         self.revealer.reveals_child()
     }
 
+    #[allow(clippy::too_many_lines)]
     pub fn sync_action_state(&self) {
         let mode = *self.current_mode.borrow();
         let state = self.state.borrow().clone();
@@ -1354,8 +1361,10 @@ impl TerminalOverlay {
                 }
             }
         }
+        self.recompute_max_content_height();
     }
 
+    #[must_use]
     pub fn current_proposal(&self) -> Proposal {
         if let OverlayState::Action(p) = &*self.state.borrow() {
             p.clone()
@@ -1437,7 +1446,8 @@ impl TerminalOverlay {
 
         drawer.add_controller(zoom_controller);
 
-        let scroll_ctrl = gtk::EventControllerScroll::new(gtk::EventControllerScrollFlags::VERTICAL);
+        let scroll_ctrl =
+            gtk::EventControllerScroll::new(gtk::EventControllerScrollFlags::VERTICAL);
         scroll_ctrl.set_propagation_phase(gtk::PropagationPhase::Capture);
         scroll_ctrl.connect_scroll(|ctrl, _dx, dy| {
             let state = ctrl.current_event_state();
@@ -1505,19 +1515,73 @@ fn update_and_persist_overlay_zoom_pct(pct: u32) {
 }
 
 pub fn zoom_in_overlay() {
-    let next = OVERLAY_ZOOM_STATE.with(|(zoom_cell, _)| {
-        zoom_cell.get().saturating_add(OVERLAY_ZOOM_STEP_PCT)
-    });
+    let next = OVERLAY_ZOOM_STATE
+        .with(|(zoom_cell, _)| zoom_cell.get().saturating_add(OVERLAY_ZOOM_STEP_PCT));
     update_and_persist_overlay_zoom_pct(next);
 }
 
 pub fn zoom_out_overlay() {
-    let next = OVERLAY_ZOOM_STATE.with(|(zoom_cell, _)| {
-        zoom_cell.get().saturating_sub(OVERLAY_ZOOM_STEP_PCT)
-    });
+    let next = OVERLAY_ZOOM_STATE
+        .with(|(zoom_cell, _)| zoom_cell.get().saturating_sub(OVERLAY_ZOOM_STEP_PCT));
     update_and_persist_overlay_zoom_pct(next);
 }
 
 pub fn reset_overlay_zoom() {
     update_and_persist_overlay_zoom_pct(OVERLAY_ZOOM_DEFAULT_PCT);
+}
+
+fn arm_sticky_scroll(
+    sticky: &Rc<Cell<bool>>,
+    timer_slot: &Rc<RefCell<Option<gtk::glib::SourceId>>>,
+) {
+    sticky.set(true);
+    if let Some(prev) = timer_slot.borrow_mut().take() {
+        prev.remove();
+    }
+    let sticky_for_timeout = sticky.clone();
+    let slot_for_timeout = timer_slot.clone();
+    let sid =
+        gtk::glib::timeout_add_local_once(std::time::Duration::from_millis(1200), move || {
+            let _ = slot_for_timeout.borrow_mut().take();
+            sticky_for_timeout.set(false);
+        });
+    *timer_slot.borrow_mut() = Some(sid);
+}
+
+/// Computes `(new_clear_offset, vis_pos, vis_removed, store_add_range)` when `full_history_store`
+/// emits `items_changed(pos, removed, added)` while `clear_offset` leading rows are hidden by `/clear`.
+fn compute_visible_slice_delta(
+    old_offset: u32,
+    pos: u32,
+    removed: u32,
+    added: u32,
+) -> (u32, u32, u32, std::ops::Range<u32>) {
+    let removed_before_offset = removed.min(old_offset.saturating_sub(pos));
+    let vis_removed = removed - removed_before_offset;
+    let vis_pos = pos.saturating_sub(old_offset);
+
+    if pos < old_offset && pos + removed <= old_offset {
+        let new_offset = old_offset - removed_before_offset + added;
+        (new_offset, 0, 0, 0..0)
+    } else {
+        let new_offset = old_offset - removed_before_offset;
+        (new_offset, vis_pos, vis_removed, pos..(pos + added))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn visible_slice_delta_preserves_clear_offset_and_avoids_duplicates() {
+        // 1. Append after `/clear` at offset 5 (`pos = 5, removed = 0, added = 1`)
+        assert_eq!(compute_visible_slice_delta(5, 5, 0, 1), (5, 0, 0, 5..6));
+        // 2. Prune cancelled working row at tail (`pos = 5, removed = 1, added = 0`)
+        assert_eq!(compute_visible_slice_delta(5, 5, 1, 0), (5, 0, 1, 5..5));
+        // 3. In-place row replacement in visible region (`pos = 6, removed = 1, added = 1`)
+        assert_eq!(compute_visible_slice_delta(5, 6, 1, 1), (5, 1, 1, 6..7));
+        // 4. Removal strictly inside hidden `/clear` prefix (`pos = 2, removed = 1, added = 0`)
+        assert_eq!(compute_visible_slice_delta(5, 2, 1, 0), (4, 0, 0, 0..0));
+    }
 }

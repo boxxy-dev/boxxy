@@ -12,6 +12,9 @@ use std::rc::Rc;
 
 pub use attachment::{Attachment, AttachmentManager};
 
+type SubmitHook = Rc<RefCell<Option<Box<dyn Fn(&str)>>>>;
+type ClearHook = Rc<RefCell<Option<Box<dyn Fn()>>>>;
+
 pub struct MsgBarComponent {
     pub widget: gtk::Box,
     pub entry: gtk::TextView,
@@ -47,13 +50,15 @@ pub struct MsgBarComponent {
     /// When true, the msgbar does not hide itself on Enter/Escape — its
     /// enclosing container (e.g. the claw overlay drawer) owns visibility.
     embedded: Rc<Cell<bool>>,
-    on_submit_hook: Rc<RefCell<Option<Box<dyn Fn(&str)>>>>,
-    on_clear_hook: Rc<RefCell<Option<Box<dyn Fn()>>>>,
+    on_submit_hook: SubmitHook,
+    on_clear_hook: ClearHook,
     status_popover: gtk::Popover,
     autocomplete: Rc<boxxy_core_widgets::autocomplete::AutocompleteController>,
 }
 
 impl MsgBarComponent {
+    #[must_use]
+    #[allow(clippy::too_many_lines)]
     pub fn new<
         F: Fn((String, Vec<String>)) + 'static,
         C: Fn() + 'static,
@@ -130,11 +135,11 @@ impl MsgBarComponent {
         entry.buffer().tag_table().add(&char_tag);
 
         let placeholder_for_buf = placeholder_label.clone();
-        let entry_for_buf = entry.clone();
+        let last_mention_colors: Rc<RefCell<(String, String)>> =
+            Rc::new(RefCell::new((String::new(), String::new())));
         entry.buffer().connect_changed(move |buf| {
             placeholder_for_buf.set_visible(buf.char_count() == 0);
-            highlight_input_mentions(buf, &file_tag, &char_tag);
-            entry_for_buf.queue_resize();
+            highlight_input_mentions(buf, &file_tag, &char_tag, &last_mention_colors);
         });
 
         // Default app font, not terminal monospace. The msgbar is
@@ -231,8 +236,7 @@ impl MsgBarComponent {
             (btn, sw)
         };
 
-        let (sleep_toggle, sleep_switch) =
-            make_popover_row("boxxy-bedtime-symbolic", "Sleep Mode");
+        let (sleep_toggle, sleep_switch) = make_popover_row("boxxy-bedtime-symbolic", "Sleep Mode");
         sleep_toggle.set_tooltip_text(Some("Sleep Mode (Passive Observer)"));
 
         let sleep_state = Rc::new(Cell::new(false));
@@ -245,8 +249,7 @@ impl MsgBarComponent {
 
         popover_box.append(&sleep_toggle);
 
-        let (pin_toggle, pin_switch) =
-            make_popover_row("boxxy-view-pin-symbolic", "Pin Session");
+        let (pin_toggle, pin_switch) = make_popover_row("boxxy-view-pin-symbolic", "Pin Session");
         pin_toggle.set_tooltip_text(Some("Pin this session"));
 
         let pin_state = Rc::new(Cell::new(false));
@@ -273,8 +276,7 @@ impl MsgBarComponent {
 
         popover_box.append(&web_search_toggle);
 
-        let (vibe_toggle, vibe_switch) =
-            make_popover_row("boxxy-vibe-symbolic", "Vibe Mode");
+        let (vibe_toggle, vibe_switch) = make_popover_row("boxxy-vibe-symbolic", "Vibe Mode");
         vibe_toggle.set_tooltip_text(Some(
             "Vibe Mode (Auto-run safe commands and workspace edits)",
         ));
@@ -323,8 +325,8 @@ impl MsgBarComponent {
         let is_active = Rc::new(Cell::new(false));
         let history = Rc::new(RefCell::new(history::MsgHistory::new()));
         let embedded = Rc::new(Cell::new(false));
-        let on_submit_hook: Rc<RefCell<Option<Box<dyn Fn(&str)>>>> = Rc::new(RefCell::new(None));
-        let on_clear_hook: Rc<RefCell<Option<Box<dyn Fn()>>>> = Rc::new(RefCell::new(None));
+        let on_submit_hook: SubmitHook = Rc::new(RefCell::new(None));
+        let on_clear_hook: ClearHook = Rc::new(RefCell::new(None));
 
         let on_submit_rc = Rc::new(on_submit);
         let on_cancel_rc = Rc::new(on_cancel);
@@ -376,10 +378,7 @@ impl MsgBarComponent {
                         // /incognito is only allowed when starting a new session
                         return;
                     }
-                    let inline_msg = trimmed_input
-                        .get(10..)
-                        .map(str::trim)
-                        .unwrap_or_default();
+                    let inline_msg = trimmed_input.get(10..).map(str::trim).unwrap_or_default();
                     let payload_text = if inline_msg.is_empty() {
                         "/incognito".to_string()
                     } else {
@@ -392,12 +391,11 @@ impl MsgBarComponent {
                     return;
                 }
 
-                if original_text.trim() == "/models" && attachment_mgr.get_attachments().is_empty()
-                {
+                let no_attachments = attachment_mgr.get_attachments().is_empty();
+
+                if trimmed_input.eq_ignore_ascii_case("/models") && no_attachments {
                     if !is_incognito_active {
-                        history
-                            .borrow_mut()
-                            .push(original_text, Vec::new());
+                        history.borrow_mut().push(original_text, Vec::new());
                     }
                     buf.set_text("");
                     if let Some(root) = entry.root() {
@@ -410,8 +408,7 @@ impl MsgBarComponent {
                     return;
                 }
 
-                if original_text.trim() == "/resume" && attachment_mgr.get_attachments().is_empty()
-                {
+                if trimmed_input.eq_ignore_ascii_case("/resume") && no_attachments {
                     if is_incognito_active {
                         buf.set_text("");
                         return;
@@ -422,11 +419,9 @@ impl MsgBarComponent {
                     return;
                 }
 
-                if original_text.trim() == "/vibe" && attachment_mgr.get_attachments().is_empty() {
+                if trimmed_input.eq_ignore_ascii_case("/vibe") && no_attachments {
                     if !is_incognito_active {
-                        history
-                            .borrow_mut()
-                            .push(original_text, Vec::new());
+                        history.borrow_mut().push(original_text, Vec::new());
                         let next = !vibe_state.get();
                         on_vibe_toggle(next);
                     }
@@ -434,11 +429,9 @@ impl MsgBarComponent {
                     return;
                 }
 
-                if original_text.trim() == "/sleep" && attachment_mgr.get_attachments().is_empty() {
+                if trimmed_input.eq_ignore_ascii_case("/sleep") && no_attachments {
                     if !is_incognito_active {
-                        history
-                            .borrow_mut()
-                            .push(original_text, Vec::new());
+                        history.borrow_mut().push(original_text, Vec::new());
                         if claw_state.get() {
                             let next = !sleep_state.get();
                             on_sleep_toggle(next);
@@ -448,11 +441,9 @@ impl MsgBarComponent {
                     return;
                 }
 
-                if original_text.trim() == "/pin" && attachment_mgr.get_attachments().is_empty() {
+                if trimmed_input.eq_ignore_ascii_case("/pin") && no_attachments {
                     if !is_incognito_active {
-                        history
-                            .borrow_mut()
-                            .push(original_text, Vec::new());
+                        history.borrow_mut().push(original_text, Vec::new());
                         if claw_state.get() {
                             let next = !pin_state.get();
                             on_pin_toggle(next);
@@ -462,11 +453,9 @@ impl MsgBarComponent {
                     return;
                 }
 
-                if original_text.trim() == "/web" && attachment_mgr.get_attachments().is_empty() {
+                if trimmed_input.eq_ignore_ascii_case("/web") && no_attachments {
                     if !is_incognito_active {
-                        history
-                            .borrow_mut()
-                            .push(original_text, Vec::new());
+                        history.borrow_mut().push(original_text, Vec::new());
                         if boxxy_preferences::Settings::load().enable_web_search {
                             let next = !web_search_state.get();
                             on_web_search_toggle(next);
@@ -476,11 +465,9 @@ impl MsgBarComponent {
                     return;
                 }
 
-                if original_text.trim() == "/code" && attachment_mgr.get_attachments().is_empty() {
+                if trimmed_input.eq_ignore_ascii_case("/code") && no_attachments {
                     if !is_incognito_active {
-                        history
-                            .borrow_mut()
-                            .push(original_text, Vec::new());
+                        history.borrow_mut().push(original_text, Vec::new());
                     }
                     buf.set_text("");
                     let settings = boxxy_preferences::Settings::update(|s| {
@@ -490,11 +477,9 @@ impl MsgBarComponent {
                     return;
                 }
 
-                if original_text.trim() == "/clear" && attachment_mgr.get_attachments().is_empty() {
+                if trimmed_input.eq_ignore_ascii_case("/clear") && no_attachments {
                     if !is_incognito_active {
-                        history
-                            .borrow_mut()
-                            .push(original_text, Vec::new());
+                        history.borrow_mut().push(original_text, Vec::new());
                     }
                     buf.set_text("");
                     if claw_state.get()
@@ -505,11 +490,9 @@ impl MsgBarComponent {
                     return;
                 }
 
-                if original_text.trim() == "/exit" && attachment_mgr.get_attachments().is_empty() {
+                if trimmed_input.eq_ignore_ascii_case("/exit") && no_attachments {
                     if !is_incognito_active {
-                        history
-                            .borrow_mut()
-                            .push(original_text, Vec::new());
+                        history.borrow_mut().push(original_text, Vec::new());
                     }
                     buf.set_text("");
                     if claw_state.get() {
@@ -571,7 +554,7 @@ impl MsgBarComponent {
             ))),
         ];
         // Sort by trigger length descending to ensure "/resume ", "/debate ", and "/drama " match before "/"
-        providers.sort_by(|a, b| b.trigger().len().cmp(&a.trigger().len()));
+        providers.sort_by_key(|a| std::cmp::Reverse(a.trigger().len()));
 
         let autocomplete_submit = submit_action.clone();
         let working_dir_for_frecency = working_dir.clone();
@@ -689,19 +672,18 @@ impl MsgBarComponent {
             }
 
             if key == gtk::gdk::Key::Escape {
-                // In embedded mode the container owns visibility; only
-                // cancel the in-progress input, the drawer stays open so
-                // the user can still read/reply.
-                if !k_embedded.get() {
-                    k_active.set(false);
-                    k_widget.set_visible(false);
-                }
+                // In embedded mode the drawer owns visibility and focus; never invoke `k_cancel()`
+                // (which focuses the underlying terminal behind an open drawer).
                 k_autocomplete.with_suppressed(|| {
                     k_entry.buffer().set_text("");
                 });
                 k_history.borrow_mut().reset();
                 k_attachment_mgr.clear();
-                k_cancel();
+                if !k_embedded.get() {
+                    k_active.set(false);
+                    k_widget.set_visible(false);
+                    k_cancel();
+                }
                 glib::Propagation::Stop
             } else {
                 glib::Propagation::Proceed
@@ -775,6 +757,7 @@ impl MsgBarComponent {
 
     /// Dismisses any open popup (autocomplete or session options popover) owned
     /// by the input bar. Returns `true` if a popup was open and was dismissed.
+    #[must_use]
     pub fn dismiss_popups(&self) -> bool {
         if self.autocomplete.dismiss() {
             return true;
@@ -812,10 +795,10 @@ impl MsgBarComponent {
         *self.character_id.borrow_mut() = None;
         let text =
             "Type your message... (@file: attach, :character: mention, /: commands)".to_string();
-        *self.default_placeholder.borrow_mut() = text.clone();
         if self.entry.is_sensitive() {
             self.placeholder_label.set_label(&text);
         }
+        *self.default_placeholder.borrow_mut() = text;
         self.refresh_user_avatar();
     }
 
@@ -838,35 +821,22 @@ impl MsgBarComponent {
                 "Message {} (Incognito — no context sent, nothing saved)...",
                 boxxy_claw_protocol::characters::INCOGNITO_DISPLAY_NAME
             );
-            *self.default_placeholder.borrow_mut() = text.clone();
             if self.entry.is_sensitive() {
                 self.placeholder_label.set_label(&text);
             }
+            *self.default_placeholder.borrow_mut() = text;
             self.refresh_user_avatar();
             return;
         }
 
         let registry = boxxy_claw_protocol::characters::CHARACTER_CACHE.load();
         if let Some(info) = registry.iter().find(|c| c.config.id == character_id) {
-            let formatted_name = info
-                .config
-                .name
-                .split('-')
-                .map(|word| {
-                    let mut c = word.chars();
-                    match c.next() {
-                        None => String::new(),
-                        Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
-                    }
-                })
-                .collect::<Vec<String>>()
-                .join(" ");
-
-            let text = format!("Message {}...", formatted_name);
-            *self.default_placeholder.borrow_mut() = text.clone();
+            let formatted_name = boxxy_claw_ui::resolve_character_display_name(info);
+            let text = format!("Message {formatted_name}...");
             if self.entry.is_sensitive() {
                 self.placeholder_label.set_label(&text);
             }
+            *self.default_placeholder.borrow_mut() = text;
         }
 
         self.refresh_user_avatar();
@@ -885,6 +855,7 @@ impl MsgBarComponent {
         }
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     pub fn set_status(&self, status: AgentStatus) {
         // Reset everything
         for cls in [
@@ -935,24 +906,6 @@ impl MsgBarComponent {
         self.sleep_indicator.set_visible(sleeping);
         self.vibe_indicator.set_visible(vibe);
         self.right_badges.set_visible(sleeping || vibe);
-    }
-
-    pub fn show_at_y(&self, y_offset: i32, height: i32) {
-        self.widget.set_margin_top(y_offset);
-        self.widget.set_height_request(height);
-        self.widget.set_visible(true);
-        self.is_active.set(true);
-        // Force the widget to realize/map before grabbing focus,
-        // or queue it for the next tick if needed. GTK4 grab_focus
-        // usually works immediately if visible.
-        self.entry.grab_focus();
-    }
-
-    pub fn hide(&self) {
-        self.widget.set_visible(false);
-        self.is_active.set(false);
-        self.set_text("");
-        self.history.borrow_mut().reset();
     }
 
     pub fn set_input_sensitive(&self, sensitive: bool) {
@@ -1011,8 +964,7 @@ impl MsgBarComponent {
         }
 
         if vibe {
-            self.vibe_toggle
-                .set_tooltip_text(Some("Disable Vibe Mode"));
+            self.vibe_toggle.set_tooltip_text(Some("Disable Vibe Mode"));
         } else {
             self.vibe_toggle.set_tooltip_text(Some(
                 "Vibe Mode (Auto-run safe commands and workspace edits)",
@@ -1028,15 +980,16 @@ impl MsgBarComponent {
     /// msgbar used to track the terminal font for visual continuity
     /// with the shell; now it's chat chrome and inherits the default
     /// app font. Kept to preserve the public API.
-    pub fn apply_font(&self, _font_desc: &gtk::pango::FontDescription) {}
+    pub const fn apply_font(&self, _font_desc: &gtk::pango::FontDescription) {}
 }
 
 /// Applies OpenCode-style live syntax highlighting (`gtk::TextTag`) to `@file` and `:character`
-/// tokens inside the input buffer as the user types.
+/// tokens inside the input buffer in a single zero-allocation pass over `text.chars()`.
 fn highlight_input_mentions(
     buf: &gtk::TextBuffer,
     file_tag: &gtk::TextTag,
     char_tag: &gtk::TextTag,
+    last_colors: &RefCell<(String, String)>,
 ) {
     let start = buf.start_iter();
     let end = buf.end_iter();
@@ -1049,33 +1002,40 @@ fn highlight_input_mentions(
     }
 
     let (file_hex, char_hex) = boxxy_themes::app_theme::active_mention_colors();
-    file_tag.set_foreground(Some(&file_hex));
-    char_tag.set_foreground(Some(&char_hex));
+    {
+        let mut cached = last_colors.borrow_mut();
+        if cached.0 != file_hex || cached.1 != char_hex {
+            file_tag.set_foreground(Some(&file_hex));
+            char_tag.set_foreground(Some(&char_hex));
+            *cached = (file_hex, char_hex);
+        }
+    }
 
-    let chars: Vec<(usize, char)> = text.char_indices().collect();
-    let len = chars.len();
-    let mut i = 0;
+    let mut chars = text.chars().enumerate().peekable();
+    let mut prev_ws = true;
 
-    while i < len {
-        let ch = chars[i].1;
-        let at_word_start = i == 0 || chars[i - 1].1.is_whitespace();
-        if at_word_start && (ch == '@' || ch == ':') {
-            let token_start = i;
-            i += 1;
-            while i < len && !chars[i].1.is_whitespace() {
-                i += 1;
-            }
-            if i > token_start + 1 {
-                let start_iter = buf.iter_at_offset(token_start as i32);
-                let end_iter = buf.iter_at_offset(i as i32);
-                if ch == '@' {
-                    buf.apply_tag(file_tag, &start_iter, &end_iter);
-                } else {
-                    buf.apply_tag(char_tag, &start_iter, &end_iter);
+    while let Some((token_start, ch)) = chars.next() {
+        if prev_ws && (ch == '@' || ch == ':') {
+            let mut token_end = token_start + 1;
+            while let Some(&(next_idx, next_ch)) = chars.peek() {
+                if next_ch.is_whitespace() {
+                    break;
                 }
+                token_end = next_idx + 1;
+                chars.next();
             }
+            if token_end > token_start + 1
+                && let (Ok(s_off), Ok(e_off)) =
+                    (i32::try_from(token_start), i32::try_from(token_end))
+            {
+                let start_iter = buf.iter_at_offset(s_off);
+                let end_iter = buf.iter_at_offset(e_off);
+                let tag = if ch == '@' { file_tag } else { char_tag };
+                buf.apply_tag(tag, &start_iter, &end_iter);
+            }
+            prev_ws = false;
         } else {
-            i += 1;
+            prev_ws = ch.is_whitespace();
         }
     }
 }

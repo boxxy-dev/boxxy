@@ -1,8 +1,10 @@
 //! Past Conversations resume list rendered inside the Claw sidebar on blank panes.
 
 use crate::character_style::{
-    load_cached_texture, prettify_character_name, resolve_character_display_name,
+    format_relative_age, load_cached_texture, prettify_character_name,
+    resolve_character_display_name,
 };
+use boxxy_core_widgets::ObjectExtSafe;
 use gtk4 as gtk;
 use gtk4::glib;
 use gtk4::prelude::*;
@@ -11,7 +13,15 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 pub(super) type RenderedSessionSig = (
-    Vec<(String, String, Option<String>, bool, i64)>,
+    Vec<(
+        String,
+        String,
+        Option<String>,
+        Option<String>,
+        bool,
+        i64,
+        Option<String>,
+    )>,
     Vec<(String, String, bool)>,
 );
 
@@ -25,43 +35,28 @@ pub(super) struct PastSessionsCtx {
     pub(super) hero_box: gtk::Box,
     pub(super) hero_icon: gtk::Image,
     pub(super) is_new_session: Rc<Cell<bool>>,
+    pub(super) fetch_seq: Rc<Cell<u64>>,
     pub(super) rendered_sessions_sig: Rc<RefCell<RenderedSessionSig>>,
     pub(super) active_options_popover: Rc<RefCell<Option<gtk::Popover>>>,
     pub(super) on_resume_session: ResumeSessionCallback,
 }
 
-fn format_relative_age(updated_at: &str) -> String {
-    use chrono::{NaiveDateTime, Utc};
-    if let Ok(ndt) = NaiveDateTime::parse_from_str(updated_at, "%Y-%m-%d %H:%M:%S") {
-        let now = Utc::now().naive_utc();
-        let duration = now.signed_duration_since(ndt);
-        if duration.num_days() > 0 {
-            format!("{}d", duration.num_days())
-        } else if duration.num_hours() > 0 {
-            format!("{}h", duration.num_hours())
-        } else if duration.num_minutes() > 0 {
-            format!("{}m", duration.num_minutes())
-        } else {
-            "now".to_string()
-        }
-    } else {
-        "recent".to_string()
-    }
-}
-
 #[allow(clippy::too_many_lines)]
 pub(super) fn populate_past_sessions(ctx: PastSessionsCtx, force: bool) {
-    glib::spawn_future_local(async move {
-        if !force
-            && ctx
-                .active_options_popover
-                .borrow()
-                .as_ref()
-                .is_some_and(|p| p.is_visible())
-        {
-            return;
-        }
+    if !force
+        && ctx
+            .active_options_popover
+            .borrow()
+            .as_ref()
+            .is_some_and(gtk::prelude::WidgetExt::is_visible)
+    {
+        return;
+    }
 
+    let seq = ctx.fetch_seq.get().wrapping_add(1);
+    ctx.fetch_seq.set(seq);
+
+    glib::spawn_future_local(async move {
         let fetched = boxxy_sys_utils::runtime()
             .spawn(async move {
                 let db = boxxy_db::Db::new().await?;
@@ -73,12 +68,17 @@ pub(super) fn populate_past_sessions(ctx: PastSessionsCtx, force: bool) {
             .and_then(Result::ok)
             .unwrap_or_default();
 
+        // Drop stale out-of-order DB query completions if a newer refresh was started.
+        if ctx.fetch_seq.get() != seq {
+            return;
+        }
+
         if !force
             && ctx
                 .active_options_popover
                 .borrow()
                 .as_ref()
-                .is_some_and(|p| p.is_visible())
+                .is_some_and(gtk::prelude::WidgetExt::is_visible)
         {
             return;
         }
@@ -111,15 +111,17 @@ pub(super) fn populate_past_sessions(ctx: PastSessionsCtx, force: bool) {
         let registry = boxxy_claw_protocol::characters::CHARACTER_CACHE.load();
         let claims = boxxy_claw_protocol::characters::CLAIMS_CACHE.load();
 
-        let new_sessions_sig: Vec<(String, String, Option<String>, bool, i64)> = fetched
+        let new_sessions_sig: Vec<_> = fetched
             .iter()
             .map(|s| {
                 (
                     s.id.clone(),
                     s.character_id.clone(),
+                    s.agent_name.clone(),
                     s.title.clone(),
                     s.pinned,
                     s.message_count,
+                    s.updated_at.clone(),
                 )
             })
             .collect();
@@ -195,10 +197,10 @@ pub(super) fn populate_past_sessions(ctx: PastSessionsCtx, force: bool) {
                 resolve_character_display_name,
             );
 
-            let age = session
-                .updated_at
-                .as_deref()
-                .map_or_else(|| "recent".to_string(), format_relative_age);
+            let age = session.updated_at.as_deref().map_or_else(
+                || "recent".to_string(),
+                |ts| format_relative_age(ts, "recent"),
+            );
 
             let msg_word = if session.message_count == 1 {
                 "msg"
@@ -222,8 +224,10 @@ pub(super) fn populate_past_sessions(ctx: PastSessionsCtx, force: bool) {
             let row = gtk::ListBoxRow::new();
             row.add_css_class("past-session-row");
             row.add_css_class("activatable");
+            row.set_safe_data("session_id", session_id.clone());
             if is_disabled_row {
                 row.set_activatable(false);
+                row.set_focusable(false);
             }
 
             let outer_hbox = gtk::Box::new(gtk::Orientation::Horizontal, 8);
@@ -313,18 +317,6 @@ pub(super) fn populate_past_sessions(ctx: PastSessionsCtx, force: bool) {
             text_vbox.append(&sub_hbox);
 
             resume_btn_content.append(&text_vbox);
-
-            if !is_disabled_row {
-                let gesture = gtk::GestureClick::new();
-                let sid_for_resume = session_id.clone();
-                let cb_for_resume = ctx.on_resume_session.clone();
-                gesture.connect_released(move |_, _, _, _| {
-                    if let Some(cb) = cb_for_resume.borrow().as_ref().cloned() {
-                        cb(sid_for_resume.clone(), None);
-                    }
-                });
-                resume_btn_content.add_controller(gesture);
-            }
             outer_hbox.append(&resume_btn_content);
 
             let options_btn = gtk::Button::builder()

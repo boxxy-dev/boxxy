@@ -948,7 +948,6 @@ name = "boxxy-claw-widget"
 version = "0.1.0"
 dependencies = [
  "async-channel",
- "boxxy-claw",
  "boxxy-claw-protocol",
  "boxxy-claw-ui",
  "boxxy-core-widgets",

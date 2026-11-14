@@ -5,7 +5,7 @@ use crate::character_style::{
     load_incognito_texture, prettify_character_name, resolve_character_display_name,
 };
 use crate::process_renderer::get_claw_viewer_registry;
-use crate::row_object::ClawRowObject;
+use crate::row_object::{ClawRowObject, RowUpdateKind};
 use crate::trace_widget::TurnTraceSlot;
 use boxxy_claw_protocol::{PersistentClawRow, TurnTraceItem};
 use boxxy_core_widgets::ObjectExtSafe;
@@ -137,13 +137,17 @@ pub fn create_claw_message_list() -> (gtk::ListView, gio::ListStore) {
         vbox.append(&cmd_label);
 
         let typewriter_timer: Rc<RefCell<Option<glib::SourceId>>> = Rc::new(RefCell::new(None));
-        let bound_pos: Rc<Cell<u32>> = Rc::new(Cell::new(gtk::INVALID_LIST_POSITION));
+        let copy_timer: Rc<RefCell<Option<glib::SourceId>>> = Rc::new(RefCell::new(None));
 
         {
             let store_for_copy = store_for_factory.clone();
-            let pos_for_copy = bound_pos.clone();
+            let item_weak = list_item.downgrade();
+            let copy_timer_for_click = copy_timer.clone();
             copy_btn.connect_clicked(move |btn| {
-                let pos = pos_for_copy.get();
+                let Some(li) = item_weak.upgrade() else {
+                    return;
+                };
+                let pos = li.position();
                 if pos == gtk::INVALID_LIST_POSITION {
                     return;
                 }
@@ -154,13 +158,19 @@ pub fn create_claw_message_list() -> (gtk::ListView, gio::ListStore) {
                 if let Some(display) = gdk::Display::default() {
                     display.clipboard().set_text(&text);
                     btn.set_icon_name("boxxy-object-select-symbolic");
+                    if let Some(prev) = copy_timer_for_click.borrow_mut().take() {
+                        prev.remove();
+                    }
                     let b = btn.clone();
-                    glib::timeout_add_local_once(
+                    let timer_slot = copy_timer_for_click.clone();
+                    let sid = glib::timeout_add_local_once(
                         std::time::Duration::from_millis(1500),
                         move || {
+                            let _ = timer_slot.borrow_mut().take();
                             b.set_icon_name("boxxy-edit-copy-symbolic");
                         },
                     );
+                    *copy_timer_for_click.borrow_mut() = Some(sid);
                 }
             });
         }
@@ -174,7 +184,7 @@ pub fn create_claw_message_list() -> (gtk::ListView, gio::ListStore) {
         hbox.set_safe_data("working_dots", working_dots);
         hbox.set_safe_data("active_ring_class", active_ring_class);
         hbox.set_safe_data("copy_btn", copy_btn);
-        hbox.set_safe_data("bound_pos", bound_pos);
+        hbox.set_safe_data("copy_timer", copy_timer);
         hbox.set_safe_data("title", title);
         hbox.set_safe_data("pane_lbl", pane_lbl);
         hbox.set_safe_data("trace_slot", trace_slot);
@@ -189,12 +199,17 @@ pub fn create_claw_message_list() -> (gtk::ListView, gio::ListStore) {
         let list_item = list_item.downcast_ref::<gtk::ListItem>().unwrap();
         let hbox = list_item.child().and_downcast::<gtk::Box>().unwrap();
 
-        let bound_pos = hbox.get_safe_data::<Rc<Cell<u32>>>("bound_pos").unwrap();
         let copy_btn = hbox.get_safe_data::<gtk::Button>("copy_btn").unwrap();
+        let copy_timer = hbox
+            .get_safe_data::<Rc<RefCell<Option<glib::SourceId>>>>("copy_timer")
+            .unwrap();
         let typewriter_timer = hbox
             .get_safe_data::<Rc<RefCell<Option<glib::SourceId>>>>("typewriter_timer")
             .unwrap();
 
+        if let Some(old_copy) = copy_timer.borrow_mut().take() {
+            old_copy.remove();
+        }
         if let Some(old_source) = typewriter_timer.borrow_mut().take() {
             old_source.remove();
         }
@@ -203,16 +218,41 @@ pub fn create_claw_message_list() -> (gtk::ListView, gio::ListStore) {
             return;
         };
 
-        bound_pos.set(list_item.position());
         copy_btn.set_icon_name("boxxy-edit-copy-symbolic");
 
         bind_or_refresh_slot(&hbox, &obj);
 
         let hbox_weak = hbox.downgrade();
         let obj_weak = obj.downgrade();
-        obj.bind_update_listener(Rc::new(move || {
-            if let (Some(hbox_live), Some(obj_live)) = (hbox_weak.upgrade(), obj_weak.upgrade()) {
-                bind_or_refresh_slot(&hbox_live, &obj_live);
+        obj.bind_update_listener(Rc::new(move |kind| {
+            let (Some(hbox_live), Some(obj_live)) = (hbox_weak.upgrade(), obj_weak.upgrade())
+            else {
+                return;
+            };
+            match kind {
+                RowUpdateKind::ProseOnly => {
+                    let Some(viewer_for_stream) =
+                        hbox_live.get_safe_data::<StructuredViewer>("viewer")
+                    else {
+                        return;
+                    };
+                    let is_working = obj_live.is_working();
+                    obj_live.with_row(|row| {
+                        if let PersistentClawRow::Diagnosis { content, .. } = row {
+                            if content.trim().is_empty() {
+                                viewer_for_stream.park_for_recycle();
+                                viewer_for_stream.widget().set_visible(false);
+                            } else if is_working {
+                                viewer_for_stream.set_streaming_content(content, false);
+                                viewer_for_stream.widget().set_visible(true);
+                            } else {
+                                viewer_for_stream.set_content(content);
+                                viewer_for_stream.widget().set_visible(true);
+                            }
+                        }
+                    });
+                }
+                RowUpdateKind::Full => bind_or_refresh_slot(&hbox_live, &obj_live),
             }
         }));
     });
@@ -225,8 +265,11 @@ pub fn create_claw_message_list() -> (gtk::ListView, gio::ListStore) {
             obj.clear_update_listener();
         }
         let hbox = list_item.child().and_downcast::<gtk::Box>().unwrap();
-        if let Some(bound_pos) = hbox.get_safe_data::<Rc<Cell<u32>>>("bound_pos") {
-            bound_pos.set(gtk::INVALID_LIST_POSITION);
+        if let Some(copy_timer) =
+            hbox.get_safe_data::<Rc<RefCell<Option<glib::SourceId>>>>("copy_timer")
+            && let Some(old_copy) = copy_timer.borrow_mut().take()
+        {
+            old_copy.remove();
         }
         if let Some(avatar_frame) = hbox.get_safe_data::<gtk::Box>("avatar_frame") {
             avatar_frame.remove_css_class("claw-avatar-typing");
@@ -500,9 +543,8 @@ fn bind_or_refresh_slot(hbox: &gtk::Box, obj: &ClawRowObject) {
                     let viewer_for_tick = viewer.clone();
                     let timer_slot = typewriter_timer.clone();
                     let avatar_frame_for_tick = avatar_frame.clone();
-                    let source_id = glib::timeout_add_local(
-                        std::time::Duration::from_millis(22),
-                        move || {
+                    let source_id =
+                        glib::timeout_add_local(std::time::Duration::from_millis(22), move || {
                             let next_idx = (idx.get() + step).min(char_ends.len() - 1);
                             idx.set(next_idx);
                             let byte_end = char_ends[next_idx];
@@ -516,8 +558,7 @@ fn bind_or_refresh_slot(hbox: &gtk::Box, obj: &ClawRowObject) {
                             } else {
                                 glib::ControlFlow::Continue
                             }
-                        },
-                    );
+                        });
                     *typewriter_timer.borrow_mut() = Some(source_id);
                 }
             } else {
@@ -687,15 +728,18 @@ fn format_row_speaker_and_body(row: &PersistentClawRow) -> Option<(String, Strin
         }
         let fallback_names = [fb_str];
         if (!id_str.is_empty() || !fb_str.is_empty())
-            && let Some(info) =
-                boxxy_claw_protocol::characters::resolve_character(&cache, id_str, &fallback_names)
+            && let Some(info) = boxxy_claw_protocol::characters::find_character_exact(
+                &cache,
+                id_str,
+                &fallback_names,
+            )
         {
             return resolve_character_display_name(info);
         }
-        fallback
-            .clone()
-            .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| "Agent".to_string())
+        if !fb_str.trim().is_empty() {
+            return prettify_character_name(fb_str);
+        }
+        "Agent".to_string()
     };
 
     match row {
@@ -711,9 +755,7 @@ fn format_row_speaker_and_body(row: &PersistentClawRow) -> Option<(String, Strin
             ..
         } => {
             let speaker = resolve_agent_display(character_id, agent_name);
-            if !content.trim().is_empty() {
-                Some((speaker, content.clone()))
-            } else {
+            if content.trim().is_empty() {
                 let edits: Vec<String> = trace
                     .iter()
                     .filter_map(|t| match t {
@@ -729,6 +771,8 @@ fn format_row_speaker_and_body(row: &PersistentClawRow) -> Option<(String, Strin
                 } else {
                     Some((speaker, edits.join("\n")))
                 }
+            } else {
+                Some((speaker, content.clone()))
             }
         }
         PersistentClawRow::Suggested {
@@ -825,6 +869,7 @@ pub fn format_exchange_for_copy(store: &gio::ListStore, pos: u32) -> String {
 // Row-append helpers (live working & read-only history rows)
 // ---------------------------------------------------------------------------
 
+#[must_use]
 pub fn add_working_turn_row(
     store: &gio::ListStore,
     pane_id: String,
@@ -861,25 +906,6 @@ pub fn add_diagnosis_row(
     );
 }
 
-pub fn add_diagnosis_row_with_typewriter(
-    store: &gio::ListStore,
-    pane_id: String,
-    agent_name: Option<String>,
-    character_id: Option<String>,
-    content: &str,
-    typewriter: bool,
-) {
-    add_diagnosis_row_with_trace(
-        store,
-        pane_id,
-        agent_name,
-        character_id,
-        content,
-        Vec::new(),
-        typewriter,
-    );
-}
-
 pub fn add_diagnosis_row_with_trace(
     store: &gio::ListStore,
     pane_id: String,
@@ -910,25 +936,6 @@ pub fn add_user_row(store: &gio::ListStore, pane_id: String, content: &str, imag
     }));
 }
 
-pub fn add_suggested_row(
-    store: &gio::ListStore,
-    pane_id: String,
-    agent_name: Option<String>,
-    character_id: Option<String>,
-    diagnosis: &str,
-    command: &str,
-) {
-    add_suggested_row_with_trace(
-        store,
-        pane_id,
-        agent_name,
-        character_id,
-        diagnosis,
-        command,
-        Vec::new(),
-    );
-}
-
 pub fn add_suggested_row_with_trace(
     store: &gio::ListStore,
     pane_id: String,
@@ -949,40 +956,6 @@ pub fn add_suggested_row_with_trace(
     }));
 }
 
-pub fn add_tool_call_row(
-    store: &gio::ListStore,
-    pane_id: String,
-    agent_name: Option<String>,
-    character_id: Option<String>,
-    tool_name: &str,
-    result: &str,
-) {
-    store.append(&ClawRowObject::new(PersistentClawRow::ToolCall {
-        pane_id,
-        agent_name,
-        character_id,
-        tool_name: tool_name.to_string(),
-        result: result.to_string(),
-        usage: None,
-    }));
-}
-
-pub fn add_process_list_row(
-    store: &gio::ListStore,
-    pane_id: String,
-    agent_name: Option<String>,
-    character_id: Option<String>,
-    result_json: &str,
-) {
-    store.append(&ClawRowObject::new(PersistentClawRow::ProcessList {
-        pane_id,
-        agent_name,
-        character_id,
-        result_json: result_json.to_string(),
-        usage: None,
-    }));
-}
-
 pub fn add_approval_row(
     store: &gio::ListStore,
     pane_id: String,
@@ -996,51 +969,6 @@ pub fn add_approval_row(
         agent_name,
         character_id,
         &format!("Proposed command:\n```bash\n{command}\n```"),
-    );
-}
-
-pub fn add_file_diff_row(
-    store: &gio::ListStore,
-    pane_id: String,
-    agent_name: Option<String>,
-    character_id: Option<String>,
-    diff: boxxy_claw_protocol::FileDiff,
-) {
-    add_file_diff_row_with_mode(store, pane_id, agent_name, character_id, diff, false);
-}
-
-pub fn add_file_diff_row_with_mode(
-    store: &gio::ListStore,
-    pane_id: String,
-    agent_name: Option<String>,
-    character_id: Option<String>,
-    diff: boxxy_claw_protocol::FileDiff,
-    auto_approved: bool,
-) {
-    store.append(&ClawRowObject::new(PersistentClawRow::FileDiff {
-        pane_id,
-        agent_name,
-        character_id,
-        diff,
-        auto_approved,
-        usage: None,
-    }));
-}
-
-pub fn add_file_write_approval_row(
-    store: &gio::ListStore,
-    pane_id: String,
-    agent_name: Option<String>,
-    character_id: Option<String>,
-    path: &str,
-    content: &str,
-) {
-    add_file_diff_row(
-        store,
-        pane_id,
-        agent_name,
-        character_id,
-        boxxy_claw_protocol::FileDiff::fallback_new(path, content),
     );
 }
 

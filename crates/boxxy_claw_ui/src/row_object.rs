@@ -5,8 +5,20 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
 
+/// Granularity of an in-place `ClawRowObject` mutation so bound `GtkListView` slots
+/// can fast-path high-frequency prose streaming without rebinding avatars or trace headers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RowUpdateKind {
+    Full,
+    ProseOnly,
+}
+
+pub type RowUpdateCallback = Rc<dyn Fn(RowUpdateKind)>;
+
 mod imp {
-    use super::*;
+    use super::{
+        Arc, Cell, ObjectImpl, ObjectSubclass, PersistentClawRow, RefCell, RowUpdateCallback, glib,
+    };
 
     #[derive(Default)]
     pub struct ClawRowObject {
@@ -19,7 +31,7 @@ mod imp {
         pub revision: Cell<u64>,
         pub cached_diff_json: RefCell<Option<Arc<str>>>,
         pub cached_edit_jsons: RefCell<Option<Vec<Arc<str>>>>,
-        pub on_updated: RefCell<Option<Rc<dyn Fn()>>>,
+        pub on_updated: RefCell<Option<RowUpdateCallback>>,
     }
 
     #[glib::object_subclass]
@@ -74,6 +86,7 @@ impl ClawRowObject {
         obj
     }
 
+    #[must_use]
     pub fn take_typewriter(&self) -> bool {
         self.imp().typewriter.replace(false)
     }
@@ -86,10 +99,13 @@ impl ClawRowObject {
     pub fn set_working(&self, working: bool) {
         let imp = self.imp();
         let changed = imp.is_working.replace(working) != working;
-        if !working {
+        let status_cleared = if !working && imp.active_status.borrow().is_some() {
             *imp.active_status.borrow_mut() = None;
-        }
-        if changed {
+            true
+        } else {
+            false
+        };
+        if changed || status_cleared {
             self.bump_and_notify();
         }
     }
@@ -139,28 +155,26 @@ impl ClawRowObject {
     /// Updates character attribution on an active working row if the speaker changed (e.g. Roundtable).
     pub fn ensure_speaker(&self, agent_name: &str, character_id: &str) {
         let mut changed = false;
-        if let Some(ref mut row) = *self.imp().row.borrow_mut() {
-            match row {
-                PersistentClawRow::Diagnosis {
-                    agent_name: r_name,
-                    character_id: r_cid,
-                    ..
-                }
-                | PersistentClawRow::Suggested {
-                    agent_name: r_name,
-                    character_id: r_cid,
-                    ..
-                } => {
-                    if !agent_name.is_empty() && r_name.as_deref() != Some(agent_name) {
-                        *r_name = Some(agent_name.to_string());
-                        changed = true;
-                    }
-                    if !character_id.is_empty() && r_cid.as_deref() != Some(character_id) {
-                        *r_cid = Some(character_id.to_string());
-                        changed = true;
-                    }
-                }
-                _ => {}
+        if let Some(
+            PersistentClawRow::Diagnosis {
+                agent_name: ref mut r_name,
+                character_id: ref mut r_cid,
+                ..
+            }
+            | PersistentClawRow::Suggested {
+                agent_name: ref mut r_name,
+                character_id: ref mut r_cid,
+                ..
+            },
+        ) = *self.imp().row.borrow_mut()
+        {
+            if !agent_name.is_empty() && r_name.as_deref() != Some(agent_name) {
+                *r_name = Some(agent_name.to_string());
+                changed = true;
+            }
+            if !character_id.is_empty() && r_cid.as_deref() != Some(character_id) {
+                *r_cid = Some(character_id.to_string());
+                changed = true;
             }
         }
         if changed {
@@ -175,31 +189,30 @@ impl ClawRowObject {
             *imp.cached_edit_jsons.borrow_mut() = None;
             *imp.pending_approval_diff.borrow_mut() = None;
         }
-        if let Some(ref mut row) = *imp.row.borrow_mut() {
-            match row {
-                PersistentClawRow::Diagnosis { trace, .. }
-                | PersistentClawRow::Suggested { trace, .. } => {
-                    trace.push(item);
-                }
-                _ => {}
-            }
+        if let Some(
+            PersistentClawRow::Diagnosis { ref mut trace, .. }
+            | PersistentClawRow::Suggested { ref mut trace, .. },
+        ) = *imp.row.borrow_mut()
+        {
+            trace.push(item);
         }
         self.bump_and_notify();
     }
 
     /// Updates the live visible prose snapshot while the model streams its final answer.
     pub fn set_streaming_prose(&self, snapshot_text: &str) {
-        let mut changed = false;
-        if let Some(PersistentClawRow::Diagnosis { content, .. }) =
+        let changed = if let Some(PersistentClawRow::Diagnosis { content, .. }) =
             &mut *self.imp().row.borrow_mut()
             && content != snapshot_text
         {
             content.clear();
             content.push_str(snapshot_text);
-            changed = true;
-        }
-        if changed {
-            self.bump_and_notify();
+            true
+        } else {
+            false
+        };
+        if changed && let Some(cb) = self.imp().on_updated.borrow().clone() {
+            cb(RowUpdateKind::ProseOnly);
         }
     }
 
@@ -294,8 +307,9 @@ impl ClawRowObject {
         self.bump_and_notify();
     }
 
-    /// Returns `true` if this row has zero prose, zero trace items, and zero pending diffs
-    /// (used to prune an empty working placeholder if cancelled before any context arrived).
+    /// Returns `true` if this row has zero visible prose, zero visible trace steps/skills,
+    /// and zero pending diffs (used to prune an empty working placeholder if cancelled,
+    /// including when a model emitted only empty/redacted `Thought` items).
     #[must_use]
     pub fn is_empty_working_placeholder(&self) -> bool {
         if self.imp().pending_approval_diff.borrow().is_some() {
@@ -303,13 +317,17 @@ impl ClawRowObject {
         }
         self.with_row(|r| match r {
             PersistentClawRow::Diagnosis { content, trace, .. } => {
-                content.trim().is_empty() && trace.is_empty()
+                if !content.trim().is_empty() {
+                    return false;
+                }
+                let summary = boxxy_claw_protocol::ActivitySummary::summarize(trace);
+                !summary.has_steps() && summary.skills.is_empty()
             }
             _ => false,
         })
     }
 
-    pub fn bind_update_listener(&self, listener: Rc<dyn Fn()>) {
+    pub fn bind_update_listener(&self, listener: Rc<dyn Fn(RowUpdateKind)>) {
         *self.imp().on_updated.borrow_mut() = Some(listener);
     }
 
@@ -326,7 +344,7 @@ impl ClawRowObject {
         imp.revision.set(imp.revision.get().wrapping_add(1));
         let cb_opt = imp.on_updated.borrow().clone();
         if let Some(cb) = cb_opt {
-            cb();
+            cb(RowUpdateKind::Full);
         }
     }
 
@@ -424,7 +442,9 @@ mod tests {
     #[test]
     fn working_row_mutates_in_place_and_caches_trace_edit_jsons() {
         let hits = Rc::new(Cell::new(0usize));
+        let prose_hits = Rc::new(Cell::new(0usize));
         let hits_cb = hits.clone();
+        let prose_cb = prose_hits.clone();
 
         let obj = ClawRowObject::new_working(
             "pane-1".to_string(),
@@ -434,9 +454,25 @@ mod tests {
         assert!(obj.is_working());
         assert!(obj.is_empty_working_placeholder());
 
-        obj.bind_update_listener(Rc::new(move || {
-            hits_cb.set(hits_cb.get() + 1);
+        obj.bind_update_listener(Rc::new(move |kind| match kind {
+            RowUpdateKind::Full => hits_cb.set(hits_cb.get() + 1),
+            RowUpdateKind::ProseOnly => prose_cb.set(prose_cb.get() + 1),
         }));
+
+        // Empty/redacted reasoning items (e.g. encrypted reasoning blocks with empty text)
+        // produce no visible trace UI and must still be treated as an empty placeholder on cancel.
+        obj.push_trace_item(TurnTraceItem::Thought {
+            summary: None,
+            content: "   ".to_string(),
+            duration_ms: Some(120),
+        });
+        assert!(obj.is_empty_working_placeholder());
+
+        let rev_before_prose = obj.revision();
+        obj.set_streaming_prose("Streaming...");
+        assert_eq!(prose_hits.get(), 1);
+        assert_eq!(obj.revision(), rev_before_prose);
+        assert!(!obj.is_empty_working_placeholder());
 
         let diff = FileDiff::compute("src/module.rs", Some("fn old() {}\n"), "fn next() {}\n");
         obj.set_pending_approval_diff(Some(&diff));
@@ -466,7 +502,7 @@ mod tests {
         obj.with_row(|r| match r {
             PersistentClawRow::Diagnosis { content, trace, .. } => {
                 assert_eq!(content, "Done.");
-                assert_eq!(trace.len(), 1);
+                assert_eq!(trace.len(), 2);
             }
             other => panic!("unexpected row {other:?}"),
         });

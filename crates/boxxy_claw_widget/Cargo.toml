@@ -18,7 +18,6 @@ chrono.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 boxxy-sys-utils = { path = "../sys_utils" }
-boxxy-claw = { path = "../boxxy_claw" }
 boxxy-claw-protocol = { path = "../boxxy_claw_protocol" }
 boxxy-claw-ui = { path = "../boxxy_claw_ui" }
 boxxy-core-widgets.workspace = true
@@ -33,3 +32,6 @@ home.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+
+[lints]
+workspace = true

@@ -7,10 +7,12 @@ use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const INDEX_TTL: Duration = Duration::from_secs(5);
+const MAX_CACHED_ROOTS: usize = 12;
 const MAX_INDEXED_ENTRIES: usize = 25_000;
 const MAX_HOME_INDEXED_ENTRIES: usize = 8_000;
 const MAX_COMPLETION_RESULTS: usize = 30;
@@ -44,7 +46,7 @@ pub struct WorkspaceEntry {
 #[derive(Clone)]
 struct CachedWorkspaceIndex {
     updated_at: Instant,
-    entries: Vec<WorkspaceEntry>,
+    entries: Arc<[WorkspaceEntry]>,
 }
 
 static WORKSPACE_INDEX_CACHE: std::sync::LazyLock<RwLock<HashMap<String, CachedWorkspaceIndex>>> =
@@ -67,8 +69,7 @@ static FRECENCY_LOADED: AtomicBool = AtomicBool::new(false);
 fn now_epoch_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
+        .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
 }
 
 fn frecency_file_path() -> PathBuf {
@@ -110,25 +111,75 @@ fn parse_frecency_jsonl(text: &str) -> Vec<FrecencyEntry> {
         }
     }
     let mut vec: Vec<FrecencyEntry> = map.into_values().collect();
-    vec.sort_by(|a, b| b.last_open_ms.cmp(&a.last_open_ms));
+    vec.sort_by_key(|a| std::cmp::Reverse(a.last_open_ms));
     vec.truncate(MAX_FRECENCY_ENTRIES);
     vec
 }
 
+#[allow(clippy::cast_precision_loss)]
 fn calculate_frecency(entry: &FrecencyEntry, now_ms: u64) -> f64 {
     let elapsed_days = (now_ms.saturating_sub(entry.last_open_ms) as f64) / 86_400_000.0;
-    (entry.frequency as f64) / (1.0 + elapsed_days)
+    f64::from(entry.frequency) / (1.0 + elapsed_days)
 }
 
-fn get_frecency_score(cwd: &str, rel_path: &str, now_ms: u64) -> f64 {
-    let trimmed = rel_path.trim_end_matches('/');
-    let abs = Path::new(cwd).join(trimmed).to_string_lossy().into_owned();
+/// Builds a compact per-query frecency table scoped to `cwd` under a single `RwLock` read so
+/// ranking 25,000 workspace entries performs 0 `PathBuf` allocations and 0 lock acquisitions in the loop.
+fn snapshot_cwd_frecency(cwd: &str, now_ms: u64) -> HashMap<String, f64> {
     let guard = FRECENCY_MAP.read();
-    guard
-        .get(&abs)
-        .or_else(|| guard.get(trimmed))
-        .map(|e| calculate_frecency(e, now_ms))
+    if guard.is_empty() {
+        return HashMap::new();
+    }
+    let cwd_prefix = cwd.trim_end_matches('/');
+    let mut out = HashMap::new();
+    for entry in guard.values() {
+        let score = calculate_frecency(entry, now_ms);
+        if score <= 0.0 {
+            continue;
+        }
+        if !cwd_prefix.is_empty()
+            && let Some(rest) = entry.path.strip_prefix(cwd_prefix)
+            && let Some(rel) = rest.strip_prefix('/')
+            && !rel.is_empty()
+        {
+            out.insert(rel.to_string(), score);
+        } else {
+            out.insert(entry.path.clone(), score);
+        }
+    }
+    drop(guard);
+    out
+}
+
+#[inline]
+fn lookup_scoped_frecency(scoped: &HashMap<String, f64>, rel_path: &str) -> f64 {
+    if scoped.is_empty() {
+        return 0.0;
+    }
+    scoped
+        .get(rel_path.trim_end_matches('/'))
+        .copied()
         .unwrap_or(0.0)
+}
+
+#[inline]
+fn ascii_starts_with_ignore_case(haystack: &str, needle: &str) -> bool {
+    haystack
+        .get(..needle.len())
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case(needle))
+}
+
+#[inline]
+fn ascii_contains_ignore_case(haystack: &str, needle: &str) -> bool {
+    if needle.is_empty() {
+        return true;
+    }
+    if haystack.len() < needle.len() {
+        return false;
+    }
+    haystack
+        .as_bytes()
+        .windows(needle.len())
+        .any(|w| w.eq_ignore_ascii_case(needle.as_bytes()))
 }
 
 /// Records a file selection in the OpenCode-style frecency store so frequently
@@ -149,7 +200,10 @@ pub fn record_file_frecency(cwd: &str, raw_replacement: &str) {
     {
         home.join(rest).to_string_lossy().into_owned()
     } else if !cwd.is_empty() {
-        Path::new(cwd).join(clean_rel).to_string_lossy().into_owned()
+        Path::new(cwd)
+            .join(clean_rel)
+            .to_string_lossy()
+            .into_owned()
     } else {
         clean_rel.to_string()
     };
@@ -159,8 +213,7 @@ pub fn record_file_frecency(cwd: &str, raw_replacement: &str) {
         let mut guard = FRECENCY_MAP.write();
         let next_freq = guard
             .get(&abs_path)
-            .map(|e| e.frequency.saturating_add(1))
-            .unwrap_or(1);
+            .map_or(1, |e| e.frequency.saturating_add(1));
         let new_entry = FrecencyEntry {
             path: abs_path.clone(),
             frequency: next_freq,
@@ -170,11 +223,13 @@ pub fn record_file_frecency(cwd: &str, raw_replacement: &str) {
 
         if guard.len() > MAX_FRECENCY_ENTRIES {
             let mut all: Vec<FrecencyEntry> = guard.values().cloned().collect();
-            all.sort_by(|a, b| b.last_open_ms.cmp(&a.last_open_ms));
+            all.sort_by_key(|a| std::cmp::Reverse(a.last_open_ms));
             all.truncate(MAX_FRECENCY_ENTRIES);
             *guard = all.iter().cloned().map(|e| (e.path.clone(), e)).collect();
+            drop(guard);
             (new_entry, Some(all))
         } else {
+            drop(guard);
             (new_entry, None)
         }
     };
@@ -218,6 +273,7 @@ pub struct ParsedLineRange {
 /// Splits an `@` file query into `(base_path_query, Option<ParsedLineRange>)`.
 /// Supports both OpenCode-style `#start-end` (`src/state.rs#20-45`) and
 /// editor-style `:start-end` (`src/state.rs:20-45`).
+#[must_use]
 pub fn parse_file_line_range(input: &str) -> (&str, Option<ParsedLineRange>) {
     for sep in ['#', ':'] {
         if let Some(idx) = input.rfind(sep) {
@@ -264,7 +320,7 @@ pub fn parse_file_line_range(input: &str) -> (&str, Option<ParsedLineRange>) {
     (input, None)
 }
 
-fn load_blacklist() -> Vec<String> {
+fn merge_blacklist_lines(custom_content: Option<&str>) -> Vec<String> {
     let mut blacklisted = vec![
         "/etc/shadow".to_string(),
         "/etc/gshadow".to_string(),
@@ -273,21 +329,26 @@ fn load_blacklist() -> Vec<String> {
         ".ssh/id_ed25519".to_string(),
     ];
 
-    let blacklist_path = boxxy_sys_utils::get_config_dir()
-        .join("boxxyclaw")
-        .join("BLACKLIST.md");
-    if let Ok(content) = std::fs::read_to_string(&blacklist_path) {
-        let custom: Vec<String> = content
+    if let Some(content) = custom_content {
+        for line in content
             .lines()
             .map(str::trim)
             .filter(|l| !l.is_empty() && !l.starts_with('#'))
-            .map(ToString::to_string)
-            .collect();
-        if !custom.is_empty() {
-            blacklisted = custom;
+        {
+            if !blacklisted.iter().any(|existing| existing == line) {
+                blacklisted.push(line.to_string());
+            }
         }
     }
     blacklisted
+}
+
+fn load_blacklist() -> Vec<String> {
+    let blacklist_path = boxxy_sys_utils::get_config_dir()
+        .join("boxxyclaw")
+        .join("BLACKLIST.md");
+    let custom = std::fs::read_to_string(&blacklist_path).ok();
+    merge_blacklist_lines(custom.as_deref())
 }
 
 fn is_blacklisted(path_str: &str, blacklist: &[String]) -> bool {
@@ -308,6 +369,8 @@ fn is_home_or_root(dir: &Path) -> bool {
 
 /// Synchronously scans `root_dir` (called on `tokio::task::spawn_blocking`) using
 /// `ignore::WalkBuilder` and returns all workspace files and ancestor directories.
+#[must_use]
+#[allow(clippy::too_many_lines)]
 pub fn scan_workspace_entries(root_dir: &Path) -> Vec<WorkspaceEntry> {
     if !root_dir.is_dir() {
         return Vec::new();
@@ -409,19 +472,14 @@ pub fn scan_workspace_entries(root_dir: &Path) -> Vec<WorkspaceEntry> {
                 });
             }
         } else if ft.is_file() {
-            let (size_bytes, mtime_secs) = entry
-                .metadata()
-                .ok()
-                .map(|m| {
-                    let mtime = m
-                        .modified()
-                        .ok()
-                        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-                        .map(|d| d.as_secs())
-                        .unwrap_or(0);
-                    (m.len(), mtime)
-                })
-                .unwrap_or((0, 0));
+            let (size_bytes, mtime_secs) = entry.metadata().ok().map_or((0, 0), |m| {
+                let mtime = m
+                    .modified()
+                    .ok()
+                    .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+                    .map_or(0, |d| d.as_secs());
+                (m.len(), mtime)
+            });
 
             files.push(WorkspaceEntry {
                 rel_path: rel_str,
@@ -442,6 +500,7 @@ pub fn scan_workspace_entries(root_dir: &Path) -> Vec<WorkspaceEntry> {
 }
 
 /// Pre-warms or refreshes the background workspace file index for `cwd` without blocking the GTK thread.
+#[allow(clippy::needless_pass_by_value)]
 pub fn refresh_workspace_index_async(
     cwd: String,
     entry_weak: Option<gtk::glib::WeakRef<gtk::TextView>>,
@@ -458,22 +517,35 @@ pub fn refresh_workspace_index_async(
         }
     }
 
-    let cwd_for_scan = cwd.clone();
+    let cwd_for_scan = cwd;
     let scan_fut = async move {
-        let entries = tokio::task::spawn_blocking({
+        let entries: Arc<[WorkspaceEntry]> = tokio::task::spawn_blocking({
             let cwd_path = PathBuf::from(&cwd_for_scan);
             move || scan_workspace_entries(&cwd_path)
         })
         .await
-        .unwrap_or_default();
+        .unwrap_or_default()
+        .into();
 
-        WORKSPACE_INDEX_CACHE.write().insert(
-            cwd_for_scan.clone(),
-            CachedWorkspaceIndex {
-                updated_at: Instant::now(),
-                entries,
-            },
-        );
+        {
+            let mut cache = WORKSPACE_INDEX_CACHE.write();
+            if !cache.contains_key(&cwd_for_scan)
+                && cache.len() >= MAX_CACHED_ROOTS
+                && let Some(oldest_key) = cache
+                    .iter()
+                    .min_by_key(|(_, v)| v.updated_at)
+                    .map(|(k, _)| k.clone())
+            {
+                cache.remove(&oldest_key);
+            }
+            cache.insert(
+                cwd_for_scan.clone(),
+                CachedWorkspaceIndex {
+                    updated_at: Instant::now(),
+                    entries,
+                },
+            );
+        }
         REFRESHING_DIRS.write().remove(&cwd_for_scan);
     };
 
@@ -496,6 +568,8 @@ pub fn refresh_workspace_index_async(
 
 /// Ranks a slice of `WorkspaceEntry` items against `raw_query` using `frizbee` (`0.13.0`)
 /// SIMD Smith-Waterman fuzzy matching, OpenCode-style frecency boosting, and line-range preservation.
+#[allow(clippy::too_many_lines)]
+#[must_use]
 pub fn rank_workspace_entries(
     entries: &[WorkspaceEntry],
     cwd: &str,
@@ -520,12 +594,14 @@ pub fn rank_workspace_entries(
         return Vec::new();
     }
 
+    let scoped_frecency = snapshot_cwd_frecency(cwd, now_ms);
+
     if base_query.is_empty() {
         // Empty `@` query: sort by frecency DESC, shallow files & recent mtime DESC, then path length ASC
         let mut ranked: Vec<(&WorkspaceEntry, f64)> = filtered_entries
             .into_iter()
             .map(|e| {
-                let frec = get_frecency_score(cwd, &e.rel_path, now_ms);
+                let frec = lookup_scoped_frecency(&scoped_frecency, &e.rel_path);
                 (e, frec)
             })
             .collect();
@@ -560,12 +636,10 @@ pub fn rank_workspace_entries(
             .iter()
             .copied()
             .filter(|e| {
-                if let Some(rest) = e.rel_path.strip_prefix(prefix) {
+                e.rel_path.strip_prefix(prefix).is_some_and(|rest| {
                     let trimmed = rest.trim_end_matches('/');
                     !trimmed.is_empty() && !trimmed.contains('/')
-                } else {
-                    false
-                }
+                })
             })
             .collect();
 
@@ -597,7 +671,8 @@ pub fn rank_workspace_entries(
         matches = Matcher::new(base_query, &config_typo).match_list(&haystacks);
     }
 
-    let query_lower = base_query.to_lowercase();
+    let ascii_query = base_query.is_ascii();
+    let query_lower = (!ascii_query).then(|| base_query.to_lowercase());
     let mut scored: Vec<(&WorkspaceEntry, f64)> = matches
         .into_iter()
         .filter_map(|m| {
@@ -609,23 +684,35 @@ pub fn rank_workspace_entries(
                 .trim_end_matches('/')
                 .rsplit('/')
                 .next()
-                .unwrap_or(&entry.rel_path)
-                .to_lowercase();
+                .unwrap_or(&entry.rel_path);
 
-            if file_name == query_lower {
-                score += 200.0;
-            } else if file_name.starts_with(&query_lower) {
-                score += 90.0;
-            } else if file_name.contains(&query_lower) {
-                score += 45.0;
+            if ascii_query {
+                if file_name.eq_ignore_ascii_case(base_query) {
+                    score += 200.0;
+                } else if ascii_starts_with_ignore_case(file_name, base_query) {
+                    score += 90.0;
+                } else if ascii_contains_ignore_case(file_name, base_query) {
+                    score += 45.0;
+                }
+                if ascii_starts_with_ignore_case(&entry.rel_path, base_query) {
+                    score += 60.0;
+                }
+            } else if let Some(ref ql) = query_lower {
+                let fn_lower = file_name.to_lowercase();
+                if &fn_lower == ql {
+                    score += 200.0;
+                } else if fn_lower.starts_with(ql) {
+                    score += 90.0;
+                } else if fn_lower.contains(ql) {
+                    score += 45.0;
+                }
+                if entry.rel_path.to_lowercase().starts_with(ql) {
+                    score += 60.0;
+                }
             }
 
-            if entry.rel_path.to_lowercase().starts_with(&query_lower) {
-                score += 60.0;
-            }
-
-            let frec = get_frecency_score(cwd, &entry.rel_path, now_ms);
-            score *= 1.0 + frec * 0.35;
+            let frec = lookup_scoped_frecency(&scoped_frecency, &entry.rel_path);
+            score *= frec.mul_add(0.35, 1.0);
 
             Some((entry, score))
         })
@@ -662,29 +749,38 @@ fn build_completion_item(
     let (icon_name, secondary_text) = if entry.is_dir {
         ("folder-symbolic".to_string(), "Folder".to_string())
     } else {
-        let lower = entry.rel_path.to_lowercase();
-        let is_img = lower.ends_with(".png")
-            || lower.ends_with(".jpg")
-            || lower.ends_with(".jpeg")
-            || lower.ends_with(".webp")
-            || lower.ends_with(".svg")
-            || lower.ends_with(".gif");
+        let is_img = Path::new(&entry.rel_path)
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|ext| {
+                ext.eq_ignore_ascii_case("png")
+                    || ext.eq_ignore_ascii_case("jpg")
+                    || ext.eq_ignore_ascii_case("jpeg")
+                    || ext.eq_ignore_ascii_case("webp")
+                    || ext.eq_ignore_ascii_case("svg")
+                    || ext.eq_ignore_ascii_case("gif")
+            });
         let icon = if is_img {
             "image-x-generic-symbolic"
         } else {
             "text-x-generic-symbolic"
         };
         let size_str = format_file_size(entry.size_bytes);
-        let sec = if let Some(lr) = line_range {
-            match lr.end_line {
-                Some(end) => format!("L{}-{}", lr.start_line, end),
-                None => format!("L{}", lr.start_line),
-            }
-        } else if is_img {
-            format!("Image · {size_str}")
-        } else {
-            size_str
-        };
+        let sec = line_range.map_or_else(
+            || {
+                if is_img {
+                    format!("Image · {size_str}")
+                } else {
+                    size_str
+                }
+            },
+            |lr| {
+                lr.end_line.map_or_else(
+                    || format!("L{}", lr.start_line),
+                    |end| format!("L{}-{end}", lr.start_line),
+                )
+            },
+        );
         (icon.to_string(), sec)
     };
 
@@ -700,6 +796,7 @@ fn build_completion_item(
     }
 }
 
+#[allow(clippy::cast_precision_loss)]
 fn format_file_size(bytes: u64) -> String {
     const KB: f64 = 1024.0;
     const MB: f64 = KB * 1024.0;
@@ -714,6 +811,7 @@ fn format_file_size(bytes: u64) -> String {
 
 /// Queries the cached workspace file index for `cwd` (or triggers an async background scan if
 /// not yet cached / stale). Also handles explicit `../`, `~/`, and `/` relative path traversal.
+#[must_use]
 pub fn get_file_completions(
     cwd: &str,
     query: &str,
@@ -722,8 +820,7 @@ pub fn get_file_completions(
     let effective_cwd = if cwd.trim().is_empty() {
         std::env::current_dir()
             .ok()
-            .map(|p| p.to_string_lossy().into_owned())
-            .unwrap_or_else(|| ".".to_string())
+            .map_or_else(|| ".".to_string(), |p| p.to_string_lossy().into_owned())
     } else {
         cwd.to_string()
     };
@@ -740,22 +837,23 @@ pub fn get_file_completions(
         return complete_explicit_traversal(&effective_cwd, query, entry_weak);
     }
 
-    let (needs_refresh, entries) = {
+    let (needs_refresh, entries): (bool, Option<Arc<[WorkspaceEntry]>>) = {
         let cache = WORKSPACE_INDEX_CACHE.read();
-        match cache.get(&effective_cwd) {
-            Some(cached) => (
+        cache.get(&effective_cwd).map_or((true, None), |cached| {
+            (
                 cached.updated_at.elapsed() >= INDEX_TTL,
-                cached.entries.clone(),
-            ),
-            None => (true, Vec::new()),
-        }
+                Some(Arc::clone(&cached.entries)),
+            )
+        })
     };
 
     if needs_refresh {
         refresh_workspace_index_async(effective_cwd.clone(), entry_weak);
     }
 
-    rank_workspace_entries(&entries, &effective_cwd, query, MAX_COMPLETION_RESULTS)
+    entries.as_ref().map_or_else(Vec::new, |slice| {
+        rank_workspace_entries(slice, &effective_cwd, query, MAX_COMPLETION_RESULTS)
+    })
 }
 
 fn complete_explicit_traversal(
@@ -808,36 +906,39 @@ fn complete_explicit_traversal(
     };
 
     let root_key = target_root.to_string_lossy().into_owned();
-    let (needs_refresh, entries) = {
+    let (needs_refresh, entries): (bool, Option<Arc<[WorkspaceEntry]>>) = {
         let cache = WORKSPACE_INDEX_CACHE.read();
-        match cache.get(&root_key) {
-            Some(cached) => (
+        cache.get(&root_key).map_or((true, None), |cached| {
+            (
                 cached.updated_at.elapsed() >= INDEX_TTL,
-                cached.entries.clone(),
-            ),
-            None => (true, Vec::new()),
-        }
+                Some(Arc::clone(&cached.entries)),
+            )
+        })
     };
 
     if needs_refresh {
         refresh_workspace_index_async(root_key.clone(), entry_weak);
     }
 
-    let sub_with_range = match line_range_opt {
-        Some(ref lr) => format!("{sub_query}{}", lr.raw_suffix),
-        None => sub_query.to_string(),
+    let Some(entries_slice) = entries else {
+        return Vec::new();
     };
 
-    let mut items =
-        rank_workspace_entries(&entries, &root_key, &sub_with_range, MAX_COMPLETION_RESULTS);
+    let sub_with_range = line_range_opt.as_ref().map_or_else(
+        || sub_query.to_string(),
+        |lr| format!("{sub_query}{}", lr.raw_suffix),
+    );
+
+    let mut items = rank_workspace_entries(
+        &entries_slice,
+        &root_key,
+        &sub_with_range,
+        MAX_COMPLETION_RESULTS,
+    );
     for item in &mut items {
         let stripped = item.replacement_text.trim_start_matches('@');
-        let prefixed = format!(
-            "{}{}",
-            display_prefix,
-            stripped.trim_start_matches('/')
-        );
-        item.display_name = prefixed.clone();
+        let prefixed = format!("{}{}", display_prefix, stripped.trim_start_matches('/'));
+        item.display_name.clone_from(&prefixed);
         item.replacement_text = format!("@{prefixed}");
     }
     items
@@ -901,21 +1002,30 @@ mod tests {
 
         let entries = scan_workspace_entries(root);
         // Should include Cargo.toml, src/main.rs, src/widgets/overlay.rs, src/, src/widgets/, and exclude target/
-        assert!(entries.iter().any(|e| e.rel_path == "Cargo.toml" && !e.is_dir));
-        assert!(entries.iter().any(|e| e.rel_path == "src/widgets/overlay.rs" && !e.is_dir));
+        assert!(
+            entries
+                .iter()
+                .any(|e| e.rel_path == "Cargo.toml" && !e.is_dir)
+        );
+        assert!(
+            entries
+                .iter()
+                .any(|e| e.rel_path == "src/widgets/overlay.rs" && !e.is_dir)
+        );
         assert!(entries.iter().any(|e| e.rel_path == "src/" && e.is_dir));
-        assert!(entries.iter().any(|e| e.rel_path == "src/widgets/" && e.is_dir));
+        assert!(
+            entries
+                .iter()
+                .any(|e| e.rel_path == "src/widgets/" && e.is_dir)
+        );
         assert!(!entries.iter().any(|e| e.rel_path.starts_with("target")));
 
         let root_str = root.to_string_lossy();
 
         // Fuzzy query with line range preserved
         let results = rank_workspace_entries(&entries, &root_str, "overlay#10-25", 10);
-        assert!(!results.is_empty());
-        assert_eq!(
-            results[0].replacement_text,
-            "@src/widgets/overlay.rs#10-25"
-        );
+        assert_ne!(results.len(), 0);
+        assert_eq!(results[0].replacement_text, "@src/widgets/overlay.rs#10-25");
         assert_eq!(results[0].secondary_text.as_deref(), Some("L10-25"));
 
         // Directory drilling query (`src/`) lists direct children (`src/widgets/` and `src/main.rs`)
@@ -923,5 +1033,21 @@ mod tests {
         assert_eq!(dir_results.len(), 2);
         assert_eq!(dir_results[0].replacement_text, "@src/widgets/");
         assert_eq!(dir_results[1].replacement_text, "@src/main.rs");
+    }
+
+    #[test]
+    fn test_merge_blacklist_retains_defaults_when_custom_rules_added() {
+        let merged = merge_blacklist_lines(Some("# comment\n.env.local\n.ssh/id_ed25519\n"));
+        assert!(merged.iter().any(|s| s == "/etc/shadow"));
+        assert!(merged.iter().any(|s| s == ".ssh/id_rsa"));
+        assert!(merged.iter().any(|s| s == ".ssh/id_ed25519"));
+        assert!(merged.iter().any(|s| s == ".env.local"));
+        assert_eq!(
+            merged
+                .iter()
+                .filter(|s| s.as_str() == ".ssh/id_ed25519")
+                .count(),
+            1
+        );
     }
 }

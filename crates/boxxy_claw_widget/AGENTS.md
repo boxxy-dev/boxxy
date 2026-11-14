@@ -42,48 +42,50 @@ Defines `TerminalOverlay` and `OverlayMode { Claw, Bookmark }`. Constructed via 
 
 The character selector renders from `CHARACTER_CACHE` and `CLAIMS_CACHE`; it is refreshed via `RegistrySnapshot` push signals, not polling.
 
-### History list + the GTK4 `ListView` virtualization gotcha
-The drawer's scrollable history is a `gtk::ListView` over a `gio::ListStore`. Virtualization means `adj.upper()` reflects only the *realized* portion of the list — so snapping to "bottom" via `set_value(upper - page_size)` lands on a false bottom (scrollbar looks at bottom, but unmeasured rows are still below). This is [GNOME/gtk#2971](https://gitlab.gnome.org/GNOME/gtk/-/issues/2971), partially fixed, partially live.
+### History list + sticky-bottom auto-scroll
+The drawer's scrollable history is a `gtk::ListView` over a `gio::ListStore` (`history_store`, synced from `full_history_store` via a `clear_offset` tail slice so temporary `/clear` preserves session history). Virtualization means `adj.upper()` grows asynchronously as rows realize and Markdown/diff blocks measure.
 
-The pragmatic workaround: arm a `Cell<u32>` counter on `items_changed` (+ on `scroll_to_latest()`), then retry `ListView::scroll_to(last, FOCUS, None)` + `adj.set_value(upper - page_size)` across ~10 frames via `glib::timeout_add_local`. Each tick lets more rows realize / markdown re-measure; by frame 10 the layout has settled at the true bottom.
+To keep streaming pinned to the true bottom without stealing focus across split panes: `arm_sticky_scroll` maintains a single cancellable 1200 ms `SourceId` on `items_changed` and `scroll_to_latest()`, snapping `adj.set_value(new_upper - page_size)` on `notify::upper` while sticky, and immediately cancelling sticky mode if the user scrolls upward manually.
 
 ### The merged msgbar (`msgbar/`)
-Formerly the `boxxy-msgbar` crate — folded in during phase 2. The `MsgBarComponent` is a horizontal bar with the 4 status toggles on the left (`claw`, `sleep`, `pin`, `web_search`) and the entry on the right. The send button is deliberately **not** a child of the bar — the drawer appends it as a sibling into `msgbar_slot`, so the bar renders as a single rounded field and the send icon floats alongside with no background.
+Formerly the `boxxy-msgbar` crate — folded in during phase 2. The `MsgBarComponent` is a full-width horizontal input bar with the user avatar/options popover on the left, an auto-wrapping `gtk::TextView` (`Enter` submits, `Shift+Enter` inserts a newline), and trailing Sleep/Vibe status icons on the right.
 
-- **Embedded flag**: `msg_bar.set_embedded(true)` suppresses the bar's self-hide on Enter / Escape. The drawer owns visibility; the bar stays visible as long as the drawer is revealed. `is_active` stays latched while embedded.
-- **Attachments**: `AttachmentManager` intercepts Ctrl+V to convert long text / images into chips above the input. `build_payload(base_text)` merges everything into `(text, Vec<base64_image>)` for the agent.
-- **Autocomplete**: six providers sorted by trigger-length descending — `FileCompletionProvider` (`@file`, backed by `file_index.rs` using `ignore 0.4.34` + `frizbee 0.13.0` SIMD Smith-Waterman fuzzy matching, frecency boosting, `#L1-L2` / `:L1-L2` line-range preservation, and directory drilling), `AgentCompletionProvider` (`:character`, reads from `CHARACTER_CACHE` and `CLAIMS_CACHE`), `DebateCompletionProvider` (`/debate `), `DramaCompletionProvider` (`/drama `), `CommandCompletionProvider` (`/resume`, `/vibe`, etc.), and `ResumeCompletionProvider` (lists recent sessions from the DB with LLM-generated titles + relative timestamps + agent colors).
-- **History**: `MsgHistory` — lazily loaded from `boxxy-db` on the first up/down key. Capped at ~100 entries in memory, images pruned after 20, to keep RAM flat even after thousands of sessions.
+- **Embedded flag**: `msg_bar.set_embedded(true)` suppresses self-hide and terminal focus handoff on Enter / Escape so the drawer owns visibility and proposal Escape resolution (`OverlayState::Action` rejects active proposals on `Escape`).
+- **Attachments**: `AttachmentManager` intercepts Ctrl+V and file drops off the GTK main thread (validating magic bytes & encoding raw PNG/JPEG/WebP files or clipboard textures asynchronously on the Tokio runtime) to render chips above the input. `build_payload(base_text)` merges everything into `(text, Vec<base64_image>)` for the agent.
+- **Autocomplete**: six providers sorted by trigger-length descending — `FileCompletionProvider` (`@file`, backed by `file_index.rs` using `Arc<[WorkspaceEntry]>` bounded root caches, `ignore 0.4.34`, `frizbee 0.13.0` SIMD Smith-Waterman fuzzy matching, merged `BLACKLIST.md` rules, frecency boosting, `#L1-L2` / `:L1-L2` line-range preservation, and directory drilling), `AgentCompletionProvider` (`:character`), `DebateCompletionProvider` (`/debate `), `DramaCompletionProvider` (`/drama `), `CommandCompletionProvider` (`/resume`, `/vibe`, etc.), and `ResumeCompletionProvider` (lists recent sessions from the DB with LLM-generated titles + relative timestamps + agent colors).
+- **History**: `MsgHistory` — lazily loaded from `boxxy-db` on the first up/down key. Capped at 100 entries in memory, dropping image attachments older than the 20 most recent entries so recalled items never contain invalid base64 data.
 
 ### The `ClawIndicator` (`claw_indicator.rs`)
-Two widgets in one: a small floating badge (over the terminal, shows the agent's name + color) and a detailed pill (inside the drawer header, shows "Thinking…" / "Diagnosis Ready" / "Error Detected" with action buttons). It dynamically updates to reflect the active tool during execution using a curated list of pretty names and matching icons, keeping the user informed of the agent's real-time actions.
+Two surfaces:
+1. **Floating top-right terminal overlay (`badge()`)**: hosts both the passive character badge (pass-through `can_target: false`) and the interactive `alert_revealer` pill (`"Error Detected · Diagnose"` / `"Diagnosis Ready · View"`, temporarily enabling `can_target: true` only while an alert is visible over a closed drawer).
+2. **In-drawer thinking pill (`widget()`)**: embedded inside `indicator_slot` in the drawer's bottom action row, displaying the animated `gtk::Svg` spinner (paused automatically when unmapped/hidden), real-time tool names, and the Cancel (`×`) button.
 
-**Quiet-by-default policy**: the badge starts with its revealer retracted. It only appears once `set_identity(name)` arrives with a non-empty name. `set_mode(AgentStatus)` only drives status icons + color tint; it never writes placeholder labels like "CLAW" / "WORKING". Dormant panes show nothing. Character lookup on `set_identity` reads `CHARACTER_CACHE` by UUID; orphan character migration (deleted UUID) is handled daemon-side via the `Migrated` claim error, not locally.
+Badge and spinner colors use `boxxy_claw_ui`'s shared `DynamicColorRegistry` (`is_safe_hex_color`-validated classes) so tool calls never reload display-wide `GtkCssProvider`s.
 
 ### The dispatch loop (`dispatch.rs`)
-`spawn_dispatch(rx, host, overlay, indicator, msg_bar, id, session_status, is_pinned, is_web_search, agent_name, session_usage)` — a single `while let Ok(event) = rx.recv().await` that matches every `ClawEngineEvent` variant. Each branch either mutates widget UI, appends overlay-visible rows to the overlay's full-session backing store (which syncs to the visible `history_store`), or delegates to the host. Resuming a session restores the full conversation history. Every event, including ones with no widget reaction (`RequestSpawnAgent`, `InjectKeystrokes`), is forwarded via `host.forward_event(event)` at the tail so non-UI consumers (tab badges, swarm router) see the full stream.
+`spawn_dispatch(rx, host, overlay, indicator, msg_bar, id, session_status, is_pinned, is_web_search, is_vibe, agent_name, session_usage, pending_tasks)` — a single `while let Ok(event) = rx.recv().await` that matches every `ClawEngineEvent` variant. Each branch either mutates widget UI, appends overlay-visible rows to the overlay's full-session backing store (which syncs to the visible `history_store`), or delegates to the host. Resuming a session restores the full conversation history. Every event, including ones with no widget reaction (`RequestSpawnAgent`, `InjectKeystrokes`), is forwarded via `host.forward_event(event)` at the tail so non-UI consumers (tab badges, swarm router) see the full stream.
 
-**User-typed error handling.** On `LazyErrorIndicator`, dispatch calls `indicator.show_lazy_error()` — a small red "Error Detected" pill appears at the pane corner. **No drawer opens, no LLM call.** The user clicks "Diagnose" on the pill, which fires the indicator's `on_lazy_click` → the pane sends `ClawMessage::RequestLazyDiagnosis` → engine drains its stashed prompt and runs the diagnosis pipeline → next `DiagnosisComplete` opens the drawer normally. Agent-originated command failures (the accept → error loop) still auto-diagnose via the engine's proactive path, emerging as `DiagnosisComplete` directly. The dispatch code doesn't need to know which mode it's in — origin is the engine's concern.
+**User-typed error handling.** On `LazyErrorIndicator`, dispatch calls `indicator.show_lazy_error()` — a small red `"Error Detected · Diagnose"` pill appears on `indicator.badge()` at the top-right corner of the terminal pane while the drawer remains closed. **No drawer opens, no LLM call.** Clicking `"Diagnose"` dismisses the alert pill and fires `on_lazy_click` → the pane sends `ClawMessage::RequestLazyDiagnosis` → engine drains its stashed prompt and runs the diagnosis pipeline → next `DiagnosisComplete` opens the drawer normally.
 
 ### The neutral `Proposal` enum (`proposal.rs`)
-UI-shaped, host-agnostic variants: `None`, `Command(String)`, `Bookmark { filename, script, placeholders }`, `FileWrite { path, content }`, `FileDelete { path }`, `KillProcess { pid, name }`, `GetClipboard`, `SetClipboard(String)`. The terminal's own `TerminalProposal` converts via `.into()` at the call-site boundary in `pane/claw.rs` (the `From` impl lives in `crates/terminal/src/claw_proposal.rs` because `TerminalProposal` is local to that crate — orphan rule).
+UI-shaped, host-agnostic variants: `None`, `Command`, `Bookmark`, `FileWrite`, `FileDelete`, `KillProcess`, `BackgroundCommand`, `GetClipboard`, `SetClipboard`. The terminal's own `TerminalProposal` converts via `.into()` at the call-site boundary in `pane/claw.rs` (the `From` impl lives in `crates/terminal/src/claw_proposal.rs` because `TerminalProposal` is local to that crate — orphan rule).
 
 ## Dependencies
 
 ```
 boxxy-claw-widget
-├── async-channel
-├── base64, chrono, serde, serde_json, uuid (msgbar transitives)
-├── glib, gtk4
+├── async-channel, parking_lot, frizbee, ignore, home
+├── chrono, serde, serde_json, uuid
+├── glib, gtk4, libadwaita
 ├── log, tokio
-├── boxxy-ai-core          (autocomplete fetches live agents)
-├── boxxy-claw             (agent registry for @agent completion)
-├── boxxy-claw-protocol    (DTOs: ClawMessage, ClawEngineEvent, AgentStatus)
-├── boxxy-claw-ui          (sidebar row helpers; same factory reused here)
+├── boxxy-sys-utils        (Tokio runtime & config dir)
+├── boxxy-claw-protocol    (DTOs: ClawMessage, ClawEngineEvent, AgentStatus, CHARACTER_CACHE)
+├── boxxy-claw-ui          (virtualized message list, shared character CSS & avatar caches)
 ├── boxxy-core-widgets     (AutocompleteController + CompletionProvider trait)
-├── boxxy-db               (MsgHistory persistence)
+├── boxxy-db               (MsgHistory & ResumeCompletionProvider persistence)
 ├── boxxy-preferences      (read settings: enable_tips, overlay_font_scale, …)
+├── boxxy-themes           (active mention token colors)
 └── boxxy-viewer           (StructuredViewer for diagnosis rendering)
 ```
 
-Verified via `cargo tree -p boxxy-claw-widget`: **no** `boxxy-vte`, **no** `boxxy-agent`, **no** `boxxy-terminal` back-edges. The dep graph is acyclic.
+Verified via `cargo tree -p boxxy-claw-widget`: **no** `boxxy-claw`, **no** `boxxy-vte`, **no** `boxxy-agent`, **no** `boxxy-terminal` back-edges. The dep graph is acyclic and free of reasoning-engine SDKs.

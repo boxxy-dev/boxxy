@@ -55,7 +55,8 @@ impl LiveTaskEntry {
     }
 }
 
-type TaskSignature = Vec<(Uuid, i64, Option<i64>, String, u8, Option<(u32, u32, u8)>)>;
+type IntervalSig = (u32, u32, u8, u32, u32, String);
+type TaskSignature = Vec<(Uuid, i64, Option<i64>, String, u8, Option<IntervalSig>)>;
 type CancelAllCallback = Rc<RefCell<Option<Rc<dyn Fn() + 'static>>>>;
 type TogglePauseCallback = Rc<RefCell<Option<Rc<dyn Fn(Uuid) + 'static>>>>;
 
@@ -78,6 +79,7 @@ pub(super) struct TasksSection {
 }
 
 impl TasksSection {
+    #[allow(clippy::too_many_lines)]
     pub(super) fn new(on_cancel_task: Rc<dyn Fn(Uuid) + 'static>) -> Self {
         let root = gtk::Box::new(gtk::Orientation::Vertical, 6);
         root.add_css_class("claw-tasks-section");
@@ -131,8 +133,12 @@ impl TasksSection {
         {
             let gesture = gtk::GestureClick::new();
             let cb_slot = on_cancel_all.clone();
-            gesture.connect_released(move |_, _, _, _| {
-                if let Some(cb) = cb_slot.borrow().as_ref().cloned() {
+            let lbl_weak = dismiss_all_lbl.downgrade();
+            gesture.connect_released(move |_, _, x, y| {
+                if let Some(lbl) = lbl_weak.upgrade()
+                    && lbl.contains(x, y)
+                    && let Some(cb) = cb_slot.borrow().as_ref().cloned()
+                {
                     cb();
                 }
             });
@@ -308,7 +314,14 @@ impl TasksSection {
                         IntervalPhase::Work => 0,
                         IntervalPhase::Break => 1,
                     };
-                    (iv.total_rounds, iv.current_round, phase_tag)
+                    (
+                        iv.total_rounds,
+                        iv.current_round,
+                        phase_tag,
+                        iv.work_secs,
+                        iv.break_secs,
+                        iv.round_label.clone(),
+                    )
                 });
                 let due_sig = if t.is_paused() {
                     0
@@ -341,11 +354,12 @@ impl TasksSection {
 
         let mut new_live = Vec::with_capacity(pending_count);
         for task in sorted {
-            let (card_widget, live_entry) = if let Some(ref iv) = task.interval {
-                build_interval_card(&task, iv, now, &self.on_toggle_pause, &self.on_cancel_task)
-            } else {
-                build_single_task_card(&task, now, &self.on_cancel_task)
-            };
+            let (card_widget, live_entry) = task.interval.as_ref().map_or_else(
+                || build_single_task_card(&task, now, &self.on_toggle_pause, &self.on_cancel_task),
+                |iv| {
+                    build_interval_card(&task, iv, now, &self.on_toggle_pause, &self.on_cancel_task)
+                },
+            );
             self.cards_box.append(&card_widget);
             new_live.push(live_entry);
         }
@@ -387,7 +401,7 @@ fn build_task_icon(
     tint_class: Option<&str>,
 ) -> gtk::Image {
     let image = if let Some(gpa_path) = gpa_resource_path
-        && gio::resources_lookup_data(gpa_path, gio::ResourceLookupFlags::NONE).is_ok()
+        && gio::resources_get_info(gpa_path, gio::ResourceLookupFlags::NONE).is_ok()
     {
         let svg = gtk::Svg::from_resource(gpa_path);
         svg.set_state(0);
@@ -411,6 +425,7 @@ fn build_task_icon(
 }
 
 /// Builds the dedicated Multi-Round Interval Session card (e.g. Boxing 6×1m rounds + 20s breaks).
+#[allow(clippy::too_many_lines)]
 fn build_interval_card(
     task: &ScheduledTask,
     iv: &IntervalSchedule,
@@ -633,19 +648,17 @@ fn build_interval_card(
             let pip = gtk::Box::new(gtk::Orientation::Horizontal, 0);
             pip.add_css_class("claw-round-pip");
             let state_cls = match iv.phase {
-                IntervalPhase::Work => {
-                    if r < iv.current_round {
-                        "claw-round-pip-done"
-                    } else if r == iv.current_round {
+                IntervalPhase::Work => match r.cmp(&iv.current_round) {
+                    std::cmp::Ordering::Less => "claw-round-pip-done",
+                    std::cmp::Ordering::Equal => {
                         if is_paused {
                             "claw-round-pip-paused"
                         } else {
                             "claw-round-pip-active"
                         }
-                    } else {
-                        "claw-round-pip-upcoming"
                     }
-                }
+                    std::cmp::Ordering::Greater => "claw-round-pip-upcoming",
+                },
                 IntervalPhase::Break => {
                     if r <= iv.current_round {
                         "claw-round-pip-done"
@@ -738,13 +751,15 @@ fn build_interval_card(
         clock_lbl,
         progress_bar,
     };
-    apply_live_timing(&entry, now);
+    apply_live_timing(&entry, now, Local::now().offset());
     (card, entry)
 }
 
+#[allow(clippy::too_many_lines)]
 fn build_single_task_card(
     task: &ScheduledTask,
     now: DateTime<Utc>,
+    on_toggle_pause: &TogglePauseCallback,
     on_cancel: &Rc<dyn Fn(Uuid) + 'static>,
 ) -> (gtk::Box, LiveTaskEntry) {
     let is_paused = task.is_paused();
@@ -835,6 +850,28 @@ fn build_single_task_card(
     body_vbox.append(&meta_hbox);
     card.append(&body_vbox);
 
+    if is_paused {
+        let resume_btn = gtk::Button::builder()
+            .icon_name("boxxy-media-playback-start-symbolic")
+            .css_classes(["flat", "circular", "claw-task-dismiss-btn"])
+            .halign(gtk::Align::End)
+            .valign(gtk::Align::Center)
+            .hexpand(false)
+            .vexpand(false)
+            .can_focus(false)
+            .focus_on_click(false)
+            .tooltip_text("Resume task")
+            .build();
+        let task_id = task.id;
+        let pause_cb_slot = on_toggle_pause.clone();
+        resume_btn.connect_clicked(move |_| {
+            if let Some(cb) = pause_cb_slot.borrow().as_ref().cloned() {
+                cb(task_id);
+            }
+        });
+        card.append(&resume_btn);
+    }
+
     let dismiss_btn = gtk::Button::builder()
         .icon_name("boxxy-cross-small-symbolic")
         .css_classes(["flat", "circular", "claw-task-dismiss-btn"])
@@ -858,7 +895,7 @@ fn build_single_task_card(
         sep_lbl,
         clock_lbl,
     };
-    apply_live_timing(&entry, now);
+    apply_live_timing(&entry, now, Local::now().offset());
     (card, entry)
 }
 
@@ -904,13 +941,23 @@ fn sync_ticker(
     *ticker_source.borrow_mut() = Some(source_id);
 }
 
-fn refresh_live_cards(cards: &[LiveTaskEntry], now: DateTime<Utc>) {
-    for entry in cards {
-        apply_live_timing(entry, now);
+fn set_label_if_changed(lbl: &gtk::Label, next: &str) {
+    if lbl.label() != next {
+        lbl.set_label(next);
     }
 }
 
-fn apply_live_timing(entry: &LiveTaskEntry, now: DateTime<Utc>) {
+fn refresh_live_cards(cards: &[LiveTaskEntry], now: DateTime<Utc>) {
+    let local_offset = *Local::now().offset();
+    for entry in cards {
+        apply_live_timing(entry, now, &local_offset);
+    }
+}
+
+fn apply_live_timing<Tz: TimeZone>(entry: &LiveTaskEntry, now: DateTime<Utc>, tz: &Tz)
+where
+    Tz::Offset: std::fmt::Display,
+{
     match entry {
         LiveTaskEntry::Single {
             due_at,
@@ -921,15 +968,18 @@ fn apply_live_timing(entry: &LiveTaskEntry, now: DateTime<Utc>) {
         } => {
             if let Some(rem_ms) = paused_remaining_ms {
                 let rem_secs = (*rem_ms + 999) / 1000;
-                countdown_lbl.set_label(&format!("Paused ({})", format_stopwatch_clock(rem_secs)));
+                set_label_if_changed(
+                    countdown_lbl,
+                    &format!("Paused ({})", format_stopwatch_clock(rem_secs)),
+                );
                 countdown_lbl.remove_css_class("claw-task-countdown-urgent");
                 sep_lbl.set_visible(false);
                 clock_lbl.set_visible(false);
                 return;
             }
             let remaining_secs = due_at.signed_duration_since(now).num_seconds();
-            countdown_lbl.set_label(&format_task_countdown(remaining_secs));
-            clock_lbl.set_label(&format_due_clock(due_at, &now, Local::now().offset()));
+            set_label_if_changed(countdown_lbl, &format_task_countdown(remaining_secs));
+            set_label_if_changed(clock_lbl, &format_due_clock(due_at, &now, tz));
             sep_lbl.set_visible(true);
             clock_lbl.set_visible(true);
 
@@ -951,19 +1001,20 @@ fn apply_live_timing(entry: &LiveTaskEntry, now: DateTime<Utc>) {
             let remaining_ms = paused_remaining_ms
                 .unwrap_or_else(|| due_at.signed_duration_since(now).num_milliseconds().max(0));
             let remaining_secs = (remaining_ms + 999) / 1000;
-            timer_lbl.set_label(&format_stopwatch_remaining(remaining_secs));
+            set_label_if_changed(timer_lbl, &format_stopwatch_remaining(remaining_secs));
 
             if paused_remaining_ms.is_some() {
                 sep_lbl.set_visible(false);
                 clock_lbl.set_visible(false);
             } else {
-                clock_lbl.set_label(&format_due_clock(due_at, &now, Local::now().offset()));
+                set_label_if_changed(clock_lbl, &format_due_clock(due_at, &now, tz));
                 sep_lbl.set_visible(true);
                 clock_lbl.set_visible(true);
             }
 
             let total_ms = (i64::from(*phase_duration_secs) * 1000).max(1000);
             let elapsed_ms = (total_ms - remaining_ms).clamp(0, total_ms);
+            #[allow(clippy::cast_precision_loss)]
             progress_bar.set_fraction(elapsed_ms as f64 / total_ms as f64);
         }
     }

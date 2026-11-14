@@ -16,11 +16,12 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime};
 
 const TEXTURE_STAT_TTL: Duration = Duration::from_secs(2);
+const MAX_TEXTURE_CACHE_ENTRIES: usize = 128;
 
 struct CachedTextureEntry {
     last_checked: Instant,
     mtime: Option<SystemTime>,
-    texture: gdk::Texture,
+    texture: Option<gdk::Texture>,
 }
 
 type AvatarTextureCache = HashMap<PathBuf, CachedTextureEntry>;
@@ -30,6 +31,8 @@ struct DynamicColorRegistry {
     stylesheet: String,
     ring_classes: HashMap<String, String>,
     char_btn_classes: HashMap<String, String>,
+    badge_bg_classes: HashMap<String, String>,
+    pill_spin_classes: HashMap<String, String>,
     next_id: usize,
 }
 
@@ -37,9 +40,11 @@ impl DynamicColorRegistry {
     fn new() -> Self {
         Self {
             provider: None,
-            stylesheet: String::with_capacity(512),
+            stylesheet: String::with_capacity(768),
             ring_classes: HashMap::new(),
             char_btn_classes: HashMap::new(),
+            badge_bg_classes: HashMap::new(),
+            pill_spin_classes: HashMap::new(),
             next_id: 0,
         }
     }
@@ -101,6 +106,47 @@ impl DynamicColorRegistry {
         self.char_btn_classes.insert(normalized, class_name.clone());
         Some(class_name)
     }
+
+    fn get_or_register_badge_bg_class(&mut self, raw_color: &str) -> String {
+        let normalized = if is_safe_hex_color(raw_color) {
+            raw_color.to_ascii_lowercase()
+        } else {
+            "@accent_bg_color".to_string()
+        };
+        if let Some(existing) = self.badge_bg_classes.get(&normalized) {
+            return existing.clone();
+        }
+        let class_name = format!("claw-badge-bg-{}", self.next_id);
+        self.next_id += 1;
+        let _ = writeln!(
+            self.stylesheet,
+            ".{class_name} {{ background-color: {normalized}; }}"
+        );
+        self.reload_stylesheet();
+        self.badge_bg_classes.insert(normalized, class_name.clone());
+        class_name
+    }
+
+    fn get_or_register_pill_spin_class(&mut self, raw_color: &str) -> String {
+        let normalized = if is_safe_hex_color(raw_color) {
+            raw_color.to_ascii_lowercase()
+        } else {
+            "@accent_color".to_string()
+        };
+        if let Some(existing) = self.pill_spin_classes.get(&normalized) {
+            return existing.clone();
+        }
+        let class_name = format!("claw-pill-spin-{}", self.next_id);
+        self.next_id += 1;
+        let _ = writeln!(
+            self.stylesheet,
+            ".{class_name} .status-label {{ color: inherit; }} .{class_name} .claw-spinner {{ color: {normalized}; }}"
+        );
+        self.reload_stylesheet();
+        self.pill_spin_classes
+            .insert(normalized, class_name.clone());
+        class_name
+    }
 }
 
 thread_local! {
@@ -123,10 +169,24 @@ pub fn character_btn_color_class(raw_color: &str) -> Option<String> {
     COLOR_CSS_REGISTRY.with(|reg| reg.borrow_mut().get_or_register_char_btn_class(raw_color))
 }
 
+/// Returns a deduplicated CSS class styling a floating character badge's `background-color`
+/// (falling back to `@accent_bg_color` if `raw_color` is empty or invalid).
+#[must_use]
+pub fn claw_badge_bg_color_class(raw_color: &str) -> String {
+    COLOR_CSS_REGISTRY.with(|reg| reg.borrow_mut().get_or_register_badge_bg_class(raw_color))
+}
+
+/// Returns a deduplicated CSS class styling the thinking pill spinner's `color`
+/// (falling back to `@accent_color` if `raw_color` is empty or invalid).
+#[must_use]
+pub fn claw_pill_spinner_color_class(raw_color: &str) -> String {
+    COLOR_CSS_REGISTRY.with(|reg| reg.borrow_mut().get_or_register_pill_spin_class(raw_color))
+}
+
 /// Converts a hyphenated or space-separated character identifier (e.g. `"niko-una"`)
 /// into title case (`"Niko Una"`).
 #[must_use]
-pub(crate) fn prettify_character_name(raw: &str) -> String {
+pub fn prettify_character_name(raw: &str) -> String {
     raw.split(['-', ' '])
         .filter(|word| !word.is_empty())
         .map(|word| {
@@ -141,18 +201,40 @@ pub(crate) fn prettify_character_name(raw: &str) -> String {
 
 /// Resolves the canonical human-readable display name for a `CharacterInfo`.
 #[must_use]
-pub(crate) fn resolve_character_display_name(info: &CharacterInfo) -> String {
-    if !info.config.display_name.trim().is_empty() {
-        prettify_character_name(&info.config.display_name)
-    } else {
+pub fn resolve_character_display_name(info: &CharacterInfo) -> String {
+    if info.config.display_name.trim().is_empty() {
         prettify_character_name(&info.config.name)
+    } else {
+        prettify_character_name(&info.config.display_name)
     }
+}
+
+/// Formats a SQLite `%Y-%m-%d %H:%M:%S` UTC timestamp into a compact relative age (`now`, `5m`, `2h`, `3d`).
+#[must_use]
+pub fn format_relative_age(updated_at: &str, fallback: &str) -> String {
+    use chrono::{NaiveDateTime, Utc};
+    NaiveDateTime::parse_from_str(updated_at, "%Y-%m-%d %H:%M:%S").map_or_else(
+        |_| fallback.to_string(),
+        |ndt| {
+            let now = Utc::now().naive_utc();
+            let duration = now.signed_duration_since(ndt);
+            if duration.num_days() > 0 {
+                format!("{}d", duration.num_days())
+            } else if duration.num_hours() > 0 {
+                format!("{}h", duration.num_hours())
+            } else if duration.num_minutes() > 0 {
+                format!("{}m", duration.num_minutes())
+            } else {
+                "now".to_string()
+            }
+        },
+    )
 }
 
 /// Validates a `#RGB`, `#RGBA`, `#RRGGBB`, or `#RRGGBBAA` hex color string so malformed
 /// user edits in `CHARACTER.toml` never break Pango markup or GTK CSS parsing.
 #[must_use]
-pub(crate) fn is_safe_hex_color(raw: &str) -> bool {
+pub fn is_safe_hex_color(raw: &str) -> bool {
     let Some(hex) = raw.strip_prefix('#') else {
         return false;
     };
@@ -160,7 +242,8 @@ pub(crate) fn is_safe_hex_color(raw: &str) -> bool {
 }
 
 /// Loads a `gdk::Texture` from disk on cache miss or when the file's modification
-/// timestamp changes (throttling `stat()` syscalls to once per 2s during fast scrolling).
+/// timestamp changes (throttling `stat()` syscalls — including negative hits for
+/// deleted temp files — to once per 2s during fast scrolling).
 #[must_use]
 pub(crate) fn load_cached_texture(path: &Path) -> Option<gdk::Texture> {
     let now = Instant::now();
@@ -171,7 +254,7 @@ pub(crate) fn load_cached_texture(path: &Path) -> Option<gdk::Texture> {
             if let Some(entry) = cache.get(path)
                 && now.duration_since(entry.last_checked) < TEXTURE_STAT_TTL
             {
-                return Some(entry.texture.clone());
+                return entry.texture.clone();
             }
         }
 
@@ -182,12 +265,17 @@ pub(crate) fn load_cached_texture(path: &Path) -> Option<gdk::Texture> {
             && entry.mtime == mtime
         {
             entry.last_checked = now;
-            return Some(entry.texture.clone());
+            return entry.texture.clone();
         }
 
-        let texture = gdk::Texture::from_filename(path).ok()?;
-        if cache.len() >= 128 {
-            cache.clear();
+        let texture = mtime.and_then(|_| gdk::Texture::from_filename(path).ok());
+        if cache.len() >= MAX_TEXTURE_CACHE_ENTRIES
+            && let Some(oldest_key) = cache
+                .iter()
+                .min_by_key(|(_, v)| v.last_checked)
+                .map(|(k, _)| k.clone())
+        {
+            cache.remove(&oldest_key);
         }
         cache.insert(
             path.to_path_buf(),
@@ -197,7 +285,7 @@ pub(crate) fn load_cached_texture(path: &Path) -> Option<gdk::Texture> {
                 texture: texture.clone(),
             },
         );
-        Some(texture)
+        texture
     })
 }
 
@@ -265,5 +353,26 @@ mod tests {
             character_btn_color_class("#ff66aa")
         );
         assert!(character_btn_color_class("not-a-color").is_none());
+
+        let b1 = claw_badge_bg_color_class("#7C5CFF");
+        let b2 = claw_badge_bg_color_class("#7c5cff");
+        let b_bad = claw_badge_bg_color_class("red; } * { color: green");
+        assert_eq!(b1, b2);
+        assert_ne!(b1, b_bad);
+        assert_eq!(b_bad, claw_badge_bg_color_class(""));
+
+        let s1 = claw_pill_spinner_color_class("#2EC27E");
+        let s2 = claw_pill_spinner_color_class("#2ec27e");
+        let s_bad = claw_pill_spinner_color_class("bad-css");
+        assert_eq!(s1, s2);
+        assert_ne!(s1, s_bad);
+    }
+
+    #[test]
+    fn missing_texture_is_negative_cached() {
+        let missing = Path::new("/nonexistent/synthetic/avatar.png");
+        assert!(load_cached_texture(missing).is_none());
+        let cached_present = AVATAR_TEXTURES.with(|c| c.borrow().contains_key(missing));
+        assert!(cached_present);
     }
 }

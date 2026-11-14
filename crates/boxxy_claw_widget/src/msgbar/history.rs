@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::{Arc, LazyLock};
 
 const MAX_HISTORY_ITEMS: i64 = 100;
+const MAX_HISTORY_CAP: usize = 100;
 const MAX_RICH_ATTACHMENTS: usize = 20;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -35,20 +36,17 @@ pub struct HistoryItem {
 }
 
 fn prune_in_memory(items: &mut Vec<HistoryItem>) {
-    if items.len() > MAX_HISTORY_ITEMS as usize {
-        let overflow = items.len() - MAX_HISTORY_ITEMS as usize;
+    if items.len() > MAX_HISTORY_CAP {
+        let overflow = items.len() - MAX_HISTORY_CAP;
         items.drain(0..overflow);
     }
 
     if items.len() > MAX_RICH_ATTACHMENTS {
         let cutoff_idx = items.len() - MAX_RICH_ATTACHMENTS;
         for item in items.iter_mut().take(cutoff_idx) {
-            for att in &mut item.attachments {
-                if att.is_image && att.content.len() > 1024 {
-                    att.content = "[Image data pruned for performance]".to_string();
-                }
-            }
+            item.attachments.retain(|att| !att.is_image);
         }
+        items.retain(|item| !item.text.is_empty() || !item.attachments.is_empty());
     }
 }
 
@@ -56,7 +54,8 @@ fn prune_in_memory(items: &mut Vec<HistoryItem>) {
 /// pushed by the user while the database load was in flight, collapsing any
 /// consecutive identical entries.
 pub(crate) fn merge_loaded_history(state: &mut HistoryState, db_items: Vec<HistoryItem>) {
-    let mut merged: Vec<HistoryItem> = Vec::with_capacity(db_items.len() + state.pending_writes.len());
+    let mut merged: Vec<HistoryItem> =
+        Vec::with_capacity(db_items.len() + state.pending_writes.len());
     for item in db_items.into_iter().chain(state.pending_writes.drain(..)) {
         if merged.last() != Some(&item) {
             merged.push(item);
@@ -76,6 +75,7 @@ pub(crate) fn push_to_state(state: &mut HistoryState, item: HistoryItem) -> bool
     }
     if state.status != HistoryLoadStatus::Ready {
         state.pending_writes.push(item.clone());
+        prune_in_memory(&mut state.pending_writes);
     }
     state.items.push(item);
     prune_in_memory(&mut state.items);
@@ -136,13 +136,13 @@ impl MsgHistory {
                             merge_loaded_history(&mut state, db_items);
                         }
                         Err(e) => {
-                            log::warn!("Failed to load msgbar history from DB: {}", e);
+                            log::warn!("Failed to load msgbar history from DB: {e}");
                             history_rc.lock().status = HistoryLoadStatus::Failed;
                         }
                     }
                 }
                 Err(e) => {
-                    log::warn!("Failed to open DB for msgbar history: {}", e);
+                    log::warn!("Failed to open DB for msgbar history: {e}");
                     history_rc.lock().status = HistoryLoadStatus::Failed;
                 }
             }
@@ -162,7 +162,7 @@ impl MsgHistory {
             };
 
             if should_persist {
-                self.save_to_db(text, attachments);
+                Self::save_to_db(text, attachments);
             }
         }
 
@@ -170,7 +170,7 @@ impl MsgHistory {
         self.draft = HistoryItem::default();
     }
 
-    fn save_to_db(&self, text: String, attachments: Vec<Attachment>) {
+    fn save_to_db(text: String, attachments: Vec<Attachment>) {
         boxxy_sys_utils::runtime().spawn(async move {
             if let Ok(db) = boxxy_db::Db::new().await {
                 let store = boxxy_db::store::Store::new(db.pool());
@@ -246,6 +246,7 @@ impl MsgHistory {
 }
 
 #[cfg(test)]
+#[allow(clippy::assert_is_empty)]
 mod tests {
     use super::*;
 
@@ -321,20 +322,14 @@ mod tests {
             .unwrap();
         assert_eq!(step1.text, "hello agent");
 
-        let step2 = nav
-            .navigate_up_in(&items, step1.text, vec![])
-            .unwrap();
+        let step2 = nav.navigate_up_in(&items, step1.text, vec![]).unwrap();
         assert_eq!(step2.text, "/drama");
 
-        let step3 = nav
-            .navigate_up_in(&items, step2.text, vec![])
-            .unwrap();
+        let step3 = nav.navigate_up_in(&items, step2.text, vec![]).unwrap();
         assert_eq!(step3.text, "/sleep");
 
         // At top of history, stays on oldest item
-        let step4 = nav
-            .navigate_up_in(&items, step3.text, vec![])
-            .unwrap();
+        let step4 = nav.navigate_up_in(&items, step3.text, vec![]).unwrap();
         assert_eq!(step4.text, "/sleep");
 
         // Navigate back down through `/drama`, `hello agent`, and back to draft
@@ -384,7 +379,7 @@ mod tests {
         // Also collapses consecutive duplicates already present in DB history on load
         let db_with_dups = vec![
             sleep_item.clone(),
-            sleep_item.clone(),
+            sleep_item,
             drama_item.clone(),
             drama_item,
         ];
@@ -397,5 +392,30 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["/sleep", "/drama"]
         );
+    }
+
+    #[test]
+    fn prune_in_memory_drops_old_images_without_leaving_corrupt_base64() {
+        let mut items: Vec<HistoryItem> = (0..25)
+            .map(|i| HistoryItem {
+                text: format!("prompt-{i}"),
+                attachments: vec![Attachment {
+                    id: format!("id-{i}"),
+                    label: "Image".to_string(),
+                    content: "a".repeat(2048),
+                    is_image: true,
+                }],
+            })
+            .collect();
+
+        prune_in_memory(&mut items);
+
+        assert_eq!(items.len(), 25);
+        // Older entries beyond `MAX_RICH_ATTACHMENTS` (first 5) drop image attachments cleanly
+        assert!(items[0].attachments.is_empty());
+        assert!(items[4].attachments.is_empty());
+        // Recent 20 entries retain valid image payloads
+        assert_eq!(items[5].attachments.len(), 1);
+        assert_eq!(items[24].attachments.len(), 1);
     }
 }

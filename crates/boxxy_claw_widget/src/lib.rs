@@ -1,3 +1,4 @@
+#![allow(clippy::missing_errors_doc, clippy::missing_panics_doc)]
 //! `boxxy_claw_widget` — the reusable Claw drawer UI.
 //!
 //! Consumers interact with the widget through the `ClawHost` trait —

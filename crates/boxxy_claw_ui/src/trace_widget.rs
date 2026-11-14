@@ -1,5 +1,8 @@
-//! Collapsible OpenCode-style per-turn activity trace widget (`+ 4 commands, 19 edits, 8 thoughts, 2 reads, 1 tool`),
-//! lazy thought/exploration/command disclosures, inline X-ray diffs (`Ctrl+Shift+D`), and pending approval diff slot.
+//! Collapsible OpenCode-style per-turn activity trace widget.
+//!
+//! Renders summary pills (`+ 4 commands, 19 edits, 8 thoughts, 2 reads, 1 tool`),
+//! lazy thought/exploration/command disclosures, inline X-ray diffs (`Ctrl+Shift+D`),
+//! and the pending approval diff slot.
 
 use crate::row_object::ClawRowObject;
 use boxxy_claw_protocol::{ActivitySummary, PersistentClawRow, TraceCategory, TurnTraceItem};
@@ -9,6 +12,7 @@ use gtk4 as gtk;
 use gtk4::glib;
 use gtk4::pango;
 use std::cell::{Cell, RefCell};
+use std::fmt::Write as _;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -31,9 +35,6 @@ fn group_trace_steps(items: &[TurnTraceItem]) -> Vec<GroupedStep<'_>> {
 
     while idx < items.len() {
         match &items[idx] {
-            TurnTraceItem::Skill { .. } => {
-                idx += 1;
-            }
             TurnTraceItem::Thought { content, .. } if !content.trim().is_empty() => {
                 let mut batch = vec![&items[idx]];
                 idx += 1;
@@ -49,7 +50,7 @@ fn group_trace_steps(items: &[TurnTraceItem]) -> Vec<GroupedStep<'_>> {
                 }
                 groups.push(GroupedStep::Thoughts(batch));
             }
-            TurnTraceItem::Thought { .. } => {
+            TurnTraceItem::Skill { .. } | TurnTraceItem::Thought { .. } => {
                 idx += 1;
             }
             TurnTraceItem::Tool {
@@ -102,15 +103,15 @@ fn group_trace_steps(items: &[TurnTraceItem]) -> Vec<GroupedStep<'_>> {
 fn format_duration_ms(ms: u64) -> String {
     if ms < 1_000 {
         format!("{ms}ms")
+    } else if ms < 60_000 {
+        let whole = ms / 1_000;
+        let tenths = (ms % 1_000) / 100;
+        format!("{whole}.{tenths}s")
     } else {
-        let secs = ms as f64 / 1_000.0;
-        if secs < 60.0 {
-            format!("{secs:.1}s")
-        } else {
-            let mins = (secs / 60.0).floor() as u64;
-            let rem = (secs % 60.0).round() as u64;
-            format!("{mins}m {rem}s")
-        }
+        let total_secs = (ms + 500) / 1_000;
+        let mins = total_secs / 60;
+        let rem = total_secs % 60;
+        format!("{mins}m {rem}s")
     }
 }
 
@@ -128,8 +129,9 @@ pub struct TurnTraceSlot {
     pending_diff_viewer: StructuredViewer,
     registry: Rc<ViewerRegistry>,
     bound_row: Rc<RefCell<Option<ClawRowObject>>>,
-    mounted_rail_stamp: Rc<Cell<(usize, usize, bool)>>,
-    mounted_inline_stamp: Rc<Cell<(usize, usize, bool)>>,
+    synced_summary_stamp: Rc<Cell<(usize, u64, bool, bool)>>,
+    mounted_rail_stamp: Rc<Cell<(usize, u64, bool)>>,
+    mounted_inline_stamp: Rc<Cell<(usize, u64, bool)>>,
     mounted_pending_ptr: Rc<Cell<usize>>,
 }
 
@@ -208,6 +210,7 @@ impl TurnTraceSlot {
             pending_diff_viewer,
             registry,
             bound_row: Rc::new(RefCell::new(None)),
+            synced_summary_stamp: Rc::new(Cell::new((0, 0, false, false))),
             mounted_rail_stamp: Rc::new(Cell::new((0, 0, false))),
             mounted_inline_stamp: Rc::new(Cell::new((0, 0, false))),
             mounted_pending_ptr: Rc::new(Cell::new(0)),
@@ -222,12 +225,13 @@ impl TurnTraceSlot {
     }
 
     #[must_use]
-    pub fn widget(&self) -> &gtk::Box {
+    pub const fn widget(&self) -> &gtk::Box {
         &self.root
     }
 
     pub fn reset_for_unbind(&self) {
         *self.bound_row.borrow_mut() = None;
+        self.synced_summary_stamp.set((0, 0, false, false));
         self.mounted_rail_stamp.set((0, 0, false));
         self.mounted_inline_stamp.set((0, 0, false));
         self.mounted_pending_ptr.set(0);
@@ -266,21 +270,26 @@ impl TurnTraceSlot {
         self.sync(&obj, always_code);
     }
 
+    #[allow(clippy::too_many_lines)]
     pub fn sync(&self, obj: &ClawRowObject, always_show_code_blocks: bool) {
         let obj_ptr = obj.as_ptr() as usize;
+        let rev = obj.revision();
+        let expanded = obj.trace_expanded();
+        let summary_stamp = (obj_ptr, rev, expanded, always_show_code_blocks);
+        if self.synced_summary_stamp.get() == summary_stamp {
+            return;
+        }
+        self.synced_summary_stamp.set(summary_stamp);
         *self.bound_row.borrow_mut() = Some(obj.clone());
 
         let is_working = obj.is_working();
         let active_status = obj.active_status();
         let pending_diff = obj.pending_approval_diff();
-        let expanded = obj.trace_expanded();
 
-        let (summary, trace_len) = obj.with_row(|r| match r {
+        let summary = obj.with_row(|r| match r {
             PersistentClawRow::Diagnosis { trace, .. }
-            | PersistentClawRow::Suggested { trace, .. } => {
-                (ActivitySummary::summarize(trace), trace.len())
-            }
-            _ => (ActivitySummary::default(), 0),
+            | PersistentClawRow::Suggested { trace, .. } => ActivitySummary::summarize(trace),
+            _ => ActivitySummary::default(),
         });
 
         let has_steps = summary.has_steps();
@@ -322,7 +331,10 @@ impl TurnTraceSlot {
                 }
             } else {
                 let st = active_status.as_deref().unwrap_or("Thinking…");
-                format!("<span alpha=\"72%\">{}</span>", glib::markup_escape_text(st))
+                format!(
+                    "<span alpha=\"72%\">{}</span>",
+                    glib::markup_escape_text(st)
+                )
             };
             self.summary_lbl.set_markup(&markup);
         }
@@ -338,7 +350,7 @@ impl TurnTraceSlot {
 
         // 3. Expanded Trace Rail (lazily mounted ONLY when `expanded && has_steps`)
         if expanded && has_steps {
-            let target_stamp = (obj_ptr, trace_len, always_show_code_blocks);
+            let target_stamp = (obj_ptr, rev, always_show_code_blocks);
             if self.mounted_rail_stamp.get() != target_stamp {
                 self.mounted_rail_stamp.set(target_stamp);
                 self.rebuild_trace_rail(obj, &edit_jsons, always_show_code_blocks);
@@ -350,7 +362,7 @@ impl TurnTraceSlot {
 
         // 4. Inline X-Ray Diffs (`Ctrl+Shift+D` / `always_show_code_blocks == true`)
         if show_inline_diffs {
-            let target_inline = (obj_ptr, edit_jsons.len(), true);
+            let target_inline = (obj_ptr, rev, true);
             if self.mounted_inline_stamp.get() != target_inline {
                 self.mounted_inline_stamp.set(target_inline);
                 while let Some(child) = self.inline_diffs_box.first_child() {
@@ -414,7 +426,7 @@ impl TurnTraceSlot {
                     }
                     GroupedStep::Exploration(items) => {
                         self.trace_rail_box
-                            .append(&self.build_exploration_group_widget(&items));
+                            .append(&Self::build_exploration_group_widget(&items));
                     }
                     GroupedStep::SingleTool(item) => {
                         self.trace_rail_box
@@ -493,7 +505,7 @@ impl TurnTraceSlot {
             header_parts.push_str(title);
         }
         if thoughts.len() > 1 {
-            header_parts.push_str(&format!(" · {} steps", thoughts.len()));
+            let _ = write!(header_parts, " · {} steps", thoughts.len());
         }
         if total_ms > 0 {
             header_parts.push_str(" · ");
@@ -546,7 +558,7 @@ impl TurnTraceSlot {
         vbox
     }
 
-    fn build_exploration_group_widget(&self, items: &[&TurnTraceItem]) -> gtk::Box {
+    fn build_exploration_group_widget(items: &[&TurnTraceItem]) -> gtk::Box {
         let vbox = gtk::Box::new(gtk::Orientation::Vertical, 2);
         vbox.set_hexpand(true);
 

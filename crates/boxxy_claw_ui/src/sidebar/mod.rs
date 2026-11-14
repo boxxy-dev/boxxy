@@ -11,8 +11,8 @@ use crate::character_style::{
     prettify_character_name, resolve_character_display_name,
 };
 use boxxy_claw_protocol::{ScheduledTask, SessionUsage, format_number_with_commas};
+use boxxy_core_widgets::ObjectExtSafe;
 use gtk4 as gtk;
-use gtk4::gdk;
 use gtk4::glib;
 use gtk4::prelude::*;
 use libadwaita as adw;
@@ -22,7 +22,10 @@ use past_sessions::{
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::time::{Duration, Instant};
 use tasks::TasksSection;
+
+const MEMORIES_COUNT_TTL: Duration = Duration::from_secs(1);
 
 pub struct ClawSidebarComponent {
     widget: gtk::Box,
@@ -39,6 +42,7 @@ pub struct ClawSidebarComponent {
     sessions_box: gtk::Box,
     sessions_list: gtk::ListBox,
     is_new_session: Rc<Cell<bool>>,
+    past_sessions_seq: Rc<Cell<u64>>,
     rendered_sessions_sig: Rc<RefCell<RenderedSessionSig>>,
     active_options_popover: Rc<RefCell<Option<gtk::Popover>>>,
     on_resume_session: ResumeSessionCallback,
@@ -53,6 +57,7 @@ pub struct ClawSidebarComponent {
     tools_lbl: gtk::Label,
     memories_lbl: gtk::Label,
     memories_fetch_in_flight: Rc<Cell<bool>>,
+    memories_last_fetched: Rc<Cell<Option<Instant>>>,
     cost_lbl: gtk::Label,
     mcp_box: gtk::Box,
     mcp_rows_box: gtk::Box,
@@ -203,6 +208,21 @@ impl ClawSidebarComponent {
             .margin_start(6)
             .margin_end(6)
             .build();
+
+        let on_resume_session: ResumeSessionCallback = Rc::new(RefCell::new(None));
+        {
+            let cb_for_row = on_resume_session.clone();
+            sessions_list.connect_row_activated(move |_, row| {
+                if !row.is_activatable() {
+                    return;
+                }
+                if let Some(sid) = row.get_safe_data::<String>("session_id")
+                    && let Some(cb) = cb_for_row.borrow().as_ref().cloned()
+                {
+                    cb(sid.clone(), None);
+                }
+            });
+        }
 
         let sessions_scroll = gtk::ScrolledWindow::builder()
             .hscrollbar_policy(gtk::PolicyType::Never)
@@ -391,9 +411,10 @@ impl ClawSidebarComponent {
             sessions_box,
             sessions_list,
             is_new_session: Rc::new(Cell::new(true)),
+            past_sessions_seq: Rc::new(Cell::new(0)),
             rendered_sessions_sig: Rc::new(RefCell::new((Vec::new(), Vec::new()))),
             active_options_popover: Rc::new(RefCell::new(None)),
-            on_resume_session: Rc::new(RefCell::new(None)),
+            on_resume_session,
             claw_model_lbl,
             dreams_model_lbl,
             dream_status_lbl,
@@ -405,6 +426,7 @@ impl ClawSidebarComponent {
             tools_lbl,
             memories_lbl,
             memories_fetch_in_flight: Rc::new(Cell::new(false)),
+            memories_last_fetched: Rc::new(Cell::new(None)),
             cost_lbl,
             mcp_box,
             mcp_rows_box,
@@ -421,11 +443,10 @@ impl ClawSidebarComponent {
             &initial_settings,
             &comp.mcp_statuses.borrow(),
         );
-        comp.refresh_memories_count();
         comp.refresh_past_sessions();
 
         if initial_settings.currency != boxxy_preferences::config::Currency::Usd {
-            let cost_lbl_init = comp.cost_lbl.clone();
+            let cost_lbl_weak = comp.cost_lbl.downgrade();
             let last_usage_init = comp.last_usage.clone();
             let initial_curr = initial_settings.currency;
             glib::spawn_future_local(async move {
@@ -433,20 +454,23 @@ impl ClawSidebarComponent {
                     .spawn(boxxy_sys_utils::fetch_exchange_rates())
                     .await
                     .ok();
-                let usage = last_usage_init.get();
-                cost_lbl_init.set_label(&initial_curr.format_from_usd(usage.cost_usd));
+                if let Some(cost_lbl_init) = cost_lbl_weak.upgrade() {
+                    let usage = last_usage_init.get();
+                    cost_lbl_init.set_label(&initial_curr.format_from_usd(usage.cost_usd));
+                }
             });
         }
 
-        // Subscribe to live Preferences updates.
-        let claw_model_sub = comp.claw_model_lbl.clone();
-        let dreams_model_sub = comp.dreams_model_lbl.clone();
-        let search_sub = comp.search_lbl.clone();
+        // Subscribe to live Preferences updates using weak widget refs so closing secondary
+        // windows drops the sidebar widget subtree and terminates this task cleanly.
+        let claw_model_weak = comp.claw_model_lbl.downgrade();
+        let dreams_model_weak = comp.dreams_model_lbl.downgrade();
+        let search_weak = comp.search_lbl.downgrade();
         let web_search_sub = comp.web_search_enabled.clone();
-        let mcp_box_sub = comp.mcp_box.clone();
-        let mcp_rows_sub = comp.mcp_rows_box.clone();
+        let mcp_box_weak = comp.mcp_box.downgrade();
+        let mcp_rows_weak = comp.mcp_rows_box.downgrade();
         let mcp_statuses_sub = comp.mcp_statuses.clone();
-        let cost_lbl_sub = comp.cost_lbl.clone();
+        let cost_lbl_weak = comp.cost_lbl.downgrade();
         let last_usage_sub = comp.last_usage.clone();
         let mut settings_rx = boxxy_preferences::SETTINGS_EVENT_BUS.subscribe();
         glib::spawn_future_local(async move {
@@ -457,6 +481,24 @@ impl ClawSidebarComponent {
                         (*boxxy_preferences::Settings::load()).clone()
                     }
                     Err(boxxy_preferences::config::BroadcastRecvError::Closed) => break,
+                };
+                let (
+                    Some(claw_model_sub),
+                    Some(dreams_model_sub),
+                    Some(search_sub),
+                    Some(mcp_box_sub),
+                    Some(mcp_rows_sub),
+                    Some(cost_lbl_sub),
+                ) = (
+                    claw_model_weak.upgrade(),
+                    dreams_model_weak.upgrade(),
+                    search_weak.upgrade(),
+                    mcp_box_weak.upgrade(),
+                    mcp_rows_weak.upgrade(),
+                    cost_lbl_weak.upgrade(),
+                )
+                else {
+                    break;
                 };
                 populate_models_info(
                     &claw_model_sub,
@@ -482,25 +524,69 @@ impl ClawSidebarComponent {
             }
         });
 
-        // Subscribe to CharacterRegistry claim updates for Past Conversations state.
-        let past_ctx_reg = comp.past_sessions_ctx();
+        // Subscribe to CharacterRegistry claim updates for Past Conversations state (weakly held).
+        let sessions_box_weak = comp.sessions_box.downgrade();
+        let sessions_list_weak = comp.sessions_list.downgrade();
+        let hero_box_weak = comp.hero_box.downgrade();
+        let hero_icon_weak = comp.hero_icon.downgrade();
+        let is_new_reg = comp.is_new_session.clone();
+        let seq_reg = comp.past_sessions_seq.clone();
+        let sig_reg = comp.rendered_sessions_sig.clone();
+        let active_pop_weak = Rc::downgrade(&comp.active_options_popover);
+        let resume_cb_weak = Rc::downgrade(&comp.on_resume_session);
         let mut reg_rx = boxxy_claw_protocol::characters::subscribe_registry_changes();
         glib::spawn_future_local(async move {
             while reg_rx.changed().await.is_ok() {
-                *past_ctx_reg.rendered_sessions_sig.borrow_mut() = (Vec::new(), Vec::new());
-                if past_ctx_reg.is_new_session.get() {
-                    populate_past_sessions(past_ctx_reg.clone(), true);
+                let (
+                    Some(sessions_box),
+                    Some(sessions_list),
+                    Some(hero_box),
+                    Some(hero_icon),
+                    Some(active_options_popover),
+                    Some(on_resume_session),
+                ) = (
+                    sessions_box_weak.upgrade(),
+                    sessions_list_weak.upgrade(),
+                    hero_box_weak.upgrade(),
+                    hero_icon_weak.upgrade(),
+                    active_pop_weak.upgrade(),
+                    resume_cb_weak.upgrade(),
+                )
+                else {
+                    break;
+                };
+                *sig_reg.borrow_mut() = (Vec::new(), Vec::new());
+                if is_new_reg.get() {
+                    populate_past_sessions(
+                        PastSessionsCtx {
+                            sessions_box,
+                            sessions_list,
+                            hero_box,
+                            hero_icon,
+                            is_new_session: is_new_reg.clone(),
+                            fetch_seq: seq_reg.clone(),
+                            rendered_sessions_sig: sig_reg.clone(),
+                            active_options_popover,
+                            on_resume_session,
+                        },
+                        true,
+                    );
                 }
             }
         });
 
-        // Subscribe to live MCP connection statuses.
-        let mcp_box_watch = comp.mcp_box.clone();
-        let mcp_rows_watch = comp.mcp_rows_box.clone();
+        // Subscribe to live MCP connection statuses (weakly held).
+        let mcp_box_watch_weak = comp.mcp_box.downgrade();
+        let mcp_rows_watch_weak = comp.mcp_rows_box.downgrade();
         let mcp_statuses_watch = comp.mcp_statuses.clone();
         let mut mcp_rx = boxxy_claw_protocol::characters::subscribe_mcp_status_changes();
         glib::spawn_future_local(async move {
             while mcp_rx.changed().await.is_ok() {
+                let (Some(mcp_box_watch), Some(mcp_rows_watch)) =
+                    (mcp_box_watch_weak.upgrade(), mcp_rows_watch_weak.upgrade())
+                else {
+                    break;
+                };
                 let latest = boxxy_claw_protocol::characters::MCP_STATUS_CACHE.load();
                 let map: HashMap<String, bool> = latest.iter().cloned().collect();
                 if *mcp_statuses_watch.borrow() != map {
@@ -526,12 +612,18 @@ impl ClawSidebarComponent {
             hero_box: self.hero_box.clone(),
             hero_icon: self.hero_icon.clone(),
             is_new_session: self.is_new_session.clone(),
+            fetch_seq: self.past_sessions_seq.clone(),
             rendered_sessions_sig: self.rendered_sessions_sig.clone(),
             active_options_popover: self.active_options_popover.clone(),
             on_resume_session: self.on_resume_session.clone(),
         }
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        clippy::fn_params_excessive_bools,
+        clippy::if_not_else
+    )]
     pub fn set_pane_state(
         &self,
         agent_name: &str,
@@ -559,16 +651,14 @@ impl ClawSidebarComponent {
                     .set_label(boxxy_claw_protocol::characters::INCOGNITO_DUTIES);
 
                 self.hero_avatar.set_text(Some(disp));
-                self.hero_avatar.set_custom_image(None::<&gdk::Texture>);
-                if let Some(texture) = load_incognito_texture() {
-                    self.hero_avatar.set_custom_image(Some(&texture));
-                }
+                let tex = load_incognito_texture();
+                self.hero_avatar.set_custom_image(tex.as_ref());
                 self.hero_avatar_overlay.set_visible(true);
                 self.hero_sleep_badge.set_visible(false);
                 self.hero_vibe_badge.set_visible(false);
                 self.hero_icon.set_visible(false);
             } else if let Some(info) =
-                boxxy_claw_protocol::characters::resolve_character(&cache, "", &fallback_names)
+                boxxy_claw_protocol::characters::find_character_exact(&cache, "", &fallback_names)
             {
                 let formatted_name = resolve_character_display_name(info);
                 resolved_char_display = formatted_name.clone();
@@ -576,10 +666,8 @@ impl ClawSidebarComponent {
                 self.hero_subtitle.set_label(&info.config.duties);
 
                 self.hero_avatar.set_text(Some(&formatted_name));
-                self.hero_avatar.set_custom_image(None::<&gdk::Texture>);
-                if let Some(texture) = load_character_avatar_texture(info) {
-                    self.hero_avatar.set_custom_image(Some(&texture));
-                }
+                let tex = load_character_avatar_texture(info);
+                self.hero_avatar.set_custom_image(tex.as_ref());
                 self.hero_avatar_overlay.set_visible(true);
                 self.hero_sleep_badge.set_visible(sleep);
                 self.hero_vibe_badge.set_visible(vibe_enabled && !sleep);
@@ -667,7 +755,9 @@ impl ClawSidebarComponent {
         self.web_search_enabled.set(web_search_enabled);
         let settings = boxxy_preferences::Settings::load();
         self.refresh_models_info(&settings);
-        self.refresh_memories_count();
+        if self.stats_box.is_visible() {
+            self.refresh_memories_count();
+        }
     }
 
     fn set_hero_title_colored(&self, name: &str, raw_color: &str) {
@@ -698,7 +788,7 @@ impl ClawSidebarComponent {
         self.active_options_popover
             .borrow()
             .as_ref()
-            .is_some_and(|p| p.is_visible())
+            .is_some_and(gtk::prelude::WidgetExt::is_visible)
     }
 
     pub fn refresh_past_sessions(&self) {
@@ -709,11 +799,17 @@ impl ClawSidebarComponent {
     }
 
     pub fn refresh_memories_count(&self) {
+        if let Some(last) = self.memories_last_fetched.get()
+            && last.elapsed() < MEMORIES_COUNT_TTL
+        {
+            return;
+        }
         if self.memories_fetch_in_flight.replace(true) {
             return;
         }
-        let memories_lbl = self.memories_lbl.clone();
+        let memories_lbl_weak = self.memories_lbl.downgrade();
         let in_flight = self.memories_fetch_in_flight.clone();
+        let last_fetched = self.memories_last_fetched.clone();
         glib::spawn_future_local(async move {
             let res = boxxy_sys_utils::runtime()
                 .spawn(async move {
@@ -724,9 +820,16 @@ impl ClawSidebarComponent {
                 .await;
             in_flight.set(false);
             if let Ok(Ok(count)) = res {
-                let n = u64::try_from(count.max(0)).unwrap_or(0);
-                let word = if n == 1 { "Memory" } else { "Memories" };
-                memories_lbl.set_label(&format!("🧠 {} {}", format_number_with_commas(n), word));
+                last_fetched.set(Some(Instant::now()));
+                if let Some(memories_lbl) = memories_lbl_weak.upgrade() {
+                    let n = u64::try_from(count.max(0)).unwrap_or(0);
+                    let word = if n == 1 { "Memory" } else { "Memories" };
+                    memories_lbl.set_label(&format!(
+                        "🧠 {} {}",
+                        format_number_with_commas(n),
+                        word
+                    ));
+                }
             }
         });
     }
@@ -805,17 +908,9 @@ impl ClawSidebarComponent {
         self.cost_lbl
             .set_label(&currency.format_from_usd(usage.cost_usd));
         self.context_box.set_visible(!self.is_new_session.get());
-        self.refresh_memories_count();
-    }
-
-    pub fn set_token_usage(&self, tokens: u64) {
-        self.set_session_usage(SessionUsage {
-            context_tokens: tokens,
-            context_window: None,
-            total_tokens: tokens,
-            cost_usd: 0.0,
-            tools_used: 0,
-        });
+        if self.stats_box.is_visible() {
+            self.refresh_memories_count();
+        }
     }
 
     pub fn update_tasks(&self, tasks: Vec<ScheduledTask>) {
@@ -839,8 +934,9 @@ fn attach_window_action_click(target: &impl IsA<gtk::Widget>, action_name: &'sta
     widget.set_cursor_from_name(Some("pointer"));
     let gesture = gtk::GestureClick::new();
     let weak = widget.downgrade();
-    gesture.connect_released(move |_, _, _, _| {
+    gesture.connect_released(move |_, _, x, y| {
         if let Some(w) = weak.upgrade()
+            && w.contains(x, y)
             && let Some(root) = w.root()
         {
             let _ = gtk::prelude::WidgetExt::activate_action(&root, action_name, None);
@@ -849,6 +945,7 @@ fn attach_window_action_click(target: &impl IsA<gtk::Widget>, action_name: &'sta
     widget.add_controller(gesture);
 }
 
+#[allow(clippy::redundant_closure_for_method_calls)]
 fn resolve_active_search_label(
     settings: &boxxy_preferences::Settings,
     web_search_local_enabled: bool,
@@ -873,6 +970,7 @@ fn resolve_active_search_label(
     }
 }
 
+#[allow(clippy::redundant_closure_for_method_calls)]
 fn populate_models_info(
     claw_model_lbl: &gtk::Label,
     dreams_model_lbl: &gtk::Label,
