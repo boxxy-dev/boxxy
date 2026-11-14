@@ -1089,25 +1089,24 @@ mod tests {
 
     #[test]
     fn gtk_code_block_widget_updates_in_place_and_chunks_large_files() {
-        if gtk::init().is_err() {
-            return;
-        }
+        crate::run_gtk_test(|| {
+            let widget = CodeBlockWidget::new();
+            let stream_ctx =
+                RenderContext::new(Arc::new(std::sync::atomic::AtomicU64::new(0)), true);
+            widget.update_code("rust", "fn demo() {\n", &stream_ctx);
+            assert_eq!(widget.active_chunk_count(), 1);
 
-        let widget = CodeBlockWidget::new();
-        let stream_ctx = RenderContext::new(Arc::new( std::sync::atomic::AtomicU64::new(0) ), true);
-        widget.update_code("rust", "fn demo() {\n", &stream_ctx);
-        assert_eq!(widget.active_chunk_count(), 1);
+            let mut huge = String::new();
+            for i in 0..260 {
+                huge.push_str(&format!("let item_{i} = {i};\n"));
+            }
+            let settled_ctx = RenderContext::default();
+            widget.update_code("rust", &huge, &settled_ctx);
+            assert_eq!(widget.active_chunk_count(), 3);
 
-        let mut huge = String::new();
-        for i in 0..260 {
-            huge.push_str(&format!("let item_{i} = {i};\n"));
-        }
-        let settled_ctx = RenderContext::default();
-        widget.update_code("rust", &huge, &settled_ctx);
-        assert_eq!(widget.active_chunk_count(), 3);
-
-        widget.reset_for_pool();
-        widget.update_code("bash", "ls -la\n", &settled_ctx);
-        assert_eq!(widget.active_chunk_count(), 1);
+            widget.reset_for_pool();
+            widget.update_code("bash", "ls -la\n", &settled_ctx);
+            assert_eq!(widget.active_chunk_count(), 1);
+        });
     }
 }

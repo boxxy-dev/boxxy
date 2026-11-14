@@ -4,7 +4,8 @@ use crate::cache::{
     save_disk_cached_thumbnail,
 };
 use crate::parser::blocks::{ContentBlock, GalleryItem};
-use crate::renderer::BlockRenderer;
+use crate::parser::markdown::strip_pango_markup;
+use crate::renderer::{BlockRenderer, RenderContext};
 use boxxy_assets::image::{
     MAX_THUMBNAIL_INPUT_BYTES, ThumbnailOutput, ThumbnailSpec, generate_thumbnail,
 };
@@ -12,29 +13,34 @@ use gtk4 as gtk;
 use gtk4::prelude::*;
 use gtk4::subclass::prelude::*;
 use gtk4::{gdk, gio, glib, graphene, gsk, pango};
+use parking_lot::Mutex;
 use std::cell::Cell;
+use std::collections::HashMap;
 use std::path::Path;
 use std::process::Stdio;
-use std::sync::LazyLock;
+use std::sync::atomic::Ordering;
+use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 
 const STANDALONE_SPEC: ThumbnailSpec = ThumbnailSpec::new(640, 400);
-const GALLERY_SPEC: ThumbnailSpec = ThumbnailSpec::new(640, 400);
+const GALLERY_SPEC: ThumbnailSpec = ThumbnailSpec::new(560, 350);
 
 const GALLERY_SPACING: i32 = 12;
-const TWO_COL_BREAKPOINT: i32 = 420;
-const THREE_COL_BREAKPOINT: i32 = 920;
-const CARD_FOOTER_HEIGHT: i32 = 34;
+const GALLERY_CARD_MIN_W: i32 = 200;
+const GALLERY_CARD_MAX_W: i32 = 280;
+const GALLERY_MIN_PREVIEW_H: i32 = 125;
+const GALLERY_MAX_PREVIEW_H: i32 = 175;
+const CARD_FOOTER_HEIGHT: i32 = 28;
 
-const STANDALONE_MAX_W: i32 = 360;
-const STANDALONE_MAX_H: i32 = 225;
-const STANDALONE_LOADING_W: i32 = 280;
-const STANDALONE_LOADING_H: i32 = 175;
+const STANDALONE_MAX_W: i32 = 320;
+const STANDALONE_MAX_H: i32 = 200;
+const STANDALONE_LOADING_W: i32 = 260;
+const STANDALONE_LOADING_H: i32 = 162;
 
-const TABLE_CELL_MAX_W: i32 = 220;
-const TABLE_CELL_MAX_H: i32 = 138;
-const TABLE_CELL_LOADING_W: i32 = 192;
-const TABLE_CELL_LOADING_H: i32 = 120;
+const TABLE_CELL_MAX_W: i32 = 200;
+const TABLE_CELL_MAX_H: i32 = 125;
+const TABLE_CELL_LOADING_W: i32 = 176;
+const TABLE_CELL_LOADING_H: i32 = 110;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CardLayout {
@@ -91,21 +97,18 @@ pub fn detect_media_kind(url: &str) -> MediaKind {
 }
 
 /// Computes `(cols, col_width, card_height)` for a given container width and item count.
-/// Preserves the ~16:10 card preview proportion across all window scales:
-/// - `< 420px`: 1 column
-/// - `420px .. 920px`: 2 columns
-/// - `>= 920px` (with 3+ items): 3 columns
+///
+/// Packs ~16:10 thumbnail cards (`200..=280 px` wide, `153..=203 px` tall including caption strip)
+/// into as many columns as fit `avail_width` (capped at `n_children`) without stretching small
+/// galleries into giant billboards on wide/ultrawide displays.
 fn compute_grid_metrics(avail_width: i32, n_children: i32) -> (i32, i32, i32) {
-    let cols = if avail_width >= THREE_COL_BREAKPOINT && n_children >= 3 {
-        3
-    } else if avail_width >= TWO_COL_BREAKPOINT && n_children >= 2 {
-        2
-    } else {
-        1
-    };
+    let n = n_children.max(1);
+    let fit_cols = ((avail_width + GALLERY_SPACING) / (GALLERY_CARD_MIN_W + GALLERY_SPACING)).max(1);
+    let cols = fit_cols.min(n);
     let total_spacing = (cols - 1) * GALLERY_SPACING;
-    let col_w = ((avail_width - total_spacing).max(120)) / cols;
-    let preview_h = (col_w * 10 / 16).max(110);
+    let avail_col_w = ((avail_width - total_spacing).max(120)) / cols;
+    let col_w = avail_col_w.min(GALLERY_CARD_MAX_W);
+    let preview_h = (col_w * 10 / 16).clamp(GALLERY_MIN_PREVIEW_H, GALLERY_MAX_PREVIEW_H);
     let card_h = preview_h + CARD_FOOTER_HEIGHT;
     (cols, col_w, card_h)
 }
@@ -183,14 +186,11 @@ mod imp {
                         (total_h, total_h, -1, -1)
                     } else {
                         // Unconstrained vertical query (used by GtkBox(Horizontal) for minimum height):
-                        // minimum height must correspond to the widest (up to 3-column) layout at minimum
-                        // card height so it is never larger than `measure(Vertical, width)` at wide widths.
-                        let max_cols = n_children.clamp(1, 3);
-                        let min_rows = (n_children + max_cols - 1) / max_cols;
-                        let min_card_h = 110 + CARD_FOOTER_HEIGHT;
-                        let min_h = min_rows * min_card_h + (min_rows - 1) * GALLERY_SPACING;
+                        // at wide widths all items can fit in a single compact row, so `min_h` must
+                        // equal 1 row at minimum card height (`<= measure(Vertical, width)` everywhere).
+                        let min_h = GALLERY_MIN_PREVIEW_H + CARD_FOOTER_HEIGHT;
 
-                        let (cols, col_w, card_h) = compute_grid_metrics(420, n_children);
+                        let (cols, col_w, card_h) = compute_grid_metrics(480, n_children);
                         let mut c = self.obj().first_child();
                         while let Some(child) = c {
                             if child.is_visible() {
@@ -207,45 +207,55 @@ mod imp {
             }
         }
 
-        fn size_allocate(&self, width: i32, _height: i32, _baseline: i32) {
-            let mut children = Vec::new();
-            let mut child_opt = self.obj().first_child();
-            while let Some(child) = child_opt {
+        fn size_allocate(&self, width: i32, height: i32, _baseline: i32) {
+            let mut n_children = 0_i32;
+            let mut count_opt = self.obj().first_child();
+            while let Some(child) = count_opt {
                 if child.is_visible() {
-                    children.push(child.clone());
+                    n_children += 1;
                 }
-                child_opt = child.next_sibling();
+                count_opt = child.next_sibling();
             }
 
-            #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
-            let n_children = children.len() as i32;
             if n_children == 0 {
                 return;
             }
 
             let (cols, col_w, card_h) = compute_grid_metrics(width, n_children);
 
-            for (idx, child) in children.into_iter().enumerate() {
-                #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
-                let idx_i32 = idx as i32;
-                let row = idx_i32 / cols;
-                let col = idx_i32 % cols;
-                let x = col * (col_w + GALLERY_SPACING);
-                let y = row * (card_h + GALLERY_SPACING);
+            let mut idx_i32 = 0_i32;
+            let mut child_opt = self.obj().first_child();
+            while let Some(child) = child_opt {
+                let next = child.next_sibling();
+                if child.is_visible() {
+                    let row = idx_i32 / cols;
+                    let col = idx_i32 % cols;
+                    let x = col * (col_w + GALLERY_SPACING);
+                    let y = row * (card_h + GALLERY_SPACING);
 
-                let _ = child.measure(gtk::Orientation::Vertical, col_w);
-                #[allow(clippy::cast_precision_loss)]
-                let transform =
-                    gsk::Transform::new().translate(&graphene::Point::new(x as f32, y as f32));
-                child.allocate(col_w, card_h, -1, Some(transform));
+                    let _ = child.measure(gtk::Orientation::Vertical, col_w);
+                    #[allow(clippy::cast_precision_loss)]
+                    let transform =
+                        gsk::Transform::new().translate(&graphene::Point::new(x as f32, y as f32));
+                    child.allocate(col_w, card_h, -1, Some(transform));
+                    idx_i32 += 1;
+                }
+                child_opt = next;
             }
 
-            if self.last_cols.get() != cols || (self.last_card_h.get() - card_h).abs() > 2 {
-                self.last_cols.set(cols);
-                self.last_card_h.set(card_h);
-                let obj = self.obj().clone();
+            let rows = (n_children + cols - 1) / cols;
+            let expected_h = rows * card_h + (rows - 1) * GALLERY_SPACING;
+            self.last_cols.set(cols);
+            self.last_card_h.set(card_h);
+
+            // Only schedule a resize if GTK allocated a stale height that differs from
+            // `measure(Vertical, width)` (e.g. during live window/pane drag-resizing).
+            if (height - expected_h).abs() > 2 {
+                let obj_weak = self.obj().downgrade();
                 glib::idle_add_local_once(move || {
-                    obj.queue_resize();
+                    if let Some(obj) = obj_weak.upgrade() {
+                        obj.queue_resize();
+                    }
                 });
             }
         }
@@ -373,48 +383,72 @@ static HTTP_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
         .unwrap_or_default()
 });
 
+const FFMPEG_TIMEOUT: Duration = Duration::from_secs(5);
+
+type SharedThumbOutcome = Option<Arc<ThumbnailOutput>>;
+type InFlightThumbMap =
+    HashMap<ThumbnailCacheKey, tokio::sync::watch::Sender<Option<SharedThumbOutcome>>>;
+
+static IN_FLIGHT_THUMBS: LazyLock<Mutex<InFlightThumbMap>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+struct InFlightCleanup(ThumbnailCacheKey);
+
+impl Drop for InFlightCleanup {
+    fn drop(&mut self) {
+        IN_FLIGHT_THUMBS.lock().remove(&self.0);
+    }
+}
+
+/// Deduplicates concurrent thumbnail loads/decodes/downloads for the same `(url, spec)` key.
+async fn fetch_or_load_thumbnail_deduped(
+    url: String,
+    spec: ThumbnailSpec,
+    kind: MediaKind,
+) -> Option<Arc<ThumbnailOutput>> {
+    let key = ThumbnailCacheKey {
+        url: url.clone(),
+        spec,
+    };
+
+    let existing_rx = {
+        let mut map = IN_FLIGHT_THUMBS.lock();
+        if let Some(tx) = map.get(&key) {
+            Some(tx.subscribe())
+        } else {
+            let (tx, _rx) = tokio::sync::watch::channel(None);
+            map.insert(key.clone(), tx);
+            None
+        }
+    };
+
+    if let Some(mut rx) = existing_rx {
+        let _ = rx.wait_for(Option::is_some).await;
+        return rx.borrow().clone().flatten();
+    }
+
+    let _cleanup = InFlightCleanup(key.clone());
+    let loaded = fetch_or_load_thumbnail(url, spec, kind).await.map(Arc::new);
+
+    if let Some(tx) = IN_FLIGHT_THUMBS.lock().get(&key) {
+        let _ = tx.send(Some(loaded.clone()));
+    }
+
+    loaded
+}
+
 /// Extracts a single PNG frame from a local video (at 1.0s, falling back to 0.0s)
-/// or embedded cover art from an audio file using `ffmpeg` with fast input keyframe seeking.
+/// or embedded cover art from an audio file using `ffmpeg` with fast input keyframe seeking,
+/// bounded by `FFMPEG_TIMEOUT` and `kill_on_drop(true)`.
 async fn extract_ffmpeg_frame_png(path: &str, kind: MediaKind) -> Option<Vec<u8>> {
     if kind == MediaKind::Video {
         for seek in ["00:00:01.00", "00:00:00.00"] {
-            if let Ok(out) = tokio::process::Command::new("ffmpeg")
-                .args([
-                    "-ss",
-                    seek,
-                    "-i",
-                    path,
-                    "-frames:v",
-                    "1",
-                    "-vf",
-                    "scale=640:-1",
-                    "-f",
-                    "image2pipe",
-                    "-vcodec",
-                    "png",
-                    "-v",
-                    "error",
-                    "-",
-                ])
-                .stdin(Stdio::null())
-                .stdout(Stdio::piped())
-                .stderr(Stdio::null())
-                .output()
-                .await
-                && out.status.success()
-                && !out.stdout.is_empty()
-            {
-                return Some(out.stdout);
-            }
-        }
-        None
-    } else {
-        // Audio: attempt to extract embedded cover art stream if present
-        let out = tokio::process::Command::new("ffmpeg")
-            .args([
+            let mut cmd = tokio::process::Command::new("ffmpeg");
+            cmd.args([
+                "-ss",
+                seek,
                 "-i",
                 path,
-                "-an",
                 "-frames:v",
                 "1",
                 "-vf",
@@ -430,8 +464,43 @@ async fn extract_ffmpeg_frame_png(path: &str, kind: MediaKind) -> Option<Vec<u8>
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
-            .output()
+            .kill_on_drop(true);
+
+            if let Ok(Ok(out)) = tokio::time::timeout(FFMPEG_TIMEOUT, cmd.output()).await
+                && out.status.success()
+                && !out.stdout.is_empty()
+            {
+                return Some(out.stdout);
+            }
+        }
+        None
+    } else {
+        // Audio: attempt to extract embedded cover art stream if present
+        let mut cmd = tokio::process::Command::new("ffmpeg");
+        cmd.args([
+            "-i",
+            path,
+            "-an",
+            "-frames:v",
+            "1",
+            "-vf",
+            "scale=640:-1",
+            "-f",
+            "image2pipe",
+            "-vcodec",
+            "png",
+            "-v",
+            "error",
+            "-",
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .kill_on_drop(true);
+
+        let out = tokio::time::timeout(FFMPEG_TIMEOUT, cmd.output())
             .await
+            .ok()?
             .ok()?;
 
         if out.status.success() && !out.stdout.is_empty() {
@@ -569,7 +638,7 @@ fn derive_display_caption(
     explicit_caption: Option<&str>,
 ) -> String {
     if let Some(cap) = explicit_caption {
-        let stripped = strip_simple_pango_tags(cap);
+        let stripped = strip_pango_markup(cap, false);
         if !stripped.trim().is_empty() {
             return stripped;
         }
@@ -587,24 +656,6 @@ fn derive_display_caption(
         return alt.trim().to_string();
     }
     url.to_string()
-}
-
-fn strip_simple_pango_tags(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    let mut in_tag = false;
-    for ch in s.chars() {
-        match ch {
-            '<' => in_tag = true,
-            '>' => in_tag = false,
-            _ if !in_tag => out.push(ch),
-            _ => {}
-        }
-    }
-    out.replace("&amp;", "&")
-        .replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&quot;", "\"")
-        .replace("&apos;", "'")
 }
 
 /// Opens the media file directly in the user's default viewer/player without prompting "Open With…".
@@ -704,28 +755,31 @@ fn create_media_badge_overlay(kind: MediaKind) -> Option<gtk::Box> {
 
 /// Builds a compact `.viewer-image-card` suitable for embedding inside a Markdown table cell.
 #[must_use]
-pub(crate) fn build_table_image_card(item: &GalleryItem) -> gtk::Widget {
+pub(crate) fn build_table_image_card(item: &GalleryItem, ctx: &RenderContext) -> gtk::Widget {
     build_image_card(
         &item.url,
         &item.title,
         &item.alt,
         item.caption.as_deref(),
         CardLayout::TableCell,
+        ctx,
     )
 }
 
 /// Builds a `.viewer-image-card` widget supporting Images, Videos, and Audio with
 /// Tier-1 synchronous cache lookup, click-to-open in default viewer/player, and `Open With…`.
+#[allow(clippy::too_many_lines)]
 fn build_image_card(
     url: &str,
     title: &str,
     alt: &str,
     caption: Option<&str>,
     layout: CardLayout,
+    ctx: &RenderContext,
 ) -> gtk::Widget {
     let in_gallery = layout == CardLayout::Gallery;
     let (max_w, max_h, loading_w, loading_h) = match layout {
-        CardLayout::Gallery => (640, 400, 320, 200),
+        CardLayout::Gallery => (GALLERY_CARD_MAX_W, GALLERY_MAX_PREVIEW_H, 240, 150),
         CardLayout::Standalone => (
             STANDALONE_MAX_W,
             STANDALONE_MAX_H,
@@ -768,12 +822,19 @@ fn build_image_card(
     picture.set_hexpand(true);
     picture.set_vexpand(true);
 
+    // Base preview surface owns primary/secondary click gestures so the floating
+    // top-right `⋮` MenuButton overlay never triggers `open_default_viewer`.
+    let preview_surface = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    preview_surface.add_css_class("viewer-image-preview-area");
+    preview_surface.set_hexpand(true);
+    preview_surface.set_vexpand(true);
+    preview_surface.set_cursor_from_name(Some("pointer"));
+    preview_surface.append(&picture);
+
     let overlay = gtk::Overlay::new();
-    overlay.add_css_class("viewer-image-preview-area");
     overlay.set_hexpand(true);
     overlay.set_vexpand(true);
-    overlay.set_child(Some(&picture));
-    overlay.set_cursor_from_name(Some("pointer"));
+    overlay.set_child(Some(&preview_surface));
 
     if let Some(play_badge) = create_media_badge_overlay(kind) {
         overlay.add_overlay(&play_badge);
@@ -781,23 +842,23 @@ fn build_image_card(
 
     let display_caption = derive_display_caption(url, title, alt, caption);
     let base_tooltip = clean_local_path(url);
-    overlay.set_tooltip_text(Some(&base_tooltip));
+    preview_surface.set_tooltip_text(Some(&base_tooltip));
 
-    // Footer bar sits directly on the card surface (no nested background box)
-    let footer = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    // Full-width bottom title strip (no competing button, no artificial max_width_chars cap)
+    let footer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     footer.add_css_class("viewer-image-card-footer");
     footer.set_vexpand(false);
     footer.set_valign(gtk::Align::End);
 
     let caption_label = gtk::Label::new(Some(&display_caption));
     caption_label.set_xalign(0.0);
+    caption_label.set_halign(gtk::Align::Fill);
     caption_label.set_hexpand(true);
-    caption_label.set_width_chars(6);
-    caption_label.set_max_width_chars(14);
+    caption_label.set_width_chars(1);
     caption_label.set_ellipsize(pango::EllipsizeMode::Middle);
     caption_label.set_single_line_mode(true);
     caption_label.add_css_class("caption");
-    caption_label.add_css_class("dim-label");
+    caption_label.add_css_class("viewer-image-card-title");
     caption_label.set_tooltip_text(Some(&base_tooltip));
     footer.append(&caption_label);
 
@@ -882,14 +943,18 @@ fn build_image_card(
     );
     menu.append_section(None, &copy_section);
 
+    // Float the `⋮` options button over the top-right corner of the image (fades in on hover)
     let menu_btn = gtk::MenuButton::builder()
         .icon_name("view-more-symbolic")
-        .css_classes(["flat", "circular", "viewer-card-menu-btn"])
+        .css_classes(["circular", "viewer-card-menu-btn"])
         .tooltip_text("Media Options")
-        .valign(gtk::Align::Center)
+        .halign(gtk::Align::End)
+        .valign(gtk::Align::Start)
+        .margin_top(6)
+        .margin_end(6)
         .menu_model(&menu)
         .build();
-    footer.append(&menu_btn);
+    overlay.add_overlay(&menu_btn);
 
     // Primary click on the preview opens immediately in default viewer/player (no "Open With" prompt)
     let primary_click = gtk::GestureClick::new();
@@ -902,17 +967,17 @@ fn build_image_card(
             open_default_viewer(&c, &url_click);
         }
     });
-    overlay.add_controller(primary_click);
+    preview_surface.add_controller(primary_click);
 
     // Secondary (right) click on the preview opens the action menu
     let secondary_click = gtk::GestureClick::new();
     secondary_click.set_button(gdk::BUTTON_SECONDARY);
-    let menu_btn_for_ctx = menu_btn.clone();
+    let menu_btn_for_ctx = menu_btn;
     secondary_click.connect_pressed(move |gesture, _, _, _| {
         gesture.set_state(gtk::EventSequenceState::Claimed);
         menu_btn_for_ctx.popup();
     });
-    overlay.add_controller(secondary_click);
+    preview_surface.add_controller(secondary_click);
 
     card.append(&overlay);
     card.append(&footer);
@@ -932,9 +997,9 @@ fn build_image_card(
                 base_tooltip, cached.original_width, cached.original_height
             )
         } else {
-            base_tooltip.clone()
+            base_tooltip
         };
-        overlay.set_tooltip_text(Some(&rich_tooltip));
+        preview_surface.set_tooltip_text(Some(&rich_tooltip));
         caption_label.set_tooltip_text(Some(&rich_tooltip));
 
         if in_gallery {
@@ -974,77 +1039,107 @@ fn build_image_card(
 
     let url_async = url.to_string();
     let alt_async = alt.to_string();
-    let picture_clone = picture.clone();
-    let overlay_clone = overlay.clone();
-    let spinner_clone = spinner.clone();
-    let caption_label_clone = caption_label.clone();
-    let bounded_clone = bounded_opt.clone();
+    let gen_handle = ctx.generation.clone();
+    let start_gen = ctx.current_generation();
+    let picture_weak = picture.downgrade();
+    let preview_weak = preview_surface.downgrade();
+    let overlay_weak = overlay.downgrade();
+    let spinner_weak = spinner.downgrade();
+    let caption_weak = caption_label.downgrade();
+    let bounded_weak = bounded_opt.as_ref().map(ObjectExt::downgrade);
 
     gtk::glib::spawn_future_local(async move {
         let url_for_task = url_async.clone();
         let thumb_opt = boxxy_sys_utils::runtime()
-            .spawn(async move { fetch_or_load_thumbnail(url_for_task, spec, kind).await })
+            .spawn(async move { fetch_or_load_thumbnail_deduped(url_for_task, spec, kind).await })
             .await
             .ok()
             .flatten();
 
-        spinner_clone.stop();
-        overlay_clone.remove_overlay(&spinner_clone);
-
-        if let Some(thumb) = thumb_opt {
+        // Populate Tier-1 MemoryTexture cache even if the row scrolled out of view mid-load,
+        // so scrolling back to this row hits Tier-1 synchronously in 0 ms!
+        let cached_entry = thumb_opt.map(|thumb_arc| {
             #[allow(clippy::cast_possible_wrap)]
-            let disp_w = thumb.thumb_width as i32;
+            let disp_w = thumb_arc.thumb_width as i32;
             #[allow(clippy::cast_possible_wrap)]
-            let disp_h = thumb.thumb_height as i32;
+            let disp_h = thumb_arc.thumb_height as i32;
+            let orig_w = thumb_arc.original_width;
+            let orig_h = thumb_arc.original_height;
+            let stride = (thumb_arc.thumb_width * 4) as usize;
 
-            let glib_bytes = glib::Bytes::from_owned(thumb.rgba_bytes);
+            let rgba_vec = Arc::try_unwrap(thumb_arc)
+                .map_or_else(|shared| shared.rgba_bytes.clone(), |owned| owned.rgba_bytes);
+            let glib_bytes = glib::Bytes::from_owned(rgba_vec);
             let texture = gdk::MemoryTexture::new(
                 disp_w,
                 disp_h,
                 gdk::MemoryFormat::R8g8b8a8,
                 &glib_bytes,
-                (thumb.thumb_width * 4) as usize,
+                stride,
             );
 
-            insert_cached_thumbnail(
-                cache_key,
-                CachedThumbnail {
-                    texture: texture.clone(),
-                    disp_w,
-                    disp_h,
-                    original_width: thumb.original_width,
-                    original_height: thumb.original_height,
-                },
-            );
+            let entry = CachedThumbnail {
+                texture,
+                disp_w,
+                disp_h,
+                original_width: orig_w,
+                original_height: orig_h,
+            };
+            insert_cached_thumbnail(cache_key, entry.clone());
+            entry
+        });
 
-            if let Some(ref b) = bounded_clone {
-                let (cw, ch) = compute_bounded_card_dims(disp_w, disp_h, max_w, max_h);
+        if gen_handle.load(Ordering::Relaxed) != start_gen {
+            return;
+        }
+        let (Some(picture_live), Some(preview_live), Some(overlay_live)) = (
+            picture_weak.upgrade(),
+            preview_weak.upgrade(),
+            overlay_weak.upgrade(),
+        ) else {
+            return;
+        };
+
+        if let Some(spinner_live) = spinner_weak.upgrade() {
+            spinner_live.stop();
+            overlay_live.remove_overlay(&spinner_live);
+        }
+
+        if let Some(entry) = cached_entry {
+            if let Some(ref b_weak) = bounded_weak
+                && let Some(b) = b_weak.upgrade()
+            {
+                let (cw, ch) = compute_bounded_card_dims(entry.disp_w, entry.disp_h, max_w, max_h);
                 b.set_dimensions(cw, ch);
             }
-            picture_clone.set_paintable(Some(&texture));
-            picture_clone.set_visible(true);
+            picture_live.set_paintable(Some(&entry.texture));
+            picture_live.set_visible(true);
             let rich_tooltip = if kind == MediaKind::Image {
                 format!(
                     "{} ({}×{})",
-                    base_tooltip, thumb.original_width, thumb.original_height
+                    base_tooltip, entry.original_width, entry.original_height
                 )
             } else {
-                base_tooltip.clone()
+                base_tooltip
             };
-            overlay_clone.set_tooltip_text(Some(&rich_tooltip));
-            caption_label_clone.set_tooltip_text(Some(&rich_tooltip));
+            preview_live.set_tooltip_text(Some(&rich_tooltip));
+            if let Some(cap_live) = caption_weak.upgrade() {
+                cap_live.set_tooltip_text(Some(&rich_tooltip));
+            }
         } else if kind != MediaKind::Image {
-            // For videos/audio without an extractable cover/frame, keep the clean card
-            // with the centered Play/Audio badge instead of collapsing into a text link.
-            if let Some(ref b) = bounded_clone {
+            if let Some(ref b_weak) = bounded_weak
+                && let Some(b) = b_weak.upgrade()
+            {
                 b.set_dimensions(loading_w, loading_h + CARD_FOOTER_HEIGHT);
             }
-            picture_clone.set_visible(true);
+            picture_live.set_visible(true);
         } else {
-            if let Some(ref b) = bounded_clone {
-                b.set_dimensions(200, 44 + CARD_FOOTER_HEIGHT);
+            if let Some(ref b_weak) = bounded_weak
+                && let Some(b) = b_weak.upgrade()
+            {
+                b.set_dimensions(220, 44 + CARD_FOOTER_HEIGHT);
             }
-            fallback_to_link(&overlay_clone, &picture_clone, &url_async, &alt_async);
+            fallback_to_link(&preview_live, &picture_live, &url_async, &alt_async);
         }
     });
 
@@ -1055,7 +1150,7 @@ fn build_image_card(
     }
 }
 
-fn render_gallery(items: &[GalleryItem]) -> gtk::Widget {
+fn render_gallery(items: &[GalleryItem], ctx: &RenderContext) -> gtk::Widget {
     if items.len() == 1 {
         let item = &items[0];
         return build_image_card(
@@ -1064,6 +1159,7 @@ fn render_gallery(items: &[GalleryItem]) -> gtk::Widget {
             &item.alt,
             item.caption.as_deref(),
             CardLayout::Standalone,
+            ctx,
         );
     }
 
@@ -1081,6 +1177,7 @@ fn render_gallery(items: &[GalleryItem]) -> gtk::Widget {
             &item.alt,
             item.caption.as_deref(),
             CardLayout::Gallery,
+            ctx,
         );
         grid.append(&card);
     }
@@ -1101,25 +1198,34 @@ impl BlockRenderer for ImageRenderer {
     fn render(
         &self,
         block: &ContentBlock,
+        registry: &crate::registry::ViewerRegistry,
+    ) -> gtk::Widget {
+        self.render_with_context(block, registry, &RenderContext::default())
+    }
+
+    fn render_with_context(
+        &self,
+        block: &ContentBlock,
         _registry: &crate::registry::ViewerRegistry,
+        ctx: &RenderContext,
     ) -> gtk::Widget {
         match block {
             ContentBlock::Image { url, title, alt } => {
-                build_image_card(url, title, alt, None, CardLayout::Standalone)
+                build_image_card(url, title, alt, None, CardLayout::Standalone, ctx)
             }
-            ContentBlock::ImageGallery { items } => render_gallery(items),
+            ContentBlock::ImageGallery { items } => render_gallery(items, ctx),
             _ => unreachable!(),
         }
     }
 }
 
-fn fallback_to_link(overlay: &gtk::Overlay, picture: &gtk::Picture, url: &str, alt: &str) {
+fn fallback_to_link(preview_surface: &gtk::Box, picture: &gtk::Picture, url: &str, alt: &str) {
     picture.set_visible(false);
     let label = if alt.is_empty() { url } else { alt };
     let link = gtk::LinkButton::with_label(url, label);
     link.set_halign(gtk::Align::Center);
     link.set_valign(gtk::Align::Center);
-    overlay.set_child(Some(&link));
+    preview_surface.append(&link);
 }
 
 #[cfg(test)]
@@ -1164,34 +1270,38 @@ mod tests {
     }
 
     #[test]
-    fn compute_grid_metrics_scales_columns_and_preserves_16_10_ratio() {
-        // Narrow (< 420px): 1 column, 16:10 preview height
-        let (cols_narrow, col_w_narrow, card_h_narrow) = compute_grid_metrics(280, 4);
+    fn compute_grid_metrics_caps_card_size_and_packs_wide_columns() {
+        // Narrow (< 412px): 1 column, capped at GALLERY_CARD_MAX_W (280px)
+        let (cols_narrow, col_w_narrow, card_h_narrow) = compute_grid_metrics(320, 4);
         assert_eq!(cols_narrow, 1);
-        assert_eq!(col_w_narrow, 280);
-        assert_eq!(card_h_narrow, (280 * 10 / 16) + CARD_FOOTER_HEIGHT);
+        assert_eq!(col_w_narrow, GALLERY_CARD_MAX_W);
+        assert_eq!(
+            card_h_narrow,
+            (GALLERY_CARD_MAX_W * 10 / 16) + CARD_FOOTER_HEIGHT
+        );
 
-        // Medium/Wide (420px .. 920px): 2 columns, 16:10 preview height per column
-        let (cols_med, col_w_med, card_h_med) = compute_grid_metrics(800, 4);
+        // Medium (600px): 2 columns capped at 280px
+        let (cols_med, col_w_med, _) = compute_grid_metrics(600, 4);
         assert_eq!(cols_med, 2);
-        assert_eq!(col_w_med, (800 - 12) / 2);
-        assert_eq!(card_h_med, (col_w_med * 10 / 16) + CARD_FOOTER_HEIGHT);
+        assert_eq!(col_w_med, GALLERY_CARD_MAX_W);
 
-        // Very wide (>= 920px): 3 columns
-        let (cols_wide, _, _) = compute_grid_metrics(1000, 4);
-        assert_eq!(cols_wide, 3);
+        // Wide (1200px) with 4 items: all 4 fit in a single row, each 280px wide
+        let (cols_wide, col_w_wide, card_h_wide) = compute_grid_metrics(1200, 4);
+        assert_eq!(cols_wide, 4);
+        assert_eq!(col_w_wide, GALLERY_CARD_MAX_W);
+        assert_eq!(card_h_wide, GALLERY_MAX_PREVIEW_H + CARD_FOOTER_HEIGHT);
     }
 
     #[test]
     fn compute_bounded_card_dims_preserves_aspect_ratio() {
-        // 16:9 image (640x360) scaled into 360x225 standalone box -> 360x203 + footer
+        // 16:9 image (640x360) scaled into 320x200 standalone box -> 320x180 + footer
         let (cw, ch) = compute_bounded_card_dims(640, 360, STANDALONE_MAX_W, STANDALONE_MAX_H);
-        assert_eq!(cw, 360);
-        assert_eq!(ch, 203 + CARD_FOOTER_HEIGHT);
+        assert_eq!(cw, 320);
+        assert_eq!(ch, 180 + CARD_FOOTER_HEIGHT);
 
-        // 16:9 image (640x360) scaled into 220x138 table-cell box -> 220x124 + footer
+        // 16:9 image (640x360) scaled into 200x125 table-cell box -> 200x113 + footer
         let (tcw, tch) = compute_bounded_card_dims(640, 360, TABLE_CELL_MAX_W, TABLE_CELL_MAX_H);
-        assert_eq!(tcw, 220);
-        assert_eq!(tch, 124 + CARD_FOOTER_HEIGHT);
+        assert_eq!(tcw, 200);
+        assert_eq!(tch, 113 + CARD_FOOTER_HEIGHT);
     }
 }

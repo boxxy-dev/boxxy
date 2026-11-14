@@ -2,6 +2,7 @@ use crate::renderer::diff::canvas::DiffHunkCanvas;
 use crate::renderer::diff::markup::{DiffPayloadKind, PreparedDiff, PreparedHunk};
 use gtk4 as gtk;
 use gtk4::prelude::*;
+use std::sync::Arc;
 
 /// Builds the two-column side-by-side view (`Original` on Left 50%, `Changes` on Right 50%).
 #[must_use]
@@ -22,7 +23,7 @@ pub fn build_split_view(prepared: &PreparedDiff, is_dark: bool) -> gtk::Box {
         let left_canvas = DiffHunkCanvas::new(
             &hunk.left_gutter_markup,
             &hunk.left_code_markup,
-            hunk.left_tones.clone(),
+            Arc::clone(&hunk.left_tones),
             is_dark,
         );
         left_canvas.add_css_class("diff-col-left");
@@ -30,7 +31,7 @@ pub fn build_split_view(prepared: &PreparedDiff, is_dark: bool) -> gtk::Box {
         let right_canvas = DiffHunkCanvas::new(
             &hunk.right_gutter_markup,
             &hunk.right_code_markup,
-            hunk.right_tones.clone(),
+            Arc::clone(&hunk.right_tones),
             is_dark,
         );
         right_canvas.add_css_class("diff-col-right");
@@ -72,14 +73,14 @@ pub fn build_drawer_view(
             DiffHunkCanvas::new(
                 &hunk.right_gutter_markup,
                 &hunk.right_code_markup,
-                hunk.right_tones.clone(),
+                Arc::clone(&hunk.right_tones),
                 is_dark,
             )
         } else {
             DiffHunkCanvas::new(
                 &hunk.unified_gutter_markup,
                 &hunk.unified_code_markup,
-                hunk.unified_tones.clone(),
+                Arc::clone(&hunk.unified_tones),
                 is_dark,
             )
         };
@@ -124,7 +125,7 @@ pub fn build_drawer_view(
         let orig_canvas = DiffHunkCanvas::new(
             &hunk.left_gutter_markup,
             &hunk.left_code_markup,
-            hunk.left_tones.clone(),
+            Arc::clone(&hunk.left_tones),
             is_dark,
         );
         drawer_panel.append(&orig_canvas);
@@ -147,7 +148,7 @@ pub fn build_created_view(hunks: &[PreparedHunk], omitted_lines: usize, is_dark:
         let canvas = DiffHunkCanvas::new(
             &hunk.right_gutter_markup,
             &hunk.right_code_markup,
-            hunk.right_tones.clone(),
+            Arc::clone(&hunk.right_tones),
             is_dark,
         );
         root.append(&canvas);

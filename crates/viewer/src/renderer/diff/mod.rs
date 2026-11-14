@@ -54,17 +54,20 @@ pub fn build_diff_card(prepared: &Arc<PreparedDiff>, is_dark: bool) -> Responsiv
 }
 
 #[must_use]
+#[allow(clippy::too_many_lines)]
 pub fn build_diff_card_with_mode(
     prepared: &Arc<PreparedDiff>,
     is_dark: bool,
     allow_auto_collapse: bool,
 ) -> ResponsiveDiffContainer {
-    // Safeguard 2:
+    // Safeguard:
     // - Pending approval diffs (`allow_auto_collapse == false`) ALWAYS start expanded.
     // - Small diffs (`<= 12` changed lines) ALWAYS start expanded.
-    // - Only auto-approved / history diffs with `> 12` changed lines start collapsed.
+    // - Auto-approved / history diffs with `> 12` changed lines start collapsed AND defer
+    //   body widget construction until expanded (matching OpenCode's `PatchTool` `defer: true`).
     let total_changed_lines = prepared.stats.added_lines + prepared.stats.removed_lines;
     let initial_expanded = !allow_auto_collapse || total_changed_lines <= 12;
+
     let frame = gtk::Frame::new(None);
     frame.add_css_class("view");
     frame.add_css_class("viewer-diff-card");
@@ -200,7 +203,7 @@ pub fn build_diff_card_with_mode(
     card_vbox.append(&header);
 
     // -----------------------------------------------------------------------
-    // 2. Body Viewport (Modified 2-Col/Drawer Stack, Created, Binary, Unchanged)
+    // 2. Body Viewport (Lazily mounted on demand if `initial_expanded == false`)
     // -----------------------------------------------------------------------
     let container = ResponsiveDiffContainer::new(&frame);
     let body_revealer = gtk::Revealer::builder()
@@ -210,13 +213,59 @@ pub fn build_diff_card_with_mode(
         .hexpand(true)
         .build();
 
+    let body_mounted = Rc::new(Cell::new(false));
+    let mount_body: Rc<dyn Fn()> = {
+        let body_mounted = body_mounted.clone();
+        let prepared_initial = Arc::clone(prepared);
+        let body_revealer = body_revealer.clone();
+        let container_weak = container.downgrade();
+        let peek_drawer_btn = peek_drawer_btn.clone();
+        let mode_toggle_btn = mode_toggle_btn.clone();
+
+        Rc::new(move || {
+            if body_mounted.replace(true) {
+                return;
+            }
+            let Some(container) = container_weak.upgrade() else {
+                return;
+            };
+
+            let current_dark = crate::cache::is_card_surface_dark();
+            let active_init = if current_dark == is_dark {
+                Arc::clone(&prepared_initial)
+            } else {
+                Arc::new(prepare_from_payload(
+                    (*prepared_initial.payload).clone(),
+                    current_dark,
+                ))
+            };
+
+            mount_diff_body_into_revealer(
+                &active_init,
+                current_dark,
+                &container,
+                &body_revealer,
+                &peek_drawer_btn,
+                &mode_toggle_btn,
+            );
+        })
+    };
+
+    if initial_expanded {
+        mount_body();
+    }
+
     let is_modified = prepared.kind == DiffPayloadKind::Modified;
     let body_rev_for_btn = body_revealer.clone();
-    let mode_btn_for_collapse = mode_toggle_btn.clone();
-    let peek_btn_for_collapse = peek_drawer_btn.clone();
+    let mode_btn_for_collapse = mode_toggle_btn;
+    let peek_btn_for_collapse = peek_drawer_btn;
     let container_for_collapse = container.downgrade();
+    let mount_on_expand = mount_body;
     collapse_btn.connect_clicked(move |btn| {
         let next = !body_rev_for_btn.reveals_child();
+        if next {
+            mount_on_expand();
+        }
         body_rev_for_btn.set_reveal_child(next);
         btn.set_tooltip_text(Some(if next {
             "Collapse diff"
@@ -238,13 +287,27 @@ pub fn build_diff_card_with_mode(
     });
 
     // Also allow clicking the file path label in the header to toggle expand/collapse
-    let collapse_btn_for_path = collapse_btn.clone();
+    let collapse_btn_for_path = collapse_btn;
     let path_click = gtk::GestureClick::new();
     path_click.connect_released(move |_, _, _, _| {
         collapse_btn_for_path.emit_clicked();
     });
     path_lbl.add_controller(path_click);
 
+    card_vbox.append(&body_revealer);
+    frame.set_child(Some(&card_vbox));
+    container
+}
+
+#[allow(clippy::too_many_lines)]
+fn mount_diff_body_into_revealer(
+    prepared: &Arc<PreparedDiff>,
+    is_dark: bool,
+    container: &ResponsiveDiffContainer,
+    body_revealer: &gtk::Revealer,
+    peek_drawer_btn: &gtk::Button,
+    mode_toggle_btn: &gtk::Button,
+) {
     match prepared.kind {
         DiffPayloadKind::Binary => {
             let notice = build_info_banner(
@@ -306,9 +369,6 @@ pub fn build_diff_card_with_mode(
             stack.add_named(&split_box, Some("split"));
             stack.set_visible_child_name("split");
 
-            // Lazily instantiated only when the pane narrows below `SPLIT_VIEW_BREAKPOINT`
-            // or the user clicks the Split <-> Drawer toggle button, cutting initial widget
-            // and Pango layout construction in half for standard wide panes.
             let drawer_rev_slot: Rc<RefCell<Option<gtk::Revealer>>> = Rc::new(RefCell::new(None));
             let active_dark = Rc::new(Cell::new(is_dark));
             let active_prepared = Rc::new(RefCell::new(Arc::clone(prepared)));
@@ -342,61 +402,68 @@ pub fn build_diff_card_with_mode(
             let stack_for_mode = stack.clone();
             let peek_btn_for_mode = peek_drawer_btn.clone();
             let rev_slot_for_mode = drawer_rev_slot.clone();
-            let toggle_for_mode = mode_toggle_btn;
+            let toggle_for_mode = mode_toggle_btn.clone();
             let body_rev_for_mode = body_revealer.clone();
             let container_for_resize = container.downgrade();
             let prepared_for_drawer = active_prepared.clone();
             let dark_for_drawer = active_dark.clone();
-            container.connect_mode_changed(move |mode, _is_narrow| {
-                let is_expanded = body_rev_for_mode.reveals_child();
-                match mode {
-                    DiffLayoutMode::Split => {
-                        if let Some(ref rev) = *rev_slot_for_mode.borrow() {
-                            rev.set_reveal_child(false);
-                            rev.set_visible(false);
-                        }
-                        peek_btn_for_mode.set_visible(false);
-                        stack_for_mode.set_visible_child_name("split");
-                        toggle_for_mode.set_tooltip_text(Some(
-                            "Two-Column Split View active (click for Compact Drawer View)",
-                        ));
-                    }
-                    DiffLayoutMode::Drawer => {
-                        if rev_slot_for_mode.borrow().is_none() {
-                            let (drawer_overlay, drawer_revealer, drawer_panel) = build_drawer_view(
-                                &prepared_for_drawer.borrow(),
-                                dark_for_drawer.get(),
-                            );
-                            if let Some(c) = container_for_resize.upgrade() {
-                                c.set_drawer_panel(&drawer_panel);
+            let apply_mode: Rc<dyn Fn(DiffLayoutMode, bool)> =
+                Rc::new(move |mode: DiffLayoutMode, _is_narrow: bool| {
+                    let is_expanded = body_rev_for_mode.reveals_child();
+                    match mode {
+                        DiffLayoutMode::Split => {
+                            if let Some(ref rev) = *rev_slot_for_mode.borrow() {
+                                rev.set_reveal_child(false);
+                                rev.set_visible(false);
                             }
-                            let peek_btn_for_notify = peek_btn_for_mode.clone();
-                            drawer_revealer.connect_reveal_child_notify(move |rev| {
-                                peek_btn_for_notify.set_label(if rev.reveals_child() {
-                                    "Hide Original"
-                                } else {
-                                    "Original"
-                                });
-                            });
-                            stack_for_mode.add_named(&drawer_overlay, Some("drawer"));
-                            *rev_slot_for_mode.borrow_mut() = Some(drawer_revealer);
+                            peek_btn_for_mode.set_visible(false);
+                            stack_for_mode.set_visible_child_name("split");
+                            toggle_for_mode.set_tooltip_text(Some(
+                                "Two-Column Split View active (click for Compact Drawer View)",
+                            ));
                         }
-                        peek_btn_for_mode.set_visible(is_expanded);
-                        stack_for_mode.set_visible_child_name("drawer");
-                        toggle_for_mode.set_tooltip_text(Some(
-                            "Compact Drawer View active (click for Two-Column Split View)",
-                        ));
+                        DiffLayoutMode::Drawer => {
+                            if rev_slot_for_mode.borrow().is_none() {
+                                let (drawer_overlay, drawer_revealer, drawer_panel) =
+                                    build_drawer_view(
+                                        &prepared_for_drawer.borrow(),
+                                        dark_for_drawer.get(),
+                                    );
+                                if let Some(c) = container_for_resize.upgrade() {
+                                    c.set_drawer_panel(&drawer_panel);
+                                }
+                                let peek_btn_for_notify = peek_btn_for_mode.clone();
+                                drawer_revealer.connect_reveal_child_notify(move |rev| {
+                                    peek_btn_for_notify.set_label(if rev.reveals_child() {
+                                        "Hide Original"
+                                    } else {
+                                        "Original"
+                                    });
+                                });
+                                stack_for_mode.add_named(&drawer_overlay, Some("drawer"));
+                                *rev_slot_for_mode.borrow_mut() = Some(drawer_revealer);
+                            }
+                            peek_btn_for_mode.set_visible(is_expanded);
+                            stack_for_mode.set_visible_child_name("drawer");
+                            toggle_for_mode.set_tooltip_text(Some(
+                                "Compact Drawer View active (click for Two-Column Split View)",
+                            ));
+                        }
                     }
-                }
-                if let Some(c) = container_for_resize.upgrade() {
-                    c.queue_resize();
-                }
+                    if let Some(c) = container_for_resize.upgrade() {
+                        c.queue_resize();
+                    }
+                });
+
+            let apply_mode_for_cb = apply_mode.clone();
+            container.connect_mode_changed(move |mode, is_narrow| {
+                apply_mode_for_cb(mode, is_narrow);
             });
 
             // Re-render syntax highlighting and diff canvas colors when `@card_bg_color` darkness changes
             let stack_weak = stack.downgrade();
             let container_for_theme = container.downgrade();
-            let peek_btn_for_theme = peek_drawer_btn;
+            let peek_btn_for_theme = peek_drawer_btn.clone();
             let rev_slot_for_theme = drawer_rev_slot;
             let payload_arc = Arc::clone(&prepared.payload);
             let update_modified: Rc<dyn Fn(bool)> = Rc::new(move |new_dark: bool| {
@@ -411,8 +478,7 @@ pub fn build_diff_card_with_mode(
 
                 let current_child_name = stk
                     .visible_child_name()
-                    .map(|s| s.to_string())
-                    .unwrap_or_else(|| "split".to_string());
+                    .map_or_else(|| "split".to_string(), |s| s.to_string());
 
                 if let Some(old_split) = stk.child_by_name("split") {
                     stk.remove(&old_split);
@@ -462,13 +528,13 @@ pub fn build_diff_card_with_mode(
             });
 
             body_revealer.set_child(Some(&stack));
+
+            // If the card was already allocated in narrow/Drawer mode while collapsed, sync immediately
+            if container.current_mode() == DiffLayoutMode::Drawer {
+                apply_mode(DiffLayoutMode::Drawer, true);
+            }
         }
     }
-
-    card_vbox.append(&body_revealer);
-
-    frame.set_child(Some(&card_vbox));
-    container
 }
 
 /// Builds a 5-segment graphical bar (like GitHub / OpenCode PR diff bars)
@@ -532,83 +598,143 @@ mod tests {
 
     #[test]
     fn modified_diff_lazily_instantiates_drawer_view_on_mode_switch() {
-        if gtk::init().is_err() {
-            return;
-        }
-
-        let json = r#"{
-            "path": "src/module.rs",
-            "language": "rs",
-            "kind": "Modified",
-            "stats": {
-                "added_lines": 1,
-                "removed_lines": 1,
-                "hunk_count": 1,
-                "old_total_lines": 4,
-                "new_total_lines": 4,
-                "truncated": false,
-                "omitted_lines": 0
-            },
-            "hunks": [{
-                "header": "@@ -1,2 +1,2 @@",
-                "old_start": 1,
-                "old_count": 2,
-                "new_start": 1,
-                "new_count": 2,
-                "rows": [{
-                    "left": {
-                        "line_no": 1,
-                        "kind": "Delete",
-                        "spans": [{"emphasized": true, "text": "let x = 1;"}]
-                    },
-                    "right": {
-                        "line_no": 1,
-                        "kind": "Insert",
-                        "spans": [{"emphasized": true, "text": "let x = 2;"}]
-                    }
+        crate::run_gtk_test(|| {
+            let json = r#"{
+                "path": "src/module.rs",
+                "language": "rs",
+                "kind": "Modified",
+                "stats": {
+                    "added_lines": 1,
+                    "removed_lines": 1,
+                    "hunk_count": 1,
+                    "old_total_lines": 4,
+                    "new_total_lines": 4,
+                    "truncated": false,
+                    "omitted_lines": 0
+                },
+                "hunks": [{
+                    "header": "@@ -1,2 +1,2 @@",
+                    "old_start": 1,
+                    "old_count": 2,
+                    "new_start": 1,
+                    "new_count": 2,
+                    "rows": [{
+                        "left": {
+                            "line_no": 1,
+                            "kind": "Delete",
+                            "spans": [{"emphasized": true, "text": "let x = 1;"}]
+                        },
+                        "right": {
+                            "line_no": 1,
+                            "kind": "Insert",
+                            "spans": [{"emphasized": true, "text": "let x = 2;"}]
+                        }
+                    }]
                 }]
-            }]
-        }"#;
+            }"#;
 
-        let prepared = get_or_prepare_diff(json, true).expect("valid diff json");
-        let card = build_diff_card(&prepared, true);
-        assert_eq!(card.current_mode(), DiffLayoutMode::Split);
+            let prepared = get_or_prepare_diff(json, true).expect("valid diff json");
+            let card = build_diff_card(&prepared, true);
+            assert_eq!(card.current_mode(), DiffLayoutMode::Split);
 
-        // Locate the inner GtkStack inside Frame -> Box -> Revealer -> Stack
-        let frame = card
-            .first_child()
-            .and_then(|w| w.downcast::<gtk::Frame>().ok())
-            .expect("frame");
-        let vbox = frame
-            .child()
-            .and_then(|w| w.downcast::<gtk::Box>().ok())
-            .expect("vbox");
-        let revealer = vbox
-            .last_child()
-            .and_then(|w| w.downcast::<gtk::Revealer>().ok())
-            .expect("body revealer");
-        let stack = revealer
-            .child()
-            .and_then(|w| w.downcast::<gtk::Stack>().ok())
-            .expect("mode stack");
+            let frame = card
+                .first_child()
+                .and_then(|w| w.downcast::<gtk::Frame>().ok())
+                .expect("frame");
+            let vbox = frame
+                .child()
+                .and_then(|w| w.downcast::<gtk::Box>().ok())
+                .expect("vbox");
+            let revealer = vbox
+                .last_child()
+                .and_then(|w| w.downcast::<gtk::Revealer>().ok())
+                .expect("body revealer");
+            let stack = revealer
+                .child()
+                .and_then(|w| w.downcast::<gtk::Stack>().ok())
+                .expect("mode stack");
 
-        // Initially only "split" exists; "drawer" is not yet instantiated.
-        assert!(stack.child_by_name("split").is_some());
-        assert!(stack.child_by_name("drawer").is_none());
-        assert_eq!(stack.visible_child_name().as_deref(), Some("split"));
+            assert!(stack.child_by_name("split").is_some());
+            assert!(stack.child_by_name("drawer").is_none());
+            assert_eq!(stack.visible_child_name().as_deref(), Some("split"));
 
-        // Switching to Drawer mode lazily builds and activates "drawer".
-        card.set_user_override(Some(DiffLayoutMode::Drawer));
-        assert_eq!(card.current_mode(), DiffLayoutMode::Drawer);
-        let drawer_child = stack
-            .child_by_name("drawer")
-            .expect("drawer built on demand");
-        assert_eq!(stack.visible_child_name().as_deref(), Some("drawer"));
+            card.set_user_override(Some(DiffLayoutMode::Drawer));
+            assert_eq!(card.current_mode(), DiffLayoutMode::Drawer);
+            let drawer_child = stack
+                .child_by_name("drawer")
+                .expect("drawer built on demand");
+            assert_eq!(stack.visible_child_name().as_deref(), Some("drawer"));
 
-        // Switching back to Split mode and then to Drawer again reuses the existing widget.
-        card.set_user_override(Some(DiffLayoutMode::Split));
-        assert_eq!(stack.visible_child_name().as_deref(), Some("split"));
-        card.set_user_override(Some(DiffLayoutMode::Drawer));
-        assert_eq!(stack.child_by_name("drawer").as_ref(), Some(&drawer_child));
+            card.set_user_override(Some(DiffLayoutMode::Split));
+            assert_eq!(stack.visible_child_name().as_deref(), Some("split"));
+            card.set_user_override(Some(DiffLayoutMode::Drawer));
+            assert_eq!(stack.child_by_name("drawer").as_ref(), Some(&drawer_child));
+        });
+    }
+
+    #[test]
+    fn compact_large_diff_defers_body_mount_until_expanded() {
+        crate::run_gtk_test(|| {
+            let json = r#"{
+                "path": "src/large_module.rs",
+                "language": "rs",
+                "kind": "Created",
+                "stats": {
+                    "added_lines": 25,
+                    "removed_lines": 0,
+                    "hunk_count": 1,
+                    "old_total_lines": 0,
+                    "new_total_lines": 25,
+                    "truncated": false,
+                    "omitted_lines": 0
+                },
+                "hunks": [{
+                    "header": "@@ -0,0 +1,2 @@",
+                    "old_start": 0,
+                    "old_count": 0,
+                    "new_start": 1,
+                    "new_count": 2,
+                    "rows": [{
+                        "left": { "line_no": null, "kind": "Empty", "spans": [] },
+                        "right": { "line_no": 1, "kind": "Insert", "spans": [{"emphasized": false, "text": "pub fn f() {}"}] }
+                    }]
+                }]
+            }"#;
+
+            let prepared = get_or_prepare_diff(json, true).expect("valid diff json");
+            let card = build_diff_card_with_mode(&prepared, true, true);
+
+            let frame = card
+                .first_child()
+                .and_then(|w| w.downcast::<gtk::Frame>().ok())
+                .expect("frame");
+            let vbox = frame
+                .child()
+                .and_then(|w| w.downcast::<gtk::Box>().ok())
+                .expect("vbox");
+            let header = vbox
+                .first_child()
+                .and_then(|w| w.downcast::<gtk::Box>().ok())
+                .expect("header");
+            let collapse_btn = header
+                .last_child()
+                .and_then(|w| w.downcast::<gtk::Button>().ok())
+                .expect("collapse button");
+            let revealer = vbox
+                .last_child()
+                .and_then(|w| w.downcast::<gtk::Revealer>().ok())
+                .expect("body revealer");
+
+            assert!(!revealer.reveals_child());
+            assert!(revealer.child().is_none());
+
+            collapse_btn.emit_clicked();
+            assert!(revealer.reveals_child());
+            let mounted_body = revealer.child().expect("diff body mounted on first expand");
+
+            collapse_btn.emit_clicked();
+            assert!(!revealer.reveals_child());
+            assert_eq!(revealer.child().as_ref(), Some(&mounted_body));
+        });
     }
 }

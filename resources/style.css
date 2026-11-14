@@ -1093,22 +1093,42 @@ flowbox.viewer-gallery > flowboxchild {
 }
 
 .viewer-image-card-footer {
-    padding: 5px 6px 5px 10px;
+    padding: 5px 10px;
     background: transparent;
     background-color: transparent;
-    border: none;
+    border-top: 1px solid alpha(currentColor, 0.08);
 }
 
-.viewer-card-menu-btn {
-    min-height: 24px;
-    min-width: 24px;
-    padding: 2px;
-    opacity: 0.65;
-    background: transparent;
+.viewer-image-card-title {
+    opacity: 0.86;
+    font-weight: 500;
 }
 
-.viewer-card-menu-btn:hover {
+menubutton.viewer-card-menu-btn > button {
+    min-height: 26px;
+    min-width: 26px;
+    padding: 0;
+    border-radius: 9999px;
+    background-color: rgba(0, 0, 0, 0.58);
+    background-image: none;
+    color: white;
+    border: 1px solid rgba(255, 255, 255, 0.22);
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+    opacity: 0;
+    transition: opacity 150ms ease, background-color 150ms ease;
+}
+
+.viewer-image-card:hover menubutton.viewer-card-menu-btn > button,
+.viewer-image-card:focus-within menubutton.viewer-card-menu-btn > button,
+menubutton.viewer-card-menu-btn > button:checked,
+menubutton.viewer-card-menu-btn > button:hover {
+    opacity: 0.92;
+}
+
+menubutton.viewer-card-menu-btn > button:hover,
+menubutton.viewer-card-menu-btn > button:checked {
     opacity: 1.0;
+    background-color: rgba(0, 0, 0, 0.78);
 }
 
 /* --- Smart Viewer: GFM Tables --- */

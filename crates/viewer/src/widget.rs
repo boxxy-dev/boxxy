@@ -442,39 +442,33 @@ mod tests {
 
     #[test]
     fn streaming_mutates_tail_widgets_in_place_and_park_recycles_widgets() {
-        if gtk::init().is_err() {
-            return;
-        }
+        crate::run_gtk_test(|| {
+            let viewer = StructuredViewer::new(Rc::new(ViewerRegistry::new_with_defaults()));
+            viewer.set_streaming_content("Hello ", false);
+            let first_para = viewer.widget().first_child().expect("first paragraph");
 
-        let viewer = StructuredViewer::new(Rc::new(ViewerRegistry::new_with_defaults()));
-        viewer.set_streaming_content("Hello ", false);
-        let first_para = viewer.widget().first_child().expect("first paragraph");
+            viewer.set_streaming_content("Hello **world**!", false);
+            let updated_para = viewer.widget().first_child().expect("same paragraph");
+            assert_eq!(first_para, updated_para);
 
-        // Growing paragraph mutates the exact same GtkLabel instance in-place
-        viewer.set_streaming_content("Hello **world**!", false);
-        let updated_para = viewer.widget().first_child().expect("same paragraph");
-        assert_eq!(first_para, updated_para);
+            viewer.set_streaming_content("Hello **world**!\n\n```rust\nlet x = 1;", false);
+            let code_w1 = viewer.widget().last_child().expect("code block");
+            viewer.set_streaming_content(
+                "Hello **world**!\n\n```rust\nlet x = 1;\nlet y = 2;\n```",
+                true,
+            );
+            let code_w2 = viewer.widget().last_child().expect("settled code block");
+            assert_eq!(code_w1, code_w2);
 
-        // Appending a streaming code block preserves paragraph 0 and mutates code block 1 in-place
-        viewer.set_streaming_content("Hello **world**!\n\n```rust\nlet x = 1;", false);
-        let code_w1 = viewer.widget().last_child().expect("code block");
-        viewer.set_streaming_content(
-            "Hello **world**!\n\n```rust\nlet x = 1;\nlet y = 2;\n```",
-            true,
-        );
-        let code_w2 = viewer.widget().last_child().expect("settled code block");
-        assert_eq!(code_w1, code_w2);
+            viewer.park_for_recycle();
+            assert!(viewer.widget().first_child().is_none());
+            let (p_cnt, _, _, c_cnt) = viewer.state.pool.borrow().counts();
+            assert_eq!(p_cnt, 1);
+            assert_eq!(c_cnt, 1);
 
-        // Parking moves both the Paragraph label and the CodeBlockWidget into the recycling pool
-        viewer.park_for_recycle();
-        assert!(viewer.widget().first_child().is_none());
-        let (p_cnt, _, _, c_cnt) = viewer.state.pool.borrow().counts();
-        assert_eq!(p_cnt, 1);
-        assert_eq!(c_cnt, 1);
-
-        // Next `set_content` rebinds the pooled widgets with 0 new GObject allocations!
-        viewer.set_content("Rebound paragraph\n\n```rust\nfn rebound() {}\n```");
-        assert_eq!(viewer.widget().first_child().as_ref(), Some(&first_para));
-        assert_eq!(viewer.widget().last_child().as_ref(), Some(&code_w1));
+            viewer.set_content("Rebound paragraph\n\n```rust\nfn rebound() {}\n```");
+            assert_eq!(viewer.widget().first_child().as_ref(), Some(&first_para));
+            assert_eq!(viewer.widget().last_child().as_ref(), Some(&code_w1));
+        });
     }
 }

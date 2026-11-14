@@ -18,14 +18,17 @@ pub enum DiffLayoutMode {
 mod imp {
     use super::*;
 
+    type ModeChangeCallback = Rc<dyn Fn(DiffLayoutMode, bool)>;
+    type CardDarkCallback = Rc<dyn Fn(bool)>;
+
     #[derive(Default)]
     pub struct ResponsiveDiffContainer {
         pub(super) last_mode: Cell<Option<DiffLayoutMode>>,
         pub(super) last_card_dark: Cell<Option<bool>>,
         pub(super) user_override: Cell<Option<DiffLayoutMode>>,
         pub(super) pending_switch: Cell<bool>,
-        pub(super) on_mode_change: RefCell<Option<Rc<dyn Fn(DiffLayoutMode, bool)>>>,
-        pub(super) on_card_dark_change: RefCell<Option<Rc<dyn Fn(bool)>>>,
+        pub(super) on_mode_change: RefCell<Option<ModeChangeCallback>>,
+        pub(super) on_card_dark_change: RefCell<Option<CardDarkCallback>>,
         pub(super) drawer_panel: RefCell<Option<gtk::Widget>>,
     }
 

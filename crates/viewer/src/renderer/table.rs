@@ -1,7 +1,8 @@
 use crate::parser::blocks::{ContentBlock, TableAlignment, TableCell};
-use crate::renderer::BlockRenderer;
+use crate::parser::markdown::strip_pango_markup;
 use crate::renderer::image::build_table_image_card;
 use crate::renderer::text::connect_label_links;
+use crate::renderer::{BlockRenderer, RenderContext};
 use gtk4 as gtk;
 use gtk4::prelude::*;
 use gtk4::subclass::prelude::*;
@@ -102,7 +103,16 @@ impl BlockRenderer for TableRenderer {
     fn render(
         &self,
         block: &ContentBlock,
+        registry: &crate::registry::ViewerRegistry,
+    ) -> gtk::Widget {
+        self.render_with_context(block, registry, &RenderContext::default())
+    }
+
+    fn render_with_context(
+        &self,
+        block: &ContentBlock,
         _registry: &crate::registry::ViewerRegistry,
+        ctx: &RenderContext,
     ) -> gtk::Widget {
         let ContentBlock::Table {
             alignments,
@@ -148,10 +158,17 @@ impl BlockRenderer for TableRenderer {
             .valign(gtk::Align::Center)
             .build();
 
-        let tsv_payload = format_table_tsv(headers, rows);
+        // Defer TSV formatting until the user actually clicks Copy so streaming tables
+        // and scrolled-past history tables skip TSV string work completely on render.
+        let headers_for_copy: std::rc::Rc<[String]> = headers.as_slice().into();
+        let rows_for_copy: std::rc::Rc<[Vec<TableCell>]> = rows.as_slice().into();
+        let cached_tsv: std::rc::Rc<std::cell::OnceCell<String>> =
+            std::rc::Rc::new(std::cell::OnceCell::new());
         copy_btn.connect_clicked(move |btn| {
             if let Some(display) = gdk::Display::default() {
-                display.clipboard().set_text(&tsv_payload);
+                let tsv = cached_tsv
+                    .get_or_init(|| format_table_tsv(&headers_for_copy, &rows_for_copy));
+                display.clipboard().set_text(tsv);
                 btn.set_icon_name("boxxy-object-select-symbolic");
                 let b = btn.clone();
                 gtk::glib::timeout_add_local_once(
@@ -205,8 +222,8 @@ impl BlockRenderer for TableRenderer {
                     .unwrap_or(TableAlignment::Left);
                 let header_cell = TableCell::new(markup.to_string(), Vec::new());
                 let hexpand = !col_is_media_only.get(col_idx).copied().unwrap_or(false);
-                let cell = build_table_cell(&header_cell, align, true, false, hexpand);
-                #[allow(clippy::cast_possible_wrap)]
+                let cell = build_table_cell(&header_cell, align, true, false, hexpand, ctx);
+                #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
                 grid.attach(&cell, col_idx as i32, current_grid_row, 1, 1);
             }
             current_grid_row += 1;
@@ -222,8 +239,8 @@ impl BlockRenderer for TableRenderer {
                     .copied()
                     .unwrap_or(TableAlignment::Left);
                 let hexpand = !col_is_media_only.get(col_idx).copied().unwrap_or(false);
-                let cell = build_table_cell(cell_data, align, false, is_odd, hexpand);
-                #[allow(clippy::cast_possible_wrap)]
+                let cell = build_table_cell(cell_data, align, false, is_odd, hexpand, ctx);
+                #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
                 grid.attach(&cell, col_idx as i32, current_grid_row, 1, 1);
             }
             current_grid_row += 1;
@@ -244,6 +261,7 @@ fn build_table_cell(
     is_header: bool,
     is_odd_row: bool,
     hexpand: bool,
+    ctx: &RenderContext,
 ) -> gtk::Box {
     let cell_box = gtk::Box::new(gtk::Orientation::Vertical, 6);
     cell_box.add_css_class("viewer-table-cell");
@@ -312,7 +330,7 @@ fn build_table_cell(
         media_box.set_halign(card_halign);
 
         for img in &cell.images {
-            let card = build_table_image_card(img);
+            let card = build_table_image_card(img, ctx);
             media_box.append(&card);
         }
         cell_box.append(&media_box);
@@ -335,50 +353,52 @@ fn visible_char_count(markup: &str) -> usize {
     count
 }
 
-fn strip_tags_for_copy(markup: &str) -> String {
-    let mut out = String::with_capacity(markup.len());
-    let mut in_tag = false;
-    for ch in markup.chars() {
-        match ch {
-            '<' => in_tag = true,
-            '>' => in_tag = false,
-            '\n' if !in_tag => out.push(' '),
-            _ if !in_tag => out.push(ch),
-            _ => {}
-        }
-    }
-    out.replace("&amp;", "&")
-        .replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&quot;", "\"")
-        .replace("&apos;", "'")
-}
-
-fn format_cell_for_tsv(cell: &TableCell) -> String {
-    let text = strip_tags_for_copy(&cell.markup);
-    if cell.images.is_empty() {
-        text
-    } else {
-        let urls: Vec<&str> = cell.images.iter().map(|i| i.url.as_str()).collect();
-        if text.is_empty() {
-            urls.join(" ")
-        } else {
-            format!("{text} ({})", urls.join(" "))
-        }
-    }
-}
-
 fn format_table_tsv(headers: &[String], rows: &[Vec<TableCell>]) -> String {
-    let mut lines = Vec::with_capacity(1 + rows.len());
+    let approx_cap = (headers.len() + rows.len() * headers.len().max(2)) * 24;
+    let mut out = String::with_capacity(approx_cap);
+
     if !headers.is_empty() {
-        let h: Vec<String> = headers.iter().map(|c| strip_tags_for_copy(c)).collect();
-        lines.push(h.join("\t"));
+        for (idx, col) in headers.iter().enumerate() {
+            if idx > 0 {
+                out.push('\t');
+            }
+            out.push_str(&strip_pango_markup(col, true));
+        }
     }
+
     for row in rows {
-        let r: Vec<String> = row.iter().map(format_cell_for_tsv).collect();
-        lines.push(r.join("\t"));
+        if !out.is_empty() || !headers.is_empty() {
+            out.push('\n');
+        }
+        for (idx, cell) in row.iter().enumerate() {
+            if idx > 0 {
+                out.push('\t');
+            }
+            let text = strip_pango_markup(&cell.markup, true);
+            if cell.images.is_empty() {
+                out.push_str(&text);
+            } else if text.is_empty() {
+                for (img_idx, img) in cell.images.iter().enumerate() {
+                    if img_idx > 0 {
+                        out.push(' ');
+                    }
+                    out.push_str(&img.url);
+                }
+            } else {
+                out.push_str(&text);
+                out.push_str(" (");
+                for (img_idx, img) in cell.images.iter().enumerate() {
+                    if img_idx > 0 {
+                        out.push(' ');
+                    }
+                    out.push_str(&img.url);
+                }
+                out.push(')');
+            }
+        }
     }
-    lines.join("\n")
+
+    out
 }
 
 #[cfg(test)]
@@ -406,11 +426,8 @@ mod tests {
 
     #[test]
     fn table_inside_horizontal_row_does_not_inflate_vertical_height() {
-        if gtk::init().is_err() {
-            return;
-        }
-
-        let input = "\
+        crate::run_gtk_test(|| {
+            let input = "\
 Querying Flathub index for latest application registrations.
 
 | Application & Description | Details |
@@ -420,34 +437,31 @@ Querying Flathub index for latest application registrations.
 | **Kaori** (`io.github.riyaniii.Kaori`)<br>Manga and comic reader frontend. Native Libadwaita interface with gesture navigation. | Utility |
 | **CalibRaw** (`io.github.Duecki1.CalibRaw`)<br>Non-destructive RAW image processor. GPU-accelerated pipeline with local AI masking modules. | Graphics |";
 
-        let blocks = parse_markdown(input);
-        let registry = ViewerRegistry::new_with_defaults();
+            let blocks = parse_markdown(input);
+            let registry = ViewerRegistry::new_with_defaults();
 
-        let hbox = gtk::Box::new(gtk::Orientation::Horizontal, 16);
-        let left_col = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        left_col.set_size_request(42, -1);
-        hbox.append(&left_col);
+            let hbox = gtk::Box::new(gtk::Orientation::Horizontal, 16);
+            let left_col = gtk::Box::new(gtk::Orientation::Vertical, 0);
+            left_col.set_size_request(42, -1);
+            hbox.append(&left_col);
 
-        let vbox = gtk::Box::new(gtk::Orientation::Vertical, 2);
-        vbox.set_hexpand(true);
-        hbox.append(&vbox);
+            let vbox = gtk::Box::new(gtk::Orientation::Vertical, 2);
+            vbox.set_hexpand(true);
+            hbox.append(&vbox);
 
-        for block in &blocks {
-            if let Some(w) = registry.render_block(block) {
-                vbox.append(&w);
+            for block in &blocks {
+                if let Some(w) = registry.render_block(block) {
+                    vbox.append(&w);
+                }
             }
-        }
 
-        let (_, vbox_nat_h, _, _) = vbox.measure(gtk::Orientation::Vertical, 942);
-        let (hbox_min_h, hbox_nat_h, _, _) = hbox.measure(gtk::Orientation::Vertical, 1000);
+            let (_, vbox_nat_h, _, _) = vbox.measure(gtk::Orientation::Vertical, 942);
+            let (hbox_min_h, hbox_nat_h, _, _) = hbox.measure(gtk::Orientation::Vertical, 1000);
 
-        // Before TableContainer, hbox_min_h was > 1200px (or > 5000px) while vbox_nat_h was ~250px.
-        // Now hbox_nat_h matches vbox_nat_h without any vertical gap inflation.
-        assert_eq!(hbox_nat_h, vbox_nat_h);
-        assert!(hbox_min_h <= hbox_nat_h);
+            assert_eq!(hbox_nat_h, vbox_nat_h);
+            assert!(hbox_min_h <= hbox_nat_h);
 
-        // Also test a table with embedded images + a 3-item gallery inside a horizontal row
-        let rich_input = "\
+            let rich_input = "\
 Querying Flathub index for latest application registrations.
 
 | Application & Description | Screenshot |
@@ -459,28 +473,33 @@ Querying Flathub index for latest application registrations.
 ![shot-2](https://example.com/shot-2.png)
 ![shot-3](https://example.com/shot-3.png)";
 
-        let rich_blocks = parse_markdown(rich_input);
-        assert_eq!(rich_blocks.len(), 3, "Expected [Paragraph, Table, ImageGallery]");
+            let rich_blocks = parse_markdown(rich_input);
+            assert_eq!(
+                rich_blocks.len(),
+                3,
+                "Expected [Paragraph, Table, ImageGallery]"
+            );
 
-        let hbox2 = gtk::Box::new(gtk::Orientation::Horizontal, 16);
-        let left_col2 = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        left_col2.set_size_request(42, -1);
-        hbox2.append(&left_col2);
+            let hbox2 = gtk::Box::new(gtk::Orientation::Horizontal, 16);
+            let left_col2 = gtk::Box::new(gtk::Orientation::Vertical, 0);
+            left_col2.set_size_request(42, -1);
+            hbox2.append(&left_col2);
 
-        let vbox2 = gtk::Box::new(gtk::Orientation::Vertical, 2);
-        vbox2.set_hexpand(true);
-        hbox2.append(&vbox2);
+            let vbox2 = gtk::Box::new(gtk::Orientation::Vertical, 2);
+            vbox2.set_hexpand(true);
+            hbox2.append(&vbox2);
 
-        for block in &rich_blocks {
-            if let Some(w) = registry.render_block(block) {
-                vbox2.append(&w);
+            for block in &rich_blocks {
+                if let Some(w) = registry.render_block(block) {
+                    vbox2.append(&w);
+                }
             }
-        }
 
-        let (_, vbox2_nat_h, _, _) = vbox2.measure(gtk::Orientation::Vertical, 942);
-        let (hbox2_min_h, hbox2_nat_h, _, _) = hbox2.measure(gtk::Orientation::Vertical, 1000);
+            let (_, vbox2_nat_h, _, _) = vbox2.measure(gtk::Orientation::Vertical, 942);
+            let (hbox2_min_h, hbox2_nat_h, _, _) = hbox2.measure(gtk::Orientation::Vertical, 1000);
 
-        assert_eq!(hbox2_nat_h, vbox2_nat_h);
-        assert!(hbox2_min_h <= hbox2_nat_h);
+            assert_eq!(hbox2_nat_h, vbox2_nat_h);
+            assert!(hbox2_min_h <= hbox2_nat_h);
+        });
     }
 }

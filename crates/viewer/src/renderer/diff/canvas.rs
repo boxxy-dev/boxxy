@@ -4,17 +4,43 @@ use gtk4::prelude::*;
 use gtk4::subclass::prelude::*;
 use gtk4::{gdk, glib, graphene, pango};
 use std::cell::{Cell, RefCell};
+use std::sync::Arc;
 
 const V_PADDING: i32 = 6;
+
+/// Contiguous vertical run of identical non-Context diff rows, coalescing adjacent
+/// additions/deletions/fillers into a single GSK color rectangle + accent bar.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct CoalescedToneRun {
+    tone: DiffRowTone,
+    y: f32,
+    h: f32,
+}
+
+fn push_coalesced_run(runs: &mut Vec<CoalescedToneRun>, tone: DiffRowTone, y: f32, h: f32) {
+    if tone == DiffRowTone::Context {
+        return;
+    }
+    if let Some(last) = runs.last_mut()
+        && last.tone == tone
+        && (y - (last.y + last.h)).abs() <= 1.5
+    {
+        last.h = (y + h) - last.y;
+        return;
+    }
+    runs.push(CoalescedToneRun { tone, y, h });
+}
 
 mod imp {
     use super::*;
 
     #[derive(Default)]
     pub struct DiffHunkCanvas {
-        pub(super) tones: RefCell<Vec<DiffRowTone>>,
+        pub(super) tones: RefCell<Arc<[DiffRowTone]>>,
         pub(super) code_label: RefCell<Option<gtk::Label>>,
         pub(super) is_dark: Cell<bool>,
+        pub(super) cached_geom: Cell<(i32, i32)>,
+        pub(super) cached_runs: RefCell<Vec<CoalescedToneRun>>,
     }
 
     #[glib::object_subclass]
@@ -64,13 +90,58 @@ mod imp {
             }
         }
 
+        #[allow(clippy::cast_precision_loss)]
         fn snapshot(&self, snapshot: &gtk::Snapshot) {
-            let width = self.obj().width() as f32;
-            let height = self.obj().height() as f32;
+            let w_i32 = self.obj().width();
+            let h_i32 = self.obj().height();
             let tones = self.tones.borrow();
-            let is_dark = self.is_dark.get();
 
-            if width > 0.0 && height > 0.0 && !tones.is_empty() {
+            if w_i32 > 0 && h_i32 > 0 && !tones.is_empty() {
+                if self.cached_geom.get() != (w_i32, h_i32) {
+                    let mut runs = self.cached_runs.borrow_mut();
+                    runs.clear();
+
+                    let top_pad = V_PADDING as f32;
+                    let height = h_i32 as f32;
+                    let n = tones.len();
+
+                    if let Some(ref lbl) = *self.code_label.borrow() {
+                        let layout = lbl.layout();
+                        let mut iter = layout.iter();
+                        let mut has_line = true;
+
+                        for (i, &tone) in tones.iter().enumerate() {
+                            let (y, h) = if has_line {
+                                let (y0, y1) = iter.line_yrange();
+                                let ly = top_pad + (y0 as f32 / pango::SCALE as f32);
+                                let lh = ((y1 - y0) as f32 / pango::SCALE as f32).max(1.0);
+                                has_line = iter.next_line();
+                                (ly, lh)
+                            } else {
+                                let avail_h = (height - 2.0 * top_pad).max(16.0);
+                                let line_h = avail_h / (n as f32);
+                                (top_pad + (i as f32) * line_h, line_h)
+                            };
+                            push_coalesced_run(&mut runs, tone, y, h);
+                        }
+                    } else {
+                        let avail_h = (height - 2.0 * top_pad).max(16.0);
+                        let line_h = avail_h / (n as f32);
+                        for (i, &tone) in tones.iter().enumerate() {
+                            push_coalesced_run(
+                                &mut runs,
+                                tone,
+                                top_pad + (i as f32) * line_h,
+                                line_h,
+                            );
+                        }
+                    }
+
+                    self.cached_geom.set((w_i32, h_i32));
+                }
+
+                let width = w_i32 as f32;
+                let is_dark = self.is_dark.get();
                 let (del_bg, del_bar, ins_bg, ins_bar, empty_bg) = if is_dark {
                     (
                         gdk::RGBA::new(0.878, 0.106, 0.141, 0.14),
@@ -89,53 +160,33 @@ mod imp {
                     )
                 };
 
-                let top_pad = V_PADDING as f32;
-                let n = tones.len();
-
-                let mut line_ranges: Vec<(f32, f32)> = Vec::with_capacity(n);
-                if let Some(ref lbl) = *self.code_label.borrow() {
-                    let layout = lbl.layout();
-                    let mut iter = layout.iter();
-                    loop {
-                        let (y0, y1) = iter.line_yrange();
-                        let y = top_pad + (y0 as f32 / pango::SCALE as f32);
-                        let h = ((y1 - y0) as f32 / pango::SCALE as f32).max(1.0);
-                        line_ranges.push((y, h));
-                        if !iter.next_line() {
-                            break;
-                        }
-                    }
-                }
-
-                for (i, tone) in tones.iter().copied().enumerate() {
-                    if tone == DiffRowTone::Context {
-                        continue;
-                    }
-
-                    let (y, h) = if let Some(&(ly, lh)) = line_ranges.get(i) {
-                        (ly, lh)
-                    } else {
-                        let avail_h = (height - 2.0 * top_pad).max(16.0);
-                        let line_h = avail_h / (n as f32);
-                        (top_pad + (i as f32) * line_h, line_h)
-                    };
-
-                    match tone {
+                for run in self.cached_runs.borrow().iter().copied() {
+                    match run.tone {
                         DiffRowTone::Delete => {
-                            snapshot
-                                .append_color(&del_bg, &graphene::Rect::new(0.0, y, width, h));
-                            snapshot
-                                .append_color(&del_bar, &graphene::Rect::new(0.0, y, 3.0, h));
+                            snapshot.append_color(
+                                &del_bg,
+                                &graphene::Rect::new(0.0, run.y, width, run.h),
+                            );
+                            snapshot.append_color(
+                                &del_bar,
+                                &graphene::Rect::new(0.0, run.y, 3.0, run.h),
+                            );
                         }
                         DiffRowTone::Insert => {
-                            snapshot
-                                .append_color(&ins_bg, &graphene::Rect::new(0.0, y, width, h));
-                            snapshot
-                                .append_color(&ins_bar, &graphene::Rect::new(0.0, y, 3.0, h));
+                            snapshot.append_color(
+                                &ins_bg,
+                                &graphene::Rect::new(0.0, run.y, width, run.h),
+                            );
+                            snapshot.append_color(
+                                &ins_bar,
+                                &graphene::Rect::new(0.0, run.y, 3.0, run.h),
+                            );
                         }
                         DiffRowTone::Empty => {
-                            snapshot
-                                .append_color(&empty_bg, &graphene::Rect::new(0.0, y, width, h));
+                            snapshot.append_color(
+                                &empty_bg,
+                                &graphene::Rect::new(0.0, run.y, width, run.h),
+                            );
                         }
                         DiffRowTone::Context => {}
                     }
@@ -158,7 +209,7 @@ impl DiffHunkCanvas {
     pub fn new(
         gutter_markup: &str,
         code_markup: &str,
-        tones: Vec<DiffRowTone>,
+        tones: Arc<[DiffRowTone]>,
         is_dark: bool,
     ) -> Self {
         let obj: Self = glib::Object::new();
@@ -219,5 +270,38 @@ impl DiffHunkCanvas {
         imp.is_dark.set(is_dark);
 
         obj
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn coalesces_adjacent_same_tone_rows_into_single_run() {
+        let mut runs = Vec::new();
+        push_coalesced_run(&mut runs, DiffRowTone::Context, 0.0, 20.0);
+        push_coalesced_run(&mut runs, DiffRowTone::Insert, 20.0, 20.0);
+        push_coalesced_run(&mut runs, DiffRowTone::Insert, 40.0, 20.0);
+        push_coalesced_run(&mut runs, DiffRowTone::Insert, 60.0, 20.0);
+        push_coalesced_run(&mut runs, DiffRowTone::Delete, 80.0, 20.0);
+
+        assert_eq!(runs.len(), 2);
+        assert_eq!(
+            runs[0],
+            CoalescedToneRun {
+                tone: DiffRowTone::Insert,
+                y: 20.0,
+                h: 60.0
+            }
+        );
+        assert_eq!(
+            runs[1],
+            CoalescedToneRun {
+                tone: DiffRowTone::Delete,
+                y: 80.0,
+                h: 20.0
+            }
+        );
     }
 }
