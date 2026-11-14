@@ -283,9 +283,6 @@ mod tests {
             build_cd_command("/tmp/workspace/it's \"$HOME\" $(whoami)"),
             "cd -- '/tmp/workspace/it'\\''s \"$HOME\" $(whoami)'\r"
         );
-        assert_eq!(
-            shell_single_quote("-leading-dash"),
-            "'-leading-dash'"
-        );
+        assert_eq!(shell_single_quote("-leading-dash"), "'-leading-dash'");
     }
 }

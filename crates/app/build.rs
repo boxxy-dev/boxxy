@@ -120,8 +120,6 @@ fn main() {
     <file compressed="true" alias="prompts/memory_flush.md">prompts/memory_flush.md</file>
     <file compressed="true" alias="prompts/privacy_policy.md">prompts/privacy_policy.md</file>
     <file compressed="true" alias="ui/preferences.ui">ui/preferences.ui</file>
-    <file compressed="true" alias="ui/widgets/notification_pill.ui">ui/widgets/notification_pill.ui</file>
-    <file compressed="true" alias="ui/widgets/notification_details.ui">ui/widgets/notification_details.ui</file>
     <file compressed="true" alias="ui/widgets/avatar_crop_dialog.ui">ui/widgets/avatar_crop_dialog.ui</file>
     <file compressed="true" alias="ui/claw_overlay.ui">ui/claw_overlay.ui</file>
     <file compressed="true" alias="ui/bookmarks_tab.ui">ui/bookmarks_tab.ui</file>
@@ -236,8 +234,6 @@ fn main() {
     println!("cargo:rerun-if-changed=../../resources/prompts/memory_flush.md");
     println!("cargo:rerun-if-changed=../../resources/prompts/privacy_policy.md");
     println!("cargo:rerun-if-changed=../../resources/ui/preferences.ui");
-    println!("cargo:rerun-if-changed=../../resources/ui/widgets/notification_pill.ui");
-    println!("cargo:rerun-if-changed=../../resources/ui/widgets/notification_details.ui");
     println!("cargo:rerun-if-changed=../../resources/ui/widgets/avatar_crop_dialog.ui");
     println!("cargo:rerun-if-changed=../../resources/ui/claw_overlay.ui");
     println!("cargo:rerun-if-changed=../../resources/ui/bookmarks_tab.ui");

@@ -1,81 +1,38 @@
 use crate::state::AppWindowInner;
-use gtk4::prelude::*;
 
 pub fn split_vertical(inner: &mut AppWindowInner) {
-    if let Some(page) = inner.tab_view.selected_page() {
-        let child = page.child();
-        if let Some(pos) = inner
-            .tabs
-            .iter()
-            .position(|c| c.controller.widget() == &child)
-        {
-            inner.tabs[pos].controller.split_vertical(None);
-        }
+    if let Some(tab) = inner.active_tab() {
+        tab.controller.split_vertical(None);
     }
 }
 
 pub fn split_horizontal(inner: &mut AppWindowInner) {
-    if let Some(page) = inner.tab_view.selected_page() {
-        let child = page.child();
-        if let Some(pos) = inner
-            .tabs
-            .iter()
-            .position(|c| c.controller.widget() == &child)
-        {
-            inner.tabs[pos].controller.split_horizontal(None);
-        }
+    if let Some(tab) = inner.active_tab() {
+        tab.controller.split_horizontal(None);
     }
 }
 
 pub fn close_split(inner: &mut AppWindowInner) {
-    if let Some(page) = inner.tab_view.selected_page() {
-        let child = page.child();
-        if let Some(pos) = inner
-            .tabs
-            .iter()
-            .position(|c| c.controller.widget() == &child)
-        {
-            inner.tabs[pos].controller.close_split();
-        }
+    if let Some(tab) = inner.active_tab() {
+        tab.controller.close_split();
     }
 }
 
 pub fn toggle_maximize(inner: &mut AppWindowInner) {
-    if let Some(page) = inner.tab_view.selected_page() {
-        let child = page.child();
-        if let Some(pos) = inner
-            .tabs
-            .iter()
-            .position(|c| c.controller.widget() == &child)
-        {
-            inner.tabs[pos].controller.toggle_maximize();
-        }
+    if let Some(tab) = inner.active_tab() {
+        tab.controller.toggle_maximize();
     }
 }
 
 pub fn focus(inner: &mut AppWindowInner, direction: boxxy_terminal::Direction) {
-    if let Some(page) = inner.tab_view.selected_page() {
-        let child = page.child();
-        if let Some(pos) = inner
-            .tabs
-            .iter()
-            .position(|c| c.controller.widget() == &child)
-        {
-            inner.tabs[pos].controller.focus(direction);
-        }
+    if let Some(tab) = inner.active_tab() {
+        tab.controller.focus(direction);
     }
 }
 
 pub fn swap(inner: &mut AppWindowInner, direction: boxxy_terminal::Direction) {
-    if let Some(page) = inner.tab_view.selected_page() {
-        let child = page.child();
-        if let Some(pos) = inner
-            .tabs
-            .iter()
-            .position(|c| c.controller.widget() == &child)
-        {
-            inner.tabs[pos].controller.swap(direction);
-        }
+    if let Some(tab) = inner.active_tab() {
+        tab.controller.swap(direction);
     }
 }
 
@@ -137,7 +94,7 @@ pub fn move_pane_to_split(
         inner.tab_view.close_page(&src_page);
     }
 
-    super::tabs::sync_tab_titles(inner);
+    super::tab_bar_sync::sync_tab_titles(inner);
     super::tabs::focus_active_terminal(inner);
 }
 
@@ -146,11 +103,7 @@ pub fn drop_pane_on_tab(
     source_pane_id: String,
     target_page_key: usize,
 ) {
-    let Some(target_tab_idx) = inner
-        .tabs
-        .iter()
-        .position(|t| t.controller.widget().as_ptr() as usize == target_page_key)
-    else {
+    let Some(target_tab_idx) = inner.tab_pos_by_widget_key(target_page_key) else {
         return;
     };
 

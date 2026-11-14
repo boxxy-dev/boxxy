@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use crate::state::TabColor;
 
 thread_local! {
-    pub static ORPHAN_TABS: RefCell<HashMap<String, TerminalController>> = RefCell::new(HashMap::new());
+    pub static ORPHAN_TABS: RefCell<HashMap<usize, TerminalController>> = RefCell::new(HashMap::new());
 }
 
 #[derive(Clone)]

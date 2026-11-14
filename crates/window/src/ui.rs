@@ -17,7 +17,37 @@ use crate::actions::setup_actions;
 use crate::app_menu::AppMenuComponent;
 use crate::init::AppInit;
 use crate::state::{AppInput, AppWindowInner};
-use crate::tab_menu::TabContextMenu;
+use crate::tab_menu::{TabContextCallbacks, TabContextMenu};
+
+async fn sync_bookmarks_to_palette(cp: &CommandPaletteComponent) {
+    let loaded = boxxy_sys_utils::runtime()
+        .spawn_blocking(|| {
+            let bookmarks = BookmarksManager::list();
+            bookmarks
+                .into_iter()
+                .map(|bm| {
+                    let script = BookmarksManager::get_script(&bm.filename).unwrap_or_default();
+                    (bm.name, bm.filename, script)
+                })
+                .collect::<Vec<_>>()
+        })
+        .await;
+
+    if let Ok(entries) = loaded {
+        let commands = entries
+            .into_iter()
+            .map(
+                |(name, filename, script)| boxxy_command_palette::CommandItem {
+                    title: format!("Bookmark: {name}"),
+                    action: "win.execute-bookmark".to_string(),
+                    parameter: Some((name, filename, script).to_variant()),
+                    shortcut: None,
+                },
+            )
+            .collect();
+        cp.set_dynamic_commands(commands);
+    }
+}
 
 pub struct AppWindow {
     _window: adw::ApplicationWindow,
@@ -25,8 +55,8 @@ pub struct AppWindow {
 
 impl AppWindow {
     pub fn new(app: &adw::Application, init: AppInit) -> Self {
-        static CSS_REGISTERED: OnceLock<()> = OnceLock::new();
-        CSS_REGISTERED.get_or_init(|| {
+        static APP_UI_INIT: OnceLock<()> = OnceLock::new();
+        APP_UI_INIT.get_or_init(|| {
             let provider = gtk::CssProvider::new();
             provider.load_from_resource("/dev/boxxy/BoxxyTerminal/style.css");
             if let Some(display) = gtk::gdk::Display::default() {
@@ -38,6 +68,7 @@ impl AppWindow {
                 gtk::IconTheme::for_display(&display)
                     .add_resource_path("/dev/boxxy/BoxxyTerminal/icons");
             }
+            boxxy_keybindings::bind_shortcuts(app);
         });
 
         let current_settings = (*Settings::load()).clone();
@@ -63,7 +94,9 @@ impl AppWindow {
         let is_drag_window = init.incoming_tab_view.is_some();
         let tab_view = init.incoming_tab_view.unwrap_or_default();
 
-        let (tx, rx) = async_channel::bounded::<AppInput>(100);
+        // Unbounded single-consumer UI channel prevents main-thread deadlocks when
+        // synchronous GTK signal handlers dispatch multiple `AppInput` messages in a burst.
+        let (tx, rx) = async_channel::unbounded::<AppInput>();
 
         tab_view.connect_create_window(move |_| {
             let new_tab_view = adw::TabView::new();
@@ -132,26 +165,8 @@ impl AppWindow {
 
         let command_palette = CommandPaletteComponent::new();
 
-        // Sync bookmarks with command palette on an idle tick after `window.present()`
-        let cp_clone = command_palette.clone();
-        let update_palette = move || {
-            let bookmarks = BookmarksManager::list();
-            let commands = bookmarks
-                .into_iter()
-                .map(|bm| {
-                    let script = BookmarksManager::get_script(&bm.filename).unwrap_or_default();
-                    boxxy_command_palette::CommandItem {
-                        title: format!("Bookmark: {}", bm.name),
-                        action: "win.execute-bookmark".to_string(),
-                        parameter: Some((bm.name, bm.filename, script).to_variant()),
-                        shortcut: None,
-                    }
-                })
-                .collect();
-            cp_clone.set_dynamic_commands(commands);
-        };
-
         let cp_sync = command_palette.clone();
+        let tx_bm_guard = tx.clone();
         let mut bookmarks_rx = BOOKMARKS_EVENT_BUS.subscribe();
         glib::spawn_future_local(async move {
             loop {
@@ -159,22 +174,13 @@ impl AppWindow {
                     Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                 }
-                let bookmarks = BookmarksManager::list();
-                let commands = bookmarks
-                    .into_iter()
-                    .map(|bm| {
-                        let script = BookmarksManager::get_script(&bm.filename).unwrap_or_default();
-                        boxxy_command_palette::CommandItem {
-                            title: format!("Bookmark: {}", bm.name),
-                            action: "win.execute-bookmark".to_string(),
-                            parameter: Some((bm.name, bm.filename, script).to_variant()),
-                            shortcut: None,
-                        }
-                    })
-                    .collect();
-                cp_sync.set_dynamic_commands(commands);
+                if tx_bm_guard.is_closed() {
+                    break;
+                }
+                sync_bookmarks_to_palette(&cp_sync).await;
             }
         });
+
         let window_title = match boxxy_sys_utils::dev_header_tag() {
             Some(ref tag) => format!("Boxxy Terminal {tag}"),
             None => "Boxxy Terminal".to_string(),
@@ -232,7 +238,6 @@ impl AppWindow {
         });
 
         // Centralized focus restoration whenever any `AdwDialog` / `AdwAlertDialog`
-        // (What's New, Model Selection, Preferences, Background Shells, Close Confirm)
         // finishes closing on this window.
         let tx_dialog_focus = tx.clone();
         window.connect_visible_dialog_notify(move |win| {
@@ -295,9 +300,7 @@ impl AppWindow {
         frosted_container.set_frosted_glass(current_settings.frosted_glass);
         frosted_container.set_opacity(current_settings.opacity);
 
-        let palette = boxxy_themes::load_palette(current_settings.theme.as_str());
-        let is_dark = libadwaita::StyleManager::default().is_dark();
-        let bg_rgba = if let Some(p) = palette {
+        let bg_rgba = if let Some(ref p) = palette {
             let variant = if is_dark { &p.dark } else { &p.light };
             gtk4::gdk::RGBA::parse(variant.background)
                 .unwrap_or_else(|_| gtk4::gdk::RGBA::new(0.08, 0.08, 0.1, 1.0))
@@ -317,17 +320,19 @@ impl AppWindow {
             let _ = tx_focus2.send_blocking(AppInput::FocusActiveTerminal);
         });
 
-        boxxy_keybindings::bind_shortcuts(app);
-
         let mut event_rx = boxxy_terminal::TERMINAL_EVENT_BUS.subscribe();
         let tx_event = tx.clone();
         boxxy_sys_utils::runtime().spawn(async move {
             loop {
                 match event_rx.recv().await {
                     Ok(event) => {
-                        let _ = tx_event
-                            .send(AppInput::HandleTerminalEvent(Some(event)))
-                            .await;
+                        if tx_event
+                            .send(AppInput::HandleTerminalEvent(Box::new(event)))
+                            .await
+                            .is_err()
+                        {
+                            break;
+                        }
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
                         log::warn!("TERMINAL_EVENT_BUS lagged by {skipped} events; continuing");
@@ -337,16 +342,14 @@ impl AppWindow {
             }
         });
 
-        // Drain any notification the agent produced before this subscriber
-        // existed (e.g. DB reset on schema upgrade). We wait for the agent to
-        // finish initializing, then deliver it through the normal toast path.
-        let tx_startup = tx.clone();
+        // Drain any notification the agent produced before this subscriber existed
+        // (e.g. DB reset on schema upgrade).
+        let tx_startup_notif = tx.clone();
         boxxy_sys_utils::runtime().spawn(async move {
             let agent = boxxy_terminal::get_agent().await;
             if let Some(msg) = agent.take_startup_notification() {
-                // Small delay so the window finishes painting before the toast appears.
                 tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
-                let _ = tx_startup
+                let _ = tx_startup_notif
                     .send(AppInput::ShowToast(crate::state::ToastRequest::persistent(
                         msg,
                     )))
@@ -365,7 +368,13 @@ impl AppWindow {
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                 };
-                let _ = tx_settings.send_blocking(AppInput::SettingsChanged(settings));
+                if tx_settings
+                    .send(AppInput::SettingsChanged(Box::new(settings)))
+                    .await
+                    .is_err()
+                {
+                    break;
+                }
             }
         });
 
@@ -382,25 +391,25 @@ impl AppWindow {
             detached_btn,
             detached_count_lbl,
             view_stack,
-            next_id: 1,
             sidebar_visible: app_state.sidebar_visible,
             preferences: None,
-            app_menu,
+            app_menu: app_menu.clone(),
+            tab_menu: None,
             claw,
             bookmarks_sidebar,
             bookmarks_controller: None,
             bookmarks_page: None,
             theme_selector,
-            command_palette,
+            command_palette: command_palette.clone(),
             current_settings,
             app_state,
             bell_indicator,
             claw_active: false,
             toast_overlay,
-            frosted_container: frosted_container.clone(),
-            notifications: Vec::new(),
+            frosted_container,
+            active_update_notification: None,
             initial_launch: Some(crate::init::TabLaunchSpec {
-                working_dir: init.working_dir.clone(),
+                working_dir: init.working_dir,
                 command: init.initial_command.clone(),
                 hold: init.hold,
                 title: init.initial_title.clone(),
@@ -408,6 +417,13 @@ impl AppWindow {
             force_close,
             tx: tx.clone(),
         };
+
+        let is_blank_initial_tab = init.initial_command.is_none()
+            && inner
+                .initial_launch
+                .as_ref()
+                .is_none_or(|l| l.working_dir.is_none())
+            && init.initial_title.is_none();
 
         let inner_ref = Rc::new(RefCell::new(inner));
         setup_actions(&window, &inner_ref, tx.clone());
@@ -417,60 +433,80 @@ impl AppWindow {
         let tx_color = tx.clone();
         let tx_title = tx.clone();
         let tx_menu_focus = tx.clone();
-        let inner_for_menu = inner_ref.clone();
-        let inner_for_menu_cwd = inner_ref.clone();
-        // The tab bar to attach the gesture to
+        let inner_for_menu = Rc::downgrade(&inner_ref);
+        let inner_for_menu_cwd = Rc::downgrade(&inner_ref);
         let context_tab_bar = inner_ref.borrow().tab_bar.clone();
         let context_tab_view = inner_ref.borrow().tab_view.clone();
-        let _ = TabContextMenu::new(
+        let tab_menu = TabContextMenu::new(
             &context_tab_bar,
             &context_tab_view,
-            move |page| {
-                if let Some(tv) = tv_weak.upgrade() {
-                    tv.close_page(&page);
-                }
-            },
-            move |page| {
-                let key = page.child().as_ptr() as usize;
-                let _ = tx_move.send_blocking(AppInput::MoveTabToNewWindowRequest(key));
-            },
-            move |page, color| {
-                let key = page.child().as_ptr() as usize;
-                let _ = tx_color.send_blocking(AppInput::SetTabColor(key, color));
-            },
-            move |page, title| {
-                let key = page.child().as_ptr() as usize;
-                let _ = tx_title.send_blocking(AppInput::SetTabTitle(key, title));
-            },
-            move |page| {
-                let inner = inner_for_menu.borrow();
-                let key = page.child().as_ptr() as usize;
-                inner
-                    .tabs
-                    .iter()
-                    .find(|t| t.controller.widget().as_ptr() as usize == key)
-                    .and_then(|t| t.custom_title.clone())
-            },
-            move |page| {
-                let inner = inner_for_menu_cwd.borrow();
-                let key = page.child().as_ptr() as usize;
-                inner
-                    .tabs
-                    .iter()
-                    .find(|t| t.controller.widget().as_ptr() as usize == key)
-                    .and_then(|t| t.cwd.clone().or_else(|| t.controller.working_dir()))
-            },
-            move || {
-                let _ = tx_menu_focus.send_blocking(AppInput::FocusActiveTerminal);
+            TabContextCallbacks {
+                on_close_page: Box::new(move |page| {
+                    if let Some(tv) = tv_weak.upgrade() {
+                        tv.close_page(&page);
+                    }
+                }),
+                on_move_to_new_window: Box::new(move |page| {
+                    let key = page.child().as_ptr() as usize;
+                    let _ = tx_move.send_blocking(AppInput::MoveTabToNewWindowRequest(key));
+                }),
+                on_set_color: Box::new(move |page, color| {
+                    let key = page.child().as_ptr() as usize;
+                    let _ = tx_color.send_blocking(AppInput::SetTabColor(key, color));
+                }),
+                on_set_title: Box::new(move |page, title| {
+                    let key = page.child().as_ptr() as usize;
+                    let _ = tx_title.send_blocking(AppInput::SetTabTitle(key, title));
+                }),
+                get_custom_title: Box::new(move |page| {
+                    let inner_rc = inner_for_menu.upgrade()?;
+                    let inner = inner_rc.borrow();
+                    let key = page.child().as_ptr() as usize;
+                    inner
+                        .tab_by_widget_key(key)
+                        .and_then(|t| t.custom_title.clone())
+                }),
+                get_cwd: Box::new(move |page| {
+                    let inner_rc = inner_for_menu_cwd.upgrade()?;
+                    let inner = inner_rc.borrow();
+                    let key = page.child().as_ptr() as usize;
+                    inner
+                        .tab_by_widget_key(key)
+                        .and_then(|t| t.cwd.clone().or_else(|| t.controller.working_dir()))
+                }),
+                on_menu_closed: Box::new(move || {
+                    let _ = tx_menu_focus.send_blocking(AppInput::FocusActiveTerminal);
+                }),
             },
         );
+        inner_ref.borrow_mut().tab_menu = Some(tab_menu);
+
+        // Close `rx` and unparent custom popovers on window destruction so the
+        // `rx.recv()` task, subscriber tasks, and `AppWindowInner` are freed cleanly.
+        {
+            let rx_destroy = rx.clone();
+            let inner_weak_destroy = Rc::downgrade(&inner_ref);
+            window.connect_destroy(move |_| {
+                if let Some(inner_rc) = inner_weak_destroy.upgrade()
+                    && let Ok(mut inner) = inner_rc.try_borrow_mut()
+                {
+                    inner.app_menu.unparent();
+                    if let Some(tm) = inner.tab_menu.take() {
+                        tm.unparent();
+                    }
+                }
+                rx_destroy.close();
+            });
+        }
 
         let tab_view_clone1 = inner_ref.borrow().tab_view.clone();
         let tx_detach = tx.clone();
-        let inner_detach = inner_ref.clone();
+        let inner_detach = Rc::downgrade(&inner_ref);
         tab_view_clone1.connect_page_detached(move |_, page, _| {
             let key = page.child().as_ptr() as usize;
-            if let Ok(mut inner) = inner_detach.try_borrow_mut() {
+            if let Some(inner_rc) = inner_detach.upgrade()
+                && let Ok(mut inner) = inner_rc.try_borrow_mut()
+            {
                 crate::update::tabs::tab_page_detached(&mut inner, key);
             } else {
                 let _ = tx_detach.send_blocking(AppInput::TabPageDetached(key));
@@ -479,10 +515,12 @@ impl AppWindow {
 
         let tab_view_clone2 = inner_ref.borrow().tab_view.clone();
         let tx_attach = tx.clone();
-        let inner_attach = inner_ref.clone();
+        let inner_attach = Rc::downgrade(&inner_ref);
         tab_view_clone2.connect_page_attached(move |_, page, _| {
             let key = page.child().as_ptr() as usize;
-            if let Ok(mut inner) = inner_attach.try_borrow_mut() {
+            if let Some(inner_rc) = inner_attach.upgrade()
+                && let Ok(mut inner) = inner_rc.try_borrow_mut()
+            {
                 crate::update::tabs::tab_page_attached(&mut inner, key);
             } else {
                 let _ = tx_attach.send_blocking(AppInput::TabPageAttached(key));
@@ -495,10 +533,7 @@ impl AppWindow {
 
         // Create the initial terminal tab synchronously before `window.present()` so the
         // terminal widget and its background color/opacity are rendered on Frame 1 with
-        // zero transparent gap. If an external companion queued detached sessions to restore,
-        // this initial blank tab is closed once the restored tabs are attached.
-        let is_blank_initial_tab =
-            init.initial_command.is_none() && init.working_dir.is_none() && init.initial_title.is_none();
+        // zero transparent gap.
         let initial_tab_id = if !is_drag_window && inner_ref.borrow().tabs.is_empty() {
             crate::update::update(&inner_ref, AppInput::NewTab);
             is_blank_initial_tab
@@ -508,17 +543,12 @@ impl AppWindow {
             None
         };
 
-        // Query initial maintenance status and keep the HeaderBar background shells
-        // badge synced with the daemon.
         if !is_drag_window {
             let tx_startup = tx.clone();
             let window_weak = window.downgrade();
             gtk::glib::spawn_future_local(async move {
                 let agent = boxxy_terminal::get_agent().await;
 
-                // Spawn sidebar status probes (maintenance + MCP servers) concurrently in
-                // the background so slow/remote MCP handshakes never delay tab restoration,
-                // the What's New dialog, or the HeaderBar background shells badge.
                 {
                     let agent_bg = agent.clone();
                     let tx_bg = tx_startup.clone();
@@ -564,12 +594,25 @@ impl AppWindow {
                 } else {
                     let _ = tx_startup.send(AppInput::EnsureInitialTab).await;
                 }
-                if let Some(pending) = crate::updater::whats_new::take_whats_new_pending() {
-                    let cached = crate::updater::whats_new::load_cached_changelog_summary(&pending);
+
+                // Perform What's New marker/cache inspection off the GTK main thread.
+                let whats_new_opt = boxxy_sys_utils::runtime()
+                    .spawn_blocking(|| {
+                        crate::updater::whats_new::take_whats_new_pending().map(|pending| {
+                            let cached =
+                                crate::updater::whats_new::load_cached_changelog_summary(&pending);
+                            (pending, cached)
+                        })
+                    })
+                    .await
+                    .ok()
+                    .flatten();
+                if let Some((pending, cached)) = whats_new_opt {
                     let _ = tx_startup
-                        .send(AppInput::ShowWhatsNewDialog(pending, cached))
+                        .send(AppInput::ShowWhatsNewDialog(pending, cached.map(Box::new)))
                         .await;
                 }
+
                 if let Ok(detached) = agent.list_detached_sessions_detailed().await {
                     let _ = tx_startup
                         .send(AppInput::UpdateDetachedSessionsBadge(detached))
@@ -578,19 +621,24 @@ impl AppWindow {
 
                 loop {
                     gtk::glib::timeout_future(std::time::Duration::from_secs(3)).await;
-                    if window_weak.upgrade().is_none() {
+                    if window_weak.upgrade().is_none() || tx_startup.is_closed() {
                         break;
                     }
-                    let _ = tx_startup.send(AppInput::RefreshDetachedSessions).await;
+                    if tx_startup
+                        .send(AppInput::RefreshDetachedSessions)
+                        .await
+                        .is_err()
+                    {
+                        break;
+                    }
                 }
             });
         }
 
         // Background update check (10s after startup, then once every hour)
-        if boxxy_sys_utils::can_self_update() {
+        if !is_drag_window && boxxy_sys_utils::can_self_update() {
             let tx_update = tx.clone();
             tokio::spawn(async move {
-                // Wait 10 seconds after startup to not interfere with boot
                 tokio::time::sleep(std::time::Duration::from_secs(10)).await;
                 loop {
                     if tx_update.is_closed() {
@@ -607,7 +655,7 @@ impl AppWindow {
                                     info.checksum_source,
                                 );
                             if tx_update
-                                .send(AppInput::PushGlobalNotification(notification))
+                                .send(AppInput::PushGlobalNotification(Box::new(notification)))
                                 .await
                                 .is_err()
                             {
@@ -623,16 +671,20 @@ impl AppWindow {
                     tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
                 }
             });
-        } else {
+        } else if !boxxy_sys_utils::can_self_update() {
             log::debug!("Self-updater is disabled. Skipping update check.");
         }
 
         window.present();
 
-        // Hydrate Command Palette bookmarks and pre-warm deferred dialogs/models
-        // right after the window and terminal have presented on screen.
-        gtk::glib::idle_add_local_once(update_palette);
-        let tx_prewarm = tx.clone();
+        // Hydrate Command Palette bookmarks asynchronously off the UI thread and pre-warm
+        // deferred dialogs/models right after the window has presented on screen.
+        let cp_initial = command_palette;
+        gtk::glib::spawn_future_local(async move {
+            sync_bookmarks_to_palette(&cp_initial).await;
+        });
+
+        let tx_prewarm = tx;
         gtk::glib::timeout_add_local_once(std::time::Duration::from_millis(150), move || {
             let _ = tx_prewarm.send_blocking(AppInput::PrewarmDeferredUi);
         });
@@ -702,10 +754,6 @@ impl AppWindow {
 
         sidebar_toolbar.set_content(Some(&sidebar_content_box));
 
-        // TODO(libadwaita): Check if future Libadwaita releases add native interactive drag-resizing
-        // to `AdwOverlaySplitView` / `AdwNavigationSplitView` so we can drop this custom 4px
-        // `GestureDrag` handle overlay. (As of Libadwaita 1.10, only static `min-sidebar-width`,
-        // `max-sidebar-width`, and `sidebar-width-fraction` properties exist.)
         // Keep width at 4px so it sits strictly inside the 5px right margin of sidebar scrollbars
         // and never blocks grabbing or dragging the scrollbar thumb.
         let handle_event_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
@@ -716,7 +764,6 @@ impl AppWindow {
         handle_event_box.set_cursor_from_name(Some("col-resize"));
 
         let drag = gtk::GestureDrag::new();
-
         let start_width = Rc::new(Cell::new(0));
         let last_width = Rc::new(Cell::new(0));
 
@@ -734,7 +781,7 @@ impl AppWindow {
             }
         ));
 
-        let tx_drag_update = tx.clone();
+        // Resize the widget smoothly during drag without persisting settings to disk on every motion step.
         drag.connect_drag_update(glib::clone!(
             #[weak]
             sidebar_toolbar,
@@ -743,23 +790,19 @@ impl AppWindow {
             #[strong]
             last_width,
             move |_, offset_x, _| {
-                let true_offset_x = offset_x + (last_width.get() - start_width.get()) as f64;
+                let true_offset_x = offset_x + f64::from(last_width.get() - start_width.get());
                 let offset_snapped = (true_offset_x as i32 / 10) * 10;
-
                 if offset_snapped == 0 {
                     return;
                 }
-
                 let target_width = (start_width.get() + offset_snapped).clamp(200, 800);
-
                 if target_width != last_width.get() {
                     sidebar_toolbar.set_width_request(target_width);
                     last_width.set(target_width);
-                    let _ =
-                        tx_drag_update.send_blocking(AppInput::SidebarWidthChanged(target_width));
                 }
             }
         ));
+
         let tx_drag_end = tx.clone();
         drag.connect_drag_end(glib::clone!(
             #[weak]
@@ -769,10 +812,11 @@ impl AppWindow {
             #[strong]
             last_width,
             move |_, offset_x, _| {
-                let true_offset_x = offset_x + (last_width.get() - start_width.get()) as f64;
+                let true_offset_x = offset_x + f64::from(last_width.get() - start_width.get());
                 let offset_snapped = (true_offset_x as i32 / 10) * 10;
                 let target_width = (start_width.get() + offset_snapped).clamp(200, 800);
                 sidebar_toolbar.set_width_request(target_width);
+                last_width.set(target_width);
                 let _ = tx_drag_end.send_blocking(AppInput::SidebarWidthChanged(target_width));
             }
         ));
@@ -811,7 +855,7 @@ impl AppWindow {
 
         let tab_bar = adw::TabBar::builder()
             .autohide(false)
-            .expand_tabs(false) // Will be synced in sync_header_title
+            .expand_tabs(false) // Synced dynamically in sync_header_title
             .hexpand(true)
             .margin_start(36)
             .view(tab_view)
@@ -867,7 +911,7 @@ impl AppWindow {
         });
         content_header.pack_end(&menu_btn);
 
-        // Slim status indicator pill for detached Background Shells (opens the unified Background Shells dialog)
+        // Slim status indicator pill for detached Background Shells
         let badge_content = gtk::Box::new(gtk::Orientation::Horizontal, 4);
         badge_content.set_valign(gtk::Align::Center);
         let badge_icon = gtk::Image::builder()
@@ -922,14 +966,17 @@ impl AppWindow {
         content_header.pack_start(&bell_indicator);
         content_header.pack_start(&tab_bar);
 
-        // `AdwHeaderBar`'s internal `.start` box defaults to `halign = Start` and
-        // `hexpand = false`, which clamps packed children to their minimum width (~90px).
-        // Setting `Fill` + `hexpand` lets `tab_bar` expand across the full headerbar
-        // while keeping a fixed 42px gap (6px box spacing + 36px margin_start) after `toggle_sidebar_btn`.
         if let Some(start_box) = tab_bar.parent() {
             start_box.set_halign(gtk::Align::Fill);
             start_box.set_hexpand(true);
         }
+
+        // Prevent `AdwHeaderBar`'s internal `GtkWindowHandle` from stealing pointer
+        // drags that originate on a tab (`AdwTab`). When `AdwTabBox` switches from
+        // inline horizontal reordering to tab DND (`gdk_drag_begin`), it sets its own
+        // `drag_gesture` to `Denied`, which otherwise lets the event bubble up to
+        // `GtkWindowHandle` and trigger `gdk_toplevel_begin_move()` on unmaximized windows.
+        guard_window_handle_over_tabs(&content_header);
 
         content_toolbar.add_top_bar(&content_header);
         content_toolbar.set_content(Some(tab_view));
@@ -950,5 +997,141 @@ impl AppWindow {
             detached_count_lbl,
             tab_bar,
         )
+    }
+}
+
+fn is_point_on_tab(window_handle: &gtk::Widget, x: f64, y: f64) -> bool {
+    let mut tabs = Vec::new();
+    crate::update::tab_bar_sync::find_tab_nodes(window_handle, &mut tabs);
+    if tabs.is_empty() {
+        return false;
+    }
+
+    let pt = gtk::graphene::Point::new(x as f32, y as f32);
+    // Include a 3px horizontal pad so pressing on a tab's rounded border or the 5px
+    // inter-tab seam never falls through to `GtkWindowHandle` window-dragging.
+    let h_pad = 3.0_f32;
+    let wh_height = window_handle.height() as f32;
+
+    if y < 0.0 || y > f64::from(wh_height) {
+        return false;
+    }
+
+    for tab in &tabs {
+        let w = tab.width() as f32;
+        if w <= 0.0 {
+            continue;
+        }
+        if let Some(local) = window_handle.compute_point(tab, &pt)
+            && local.x() >= -h_pad
+            && local.x() <= w + h_pad
+        {
+            return true;
+        }
+    }
+
+    false
+}
+
+fn guard_window_handle_over_tabs(header: &adw::HeaderBar) {
+    let Some(window_handle) = header.first_child() else {
+        return;
+    };
+
+    let controllers = window_handle.observe_controllers();
+    for i in 0..controllers.n_items() {
+        if let Some(drag_gesture) = controllers.item(i).and_downcast::<gtk::GestureDrag>() {
+            drag_gesture.connect_drag_begin(|gesture, start_x, start_y| {
+                if let Some(wh) = gesture.widget()
+                    && is_point_on_tab(&wh, start_x, start_y)
+                {
+                    gesture.set_state(gtk::EventSequenceState::Denied);
+                }
+            });
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[gtk::test]
+    fn window_handle_guard_detects_tabs_and_preserves_empty_header_drag_space() {
+        if let Some(settings) = gtk::Settings::default() {
+            settings.set_gtk_enable_animations(false);
+        }
+
+        let tab_view = adw::TabView::new();
+        let p1 = tab_view.append(&gtk::Box::new(gtk::Orientation::Vertical, 0));
+        p1.set_title("alpha");
+        let p2 = tab_view.append(&gtk::Box::new(gtk::Orientation::Vertical, 0));
+        p2.set_title("beta");
+
+        let header = adw::HeaderBar::builder()
+            .show_title(false)
+            .show_start_title_buttons(false)
+            .show_end_title_buttons(false)
+            .build();
+        let tab_bar = adw::TabBar::builder()
+            .autohide(false)
+            .expand_tabs(false)
+            .hexpand(true)
+            .margin_start(36)
+            .view(&tab_view)
+            .build();
+        header.pack_start(&tab_bar);
+        if let Some(start_box) = tab_bar.parent() {
+            start_box.set_halign(gtk::Align::Fill);
+            start_box.set_hexpand(true);
+        }
+        guard_window_handle_over_tabs(&header);
+
+        let wh = header.first_child().expect("AdwHeaderBar has WindowHandle");
+        assert_eq!(wh.css_name(), "windowhandle");
+
+        let has_drag_gesture = (0..wh.observe_controllers().n_items()).any(|i| {
+            wh.observe_controllers()
+                .item(i)
+                .and_downcast::<gtk::GestureDrag>()
+                .is_some()
+        });
+        assert!(has_drag_gesture, "GtkWindowHandle exposes GestureDrag");
+
+        let (_, nat_h, _, _) = header.measure(gtk::Orientation::Vertical, 900);
+        header.allocate(900, nat_h.max(48), -1, None);
+
+        let mut tabs = Vec::new();
+        crate::update::tab_bar_sync::find_tab_nodes(&wh, &mut tabs);
+        assert_eq!(tabs.len(), 2);
+        assert!(
+            tabs[0].width() > 0,
+            "Tab should have non-zero allocated width"
+        );
+
+        let tab0_center = tabs[0]
+            .compute_point(
+                &wh,
+                &gtk::graphene::Point::new(
+                    tabs[0].width() as f32 / 2.0,
+                    tabs[0].height() as f32 / 2.0,
+                ),
+            )
+            .unwrap();
+        assert!(
+            is_point_on_tab(&wh, f64::from(tab0_center.x()), f64::from(tab0_center.y()),),
+            "Point on tab should deny GtkWindowHandle drag"
+        );
+
+        // Far right empty area after non-expanded tabs should still allow dragging the window.
+        assert!(
+            !is_point_on_tab(&wh, 850.0, 20.0),
+            "Empty headerbar space should remain draggable for moving the window"
+        );
+        // Left 36px gap before the first tab should also remain draggable for moving the window.
+        assert!(
+            !is_point_on_tab(&wh, 12.0, 20.0),
+            "Leading margin before tabs should remain draggable for moving the window"
+        );
     }
 }

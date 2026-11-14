@@ -391,7 +391,7 @@ pub fn parse_osc_title(
         };
     }
 
-    // Pure path: e.g. "~/Projects/boxxy-dev/boxxy-terminal" or "/home/user/Downloads"
+    // Pure path: e.g. "~/workspace/service" or "/opt/downloads"
     if looks_like_path(s) {
         return ParsedOscTitle {
             remote_host,
@@ -400,7 +400,7 @@ pub fn parse_osc_title(
         };
     }
 
-    // Vim / Neovim window title: e.g. "main.rs (~/Projects/boxxy-terminal/src) - NVIM"
+    // Vim / Neovim window title: e.g. "main.rs (~/workspace/service/src) - NVIM"
     if let Some((cmd, path_opt)) = parse_editor_title(s) {
         return ParsedOscTitle {
             remote_host,
@@ -519,10 +519,9 @@ fn split_user_host_prefix(s: &str) -> Option<(&str, &str)> {
 fn parse_editor_title(s: &str) -> Option<(String, Option<String>)> {
     let (head, editor) = if let Some(h) = s.strip_suffix(" - NVIM") {
         (h.trim(), "nvim")
-    } else if let Some(h) = s.strip_suffix(" - VIM") {
-        (h.trim(), "vim")
     } else {
-        return None;
+        let h = s.strip_suffix(" - VIM")?;
+        (h.trim(), "vim")
     };
 
     let mut extracted_path = None;
@@ -728,7 +727,7 @@ mod tests {
     use super::*;
     use crate::application_detector::ApplicationCategory;
 
-    const HOME: Option<&str> = Some("/home/user");
+    const HOME: Option<&str> = Some("/users/demo");
     const LOCAL_HOST: Option<&str> = Some("workstation");
 
     #[test]
@@ -736,21 +735,21 @@ mod tests {
         let tabs = vec![
             TabTitleInput {
                 custom_title: None,
-                cwd: Some("/home/user/Projects/boxxy-dev/boxxy-terminal".to_string()),
-                raw_title: Some("~/Projects/boxxy-dev/boxxy-terminal - fish".to_string()),
+                cwd: Some("/users/demo/workspace/alpha/service".to_string()),
+                raw_title: Some("~/workspace/alpha/service - fish".to_string()),
                 foreground_process: None,
                 ..Default::default()
             },
             TabTitleInput {
                 custom_title: None,
-                cwd: Some("/home/user/Downloads".to_string()),
+                cwd: Some("/users/demo/Downloads".to_string()),
                 raw_title: Some("~/Downloads - fish".to_string()),
                 foreground_process: None,
                 ..Default::default()
             },
             TabTitleInput {
                 custom_title: None,
-                cwd: Some("/home/user/Projects/boxxy-dev/boxxy-terminal/src".to_string()),
+                cwd: Some("/users/demo/workspace/alpha/service/src".to_string()),
                 raw_title: None,
                 foreground_process: None,
                 ..Default::default()
@@ -758,24 +757,21 @@ mod tests {
         ];
 
         let resolved = resolve_tab_titles(&tabs, true, HOME, LOCAL_HOST);
-        assert_eq!(resolved[0].title, "boxxy-terminal");
+        assert_eq!(resolved[0].title, "service");
         assert!(!resolved[0].has_running_app);
         assert_eq!(
             resolved[0].app_state.application_category,
             ApplicationCategory::Idle
         );
-        assert_eq!(
-            resolved[0].tooltip,
-            "/home/user/Projects/boxxy-dev/boxxy-terminal"
-        );
+        assert_eq!(resolved[0].tooltip, "/users/demo/workspace/alpha/service");
         assert_eq!(resolved[1].title, "Downloads");
         assert!(!resolved[1].has_running_app);
-        assert_eq!(resolved[1].tooltip, "/home/user/Downloads");
+        assert_eq!(resolved[1].tooltip, "/users/demo/Downloads");
         assert_eq!(resolved[2].title, "src");
         assert!(!resolved[2].has_running_app);
         assert_eq!(
             resolved[2].tooltip,
-            "/home/user/Projects/boxxy-dev/boxxy-terminal/src"
+            "/users/demo/workspace/alpha/service/src"
         );
     }
 
@@ -784,21 +780,21 @@ mod tests {
         let tabs = vec![
             TabTitleInput {
                 custom_title: None,
-                cwd: Some("/home/user/Projects/boxxy-dev/boxxy-terminal/src".to_string()),
-                raw_title: Some("~/P/b/b/src - fish".to_string()),
+                cwd: Some("/users/demo/workspace/alpha-app/src".to_string()),
+                raw_title: Some("~/w/a/src - fish".to_string()),
                 foreground_process: None,
                 ..Default::default()
             },
             TabTitleInput {
                 custom_title: None,
-                cwd: Some("/home/user/Projects/other-project/src".to_string()),
-                raw_title: Some("~/P/o/src - fish".to_string()),
+                cwd: Some("/users/demo/workspace/beta-app/src".to_string()),
+                raw_title: Some("~/w/b/src - fish".to_string()),
                 foreground_process: None,
                 ..Default::default()
             },
             TabTitleInput {
                 custom_title: None,
-                cwd: Some("/home/user/Downloads".to_string()),
+                cwd: Some("/users/demo/Downloads".to_string()),
                 raw_title: None,
                 foreground_process: None,
                 ..Default::default()
@@ -806,13 +802,10 @@ mod tests {
         ];
 
         let resolved = resolve_tab_titles(&tabs, true, HOME, LOCAL_HOST);
-        assert_eq!(resolved[0].title, "src · boxxy-terminal");
-        assert_eq!(
-            resolved[0].tooltip,
-            "/home/user/Projects/boxxy-dev/boxxy-terminal/src"
-        );
-        assert_eq!(resolved[1].title, "src · other-project");
-        assert_eq!(resolved[1].tooltip, "/home/user/Projects/other-project/src");
+        assert_eq!(resolved[0].title, "src · alpha-app");
+        assert_eq!(resolved[0].tooltip, "/users/demo/workspace/alpha-app/src");
+        assert_eq!(resolved[1].title, "src · beta-app");
+        assert_eq!(resolved[1].tooltip, "/users/demo/workspace/beta-app/src");
         assert_eq!(resolved[2].title, "Downloads");
     }
 
@@ -821,31 +814,31 @@ mod tests {
         let tabs = vec![
             TabTitleInput {
                 custom_title: None,
-                cwd: Some("/home/user/Projects/boxxy-dev/boxxy-terminal".to_string()),
-                raw_title: Some("~/Projects/boxxy-dev/boxxy-terminal - fish".to_string()),
+                cwd: Some("/users/demo/workspace/alpha/service".to_string()),
+                raw_title: Some("~/workspace/alpha/service - fish".to_string()),
                 foreground_process: None,
                 ..Default::default()
             },
             TabTitleInput {
                 custom_title: None,
-                cwd: Some("/home/user/Projects/boxxy-dev/boxxy-terminal".to_string()),
-                raw_title: Some("~/Projects/boxxy-dev/boxxy-terminal - fish".to_string()),
+                cwd: Some("/users/demo/workspace/alpha/service".to_string()),
+                raw_title: Some("~/workspace/alpha/service - fish".to_string()),
                 foreground_process: None,
                 ..Default::default()
             },
         ];
 
         let resolved = resolve_tab_titles(&tabs, true, HOME, LOCAL_HOST);
-        assert_eq!(resolved[0].title, "boxxy-terminal");
-        assert_eq!(resolved[1].title, "boxxy-terminal");
+        assert_eq!(resolved[0].title, "service");
+        assert_eq!(resolved[1].title, "service");
     }
 
     #[test]
     fn test_running_vim_shows_foreground_command() {
         let tabs = vec![TabTitleInput {
             custom_title: None,
-            cwd: Some("/home/user/Projects/boxxy-dev/boxxy-terminal".to_string()),
-            raw_title: Some("vim ~/Projects/boxxy-dev/boxxy-terminal".to_string()),
+            cwd: Some("/users/demo/workspace/alpha/service".to_string()),
+            raw_title: Some("vim ~/workspace/alpha/service".to_string()),
             foreground_process: Some("vim".to_string()),
             alternate_screen_active: true,
         }];
@@ -857,10 +850,7 @@ mod tests {
             resolved[0].app_state.application_category,
             ApplicationCategory::Editor
         );
-        assert_eq!(
-            resolved[0].tooltip,
-            "/home/user/Projects/boxxy-dev/boxxy-terminal"
-        );
+        assert_eq!(resolved[0].tooltip, "/users/demo/workspace/alpha/service");
     }
 
     #[test]
@@ -869,50 +859,50 @@ mod tests {
             // Remote shell emitting user@host: path
             TabTitleInput {
                 custom_title: None,
-                cwd: Some("/home/user".to_string()),
-                raw_title: Some("deploy@host: ~/Projects/boxxy-terminal".to_string()),
+                cwd: Some("/users/demo".to_string()),
+                raw_title: Some("deploy@host: ~/workspace/service".to_string()),
                 foreground_process: Some("ssh".to_string()),
                 ..Default::default()
             },
-            // Local fish title while ssh is running in boxxy-terminal
+            // Local fish title while ssh is running in service
             TabTitleInput {
                 custom_title: None,
-                cwd: Some("/home/user/Projects/boxxy-dev/boxxy-terminal".to_string()),
-                raw_title: Some("ssh user@host ~/Projects/boxxy-dev/boxxy-terminal".to_string()),
+                cwd: Some("/users/demo/workspace/alpha/service".to_string()),
+                raw_title: Some("ssh demo@host ~/workspace/alpha/service".to_string()),
                 foreground_process: Some("ssh".to_string()),
                 ..Default::default()
             },
         ];
 
         let resolved = resolve_tab_titles(&tabs, true, HOME, LOCAL_HOST);
-        assert_eq!(resolved[0].title, "host · boxxy-terminal");
+        assert_eq!(resolved[0].title, "host · service");
         assert_eq!(
             resolved[0].app_state.application_category,
             ApplicationCategory::Remote
         );
-        assert_eq!(resolved[0].tooltip, "host:~/Projects/boxxy-terminal");
-        assert_eq!(resolved[1].title, "host · boxxy-terminal");
+        assert_eq!(resolved[0].tooltip, "host:~/workspace/service");
+        assert_eq!(resolved[1].title, "host · service");
     }
 
     #[test]
     fn test_local_bash_user_at_host_is_not_treated_as_remote() {
         let tabs = vec![TabTitleInput {
             custom_title: None,
-            cwd: Some("/home/user/Projects/boxxy-dev/boxxy-terminal".to_string()),
-            raw_title: Some("user@workstation: ~/Projects/boxxy-dev/boxxy-terminal".to_string()),
+            cwd: Some("/users/demo/workspace/alpha/service".to_string()),
+            raw_title: Some("demo@workstation: ~/workspace/alpha/service".to_string()),
             foreground_process: None,
             ..Default::default()
         }];
 
         let resolved = resolve_tab_titles(&tabs, true, HOME, LOCAL_HOST);
-        assert_eq!(resolved[0].title, "boxxy-terminal");
+        assert_eq!(resolved[0].title, "service");
     }
 
     #[test]
     fn test_custom_title_overrides_smart_naming() {
         let tabs = vec![TabTitleInput {
             custom_title: Some("Release Build".to_string()),
-            cwd: Some("/home/user/Projects/boxxy-dev/boxxy-terminal".to_string()),
+            cwd: Some("/users/demo/workspace/alpha/service".to_string()),
             raw_title: Some("cargo build".to_string()),
             foreground_process: Some("cargo".to_string()),
             ..Default::default()
@@ -924,30 +914,21 @@ mod tests {
             resolved[0].app_state.application_category,
             ApplicationCategory::RunningCommand
         );
-        assert_eq!(
-            resolved[0].tooltip,
-            "/home/user/Projects/boxxy-dev/boxxy-terminal"
-        );
+        assert_eq!(resolved[0].tooltip, "/users/demo/workspace/alpha/service");
     }
 
     #[test]
     fn test_smart_naming_disabled_uses_raw_title() {
         let tabs = vec![TabTitleInput {
             custom_title: None,
-            cwd: Some("/home/user/Projects/boxxy-dev/boxxy-terminal".to_string()),
-            raw_title: Some("~/Projects/boxxy-dev/boxxy-terminal - fish".to_string()),
+            cwd: Some("/users/demo/workspace/alpha/service".to_string()),
+            raw_title: Some("~/workspace/alpha/service - fish".to_string()),
             foreground_process: None,
             ..Default::default()
         }];
 
         let resolved = resolve_tab_titles(&tabs, false, HOME, LOCAL_HOST);
-        assert_eq!(
-            resolved[0].title,
-            "~/Projects/boxxy-dev/boxxy-terminal - fish"
-        );
-        assert_eq!(
-            resolved[0].tooltip,
-            "/home/user/Projects/boxxy-dev/boxxy-terminal"
-        );
+        assert_eq!(resolved[0].title, "~/workspace/alpha/service - fish");
+        assert_eq!(resolved[0].tooltip, "/users/demo/workspace/alpha/service");
     }
 }

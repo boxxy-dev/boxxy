@@ -433,9 +433,8 @@ impl TerminalPaneComponent {
                         }
                         Err(e) => {
                             log::error!("Failed to spawn process via agent: {e:#}");
-                            let msg = format!(
-                                "\x1b[1;31mFailed to execute command:\x1b[0m {e}\r\n"
-                            );
+                            let msg =
+                                format!("\x1b[1;31mFailed to execute command:\x1b[0m {e}\r\n");
                             let mut inner = inner_rc.borrow_mut();
                             inner.hold_on_exit = true;
                             inner

@@ -1,11 +1,9 @@
 use gtk4::prelude::*;
 use gtk4::{gdk, gio};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct AppMenuContext {
     pub is_maximized: bool,
-    pub path_to_copy: Option<String>,
-    pub has_selection: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -31,6 +29,12 @@ impl AppMenuComponent {
         &self.popover
     }
 
+    pub fn unparent(&self) {
+        if self.popover.parent().is_some() {
+            self.popover.unparent();
+        }
+    }
+
     pub fn show(&self, rect: gdk::Rectangle, ctx: AppMenuContext) {
         let menu_model = gio::Menu::new();
 
@@ -41,7 +45,7 @@ impl AppMenuComponent {
             i
         };
 
-        // ── Section 3: Split Pane Icons ──────────────────────────────────────
+        // ── Split Pane Icons ─────────────────────────────────────────────────
         let split_model = gio::Menu::new();
 
         let split_v = gio::MenuItem::new(None, Some("win.split-vertical"));
@@ -79,19 +83,19 @@ impl AppMenuComponent {
             .set_attribute_value("display-hint", Some(&"horizontal-buttons".to_variant()));
         menu_model.append_item(&split_section_item);
 
-        // ── Section 4: New Tab / New Window (Text Items) ─────────────────────
+        // ── New Tab / New Window ─────────────────────────────────────────────
         let tab_model = gio::Menu::new();
         tab_model.append_item(&item("New Tab", "win.new-tab"));
         tab_model.append_item(&item("New Window", "win.new-window"));
         menu_model.append_section(None, &tab_model);
 
-        // ── Section 5: App Features ──────────────────────────────────────────
+        // ── App Features ─────────────────────────────────────────────────────
         let app_section = gio::Menu::new();
         app_section.append_item(&item("Open in Files", "win.open-in-files"));
         app_section.append_item(&item("Reset", "win.reset-terminal"));
         menu_model.append_section(None, &app_section);
 
-        // ── Section 6: Meta Actions ──────────────────────────────────────────
+        // ── Meta Actions ─────────────────────────────────────────────────────
         let meta_section = gio::Menu::new();
         meta_section.append_item(&item("Preferences", "win.preferences"));
         menu_model.append_section(None, &meta_section);

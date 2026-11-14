@@ -41,8 +41,7 @@ fn main() -> ExitCode {
     let app = libadwaita::Application::builder()
         .application_id(boxxy_sys_utils::gtk_app_id())
         .flags(
-            gio::ApplicationFlags::HANDLES_COMMAND_LINE
-                | gio::ApplicationFlags::ALLOW_REPLACEMENT,
+            gio::ApplicationFlags::HANDLES_COMMAND_LINE | gio::ApplicationFlags::ALLOW_REPLACEMENT,
         )
         .build();
 
@@ -130,15 +129,12 @@ fn main() -> ExitCode {
                         .or_else(|_| std::fs::read_to_string("/run/host/etc/os-release"))
                         .ok()
                         .and_then(|content| {
-                            content
-                                .lines()
-                                .find(|l| l.starts_with("NAME="))
-                                .map(|l| {
-                                    l.trim_start_matches("NAME=")
-                                        .trim_matches(['"', '\''])
-                                        .trim()
-                                        .to_string()
-                                })
+                            content.lines().find(|l| l.starts_with("NAME=")).map(|l| {
+                                l.trim_start_matches("NAME=")
+                                    .trim_matches(['"', '\''])
+                                    .trim()
+                                    .to_string()
+                            })
                         })
                         .unwrap_or_else(|| System::name().unwrap_or_else(|_| "Unknown".to_string()))
                 } else {
@@ -162,8 +158,10 @@ fn main() -> ExitCode {
                     boxxy_telemetry::resolve_theme_telemetry(s.app_theme_mode, &s.app_theme_id)
                 };
 
-                boxxy_telemetry::track_launch(&os, &arch, pkg_type, version, &shell, &desktop, theme)
-                    .await;
+                boxxy_telemetry::track_launch(
+                    &os, &arch, pkg_type, version, &shell, &desktop, theme,
+                )
+                .await;
             }
         });
     });

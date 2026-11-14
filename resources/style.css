@@ -642,14 +642,6 @@ tabbox separator {
     border: 1px solid alpha(currentColor, 0.05);
 }
 
-
-.notification-pill {
-    border-radius: 9999px;
-    padding: 2px 12px;
-    font-weight: bold;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
-}
-
 /* ── Bookmarks Gallery & Editor ────────────────────────────────────────── */
 .bookmarks-gallery {
     background-color: transparent;

@@ -1,16 +1,17 @@
 use crate::app_menu::AppMenuComponent;
+use crate::init::{TabLaunchSpec, TerminalController};
+use crate::tab_menu::TabContextMenu;
+use crate::widgets::notification::Notification;
 use boxxy_bookmarks::{sidebar::BookmarksSidebarComponent, tab::BookmarksTabComponent};
 use boxxy_claw_ui::ClawSidebarComponent;
 use boxxy_command_palette::CommandPaletteComponent;
 use boxxy_preferences::{AppState, PreferencesComponent, Settings};
 use boxxy_terminal::TerminalEvent;
 use gtk4 as gtk;
+use gtk4::prelude::*;
 use libadwaita as adw;
 use std::cell::Cell;
 use std::rc::Rc;
-
-use crate::init::{TabLaunchSpec, TerminalController};
-use crate::widgets::notification::Notification;
 
 /// Carries everything needed to display an in-app toast.
 /// `timeout_secs = 0` means the toast stays until the user dismisses it.
@@ -27,6 +28,7 @@ impl ToastRequest {
             timeout_secs: 3,
         }
     }
+
     pub fn persistent(message: impl Into<String>) -> Self {
         Self {
             message: message.into(),
@@ -93,7 +95,7 @@ pub enum AppInput {
     SyncTabColors,
     CloseTab(String),
     CloseActiveTab,
-    HandleTerminalEvent(Option<TerminalEvent>),
+    HandleTerminalEvent(Box<TerminalEvent>),
     AdoptOrphanTabs,
     ToggleSidebar,
     SidebarVisibleChanged(bool),
@@ -109,7 +111,7 @@ pub enum AppInput {
     OpenInFiles,
     ShowAppMenu(f64, f64),
     ShowCommandPaletteMenu,
-    SettingsChanged(Settings),
+    SettingsChanged(Box<Settings>),
     ShowThemesSidebar,
     ShowClawSidebar,
     ToggleClawCodeBlocks,
@@ -125,8 +127,6 @@ pub enum AppInput {
     ZoomIn,
     ZoomOut,
     ResetZoom,
-    Copy,
-    Paste,
     SplitVertical,
     SplitHorizontal,
     CloseSplit,
@@ -158,7 +158,7 @@ pub enum AppInput {
         height: i32,
         is_maximized: bool,
     },
-    PushGlobalNotification(Notification),
+    PushGlobalNotification(Box<Notification>),
     ShowToast(ToastRequest),
     DismissNotification(String),
     StartUpdateDownload(String, String, String, Option<String>), // (url, date, new_commit, checksum_url)
@@ -166,10 +166,9 @@ pub enum AppInput {
     ApplyUpdateAndRestart,
     ShowWhatsNewDialog(
         crate::updater::whats_new::WhatsNewPending,
-        Option<crate::updater::whats_new::ChangelogSummary>,
+        Option<Box<crate::updater::whats_new::ChangelogSummary>>,
     ),
     StartWhatsNewClaw(String),
-    GrabFocus,
     CancelTask(uuid::Uuid, Option<String>), // (task_id, pane_id)
     TogglePauseTask(uuid::Uuid, Option<String>), // (task_id, pane_id)
     CancelAllTasks(Option<String>),         // (pane_id)
@@ -198,10 +197,10 @@ pub struct AppWindowInner {
     pub detached_btn: gtk::Button,
     pub detached_count_lbl: gtk::Label,
     pub view_stack: adw::ViewStack,
-    pub next_id: usize,
     pub sidebar_visible: bool,
     pub preferences: Option<PreferencesComponent>,
     pub app_menu: AppMenuComponent,
+    pub tab_menu: Option<TabContextMenu>,
     pub claw: ClawSidebarComponent,
     pub bookmarks_sidebar: BookmarksSidebarComponent,
     pub bookmarks_controller: Option<BookmarksTabComponent>,
@@ -214,13 +213,41 @@ pub struct AppWindowInner {
     pub claw_active: bool,
     pub toast_overlay: adw::ToastOverlay,
     pub frosted_container: crate::widgets::frosted_glass::FrostedGlassContainer,
-    pub notifications: Vec<Notification>,
+    pub active_update_notification: Option<Notification>,
     pub initial_launch: Option<TabLaunchSpec>,
     pub force_close: Rc<Cell<bool>>,
     pub tx: async_channel::Sender<AppInput>,
 }
 
 impl AppWindowInner {
+    /// Returns the `TerminalController` for the currently selected `AdwTabView` page,
+    /// or `None` if no page is selected or the selected page is a non-terminal tab (e.g., Bookmarks).
+    pub fn active_tab(&self) -> Option<&TerminalController> {
+        let page = self.tab_view.selected_page()?;
+        let child = page.child();
+        self.tabs.iter().find(|c| c.controller.widget() == &child)
+    }
+
+    pub fn active_tab_pos(&self) -> Option<usize> {
+        let page = self.tab_view.selected_page()?;
+        let child = page.child();
+        self.tabs
+            .iter()
+            .position(|c| c.controller.widget() == &child)
+    }
+
+    pub fn tab_by_widget_key(&self, key: usize) -> Option<&TerminalController> {
+        self.tabs
+            .iter()
+            .find(|t| t.controller.widget().as_ptr() as usize == key)
+    }
+
+    pub fn tab_pos_by_widget_key(&self, key: usize) -> Option<usize> {
+        self.tabs
+            .iter()
+            .position(|t| t.controller.widget().as_ptr() as usize == key)
+    }
+
     pub fn ensure_preferences(&mut self) -> &PreferencesComponent {
         if self.preferences.is_none() {
             let tx_themes_nav = self.tx.clone();
@@ -247,13 +274,11 @@ impl AppWindowInner {
     }
 
     pub fn is_dialog_or_popover_open(win: &adw::ApplicationWindow) -> bool {
-        use gtk::prelude::{GtkWindowExt, WidgetExt};
         use libadwaita::glib::types::StaticType;
         use libadwaita::prelude::AdwApplicationWindowExt;
 
         win.visible_dialog().is_some()
-            || win
-                .focus()
+            || gtk::prelude::GtkWindowExt::focus(win)
                 .and_then(|w| w.ancestor(gtk::Popover::static_type()))
                 .is_some()
     }

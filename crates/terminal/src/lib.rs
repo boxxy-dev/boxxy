@@ -28,10 +28,7 @@ thread_local! {
         std::cell::RefCell::new(HashMap::new());
 }
 
-pub(crate) fn register_live_pane(
-    id: String,
-    inner: Weak<std::cell::RefCell<pane::PaneInner>>,
-) {
+pub(crate) fn register_live_pane(id: String, inner: Weak<std::cell::RefCell<pane::PaneInner>>) {
     LIVE_PANES.with(|map| {
         map.borrow_mut().insert(id, inner);
     });

@@ -154,7 +154,9 @@ impl Drop for PaneInner {
         };
 
         if persist {
-            log::info!("PaneInner dropping (pid={pid}): pty_persistence on → detaching into daemon");
+            log::info!(
+                "PaneInner dropping (pid={pid}): pty_persistence on → detaching into daemon"
+            );
             let snapshot = self.export_snapshot_with_title();
             self.terminal.detach_pty();
             glib::spawn_future_local(async move {
@@ -165,9 +167,9 @@ impl Drop for PaneInner {
                     Ok(0) => log::info!(
                         "pid={pid} terminated (unexpectedly — persistence may be off on daemon)"
                     ),
-                    Ok(3) => log::warn!(
-                        "pid={pid} detached without buffer (daemon has no stored FD)"
-                    ),
+                    Ok(3) => {
+                        log::warn!("pid={pid} detached without buffer (daemon has no stored FD)")
+                    }
                     Ok(code) => log::debug!("pid={pid} detach returned code {code}"),
                     Err(e) => log::warn!("pid={pid} detach failed: {e}"),
                 }

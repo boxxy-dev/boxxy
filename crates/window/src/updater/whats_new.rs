@@ -3,10 +3,10 @@ use std::path::Path;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use self_update::http::header::{ACCEPT, AUTHORIZATION, USER_AGENT};
+use self_update::http::header::USER_AGENT;
 use serde::{Deserialize, Serialize};
 
-use super::{GITHUB_API_BASE, REPO_NAME, REPO_OWNER, USER_AGENT_VALUE, Updater};
+use super::{GITHUB_API_BASE, REPO_NAME, REPO_OWNER, USER_AGENT_VALUE, Updater, http_client};
 
 const WHATS_NEW_MARKER_FILE: &str = ".whats_new_pending";
 const WHATS_NEW_LAST_FILE: &str = "whats_new_last.json";
@@ -15,6 +15,16 @@ const LAST_SEEN_COMMIT_FILE: &str = "last_seen_commit";
 
 /// Maximum commit range depth / list size for the What's New dialog.
 pub const MAX_WHATS_NEW_COMMITS: usize = 100;
+
+/// Writes `contents` atomically via a temporary sibling file + rename.
+fn write_atomic(path: &Path, contents: &str) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let tmp_path = path.with_extension(format!("tmp.{}", std::process::id()));
+    fs::write(&tmp_path, contents)?;
+    fs::rename(&tmp_path, path)
+}
 
 /// Marker persisted across the update restart so the newly launched binary knows
 /// which commit it upgraded from and can present the "What's New" dialog once.
@@ -87,11 +97,7 @@ impl CommitEntry {
     /// Returns the first line of the commit message (the commit subject/title).
     #[must_use]
     pub fn title(&self) -> &str {
-        self.message
-            .lines()
-            .next()
-            .unwrap_or(&self.message)
-            .trim()
+        self.message.lines().next().unwrap_or(&self.message).trim()
     }
 
     /// Formats a concise secondary metadata string (e.g. `e158d50 · 3h ago`) for the commit row caption.
@@ -190,24 +196,58 @@ pub fn shorten_sha(sha: &str) -> String {
     }
 }
 
+/// Strips characters unsafe in a single GitHub revision URL segment (`?`, `#`, whitespace, `\`, etc.)
+/// and drops empty, `.` or `..` path components so user-entered commit refs cannot break Compare API URLs.
+fn clean_git_ref_segment(raw: &str) -> String {
+    let filtered: String = raw
+        .trim()
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '/' | '~' | '^'))
+        .collect();
+
+    filtered
+        .split('/')
+        .map(|part| {
+            let mut collapsed = String::with_capacity(part.len());
+            let mut prev_dot = false;
+            for ch in part.chars() {
+                if ch == '.' {
+                    if prev_dot {
+                        continue;
+                    }
+                    prev_dot = true;
+                } else {
+                    prev_dot = false;
+                }
+                collapsed.push(ch);
+            }
+            collapsed.trim_matches('.').to_string()
+        })
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
 /// Clamps `~N` commit-depth expressions (such as `HEAD~1300` or `a1b2c3d~500`) to
-/// `MAX_WHATS_NEW_COMMITS` (100) so out-of-range ancestry queries do not 404 on GitHub.
-/// Returns `(normalized_ref, was_clamped)`.
+/// `MAX_WHATS_NEW_COMMITS` (100) so out-of-range ancestry queries do not 404 on GitHub,
+/// and strips URL-unsafe characters. Returns `(normalized_ref, was_clamped)`.
 pub fn sanitize_commit_ref(raw: &str) -> (String, bool) {
-    let trimmed = raw.trim();
-    if let Some((base, depth_str)) = trimmed.rsplit_once('~')
+    let cleaned = clean_git_ref_segment(raw);
+    if let Some((base, depth_str)) = cleaned.rsplit_once('~')
         && !base.is_empty()
         && !depth_str.is_empty()
         && depth_str.chars().all(|c| c.is_ascii_digit())
     {
         let base_short = shorten_sha(base);
-        let depth = depth_str.parse::<usize>().unwrap_or(MAX_WHATS_NEW_COMMITS + 1);
+        let depth = depth_str
+            .parse::<usize>()
+            .unwrap_or(MAX_WHATS_NEW_COMMITS + 1);
         if depth > MAX_WHATS_NEW_COMMITS {
             return (format!("{base_short}~{MAX_WHATS_NEW_COMMITS}"), true);
         }
         return (format!("{base_short}~{depth}"), false);
     }
-    (shorten_sha(trimmed), false)
+    (shorten_sha(&cleaned), false)
 }
 
 pub fn parse_simulate_update_range(raw: &str) -> Option<WhatsNewPending> {
@@ -241,8 +281,8 @@ pub(crate) fn write_whats_new_pending_in(
         to_commit: to_short,
     };
     let json = serde_json::to_string(&pending)?;
-    fs::write(app_dir.join(WHATS_NEW_MARKER_FILE), &json)?;
-    let _ = fs::write(app_dir.join(WHATS_NEW_LAST_FILE), &json);
+    write_atomic(&app_dir.join(WHATS_NEW_MARKER_FILE), &json)?;
+    let _ = write_atomic(&app_dir.join(WHATS_NEW_LAST_FILE), &json);
     Ok(())
 }
 
@@ -275,7 +315,7 @@ pub(crate) fn take_whats_new_pending_in(
     }
 
     if let Ok(json) = serde_json::to_string(&pending) {
-        let _ = fs::write(app_dir.join(WHATS_NEW_LAST_FILE), json);
+        let _ = write_atomic(&app_dir.join(WHATS_NEW_LAST_FILE), &json);
     }
 
     Some(pending)
@@ -287,8 +327,7 @@ pub(crate) fn record_last_seen_commit_in(config_dir: &Path, running_commit: &str
     if !super::is_hex_sha(&running_short) {
         return;
     }
-    let _ = fs::create_dir_all(config_dir);
-    let _ = fs::write(config_dir.join(LAST_SEEN_COMMIT_FILE), &running_short);
+    let _ = write_atomic(&config_dir.join(LAST_SEEN_COMMIT_FILE), &running_short);
 }
 
 /// Detects if the running binary's commit hash changed since the previous launch
@@ -344,11 +383,7 @@ pub(crate) fn check_and_record_commit_transition_in(
 }
 
 /// Checks if a post-update "What's New" dialog should be shown on this launch.
-/// Supports:
-/// 1. `BOXXY_SIMULATE_UPDATE="commit_a..commit_b"` for instant local testing.
-/// 2. `~/.local/boxxy-terminal/.whats_new_pending` written by the native self-updater.
-/// 3. `~/.config/boxxy-terminal/last_seen_commit` transition detection for Nix, Flatpak,
-///    and system package manager upgrades.
+/// Performs synchronous disk I/O; call via `spawn_blocking` off the GTK main thread.
 pub fn take_whats_new_pending() -> Option<WhatsNewPending> {
     if let Some(sim) = boxxy_sys_utils::env::simulate_update_raw()
         && let Some(pending) = parse_simulate_update_range(&sim)
@@ -376,8 +411,7 @@ pub fn take_whats_new_pending() -> Option<WhatsNewPending> {
         return Some(pending);
     }
 
-    if let Some(pending) =
-        check_and_record_commit_transition_in(&config_dir, super::CURRENT_COMMIT)
+    if let Some(pending) = check_and_record_commit_transition_in(&config_dir, super::CURRENT_COMMIT)
     {
         log::info!(
             "Detected binary commit upgrade ({} -> {}); presenting What's New dialog",
@@ -398,12 +432,11 @@ pub fn save_last_whats_new(pending: &WhatsNewPending) {
         return;
     };
     let config_dir = boxxy_sys_utils::get_config_dir();
-    let _ = fs::create_dir_all(&config_dir);
-    let _ = fs::write(config_dir.join(WHATS_NEW_LAST_FILE), &json);
+    let _ = write_atomic(&config_dir.join(WHATS_NEW_LAST_FILE), &json);
     if let Ok(app_dir) = Updater::get_app_dir()
         && app_dir.exists()
     {
-        let _ = fs::write(app_dir.join(WHATS_NEW_LAST_FILE), &json);
+        let _ = write_atomic(&app_dir.join(WHATS_NEW_LAST_FILE), &json);
     }
 }
 
@@ -454,19 +487,18 @@ pub fn save_cached_changelog_summary(summary: &ChangelogSummary) {
         return;
     };
     let config_dir = boxxy_sys_utils::get_config_dir();
-    let _ = fs::create_dir_all(&config_dir);
-    let _ = fs::write(config_dir.join(WHATS_NEW_CACHE_FILE), &json);
+    let _ = write_atomic(&config_dir.join(WHATS_NEW_CACHE_FILE), &json);
     if let Ok(app_dir) = Updater::get_app_dir()
         && app_dir.exists()
     {
-        let _ = fs::write(app_dir.join(WHATS_NEW_CACHE_FILE), &json);
+        let _ = write_atomic(&app_dir.join(WHATS_NEW_CACHE_FILE), &json);
     }
 }
 
 /// Loads a cached `ChangelogSummary` if it matches the requested `pending` commit range.
 pub fn load_cached_changelog_summary(pending: &WhatsNewPending) -> Option<ChangelogSummary> {
-    let from = shorten_sha(&pending.from_commit);
-    let to = shorten_sha(&pending.to_commit);
+    let (from, _) = sanitize_commit_ref(&pending.from_commit);
+    let (to, _) = sanitize_commit_ref(&pending.to_commit);
 
     let candidates = [
         Some(boxxy_sys_utils::get_config_dir().join(WHATS_NEW_CACHE_FILE)),
@@ -495,15 +527,8 @@ pub fn load_cached_changelog_summary(pending: &WhatsNewPending) -> Option<Change
 
 /// Fetches contributor avatars concurrently (up to 5) in the background so the main
 /// changelog summary can be rendered immediately without waiting on image downloads.
-pub async fn fetch_contributor_avatars(
-    contributors: &[ContributorInfo],
-) -> Vec<(String, Vec<u8>)> {
-    let Ok(client) = reqwest::Client::builder()
-        .timeout(Duration::from_secs(3))
-        .build()
-    else {
-        return Vec::new();
-    };
+pub async fn fetch_contributor_avatars(contributors: &[ContributorInfo]) -> Vec<(String, Vec<u8>)> {
+    let client = http_client();
 
     let mut set = tokio::task::JoinSet::new();
     for contributor in contributors.iter().take(5) {
@@ -520,6 +545,7 @@ pub async fn fetch_contributor_avatars(
         set.spawn(async move {
             if let Ok(img_resp) = client_c
                 .get(&sized_url)
+                .timeout(Duration::from_secs(3))
                 .header(USER_AGENT, USER_AGENT_VALUE)
                 .send()
                 .await
@@ -549,8 +575,12 @@ pub async fn fetch_changelog_summary(
     from_commit: &str,
     to_commit: &str,
 ) -> Result<ChangelogSummary> {
-    let from = from_commit.trim();
-    let to = to_commit.trim();
+    let (from, _) = sanitize_commit_ref(from_commit);
+    let (to, _) = sanitize_commit_ref(to_commit);
+    if from.is_empty() || to.is_empty() {
+        anyhow::bail!("Invalid commit range for changelog comparison");
+    }
+
     let url = format!(
         "{}/repos/{}/{}/compare/{}...{}",
         GITHUB_API_BASE.trim_end_matches('/'),
@@ -560,33 +590,7 @@ pub async fn fetch_changelog_summary(
         to
     );
 
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(12))
-        .build()?;
-
-    let token = Updater::github_token_from_env();
-    let mut req = client
-        .get(&url)
-        .header(USER_AGENT, USER_AGENT_VALUE)
-        .header(ACCEPT, "application/vnd.github+json");
-
-    if let Some(ref token) = token {
-        req = req.header(AUTHORIZATION, format!("Bearer {token}"));
-    }
-
-    let mut resp = req.send().await?;
-    if (resp.status() == reqwest::StatusCode::UNAUTHORIZED
-        || resp.status() == reqwest::StatusCode::FORBIDDEN)
-        && token.is_some()
-    {
-        resp = client
-            .get(&url)
-            .header(USER_AGENT, USER_AGENT_VALUE)
-            .header(ACCEPT, "application/vnd.github+json")
-            .send()
-            .await?;
-    }
-
+    let resp = Updater::github_api_get(&url, Duration::from_secs(12)).await?;
     let status = resp.status();
     if !status.is_success() {
         let err = self_update::Error::http_status_error_with_headers(
@@ -606,8 +610,12 @@ pub async fn fetch_changelog_summary(
     }
 
     let body = resp.text().await?;
-    let summary = parse_compare_payload(from, to, &body)?;
-    save_cached_changelog_summary(&summary);
+    let summary = parse_compare_payload(&from, &to, &body)?;
+    let summary_for_cache = summary.clone();
+    let _ = tokio::task::spawn_blocking(move || {
+        save_cached_changelog_summary(&summary_for_cache);
+    })
+    .await;
 
     Ok(summary)
 }
@@ -617,8 +625,8 @@ pub(crate) fn parse_compare_payload(
     to_commit: &str,
     json_str: &str,
 ) -> Result<ChangelogSummary> {
-    let payload: GithubComparePayload = serde_json::from_str(json_str)
-        .context("Failed to deserialize GitHub compare payload")?;
+    let payload: GithubComparePayload =
+        serde_json::from_str(json_str).context("Failed to deserialize GitHub compare payload")?;
 
     let additions: usize = payload.files.iter().map(|f| f.additions).sum();
     let deletions: usize = payload.files.iter().map(|f| f.deletions).sum();
@@ -841,14 +849,14 @@ mod tests {
             ],
             "files": [
                 {
-                    "filename": "crates/window/src/ui.rs",
+                    "filename": "src/ui.rs",
                     "additions": 120,
                     "deletions": 15,
                     "changes": 135,
                     "patch": "@@ -1,15 +1,120 @@\n+lots of rust code that must be ignored"
                 },
                 {
-                    "filename": "crates/boxxy_vte/src/lib.rs",
+                    "filename": "src/parser.rs",
                     "additions": 45,
                     "deletions": 30,
                     "changes": 75,
@@ -866,9 +874,11 @@ mod tests {
         assert_eq!(summary.deletions, 45);
         assert_eq!(summary.commits.len(), 2);
         assert_eq!(summary.commits[0].short_sha, "b111111");
-        assert!(summary.commits[0]
-            .message
-            .starts_with("feat(claw): add side-channel /btw query dialog"));
+        assert!(
+            summary.commits[0]
+                .message
+                .starts_with("feat(claw): add side-channel /btw query dialog")
+        );
         assert_eq!(summary.commits[1].short_sha, "c222222");
         assert_eq!(summary.contributors.len(), 1);
         assert_eq!(summary.contributors[0].login, "alice");
@@ -909,7 +919,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_simulate_update_range_accepts_double_and_triple_dots() {
+    fn parse_simulate_update_range_and_sanitize_commit_ref_reject_unsafe_chars() {
         let p1 = parse_simulate_update_range("1111111222..3333333444").unwrap();
         assert_eq!(p1.from_commit, "1111111");
         assert_eq!(p1.to_commit, "3333333");
@@ -925,6 +935,12 @@ mod tests {
         let (unclamped, was_clamped_ok) = sanitize_commit_ref("HEAD~25");
         assert_eq!(unclamped, "HEAD~25");
         assert!(!was_clamped_ok);
+
+        let (stripped, _) = sanitize_commit_ref("main?per_page=1#frag");
+        assert_eq!(stripped, "mainper_page1frag");
+
+        let (traversal, _) = sanitize_commit_ref("../../etc/passwd");
+        assert_eq!(traversal, "etc/passwd");
     }
 
     #[test]
@@ -964,7 +980,9 @@ mod tests {
 
         let clip_prompt = build_clipboard_whats_new_prompt(&pending, Some(&summary));
         assert!(clip_prompt.contains("from commit a1b2c3d to e4f5a6b"));
-        assert!(clip_prompt.contains("https://github.com/boxxy-dev/boxxy/compare/a1b2c3d...e4f5a6b"));
+        assert!(
+            clip_prompt.contains("https://github.com/boxxy-dev/boxxy/compare/a1b2c3d...e4f5a6b")
+        );
         assert!(clip_prompt.contains("+88 lines added, -12 lines removed"));
     }
 

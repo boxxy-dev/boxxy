@@ -1,12 +1,13 @@
-use boxxy_claw_protocol::TaskType;
 use boxxy_preferences::Settings;
 use gtk4::gio;
 use libadwaita::prelude::*;
 use std::cell::RefCell;
+use std::collections::HashSet;
 use std::rc::Rc;
 
+use super::close_dialog::{CloseDecision, prompt_close_active_work};
 use crate::init::AppInit;
-use crate::state::AppWindowInner;
+use crate::state::{AppInput, AppWindowInner};
 use crate::ui::AppWindow;
 
 pub fn save_window_state(inner: &mut AppWindowInner, width: i32, height: i32, is_maximized: bool) {
@@ -30,7 +31,7 @@ fn finalize_window_close(inner_ref: &Rc<RefCell<AppWindowInner>>) {
 
 pub fn handle_close_request(inner_ref: &Rc<RefCell<AppWindowInner>>, inner: &mut AppWindowInner) {
     let mut pids = Vec::new();
-    let mut window_pane_ids = std::collections::HashSet::new();
+    let mut window_pane_ids = HashSet::new();
     let mut active_claw_panes = Vec::new();
     for tab in &inner.tabs {
         pids.extend(tab.controller.get_pids());
@@ -58,23 +59,17 @@ pub fn handle_close_request(inner_ref: &Rc<RefCell<AppWindowInner>>, inner: &mut
 
         let mut running_apps = Vec::new();
         for pid in &pids {
-            log::debug!(
-                "handle_close_request: Querying running processes for PID {}",
-                pid
-            );
+            log::debug!("handle_close_request: Querying running processes for PID {pid}");
             if let Ok(Ok(mut procs)) = tokio::time::timeout(
                 std::time::Duration::from_millis(500),
                 agent.get_running_processes(*pid),
             )
             .await
             {
-                // Ignore the shell process itself if it's the only thing running,
-                // but since we get descendants, the shell itself isn't included.
                 running_apps.append(&mut procs);
             } else {
                 log::warn!(
-                    "handle_close_request: Timeout or error querying processes for PID {}",
-                    pid
+                    "handle_close_request: Timeout or error querying processes for PID {pid}"
                 );
             }
         }
@@ -102,9 +97,6 @@ pub fn handle_close_request(inner_ref: &Rc<RefCell<AppWindowInner>>, inner: &mut
             return;
         }
 
-        // If "Always Keep Running Processes in Background" (`pty_persistence`) is on,
-        // detach all tabs (the daemon automatically terminates idle shells and keeps
-        // busy shells and active AI sessions alive) and close without showing the dialog.
         if Settings::load().pty_persistence {
             let tabs: Vec<_> = inner_clone
                 .borrow()
@@ -120,152 +112,47 @@ pub fn handle_close_request(inner_ref: &Rc<RefCell<AppWindowInner>>, inner: &mut
             return;
         }
 
-        let dialog = libadwaita::AlertDialog::builder()
-            .heading("Close Window?")
-            .body("Put active sessions in the background to continue them later without needing to resume, or terminate them.")
-            .build();
-
-        let group = libadwaita::PreferencesGroup::new();
-        for (pid, comm) in running_apps {
-            let row = libadwaita::ActionRow::builder()
-                .title(&comm)
-                .subtitle(format!("Process {}", pid))
-                .focusable(false)
-                .build();
-            group.add(&row);
-        }
-
-        let mut panes_with_tasks = std::collections::HashSet::new();
-        for task in pending_tasks {
-            panes_with_tasks.insert(task.pane_id.clone());
-            let type_str = match task.task_type {
-                TaskType::Notification => "Reminder",
-                TaskType::Command => "Scheduled Command",
-                TaskType::Query => "Scheduled Query",
-            };
-            let agent_name = if task.character_name.is_empty() {
-                "AI Agent"
-            } else {
-                &task.character_name
-            };
-            let row = libadwaita::ActionRow::builder()
-                .title(&task.payload)
-                .subtitle(format!("{} by {}", type_str, agent_name))
-                .focusable(false)
-                .build();
-            group.add(&row);
-        }
-
-        for (pane_id, agent_name) in active_claw_panes {
-            if !panes_with_tasks.contains(&pane_id) {
-                let row = libadwaita::ActionRow::builder()
-                    .title(&agent_name)
-                    .subtitle("Active AI Agent Session")
-                    .focusable(false)
-                    .build();
-                group.add(&row);
-            }
-        }
-
-        let scrolled = gtk4::ScrolledWindow::builder()
-            .hscrollbar_policy(gtk4::PolicyType::Never)
-            .vscrollbar_policy(gtk4::PolicyType::Automatic)
-            .max_content_height(250)
-            .propagate_natural_height(true)
-            .child(&group)
-            .build();
-
-        let extra_vbox = gtk4::Box::new(gtk4::Orientation::Vertical, 16);
-        extra_vbox.set_width_request(440);
-        extra_vbox.append(&scrolled);
-
-        let actions_row = gtk4::Box::new(gtk4::Orientation::Horizontal, 10);
-        actions_row.set_homogeneous(true);
-
-        let cancel_btn = gtk4::Button::builder()
-            .label("Cancel")
-            .height_request(38)
-            .build();
-        let terminate_btn = gtk4::Button::builder()
-            .label("Terminate All")
-            .css_classes(["destructive-action"])
-            .height_request(38)
-            .build();
-        let bg_btn = gtk4::Button::builder()
-            .label("Run in Background")
-            .css_classes(["suggested-action"])
-            .height_request(38)
-            .build();
-
-        let chosen = std::rc::Rc::new(std::cell::Cell::new("cancel"));
-        {
-            let c = chosen.clone();
-            let d = dialog.downgrade();
-            cancel_btn.connect_clicked(move |_| {
-                c.set("cancel");
-                if let Some(dlg) = d.upgrade() {
-                    dlg.close();
-                }
-            });
-        }
-        {
-            let c = chosen.clone();
-            let d = dialog.downgrade();
-            terminate_btn.connect_clicked(move |_| {
-                c.set("close");
-                if let Some(dlg) = d.upgrade() {
-                    dlg.close();
-                }
-            });
-        }
-        {
-            let c = chosen.clone();
-            let d = dialog.downgrade();
-            bg_btn.connect_clicked(move |_| {
-                c.set("background");
-                if let Some(dlg) = d.upgrade() {
-                    dlg.close();
-                }
-            });
-        }
-
-        actions_row.append(&cancel_btn);
-        actions_row.append(&terminate_btn);
-        actions_row.append(&bg_btn);
-        extra_vbox.append(&actions_row);
-
-        dialog.set_extra_child(Some(&extra_vbox));
-
         let window = inner_clone.borrow().window.clone();
-        let _ = dialog.choose_future(Some(&window)).await;
-        let response = chosen.get();
-        if response == "background" {
-            let tabs: Vec<_> = inner_clone
-                .borrow()
-                .tabs
-                .iter()
-                .map(|t| t.controller.clone())
-                .collect();
-            for tab in tabs {
-                tab.detach_on_close_sync().await;
-            }
+        let decision = prompt_close_active_work(
+            &window,
+            "Close Window?",
+            "Put active sessions in the background to continue them later without needing to resume, or terminate them.",
+            "Terminate All",
+            running_apps,
+            pending_tasks,
+            active_claw_panes,
+        )
+        .await;
 
-            finalize_window_close(&inner_clone);
-        } else if response == "close" {
-            let tabs: Vec<_> = inner_clone
-                .borrow()
-                .tabs
-                .iter()
-                .map(|t| t.controller.clone())
-                .collect();
-            for tab in tabs {
-                tab.terminate_on_close_sync().await;
+        match decision {
+            CloseDecision::RunInBackground => {
+                let tabs: Vec<_> = inner_clone
+                    .borrow()
+                    .tabs
+                    .iter()
+                    .map(|t| t.controller.clone())
+                    .collect();
+                for tab in tabs {
+                    tab.detach_on_close_sync().await;
+                }
+                finalize_window_close(&inner_clone);
             }
-
-            finalize_window_close(&inner_clone);
-        } else {
-            let tx = inner_clone.borrow().tx.clone();
-            let _ = tx.send_blocking(crate::state::AppInput::FocusActiveTerminal);
+            CloseDecision::Terminate => {
+                let tabs: Vec<_> = inner_clone
+                    .borrow()
+                    .tabs
+                    .iter()
+                    .map(|t| t.controller.clone())
+                    .collect();
+                for tab in tabs {
+                    tab.terminate_on_close_sync().await;
+                }
+                finalize_window_close(&inner_clone);
+            }
+            CloseDecision::Cancel => {
+                let tx = inner_clone.borrow().tx.clone();
+                let _ = tx.send_blocking(AppInput::FocusActiveTerminal);
+            }
         }
     });
 }
@@ -274,18 +161,11 @@ pub fn new_window(inner: &AppWindowInner) {
     if let Some(app) =
         gio::Application::default().and_then(|a| a.downcast::<libadwaita::Application>().ok())
     {
-        let working_dir = if inner.current_settings.preserve_working_dir {
-            inner.tab_view.selected_page().and_then(|page| {
-                let child = page.child();
-                inner
-                    .tabs
-                    .iter()
-                    .find(|c| c.controller.widget() == &child)
-                    .and_then(|tc| tc.cwd.clone())
-            })
-        } else {
-            None
-        };
+        let working_dir = inner
+            .current_settings
+            .preserve_working_dir
+            .then(|| inner.active_tab().and_then(|tc| tc.cwd.clone()))
+            .flatten();
 
         AppWindow::new(
             &app,
@@ -297,43 +177,103 @@ pub fn new_window(inner: &AppWindowInner) {
     }
 }
 
+/// Returns `true` when `prev` and `next` differ ONLY in pure window/appearance chrome
+/// fields that have zero effect on the background `boxxy-agent` daemon or AI sessions.
+fn only_ui_chrome_changed(prev: &Settings, next: &Settings) -> bool {
+    let mut probe = prev.clone();
+    probe.ai_chat_width = next.ai_chat_width;
+    probe.font_size = next.font_size;
+    probe.overlay_font_scale = next.overlay_font_scale;
+    probe.always_show_code_blocks = next.always_show_code_blocks;
+    probe.opacity = next.opacity;
+    probe.frosted_glass = next.frosted_glass;
+    probe.theme.clone_from(&next.theme);
+    probe.app_theme_mode = next.app_theme_mode;
+    probe.app_theme_id.clone_from(&next.app_theme_id);
+    probe
+        .custom_accent_color
+        .clone_from(&next.custom_accent_color);
+    probe.color_scheme = next.color_scheme;
+    probe.smart_tab_naming = next.smart_tab_naming;
+    probe.fixed_width_tabs = next.fixed_width_tabs;
+    probe.colored_tabs = next.colored_tabs;
+    probe == *next
+}
+
 pub fn settings_changed(inner: &mut AppWindowInner, settings: Settings) {
-    inner.current_settings = settings.clone();
+    if inner.current_settings == settings {
+        return;
+    }
+
+    let prev = std::mem::replace(&mut inner.current_settings, settings.clone());
     if let Some(ref preferences) = inner.preferences {
         preferences.sync_settings(&settings);
     }
-    boxxy_terminal::TerminalComponent::set_claw_overlay_zoom_pct(settings.overlay_font_scale);
 
-    let fallback_scheme = match settings.color_scheme {
-        boxxy_preferences::config::ColorScheme::Default => libadwaita::ColorScheme::Default,
-        boxxy_preferences::config::ColorScheme::Light => libadwaita::ColorScheme::ForceLight,
-        boxxy_preferences::config::ColorScheme::Dark => libadwaita::ColorScheme::ForceDark,
-    };
-    boxxy_themes::app_theme::apply_app_theme(
-        settings.app_theme_mode == boxxy_preferences::AppThemeMode::Boxxy,
-        &settings.app_theme_id,
-        settings.custom_accent_color.as_deref(),
-        fallback_scheme,
-    );
+    if inner.sidebar_toolbar.width_request() != settings.ai_chat_width {
+        inner
+            .sidebar_toolbar
+            .set_width_request(settings.ai_chat_width);
+    }
 
+    // Fast path when only the sidebar width changed (e.g. after drag-resizing).
+    let mut width_only_probe = prev.clone();
+    width_only_probe.ai_chat_width = settings.ai_chat_width;
+    if width_only_probe == settings {
+        return;
+    }
+
+    if prev.overlay_font_scale != settings.overlay_font_scale {
+        boxxy_terminal::TerminalComponent::set_claw_overlay_zoom_pct(settings.overlay_font_scale);
+    }
+
+    let style_manager = libadwaita::StyleManager::default();
+    let was_dark = style_manager.is_dark();
+
+    let app_theme_changed = prev.app_theme_mode != settings.app_theme_mode
+        || prev.app_theme_id != settings.app_theme_id
+        || prev.custom_accent_color != settings.custom_accent_color
+        || prev.color_scheme != settings.color_scheme;
+
+    if app_theme_changed {
+        let fallback_scheme = match settings.color_scheme {
+            boxxy_preferences::config::ColorScheme::Default => libadwaita::ColorScheme::Default,
+            boxxy_preferences::config::ColorScheme::Light => libadwaita::ColorScheme::ForceLight,
+            boxxy_preferences::config::ColorScheme::Dark => libadwaita::ColorScheme::ForceDark,
+        };
+        boxxy_themes::app_theme::apply_app_theme(
+            settings.app_theme_mode == boxxy_preferences::AppThemeMode::Boxxy,
+            &settings.app_theme_id,
+            settings.custom_accent_color.as_deref(),
+            fallback_scheme,
+        );
+    }
+
+    let is_dark = style_manager.is_dark();
     let parsed = boxxy_themes::load_palette(settings.theme.as_str());
-    let is_dark = libadwaita::StyleManager::default().is_dark();
-    boxxy_themes::apply_palette(parsed.as_ref(), is_dark);
+    if prev.theme != settings.theme || was_dark != is_dark || app_theme_changed {
+        boxxy_themes::apply_palette(parsed.as_ref(), is_dark);
+    }
 
     let variant = parsed
         .as_ref()
         .map(|p| if is_dark { p.dark } else { p.light });
 
-    inner.claw.refresh_mcp_list(&settings);
+    let agent_sync_needed = !only_ui_chrome_changed(&prev, &settings);
+    if agent_sync_needed {
+        inner.claw.refresh_mcp_list(&settings);
+    }
 
     for tab in &inner.tabs {
         tab.controller.update_settings(settings.clone(), variant);
-        tab.controller.notify_settings_invalidated();
+        if agent_sync_needed {
+            tab.controller.notify_settings_invalidated();
+        }
     }
 
     let bg_rgba = if let Some(ref p) = parsed {
-        let variant = if is_dark { &p.dark } else { &p.light };
-        gtk4::gdk::RGBA::parse(variant.background)
+        let v = if is_dark { &p.dark } else { &p.light };
+        gtk4::gdk::RGBA::parse(v.background)
             .unwrap_or_else(|_| gtk4::gdk::RGBA::new(0.08, 0.08, 0.1, 1.0))
     } else {
         gtk4::gdk::RGBA::new(0.08, 0.08, 0.1, 1.0)
@@ -350,34 +290,30 @@ pub fn settings_changed(inner: &mut AppWindowInner, settings: Settings) {
         inner.window.remove_css_class("frosted-glass-active");
     }
 
-    // Re-push credentials so the daemon's in-memory `core.state.api_keys`
-    // track any changes the user just made in Settings → APIs.
-    // (The engine also falls back to disk, but keeping the IPC state
-    // current avoids that fallback path on every turn.)
-    let effective_keys = settings.get_effective_api_keys();
-    let ollama_url = settings.ollama_base_url.clone();
-    let tx_mcp = inner.tx.clone();
+    if agent_sync_needed {
+        // Re-push credentials and invalidate settings in the daemon only when
+        // agent/API/MCP/model/toolbox configuration actually changed.
+        let effective_keys = settings.get_effective_api_keys();
+        let ollama_url = settings.ollama_base_url.clone();
+        let tx_mcp = inner.tx.clone();
 
-    gtk4::glib::spawn_future_local(async move {
-        let agent = boxxy_terminal::get_agent().await;
-        let _ = agent.update_credentials(effective_keys, ollama_url).await;
-        let _ = agent.notify_settings_invalidated().await;
-        if let Ok(mcp_statuses) = agent.get_mcp_statuses().await {
-            let _ = tx_mcp
-                .send(crate::state::AppInput::RefreshMcpStatuses(mcp_statuses))
-                .await;
-        }
-    });
-
-    if inner.sidebar_toolbar.width_request() != settings.ai_chat_width {
-        inner
-            .sidebar_toolbar
-            .set_width_request(settings.ai_chat_width);
+        gtk4::glib::spawn_future_local(async move {
+            let agent = boxxy_terminal::get_agent().await;
+            let _ = agent.update_credentials(effective_keys, ollama_url).await;
+            let _ = agent.notify_settings_invalidated().await;
+            if let Ok(mcp_statuses) = agent.get_mcp_statuses().await {
+                let _ = tx_mcp
+                    .send(AppInput::RefreshMcpStatuses(mcp_statuses))
+                    .await;
+            }
+        });
     }
 
-    // from global settings here. Those are window-local states that can be toggled independently per window.
-
-    super::tabs::sync_tab_titles(inner);
+    if prev.smart_tab_naming != settings.smart_tab_naming
+        || prev.fixed_width_tabs != settings.fixed_width_tabs
+    {
+        super::tab_bar_sync::sync_tab_titles(inner);
+    }
 }
 
 pub fn theme_selected(inner: &mut AppWindowInner, palette: boxxy_themes::ParsedPaletteStatic) {
@@ -429,31 +365,26 @@ pub fn sidebar_page_changed(inner: &mut AppWindowInner, name: String) {
     inner.app_state.save();
 }
 
-fn refresh_claw_maintenance_status(tx: async_channel::Sender<crate::state::AppInput>) {
+pub(crate) fn refresh_claw_maintenance_status(tx: async_channel::Sender<AppInput>) {
     gtk4::glib::spawn_future_local(async move {
         let agent = boxxy_terminal::get_agent().await;
         if let Ok((status, on_battery)) = agent.get_maintenance_status().await {
             let _ = tx
-                .send(crate::state::AppInput::RefreshMaintenanceStatus(
-                    status, on_battery,
-                ))
+                .send(AppInput::RefreshMaintenanceStatus(status, on_battery))
                 .await;
         }
         if let Ok(mcp_statuses) = agent.get_mcp_statuses().await {
-            let _ = tx
-                .send(crate::state::AppInput::RefreshMcpStatuses(mcp_statuses))
-                .await;
+            let _ = tx.send(AppInput::RefreshMcpStatuses(mcp_statuses)).await;
         }
     });
 }
 
 pub fn sidebar_width_changed(inner: &mut AppWindowInner, width: i32) {
     if inner.current_settings.ai_chat_width != width {
-        boxxy_preferences::Settings::update(|settings| {
+        inner.current_settings.ai_chat_width = width;
+        Settings::update(|settings| {
             settings.ai_chat_width = width;
         });
-
-        inner.current_settings.ai_chat_width = width;
     }
 }
 

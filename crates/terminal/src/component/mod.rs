@@ -209,6 +209,10 @@ impl TerminalComponent {
         self.inner.borrow().panes.len()
     }
 
+    pub fn is_maximized(&self) -> bool {
+        self.inner.borrow().is_maximized
+    }
+
     pub fn send_text(&self, text: &str) {
         let inner = self.inner.borrow();
         if let Some(pane) = inner.panes.get(&inner.active_pane_id) {
@@ -415,9 +419,7 @@ impl TerminalComponent {
             }
             PaneOutput::AltScreenChanged(id, is_alt) => {
                 let mut inner = self.inner.borrow_mut();
-                if !is_alt
-                    && let Some(pane) = inner.panes.get_mut(&id)
-                {
+                if !is_alt && let Some(pane) = inner.panes.get_mut(&id) {
                     pane.title = pane.controller.last_title();
                 }
                 if inner.active_pane_id == id {

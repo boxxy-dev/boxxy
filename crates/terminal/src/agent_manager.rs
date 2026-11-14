@@ -78,7 +78,11 @@ where
                     }
                 }
             }
-            state.subscribers.entry(key.clone()).or_default().push((sub_id, tx));
+            state
+                .subscribers
+                .entry(key.clone())
+                .or_default()
+                .push((sub_id, tx));
         }
 
         let inner = self.inner.clone();
@@ -163,15 +167,15 @@ where
 
     /// Registers an existing `Sender<V>` under `key` and returns an RAII
     /// `SubscriptionGuard` that removes it on drop.
-    pub fn subscribe_with_sender(
-        &self,
-        key: K,
-        tx: async_channel::Sender<V>,
-    ) -> SubscriptionGuard {
+    pub fn subscribe_with_sender(&self, key: K, tx: async_channel::Sender<V>) -> SubscriptionGuard {
         let sub_id = NEXT_SUBSCRIPTION_ID.fetch_add(1, Ordering::Relaxed);
         {
             let mut state = self.inner.lock();
-            state.subscribers.entry(key.clone()).or_default().push((sub_id, tx));
+            state
+                .subscribers
+                .entry(key.clone())
+                .or_default()
+                .push((sub_id, tx));
         }
 
         let inner = self.inner.clone();
@@ -251,11 +255,7 @@ where
 
     #[cfg(test)]
     pub fn subscriber_count(&self, key: &K) -> usize {
-        self.inner
-            .lock()
-            .subscribers
-            .get(key)
-            .map_or(0, Vec::len)
+        self.inner.lock().subscribers.get(key).map_or(0, Vec::len)
     }
 }
 
@@ -286,9 +286,10 @@ impl AgentConnection {
                     if let Ok(mut stream) = proxy.receive_claims_changed().await {
                         while let Some(msg) = stream.next().await {
                             if let Ok(args) = msg.args()
-                                && let Ok(snapshot) = serde_json::from_str::<
-                                    boxxy_claw_protocol::characters::RegistrySnapshot,
-                                >(&args.snapshot_json)
+                                && let Ok(snapshot) =
+                                    serde_json::from_str::<
+                                        boxxy_claw_protocol::characters::RegistrySnapshot,
+                                    >(&args.snapshot_json)
                                 && snapshot.revision > last_seen_revision
                             {
                                 last_seen_revision = snapshot.revision;
@@ -668,8 +669,7 @@ impl AgentManager {
                         .find(|c| {
                             c.config.id != target_id
                                 && !claims.iter().any(|claim| {
-                                    claim.character_id == c.config.id
-                                        && claim.holder_id != pane_id
+                                    claim.character_id == c.config.id && claim.holder_id != pane_id
                                 })
                         })
                         .or_else(|| catalog.first())

@@ -4,6 +4,7 @@ use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::LazyLock;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -21,6 +22,16 @@ pub(crate) const GITHUB_API_BASE: &str = "https://api.github.com";
 pub(crate) const USER_AGENT_VALUE: &str = concat!("boxxy-terminal/", env!("CARGO_PKG_VERSION"));
 const CHECK_THROTTLE_INTERVAL: Duration = Duration::from_secs(60); // 60s burst guard across multi-window opens
 const MAX_UPDATE_ARCHIVE_BYTES: u64 = 250 * 1024 * 1024; // 250 MiB safety cap
+
+pub(crate) fn http_client() -> &'static reqwest::Client {
+    static CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
+        reqwest::Client::builder()
+            .connect_timeout(Duration::from_secs(10))
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new())
+    });
+    &CLIENT
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UpdateInfo {
@@ -64,6 +75,44 @@ pub(crate) fn is_hex_sha(s: &str) -> bool {
 pub struct Updater;
 
 impl Updater {
+    /// Performs a `GET` against the GitHub JSON API using the shared `reqwest::Client`.
+    /// Injects `GH_TOKEN`/`GITHUB_TOKEN` when present and retries unauthenticated on 401/403
+    /// so a stale or mis-scoped local token never breaks public release/changelog checks.
+    pub(crate) async fn github_api_get(url: &str, timeout: Duration) -> Result<reqwest::Response> {
+        let client = http_client();
+        let token = Self::github_token_from_env();
+
+        let mut req = client
+            .get(url)
+            .timeout(timeout)
+            .header(USER_AGENT, USER_AGENT_VALUE)
+            .header(ACCEPT, "application/vnd.github+json");
+
+        if let Some(ref token) = token {
+            req = req.header(AUTHORIZATION, format!("Bearer {token}"));
+        }
+
+        let mut resp = req.send().await?;
+        if (resp.status() == reqwest::StatusCode::UNAUTHORIZED
+            || resp.status() == reqwest::StatusCode::FORBIDDEN)
+            && token.is_some()
+        {
+            log::debug!(
+                "Authenticated GitHub request to {url} returned {}; retrying unauthenticated.",
+                resp.status()
+            );
+            resp = client
+                .get(url)
+                .timeout(timeout)
+                .header(USER_AGENT, USER_AGENT_VALUE)
+                .header(ACCEPT, "application/vnd.github+json")
+                .send()
+                .await?;
+        }
+
+        Ok(resp)
+    }
+
     /// Checks for a new nightly build on GitHub.
     ///
     /// Uses `UpdateCheckGuard` to throttle background checks, queries `/releases/tags/nightly`
@@ -74,15 +123,17 @@ impl Updater {
         }
 
         let app_dir = Self::get_app_dir()?;
-        if !app_dir.exists() {
-            let _ = fs::create_dir_all(&app_dir);
-        }
+        let _ = tokio::fs::create_dir_all(&app_dir).await;
 
-        let check_guard = UpdateCheckGuard::new(
-            app_dir.join(".last_update_check"),
-            CHECK_THROTTLE_INTERVAL,
-        );
-        match check_guard.should_check() {
+        let guard_path = app_dir.join(".last_update_check");
+        let should_check = tokio::task::spawn_blocking(move || {
+            let guard = UpdateCheckGuard::new(guard_path, CHECK_THROTTLE_INTERVAL);
+            guard.should_check()
+        })
+        .await
+        .context("UpdateCheckGuard task panicked")?;
+
+        match should_check {
             Ok(false) => {
                 log::debug!("Update check throttled by UpdateCheckGuard; skipping.");
                 return Ok(None);
@@ -95,9 +146,7 @@ impl Updater {
 
         log::debug!("Checking GitHub for nightly updates...");
 
-        let release = Self::fetch_nightly_release(GITHUB_API_BASE).await?;
-
-        let Some(nightly) = release else {
+        let Some(nightly) = Self::fetch_nightly_release(GITHUB_API_BASE).await? else {
             return Ok(None);
         };
 
@@ -106,8 +155,31 @@ impl Updater {
         // pre-1.3.0 updater (which wrote `created_at` into `.last_update`) are recognized
         // as up-to-date and migrated cleanly without prompting to re-download the same build.
         let last_update_path = app_dir.join(".last_update");
-        if Self::is_release_already_installed(&last_update_path, &nightly) {
-            let _ = check_guard.record_check();
+        let guard_record_path = app_dir.join(".last_update_check");
+        let already_installed = {
+            let p = last_update_path.clone();
+            let created = nightly.created_at.clone();
+            let published = nightly.published_at.clone();
+            tokio::task::spawn_blocking(move || {
+                let dummy = GithubRelease {
+                    tag_name: String::new(),
+                    target_commitish: None,
+                    created_at: created,
+                    published_at: published,
+                    assets: Vec::new(),
+                };
+                Self::is_release_already_installed(&p, &dummy)
+            })
+            .await
+            .unwrap_or(false)
+        };
+
+        if already_installed {
+            let _ = tokio::task::spawn_blocking(move || {
+                let _ = UpdateCheckGuard::new(guard_record_path, CHECK_THROTTLE_INTERVAL)
+                    .record_check();
+            })
+            .await;
             return Ok(None);
         }
 
@@ -126,9 +198,14 @@ impl Updater {
                 .published_at
                 .as_deref()
                 .unwrap_or(&nightly.created_at)
-                .trim();
-            let _ = fs::write(&last_update_path, release_date);
-            let _ = check_guard.record_check();
+                .trim()
+                .to_string();
+            let _ = tokio::fs::write(&last_update_path, release_date).await;
+            let _ = tokio::task::spawn_blocking(move || {
+                let _ = UpdateCheckGuard::new(guard_record_path, CHECK_THROTTLE_INTERVAL)
+                    .record_check();
+            })
+            .await;
             return Ok(None);
         }
 
@@ -169,33 +246,7 @@ impl Updater {
             tag
         );
 
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(10))
-            .build()?;
-
-        let token = Self::github_token_from_env();
-        let mut req = client
-            .get(&url)
-            .header(USER_AGENT, USER_AGENT_VALUE)
-            .header(ACCEPT, "application/vnd.github+json");
-
-        if let Some(ref token) = token {
-            req = req.header(AUTHORIZATION, format!("Bearer {token}"));
-        }
-
-        let mut resp = req.send().await?;
-        if (resp.status() == reqwest::StatusCode::UNAUTHORIZED
-            || resp.status() == reqwest::StatusCode::FORBIDDEN)
-            && token.is_some()
-        {
-            resp = client
-                .get(&url)
-                .header(USER_AGENT, USER_AGENT_VALUE)
-                .header(ACCEPT, "application/vnd.github+json")
-                .send()
-                .await?;
-        }
-
+        let resp = Self::github_api_get(&url, Duration::from_secs(10)).await?;
         let status = resp.status();
         if !status.is_success() {
             let err = self_update::Error::http_status_error_with_headers(
@@ -303,38 +354,7 @@ impl Updater {
             REPO_NAME
         );
 
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(15))
-            .build()?;
-
-        let token = Self::github_token_from_env();
-        let mut req = client
-            .get(&url)
-            .header(USER_AGENT, USER_AGENT_VALUE)
-            .header(ACCEPT, "application/vnd.github+json");
-
-        if let Some(ref token) = token {
-            req = req.header(AUTHORIZATION, format!("Bearer {token}"));
-        }
-
-        let mut resp = req.send().await?;
-        if (resp.status() == reqwest::StatusCode::UNAUTHORIZED
-            || resp.status() == reqwest::StatusCode::FORBIDDEN)
-            && token.is_some()
-        {
-            // A stale or mis-scoped GH_TOKEN/GITHUB_TOKEN in the user's shell should not
-            // break update checks against our public repository; retry once without auth.
-            log::debug!(
-                "Authenticated GitHub release check returned {}; retrying unauthenticated.",
-                resp.status()
-            );
-            resp = client
-                .get(&url)
-                .header(USER_AGENT, USER_AGENT_VALUE)
-                .header(ACCEPT, "application/vnd.github+json")
-                .send()
-                .await?;
-        }
+        let resp = Self::github_api_get(&url, Duration::from_secs(15)).await?;
         let status = resp.status();
 
         if !status.is_success() {
@@ -391,10 +411,10 @@ impl Updater {
 
         log::info!("Starting update download from: {url}");
         let pending_dir = Self::get_app_dir()?.join("updates").join("pending");
-        if pending_dir.exists() {
-            fs::remove_dir_all(&pending_dir)?;
+        if tokio::fs::try_exists(&pending_dir).await.unwrap_or(false) {
+            tokio::fs::remove_dir_all(&pending_dir).await?;
         }
-        fs::create_dir_all(&pending_dir)?;
+        tokio::fs::create_dir_all(&pending_dir).await?;
 
         let asset_file_name = url
             .rsplit('/')
@@ -427,17 +447,18 @@ impl Updater {
         .context("Failed to extract update archive")?;
 
         // Remove the downloaded archive after successful unpack so only the extracted tree remains.
-        let _ = fs::remove_file(&tmp_tarball);
+        let _ = tokio::fs::remove_file(&tmp_tarball).await;
 
         log::info!("Extraction complete to: {}", pending_dir.display());
 
         // Persist the release date and target commit so apply_update_and_restart can write
         // .last_update and .whats_new_pending without a second network round-trip.
-        fs::write(pending_dir.join(".update_date"), &date)?;
-        if !new_commit.trim().is_empty() {
-            let _ = fs::write(pending_dir.join(".update_commit"), new_commit.trim());
+        tokio::fs::write(pending_dir.join(".update_date"), &date).await?;
+        let trimmed_commit = new_commit.trim();
+        if !trimmed_commit.is_empty() {
+            let _ = tokio::fs::write(pending_dir.join(".update_commit"), trimmed_commit).await;
             let from_c = CURRENT_COMMIT.to_string();
-            let to_c = new_commit.trim().to_string();
+            let to_c = trimmed_commit.to_string();
             if from_c != "unknown" && !from_c.is_empty() {
                 tokio::spawn(async move {
                     let _ = whats_new::fetch_changelog_summary(&from_c, &to_c).await;
@@ -536,11 +557,10 @@ impl Updater {
             .arg("stop")
             .output();
 
-        // crates/window/src/agent_deployer.rs automatically checks for and
-        // spawns the new agent when the new `boxxy-terminal` process starts.
-        // Pass `--gapplication-replace` alongside `--new-window` (paired with
-        // `wait_for_restarting_parent()` in `boxxy-app`) so the new instance
-        // cleanly takes over `dev.boxxy.BoxxyTerminal` on D-Bus and opens its window.
+        // `agent_deployer.rs` automatically checks for and spawns the new agent when
+        // the new `boxxy-terminal` process starts. Pass `--gapplication-replace` alongside
+        // `--new-window` (paired with `wait_for_restarting_parent()` in `boxxy-app`) so the
+        // new instance cleanly takes over `dev.boxxy.BoxxyTerminal` on D-Bus.
         log::info!("Restarting app...");
         Command::new(bin_dir.join("boxxy-terminal"))
             .args(["--gapplication-replace", "--new-window"])
@@ -588,7 +608,10 @@ impl Updater {
 
         for bin in [&new_terminal, &new_agent] {
             if !bin.exists() {
-                anyhow::bail!("Staged binary missing from update archive: {}", bin.display());
+                anyhow::bail!(
+                    "Staged binary missing from update archive: {}",
+                    bin.display()
+                );
             }
             #[cfg(unix)]
             {
@@ -629,7 +652,8 @@ impl Updater {
             fs::write(app_dir.join(".last_update"), nightly_date)?;
         }
 
-        let _ = whats_new::write_whats_new_pending_in(app_dir, CURRENT_COMMIT, target_commit.trim());
+        let _ =
+            whats_new::write_whats_new_pending_in(app_dir, CURRENT_COMMIT, target_commit.trim());
 
         let _ = fs::remove_dir_all(&pending_dir);
 
@@ -659,7 +683,11 @@ impl Updater {
         let mut last_err = None;
 
         for attempt in 1..=MAX_ATTEMPTS {
-            let mut dest = fs::File::create(tmp_tarball)?;
+            let tar_path = tmp_tarball.to_path_buf();
+            let mut dest = tokio::task::spawn_blocking(move || fs::File::create(tar_path))
+                .await
+                .context("File create task panicked")??;
+
             let mut download = Download::from_url(url);
             download
                 .request_header(USER_AGENT, USER_AGENT_VALUE)
@@ -755,8 +783,9 @@ impl Updater {
     }
 
     pub(crate) fn get_app_dir() -> Result<PathBuf> {
-        let home = std::env::var("HOME").context("HOME not set")?;
-        Ok(PathBuf::from(home).join(".local").join("boxxy-terminal"))
+        home::home_dir()
+            .context("Could not resolve user home directory")
+            .map(|h| h.join(".local").join("boxxy-terminal"))
     }
 }
 
@@ -767,20 +796,19 @@ mod tests {
     #[test]
     fn checksum_verification_accepts_sums_file_and_release_digest() {
         let tmp = tempfile::tempdir().unwrap();
-        let archive_path = tmp.path().join("boxxy-terminal-nightly-linux-x86_64.tar.gz");
+        let archive_path = tmp
+            .path()
+            .join("boxxy-terminal-nightly-linux-x86_64.tar.gz");
         fs::write(&archive_path, b"synthetic-archive-payload").unwrap();
 
         let expected_sha256 = Updater::hash_file::<Sha256>(&archive_path).unwrap();
 
         // 1. Verify via coreutils `.sha256` sums format (`<hex>  <filename>`)
-        let sums_content = format!(
-            "{expected_sha256}  boxxy-terminal-nightly-linux-x86_64.tar.gz\n"
-        );
-        let parsed_from_sums = Checksum::from_sums_file(
-            &sums_content,
-            "boxxy-terminal-nightly-linux-x86_64.tar.gz",
-        )
-        .unwrap();
+        let sums_content =
+            format!("{expected_sha256}  boxxy-terminal-nightly-linux-x86_64.tar.gz\n");
+        let parsed_from_sums =
+            Checksum::from_sums_file(&sums_content, "boxxy-terminal-nightly-linux-x86_64.tar.gz")
+                .unwrap();
         Updater::verify_file_checksum(&archive_path, &parsed_from_sums).unwrap();
 
         // 2. Verify via GitHub's `sha256:<hex>` per-asset digest format
@@ -791,8 +819,13 @@ mod tests {
         // 3. Reject mismatched digest with Error::ChecksumMismatch
         let wrong = Checksum::parse_digest(&format!("sha256:{}", "00".repeat(32))).unwrap();
         let err = Updater::verify_file_checksum(&archive_path, &wrong).unwrap_err();
-        let su_err = err.downcast_ref::<self_update::Error>().expect("self_update::Error");
-        assert!(matches!(su_err, self_update::Error::ChecksumMismatch { .. }));
+        let su_err = err
+            .downcast_ref::<self_update::Error>()
+            .expect("self_update::Error");
+        assert!(matches!(
+            su_err,
+            self_update::Error::ChecksumMismatch { .. }
+        ));
     }
 
     #[test]
@@ -810,8 +843,7 @@ mod tests {
         fs::write(bin_dir.join("boxxy-terminal.old"), b"legacy-backup").unwrap();
         fs::write(bin_dir.join("boxxy-agent.old"), b"legacy-backup").unwrap();
 
-        // Build a synthetic `.tar.gz` archive in memory/tempdir with `./` prefix to exercise
-        // self_update 1.3.0's archive extraction.
+        // Build a synthetic `.tar.gz` archive in tempdir to exercise archive extraction.
         let tarball_path = pending_dir.join("update.tar.gz");
         {
             let tar_gz = fs::File::create(&tarball_path).unwrap();
@@ -923,8 +955,7 @@ mod tests {
             }],
         };
 
-        let info =
-            Updater::select_nightly_asset(&release, "x86_64", "a1b2c3d", "e4f5a6b").unwrap();
+        let info = Updater::select_nightly_asset(&release, "x86_64", "a1b2c3d", "e4f5a6b").unwrap();
         assert_eq!(info.version, "nightly");
         assert_eq!(info.current_commit, "a1b2c3d");
         assert_eq!(info.new_commit, "e4f5a6b");
@@ -952,7 +983,8 @@ mod tests {
             if let Ok((mut stream, _)) = listener.accept() {
                 let mut req_buf = [0u8; 1024];
                 let _ = stream.read(&mut req_buf);
-                let resp = b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 3\r\nConnection: close\r\n\r\nerr";
+                let resp =
+                    b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 3\r\nConnection: close\r\n\r\nerr";
                 let _ = stream.write_all(resp);
                 let _ = stream.flush();
             }

@@ -95,10 +95,7 @@ pub(super) fn build_msg_bar(
 
     Rc::new(MsgBarComponent::new(
         move |(query, images)| {
-            let Some(inner_arc) = inner_weak_for_msg
-                .borrow()
-                .as_ref()
-                .and_then(Weak::upgrade)
+            let Some(inner_arc) = inner_weak_for_msg.borrow().as_ref().and_then(Weak::upgrade)
             else {
                 return;
             };
@@ -414,9 +411,7 @@ pub(super) fn build_msg_bar(
                             {
                                 *claw_sub_ref.lock() = Some(sub_guard);
                                 *session_id_ref.lock().await = Some(sid.clone());
-                                let _ = agent
-                                    .post_claw_message(sid, ClawMessage::Initialize)
-                                    .await;
+                                let _ = agent.post_claw_message(sid, ClawMessage::Initialize).await;
                                 return;
                             }
                         }
@@ -478,10 +473,8 @@ pub(super) fn build_msg_bar(
         move |pin| {
             if is_pinned_for_pin.get() != pin {
                 is_pinned_for_pin.set(pin);
-                if let Some(inner_arc) = inner_weak_for_pin
-                    .borrow()
-                    .as_ref()
-                    .and_then(Weak::upgrade)
+                if let Some(inner_arc) =
+                    inner_weak_for_pin.borrow().as_ref().and_then(Weak::upgrade)
                 {
                     inner_arc.borrow().msg_bar.update_ui(
                         session_status_for_pin.borrow().clone(),
@@ -942,23 +935,22 @@ impl TerminalPaneComponent {
             let has_session = session_id_ref.lock().await.is_some();
             if !has_session {
                 let agent = crate::get_agent().await;
-                let char_id = if let Some(cid) =
-                    override_character_id.as_ref().filter(|s| !s.is_empty())
-                {
-                    cid.clone()
-                } else {
-                    boxxy_claw_widget::msgbar::autocomplete::resolve_session_character_id(
-                        &resume_id,
-                    )
-                    .await
-                    .unwrap_or_else(|| {
-                        boxxy_claw_protocol::characters::CHARACTER_CACHE
-                            .load()
-                            .first()
-                            .map(|c| c.config.id.clone())
-                            .unwrap_or_default()
-                    })
-                };
+                let char_id =
+                    if let Some(cid) = override_character_id.as_ref().filter(|s| !s.is_empty()) {
+                        cid.clone()
+                    } else {
+                        boxxy_claw_widget::msgbar::autocomplete::resolve_session_character_id(
+                            &resume_id,
+                        )
+                        .await
+                        .unwrap_or_else(|| {
+                            boxxy_claw_protocol::characters::CHARACTER_CACHE
+                                .load()
+                                .first()
+                                .map(|c| c.config.id.clone())
+                                .unwrap_or_default()
+                        })
+                    };
 
                 if let Ok((session_id, _sub_guard)) = agent
                     .create_claw_session_with_sender(pane_id, char_id, event_tx.clone())

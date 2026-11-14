@@ -1,25 +1,178 @@
 use gtk4::prelude::*;
-use std::cell::RefCell;
-use std::rc::Rc;
 
-use crate::state::{AppInput, AppWindowInner};
+use crate::state::{AppInput, AppWindowInner, ToastRequest};
+use crate::widgets::notification::{Notification, NotificationAction, NotificationLevel};
+use boxxy_claw_protocol::characters::{
+    CHARACTER_CACHE, CLAIMS_CACHE, CharacterClaim, CharacterInfo,
+};
 use boxxy_claw_protocol::*;
 use boxxy_terminal::{TerminalEvent, TerminalEventKind};
 
-pub fn handle_terminal_event(
-    _inner_ref: &Rc<RefCell<AppWindowInner>>,
-    inner: &mut AppWindowInner,
-    event: TerminalEvent,
-) {
+/// Ensures global `RestoreDetached` broadcasts on `TERMINAL_EVENT_BUS` are handled
+/// by exactly one live window when multiple windows are open.
+fn is_primary_restore_window(win: &libadwaita::ApplicationWindow) -> bool {
+    if win.is_active() {
+        return true;
+    }
+    let Some(app) = win.application() else {
+        return true;
+    };
+    let windows = app.windows();
+    if windows.iter().any(GtkWindowExt::is_active) {
+        return false;
+    }
+    windows
+        .first()
+        .is_none_or(|first| first == win.upcast_ref::<gtk4::Window>())
+}
+
+fn normalize_peer_key(raw: &str) -> String {
+    raw.trim()
+        .trim_start_matches(['@', ':'])
+        .chars()
+        .filter(char::is_ascii_alphanumeric)
+        .map(|c| c.to_ascii_lowercase())
+        .collect()
+}
+
+/// Synchronously resolves a target pane ID from `CLAIMS_CACHE` and `CHARACTER_CACHE`
+/// (matching `holder_id`, `character_id`, `petname`, `name`, or `display_name`),
+/// falling back to `raw_target` if it is already a direct `pane_id`.
+fn resolve_pane_id_in(
+    raw_target: &str,
+    claims: &[CharacterClaim],
+    catalog: &[CharacterInfo],
+) -> String {
+    let trimmed = raw_target.trim().trim_start_matches(['@', ':']).trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    let query_norm = normalize_peer_key(trimmed);
+
+    for claim in claims {
+        if claim.holder_id.eq_ignore_ascii_case(trimmed)
+            || claim.character_id.eq_ignore_ascii_case(trimmed)
+            || (!query_norm.is_empty() && normalize_peer_key(&claim.petname) == query_norm)
+        {
+            return claim.holder_id.clone();
+        }
+        if !query_norm.is_empty()
+            && let Some(char_info) = catalog.iter().find(|c| c.config.id == claim.character_id)
+            && (normalize_peer_key(&char_info.config.display_name) == query_norm
+                || normalize_peer_key(&char_info.config.name) == query_norm)
+        {
+            return claim.holder_id.clone();
+        }
+    }
+
+    trimmed.to_string()
+}
+
+fn resolve_pane_id_from_caches(raw_target: &str) -> String {
+    let claims = CLAIMS_CACHE.load();
+    let catalog = CHARACTER_CACHE.load();
+    resolve_pane_id_in(raw_target, &claims, &catalog)
+}
+
+fn is_tab_selected(inner: &AppWindowInner, pos: usize) -> bool {
+    inner
+        .tab_view
+        .selected_page()
+        .is_some_and(|p| inner.tabs[pos].controller.widget() == &p.child())
+}
+
+fn sync_selected_claw_sidebar(inner: &mut AppWindowInner, pos: usize) {
+    if !is_tab_selected(inner, pos) {
+        return;
+    }
+    let tc = &inner.tabs[pos];
+    inner.claw_active = tc.controller.is_claw_active();
+    inner.claw.set_pane_state(
+        &tc.controller.agent_name(),
+        tc.controller.is_sleep(),
+        tc.controller.is_pinned(),
+        tc.controller.is_web_search(),
+        tc.controller.is_vibe(),
+    );
+    inner
+        .claw
+        .set_session_usage(tc.controller.get_session_usage());
+    inner.claw.update_tasks(tc.get_pending_tasks());
+}
+
+struct CharacterAttribution {
+    first_name: String,
+    icon_name: String,
+    color: Option<String>,
+    avatar_path: Option<String>,
+}
+
+fn resolve_character_attribution(character_id: &str, agent_name: &str) -> CharacterAttribution {
+    let mut resolved_name = agent_name.to_string();
+    let mut icon_name = "boxxyclaw-symbolic".to_string();
+    let mut color = None;
+    let mut avatar_path = None;
+
+    let registry = CHARACTER_CACHE.load();
+    let fallback_names = [agent_name];
+    if let Some(info) = boxxy_claw_protocol::characters::find_character_exact(
+        &registry,
+        character_id,
+        &fallback_names,
+    ) {
+        if !info.config.display_name.trim().is_empty() {
+            resolved_name.clone_from(&info.config.display_name);
+        } else {
+            resolved_name = info.config.name.replace('-', " ");
+        }
+        color = Some(info.config.color.clone());
+        if info.has_avatar {
+            let mut path = boxxy_sys_utils::get_config_dir();
+            path.push("boxxyclaw");
+            path.push("characters");
+            path.push(&info.config.name);
+            path.push("AVATAR.png");
+            let path_str = path.to_string_lossy().into_owned();
+            icon_name.clone_from(&path_str);
+            avatar_path = Some(path_str);
+        }
+    }
+
+    let raw_first = resolved_name
+        .split([' ', '-'])
+        .find(|s| !s.is_empty())
+        .unwrap_or("Claw");
+    let first_name = {
+        let mut c = raw_first.chars();
+        c.next().map_or_else(
+            || "Claw".to_string(),
+            |f| f.to_uppercase().collect::<String>() + c.as_str(),
+        )
+    };
+
+    CharacterAttribution {
+        first_name,
+        icon_name,
+        color,
+        avatar_path,
+    }
+}
+
+pub fn handle_terminal_event(inner: &mut AppWindowInner, event: TerminalEvent) {
     // Global events (no pane id) — handle before the per-pane match.
     if event.id.is_empty() {
         match event.kind {
             TerminalEventKind::Notification(message) => {
-                let _ = inner.tx.send_blocking(AppInput::ShowToast(
-                    crate::state::ToastRequest::ephemeral(message),
-                ));
+                if is_primary_restore_window(&inner.window) {
+                    let _ = inner
+                        .tx
+                        .send_blocking(AppInput::ShowToast(ToastRequest::ephemeral(message)));
+                }
             }
             TerminalEventKind::RestoreDetached(pid, cwd) => {
+                if !is_primary_restore_window(&inner.window) {
+                    return;
+                }
                 if pid == 0 {
                     let tx = inner.tx.clone();
                     gtk4::glib::spawn_future_local(async move {
@@ -32,9 +185,7 @@ pub fn handle_terminal_event(
                     });
                 } else {
                     let cwd_opt = (!cwd.is_empty()).then_some(cwd);
-                    let _ = inner
-                        .tx
-                        .send_blocking(AppInput::ReattachDetachedSession(pid, cwd_opt));
+                    super::detached_sessions::reattach_session(inner, pid, cwd_opt);
                 }
             }
             _ => {}
@@ -42,526 +193,416 @@ pub fn handle_terminal_event(
         return;
     }
 
-    if let Some(pos) = inner.tabs.iter().position(|c| c.id == event.id) {
-        match event.kind {
-            TerminalEventKind::TitleChanged(title) => {
-                inner.tabs[pos].raw_title = Some(title);
-                if inner.tabs[pos].custom_title.is_none() {
-                    let widget = inner.tabs[pos].controller.widget();
-                    let page = inner.tab_view.page(widget);
-                    if Some(&page) != inner.tab_view.selected_page().as_ref() {
-                        inner.tabs[pos].unread_bell = true;
+    let Some(pos) = inner.tabs.iter().position(|c| c.id == event.id) else {
+        return;
+    };
+
+    match event.kind {
+        TerminalEventKind::TitleChanged(title) => {
+            if inner.tabs[pos].raw_title.as_deref() == Some(title.as_str()) {
+                return;
+            }
+            inner.tabs[pos].raw_title = Some(title);
+            if inner.tabs[pos].custom_title.is_none() && !is_tab_selected(inner, pos) {
+                inner.tabs[pos].unread_bell = true;
+            }
+            super::tab_bar_sync::sync_tab_titles(inner);
+        }
+        TerminalEventKind::DirectoryChanged(path) => {
+            if inner.tabs[pos].cwd.as_deref() == Some(path.as_str()) {
+                return;
+            }
+            inner.tabs[pos].cwd = Some(path);
+            super::tab_bar_sync::sync_tab_titles(inner);
+        }
+        TerminalEventKind::Exited(_code) => {
+            super::tabs::close_tab(inner, event.id);
+        }
+        TerminalEventKind::BellRung => {
+            if !is_tab_selected(inner, pos) {
+                inner.tabs[pos].unread_bell = true;
+                super::tab_bar_sync::sync_tab_running_icons(inner);
+            } else {
+                inner.bell_indicator.set_visible(true);
+            }
+        }
+        TerminalEventKind::ForegroundProcessChanged(proc_name) => {
+            let new_fg = (!proc_name.is_empty()).then_some(proc_name);
+            if new_fg.is_none() {
+                inner.tabs[pos].raw_title = inner.tabs[pos].controller.last_title();
+            }
+            inner.tabs[pos].foreground_process = new_fg;
+            super::tab_bar_sync::sync_tab_titles(inner);
+        }
+        TerminalEventKind::AltScreenChanged(is_alt) => {
+            if !is_alt {
+                inner.tabs[pos].raw_title = inner.tabs[pos].controller.last_title();
+            }
+            super::tab_bar_sync::sync_tab_titles(inner);
+        }
+        TerminalEventKind::Osc133A | TerminalEventKind::Osc133D(_, _) => {
+            inner.tabs[pos].foreground_process = inner.tabs[pos].controller.foreground_process();
+            inner.tabs[pos].raw_title = inner.tabs[pos].controller.last_title();
+            super::tab_bar_sync::sync_tab_titles(inner);
+        }
+        TerminalEventKind::Osc133B | TerminalEventKind::Osc133C => {}
+        TerminalEventKind::Notification(message) => {
+            super::notifications::push_global_notification(inner, Notification::new_info(message));
+        }
+        TerminalEventKind::ClawStateChanged(_active, _sleep) => {
+            super::tab_bar_sync::sync_tab_running_icons(inner);
+            sync_selected_claw_sidebar(inner, pos);
+        }
+        TerminalEventKind::PaneFocused(_) => {
+            inner.tabs[pos].cwd = inner.tabs[pos].controller.working_dir();
+            inner.tabs[pos].raw_title = inner.tabs[pos].controller.last_title();
+            inner.tabs[pos].foreground_process = inner.tabs[pos].controller.foreground_process();
+            super::tab_bar_sync::sync_tab_titles(inner);
+            sync_selected_claw_sidebar(inner, pos);
+        }
+        TerminalEventKind::FocusClawSidebar => {
+            super::window_state::show_claw_sidebar(inner);
+        }
+        TerminalEventKind::ClawEvent(p_id, claw_event) => {
+            if is_tab_selected(inner, pos) {
+                let session_usage = inner.tabs[pos].controller.get_session_usage();
+                inner.claw.set_session_usage(session_usage);
+            }
+
+            match claw_event {
+                ClawEngineEvent::SessionStateChanged { status, .. } => {
+                    inner.tabs[pos]
+                        .controller
+                        .set_session_status_for_pane(&p_id, status);
+                    if is_tab_selected(inner, pos) {
+                        let tc = &inner.tabs[pos];
+                        inner.claw.set_pane_state(
+                            &tc.controller.agent_name(),
+                            tc.controller.is_sleep(),
+                            tc.controller.is_pinned(),
+                            tc.controller.is_web_search(),
+                            tc.controller.is_vibe(),
+                        );
                     }
                 }
-                super::tabs::sync_tab_titles(inner);
-            }
-            TerminalEventKind::DirectoryChanged(path) => {
-                inner.tabs[pos].cwd = Some(path);
-                super::tabs::sync_tab_titles(inner);
-            }
-            TerminalEventKind::Exited(_code) => {
-                let id = event.id;
-                super::tabs::close_tab(inner, id);
-            }
-            TerminalEventKind::BellRung => {
-                let widget = inner.tabs[pos].controller.widget();
-                let page = inner.tab_view.page(widget);
-                if Some(&page) != inner.tab_view.selected_page().as_ref() {
-                    inner.tabs[pos].unread_bell = true;
-                    super::tabs::sync_tab_running_icons(inner);
-                } else {
-                    inner.bell_indicator.set_visible(true);
-                }
-            }
-            TerminalEventKind::ForegroundProcessChanged(proc_name) => {
-                let new_fg = (!proc_name.is_empty()).then_some(proc_name);
-                if new_fg.is_none() {
-                    inner.tabs[pos].raw_title = inner.tabs[pos].controller.last_title();
-                }
-                inner.tabs[pos].foreground_process = new_fg;
-                super::tabs::sync_tab_titles(inner);
-            }
-            TerminalEventKind::AltScreenChanged(is_alt) => {
-                if !is_alt {
-                    inner.tabs[pos].raw_title = inner.tabs[pos].controller.last_title();
-                }
-                super::tabs::sync_tab_titles(inner);
-            }
-            TerminalEventKind::Osc133A | TerminalEventKind::Osc133D(_, _) => {
-                inner.tabs[pos].foreground_process =
-                    inner.tabs[pos].controller.foreground_process();
-                inner.tabs[pos].raw_title = inner.tabs[pos].controller.last_title();
-                super::tabs::sync_tab_titles(inner);
-            }
-            TerminalEventKind::Osc133B | TerminalEventKind::Osc133C => {}
-            TerminalEventKind::Notification(message) => {
-                let _ = inner.tx.send_blocking(AppInput::PushGlobalNotification(
-                    crate::widgets::notification::Notification::new_info(message),
-                ));
-            }
-            TerminalEventKind::ClawStateChanged(active, _sleep) => {
-                let widget = inner.tabs[pos].controller.widget();
-                let page = inner.tab_view.page(widget);
-
-                super::tabs::sync_tab_running_icons(inner);
-
-                if Some(&page) == inner.tab_view.selected_page().as_ref() {
+                ClawEngineEvent::Identity {
+                    agent_name,
+                    pinned,
+                    web_search_enabled,
+                    vibe_enabled,
+                    ..
+                } if is_tab_selected(inner, pos) => {
+                    let active = inner.tabs[pos].controller.is_claw_active();
+                    let sleep = inner.tabs[pos].controller.is_sleep();
                     inner.claw_active = active;
                     inner.claw.set_pane_state(
-                        &inner.tabs[pos].controller.agent_name(),
-                        inner.tabs[pos].controller.is_sleep(),
-                        inner.tabs[pos].controller.is_pinned(),
-                        inner.tabs[pos].controller.is_web_search(),
-                        inner.tabs[pos].controller.is_vibe(),
-                    );
-                    inner
-                        .claw
-                        .set_session_usage(inner.tabs[pos].controller.get_session_usage());
-                    inner.claw.update_tasks(inner.tabs[pos].get_pending_tasks());
-                }
-            }
-            TerminalEventKind::PaneFocused(_) => {
-                inner.tabs[pos].cwd = inner.tabs[pos].controller.working_dir();
-                inner.tabs[pos].raw_title = inner.tabs[pos].controller.last_title();
-                inner.tabs[pos].foreground_process =
-                    inner.tabs[pos].controller.foreground_process();
-                super::tabs::sync_tab_titles(inner);
-
-                let widget = inner.tabs[pos].controller.widget();
-                let page = inner.tab_view.page(widget);
-                let is_claw_active = inner.tabs[pos].controller.is_claw_active();
-
-                if Some(&page) == inner.tab_view.selected_page().as_ref() {
-                    inner.claw_active = is_claw_active;
-
-                    inner.claw.set_pane_state(
-                        &inner.tabs[pos].controller.agent_name(),
-                        inner.tabs[pos].controller.is_sleep(),
-                        inner.tabs[pos].controller.is_pinned(),
-                        inner.tabs[pos].controller.is_web_search(),
-                        inner.tabs[pos].controller.is_vibe(),
-                    );
-                    inner
-                        .claw
-                        .set_session_usage(inner.tabs[pos].controller.get_session_usage());
-                    inner.claw.update_tasks(inner.tabs[pos].get_pending_tasks());
-                }
-            }
-            TerminalEventKind::FocusClawSidebar => {
-                super::window_state::show_claw_sidebar(inner);
-            }
-            TerminalEventKind::ClawEvent(p_id, claw_event) => {
-                // Update session usage if this is the active tab/pane
-                let session_usage = inner.tabs[pos].controller.get_session_usage();
-                if let Some(page) = inner.tab_view.selected_page() {
-                    let child = page.child();
-                    if inner.tabs[pos].controller.widget() == &child {
-                        inner.claw.set_session_usage(session_usage);
-                    }
-                }
-
-                match claw_event {
-                    ClawEngineEvent::SessionStateChanged { status, .. } => {
-                        inner.tabs[pos]
-                            .controller
-                            .set_session_status_for_pane(&p_id, status);
-                        if let Some(page) = inner.tab_view.selected_page()
-                            && inner.tabs[pos].controller.widget() == &page.child()
-                        {
-                            inner.claw.set_pane_state(
-                                &inner.tabs[pos].controller.agent_name(),
-                                inner.tabs[pos].controller.is_sleep(),
-                                inner.tabs[pos].controller.is_pinned(),
-                                inner.tabs[pos].controller.is_web_search(),
-                                inner.tabs[pos].controller.is_vibe(),
-                            );
-                        }
-                    }
-                    ClawEngineEvent::Identity {
-                        agent_name,
+                        &agent_name,
+                        sleep,
                         pinned,
                         web_search_enabled,
                         vibe_enabled,
-                        ..
-                    } if let Some(page) = inner.tab_view.selected_page()
-                        && inner.tabs[pos].controller.widget() == &page.child() =>
-                    {
-                        // If we got an identity, ensure the sidebar UI reflects that this pane is now active
-                        let active = inner.tabs[pos].controller.is_claw_active();
-                        let sleep = inner.tabs[pos].controller.is_sleep();
-                        inner.claw_active = active;
-                        inner.claw.set_pane_state(
-                            &agent_name,
-                            sleep,
-                            pinned,
-                            web_search_enabled,
-                            vibe_enabled,
-                        );
-                    }
-                    ClawEngineEvent::PinStatusChanged(pinned)
-                        if let Some(page) = inner.tab_view.selected_page()
-                            && inner.tabs[pos].controller.widget() == &page.child() =>
-                    {
-                        inner.claw.set_pane_state(
-                            &inner.tabs[pos].controller.agent_name(),
-                            inner.tabs[pos].controller.is_sleep(),
-                            pinned,
-                            inner.tabs[pos].controller.is_web_search(),
-                            inner.tabs[pos].controller.is_vibe(),
-                        );
-                    }
-                    ClawEngineEvent::WebSearchStatusChanged(enabled)
-                        if let Some(page) = inner.tab_view.selected_page()
-                            && inner.tabs[pos].controller.widget() == &page.child() =>
-                    {
-                        inner.claw.set_pane_state(
-                            &inner.tabs[pos].controller.agent_name(),
-                            inner.tabs[pos].controller.is_sleep(),
-                            inner.tabs[pos].controller.is_pinned(),
-                            enabled,
-                            inner.tabs[pos].controller.is_vibe(),
-                        );
-                    }
-                    ClawEngineEvent::VibeStatusChanged(vibe)
-                        if let Some(page) = inner.tab_view.selected_page()
-                            && inner.tabs[pos].controller.widget() == &page.child() =>
-                    {
-                        inner.claw.set_pane_state(
-                            &inner.tabs[pos].controller.agent_name(),
-                            inner.tabs[pos].controller.is_sleep(),
-                            inner.tabs[pos].controller.is_pinned(),
-                            inner.tabs[pos].controller.is_web_search(),
-                            vibe,
-                        );
-                    }
-                    ClawEngineEvent::DismissDrawer => {
-                        inner.claw.refresh_visibility();
-                    }
-                    ClawEngineEvent::FocusPane => {
-                        // Raise the window
-                        inner.window.present();
-
-                        // Select the tab containing this pane
-                        let widget = inner.tabs[pos].controller.widget();
-                        let page = inner.tab_view.page(widget);
-                        inner.tab_view.set_selected_page(&page);
-
-                        // Focus the specific pane within the terminal component
-                        inner.tabs[pos].controller.focus_pane_by_id(&p_id);
-                    }
-                    ClawEngineEvent::DiagnosisComplete { .. }
-                    | ClawEngineEvent::InjectCommand { .. }
-                    | ClawEngineEvent::ProposeFileWrite { .. }
-                    | ClawEngineEvent::RestoreHistory(..)
-                    | ClawEngineEvent::ProposeTerminalCommand { .. } => {
-                        inner.claw.refresh_visibility();
-                    }
-                    ClawEngineEvent::RequestSpawnAgent {
-                        location,
-                        intent,
-                        request_id,
-                        ..
-                    } => {
-                        let source_ctrl = inner.tabs[pos].controller.clone();
-                        let source_pane_id = p_id.clone();
-                        let cwd = source_ctrl.working_dir().unwrap_or_default();
-                        let new_pane_id = match location {
-                            SpawnLocation::NewTab => {
-                                let new_ctrl = super::tabs::new_tab_with_intent(inner, intent);
-                                new_ctrl.active_pane_id()
-                            }
-                            SpawnLocation::VerticalSplit => source_ctrl.split_vertical(intent),
-                            SpawnLocation::HorizontalSplit => source_ctrl.split_horizontal(intent),
-                        };
-
-                        if let Some(req_id) = request_id {
-                            gtk4::glib::spawn_future_local(async move {
-                                let agent = boxxy_terminal::get_agent().await;
-                                let alias = agent
-                                    .update_workspace_pane(
-                                        new_pane_id.clone(),
-                                        cwd,
-                                        String::new(),
-                                        String::new(),
-                                        "Idle".to_string(),
-                                    )
-                                    .await
-                                    .unwrap_or_else(|_| new_pane_id.clone());
-                                source_ctrl.send_claw_to_pane(
-                                    &source_pane_id,
-                                    ClawMessage::SpawnAgentReply {
-                                        request_id: req_id,
-                                        pane_id: new_pane_id,
-                                        alias,
-                                    },
-                                );
-                            });
-                        }
-                    }
-                    ClawEngineEvent::RequestReattachShell { pid, cwd } => {
-                        if pid == 0 {
-                            let tx = inner.tx.clone();
-                            gtk4::glib::spawn_future_local(async move {
-                                let agent = boxxy_terminal::get_agent().await;
-                                if let Ok(remaining) = agent.list_detached_sessions_detailed().await
-                                    && !remaining.is_empty()
-                                {
-                                    let _ =
-                                        tx.send(AppInput::ReattachDetachedBatch(remaining)).await;
-                                }
-                            });
-                        } else {
-                            let _ = inner
-                                .tx
-                                .send_blocking(AppInput::ReattachDetachedSession(pid, cwd));
-                        }
-                    }
-                    ClawEngineEvent::RequestCloseAgent {
-                        target_agent_name,
-                        target_pane_id,
-                    } => {
-                        if let Some(pane_id) = target_pane_id {
-                            for tab in &inner.tabs {
-                                if tab.controller.close_pane_by_id(&pane_id) {
-                                    break;
-                                }
-                            }
-                        } else {
-                            let inner_clone = _inner_ref.clone();
-                            let target_name = target_agent_name.clone();
-                            gtk4::glib::spawn_future_local(async move {
-                                let workspace =
-                                    boxxy_claw::registry::workspace::global_workspace().await;
-                                let resolved = workspace
-                                    .resolve_pane_id_by_name(&target_name)
-                                    .await
-                                    .unwrap_or(target_name);
-                                let inner = inner_clone.borrow_mut();
-                                for tab in &inner.tabs {
-                                    if tab.controller.close_pane_by_id(&resolved) {
-                                        break;
-                                    }
-                                }
-                            });
-                        }
-                    }
-                    ClawEngineEvent::InjectKeystrokes {
-                        target_agent_name,
-                        target_pane_id,
-                        keys,
-                    } => {
-                        if let Some(pane_id) = target_pane_id {
-                            for tab in &inner.tabs {
-                                if tab.controller.inject_keystrokes_by_id(&pane_id, &keys) {
-                                    break;
-                                }
-                            }
-                        } else {
-                            let inner_clone = _inner_ref.clone();
-                            let target_name = target_agent_name.clone();
-                            let keys = keys.clone();
-                            gtk4::glib::spawn_future_local(async move {
-                                let workspace =
-                                    boxxy_claw::registry::workspace::global_workspace().await;
-                                let resolved = workspace
-                                    .resolve_pane_id_by_name(&target_name)
-                                    .await
-                                    .unwrap_or(target_name);
-                                let inner = inner_clone.borrow();
-                                for tab in &inner.tabs {
-                                    if tab.controller.inject_keystrokes_by_id(&resolved, &keys) {
-                                        break;
-                                    }
-                                }
-                            });
-                        }
-                    }
-                    ClawEngineEvent::TaskStatusChanged { .. } => {
-                        let widget = inner.tabs[pos].controller.widget();
-                        let page = inner.tab_view.page(widget);
-
-                        super::tabs::sync_tab_running_icons(inner);
-
-                        // Update sidebar only from the active pane of the selected tab so
-                        // background split panes never overwrite the focused pane's tasks.
-                        if let Some(selected) = inner.tab_view.selected_page()
-                            && selected == page
-                        {
-                            inner.claw.update_tasks(inner.tabs[pos].get_pending_tasks());
-                        }
-                    }
-                    ClawEngineEvent::TaskCompleted {
-                        agent_name,
-                        character_id,
-                        message,
-                        ..
-                    } => {
-                        let settings = boxxy_preferences::Settings::load();
-                        if settings.enable_timer_sounds {
-                            crate::sound::play_timer_completion_sound();
-                        }
-
-                        let mut resolved_name = agent_name.clone();
-                        let mut icon_path = "boxxyclaw-symbolic".to_string();
-                        let mut char_color: Option<String> = None;
-                        let mut avatar_file_path: Option<String> = None;
-
-                        let registry = boxxy_claw_protocol::characters::CHARACTER_CACHE.load();
-                        let fallback_names = [agent_name.as_str()];
-                        if let Some(info) = boxxy_claw_protocol::characters::find_character_exact(
-                            &registry,
-                            &character_id,
-                            &fallback_names,
-                        ) {
-                            if !info.config.display_name.trim().is_empty() {
-                                resolved_name.clone_from(&info.config.display_name);
-                            } else {
-                                resolved_name = info.config.name.replace('-', " ");
-                            }
-                            char_color = Some(info.config.color.clone());
-                            if info.has_avatar {
-                                let mut path = boxxy_sys_utils::get_config_dir();
-                                path.push("boxxyclaw");
-                                path.push("characters");
-                                path.push(&info.config.name);
-                                path.push("AVATAR.png");
-                                let path_str = path.to_string_lossy().to_string();
-                                icon_path.clone_from(&path_str);
-                                avatar_file_path = Some(path_str);
-                            }
-                        }
-
-                        let raw_first = resolved_name
-                            .split([' ', '-'])
-                            .find(|s| !s.is_empty())
-                            .unwrap_or("Claw");
-                        let first_name = {
-                            let mut c = raw_first.chars();
-                            match c.next() {
-                                None => "Claw".to_string(),
-                                Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
-                            }
-                        };
-
-                        let display_message = message
-                            .clone()
-                            .unwrap_or_else(|| format!("{} has finished a timer.", first_name));
-
-                        let _ = inner.tx.send_blocking(AppInput::PushGlobalNotification(
-                            crate::widgets::notification::Notification {
-                                id: uuid::Uuid::new_v4().to_string(),
-                                level: crate::widgets::notification::NotificationLevel::Info,
-                                title: format!("{} reminds", first_name),
-                                message: display_message,
-                                icon_name: icon_path,
-                                actions: vec![crate::widgets::notification::NotificationAction {
-                                    label: "Dismiss".to_string(),
-                                    action_name: "win.dismiss-notification".to_string(),
-                                    is_primary: false,
-                                }],
-                                details: Vec::new(),
-                                suppress_toast: false,
-                                character_name: Some(first_name),
-                                character_color: char_color,
-                                avatar_path: avatar_file_path,
-                            },
-                        ));
-                    }
-                    ClawEngineEvent::LongTaskCompleted {
-                        agent_name,
-                        character_id,
-                        message,
-                        ..
-                    } => {
-                        let settings = boxxy_preferences::Settings::load();
-                        if settings.enable_task_sounds {
-                            crate::sound::play_task_completion_sound();
-                        }
-
-                        let raw_first = agent_name.split_whitespace().next().unwrap_or(&agent_name);
-                        let first_name = {
-                            let mut c = raw_first.chars();
-                            match c.next() {
-                                None => String::new(),
-                                Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
-                            }
-                        };
-                        let mut icon_path = "boxxyclaw-symbolic".to_string();
-
-                        let registry = boxxy_claw_protocol::characters::CHARACTER_CACHE.load();
-                        if let Some(info) = registry.iter().find(|c| c.config.id == *character_id) {
-                            if info.has_avatar {
-                                let mut path = boxxy_sys_utils::get_config_dir();
-                                path.push("boxxyclaw");
-                                path.push("characters");
-                                path.push(&info.config.name);
-                                path.push("AVATAR.png");
-                                icon_path = path.to_string_lossy().to_string();
-                            }
-                        }
-
-                        let _ = inner.tx.send_blocking(AppInput::PushGlobalNotification(
-                            crate::widgets::notification::Notification {
-                                id: uuid::Uuid::new_v4().to_string(),
-                                level: crate::widgets::notification::NotificationLevel::Info,
-                                title: format!("{} completed a task", first_name),
-                                message,
-                                icon_name: icon_path,
-                                actions: vec![crate::widgets::notification::NotificationAction {
-                                    label: "Dismiss".to_string(),
-                                    action_name: "win.dismiss-notification".to_string(),
-                                    is_primary: false,
-                                }],
-                                details: Vec::new(),
-                                // Redundant because the agent's message is already in the Claw overlay
-                                suppress_toast: true,
-                                character_name: None,
-                                character_color: None,
-                                avatar_path: None,
-                            },
-                        ));
-                    }
-                    ClawEngineEvent::PushGlobalNotification { title, message } => {
-                        let _ = inner.tx.send_blocking(AppInput::PushGlobalNotification(
-                            crate::widgets::notification::Notification {
-                                id: uuid::Uuid::new_v4().to_string(),
-                                level: crate::widgets::notification::NotificationLevel::Info,
-                                title: title.clone(),
-                                message: message.clone(),
-                                icon_name: "boxxyclaw-symbolic".to_string(),
-                                actions: vec![crate::widgets::notification::NotificationAction {
-                                    label: "Dismiss".to_string(),
-                                    action_name: "win.dismiss-notification".to_string(),
-                                    is_primary: false,
-                                }],
-                                details: Vec::new(),
-                                suppress_toast: false,
-                                character_name: None,
-                                character_color: None,
-                                avatar_path: None,
-                            },
-                        ));
-                    }
-                    _ => {} // Other events like AgentThinking or FileWrite are handled strictly by the Pane UI
+                    );
                 }
+                ClawEngineEvent::PinStatusChanged(pinned) if is_tab_selected(inner, pos) => {
+                    let tc = &inner.tabs[pos];
+                    inner.claw.set_pane_state(
+                        &tc.controller.agent_name(),
+                        tc.controller.is_sleep(),
+                        pinned,
+                        tc.controller.is_web_search(),
+                        tc.controller.is_vibe(),
+                    );
+                }
+                ClawEngineEvent::WebSearchStatusChanged(enabled) if is_tab_selected(inner, pos) => {
+                    let tc = &inner.tabs[pos];
+                    inner.claw.set_pane_state(
+                        &tc.controller.agent_name(),
+                        tc.controller.is_sleep(),
+                        tc.controller.is_pinned(),
+                        enabled,
+                        tc.controller.is_vibe(),
+                    );
+                }
+                ClawEngineEvent::VibeStatusChanged(vibe) if is_tab_selected(inner, pos) => {
+                    let tc = &inner.tabs[pos];
+                    inner.claw.set_pane_state(
+                        &tc.controller.agent_name(),
+                        tc.controller.is_sleep(),
+                        tc.controller.is_pinned(),
+                        tc.controller.is_web_search(),
+                        vibe,
+                    );
+                }
+                ClawEngineEvent::DismissDrawer
+                | ClawEngineEvent::DiagnosisComplete { .. }
+                | ClawEngineEvent::InjectCommand { .. }
+                | ClawEngineEvent::ProposeFileWrite { .. }
+                | ClawEngineEvent::RestoreHistory(..)
+                | ClawEngineEvent::ProposeTerminalCommand { .. } => {
+                    inner.claw.refresh_visibility();
+                }
+                ClawEngineEvent::FocusPane => {
+                    inner.window.present();
+                    let widget = inner.tabs[pos].controller.widget();
+                    let page = inner.tab_view.page(widget);
+                    inner.tab_view.set_selected_page(&page);
+                    inner.tabs[pos].controller.focus_pane_by_id(&p_id);
+                }
+                ClawEngineEvent::RequestSpawnAgent {
+                    location,
+                    intent,
+                    request_id,
+                    ..
+                } => {
+                    let source_ctrl = inner.tabs[pos].controller.clone();
+                    let source_pane_id = p_id;
+                    let cwd = source_ctrl.working_dir().unwrap_or_default();
+                    let new_pane_id = match location {
+                        SpawnLocation::NewTab => {
+                            let new_ctrl = super::tabs::new_tab_with_intent(inner, intent);
+                            new_ctrl.active_pane_id()
+                        }
+                        SpawnLocation::VerticalSplit => source_ctrl.split_vertical(intent),
+                        SpawnLocation::HorizontalSplit => source_ctrl.split_horizontal(intent),
+                    };
+
+                    if let Some(req_id) = request_id {
+                        gtk4::glib::spawn_future_local(async move {
+                            let agent = boxxy_terminal::get_agent().await;
+                            let alias = agent
+                                .update_workspace_pane(
+                                    new_pane_id.clone(),
+                                    cwd,
+                                    String::new(),
+                                    String::new(),
+                                    "Idle".to_string(),
+                                )
+                                .await
+                                .unwrap_or_else(|_| new_pane_id.clone());
+                            source_ctrl.send_claw_to_pane(
+                                &source_pane_id,
+                                ClawMessage::SpawnAgentReply {
+                                    request_id: req_id,
+                                    pane_id: new_pane_id,
+                                    alias,
+                                },
+                            );
+                        });
+                    }
+                }
+                ClawEngineEvent::RequestReattachShell { pid, cwd } => {
+                    if pid == 0 {
+                        let tx = inner.tx.clone();
+                        gtk4::glib::spawn_future_local(async move {
+                            let agent = boxxy_terminal::get_agent().await;
+                            if let Ok(remaining) = agent.list_detached_sessions_detailed().await
+                                && !remaining.is_empty()
+                            {
+                                let _ = tx.send(AppInput::ReattachDetachedBatch(remaining)).await;
+                            }
+                        });
+                    } else {
+                        super::detached_sessions::reattach_session(inner, pid, cwd);
+                    }
+                }
+                ClawEngineEvent::RequestCloseAgent {
+                    target_agent_name,
+                    target_pane_id,
+                } => {
+                    let resolved = target_pane_id
+                        .unwrap_or_else(|| resolve_pane_id_from_caches(&target_agent_name));
+                    if !resolved.is_empty() {
+                        for tab in &inner.tabs {
+                            if tab.controller.close_pane_by_id(&resolved) {
+                                break;
+                            }
+                        }
+                    }
+                }
+                ClawEngineEvent::InjectKeystrokes {
+                    target_agent_name,
+                    target_pane_id,
+                    keys,
+                } => {
+                    let resolved = target_pane_id
+                        .unwrap_or_else(|| resolve_pane_id_from_caches(&target_agent_name));
+                    if !resolved.is_empty() {
+                        for tab in &inner.tabs {
+                            if tab.controller.inject_keystrokes_by_id(&resolved, &keys) {
+                                break;
+                            }
+                        }
+                    }
+                }
+                ClawEngineEvent::TaskStatusChanged { .. } => {
+                    super::tab_bar_sync::sync_tab_running_icons(inner);
+                    if is_tab_selected(inner, pos) {
+                        inner.claw.update_tasks(inner.tabs[pos].get_pending_tasks());
+                    }
+                }
+                ClawEngineEvent::TaskCompleted {
+                    agent_name,
+                    character_id,
+                    message,
+                    ..
+                } => {
+                    if boxxy_preferences::Settings::load().enable_timer_sounds {
+                        crate::sound::play_timer_completion_sound();
+                    }
+
+                    let attr = resolve_character_attribution(&character_id, &agent_name);
+                    let display_message = message
+                        .unwrap_or_else(|| format!("{} has finished a timer.", attr.first_name));
+
+                    super::notifications::push_global_notification(
+                        inner,
+                        Notification {
+                            id: uuid::Uuid::new_v4().to_string(),
+                            level: NotificationLevel::Info,
+                            title: format!("{} reminds", attr.first_name),
+                            message: display_message,
+                            icon_name: attr.icon_name,
+                            actions: vec![NotificationAction {
+                                label: "Dismiss".to_string(),
+                                action_name: "win.dismiss-notification".to_string(),
+                                is_primary: false,
+                            }],
+                            details: Vec::new(),
+                            suppress_toast: false,
+                            character_name: Some(attr.first_name),
+                            character_color: attr.color,
+                            avatar_path: attr.avatar_path,
+                        },
+                    );
+                }
+                ClawEngineEvent::LongTaskCompleted {
+                    agent_name,
+                    character_id,
+                    message,
+                    ..
+                } => {
+                    if boxxy_preferences::Settings::load().enable_task_sounds {
+                        crate::sound::play_task_completion_sound();
+                    }
+
+                    let attr = resolve_character_attribution(&character_id, &agent_name);
+                    super::notifications::push_global_notification(
+                        inner,
+                        Notification {
+                            id: uuid::Uuid::new_v4().to_string(),
+                            level: NotificationLevel::Info,
+                            title: format!("{} completed a task", attr.first_name),
+                            message,
+                            icon_name: attr.icon_name,
+                            actions: vec![NotificationAction {
+                                label: "Dismiss".to_string(),
+                                action_name: "win.dismiss-notification".to_string(),
+                                is_primary: false,
+                            }],
+                            details: Vec::new(),
+                            // Redundant because the agent's message is already in the Claw overlay
+                            suppress_toast: true,
+                            character_name: None,
+                            character_color: None,
+                            avatar_path: None,
+                        },
+                    );
+                }
+                ClawEngineEvent::PushGlobalNotification { title, message } => {
+                    super::notifications::push_global_notification(
+                        inner,
+                        Notification {
+                            id: uuid::Uuid::new_v4().to_string(),
+                            level: NotificationLevel::Info,
+                            title,
+                            message,
+                            icon_name: "boxxyclaw-symbolic".to_string(),
+                            actions: vec![NotificationAction {
+                                label: "Dismiss".to_string(),
+                                action_name: "win.dismiss-notification".to_string(),
+                                is_primary: false,
+                            }],
+                            details: Vec::new(),
+                            suppress_toast: false,
+                            character_name: None,
+                            character_color: None,
+                            avatar_path: None,
+                        },
+                    );
+                }
+                _ => {}
             }
-            TerminalEventKind::ZoomIn => {
-                let _ = inner.tx.send_blocking(AppInput::ZoomIn);
-            }
-            TerminalEventKind::ZoomOut => {
-                let _ = inner.tx.send_blocking(AppInput::ZoomOut);
-            }
-            TerminalEventKind::ResetZoom => {
-                let _ = inner.tx.send_blocking(AppInput::ResetZoom);
-            }
-            TerminalEventKind::MovePaneToSplit {
-                source_pane_id,
-                target_pane_id,
-                direction,
-            } => {
-                super::split::move_pane_to_split(inner, source_pane_id, target_pane_id, direction);
-            }
-            TerminalEventKind::RestoreDetached(_, _) => {}
         }
+        TerminalEventKind::ZoomIn => {
+            let _ = inner.tx.send_blocking(AppInput::ZoomIn);
+        }
+        TerminalEventKind::ZoomOut => {
+            let _ = inner.tx.send_blocking(AppInput::ZoomOut);
+        }
+        TerminalEventKind::ResetZoom => {
+            let _ = inner.tx.send_blocking(AppInput::ResetZoom);
+        }
+        TerminalEventKind::MovePaneToSplit {
+            source_pane_id,
+            target_pane_id,
+            direction,
+        } => {
+            super::split::move_pane_to_split(inner, source_pane_id, target_pane_id, direction);
+        }
+        TerminalEventKind::RestoreDetached(_, _) => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use boxxy_claw_protocol::characters::{CharacterConfig, HolderKind};
+
+    #[test]
+    fn resolve_pane_id_matches_petname_display_name_and_holder_id() {
+        let catalog = vec![CharacterInfo::new(
+            CharacterConfig {
+                id: "char-uuid-1".to_string(),
+                name: "levi-kujo".to_string(),
+                display_name: "Levi".to_string(),
+                color: "#204A87".to_string(),
+                duties: "Systems".to_string(),
+                personality: "Direct".to_string(),
+            },
+            false,
+        )];
+        let claims = vec![CharacterClaim {
+            holder_id: "pane-uuid-99".to_string(),
+            holder_kind: HolderKind::Pane,
+            character_id: "char-uuid-1".to_string(),
+            session_id: "sess-1".to_string(),
+            petname: "red-pony".to_string(),
+            owner_bus_name: ":1.10".to_string(),
+        }];
+
+        assert_eq!(
+            resolve_pane_id_in("red-pony", &claims, &catalog),
+            "pane-uuid-99"
+        );
+        assert_eq!(
+            resolve_pane_id_in("Red Pony", &claims, &catalog),
+            "pane-uuid-99"
+        );
+        assert_eq!(
+            resolve_pane_id_in("@Levi", &claims, &catalog),
+            "pane-uuid-99"
+        );
+        assert_eq!(
+            resolve_pane_id_in(":levi-kujo", &claims, &catalog),
+            "pane-uuid-99"
+        );
+        assert_eq!(
+            resolve_pane_id_in("pane-uuid-99", &claims, &catalog),
+            "pane-uuid-99"
+        );
+        assert_eq!(
+            resolve_pane_id_in("unclaimed-pane-id", &claims, &catalog),
+            "unclaimed-pane-id"
+        );
     }
 }

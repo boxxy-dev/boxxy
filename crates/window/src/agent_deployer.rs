@@ -1,10 +1,11 @@
-//! Called once at startup (and on every app foreground) to ensure the
-//! host-side boxxy-agent binary is present and matches our version.
+//! Called once at startup (and on agent reconnect) to ensure the
+//! host-side `boxxy-agent` binary is present and matches our version.
 
 use anyhow::{Context, Result};
 use boxxy_sys_utils::is_flatpak;
 use log::{info, warn};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 use zbus::{Connection, proxy};
 
@@ -30,52 +31,52 @@ async fn connect_version_proxy(conn: &Connection) -> zbus::Result<AgentVersionPr
 }
 
 /// Returns the path where the agent binary lives on the host.
-fn agent_host_path() -> PathBuf {
+fn agent_host_path() -> Result<PathBuf> {
     if is_flatpak() {
-        home::home_dir()
-            .expect("no home dir")
-            .join(".local/boxxy-terminal/boxxy-agent")
+        let home = home::home_dir().context("Could not resolve user home directory")?;
+        Ok(home.join(".local/boxxy-terminal/boxxy-agent"))
     } else {
         // Native: look in the same directory as the current executable
-        let mut p = std::env::current_exe().expect("no current exe");
+        let mut p = std::env::current_exe().context("Could not resolve current executable path")?;
         p.pop();
         p.push("boxxy-agent");
-        p
+        Ok(p)
     }
 }
 
 /// Full handshake:
 /// 1. Deploy agent binary if missing or outdated (Flatpak only).
-/// 2. Spawn agent if not already running.
+/// 2. Spawn agent if not already running with matching version & config dir.
 /// 3. Wait for the agent to claim its D-Bus name.
 pub async fn ensure_agent_running() -> Result<()> {
-    let host_path = agent_host_path();
+    let host_path = agent_host_path()?;
+    let conn = Connection::session().await.ok();
 
-    if is_flatpak() {
-        // Step 1 — Re-deploy binary if needed (only in Flatpak).
-        if needs_redeploy(&host_path).await {
-            let _ = stop_ghost().await;
-            wait_for_agent_stopped().await;
-            deploy_agent_binary(&host_path).await?;
+    if is_flatpak() && needs_redeploy(conn.as_ref(), &host_path).await {
+        if let Some(ref c) = conn {
+            let _ = stop_ghost(c).await;
+            wait_for_agent_stopped(c).await;
         }
+        deploy_agent_binary(&host_path).await?;
     }
 
     // Step 2 — Ensure daemon is running. Returns `true` if a new daemon was spawned.
-    let spawned = spawn_agent(&host_path).await?;
+    let spawned = spawn_agent(conn.as_ref(), &host_path).await?;
 
     // Step 3 — Wait for D-Bus name to be ready when a new daemon was spawned.
     if spawned {
-        wait_for_agent_ready().await?;
+        let ready_conn = match conn {
+            Some(c) => c,
+            None => Connection::session().await?,
+        };
+        wait_for_agent_ready(&ready_conn).await?;
     }
 
     Ok(())
 }
 
-async fn wait_for_agent_stopped() {
-    let Ok(conn) = Connection::session().await else {
-        return;
-    };
-    let Ok(proxy) = connect_version_proxy(&conn).await else {
+async fn wait_for_agent_stopped(conn: &Connection) {
+    let Ok(proxy) = connect_version_proxy(conn).await else {
         return;
     };
     for _ in 0..40 {
@@ -86,28 +87,24 @@ async fn wait_for_agent_stopped() {
     }
 }
 
-async fn wait_for_agent_ready() -> Result<()> {
-    let conn = Connection::session().await?;
-    let proxy = connect_version_proxy(&conn).await?;
+async fn wait_for_agent_ready(conn: &Connection) -> Result<()> {
+    let proxy = connect_version_proxy(conn).await?;
     let mut attempts = 0;
     let max_attempts = 200; // 3 seconds total at 15ms intervals
 
     loop {
         match proxy.get_version().await {
             Ok(ver) => {
-                info!("Agent is ready (v{})", ver);
+                info!("Agent is ready (v{ver})");
                 return Ok(());
             }
             Err(e) => {
                 attempts += 1;
                 if attempts >= max_attempts {
-                    anyhow::bail!("Timed out waiting for agent to claim D-Bus name: {}", e);
+                    anyhow::bail!("Timed out waiting for agent to claim D-Bus name: {e}");
                 }
                 if attempts % 20 == 0 {
-                    info!(
-                        "Waiting for agent D-Bus name (attempt {}/{})...",
-                        attempts, max_attempts
-                    );
+                    info!("Waiting for agent D-Bus name (attempt {attempts}/{max_attempts})...");
                 }
                 tokio::time::sleep(std::time::Duration::from_millis(15)).await;
             }
@@ -115,58 +112,87 @@ async fn wait_for_agent_ready() -> Result<()> {
     }
 }
 
-async fn needs_redeploy(host_path: &PathBuf) -> bool {
-    if !host_path.exists() {
+/// Compares two files without allocating full binary buffers in memory.
+/// Checks byte lengths via `metadata` first, then streams in 64 KiB chunks.
+async fn files_identical(a: &Path, b: &Path) -> std::io::Result<bool> {
+    let (meta_a, meta_b) = tokio::try_join!(tokio::fs::metadata(a), tokio::fs::metadata(b))?;
+    if meta_a.len() != meta_b.len() {
+        return Ok(false);
+    }
+
+    let (file_a, file_b) = tokio::try_join!(tokio::fs::File::open(a), tokio::fs::File::open(b))?;
+    let mut reader_a = tokio::io::BufReader::with_capacity(64 * 1024, file_a);
+    let mut reader_b = tokio::io::BufReader::with_capacity(64 * 1024, file_b);
+    let mut buf_a = [0u8; 8192];
+    let mut buf_b = [0u8; 8192];
+
+    loop {
+        let n_a = reader_a.read(&mut buf_a).await?;
+        if n_a == 0 {
+            let n_b = reader_b.read(&mut buf_b).await?;
+            return Ok(n_b == 0);
+        }
+        reader_b.read_exact(&mut buf_b[..n_a]).await?;
+        if buf_a[..n_a] != buf_b[..n_a] {
+            return Ok(false);
+        }
+    }
+}
+
+async fn needs_redeploy(conn: Option<&Connection>, host_path: &Path) -> bool {
+    if !tokio::fs::try_exists(host_path).await.unwrap_or(false) {
         return true;
     }
 
     // Compare the packaged `/app/libexec/boxxy-agent` binary against the deployed
-    // host binary so Flatpak rebuilds with the same CARGO_PKG_VERSION always redeploy.
-    let src_path = PathBuf::from("/app/libexec/boxxy-agent");
-    if src_path.exists()
-        && let (Ok(src_bytes), Ok(dst_bytes)) = (
-            tokio::fs::read(&src_path).await,
-            tokio::fs::read(host_path).await,
-        )
-        && src_bytes != dst_bytes
-    {
-        info!("Host boxxy-agent binary differs from /app/libexec/boxxy-agent — redeploying");
-        return true;
+    // host binary so Flatpak rebuilds with the same CARGO_PKG_VERSION always redeploy,
+    // while avoiding a redundant copy when the on-disk binary already matches.
+    let src_path = Path::new("/app/libexec/boxxy-agent");
+    if tokio::fs::try_exists(src_path).await.unwrap_or(false) {
+        match files_identical(src_path, host_path).await {
+            Ok(true) => return false,
+            Ok(false) => {
+                info!(
+                    "Host boxxy-agent binary differs from /app/libexec/boxxy-agent — redeploying"
+                );
+                return true;
+            }
+            Err(_) => {}
+        }
     }
 
-    // Ask the running Ghost its version via D-Bus.
-    match query_ghost_version().await {
+    // Fallback when host filesystem isn't directly readable from the sandbox:
+    // ask the running Ghost its version via D-Bus.
+    let Some(conn) = conn else {
+        return true;
+    };
+    match query_ghost_version(conn).await {
         Ok(ver) if ver == AGENT_VERSION => false,
         Ok(ver) => {
-            warn!(
-                "Ghost version {} != app version {} — redeploying",
-                ver, AGENT_VERSION
-            );
+            warn!("Ghost version {ver} != app version {AGENT_VERSION} — redeploying");
             true
         }
         Err(_) => true,
     }
 }
 
-async fn query_ghost_version() -> Result<String> {
-    let conn = Connection::session().await?;
-    let proxy = connect_version_proxy(&conn).await?;
+async fn query_ghost_version(conn: &Connection) -> Result<String> {
+    let proxy = connect_version_proxy(conn).await?;
     let ver = proxy.get_version().await?;
     Ok(ver)
 }
 
-async fn query_ghost_version_and_config_dir() -> Result<(String, String)> {
-    let conn = Connection::session().await?;
-    let proxy = connect_version_proxy(&conn).await?;
+async fn query_ghost_version_and_config_dir(conn: &Connection) -> Result<(String, String)> {
+    let proxy = connect_version_proxy(conn).await?;
     let (ver, dir) = tokio::try_join!(proxy.get_version(), proxy.get_config_dir())?;
     Ok((ver, dir))
 }
 
-async fn deploy_agent_binary(dest: &PathBuf) -> Result<()> {
+async fn deploy_agent_binary(dest: &Path) -> Result<()> {
     info!("Deploying agent binary to {}", dest.display());
 
-    let src_path = PathBuf::from("/app/libexec/boxxy-agent");
-    if !src_path.exists() {
+    let src_path = Path::new("/app/libexec/boxxy-agent");
+    if !tokio::fs::try_exists(src_path).await.unwrap_or(false) {
         anyhow::bail!("Source agent binary not found at {}", src_path.display());
     }
 
@@ -195,7 +221,7 @@ async fn deploy_agent_binary(dest: &PathBuf) -> Result<()> {
 
     if let Some(mut stdin) = child.stdin.take() {
         use tokio::io::AsyncWriteExt;
-        let file = tokio::fs::File::open(&src_path).await?;
+        let file = tokio::fs::File::open(src_path).await?;
         let mut reader = tokio::io::BufReader::with_capacity(64 * 1024, file);
         tokio::io::copy_buf(&mut reader, &mut stdin).await?;
         stdin.shutdown().await?;
@@ -243,32 +269,32 @@ async fn deploy_agent_binary(dest: &PathBuf) -> Result<()> {
     Ok(())
 }
 
-async fn spawn_agent(host_path: &PathBuf) -> Result<bool> {
+async fn spawn_agent(conn: Option<&Connection>, host_path: &Path) -> Result<bool> {
     let expected_config_dir = boxxy_sys_utils::get_config_dir();
 
     // Check if it's already running with matching version and config dir in one round-trip.
-    match query_ghost_version_and_config_dir().await {
-        Ok((ver, dir)) if ver == AGENT_VERSION && PathBuf::from(&dir) == expected_config_dir => {
-            info!("Agent v{} with matching config dir is already running.", ver);
-            return Ok(false);
-        }
-        Ok((ver, dir)) => {
-            if ver != AGENT_VERSION {
-                warn!(
-                    "Ghost version {} != app version {} — stopping old agent",
-                    ver, AGENT_VERSION
-                );
-            } else {
-                warn!(
-                    "Ghost config dir ({}) != app config dir ({:?}) — stopping old agent",
-                    dir, expected_config_dir
-                );
+    if let Some(conn) = conn {
+        match query_ghost_version_and_config_dir(conn).await {
+            Ok((ver, dir)) if ver == AGENT_VERSION && Path::new(&dir) == expected_config_dir => {
+                info!("Agent v{ver} with matching config dir is already running.");
+                return Ok(false);
             }
-            let _ = stop_ghost().await;
-            wait_for_agent_stopped().await;
-        }
-        Err(_) => {
-            info!("Agent is not running; will spawn.");
+            Ok((ver, dir)) => {
+                if ver != AGENT_VERSION {
+                    warn!(
+                        "Ghost version {ver} != app version {AGENT_VERSION} — stopping old agent"
+                    );
+                } else {
+                    warn!(
+                        "Ghost config dir ({dir}) != app config dir ({expected_config_dir:?}) — stopping old agent"
+                    );
+                }
+                let _ = stop_ghost(conn).await;
+                wait_for_agent_stopped(conn).await;
+            }
+            Err(_) => {
+                info!("Agent is not running; will spawn.");
+            }
         }
     }
 
@@ -285,8 +311,7 @@ async fn spawn_agent(host_path: &PathBuf) -> Result<bool> {
             host_path.to_string_lossy().into_owned(),
             "--background".to_string(),
         ]);
-        cmd.spawn()
-            .context("Failed to spawn agent on host")?;
+        cmd.spawn().context("Failed to spawn agent on host")?;
     } else {
         info!(
             "Spawning native agent ({}): {}",
@@ -304,9 +329,32 @@ async fn spawn_agent(host_path: &PathBuf) -> Result<bool> {
     Ok(true)
 }
 
-async fn stop_ghost() -> Result<()> {
-    let conn = Connection::session().await?;
-    let proxy = connect_version_proxy(&conn).await?;
+async fn stop_ghost(conn: &Connection) -> Result<()> {
+    let proxy = connect_version_proxy(conn).await?;
     let _ = proxy.request_stop().await;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn files_identical_checks_length_then_contents() {
+        let tmp = tempfile::tempdir().unwrap();
+        let a = tmp.path().join("a.bin");
+        let b = tmp.path().join("b.bin");
+        let c = tmp.path().join("c.bin");
+
+        let payload = vec![0x42u8; 20_000];
+        tokio::fs::write(&a, &payload).await.unwrap();
+        tokio::fs::write(&b, &payload).await.unwrap();
+
+        let mut modified = payload;
+        modified[19_999] = 0x99;
+        tokio::fs::write(&c, &modified).await.unwrap();
+
+        assert!(files_identical(&a, &b).await.unwrap());
+        assert!(!files_identical(&a, &c).await.unwrap());
+    }
 }

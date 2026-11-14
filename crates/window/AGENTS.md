@@ -10,12 +10,18 @@ This crate follows a modular **Model-View-Update (MVU)** architecture:
 - **`ui.rs`**: GTK widget tree construction and signal-to-message mapping.
 - **`application_detector.rs`**: Pure-Rust application category detector (`ApplicationCategory`, `TerminalAppState`, `detect_application_state`) combining foreground process inspection (with `/proc/<tpgid>/cmdline` wrapper resolution in `boxxy-agent`) and VT alternate-screen mode (`?1049h` / `?1049l`) to classify active terminal sessions into `Idle`, `Editor`, `Monitor`, `AiAgent`, `Git`, `FileManager`, `Pager`, `Multiplexer`, `Remote`, `GenericTui`, and `RunningCommand` for category-specific tab icons.
 - **`tab_title.rs`**: Smart Tab Naming and hover tooltip resolution (`smart_tab_naming` setting, enabled by default). Prioritizes user custom titles, remote SSH host + directory (`host · boxxy-terminal`), foreground commands (`vim`), and directory basenames (`boxxy-terminal`, `Downloads`, `src`) with automatic parent-directory disambiguation (`src · boxxy-terminal`) when multiple tabs share the same title, while exposing the full path in the `AdwTabPage` hover tooltip and tab context menu.
-- **`update/` Module**: Pure state transition logic:
+- **`update/` Module**: Modular MVU state transition logic:
     - **`update/mod.rs`**: Primary message dispatcher.
-    - **`update/tabs.rs`**: Tab lifecycle (open, close, adopt, transfer).
+    - **`update/tabs.rs`**: Tab lifecycle (open, close, adopt, transfer, grouped session reattach).
+    - **`update/tab_bar_sync.rs`**: `AdwTabBar` widget-tree sync, diff-only tab color CSS classes, title centering, and GPA `.gpa` animated category/indicator icons.
+    - **`update/close_dialog.rs`**: Shared 3-button close protection dialog (`Cancel`, `Terminate` / `Terminate All`, `Run in Background`) used by both tab close and window close.
     - **`update/split.rs`**: Split management, layout control, and cross-tab/intra-tab pane drag-and-drop (`move_pane_to_split`, `drop_pane_on_tab`).
-    - **`update/events.rs`**: Terminal signal routing and agent event handling.
-    - **`update/window_state.rs`**: Persistence and global state updates.
+    - **`update/events.rs`**: Terminal signal routing, peer pane lookup via `CLAIMS_CACHE`/`CHARACTER_CACHE`, and agent event handling.
+    - **`update/claw.rs`**: Claw pane activation, task pause/cancel, soft history clear, session resumption, model selection, and engine reload.
+    - **`update/detached_sessions.rs`**: HeaderBar background shells badge and the unified Background Shells dialog.
+    - **`update/notifications.rs`**: In-app toast and desktop update notification pipeline, update details dialog, and async character reminder toast widgets.
+    - **`update/whats_new_dialog.rs`**: Post-update "What's New" `AdwDialog` controller, commit detail pager, and non-blocking GitHub changelog population.
+    - **`update/window_state.rs`**: Window geometry persistence, diff-aware settings synchronization, and sidebar navigation.
 
 ## Key Features
 - **Task-Aware Closing Protection & Background Detach**: The `handle_close_request` dialog (in `update/window_state.rs`) and tab-close dialog (`update/tabs.rs`) prevent accidental loss of active work. They query `boxxy-agent` for running OS processes, query the `boxxy-claw` `WorkspaceRegistry` for active scheduled AI tasks, AND check `get_active_claw_panes()` for any active AI agent sessions in the tab/window, displaying a unified 3-button alert: **Cancel**, **Run in Background** (detaches running shells and active AI sessions into `boxxy-agent` via `detach_on_close_sync()`), and **Terminate** / **Terminate All** (kills the process group via `terminate_on_close_sync()`). When the "Always Keep Running Processes in Background" (`pty_persistence`) setting is on, the dialog is skipped and running shells / active AI sessions automatically detach into the daemon while idle shells are terminated cleanly.
