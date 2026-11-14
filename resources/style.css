@@ -1591,7 +1591,50 @@ row.past-session-row button.past-session-options-btn:active {
     margin-right: 4px;
 }
 
-/* --- Smart Viewer: Code Header & File Diff Cards --- */
+/* --- Smart Viewer: Code Blocks, Header & File Diff Cards --- */
+frame.viewer-code-block {
+    border-radius: 8px;
+}
+
+.viewer-code-block .viewer-code-overlay-bar {
+    padding: 2px;
+    border-radius: 6px;
+}
+
+.viewer-code-block .viewer-code-lang-pill {
+    font-size: 0.72em;
+    font-weight: 600;
+    padding: 2px 6px;
+    border-radius: 5px;
+    background-color: alpha(currentColor, 0.06);
+    opacity: 0.55;
+    transition: opacity 150ms ease;
+}
+
+.viewer-code-block button.viewer-code-copy-btn {
+    min-width: 26px;
+    min-height: 26px;
+    padding: 0;
+    opacity: 0;
+    background-color: alpha(@card_bg_color, 0.85);
+    transition: opacity 150ms ease, background-color 150ms ease;
+}
+
+.viewer-code-block:hover button.viewer-code-copy-btn,
+.viewer-code-block:focus-within button.viewer-code-copy-btn,
+.viewer-code-block button.viewer-code-copy-btn.copied {
+    opacity: 0.88;
+}
+
+.viewer-code-block button.viewer-code-copy-btn:hover {
+    opacity: 1.0;
+    background-color: alpha(currentColor, 0.12);
+}
+
+frame.viewer-code-block.viewer-code-shell {
+    border-color: alpha(currentColor, 0.16);
+}
+
 .code-header {
     background-color: alpha(currentColor, 0.05);
     border-bottom: 1px solid alpha(currentColor, 0.10);

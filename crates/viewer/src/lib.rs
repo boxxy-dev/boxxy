@@ -10,5 +10,6 @@ pub use parser::markdown::{
     write_escaped_pango, write_escaped_pango_attr,
 };
 pub use registry::ViewerRegistry;
-pub use renderer::BlockRenderer;
+pub use renderer::code::CodeBlockWidget;
+pub use renderer::{BlockRenderer, RenderContext};
 pub use widget::StructuredViewer;

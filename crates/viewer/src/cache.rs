@@ -385,6 +385,36 @@ fn adjust_syntax_fg(r: u8, g: u8, b: u8, is_dark: bool) -> (u8, u8, u8) {
 // Collision-Safe Parsed Markdown AST Cache & Syntax Highlight Cache
 // ---------------------------------------------------------------------------
 
+/// Compact byte-range foreground color span for direct `pango::AttrList` construction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SyntaxSpan {
+    pub start_byte: u32,
+    pub end_byte: u32,
+    pub r: u8,
+    pub g: u8,
+    pub b: u8,
+}
+
+/// Cached syntax-highlighted metadata for a code block's display text.
+/// Stores coalesced foreground color byte spans (~35x smaller than Pango XML strings)
+/// plus `\n` byte offsets for O(1) 100-line chunk slicing on large files.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HighlightedCode {
+    pub spans: Box<[SyntaxSpan]>,
+    pub newline_offsets: Box<[u32]>,
+}
+
+impl HighlightedCode {
+    #[must_use]
+    pub const fn line_count(&self, is_empty_text: bool) -> usize {
+        if is_empty_text {
+            0
+        } else {
+            self.newline_offsets.len() + 1
+        }
+    }
+}
+
 #[derive(PartialEq, Eq)]
 struct AstCacheKey {
     hash: u64,
@@ -402,7 +432,7 @@ struct HighlightCacheKey {
 static AST_CACHE: LazyLock<Mutex<SimpleLru<AstCacheKey, Arc<[ContentBlock]>>>> =
     LazyLock::new(|| Mutex::new(SimpleLru::new(AST_CACHE_CAPACITY)));
 
-static HIGHLIGHT_CACHE: LazyLock<Mutex<SimpleLru<HighlightCacheKey, Arc<str>>>> =
+static HIGHLIGHT_CACHE: LazyLock<Mutex<SimpleLru<HighlightCacheKey, Arc<HighlightedCode>>>> =
     LazyLock::new(|| Mutex::new(SimpleLru::new(HIGHLIGHT_CACHE_CAPACITY)));
 
 fn hash_str(s: &str) -> u64 {
@@ -441,26 +471,35 @@ pub fn get_or_parse_markdown(input: &str) -> Arc<[ContentBlock]> {
     parsed
 }
 
-/// Synchronously looks up cached `syntect` Pango markup for a `(lang, code, is_dark)` tuple.
+/// Synchronously looks up cached `HighlightedCode` spans for a `(lang, display_code, is_dark)` tuple.
 #[must_use]
-pub fn get_cached_highlight(lang: &str, code: &str, is_dark: bool) -> Option<Arc<str>> {
-    let h = hash_highlight(lang, code, is_dark);
+pub fn get_cached_highlight(
+    lang: &str,
+    display_code: &str,
+    is_dark: bool,
+) -> Option<Arc<HighlightedCode>> {
+    let h = hash_highlight(lang, display_code, is_dark);
     HIGHLIGHT_CACHE.lock().get_by(|k| {
-        k.hash == h && k.is_dark == is_dark && &*k.lang == lang && &*k.code == code
+        k.hash == h && k.is_dark == is_dark && &*k.lang == lang && &*k.code == display_code
     })
 }
 
-/// Stores `syntect` Pango markup in the highlight LRU cache.
-pub fn insert_cached_highlight(lang: &str, code: &str, is_dark: bool, markup: impl Into<Arc<str>>) {
-    let h = hash_highlight(lang, code, is_dark);
+/// Stores `HighlightedCode` spans in the highlight LRU cache.
+pub fn insert_cached_highlight(
+    lang: &str,
+    display_code: &str,
+    is_dark: bool,
+    highlighted: Arc<HighlightedCode>,
+) {
+    let h = hash_highlight(lang, display_code, is_dark);
     HIGHLIGHT_CACHE.lock().insert(
         HighlightCacheKey {
             hash: h,
             is_dark,
             lang: lang.into(),
-            code: code.into(),
+            code: display_code.into(),
         },
-        markup.into(),
+        highlighted,
     );
 }
 
@@ -487,11 +526,20 @@ mod tests {
         assert!(Arc::ptr_eq(&blocks1, &blocks2));
 
         assert!(get_cached_highlight("rust", "fn main() {}", true).is_none());
-        insert_cached_highlight("rust", "fn main() {}", true, "<tt>fn main()</tt>");
-        assert_eq!(
-            get_cached_highlight("rust", "fn main() {}", true).as_deref(),
-            Some("<tt>fn main()</tt>")
-        );
+        let sample = Arc::new(HighlightedCode {
+            spans: Box::new([SyntaxSpan {
+                start_byte: 0,
+                end_byte: 2,
+                r: 200,
+                g: 150,
+                b: 255,
+            }]),
+            newline_offsets: Box::new([]),
+        });
+        insert_cached_highlight("rust", "fn main() {}", true, sample.clone());
+        let hit = get_cached_highlight("rust", "fn main() {}", true).expect("cache hit");
+        assert!(Arc::ptr_eq(&sample, &hit));
+        assert_eq!(hit.line_count(false), 1);
     }
 
     #[test]
