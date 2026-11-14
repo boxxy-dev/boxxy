@@ -1,5 +1,5 @@
 use crate::parser::blocks::ContentBlock;
-use crate::parser::markdown::parse_markdown;
+use crate::parser::markdown::{normalize_fence_language, parse_markdown, write_escaped_pango};
 use boxxy_assets::image::{
     ThumbnailOutput, ThumbnailSpec, decode_rgba_from_png, encode_rgba_to_png,
 };
@@ -8,17 +8,18 @@ use parking_lot::Mutex;
 use sha2::{Digest, Sha256};
 use std::cell::RefCell;
 use std::collections::VecDeque;
+use std::fmt::Write as _;
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 use std::sync::{Arc, LazyLock};
 use std::time::UNIX_EPOCH;
 
 const THUMB_MEMORY_CACHE_CAPACITY: usize = 96;
-const AST_CACHE_CAPACITY: usize = 256;
-const HIGHLIGHT_CACHE_CAPACITY: usize = 128;
+const AST_CACHE_CAPACITY: usize = 512;
+const HIGHLIGHT_CACHE_CAPACITY: usize = 512;
 const DISK_CACHE_MAGIC: &[u8; 4] = b"BXT1";
 
-/// Compact bounded LRU cache backed by `VecDeque`.
+/// Compact bounded LRU cache backed by `VecDeque`, supporting zero-allocation borrowed lookups.
 pub(crate) struct SimpleLru<K, V> {
     capacity: usize,
     entries: VecDeque<(K, V)>,
@@ -33,7 +34,14 @@ impl<K: Eq, V: Clone> SimpleLru<K, V> {
     }
 
     pub(crate) fn get(&mut self, key: &K) -> Option<V> {
-        let pos = self.entries.iter().position(|(k, _)| k == key)?;
+        self.get_by(|k| k == key)
+    }
+
+    pub(crate) fn get_by(&mut self, mut pred: impl FnMut(&K) -> bool) -> Option<V> {
+        let pos = self.entries.iter().position(|(k, _)| pred(k))?;
+        if pos == 0 {
+            return Some(self.entries[0].1.clone());
+        }
         let (k, v) = self.entries.remove(pos)?;
         let out = v.clone();
         self.entries.push_front((k, v));
@@ -113,7 +121,6 @@ pub fn compute_disk_cache_key(
     let digest = hasher.finalize();
     let mut hex = String::with_capacity(68);
     for b in digest {
-        use std::fmt::Write;
         let _ = write!(&mut hex, "{b:02x}");
     }
     hex.push_str(".bxt");
@@ -222,30 +229,56 @@ pub fn theme_set() -> &'static syntect::highlighting::ThemeSet {
     &THEME_SET
 }
 
-/// Resolves a syntax definition by language token/extension, with a fallback to shell highlighting
-/// for config formats (`toml`, `ini`, `conf`, `cfg`, `env`) not bundled in `syntect`'s default pack.
+/// Returns true if `lang` is a shell/terminal snippet language (matching OpenCode's `shellLanguages`).
+#[must_use]
+pub fn is_shell_language(lang: &str) -> bool {
+    let norm = normalize_fence_language(lang);
+    matches!(
+        norm.as_str(),
+        "bash" | "sh" | "shell" | "zsh" | "fish" | "console" | "terminal"
+    )
+}
+
+/// Resolves a syntax definition by fence info-string / language token / extension, with
+/// fallback aliases for modern languages and config formats missing from `syntect`'s default pack.
 #[must_use]
 pub fn resolve_syntax<'a>(
     ss: &'a syntect::parsing::SyntaxSet,
     lang: &str,
     first_line_sample: Option<&str>,
 ) -> &'a syntect::parsing::SyntaxReference {
-    let trimmed = lang.trim();
-    if !trimmed.is_empty() && !trimmed.eq_ignore_ascii_case("text") {
+    let norm = normalize_fence_language(lang);
+    if !norm.is_empty() && norm != "text" && norm != "plain" && norm != "plaintext" {
         if let Some(syn) = ss
-            .find_syntax_by_token(trimmed)
-            .or_else(|| ss.find_syntax_by_extension(trimmed))
+            .find_syntax_by_token(&norm)
+            .or_else(|| ss.find_syntax_by_extension(&norm))
         {
             return syn;
         }
-        if matches!(
-            trimmed.to_ascii_lowercase().as_str(),
-            "toml" | "ini" | "conf" | "cfg" | "env" | "dotenv"
-        ) && let Some(syn) = ss.find_syntax_by_extension("sh")
+
+        let alias_ext = match norm.as_str() {
+            "ts" | "typescript" | "tsx" | "jsx" | "mts" | "cts" | "mjs" | "cjs" => Some("js"),
+            "jsonc" | "jsonl" | "json5" => Some("json"),
+            "toml" | "ini" | "conf" | "cfg" | "env" | "dotenv" | "zsh" | "fish" | "nu"
+            | "nushell" | "just" | "justfile" | "dockerfile" | "containerfile" => Some("sh"),
+            "zig" | "wgsl" | "odin" => Some("rs"),
+            "glsl" | "hlsl" | "proto" | "protobuf" => Some("cpp"),
+            "kt" | "kts" | "kotlin" => Some("java"),
+            "nix" | "hcl" | "tf" | "terraform" | "gleam" => Some("rb"),
+            "svelte" | "vue" | "astro" => Some("html"),
+            "yml" | "gql" | "graphql" => Some("yaml"),
+            _ => None,
+        };
+
+        if let Some(ext) = alias_ext
+            && let Some(syn) = ss
+                .find_syntax_by_extension(ext)
+                .or_else(|| ss.find_syntax_by_token(ext))
         {
             return syn;
         }
     }
+
     first_line_sample
         .and_then(|s| ss.find_syntax_by_first_line(s))
         .unwrap_or_else(|| ss.find_syntax_plain_text())
@@ -267,12 +300,44 @@ pub fn is_card_surface_dark() -> bool {
     libadwaita::StyleManager::default().is_dark()
 }
 
+/// Resolves the luminance-clamped `(r, g, b)` foreground color for a `syntect` token,
+/// returning `None` when the token matches the theme's default foreground so it inherits `@card_fg_color`.
+#[must_use]
+pub fn resolve_syntect_fg(
+    style: syntect::highlighting::Style,
+    default_fg: Option<syntect::highlighting::Color>,
+    is_dark: bool,
+) -> Option<(u8, u8, u8)> {
+    let c = style.foreground;
+    let is_default_fg = default_fg.is_some_and(|fg| {
+        fg.r.abs_diff(c.r) <= 4 && fg.g.abs_diff(c.g) <= 4 && fg.b.abs_diff(c.b) <= 4
+    });
+    if is_default_fg {
+        None
+    } else {
+        Some(adjust_syntax_fg(c.r, c.g, c.b, is_dark))
+    }
+}
+
+/// Appends a single `syntect` token formatted as Pango markup directly into `out` without
+/// intermediate `String` allocations.
+pub fn write_syntect_span(
+    out: &mut String,
+    style: syntect::highlighting::Style,
+    default_fg: Option<syntect::highlighting::Color>,
+    token: &str,
+    is_dark: bool,
+) {
+    if let Some((r, g, b)) = resolve_syntect_fg(style, default_fg, is_dark) {
+        let _ = write!(out, "<span foreground=\"#{r:02x}{g:02x}{b:02x}\">");
+        write_escaped_pango(out, token);
+        out.push_str("</span>");
+    } else {
+        write_escaped_pango(out, token);
+    }
+}
+
 /// Formats a single `syntect` token into Pango markup.
-///
-/// - Tokens using the theme's default foreground omit `foreground="..."` so they inherit
-///   the active Boxxy theme's `@card_fg_color` via GTK CSS.
-/// - Colored syntax tokens are luminance-clamped (`>= 0.72` on dark cards, `<= 0.28` on light cards)
-///   so they remain readable even on vibrant custom `card_bg` surfaces (e.g. arcade blue or gold).
 #[must_use]
 pub fn format_syntect_span(
     style: syntect::highlighting::Style,
@@ -280,19 +345,12 @@ pub fn format_syntect_span(
     token: &str,
     is_dark: bool,
 ) -> String {
-    let escaped = crate::parser::markdown::escape_pango(token);
-    let c = style.foreground;
-    let is_default_fg = default_fg.is_some_and(|fg| {
-        fg.r.abs_diff(c.r) <= 4 && fg.g.abs_diff(c.g) <= 4 && fg.b.abs_diff(c.b) <= 4
-    });
-    if is_default_fg {
-        return escaped;
-    }
-
-    let (r, g, b) = adjust_syntax_fg(c.r, c.g, c.b, is_dark);
-    format!("<span foreground=\"#{r:02x}{g:02x}{b:02x}\">{escaped}</span>")
+    let mut out = String::with_capacity(token.len() + 34);
+    write_syntect_span(&mut out, style, default_fg, token, is_dark);
+    out
 }
 
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 fn adjust_syntax_fg(r: u8, g: u8, b: u8, is_dark: bool) -> (u8, u8, u8) {
     let rf = f32::from(r) / 255.0;
     let gf = f32::from(g) / 255.0;
@@ -324,16 +382,27 @@ fn adjust_syntax_fg(r: u8, g: u8, b: u8, is_dark: bool) -> (u8, u8, u8) {
 }
 
 // ---------------------------------------------------------------------------
-// Parsed Markdown AST Cache & Syntax Highlight Cache
+// Collision-Safe Parsed Markdown AST Cache & Syntax Highlight Cache
 // ---------------------------------------------------------------------------
 
-type AstCacheKey = (usize, u64);
-type HighlightCacheKey = (usize, usize, u64, bool);
+#[derive(PartialEq, Eq)]
+struct AstCacheKey {
+    hash: u64,
+    raw: Box<str>,
+}
+
+#[derive(PartialEq, Eq)]
+struct HighlightCacheKey {
+    hash: u64,
+    is_dark: bool,
+    lang: Box<str>,
+    code: Box<str>,
+}
 
 static AST_CACHE: LazyLock<Mutex<SimpleLru<AstCacheKey, Arc<[ContentBlock]>>>> =
     LazyLock::new(|| Mutex::new(SimpleLru::new(AST_CACHE_CAPACITY)));
 
-static HIGHLIGHT_CACHE: LazyLock<Mutex<SimpleLru<HighlightCacheKey, String>>> =
+static HIGHLIGHT_CACHE: LazyLock<Mutex<SimpleLru<HighlightCacheKey, Arc<str>>>> =
     LazyLock::new(|| Mutex::new(SimpleLru::new(HIGHLIGHT_CACHE_CAPACITY)));
 
 fn hash_str(s: &str) -> u64 {
@@ -342,36 +411,57 @@ fn hash_str(s: &str) -> u64 {
     hasher.finish()
 }
 
-fn highlight_cache_key(lang: &str, code: &str, is_dark: bool) -> HighlightCacheKey {
+fn hash_highlight(lang: &str, code: &str, is_dark: bool) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     lang.hash(&mut hasher);
     code.hash(&mut hasher);
-    (lang.len(), code.len(), hasher.finish(), is_dark)
+    is_dark.hash(&mut hasher);
+    hasher.finish()
 }
 
 /// Returns cached parsed `ContentBlock`s for `input`, or parses and caches them on miss.
+/// Lookup compares the 64-bit hash first and verifies exact `&str` equality on match (0 allocations on hit).
 #[must_use]
 pub fn get_or_parse_markdown(input: &str) -> Arc<[ContentBlock]> {
-    let key = (input.len(), hash_str(input));
-    if let Some(cached) = AST_CACHE.lock().get(&key) {
+    let h = hash_str(input);
+    if let Some(cached) = AST_CACHE
+        .lock()
+        .get_by(|k| k.hash == h && &*k.raw == input)
+    {
         return cached;
     }
     let parsed: Arc<[ContentBlock]> = Arc::from(parse_markdown(input));
-    AST_CACHE.lock().insert(key, parsed.clone());
+    AST_CACHE.lock().insert(
+        AstCacheKey {
+            hash: h,
+            raw: input.into(),
+        },
+        parsed.clone(),
+    );
     parsed
 }
 
 /// Synchronously looks up cached `syntect` Pango markup for a `(lang, code, is_dark)` tuple.
 #[must_use]
-pub fn get_cached_highlight(lang: &str, code: &str, is_dark: bool) -> Option<String> {
-    let key = highlight_cache_key(lang, code, is_dark);
-    HIGHLIGHT_CACHE.lock().get(&key)
+pub fn get_cached_highlight(lang: &str, code: &str, is_dark: bool) -> Option<Arc<str>> {
+    let h = hash_highlight(lang, code, is_dark);
+    HIGHLIGHT_CACHE.lock().get_by(|k| {
+        k.hash == h && k.is_dark == is_dark && &*k.lang == lang && &*k.code == code
+    })
 }
 
 /// Stores `syntect` Pango markup in the highlight LRU cache.
-pub fn insert_cached_highlight(lang: &str, code: &str, is_dark: bool, markup: String) {
-    let key = highlight_cache_key(lang, code, is_dark);
-    HIGHLIGHT_CACHE.lock().insert(key, markup);
+pub fn insert_cached_highlight(lang: &str, code: &str, is_dark: bool, markup: impl Into<Arc<str>>) {
+    let h = hash_highlight(lang, code, is_dark);
+    HIGHLIGHT_CACHE.lock().insert(
+        HighlightCacheKey {
+            hash: h,
+            is_dark,
+            lang: lang.into(),
+            code: code.into(),
+        },
+        markup.into(),
+    );
 }
 
 #[cfg(test)]
@@ -397,15 +487,47 @@ mod tests {
         assert!(Arc::ptr_eq(&blocks1, &blocks2));
 
         assert!(get_cached_highlight("rust", "fn main() {}", true).is_none());
-        insert_cached_highlight(
-            "rust",
-            "fn main() {}",
-            true,
-            "<tt>fn main()</tt>".to_string(),
-        );
+        insert_cached_highlight("rust", "fn main() {}", true, "<tt>fn main()</tt>");
         assert_eq!(
             get_cached_highlight("rust", "fn main() {}", true).as_deref(),
             Some("<tt>fn main()</tt>")
         );
+    }
+
+    #[test]
+    fn test_simple_lru_verifies_key_equality_on_hash_collision() {
+        let mut lru: SimpleLru<AstCacheKey, usize> = SimpleLru::new(4);
+        lru.insert(
+            AstCacheKey {
+                hash: 42,
+                raw: "alpha".into(),
+            },
+            1,
+        );
+        lru.insert(
+            AstCacheKey {
+                hash: 42,
+                raw: "bravo".into(),
+            },
+            2,
+        );
+        assert_eq!(lru.get_by(|k| k.hash == 42 && &*k.raw == "alpha"), Some(1));
+        assert_eq!(lru.get_by(|k| k.hash == 42 && &*k.raw == "bravo"), Some(2));
+        assert_eq!(lru.get_by(|k| k.hash == 42 && &*k.raw == "charlie"), None);
+    }
+
+    #[test]
+    fn test_resolve_syntax_handles_info_strings_and_modern_aliases() {
+        let ss = syntax_set();
+        let plain = ss.find_syntax_plain_text().name.as_str();
+
+        assert_ne!(resolve_syntax(ss, "Rust,no_run", None).name, plain);
+        assert_ne!(resolve_syntax(ss, "tsx title=\"App.tsx\"", None).name, plain);
+        assert_ne!(resolve_syntax(ss, "jsonc", None).name, plain);
+        assert_ne!(resolve_syntax(ss, "dockerfile", None).name, plain);
+        assert_ne!(resolve_syntax(ss, "zig", None).name, plain);
+        assert!(is_shell_language("zsh"));
+        assert!(is_shell_language("bash title=\"run.sh\""));
+        assert!(!is_shell_language("rust"));
     }
 }

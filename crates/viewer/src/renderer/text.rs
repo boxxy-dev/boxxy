@@ -93,34 +93,39 @@ impl BlockRenderer for TextRenderer {
 
                 label.upcast()
             }
-            ContentBlock::Blockquote(markup) => {
+            ContentBlock::Blockquote(inner_blocks) => {
                 let frame = gtk::Frame::new(None);
                 frame.add_css_class("view");
                 frame.add_css_class("viewer-blockquote");
                 frame.set_hexpand(true);
 
-                let label = gtk::Label::new(None);
-                label.set_use_markup(true);
-                label.set_wrap(true);
-                label.set_wrap_mode(pango::WrapMode::WordChar);
-                label.set_xalign(0.0);
-                label.set_halign(gtk::Align::Fill);
-                label.set_hexpand(true);
-                label.set_selectable(true);
-                label.set_markup(markup);
-                connect_label_links(&label);
+                let inner_vbox = gtk::Box::new(gtk::Orientation::Vertical, 4);
+                inner_vbox.set_hexpand(true);
+                inner_vbox.set_margin_start(12);
+                inner_vbox.set_margin_end(12);
+                inner_vbox.set_margin_top(8);
+                inner_vbox.set_margin_bottom(8);
 
-                label.set_margin_start(12);
-                label.set_margin_end(12);
-                label.set_margin_top(8);
-                label.set_margin_bottom(8);
+                let last_idx = inner_blocks.len().saturating_sub(1);
+                for (idx, child_block) in inner_blocks.iter().enumerate() {
+                    if let Some(widget) = registry.render_block(child_block) {
+                        if idx == last_idx {
+                            widget.set_margin_bottom(0);
+                        }
+                        inner_vbox.append(&widget);
+                    }
+                }
 
-                frame.set_child(Some(&label));
+                frame.set_child(Some(&inner_vbox));
                 frame.set_margin_start(8);
                 frame.set_margin_bottom(8);
                 frame.upcast()
             }
-            ContentBlock::List { ordered, items } => {
+            ContentBlock::List {
+                ordered,
+                start,
+                items,
+            } => {
                 let vbox = gtk::Box::new(gtk::Orientation::Vertical, 4);
                 vbox.set_margin_bottom(8);
                 vbox.set_margin_start(16);
@@ -139,7 +144,7 @@ impl BlockRenderer for TextRenderer {
                         hbox.append(&check);
                     } else {
                         let bullet_text = if *ordered {
-                            format!("{}.", i + 1)
+                            format!("{}.", start.saturating_add(i as u64))
                         } else {
                             "•".to_string()
                         };

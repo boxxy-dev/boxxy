@@ -1,42 +1,215 @@
 use super::blocks::{ContentBlock, GalleryItem, ListItem, TableAlignment, TableCell};
 use pulldown_cmark::{Alignment, CodeBlockKind, Event, Parser, Tag, TagEnd};
 
+/// Appends `text` to `out`, escaping `&`, `<`, and `>` for safe inclusion in Pango markup body text.
+/// Uses bulk slice copying so clean ASCII/UTF-8 runs require zero per-character branching.
+pub fn write_escaped_pango(out: &mut String, text: &str) {
+    let bytes = text.as_bytes();
+    let mut last = 0;
+    for (i, &b) in bytes.iter().enumerate() {
+        let replacement = match b {
+            b'&' => "&amp;",
+            b'<' => "&lt;",
+            b'>' => "&gt;",
+            _ => continue,
+        };
+        if last < i {
+            out.push_str(&text[last..i]);
+        }
+        out.push_str(replacement);
+        last = i + 1;
+    }
+    if last < text.len() {
+        out.push_str(&text[last..]);
+    }
+}
+
 /// Escapes text for safe inclusion in Pango markup body text.
 #[must_use]
 pub fn escape_pango(text: &str) -> String {
-    let mut out = String::with_capacity(text.len() + 16);
-    for c in text.chars() {
-        match c {
-            '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            _ => out.push(c),
-        }
+    if !text
+        .as_bytes()
+        .iter()
+        .any(|&b| matches!(b, b'&' | b'<' | b'>'))
+    {
+        return text.to_string();
     }
+    let mut out = String::with_capacity(text.len() + 16);
+    write_escaped_pango(&mut out, text);
     out
+}
+
+/// Appends `text` to `out`, escaping XML attribute special characters for double-quoted Pango attributes.
+pub fn write_escaped_pango_attr(out: &mut String, text: &str) {
+    let bytes = text.as_bytes();
+    let mut last = 0;
+    for (i, &b) in bytes.iter().enumerate() {
+        let replacement = match b {
+            b'&' => "&amp;",
+            b'<' => "&lt;",
+            b'>' => "&gt;",
+            b'"' => "&quot;",
+            b'\'' => "&apos;",
+            _ => continue,
+        };
+        if last < i {
+            out.push_str(&text[last..i]);
+        }
+        out.push_str(replacement);
+        last = i + 1;
+    }
+    if last < text.len() {
+        out.push_str(&text[last..]);
+    }
 }
 
 /// Escapes text for safe inclusion inside a double-quoted Pango XML attribute (e.g. `href="..."`).
 #[must_use]
 pub fn escape_pango_attr(text: &str) -> String {
+    if !text
+        .as_bytes()
+        .iter()
+        .any(|&b| matches!(b, b'&' | b'<' | b'>' | b'"' | b'\''))
+    {
+        return text.to_string();
+    }
     let mut out = String::with_capacity(text.len() + 16);
-    for c in text.chars() {
-        match c {
-            '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '"' => out.push_str("&quot;"),
-            '\'' => out.push_str("&apos;"),
-            _ => out.push(c),
+    write_escaped_pango_attr(&mut out, text);
+    out
+}
+
+/// Strips Pango XML tags and decodes XML character entities in a single pass.
+/// When `newlines_as_spaces` is true, `\n` outside tags is converted to `' '` (useful for TSV export).
+#[must_use]
+pub fn strip_pango_markup(markup: &str, newlines_as_spaces: bool) -> String {
+    let mut out = String::with_capacity(markup.len());
+    let bytes = markup.as_bytes();
+    let mut i = 0;
+    let mut in_tag = false;
+
+    while i < bytes.len() {
+        let b = bytes[i];
+        if in_tag {
+            if b == b'>' {
+                in_tag = false;
+            }
+            i += 1;
+            continue;
+        }
+
+        match b {
+            b'<' => {
+                in_tag = true;
+                i += 1;
+            }
+            b'\n' if newlines_as_spaces => {
+                out.push(' ');
+                i += 1;
+            }
+            b'&' => {
+                let rest = &markup[i..];
+                if rest.starts_with("&amp;") {
+                    out.push('&');
+                    i += 5;
+                } else if rest.starts_with("&lt;") {
+                    out.push('<');
+                    i += 4;
+                } else if rest.starts_with("&gt;") {
+                    out.push('>');
+                    i += 4;
+                } else if rest.starts_with("&quot;") {
+                    out.push('"');
+                    i += 6;
+                } else if rest.starts_with("&apos;") {
+                    out.push('\'');
+                    i += 6;
+                } else if rest.starts_with("&#39;") {
+                    out.push('\'');
+                    i += 5;
+                } else {
+                    out.push('&');
+                    i += 1;
+                }
+            }
+            _ => {
+                // Copy contiguous plain UTF-8 run until next `<`, `&`, or `\n`
+                let start = i;
+                i += 1;
+                while i < bytes.len() {
+                    let nb = bytes[i];
+                    if nb == b'<' || nb == b'&' || (newlines_as_spaces && nb == b'\n') {
+                        break;
+                    }
+                    i += 1;
+                }
+                out.push_str(&markup[start..i]);
+            }
         }
     }
+
     out
+}
+
+/// Normalizes a fenced code block's info string using OpenCode's rule:
+/// extracts the first word (delimited by whitespace, `,`, `{`, or `:`), strips optional
+/// Pandoc/Quarto `.` class prefixes, and lowercases ASCII.
+///
+/// Examples:
+/// - `"CSV title=\"Q3\""` -> `"csv"`
+/// - `"rust,no_run"` -> `"rust"`
+/// - `"{.python}"` -> `"python"`
+/// - `"ts:src/index.ts"` -> `"ts"`
+#[must_use]
+pub fn normalize_fence_language(info: &str) -> String {
+    let trimmed = info.trim().trim_start_matches('{').trim_start_matches('.');
+    let token = trimmed
+        .split(|c: char| c.is_ascii_whitespace() || matches!(c, ',' | '{' | '}' | ':' | ';'))
+        .next()
+        .unwrap_or_default();
+    token
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '+' | '#' | '.' | '-'))
+        .map(|c| c.to_ascii_lowercase())
+        .collect()
+}
+
+#[derive(Debug, Clone)]
+enum InlineStyle {
+    Strong,
+    Emphasis,
+    Strikethrough,
+    Link(String), // Already escaped for Pango attribute
+}
+
+impl InlineStyle {
+    fn write_open(&self, out: &mut String) {
+        match self {
+            Self::Strong => out.push_str("<b>"),
+            Self::Emphasis => out.push_str("<i>"),
+            Self::Strikethrough => out.push_str("<s>"),
+            Self::Link(escaped_url) => {
+                out.push_str("<a href=\"");
+                out.push_str(escaped_url);
+                out.push_str("\">");
+            }
+        }
+    }
+
+    fn close_tag(&self) -> &'static str {
+        match self {
+            Self::Strong => "</b>",
+            Self::Emphasis => "</i>",
+            Self::Strikethrough => "</s>",
+            Self::Link(_) => "</a>",
+        }
+    }
 }
 
 #[derive(Debug)]
 enum ParseContainer {
     List {
         ordered: bool,
+        start: u64,
         items: Vec<ListItem>,
     },
     Item {
@@ -45,7 +218,9 @@ enum ParseContainer {
     },
     Paragraph(String, bool), // markup, is_implicit
     Heading(u8, String),
-    BlockQuote(String),
+    BlockQuote {
+        blocks: Vec<ContentBlock>,
+    },
     CodeBlock(String, String),
     Image {
         url: String,
@@ -66,19 +241,21 @@ enum ParseContainer {
 }
 
 /// Parses a Markdown string into a sequence of `ContentBlock`s, including GFM tables,
-/// clickable links, and automatic multi-image gallery coalescing.
+/// clickable links, nested blockquotes, and automatic multi-image gallery coalescing.
 #[must_use]
+#[allow(clippy::too_many_lines)]
 pub fn parse_markdown(input: &str) -> Vec<ContentBlock> {
     let parser = Parser::new_ext(input, pulldown_cmark::Options::all());
 
     let mut root_blocks = Vec::new();
     let mut stack: Vec<ParseContainer> = Vec::new();
+    let mut inline_styles: Vec<InlineStyle> = Vec::new();
 
     for event in parser {
         match event {
             Event::Start(tag) => {
                 if is_block_tag(&tag) {
-                    maybe_close_implicit_paragraph(&mut stack, &mut root_blocks);
+                    maybe_close_implicit_paragraph(&mut stack, &inline_styles, &mut root_blocks);
                 }
                 match tag {
                     Tag::Paragraph => {
@@ -87,10 +264,12 @@ pub fn parse_markdown(input: &str) -> Vec<ContentBlock> {
                     Tag::Heading { level, .. } => {
                         stack.push(ParseContainer::Heading(level as u8, String::new()));
                     }
-                    Tag::BlockQuote(_) => stack.push(ParseContainer::BlockQuote(String::new())),
+                    Tag::BlockQuote(_) => {
+                        stack.push(ParseContainer::BlockQuote { blocks: Vec::new() });
+                    }
                     Tag::CodeBlock(kind) => {
-                        let lang = if let CodeBlockKind::Fenced(lang) = kind {
-                            lang.to_string()
+                        let lang = if let CodeBlockKind::Fenced(info) = kind {
+                            normalize_fence_language(&info)
                         } else {
                             String::new()
                         };
@@ -98,6 +277,7 @@ pub fn parse_markdown(input: &str) -> Vec<ContentBlock> {
                     }
                     Tag::List(first_item_number) => stack.push(ParseContainer::List {
                         ordered: first_item_number.is_some(),
+                        start: first_item_number.unwrap_or(1),
                         items: Vec::new(),
                     }),
                     Tag::Item => stack.push(ParseContainer::Item {
@@ -107,12 +287,13 @@ pub fn parse_markdown(input: &str) -> Vec<ContentBlock> {
                     Tag::Image {
                         dest_url, title, ..
                     } => {
-                        // If an image appears inside a non-empty paragraph, flush the
-                        // preceding text first so captions/labels remain in document order.
-                        flush_non_empty_top_paragraph(&mut stack, &mut root_blocks);
+                        // If an image appears inside a paragraph with visible preceding text,
+                        // cleanly close active inline tags on the preceding text, emit it in
+                        // document order, and re-open active inline tags for any trailing text.
+                        flush_non_empty_top_paragraph(&mut stack, &inline_styles, &mut root_blocks);
                         stack.push(ParseContainer::Image {
-                            url: dest_url.to_string(),
-                            title: title.to_string(),
+                            url: dest_url.into_string(),
+                            title: title.into_string(),
                             alt: String::new(),
                         });
                     }
@@ -164,31 +345,47 @@ pub fn parse_markdown(input: &str) -> Vec<ContentBlock> {
                     }
 
                     // Inline styles & links
-                    Tag::Strong => append_text(&mut stack, "<b>"),
-                    Tag::Emphasis => append_text(&mut stack, "<i>"),
-                    Tag::Strikethrough => append_text(&mut stack, "<s>"),
-                    Tag::Link { dest_url, .. } => {
-                        if !is_in_image(&stack) {
-                            let escaped_url = escape_pango_attr(&dest_url);
-                            append_text(&mut stack, &format!("<a href=\"{escaped_url}\">"));
-                        }
+                    Tag::Strong if !is_in_image(&stack) => {
+                        inline_styles.push(InlineStyle::Strong);
+                        append_raw_text(&mut stack, &inline_styles, "<b>");
+                    }
+                    Tag::Emphasis if !is_in_image(&stack) => {
+                        inline_styles.push(InlineStyle::Emphasis);
+                        append_raw_text(&mut stack, &inline_styles, "<i>");
+                    }
+                    Tag::Strikethrough if !is_in_image(&stack) => {
+                        inline_styles.push(InlineStyle::Strikethrough);
+                        append_raw_text(&mut stack, &inline_styles, "<s>");
+                    }
+                    Tag::Link { dest_url, .. } if !is_in_image(&stack) => {
+                        let escaped_url = escape_pango_attr(&dest_url);
+                        let style = InlineStyle::Link(escaped_url);
+                        append_inline_open(&mut stack, &inline_styles, &style);
+                        inline_styles.push(style);
                     }
                     _ => {}
                 }
             }
             Event::End(tag) => {
                 if matches!(tag, TagEnd::Item | TagEnd::List(_) | TagEnd::BlockQuote(_)) {
-                    maybe_close_implicit_paragraph(&mut stack, &mut root_blocks);
+                    maybe_close_implicit_paragraph(&mut stack, &inline_styles, &mut root_blocks);
                 }
 
                 match tag {
                     TagEnd::TableCell => {
-                        if let Some(ParseContainer::TableCell { markup, images }) = stack.pop()
+                        if let Some(ParseContainer::TableCell { mut markup, images }) = stack.pop()
                             && let Some(ParseContainer::Table { current_row, .. }) =
                                 find_enclosing_table(&mut stack)
                         {
+                            close_inline_tags(&mut markup, &inline_styles);
+                            inline_styles.clear();
+                            let cleaned = if has_visible_text_outside_tags(&markup) {
+                                markup.trim().to_string()
+                            } else {
+                                String::new()
+                            };
                             current_row.push(TableCell {
-                                markup: markup.trim().to_string(),
+                                markup: cleaned,
                                 images,
                             });
                         }
@@ -222,28 +419,24 @@ pub fn parse_markdown(input: &str) -> Vec<ContentBlock> {
                     _ if is_block_tag_end(&tag) => {
                         if let Some(container) = stack.pop() {
                             let block = match (tag, container) {
-                                (TagEnd::Paragraph, ParseContainer::Paragraph(markup, _)) => {
-                                    let trimmed = markup.trim();
-                                    if trimmed.is_empty() {
-                                        None
-                                    } else if let Some(bq) = find_enclosing_blockquote(&mut stack) {
-                                        if !bq.is_empty() {
-                                            bq.push_str("\n\n");
-                                        }
-                                        bq.push_str(trimmed);
-                                        None
-                                    } else {
-                                        Some(ContentBlock::Paragraph(trimmed.to_string()))
-                                    }
+                                (TagEnd::Paragraph, ParseContainer::Paragraph(mut markup, _)) => {
+                                    close_inline_tags(&mut markup, &inline_styles);
+                                    inline_styles.clear();
+                                    finalize_paragraph(markup)
                                 }
-                                (TagEnd::Heading(_), ParseContainer::Heading(level, markup)) => {
+                                (TagEnd::Heading(_), ParseContainer::Heading(level, mut markup)) => {
+                                    close_inline_tags(&mut markup, &inline_styles);
+                                    inline_styles.clear();
                                     Some(ContentBlock::Heading { level, markup })
                                 }
-                                (TagEnd::BlockQuote(_), ParseContainer::BlockQuote(markup)) => {
-                                    if markup.trim().is_empty() {
+                                (
+                                    TagEnd::BlockQuote(_),
+                                    ParseContainer::BlockQuote { blocks },
+                                ) => {
+                                    if blocks.is_empty() {
                                         None
                                     } else {
-                                        Some(ContentBlock::Blockquote(markup))
+                                        Some(ContentBlock::Blockquote(blocks))
                                     }
                                 }
                                 (TagEnd::CodeBlock, ParseContainer::CodeBlock(lang, code)) => {
@@ -257,9 +450,18 @@ pub fn parse_markdown(input: &str) -> Vec<ContentBlock> {
                                     }
                                     None
                                 }
-                                (TagEnd::List(_), ParseContainer::List { ordered, items }) => {
-                                    Some(ContentBlock::List { ordered, items })
-                                }
+                                (
+                                    TagEnd::List(_),
+                                    ParseContainer::List {
+                                        ordered,
+                                        start,
+                                        items,
+                                    },
+                                ) => Some(ContentBlock::List {
+                                    ordered,
+                                    start,
+                                    items,
+                                }),
                                 (TagEnd::Image, ParseContainer::Image { url, title, alt }) => {
                                     if let Some(ParseContainer::TableCell { images, .. }) =
                                         find_enclosing_table_cell(&mut stack)
@@ -296,46 +498,62 @@ pub fn parse_markdown(input: &str) -> Vec<ContentBlock> {
                             }
                         }
                     }
-                    TagEnd::Strong => append_text(&mut stack, "</b>"),
-                    TagEnd::Emphasis => append_text(&mut stack, "</i>"),
-                    TagEnd::Strikethrough => append_text(&mut stack, "</s>"),
-                    TagEnd::Link => {
-                        if !is_in_image(&stack) {
-                            append_text(&mut stack, "</a>");
-                        }
+                    TagEnd::Strong
+                        if !is_in_image(&stack)
+                            && pop_matching_inline(&mut inline_styles, InlineKind::Strong) =>
+                    {
+                        append_raw_text(&mut stack, &inline_styles, "</b>");
+                    }
+                    TagEnd::Emphasis
+                        if !is_in_image(&stack)
+                            && pop_matching_inline(&mut inline_styles, InlineKind::Emphasis) =>
+                    {
+                        append_raw_text(&mut stack, &inline_styles, "</i>");
+                    }
+                    TagEnd::Strikethrough
+                        if !is_in_image(&stack)
+                            && pop_matching_inline(
+                                &mut inline_styles,
+                                InlineKind::Strikethrough,
+                            ) =>
+                    {
+                        append_raw_text(&mut stack, &inline_styles, "</s>");
+                    }
+                    TagEnd::Link
+                        if !is_in_image(&stack)
+                            && pop_matching_inline(&mut inline_styles, InlineKind::Link) =>
+                    {
+                        append_raw_text(&mut stack, &inline_styles, "</a>");
                     }
                     _ => {}
                 }
             }
             Event::Text(t) => {
-                let escaped = if is_in_code_block(&stack) || is_in_image(&stack) {
-                    t.to_string()
+                if is_in_code_block(&stack) || is_in_image(&stack) {
+                    append_raw_text(&mut stack, &inline_styles, &t);
                 } else {
-                    escape_pango(&t)
-                };
-                append_text(&mut stack, &escaped);
+                    append_escaped_text(&mut stack, &inline_styles, &t);
+                }
             }
             Event::Code(c) => {
                 if is_in_image(&stack) {
-                    append_text(&mut stack, &c);
+                    append_raw_text(&mut stack, &inline_styles, &c);
                 } else {
-                    append_text(&mut stack, "<tt>");
-                    append_text(&mut stack, &escape_pango(&c));
-                    append_text(&mut stack, "</tt>");
+                    append_inline_code(&mut stack, &inline_styles, &c);
                 }
             }
             Event::SoftBreak => {
-                if !is_in_table_cell(&stack) {
-                    append_text(&mut stack, "\n");
+                if is_in_table_cell(&stack) {
+                    append_raw_text(&mut stack, &inline_styles, " ");
                 } else {
-                    append_text(&mut stack, " ");
+                    append_raw_text(&mut stack, &inline_styles, "\n");
                 }
             }
             Event::HardBreak => {
-                append_text(&mut stack, "\n");
+                append_raw_text(&mut stack, &inline_styles, "\n");
             }
             Event::Rule => {
-                maybe_close_implicit_paragraph(&mut stack, &mut root_blocks);
+                maybe_close_implicit_paragraph(&mut stack, &inline_styles, &mut root_blocks);
                 push_block(&mut root_blocks, &mut stack, ContentBlock::Rule);
             }
             Event::TaskListMarker(checked) => {
@@ -345,38 +563,33 @@ pub fn parse_markdown(input: &str) -> Vec<ContentBlock> {
             }
             Event::Html(html) | Event::InlineHtml(html) => {
                 if is_html_line_break(&html) {
-                    append_text(&mut stack, "\n");
+                    append_raw_text(&mut stack, &inline_styles, "\n");
                 } else {
-                    append_text(&mut stack, &escape_pango(&html));
+                    append_escaped_text(&mut stack, &inline_styles, &html);
                 }
             }
             _ => {}
         }
     }
 
-    // Flush unfinished containers for streaming support
+    // Flush unfinished containers for streaming support (closing any open inline tags)
     while let Some(container) = stack.pop() {
         let block = match container {
-            ParseContainer::Paragraph(markup, _) => {
-                let trimmed = markup.trim();
-                if trimmed.is_empty() {
-                    None
-                } else if let Some(bq) = find_enclosing_blockquote(&mut stack) {
-                    if !bq.is_empty() {
-                        bq.push_str("\n\n");
-                    }
-                    bq.push_str(trimmed);
-                    None
-                } else {
-                    Some(ContentBlock::Paragraph(trimmed.to_string()))
-                }
+            ParseContainer::Paragraph(mut markup, _) => {
+                close_inline_tags(&mut markup, &inline_styles);
+                inline_styles.clear();
+                finalize_paragraph(markup)
             }
-            ParseContainer::Heading(level, markup) => Some(ContentBlock::Heading { level, markup }),
-            ParseContainer::BlockQuote(markup) => {
-                if markup.trim().is_empty() {
+            ParseContainer::Heading(level, mut markup) => {
+                close_inline_tags(&mut markup, &inline_styles);
+                inline_styles.clear();
+                Some(ContentBlock::Heading { level, markup })
+            }
+            ParseContainer::BlockQuote { blocks } => {
+                if blocks.is_empty() {
                     None
                 } else {
-                    Some(ContentBlock::Blockquote(markup))
+                    Some(ContentBlock::Blockquote(blocks))
                 }
             }
             ParseContainer::CodeBlock(lang, code) => Some(ContentBlock::Code { lang, code }),
@@ -386,7 +599,15 @@ pub fn parse_markdown(input: &str) -> Vec<ContentBlock> {
                 }
                 None
             }
-            ParseContainer::List { ordered, items } => Some(ContentBlock::List { ordered, items }),
+            ParseContainer::List {
+                ordered,
+                start,
+                items,
+            } => Some(ContentBlock::List {
+                ordered,
+                start,
+                items,
+            }),
             ParseContainer::Image { url, title, alt } => {
                 if let Some(ParseContainer::TableCell { images, .. }) =
                     find_enclosing_table_cell(&mut stack)
@@ -402,12 +623,19 @@ pub fn parse_markdown(input: &str) -> Vec<ContentBlock> {
                     Some(ContentBlock::Image { url, title, alt })
                 }
             }
-            ParseContainer::TableCell { markup, images } => {
+            ParseContainer::TableCell { mut markup, images } => {
+                close_inline_tags(&mut markup, &inline_styles);
+                inline_styles.clear();
                 if let Some(ParseContainer::Table { current_row, .. }) =
                     find_enclosing_table(&mut stack)
                 {
+                    let cleaned = if has_visible_text_outside_tags(&markup) {
+                        markup.trim().to_string()
+                    } else {
+                        String::new()
+                    };
                     current_row.push(TableCell {
-                        markup: markup.trim().to_string(),
+                        markup: cleaned,
                         images,
                     });
                 }
@@ -440,7 +668,117 @@ pub fn parse_markdown(input: &str) -> Vec<ContentBlock> {
         }
     }
 
+    if !may_have_gallery_candidates(&root_blocks) {
+        return root_blocks;
+    }
+
     coalesce_image_galleries(root_blocks)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InlineKind {
+    Strong,
+    Emphasis,
+    Strikethrough,
+    Link,
+}
+
+fn pop_matching_inline(styles: &mut Vec<InlineStyle>, expected: InlineKind) -> bool {
+    let matches_kind = |s: &InlineStyle| {
+        matches!(
+            (s, expected),
+            (InlineStyle::Strong, InlineKind::Strong)
+                | (InlineStyle::Emphasis, InlineKind::Emphasis)
+                | (InlineStyle::Strikethrough, InlineKind::Strikethrough)
+                | (InlineStyle::Link(_), InlineKind::Link)
+        )
+    };
+    if let Some(pos) = styles.iter().rposition(matches_kind) {
+        styles.remove(pos);
+        true
+    } else {
+        false
+    }
+}
+
+fn close_inline_tags(out: &mut String, styles: &[InlineStyle]) {
+    for style in styles.iter().rev() {
+        out.push_str(style.close_tag());
+    }
+}
+
+fn reopen_inline_tags(styles: &[InlineStyle]) -> String {
+    if styles.is_empty() {
+        return String::new();
+    }
+    let mut out = String::with_capacity(styles.len() * 8);
+    for style in styles {
+        style.write_open(&mut out);
+    }
+    out
+}
+
+/// Returns true if `markup` contains at least one non-whitespace character outside Pango `<...>` tags.
+fn has_visible_text_outside_tags(markup: &str) -> bool {
+    let mut in_tag = false;
+    for ch in markup.chars() {
+        match ch {
+            '<' => in_tag = true,
+            '>' => in_tag = false,
+            _ if !in_tag && !ch.is_whitespace() => return true,
+            _ => {}
+        }
+    }
+    false
+}
+
+fn finalize_paragraph(markup: String) -> Option<ContentBlock> {
+    if !has_visible_text_outside_tags(&markup) {
+        return None;
+    }
+    let trimmed = markup.trim();
+    if trimmed.len() == markup.len() {
+        Some(ContentBlock::Paragraph(markup))
+    } else {
+        Some(ContentBlock::Paragraph(trimmed.to_string()))
+    }
+}
+
+/// Fast-path guard: returns `false` in O(blocks) without allocating or cloning when
+/// the parsed document has no `Image`, `ImageGallery`, or media-list candidates (99%+ of turns).
+fn may_have_gallery_candidates(blocks: &[ContentBlock]) -> bool {
+    for block in blocks {
+        match block {
+            ContentBlock::Image { .. } | ContentBlock::ImageGallery { .. } => return true,
+            ContentBlock::Blockquote(inner) => {
+                if may_have_gallery_candidates(inner) {
+                    return true;
+                }
+            }
+            ContentBlock::List { items, .. } => {
+                for item in items {
+                    if may_have_gallery_candidates(&item.blocks) || item_may_contain_media_path(item)
+                    {
+                        return true;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
+fn item_may_contain_media_path(item: &ListItem) -> bool {
+    if item.checked.is_some() || item.blocks.is_empty() || item.blocks.len() > 3 {
+        return false;
+    }
+    item.blocks.iter().any(|b| match b {
+        ContentBlock::Paragraph(m) | ContentBlock::Heading { markup: m, .. } => {
+            m.len() <= 240 && (m.contains('/') || m.contains("file://"))
+        }
+        _ => false,
+    })
 }
 
 /// Post-processes the parsed block tree to coalesce:
@@ -452,7 +790,11 @@ fn coalesce_image_galleries(blocks: Vec<ContentBlock>) -> Vec<ContentBlock> {
 
     for block in blocks {
         match block {
-            ContentBlock::List { ordered, items } => {
+            ContentBlock::List {
+                ordered,
+                start,
+                items,
+            } => {
                 if let Some(gallery_items) = try_extract_gallery_from_list(&items) {
                     pass1.push(ContentBlock::ImageGallery {
                         items: gallery_items,
@@ -461,15 +803,28 @@ fn coalesce_image_galleries(blocks: Vec<ContentBlock>) -> Vec<ContentBlock> {
                     let recurse_items = items
                         .into_iter()
                         .map(|item| ListItem {
-                            blocks: coalesce_image_galleries(item.blocks),
+                            blocks: if may_have_gallery_candidates(&item.blocks) {
+                                coalesce_image_galleries(item.blocks)
+                            } else {
+                                item.blocks
+                            },
                             checked: item.checked,
                         })
                         .collect();
                     pass1.push(ContentBlock::List {
                         ordered,
+                        start,
                         items: recurse_items,
                     });
                 }
+            }
+            ContentBlock::Blockquote(inner) => {
+                let processed = if may_have_gallery_candidates(&inner) {
+                    coalesce_image_galleries(inner)
+                } else {
+                    inner
+                };
+                pass1.push(ContentBlock::Blockquote(processed));
             }
             other => pass1.push(other),
         }
@@ -482,12 +837,17 @@ fn coalesce_image_galleries(blocks: Vec<ContentBlock>) -> Vec<ContentBlock> {
 /// (where each entry is `[optional label Heading/Paragraph] + Image + [optional filename Paragraph]`)
 /// into `ContentBlock::ImageGallery`.
 fn coalesce_top_level_image_runs(blocks: Vec<ContentBlock>) -> Vec<ContentBlock> {
+    let has_top_level_image = blocks
+        .iter()
+        .any(|b| matches!(b, ContentBlock::Image { .. } | ContentBlock::ImageGallery { .. }));
+    if !has_top_level_image {
+        return blocks;
+    }
+
     let mut out: Vec<ContentBlock> = Vec::with_capacity(blocks.len());
     let mut i = 0;
 
     while i < blocks.len() {
-        // Check if blocks[i..] starts an image run (either directly with Image/ImageGallery,
-        // or with a short label Heading/Paragraph immediately followed by an Image).
         if let Some((first_items, next_idx)) = try_consume_image_entry(&blocks, i) {
             let mut gallery_items = first_items;
             let mut cursor = next_idx;
@@ -508,9 +868,6 @@ fn coalesce_top_level_image_runs(blocks: Vec<ContentBlock>) -> Vec<ContentBlock>
                 i = cursor;
                 continue;
             } else if gallery_items.len() == 1 {
-                // Single image: if a redundant heading/caption was absorbed or it was already
-                // a single-item gallery, emit a clean single-item ImageGallery (which renders
-                // as a standalone card with caption) when a caption exists, or ContentBlock::Image.
                 let item = gallery_items.into_iter().next().unwrap();
                 if item.caption.is_some() {
                     out.push(ContentBlock::ImageGallery { items: vec![item] });
@@ -534,10 +891,6 @@ fn coalesce_top_level_image_runs(blocks: Vec<ContentBlock>) -> Vec<ContentBlock>
 }
 
 /// Attempts to consume one image entry starting at `blocks[idx]`.
-/// Supported shapes:
-/// - `ImageGallery { items }`
-/// - `Image { .. } [+ optional redundant/filename Paragraph]`
-/// - `Heading/Paragraph (short item label) + Image { .. } [+ optional redundant/filename Paragraph]`
 fn try_consume_image_entry(
     blocks: &[ContentBlock],
     idx: usize,
@@ -547,7 +900,6 @@ fn try_consume_image_entry(
         ContentBlock::Image { url, title, alt } => {
             let mut next = idx + 1;
             let mut caption = None;
-            // Absorb a trailing short filename paragraph if it isn't the label for a subsequent image
             if let Some(ContentBlock::Paragraph(p)) = blocks.get(next)
                 && is_short_image_label(p)
                 && (caption_matches_image(p, url, alt)
@@ -683,13 +1035,8 @@ fn is_short_image_label(markup: &str) -> bool {
 }
 
 fn caption_matches_image(label_markup: &str, url: &str, alt: &str) -> bool {
-    let clean_label = label_markup
-        .replace("<b>", "")
-        .replace("</b>", "")
-        .replace("<tt>", "")
-        .replace("</tt>", "")
-        .trim()
-        .to_lowercase();
+    let stripped = strip_pango_markup(label_markup, false);
+    let clean_label = stripped.trim().to_lowercase();
     if clean_label.is_empty() {
         return false;
     }
@@ -722,7 +1069,7 @@ fn try_extract_gallery_from_list(items: &[ListItem]) -> Option<Vec<GalleryItem>>
             match b {
                 ContentBlock::Image { url, title, alt } => {
                     if found_img.is_some() {
-                        return None; // More than one image in a single bullet item
+                        return None;
                     }
                     found_img = Some((url.clone(), title.clone(), alt.clone()));
                 }
@@ -750,7 +1097,6 @@ fn try_extract_gallery_from_list(items: &[ListItem]) -> Option<Vec<GalleryItem>>
         }
 
         let (url, title, alt) = found_img?;
-        // Prefer the last caption part if one is a stem and the next is the full filename
         let caption = caption_parts.last().cloned();
 
         gallery.push(GalleryItem {
@@ -765,31 +1111,29 @@ fn try_extract_gallery_from_list(items: &[ListItem]) -> Option<Vec<GalleryItem>>
 }
 
 fn has_media_extension(path_or_url: &str) -> bool {
-    let lower = path_or_url.trim().to_lowercase();
+    let trimmed = path_or_url.trim();
     const MEDIA_EXTS: &[&str] = &[
         ".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".svg", ".mp4", ".webm", ".mkv",
         ".mov", ".avi", ".mp3", ".flac", ".wav", ".ogg", ".m4a", ".opus", ".aac",
     ];
-    MEDIA_EXTS.iter().any(|ext| lower.ends_with(ext))
+    MEDIA_EXTS.iter().any(|ext| {
+        trimmed.len() >= ext.len()
+            && trimmed[trimmed.len() - ext.len()..].eq_ignore_ascii_case(ext)
+    })
 }
 
 fn try_extract_media_path_from_markup(markup: &str) -> Option<(String, Option<String>)> {
     let trimmed = markup.trim();
-    // Case 1: `<a href="/abs/path.mp4">label</a>`
     if let Some(rest) = trimmed.strip_prefix("<a href=\"")
         && let Some(end_quote) = rest.find("\">")
         && let Some(inner) = rest[end_quote + 2..].strip_suffix("</a>")
     {
-        let href = rest[..end_quote]
-            .replace("&amp;", "&")
-            .replace("&quot;", "\"")
-            .replace("&apos;", "'");
+        let href = strip_pango_markup(&rest[..end_quote], false);
         if (href.starts_with('/') || href.starts_with("file://")) && has_media_extension(&href) {
             return Some((href, Some(inner.to_string())));
         }
     }
 
-    // Case 2: `/abs/path.mp4` or `<tt>/abs/path.mp4</tt>`
     let clean = trimmed
         .strip_prefix("<tt>")
         .and_then(|s| s.strip_suffix("</tt>"))
@@ -825,32 +1169,27 @@ fn find_enclosing_table(stack: &mut [ParseContainer]) -> Option<&mut ParseContai
         .find(|c| matches!(c, ParseContainer::Table { .. }))
 }
 
-fn find_enclosing_blockquote(stack: &mut [ParseContainer]) -> Option<&mut String> {
-    for c in stack.iter_mut().rev() {
-        if let ParseContainer::BlockQuote(s) = c {
-            return Some(s);
-        }
-    }
-    None
-}
-
 fn flush_non_empty_top_paragraph(
     stack: &mut Vec<ParseContainer>,
+    inline_styles: &[InlineStyle],
     root_blocks: &mut Vec<ContentBlock>,
 ) {
     let should_flush = matches!(
         stack.last(),
-        Some(ParseContainer::Paragraph(m, _)) if !m.trim().is_empty()
+        Some(ParseContainer::Paragraph(m, _)) if has_visible_text_outside_tags(m)
     );
-    if should_flush
-        && let Some(ParseContainer::Paragraph(markup, implicit)) = stack.pop()
-    {
-        let trimmed = markup.trim().to_string();
-        if !trimmed.is_empty() {
-            push_block(root_blocks, stack, ContentBlock::Paragraph(trimmed));
+    if should_flush && let Some(ParseContainer::Paragraph(mut markup, implicit)) = stack.pop() {
+        let trimmed_len = markup.trim_end().len();
+        markup.truncate(trimmed_len);
+        close_inline_tags(&mut markup, inline_styles);
+        if let Some(block) = finalize_paragraph(markup) {
+            push_block(root_blocks, stack, block);
         }
         if !implicit {
-            stack.push(ParseContainer::Paragraph(String::new(), false));
+            stack.push(ParseContainer::Paragraph(
+                reopen_inline_tags(inline_styles),
+                false,
+            ));
         }
     }
 }
@@ -898,56 +1237,77 @@ fn is_in_table_cell(stack: &[ParseContainer]) -> bool {
         .any(|c| matches!(c, ParseContainer::TableCell { .. }))
 }
 
-fn append_text(stack: &mut Vec<ParseContainer>, text: &str) {
-    let mut needs_paragraph = false;
-    if let Some(container) = stack.last() {
-        if matches!(
-            container,
-            ParseContainer::Item { .. } | ParseContainer::List { .. }
-        ) {
-            needs_paragraph = true;
-        }
-    } else {
-        needs_paragraph = true;
-    }
+fn ensure_text_target<'a>(
+    stack: &'a mut Vec<ParseContainer>,
+    inline_styles: &[InlineStyle],
+) -> Option<&'a mut String> {
+    let needs_paragraph = matches!(
+        stack.last(),
+        Some(
+            ParseContainer::Item { .. }
+                | ParseContainer::List { .. }
+                | ParseContainer::BlockQuote { .. }
+        ) | None
+    );
 
     if needs_paragraph {
-        stack.push(ParseContainer::Paragraph(String::new(), true));
+        stack.push(ParseContainer::Paragraph(
+            reopen_inline_tags(inline_styles),
+            true,
+        ));
     }
 
-    if let Some(container) = stack.last_mut() {
-        match container {
-            ParseContainer::Paragraph(s, _)
-            | ParseContainer::Heading(_, s)
-            | ParseContainer::BlockQuote(s)
-            | ParseContainer::CodeBlock(_, s)
-            | ParseContainer::TableCell { markup: s, .. } => s.push_str(text),
-            ParseContainer::Image { alt, .. } => alt.push_str(text),
-            _ => {}
-        }
+    match stack.last_mut()? {
+        ParseContainer::Paragraph(s, _)
+        | ParseContainer::Heading(_, s)
+        | ParseContainer::CodeBlock(_, s)
+        | ParseContainer::TableCell { markup: s, .. } => Some(s),
+        ParseContainer::Image { alt, .. } => Some(alt),
+        _ => None,
+    }
+}
+
+fn append_raw_text(stack: &mut Vec<ParseContainer>, inline_styles: &[InlineStyle], text: &str) {
+    if let Some(target) = ensure_text_target(stack, inline_styles) {
+        target.push_str(text);
+    }
+}
+
+fn append_escaped_text(stack: &mut Vec<ParseContainer>, inline_styles: &[InlineStyle], text: &str) {
+    if let Some(target) = ensure_text_target(stack, inline_styles) {
+        write_escaped_pango(target, text);
+    }
+}
+
+fn append_inline_code(stack: &mut Vec<ParseContainer>, inline_styles: &[InlineStyle], code: &str) {
+    if let Some(target) = ensure_text_target(stack, inline_styles) {
+        target.push_str("<tt>");
+        write_escaped_pango(target, code);
+        target.push_str("</tt>");
+    }
+}
+
+fn append_inline_open(
+    stack: &mut Vec<ParseContainer>,
+    inline_styles: &[InlineStyle],
+    style: &InlineStyle,
+) {
+    if let Some(target) = ensure_text_target(stack, inline_styles) {
+        style.write_open(target);
     }
 }
 
 fn maybe_close_implicit_paragraph(
     stack: &mut Vec<ParseContainer>,
+    inline_styles: &[InlineStyle],
     root_blocks: &mut Vec<ContentBlock>,
 ) {
-    let is_implicit = if let Some(ParseContainer::Paragraph(_, implicit)) = stack.last() {
-        *implicit
-    } else {
-        false
-    };
+    let is_implicit = matches!(stack.last(), Some(ParseContainer::Paragraph(_, true)));
 
-    if is_implicit
-        && let Some(ParseContainer::Paragraph(markup, _)) = stack.pop()
-    {
-        let trimmed = markup.trim();
-        if !trimmed.is_empty() {
-            push_block(
-                root_blocks,
-                stack,
-                ContentBlock::Paragraph(trimmed.to_string()),
-            );
+    if is_implicit && let Some(ParseContainer::Paragraph(mut markup, _)) = stack.pop() {
+        close_inline_tags(&mut markup, inline_styles);
+        if let Some(block) = finalize_paragraph(markup) {
+            push_block(root_blocks, stack, block);
         }
     }
 }
@@ -957,14 +1317,16 @@ fn push_block(
     stack: &mut [ParseContainer],
     block: ContentBlock,
 ) {
-    // Find the nearest container that supports nested blocks (Item)
+    // Find the nearest container that supports nested blocks (ListItem or BlockQuote)
     for container in stack.iter_mut().rev() {
-        if let ParseContainer::Item { blocks, .. } = container {
-            blocks.push(block);
-            return;
+        match container {
+            ParseContainer::Item { blocks, .. } | ParseContainer::BlockQuote { blocks } => {
+                blocks.push(block);
+                return;
+            }
+            _ => {}
         }
     }
-    // Otherwise push to root
     root_blocks.push(block);
 }
 
@@ -977,8 +1339,14 @@ mod tests {
         let input = "- Item 1\n- Item 2";
         let blocks = parse_markdown(input);
         assert_eq!(blocks.len(), 1);
-        if let ContentBlock::List { ordered, items } = &blocks[0] {
+        if let ContentBlock::List {
+            ordered,
+            start,
+            items,
+        } = &blocks[0]
+        {
             assert!(!ordered);
+            assert_eq!(*start, 1);
             assert_eq!(items.len(), 2);
             match &items[0].blocks[0] {
                 ContentBlock::Paragraph(m) => assert_eq!(m, "Item 1"),
@@ -986,6 +1354,25 @@ mod tests {
             }
         } else {
             panic!("Expected List");
+        }
+    }
+
+    #[test]
+    fn test_ordered_list_preserves_custom_start_number() {
+        let input = "3. Step three\n4. Step four";
+        let blocks = parse_markdown(input);
+        assert_eq!(blocks.len(), 1);
+        if let ContentBlock::List {
+            ordered,
+            start,
+            items,
+        } = &blocks[0]
+        {
+            assert!(*ordered);
+            assert_eq!(*start, 3);
+            assert_eq!(items.len(), 2);
+        } else {
+            panic!("Expected ordered List");
         }
     }
 
@@ -1054,6 +1441,55 @@ mod tests {
                 _ => panic!("Expected Paragraph"),
             }
         }
+    }
+
+    #[test]
+    fn test_clickable_badge_image_does_not_emit_broken_pango_tags() {
+        let input = "[![Build Status](https://example.com/badge.svg)](https://example.com/actions)";
+        let blocks = parse_markdown(input);
+        assert_eq!(
+            blocks,
+            vec![ContentBlock::Image {
+                url: "https://example.com/badge.svg".to_string(),
+                title: String::new(),
+                alt: "Build Status".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn test_image_inside_bold_paragraph_balances_pango_tags() {
+        let input = "**Before ![diagram](https://example.com/a.png) After**";
+        let blocks = parse_markdown(input);
+        // Note: `**Before**` followed by `Image` and `**After**` may coalesce caption if matching,
+        // here "Before" doesn't match "a.png" or "diagram", so we get [Paragraph("<b>Before</b>"), Image/Gallery].
+        assert_eq!(blocks[0], ContentBlock::Paragraph("<b>Before</b>".to_string()));
+        for block in &blocks {
+            if let ContentBlock::Paragraph(m) = block {
+                assert!(
+                    gtk4::pango::parse_markup(m, '\0').is_ok(),
+                    "Invalid Pango markup emitted: {m}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_fenced_code_info_string_extracts_first_lowercased_word() {
+        assert_eq!(normalize_fence_language("CSV title=\"Q3\""), "csv");
+        assert_eq!(normalize_fence_language("Rust,no_run"), "rust");
+        assert_eq!(normalize_fence_language("{.Python}"), "python");
+        assert_eq!(normalize_fence_language("ts:src/module.ts"), "ts");
+        assert_eq!(normalize_fence_language("c++"), "c++");
+
+        let blocks = parse_markdown("```Rust,no_run title=\"src/lib.rs\"\nfn demo() {}\n```");
+        assert_eq!(
+            blocks,
+            vec![ContentBlock::Code {
+                lang: "rust".to_string(),
+                code: "fn demo() {}\n".to_string(),
+            }]
+        );
     }
 
     #[test]
@@ -1161,12 +1597,29 @@ mod tests {
     }
 
     #[test]
-    fn test_blockquote_preserves_content() {
-        let input = "> First line\n>\n> **Second** line";
+    fn test_blockquote_preserves_nested_blocks_in_order() {
+        let input = "\
+> First line
+>
+> - Bullet A
+> - Bullet B
+>
+> ```rs
+> let x = 1;
+> ```
+>
+> **Last** line";
         let blocks = parse_markdown(input);
         assert_eq!(blocks.len(), 1);
-        if let ContentBlock::Blockquote(m) = &blocks[0] {
-            assert_eq!(m, "First line\n\n<b>Second</b> line");
+        if let ContentBlock::Blockquote(inner) = &blocks[0] {
+            assert_eq!(inner.len(), 4);
+            assert_eq!(inner[0], ContentBlock::Paragraph("First line".to_string()));
+            assert!(matches!(inner[1], ContentBlock::List { .. }));
+            assert!(matches!(inner[2], ContentBlock::Code { ref lang, .. } if lang == "rs"));
+            assert_eq!(
+                inner[3],
+                ContentBlock::Paragraph("<b>Last</b> line".to_string())
+            );
         } else {
             panic!("Expected Blockquote, got {:?}", blocks[0]);
         }
@@ -1207,7 +1660,11 @@ Querying Flathub index for latest application registrations.
 | **DiagNG** (`com.p1security.diagng`)<br/>Qualcomm baseband diagnostic monitor client. | ![DiagNG](https://example.com/diagng.png) |";
 
         let blocks = parse_markdown(input);
-        assert_eq!(blocks.len(), 2, "Expected [Paragraph, Table], got {blocks:?}");
+        assert_eq!(
+            blocks.len(),
+            2,
+            "Expected [Paragraph, Table], got {blocks:?}"
+        );
         assert_eq!(
             blocks[0],
             ContentBlock::Paragraph(
@@ -1216,7 +1673,10 @@ Querying Flathub index for latest application registrations.
         );
 
         if let ContentBlock::Table { headers, rows, .. } = &blocks[1] {
-            assert_eq!(headers, &vec!["Application &amp; Description", "Screenshot"]);
+            assert_eq!(
+                headers,
+                &vec!["Application &amp; Description", "Screenshot"]
+            );
             assert_eq!(rows.len(), 2);
             assert_eq!(
                 rows[0][0].markup,
@@ -1249,7 +1709,11 @@ Here are the latest screenshots from the build pipeline.
 ![shot-2](https://example.com/shot-2.png)";
 
         let blocks = parse_markdown(input);
-        assert_eq!(blocks.len(), 2, "Expected [Paragraph, ImageGallery], got {blocks:?}");
+        assert_eq!(
+            blocks.len(),
+            2,
+            "Expected [Paragraph, ImageGallery], got {blocks:?}"
+        );
         assert_eq!(
             blocks[0],
             ContentBlock::Paragraph(
@@ -1257,5 +1721,66 @@ Here are the latest screenshots from the build pipeline.
             )
         );
         assert!(matches!(blocks[1], ContentBlock::ImageGallery { .. }));
+    }
+
+    #[test]
+    fn test_strip_pango_markup_single_pass() {
+        assert_eq!(
+            strip_pango_markup(
+                "<b>App &amp; Tools</b>\n<tt>&lt;v1&gt; &quot;ok&quot; &apos;s&#39;</tt>",
+                true
+            ),
+            "App & Tools <v1> \"ok\" 's'"
+        );
+    }
+
+    #[test]
+    fn test_streaming_partial_chunks_always_emit_valid_pango_markup() {
+        let full = "Check **[Docs](https://example.com?x=1&y=2)** and [![CI](https://example.com/ci.svg)](https://example.com) with ~~strikethrough~~!";
+        for end in 1..=full.len() {
+            if !full.is_char_boundary(end) {
+                continue;
+            }
+            let slice = &full[..end];
+            let blocks = parse_markdown(slice);
+            for block in blocks {
+                if let ContentBlock::Paragraph(m) | ContentBlock::Heading { markup: m, .. } = block
+                {
+                    // `<a>` is a GtkLabel markup extension on top of Pango; rewrite `<a href="...">`
+                    // to `<u>` so `pango::parse_markup` validates XML balance + entity escaping.
+                    let normalized = replace_anchor_tags_for_pango_check(&m);
+                    assert!(
+                        gtk4::pango::parse_markup(&normalized, '\0').is_ok(),
+                        "Broken Pango markup at slice {slice:?} -> {m:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    fn replace_anchor_tags_for_pango_check(markup: &str) -> String {
+        let mut out = String::with_capacity(markup.len());
+        let mut rest = markup;
+        while let Some(pos) = rest.find("<a href=\"") {
+            out.push_str(&rest[..pos]);
+            let after_open = &rest[pos + 9..];
+            let end_quote = after_open
+                .find("\">")
+                .expect("<a href=\" must have closing \">");
+            let attr_val = &after_open[..end_quote];
+            assert!(
+                !attr_val.contains('"') && !attr_val.contains('<') && !attr_val.contains('>'),
+                "Unescaped attribute char in href: {attr_val}"
+            );
+            // Also verify attribute entities via Pango by putting attr_val inside a dummy tag text
+            assert!(
+                gtk4::pango::parse_markup(&format!("<span>{attr_val}</span>"), '\0').is_ok(),
+                "Invalid XML entities in href: {attr_val}"
+            );
+            out.push_str("<u>");
+            rest = &after_open[end_quote + 2..];
+        }
+        out.push_str(rest);
+        out.replace("</a>", "</u>")
     }
 }
