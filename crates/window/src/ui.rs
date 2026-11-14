@@ -971,15 +971,14 @@ impl AppWindow {
             start_box.set_hexpand(true);
         }
 
-        // Prevent `AdwHeaderBar`'s internal `GtkWindowHandle` from stealing pointer
-        // drags that originate on a tab (`AdwTab`). When `AdwTabBox` switches from
-        // inline horizontal reordering to tab DND (`gdk_drag_begin`), it sets its own
-        // `drag_gesture` to `Denied`, which otherwise lets the event bubble up to
-        // `GtkWindowHandle` and trigger `gdk_toplevel_begin_move()` on unmaximized windows.
-        guard_window_handle_over_tabs(&content_header);
-
         content_toolbar.add_top_bar(&content_header);
         content_toolbar.set_content(Some(tab_view));
+
+        // Guard every ancestor `GtkWindowHandle` (both `AdwHeaderBar`'s internal handle
+        // and `AdwToolbarView`'s `top-bar` handle) after `add_top_bar` links them, and
+        // reset child gestures whenever a headerbar window-move begins so swallowed
+        // Wayland `xdg_toplevel_move` button releases cannot poison `AdwTabBox`.
+        guard_window_handles_over_tabs(&tab_bar);
 
         let tx_closetab = tx.clone();
         tab_view.connect_close_page(move |_, page| {
@@ -1000,54 +999,113 @@ impl AppWindow {
     }
 }
 
-fn is_point_on_tab(window_handle: &gtk::Widget, x: f64, y: f64) -> bool {
-    let mut tabs = Vec::new();
-    crate::update::tab_bar_sync::find_tab_nodes(window_handle, &mut tabs);
-    if tabs.is_empty() {
-        return false;
-    }
+/// Upstream GTK 4 + Wayland workaround (`gtkwindowhandle.c` / `gtkwidget.c` + `xdg_toplevel_move`,
+/// see GNOME Mutter #2523):
+///
+/// 1. Both `AdwHeaderBar` and `AdwToolbarView` wrap the top bar in their own internal
+///    `GtkWindowHandle`. Denying their `GestureDrag` when pressing on a tab (or the 5px
+///    inter-tab seam) ensures tab drags/clicks never bubble up into a window move.
+/// 2. When dragging empty space inside `AdwTabBar` to move the window, `GtkWindowHandle`
+///    claims its `GTK_PHASE_BUBBLE` `GestureDrag`, calls `gdk_toplevel_begin_move()`, and
+///    resets *only* its own two controllers. Because the claim happens in bubble phase,
+///    `gtk_widget_propagate_event_sequence_state()` marks child gestures (`AdwTabBox`) as
+///    `Denied` rather than `Cancelled`—leaving the `NULL` pointer sequence occupied until
+///    `GDK_BUTTON_RELEASE`, which Wayland's `xdg_toplevel_move` consumes in the compositor.
+///    Without resetting inactive child gestures on `Claimed` (and on button-free pointer
+///    re-entry), `AdwTabBox` ignores subsequent drags and tabs move the entire window.
+fn guard_window_handles_over_tabs(tab_bar: &adw::TabBar) {
+    let mut window_handles: Vec<glib::WeakRef<gtk::Widget>> = Vec::new();
+    let mut ancestor = tab_bar.parent();
 
-    let pt = gtk::graphene::Point::new(x as f32, y as f32);
-    // Include a 3px horizontal pad so pressing on a tab's rounded border or the 5px
-    // inter-tab seam never falls through to `GtkWindowHandle` window-dragging.
-    let h_pad = 3.0_f32;
-    let wh_height = window_handle.height() as f32;
+    while let Some(w) = ancestor {
+        if w.downcast_ref::<gtk::WindowHandle>().is_some() || w.css_name() == "windowhandle" {
+            window_handles.push(w.downgrade());
 
-    if y < 0.0 || y > f64::from(wh_height) {
-        return false;
-    }
+            let controllers = w.observe_controllers();
+            for i in 0..controllers.n_items() {
+                if let Some(drag_gesture) = controllers.item(i).and_downcast::<gtk::GestureDrag>() {
+                    drag_gesture.connect_drag_begin(|gesture, start_x, start_y| {
+                        if let Some(wh) = gesture.widget()
+                            && is_point_on_tab(&wh, start_x, start_y)
+                        {
+                            gesture.set_state(gtk::EventSequenceState::Denied);
+                        }
+                    });
 
-    for tab in &tabs {
-        let w = tab.width() as f32;
-        if w <= 0.0 {
-            continue;
+                    drag_gesture.connect_sequence_state_changed(|gesture, _, state| {
+                        if state == gtk::EventSequenceState::Claimed
+                            && let Some(wh) = gesture.widget()
+                        {
+                            reset_inactive_gestures(&wh, true);
+                        }
+                    });
+                }
+            }
         }
-        if let Some(local) = window_handle.compute_point(tab, &pt)
-            && local.x() >= -h_pad
-            && local.x() <= w + h_pad
-        {
+        ancestor = w.parent();
+    }
+
+    let motion_guard = gtk::EventControllerMotion::new();
+    motion_guard.set_propagation_phase(gtk::PropagationPhase::Capture);
+    motion_guard.connect_enter(move |ctrl, _, _| {
+        let buttons = ctrl.current_event_state();
+        if !buttons.intersects(
+            gtk::gdk::ModifierType::BUTTON1_MASK
+                | gtk::gdk::ModifierType::BUTTON2_MASK
+                | gtk::gdk::ModifierType::BUTTON3_MASK,
+        ) {
+            if let Some(tb) = ctrl.widget() {
+                reset_inactive_gestures(&tb, true);
+            }
+            for wh in window_handles.iter().filter_map(glib::WeakRef::upgrade) {
+                reset_inactive_gestures(&wh, false);
+            }
+        }
+    });
+    tab_bar.add_controller(motion_guard);
+}
+
+fn is_picked_tab(mut picked: Option<gtk::Widget>, stop_at: &gtk::Widget) -> bool {
+    while let Some(w) = picked {
+        if &w == stop_at {
+            break;
+        }
+        if w.css_name() == "tab" {
             return true;
         }
+        picked = w.parent();
     }
-
     false
 }
 
-fn guard_window_handle_over_tabs(header: &adw::HeaderBar) {
-    let Some(window_handle) = header.first_child() else {
-        return;
+fn is_point_on_tab(window_handle: &gtk::Widget, x: f64, y: f64) -> bool {
+    let flags = gtk::PickFlags::DEFAULT;
+    let Some(hit) = window_handle.pick(x, y, flags) else {
+        return false;
     };
+    if is_picked_tab(Some(hit.clone()), window_handle) {
+        return true;
+    }
+    // Also cover the 5px inter-tab seam and rounded tab corners inside `AdwTabBox`.
+    hit.css_name() == "tabbox"
+        && (is_picked_tab(window_handle.pick(x - 3.0, y, flags), window_handle)
+            || is_picked_tab(window_handle.pick(x + 3.0, y, flags), window_handle))
+}
 
-    let controllers = window_handle.observe_controllers();
+fn reset_inactive_gestures(widget: &gtk::Widget, recursive: bool) {
+    let controllers = widget.observe_controllers();
     for i in 0..controllers.n_items() {
-        if let Some(drag_gesture) = controllers.item(i).and_downcast::<gtk::GestureDrag>() {
-            drag_gesture.connect_drag_begin(|gesture, start_x, start_y| {
-                if let Some(wh) = gesture.widget()
-                    && is_point_on_tab(&wh, start_x, start_y)
-                {
-                    gesture.set_state(gtk::EventSequenceState::Denied);
-                }
-            });
+        if let Some(gesture) = controllers.item(i).and_downcast::<gtk::Gesture>()
+            && !gesture.is_active()
+        {
+            gesture.reset();
+        }
+    }
+    if recursive {
+        let mut child = widget.first_child();
+        while let Some(c) = child {
+            reset_inactive_gestures(&c, true);
+            child = c.next_sibling();
         }
     }
 }
@@ -1056,8 +1114,20 @@ fn guard_window_handle_over_tabs(header: &adw::HeaderBar) {
 mod tests {
     use super::*;
 
+    fn collect_ancestor_window_handles(widget: &gtk::Widget) -> Vec<gtk::Widget> {
+        let mut out = Vec::new();
+        let mut cur = widget.parent();
+        while let Some(w) = cur {
+            if w.downcast_ref::<gtk::WindowHandle>().is_some() || w.css_name() == "windowhandle" {
+                out.push(w.clone());
+            }
+            cur = w.parent();
+        }
+        out
+    }
+
     #[gtk::test]
-    fn window_handle_guard_detects_tabs_and_preserves_empty_header_drag_space() {
+    fn window_handle_guard_covers_both_header_and_toolbar_handles_and_resets_child_gestures() {
         if let Some(settings) = gtk::Settings::default() {
             settings.set_gtk_enable_animations(false);
         }
@@ -1067,6 +1137,9 @@ mod tests {
         p1.set_title("alpha");
         let p2 = tab_view.append(&gtk::Box::new(gtk::Orientation::Vertical, 0));
         p2.set_title("beta");
+
+        let toolbar = adw::ToolbarView::new();
+        toolbar.set_top_bar_style(adw::ToolbarStyle::Flat);
 
         let header = adw::HeaderBar::builder()
             .show_title(false)
@@ -1085,53 +1158,80 @@ mod tests {
             start_box.set_halign(gtk::Align::Fill);
             start_box.set_hexpand(true);
         }
-        guard_window_handle_over_tabs(&header);
 
-        let wh = header.first_child().expect("AdwHeaderBar has WindowHandle");
-        assert_eq!(wh.css_name(), "windowhandle");
+        toolbar.add_top_bar(&header);
+        toolbar.set_content(Some(&tab_view));
+        guard_window_handles_over_tabs(&tab_bar);
 
-        let has_drag_gesture = (0..wh.observe_controllers().n_items()).any(|i| {
-            wh.observe_controllers()
-                .item(i)
-                .and_downcast::<gtk::GestureDrag>()
-                .is_some()
-        });
-        assert!(has_drag_gesture, "GtkWindowHandle exposes GestureDrag");
+        // Host inside a mapped `gtk::Window` so `WidgetExt::pick` exercises GTK's full
+        // scene-graph picker (visibility, overflow clipping, and transforms).
+        let win = gtk::Window::builder()
+            .default_width(900)
+            .default_height(200)
+            .child(&toolbar)
+            .build();
+        win.set_visible(true);
+        let (_, nat_h, _, _) = toolbar.measure(gtk::Orientation::Vertical, 900);
+        toolbar.allocate(900, nat_h.max(200), -1, None);
 
-        let (_, nat_h, _, _) = header.measure(gtk::Orientation::Vertical, 900);
-        header.allocate(900, nat_h.max(48), -1, None);
+        let handles = collect_ancestor_window_handles(tab_bar.upcast_ref());
+        assert_eq!(
+            handles.len(),
+            2,
+            "Expected both AdwHeaderBar and AdwToolbarView WindowHandles to wrap tab_bar"
+        );
 
         let mut tabs = Vec::new();
-        crate::update::tab_bar_sync::find_tab_nodes(&wh, &mut tabs);
+        crate::update::tab_bar_sync::find_tab_nodes(tab_bar.upcast_ref(), &mut tabs);
         assert_eq!(tabs.len(), 2);
         assert!(
             tabs[0].width() > 0,
             "Tab should have non-zero allocated width"
         );
 
-        let tab0_center = tabs[0]
-            .compute_point(
-                &wh,
-                &gtk::graphene::Point::new(
-                    tabs[0].width() as f32 / 2.0,
-                    tabs[0].height() as f32 / 2.0,
-                ),
-            )
-            .unwrap();
-        assert!(
-            is_point_on_tab(&wh, f64::from(tab0_center.x()), f64::from(tab0_center.y()),),
-            "Point on tab should deny GtkWindowHandle drag"
-        );
+        for wh in &handles {
+            let has_drag_gesture = (0..wh.observe_controllers().n_items()).any(|i| {
+                wh.observe_controllers()
+                    .item(i)
+                    .and_downcast::<gtk::GestureDrag>()
+                    .is_some()
+            });
+            assert!(has_drag_gesture, "GtkWindowHandle exposes GestureDrag");
 
-        // Far right empty area after non-expanded tabs should still allow dragging the window.
-        assert!(
-            !is_point_on_tab(&wh, 850.0, 20.0),
-            "Empty headerbar space should remain draggable for moving the window"
-        );
-        // Left 36px gap before the first tab should also remain draggable for moving the window.
-        assert!(
-            !is_point_on_tab(&wh, 12.0, 20.0),
-            "Leading margin before tabs should remain draggable for moving the window"
-        );
+            let tab0_center = tabs[0]
+                .compute_point(
+                    wh,
+                    &gtk::graphene::Point::new(
+                        tabs[0].width() as f32 / 2.0,
+                        tabs[0].height() as f32 / 2.0,
+                    ),
+                )
+                .unwrap();
+            assert!(
+                is_point_on_tab(
+                    wh,
+                    f64::from(tab0_center.x()),
+                    f64::from(tab0_center.y()),
+                ),
+                "Point on tab should deny drag on all ancestor GtkWindowHandles"
+            );
+
+            // Far right empty area after non-expanded tabs should still allow dragging the window.
+            assert!(
+                !is_point_on_tab(wh, 850.0, 20.0),
+                "Empty headerbar space should remain draggable for moving the window"
+            );
+            // Left 36px gap before the first tab should also remain draggable for moving the window.
+            assert!(
+                !is_point_on_tab(wh, 12.0, 20.0),
+                "Leading margin before tabs should remain draggable for moving the window"
+            );
+        }
+
+        let probe_gesture = gtk::GestureDrag::new();
+        tab_bar.add_controller(probe_gesture);
+        reset_inactive_gestures(&handles[1], true);
+
+        win.destroy();
     }
 }
