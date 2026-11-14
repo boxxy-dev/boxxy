@@ -1,8 +1,8 @@
 //! Virtualized Claw conversation history `ListView` factory and row-append helpers.
 
 use crate::character_style::{
-    is_safe_hex_color, load_cached_texture, load_character_avatar_texture, load_incognito_texture,
-    prettify_character_name, resolve_character_display_name,
+    avatar_ring_color_class, is_safe_hex_color, load_cached_texture, load_character_avatar_texture,
+    load_incognito_texture, prettify_character_name, resolve_character_display_name,
 };
 use crate::process_renderer::get_claw_viewer_registry;
 use crate::row_object::ClawRowObject;
@@ -36,12 +36,7 @@ pub fn create_claw_message_list() -> (gtk::ListView, gio::ListStore) {
     let factory = gtk::SignalListItemFactory::new();
 
     factory.connect_setup(move |_, list_item| {
-        static AVATAR_RING_COUNTER: std::sync::atomic::AtomicUsize =
-            std::sync::atomic::AtomicUsize::new(0);
-
         let list_item = list_item.downcast_ref::<gtk::ListItem>().unwrap();
-        let slot_id = AVATAR_RING_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let avatar_ring_class = format!("claw-avatar-ring-{slot_id}");
 
         let hbox = gtk::Box::new(gtk::Orientation::Horizontal, 16);
         hbox.add_css_class("claw-virtual-row");
@@ -60,27 +55,13 @@ pub fn create_claw_message_list() -> (gtk::ListView, gio::ListStore) {
         avatar_frame.set_halign(gtk::Align::Center);
         avatar_frame.set_valign(gtk::Align::Start);
         avatar_frame.add_css_class("claw-avatar-frame");
-        avatar_frame.add_css_class(&avatar_ring_class);
         avatar_frame.set_visible(false);
 
         let avatar = adw::Avatar::new(42, None, true);
         avatar_frame.append(&avatar);
         left_col.append(&avatar_frame);
 
-        let avatar_provider = gtk::CssProvider::new();
-        if let Some(display) = gdk::Display::default() {
-            gtk::style_context_add_provider_for_display(
-                &display,
-                &avatar_provider,
-                gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
-            );
-            let provider_cleanup = avatar_provider.clone();
-            avatar_frame.connect_destroy(move |_| {
-                if let Some(display) = gdk::Display::default() {
-                    gtk::style_context_remove_provider_for_display(&display, &provider_cleanup);
-                }
-            });
-        }
+        let active_ring_class: Rc<RefCell<String>> = Rc::new(RefCell::new(String::new()));
 
         let vbox = gtk::Box::new(gtk::Orientation::Vertical, 2);
         vbox.set_hexpand(true);
@@ -170,8 +151,7 @@ pub fn create_claw_message_list() -> (gtk::ListView, gio::ListStore) {
         hbox.set_safe_data("icon", icon);
         hbox.set_safe_data("avatar_frame", avatar_frame);
         hbox.set_safe_data("avatar", avatar);
-        hbox.set_safe_data("avatar_provider", avatar_provider);
-        hbox.set_safe_data("avatar_ring_class", avatar_ring_class);
+        hbox.set_safe_data("active_ring_class", active_ring_class);
         hbox.set_safe_data("copy_btn", copy_btn);
         hbox.set_safe_data("bound_pos", bound_pos);
         hbox.set_safe_data("title", title);
@@ -193,10 +173,9 @@ pub fn create_claw_message_list() -> (gtk::ListView, gio::ListStore) {
         let icon = hbox.get_safe_data::<gtk::Image>("icon").unwrap();
         let avatar_frame = hbox.get_safe_data::<gtk::Box>("avatar_frame").unwrap();
         let avatar = hbox.get_safe_data::<adw::Avatar>("avatar").unwrap();
-        let avatar_provider = hbox
-            .get_safe_data::<gtk::CssProvider>("avatar_provider")
+        let active_ring_class = hbox
+            .get_safe_data::<Rc<RefCell<String>>>("active_ring_class")
             .unwrap();
-        let avatar_ring_class = hbox.get_safe_data::<String>("avatar_ring_class").unwrap();
         let copy_btn = hbox.get_safe_data::<gtk::Button>("copy_btn").unwrap();
         let bound_pos = hbox.get_safe_data::<Rc<Cell<u32>>>("bound_pos").unwrap();
         let title = hbox.get_safe_data::<gtk::Label>("title").unwrap();
@@ -253,13 +232,15 @@ pub fn create_claw_message_list() -> (gtk::ListView, gio::ListStore) {
         }
 
         let update_avatar_ring_color = |raw_color: &str| {
-            let safe_color = if is_safe_hex_color(raw_color) {
-                raw_color
-            } else {
-                "@accent_color"
-            };
-            avatar_provider
-                .load_from_string(&format!(".{avatar_ring_class} {{ color: {safe_color}; }}"));
+            let next_class = avatar_ring_color_class(raw_color);
+            let mut current = active_ring_class.borrow_mut();
+            if *current != next_class {
+                if !current.is_empty() {
+                    avatar_frame.remove_css_class(&current);
+                }
+                avatar_frame.add_css_class(&next_class);
+                *current = next_class;
+            }
         };
 
         let set_colored_title = |name: &str, raw_color: &str| {
@@ -362,7 +343,10 @@ pub fn create_claw_message_list() -> (gtk::ListView, gio::ListStore) {
             pane_lbl.set_visible(false);
         };
 
-        match obj.get_row() {
+        let diff_json_opt = obj.cached_file_diff_json();
+        let should_typewriter = obj.take_typewriter();
+
+        obj.with_row(|row| match row {
             PersistentClawRow::SystemMessage { content, .. } => {
                 left_col.set_visible(false);
                 header.set_visible(false);
@@ -375,7 +359,7 @@ pub fn create_claw_message_list() -> (gtk::ListView, gio::ListStore) {
                 hbox.add_css_class("claw-row-system");
                 hbox.add_css_class("dimmed");
 
-                viewer.set_content(&content);
+                viewer.set_content(content);
                 viewer.widget().set_visible(true);
                 cmd_label.set_visible(false);
             }
@@ -385,23 +369,25 @@ pub fn create_claw_message_list() -> (gtk::ListView, gio::ListStore) {
                 content,
                 ..
             } => {
-                set_agent_header(&character_id, &agent_name, "boxxyclaw", Some("accent"));
+                set_agent_header(character_id, agent_name, "boxxyclaw", Some("accent"));
                 pane_lbl.set_visible(false);
                 hbox.add_css_class("claw-row-diagnosis");
 
                 viewer.widget().set_visible(true);
                 cmd_label.set_visible(false);
 
-                if obj.take_typewriter() && !content.is_empty() {
+                if should_typewriter && !content.is_empty() {
                     let char_ends: Vec<usize> = content
                         .char_indices()
                         .map(|(i, c)| i + c.len_utf8())
                         .collect();
                     if char_ends.len() <= 2 {
-                        viewer.set_content(&content);
+                        viewer.set_content(content);
                     } else {
+                        let step = (char_ends.len() / 120).clamp(2, 24);
+                        let content_arc: std::sync::Arc<str> = content.as_str().into();
                         avatar_frame.add_css_class("claw-avatar-typing");
-                        viewer.set_content(&content[..char_ends[1]]);
+                        viewer.set_streaming_content(&content_arc[..char_ends[1]], false);
                         let idx = Cell::new(1usize);
                         let viewer_for_tick = viewer.clone();
                         let timer_slot = typewriter_timer.clone();
@@ -409,11 +395,13 @@ pub fn create_claw_message_list() -> (gtk::ListView, gio::ListStore) {
                         let source_id = glib::timeout_add_local(
                             std::time::Duration::from_millis(22),
                             move || {
-                                let next_idx = (idx.get() + 2).min(char_ends.len() - 1);
+                                let next_idx = (idx.get() + step).min(char_ends.len() - 1);
                                 idx.set(next_idx);
                                 let byte_end = char_ends[next_idx];
-                                viewer_for_tick.set_content(&content[..byte_end]);
-                                if next_idx + 1 >= char_ends.len() {
+                                let is_done = next_idx + 1 >= char_ends.len();
+                                viewer_for_tick
+                                    .set_streaming_content(&content_arc[..byte_end], is_done);
+                                if is_done {
                                     avatar_frame_for_tick.remove_css_class("claw-avatar-typing");
                                     let _ = timer_slot.borrow_mut().take();
                                     glib::ControlFlow::Break
@@ -425,7 +413,7 @@ pub fn create_claw_message_list() -> (gtk::ListView, gio::ListStore) {
                         *typewriter_timer.borrow_mut() = Some(source_id);
                     }
                 } else {
-                    viewer.set_content(&content);
+                    viewer.set_content(content);
                 }
             }
             PersistentClawRow::User {
@@ -435,7 +423,7 @@ pub fn create_claw_message_list() -> (gtk::ListView, gio::ListStore) {
                 hbox.add_css_class("claw-row-user");
 
                 for img_path in images {
-                    if let Some(texture) = load_cached_texture(Path::new(&img_path)) {
+                    if let Some(texture) = load_cached_texture(Path::new(img_path)) {
                         let thumb_frame = gtk::Box::new(gtk::Orientation::Horizontal, 0);
                         thumb_frame.set_overflow(gtk::Overflow::Hidden);
                         thumb_frame.add_css_class("user-attachment-thumb");
@@ -449,7 +437,7 @@ pub fn create_claw_message_list() -> (gtk::ListView, gio::ListStore) {
                 }
                 thumbs_box.set_visible(thumbs_box.first_child().is_some());
 
-                viewer.set_content(&content);
+                viewer.set_content(content);
                 viewer.widget().set_visible(!content.is_empty());
                 cmd_label.set_visible(false);
             }
@@ -461,8 +449,8 @@ pub fn create_claw_message_list() -> (gtk::ListView, gio::ListStore) {
                 ..
             } => {
                 set_agent_header(
-                    &character_id,
-                    &agent_name,
+                    character_id,
+                    agent_name,
                     "boxxy-dialog-warning-symbolic",
                     Some("warning"),
                 );
@@ -470,13 +458,14 @@ pub fn create_claw_message_list() -> (gtk::ListView, gio::ListStore) {
                 hbox.add_css_class("claw-row-suggested");
 
                 if diagnosis.is_empty() {
+                    viewer.park_for_recycle();
                     viewer.widget().set_visible(false);
                 } else {
-                    viewer.set_content(&diagnosis);
+                    viewer.set_content(diagnosis);
                     viewer.widget().set_visible(true);
                 }
 
-                cmd_label.set_label(&command);
+                cmd_label.set_label(command);
                 cmd_label.set_visible(true);
             }
             PersistentClawRow::ProcessList {
@@ -485,12 +474,12 @@ pub fn create_claw_message_list() -> (gtk::ListView, gio::ListStore) {
                 result_json,
                 ..
             } => {
-                set_agent_header(&character_id, &agent_name, "boxxyclaw", Some("accent"));
+                set_agent_header(character_id, agent_name, "boxxyclaw", Some("accent"));
                 pane_lbl.set_visible(false);
                 hbox.add_css_class("claw-row-process-list");
 
-                viewer.clear();
-                viewer.append_custom_block("list_processes", &result_json);
+                viewer.park_for_recycle();
+                viewer.append_custom_block("list_processes", result_json);
                 viewer.widget().set_visible(true);
                 cmd_label.set_visible(false);
             }
@@ -501,8 +490,8 @@ pub fn create_claw_message_list() -> (gtk::ListView, gio::ListStore) {
                 ..
             } => {
                 set_agent_header(
-                    &character_id,
-                    &agent_name,
+                    character_id,
+                    agent_name,
                     "boxxy-build-circle-symbolic",
                     Some("accent"),
                 );
@@ -510,14 +499,14 @@ pub fn create_claw_message_list() -> (gtk::ListView, gio::ListStore) {
                 pane_lbl.set_visible(false);
                 hbox.add_css_class("claw-row-tool-call");
 
-                viewer.clear();
+                viewer.park_for_recycle();
                 viewer.widget().set_visible(false);
                 cmd_label.set_visible(false);
             }
             PersistentClawRow::Command { command, exit_code } => {
                 set_user_header();
 
-                let status = if exit_code == 0 {
+                let status = if *exit_code == 0 {
                     "Command Execution"
                 } else {
                     "Command Failed"
@@ -527,38 +516,37 @@ pub fn create_claw_message_list() -> (gtk::ListView, gio::ListStore) {
 
                 hbox.add_css_class("claw-row-command");
 
-                viewer.set_content(&command);
+                viewer.set_content(command);
                 viewer.widget().set_visible(true);
                 cmd_label.set_visible(false);
             }
             PersistentClawRow::FileDiff {
                 agent_name,
                 character_id,
-                diff,
                 auto_approved,
                 ..
             } => {
-                set_agent_header(&character_id, &agent_name, "boxxyclaw", Some("accent"));
+                set_agent_header(character_id, agent_name, "boxxyclaw", Some("accent"));
                 pane_lbl.set_visible(false);
                 hbox.add_css_class("claw-row-file-diff");
 
-                viewer.clear();
-                if let Ok(diff_json) = serde_json::to_string(&diff) {
-                    let schema = if auto_approved {
+                viewer.park_for_recycle();
+                if let Some(ref diff_json) = diff_json_opt {
+                    let schema = if *auto_approved {
                         "file_diff_compact"
                     } else {
                         "file_diff"
                     };
-                    viewer.append_custom_block(schema, &diff_json);
+                    viewer.append_custom_block(schema, diff_json);
                 }
                 viewer.widget().set_visible(true);
                 cmd_label.set_visible(false);
             }
-        }
+        });
     });
 
-    // Releasing viewer state on unbind stops background highlighter jobs
-    // from racing with the next bind on the same recycled widget.
+    // Parking viewer widgets into the slot's recycling pool on unbind cancels stale
+    // background highlight/image tasks while keeping leaf labels & code blocks warm.
     factory.connect_unbind(move |_, list_item| {
         let list_item = list_item.downcast_ref::<gtk::ListItem>().unwrap();
         let hbox = list_item.child().and_downcast::<gtk::Box>().unwrap();
@@ -575,7 +563,7 @@ pub fn create_claw_message_list() -> (gtk::ListView, gio::ListStore) {
             old_source.remove();
         }
         if let Some(viewer) = hbox.get_safe_data::<StructuredViewer>("viewer") {
-            viewer.clear();
+            viewer.park_for_recycle();
         }
     });
 
@@ -673,23 +661,23 @@ pub fn format_exchange_for_copy(store: &gio::ListStore, pos: u32) -> String {
         return String::new();
     }
 
-    let get_row_at = |idx: u32| -> Option<PersistentClawRow> {
+    let is_user_at = |idx: u32| -> Option<bool> {
         store
             .item(idx)
             .and_downcast::<ClawRowObject>()
-            .map(|o| o.get_row())
+            .map(|o| o.with_row(|r| matches!(r, PersistentClawRow::User { .. })))
     };
 
-    let Some(clicked_row) = get_row_at(pos) else {
+    let Some(clicked_is_user) = is_user_at(pos) else {
         return String::new();
     };
 
     let mut start_idx = pos;
-    if !matches!(clicked_row, PersistentClawRow::User { .. }) {
+    if !clicked_is_user {
         let mut cursor = pos;
         while cursor > 0 {
             cursor -= 1;
-            if let Some(PersistentClawRow::User { .. }) = get_row_at(cursor) {
+            if is_user_at(cursor) == Some(true) {
                 start_idx = cursor;
                 break;
             }
@@ -698,13 +686,13 @@ pub fn format_exchange_for_copy(store: &gio::ListStore, pos: u32) -> String {
 
     let mut sections = Vec::new();
     for idx in start_idx..n {
-        let Some(row) = get_row_at(idx) else {
+        let Some(obj) = store.item(idx).and_downcast::<ClawRowObject>() else {
             continue;
         };
-        if idx > start_idx && matches!(row, PersistentClawRow::User { .. }) {
+        if idx > start_idx && obj.with_row(|r| matches!(r, PersistentClawRow::User { .. })) {
             break;
         }
-        if let Some((speaker, body)) = format_row_speaker_and_body(&row)
+        if let Some((speaker, body)) = obj.with_row(format_row_speaker_and_body)
             && !body.trim().is_empty()
         {
             sections.push(format!("{speaker}:\n{}", body.trim()));

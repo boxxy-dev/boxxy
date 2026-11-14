@@ -10,6 +10,7 @@ mod process_renderer;
 pub mod row_object;
 pub mod sidebar;
 
+pub use character_style::{character_btn_color_class, load_character_avatar_texture};
 pub use message_list::{
     add_approval_row, add_clipboard_get_approval_row, add_clipboard_set_approval_row,
     add_diagnosis_row, add_diagnosis_row_with_typewriter, add_file_delete_approval_row,

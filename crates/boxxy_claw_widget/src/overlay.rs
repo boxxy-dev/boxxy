@@ -50,6 +50,7 @@ pub struct TerminalOverlay {
     active_agent: Rc<RefCell<String>>,
     history_sticky: Rc<Cell<bool>>,
     is_auto_scrolling: Rc<Cell<bool>>,
+    scroll_idle_queued: Rc<Cell<bool>>,
     last_pane_height: Rc<Cell<i32>>,
     bottom_gap: Rc<Cell<bool>>,
     tips_cycle: TipsCycle,
@@ -156,7 +157,7 @@ impl TerminalOverlay {
         full_history_store.connect_items_changed(move |store, pos, removed, added| {
             if removed > 0 && added == 0 && store.n_items() == 0 {
                 history_store_for_sync.remove_all();
-                diag_viewer_for_sync.set_content("");
+                diag_viewer_for_sync.park_for_recycle();
                 return;
             }
             if added > 0 {
@@ -169,7 +170,9 @@ impl TerminalOverlay {
                         batch.push(obj);
                     }
                 }
-                if !batch.is_empty() {
+                if pos == 0 && removed > 0 && store.n_items() == added {
+                    history_store_for_sync.splice(0, history_store_for_sync.n_items(), &batch);
+                } else if !batch.is_empty() {
                     history_store_for_sync.extend_from_slice(&batch);
                 }
             }
@@ -181,40 +184,49 @@ impl TerminalOverlay {
         // 3. On notify::upper: if sticky and we were at the bottom, snap to latest.
         let history_sticky = Rc::new(Cell::new(false));
         let is_auto_scrolling = Rc::new(Cell::new(false));
+        let scroll_idle_queued = Rc::new(Cell::new(false));
         let prev_upper = Rc::new(Cell::new(0.0));
 
         let sticky = history_sticky.clone();
         let list_items = history_list.clone();
         let is_auto_items = is_auto_scrolling.clone();
+        let idle_queued_items = scroll_idle_queued.clone();
         let msg_bar_items = msg_bar.clone();
         let revealer_items = revealer.clone();
         history_store.connect_items_changed(move |s, _, _, _| {
-            let n = s.n_items();
-            if n == 0 {
+            if s.n_items() == 0 {
                 return;
             }
             let was_idle = !sticky.get();
             sticky.set(true);
 
-            let lv = list_items.clone();
-            let is_auto = is_auto_items.clone();
-            let msg_bar_for_focus = msg_bar_items.clone();
-            let rev_for_focus = revealer_items.clone();
-            gtk::glib::idle_add_local_once(move || {
-                is_auto.set(true);
-                lv.scroll_to(n - 1, gtk::ListScrollFlags::NONE, None);
-                if rev_for_focus.reveals_child()
-                    && msg_bar_for_focus.entry.is_sensitive()
-                    && msg_bar_for_focus.widget.is_visible()
-                    && !msg_bar_for_focus.entry.has_focus()
-                    && msg_bar_for_focus.entry.focus_child().is_none()
-                {
-                    msg_bar_for_focus.entry.grab_focus();
-                }
+            if !idle_queued_items.replace(true) {
+                let lv = list_items.clone();
+                let is_auto = is_auto_items.clone();
+                let queued_flag = idle_queued_items.clone();
+                let msg_bar_for_focus = msg_bar_items.clone();
+                let rev_for_focus = revealer_items.clone();
                 gtk::glib::idle_add_local_once(move || {
-                    is_auto.set(false);
+                    queued_flag.set(false);
+                    let live_n = lv.model().map_or(0, |m| m.n_items());
+                    if live_n == 0 {
+                        return;
+                    }
+                    is_auto.set(true);
+                    lv.scroll_to(live_n - 1, gtk::ListScrollFlags::NONE, None);
+                    if rev_for_focus.reveals_child()
+                        && msg_bar_for_focus.entry.is_sensitive()
+                        && msg_bar_for_focus.widget.is_visible()
+                        && !msg_bar_for_focus.entry.has_focus()
+                        && msg_bar_for_focus.entry.focus_child().is_none()
+                    {
+                        msg_bar_for_focus.entry.grab_focus();
+                    }
+                    gtk::glib::idle_add_local_once(move || {
+                        is_auto.set(false);
+                    });
                 });
-            });
+            }
 
             if was_idle {
                 let sticky_timer = sticky.clone();
@@ -346,6 +358,7 @@ impl TerminalOverlay {
             active_agent: active_agent.clone(),
             history_sticky: history_sticky.clone(),
             is_auto_scrolling: is_auto_scrolling.clone(),
+            scroll_idle_queued,
             last_pane_height,
             bottom_gap,
             tips_cycle: tips_cycle.clone(),
@@ -671,7 +684,7 @@ impl TerminalOverlay {
     /// view without deleting the session's underlying history.
     pub fn clear_visible_history(&self) {
         self.history_store.remove_all();
-        self.diagnosis_viewer.set_content("");
+        self.diagnosis_viewer.park_for_recycle();
     }
 
     /// Resets the overlay when the active character is withdrawn via `/exit`,
@@ -681,7 +694,7 @@ impl TerminalOverlay {
         *self.active_agent.borrow_mut() = String::new();
         self.full_history_store.remove_all();
         self.history_store.remove_all();
-        self.diagnosis_viewer.set_content("");
+        self.diagnosis_viewer.park_for_recycle();
         self.hide();
     }
 
@@ -844,13 +857,8 @@ impl TerminalOverlay {
 
             let avatar = adw::Avatar::new(32, Some(&info.config.display_name), true);
             avatar.set_valign(gtk::Align::Center);
-            if info.has_avatar
-                && let Ok(dir) = boxxy_claw_protocol::character_loader::get_characters_dir()
-            {
-                let avatar_path = dir.join(&info.config.name).join("AVATAR.png");
-                if let Ok(texture) = gtk::gdk::Texture::from_filename(&avatar_path) {
-                    avatar.set_custom_image(Some(&texture));
-                }
+            if let Some(texture) = boxxy_claw_ui::load_character_avatar_texture(info) {
+                avatar.set_custom_image(Some(&texture));
             }
 
             inner_box.append(&avatar);
@@ -878,29 +886,8 @@ impl TerminalOverlay {
                 btn.add_css_class("selected-character");
             }
 
-            let class_name = format!("char-btn-{}", info.config.name);
-            btn.add_css_class(&class_name);
-
-            let css = format!(
-                ".{class_name} label {{\n\
-                     background-image: radial-gradient(circle, alpha({}, 0.85) 62%, transparent 70%);\n\
-                 }}\n",
-                info.config.color
-            );
-            let provider = gtk::CssProvider::new();
-            provider.load_from_string(&css);
-            if let Some(display) = gtk::gdk::Display::default() {
-                gtk::style_context_add_provider_for_display(
-                    &display,
-                    &provider,
-                    gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
-                );
-                let provider_cleanup = provider.clone();
-                btn.connect_destroy(move |_| {
-                    if let Some(display) = gtk::gdk::Display::default() {
-                        gtk::style_context_remove_provider_for_display(&display, &provider_cleanup);
-                    }
-                });
+            if let Some(color_cls) = boxxy_claw_ui::character_btn_color_class(&info.config.color) {
+                btn.add_css_class(&color_cls);
             }
 
             // Clicking only updates the local pre-selection so the checkmark
@@ -929,9 +916,13 @@ impl TerminalOverlay {
         self.msg_bar.set_working_dir(self.host.working_dir());
         self.refresh_character_selector(title);
 
-        self.diagnosis_viewer.set_content(diagnosis);
+        // Only populate `diagnosis_viewer` (`single_scroll`) in Bookmark mode; in Claw mode
+        // `single_scroll` is hidden and `history_list` owns rendering, avoiding duplicate widget trees.
         if mode == OverlayMode::Bookmark {
+            self.diagnosis_viewer.set_content(diagnosis);
             self.msg_bar.set_text("");
+        } else {
+            self.diagnosis_viewer.park_for_recycle();
         }
         self.template_entry.set_text("");
 
@@ -965,7 +956,7 @@ impl TerminalOverlay {
                 path,
                 content,
                 diff,
-            } => {
+            } if mode == OverlayMode::Bookmark => {
                 let resolved_diff = diff
                     .unwrap_or_else(|| boxxy_claw_protocol::FileDiff::fallback_new(&path, &content));
                 if let Ok(diff_json) = serde_json::to_string(&resolved_diff) {
@@ -1010,7 +1001,7 @@ impl TerminalOverlay {
         self.msg_bar.set_working_dir(self.host.working_dir());
         self.refresh_character_selector(agent_name);
 
-        self.diagnosis_viewer.set_content("");
+        self.diagnosis_viewer.park_for_recycle();
         self.msg_bar.set_text("");
         self.template_entry.set_text("");
         *self.current_mode.borrow_mut() = OverlayMode::Claw;
@@ -1060,29 +1051,35 @@ impl TerminalOverlay {
                 });
             }
 
-            let adj = self.history_scroll.vadjustment();
-            let list = self.history_list.clone();
-            let is_auto = self.is_auto_scrolling.clone();
-            let msg_bar_for_scroll = self.msg_bar.clone();
-            let rev_for_scroll = self.revealer.clone();
-            gtk::glib::idle_add_local_once(move || {
-                is_auto.set(true);
-                list.scroll_to(n - 1, gtk::ListScrollFlags::NONE, None);
-                // Also snap the adjustment directly; for realized rows this
-                // is redundant but for unrealized rows it helps the initial jump.
-                adj.set_value(adj.upper() - adj.page_size());
-                if rev_for_scroll.reveals_child()
-                    && msg_bar_for_scroll.entry.is_sensitive()
-                    && msg_bar_for_scroll.widget.is_visible()
-                    && !msg_bar_for_scroll.entry.has_focus()
-                    && msg_bar_for_scroll.entry.focus_child().is_none()
-                {
-                    msg_bar_for_scroll.entry.grab_focus();
-                }
+            if !self.scroll_idle_queued.replace(true) {
+                let adj = self.history_scroll.vadjustment();
+                let list = self.history_list.clone();
+                let is_auto = self.is_auto_scrolling.clone();
+                let queued_flag = self.scroll_idle_queued.clone();
+                let msg_bar_for_scroll = self.msg_bar.clone();
+                let rev_for_scroll = self.revealer.clone();
                 gtk::glib::idle_add_local_once(move || {
-                    is_auto.set(false);
+                    queued_flag.set(false);
+                    let live_n = list.model().map_or(0, |m| m.n_items());
+                    if live_n == 0 {
+                        return;
+                    }
+                    is_auto.set(true);
+                    list.scroll_to(live_n - 1, gtk::ListScrollFlags::NONE, None);
+                    adj.set_value(adj.upper() - adj.page_size());
+                    if rev_for_scroll.reveals_child()
+                        && msg_bar_for_scroll.entry.is_sensitive()
+                        && msg_bar_for_scroll.widget.is_visible()
+                        && !msg_bar_for_scroll.entry.has_focus()
+                        && msg_bar_for_scroll.entry.focus_child().is_none()
+                    {
+                        msg_bar_for_scroll.entry.grab_focus();
+                    }
+                    gtk::glib::idle_add_local_once(move || {
+                        is_auto.set(false);
+                    });
                 });
-            });
+            }
         } else {
             let adj = self.single_scroll.vadjustment();
             gtk::glib::idle_add_local_once(move || {
@@ -1164,9 +1161,6 @@ impl TerminalOverlay {
         let is_working = matches!(state, OverlayState::Thinking | OverlayState::Pending);
         let show_picker = mode == OverlayMode::Claw && !is_working && !has_active_agent;
         self.character_selector_box.set_visible(show_picker);
-
-        // If the picker shouldn't be shown, we don't need to poll the registry.
-        if !show_picker {}
 
         let overlay_had_focus = self.revealer.focus_child().is_some();
 

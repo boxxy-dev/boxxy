@@ -14,6 +14,7 @@ use crate::msgbar::MsgBarComponent;
 use crate::{ClawHost, ClawIndicator, OverlayMode, TerminalOverlay, state::OverlayState};
 use boxxy_claw_protocol::{AgentStatus, ClawEngineEvent, ClawMessage, SessionUsage, UsageWrapper};
 use gtk4 as gtk;
+use gtk4::gio::prelude::ListModelExt;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
@@ -627,8 +628,7 @@ pub fn spawn_dispatch(
                     let mut su = session_usage.get();
                     su.tools_used = restored_tools;
                     session_usage.set(su);
-                    overlay_store.remove_all();
-                    overlay_store.extend_from_slice(&overlay_items);
+                    overlay_store.splice(0, overlay_store.n_items(), &overlay_items);
                     if !rows.is_empty() && overlay.is_visible() {
                         overlay.grab_input_focus();
                     }
