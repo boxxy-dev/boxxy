@@ -376,11 +376,10 @@ pub(crate) fn setup_apis_page(builder: &gtk::Builder) -> PageHooks {
                 let haystack = format!("{} {} {}", ep.name, ep.base_url, model_ids.join(" "))
                     .to_lowercase();
 
-                let row = adw::ActionRow::builder()
-                    .use_markup(false)
-                    .title(&ep.name)
-                    .subtitle(&subtitle)
-                    .build();
+                let row = adw::ActionRow::new();
+                row.set_use_markup(false);
+                row.set_title(&ep.name);
+                row.set_subtitle(&subtitle);
 
                 let switch = gtk::Switch::builder()
                     .active(ep.enabled)

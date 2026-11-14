@@ -345,17 +345,23 @@ pub fn parse_markdown(input: &str) -> Vec<ContentBlock> {
                     }
 
                     // Inline styles & links
+                    // CRITICAL: open the tag into the target container BEFORE pushing onto
+                    // `inline_styles` so lazy implicit-paragraph creation (e.g. tight list items
+                    // starting with `**bold**`) does not reopen the same tag twice via `reopen_inline_tags`.
                     Tag::Strong if !is_in_image(&stack) => {
-                        inline_styles.push(InlineStyle::Strong);
-                        append_raw_text(&mut stack, &inline_styles, "<b>");
+                        let style = InlineStyle::Strong;
+                        append_inline_open(&mut stack, &inline_styles, &style);
+                        inline_styles.push(style);
                     }
                     Tag::Emphasis if !is_in_image(&stack) => {
-                        inline_styles.push(InlineStyle::Emphasis);
-                        append_raw_text(&mut stack, &inline_styles, "<i>");
+                        let style = InlineStyle::Emphasis;
+                        append_inline_open(&mut stack, &inline_styles, &style);
+                        inline_styles.push(style);
                     }
                     Tag::Strikethrough if !is_in_image(&stack) => {
-                        inline_styles.push(InlineStyle::Strikethrough);
-                        append_raw_text(&mut stack, &inline_styles, "<s>");
+                        let style = InlineStyle::Strikethrough;
+                        append_inline_open(&mut stack, &inline_styles, &style);
+                        inline_styles.push(style);
                     }
                     Tag::Link { dest_url, .. } if !is_in_image(&stack) => {
                         let escaped_url = escape_pango_attr(&dest_url);
@@ -502,13 +508,13 @@ pub fn parse_markdown(input: &str) -> Vec<ContentBlock> {
                         if !is_in_image(&stack)
                             && pop_matching_inline(&mut inline_styles, InlineKind::Strong) =>
                     {
-                        append_raw_text(&mut stack, &inline_styles, "</b>");
+                        append_inline_close(&mut stack, "</b>");
                     }
                     TagEnd::Emphasis
                         if !is_in_image(&stack)
                             && pop_matching_inline(&mut inline_styles, InlineKind::Emphasis) =>
                     {
-                        append_raw_text(&mut stack, &inline_styles, "</i>");
+                        append_inline_close(&mut stack, "</i>");
                     }
                     TagEnd::Strikethrough
                         if !is_in_image(&stack)
@@ -517,13 +523,13 @@ pub fn parse_markdown(input: &str) -> Vec<ContentBlock> {
                                 InlineKind::Strikethrough,
                             ) =>
                     {
-                        append_raw_text(&mut stack, &inline_styles, "</s>");
+                        append_inline_close(&mut stack, "</s>");
                     }
                     TagEnd::Link
                         if !is_in_image(&stack)
                             && pop_matching_inline(&mut inline_styles, InlineKind::Link) =>
                     {
-                        append_raw_text(&mut stack, &inline_styles, "</a>");
+                        append_inline_close(&mut stack, "</a>");
                     }
                     _ => {}
                 }
@@ -1227,7 +1233,10 @@ fn is_in_code_block(stack: &[ParseContainer]) -> bool {
 }
 
 fn is_in_image(stack: &[ParseContainer]) -> bool {
-    matches!(stack.last(), Some(ParseContainer::Image { .. }))
+    stack
+        .iter()
+        .rev()
+        .any(|c| matches!(c, ParseContainer::Image { .. }))
 }
 
 fn is_in_table_cell(stack: &[ParseContainer]) -> bool {
@@ -1294,6 +1303,20 @@ fn append_inline_open(
 ) {
     if let Some(target) = ensure_text_target(stack, inline_styles) {
         style.write_open(target);
+    }
+}
+
+/// Appends a closing inline tag (`</b>`, `</i>`, `</s>`, `</a>`) only to an already-open
+/// text container on top of `stack`. Never creates a new implicit paragraph just to write
+/// a close tag (which would leave an orphan closing tag after an embedded `Image` split).
+fn append_inline_close(stack: &mut [ParseContainer], close_tag: &str) {
+    if let Some(
+        ParseContainer::Paragraph(s, _)
+        | ParseContainer::Heading(_, s)
+        | ParseContainer::TableCell { markup: s, .. },
+    ) = stack.last_mut()
+    {
+        s.push_str(close_tag);
     }
 }
 
@@ -1782,5 +1805,110 @@ Here are the latest screenshots from the build pipeline.
         }
         out.push_str(rest);
         out.replace("</a>", "</u>")
+    }
+
+    fn assert_blocks_valid_pango_markup(blocks: &[ContentBlock], context: &str) {
+        for block in blocks {
+            match block {
+                ContentBlock::Paragraph(m) | ContentBlock::Heading { markup: m, .. } => {
+                    let normalized = replace_anchor_tags_for_pango_check(m);
+                    assert!(
+                        gtk4::pango::parse_markup(&normalized, '\0').is_ok(),
+                        "Invalid Pango markup ({context}): {m:?}"
+                    );
+                }
+                ContentBlock::Blockquote(inner) => {
+                    assert_blocks_valid_pango_markup(inner, context);
+                }
+                ContentBlock::List { items, .. } => {
+                    for item in items {
+                        assert_blocks_valid_pango_markup(&item.blocks, context);
+                    }
+                }
+                ContentBlock::Table { headers, rows, .. } => {
+                    for h in headers {
+                        let normalized = replace_anchor_tags_for_pango_check(h);
+                        assert!(
+                            gtk4::pango::parse_markup(&normalized, '\0').is_ok(),
+                            "Invalid table header markup ({context}): {h:?}"
+                        );
+                    }
+                    for row in rows {
+                        for cell in row {
+                            let normalized = replace_anchor_tags_for_pango_check(&cell.markup);
+                            assert!(
+                                gtk4::pango::parse_markup(&normalized, '\0').is_ok(),
+                                "Invalid table cell markup ({context}): {:?}",
+                                cell.markup
+                            );
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    #[test]
+    fn test_tight_list_items_starting_with_inline_styles_emit_balanced_markup() {
+        let input = "\
+### Overview
+
+- **First feature:** works with `flag` and **nested** emphasis.
+- *Italic prefix* followed by plain explanation.
+- ~~Deprecated option~~ replaced by `--modern`.
+- ***Combined style*** at the start of an item.
+- [Documentation](https://example.com/docs?a=1&b=2): reference link item.
+- Plain item without leading inline style.";
+
+        let blocks = parse_markdown(input);
+        assert_blocks_valid_pango_markup(&blocks, "complete tight list");
+        assert_eq!(blocks.len(), 2);
+
+        let ContentBlock::List { items, .. } = &blocks[1] else {
+            panic!("Expected ContentBlock::List, got {:?}", blocks[1]);
+        };
+        assert_eq!(items.len(), 6);
+        assert_eq!(
+            items[0].blocks,
+            vec![ContentBlock::Paragraph(
+                "<b>First feature:</b> works with <tt>flag</tt> and <b>nested</b> emphasis."
+                    .to_string()
+            )]
+        );
+        assert_eq!(
+            items[1].blocks,
+            vec![ContentBlock::Paragraph(
+                "<i>Italic prefix</i> followed by plain explanation.".to_string()
+            )]
+        );
+        assert_eq!(
+            items[2].blocks,
+            vec![ContentBlock::Paragraph(
+                "<s>Deprecated option</s> replaced by <tt>--modern</tt>.".to_string()
+            )]
+        );
+        assert_eq!(
+            items[3].blocks,
+            vec![ContentBlock::Paragraph(
+                "<i><b>Combined style</b></i> at the start of an item.".to_string()
+            )]
+        );
+
+        // Verify every partial byte boundary of the list also produces valid Pango XML
+        for end in 1..=input.len() {
+            if input.is_char_boundary(end) {
+                let slice = &input[..end];
+                let partial_blocks = parse_markdown(slice);
+                assert_blocks_valid_pango_markup(&partial_blocks, slice);
+            }
+        }
+    }
+
+    #[test]
+    fn test_tight_list_item_with_styled_image_and_trailing_text_has_no_orphan_close_tag() {
+        let input = "- **![diagram](https://example.com/diagram.svg)** trailing description\n- Plain item";
+        let blocks = parse_markdown(input);
+        assert_blocks_valid_pango_markup(&blocks, "styled image in tight list");
     }
 }

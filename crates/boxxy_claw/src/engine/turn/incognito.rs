@@ -67,9 +67,6 @@ pub(super) async fn run_incognito_turn(
     let tx_for_thoughts = tx_ui.clone();
     let name_for_thoughts = agent_name.clone();
     let cid_for_thoughts = character_id.clone();
-    let tx_for_text = tx_ui.clone();
-    let name_for_text = agent_name.clone();
-    let cid_for_text = character_id.clone();
 
     match agent
         .chat_streaming(
@@ -93,16 +90,7 @@ pub(super) async fn run_incognito_turn(
                     });
                 }
             },
-            |partial_text| {
-                let cleaned = partial_text.trim_start();
-                if !cleaned.is_empty() {
-                    let _ = tx_for_text.try_send(ClawEngineEvent::AssistantTextDelta {
-                        agent_name: name_for_text.clone(),
-                        character_id: cid_for_text.clone(),
-                        text: cleaned.to_string(),
-                    });
-                }
-            },
+            |_partial_text| {},
         )
         .await
     {

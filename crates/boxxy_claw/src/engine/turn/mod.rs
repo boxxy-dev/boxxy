@@ -4,6 +4,31 @@ mod incognito;
 pub mod persistence;
 pub mod skills;
 pub mod snapshot;
+mod whats_new;
+
+pub const WHATS_NEW_CONTEXT_MARKER: &str = "\n\n--- UPDATE CHANGELOG CONTEXT ---";
+pub const ATTACHMENTS_CONTEXT_MARKER: &str = "\n\n--- ATTACHMENTS ---";
+
+/// Returns `true` when `prompt` is a post-update "Read What's New" changelog summary request.
+#[must_use]
+pub fn is_whats_new_prompt(prompt: &str) -> bool {
+    prompt.contains(WHATS_NEW_CONTEXT_MARKER)
+}
+
+/// Strips synthetic appended payload sections from a prompt.
+///
+/// Ensures skill matching, memory recall, `@file` extraction, and `:character` mention
+/// parsing inspect only the text actually authored by the user.
+#[must_use]
+pub fn extract_user_authored_prompt(prompt: &str) -> &str {
+    prompt
+        .split(WHATS_NEW_CONTEXT_MARKER)
+        .next()
+        .unwrap_or(prompt)
+        .split(ATTACHMENTS_CONTEXT_MARKER)
+        .next()
+        .unwrap_or(prompt)
+}
 
 use crate::engine::{
     ClawEngineEvent, ClawEnvironment, ClawMessage, dispatcher::extract_command_and_clean,
@@ -85,6 +110,32 @@ pub fn spawn_turn(
             return;
         }
 
+        if is_whats_new_prompt(&prompt_clone) {
+            let effective_preamble = if speaker.is_guest {
+                crate::engine::context::load_session_context(&character_id)
+            } else {
+                session_ctx_clone
+            };
+            whats_new::run_whats_new_turn(
+                pane_id,
+                session_id_clone,
+                agent_name,
+                host_agent_name,
+                character_id,
+                speaker.slug,
+                prompt_clone,
+                cwd_clone,
+                is_new_task,
+                effective_preamble,
+                db,
+                state,
+                tx_ui,
+                tx_self,
+            )
+            .await;
+            return;
+        }
+
         // Cleanup R4: Simplified history clear
         if is_new_task {
             let mut state_lock = state.lock().await;
@@ -92,22 +143,25 @@ pub fn spawn_turn(
             state_lock.flushed_watermark = 0;
         }
 
+        let user_authored_prompt = extract_user_authored_prompt(&prompt_clone).to_string();
+
         // --- DEADLOCK PREVENTION: Brief DB lock to clone handle ---
         let db_opt = {
             let db_guard = db.lock().await;
             db_guard.clone()
         };
         let past_memories =
-            crate::engine::context::retrieve_memories(&db_opt, &prompt_clone, &cwd_clone).await;
+            crate::engine::context::retrieve_memories(&db_opt, &user_authored_prompt, &cwd_clone)
+                .await;
 
         let settings = boxxy_preferences::Settings::load();
 
-        // 1. Build Skills Context & Pre-Load `@file` References
+        // 1. Build Skills Context & Pre-Load `@file` References (only from user-authored text)
         let (active_skills_text, available_skills_text, triggered_skill_names) =
-            skills::build_skills_context(&prompt_clone, &pane_id).await;
+            skills::build_skills_context(&user_authored_prompt, &pane_id).await;
         let skills_context = format!("{active_skills_text}{available_skills_text}");
         let resolved_file_refs =
-            file_refs::resolve_prompt_file_refs(&prompt_clone, &cwd_clone).await;
+            file_refs::resolve_prompt_file_refs(&user_authored_prompt, &cwd_clone).await;
         for b64 in resolved_file_refs.image_attachments {
             if !images_clone.contains(&b64) {
                 images_clone.push(b64);
@@ -484,7 +538,6 @@ pub fn spawn_turn(
             state: state.clone(),
             agent_name: agent_name.clone(),
             character_id: character_id.clone(),
-            stream_visible_text: !drama_mode,
         };
 
         let start_time = std::time::Instant::now();
@@ -911,6 +964,24 @@ mod tests {
         assert_eq!(
             sniff_base64_image_media_type("iVBORw0KGgoAAAANSUhEUg"),
             rig::message::ImageMediaType::PNG
+        );
+    }
+
+    #[test]
+    fn extracts_user_authored_prompt_without_changelog_or_attachment_payloads() {
+        let whats_new = "Read me what's new from `a1b2c3d` to `e4f5a6b`!\n\n--- UPDATE CHANGELOG CONTEXT ---\n- commit mentioning themes and bugs";
+        assert!(is_whats_new_prompt(whats_new));
+        assert_eq!(
+            extract_user_authored_prompt(whats_new),
+            "Read me what's new from `a1b2c3d` to `e4f5a6b`!"
+        );
+
+        let with_attachments =
+            "Explain this snippet\n\n--- ATTACHMENTS ---\n### Snippet 1:\n```\nfn demo() {}\n```";
+        assert!(!is_whats_new_prompt(with_attachments));
+        assert_eq!(
+            extract_user_authored_prompt(with_attachments),
+            "Explain this snippet"
         );
     }
 }

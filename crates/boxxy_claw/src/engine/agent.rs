@@ -30,7 +30,6 @@ pub struct TurnStreamContext {
     pub state: Arc<tokio::sync::Mutex<SessionState>>,
     pub agent_name: String,
     pub character_id: String,
-    pub stream_visible_text: bool,
 }
 
 #[derive(Clone)]
@@ -102,11 +101,11 @@ impl ClawAgent {
                     usize,
                     (std::time::Instant, String, Option<String>),
                 > = std::collections::HashMap::new();
-                let mut step_text = String::new();
-                let mut had_streamed_text = false;
-                let mut last_ui_push = std::time::Instant::now()
-                    .checked_sub(std::time::Duration::from_millis(100))
-                    .unwrap_or_else(std::time::Instant::now);
+                // Visible prose is never streamed chunk-by-chunk outside `/drama` typewriter mode;
+                // the full response appears at once when the turn completes (`DiagnosisComplete`).
+                // We only track whether the model has started composing text so any prior tool
+                // status label resets cleanly to `"Thinking…"` once per text step.
+                let mut composing_reply = false;
                 let mut final_res: Option<rig::agent::PromptResponse> = None;
 
                 while let Some(item_res) = stream.next().await {
@@ -119,6 +118,7 @@ impl ClawAgent {
                                 kind: rig::streaming::PartKind::Reasoning,
                                 ..
                             } => {
+                                composing_reply = false;
                                 reasoning_parts.insert(
                                     part.index(),
                                     (std::time::Instant::now(), String::new(), None),
@@ -194,18 +194,7 @@ impl ClawAgent {
                                 name: Some(tool_name),
                                 ..
                             } => {
-                                step_text.clear();
-                                if had_streamed_text {
-                                    had_streamed_text = false;
-                                    let _ = sctx
-                                        .tx_ui
-                                        .send(ClawEngineEvent::AssistantTextDelta {
-                                            agent_name: sctx.agent_name.clone(),
-                                            character_id: sctx.character_id.clone(),
-                                            text: String::new(),
-                                        })
-                                        .await;
-                                }
+                                composing_reply = false;
                                 let status_str =
                                     boxxy_claw_protocol::busy_tool_label(tool_name.as_str(), true);
                                 let _ = sctx
@@ -218,43 +207,22 @@ impl ClawAgent {
                                     })
                                     .await;
                             }
-                            rig::streaming::StreamEvent::Text { text, .. } => {
-                                step_text.push_str(&text);
-                                if sctx.stream_visible_text
-                                    && last_ui_push.elapsed() >= std::time::Duration::from_millis(45)
-                                {
-                                    let trimmed_lead = step_text.trim_start();
-                                    let speaker_tag_pending = trimmed_lead
-                                        .starts_with("[SPEAKER_ID:")
-                                        && !trimmed_lead.contains(']');
-                                    if !speaker_tag_pending {
-                                        let cleaned =
-                                            crate::engine::turn::history::strip_speaker_tag(
-                                                &step_text,
-                                            )
-                                            .replace(
-                                                crate::engine::session::roundtable::YIELD_TO_USER_MARKER,
-                                                "",
-                                            );
-                                        let trimmed = cleaned.trim();
-                                        let is_silent_ack_prefix =
-                                            !trimmed.is_empty() && "[SILENT_ACK]".starts_with(trimmed);
-                                        if !trimmed.is_empty()
-                                            && trimmed != "[SILENT_ACK]"
-                                            && !is_silent_ack_prefix
-                                        {
-                                            had_streamed_text = true;
-                                            last_ui_push = std::time::Instant::now();
-                                            let _ = sctx
-                                                .tx_ui
-                                                .send(ClawEngineEvent::AssistantTextDelta {
-                                                    agent_name: sctx.agent_name.clone(),
-                                                    character_id: sctx.character_id.clone(),
-                                                    text: cleaned.trim_start().to_string(),
-                                                })
-                                                .await;
-                                        }
-                                    }
+                            rig::streaming::StreamEvent::Start {
+                                kind: rig::streaming::PartKind::Text,
+                                ..
+                            }
+                            | rig::streaming::StreamEvent::Text { .. } => {
+                                if !composing_reply {
+                                    composing_reply = true;
+                                    let _ = sctx
+                                        .tx_ui
+                                        .send(ClawEngineEvent::TurnTraceProgress {
+                                            agent_name: sctx.agent_name.clone(),
+                                            character_id: sctx.character_id.clone(),
+                                            item: None,
+                                            active_status: Some("Thinking…".to_string()),
+                                        })
+                                        .await;
                                 }
                             }
                             _ => {}
@@ -264,18 +232,7 @@ impl ClawAgent {
                             | rig::agent::MultiTurnStreamItem::ToolCall { .. }
                             | rig::agent::MultiTurnStreamItem::ToolResult { .. },
                         ) => {
-                            step_text.clear();
-                            if had_streamed_text {
-                                had_streamed_text = false;
-                                let _ = sctx
-                                    .tx_ui
-                                    .send(ClawEngineEvent::AssistantTextDelta {
-                                        agent_name: sctx.agent_name.clone(),
-                                        character_id: sctx.character_id.clone(),
-                                        text: String::new(),
-                                    })
-                                    .await;
-                            }
+                            composing_reply = false;
                         }
                         Ok(rig::agent::MultiTurnStreamItem::FinalResponse(res)) => {
                             final_res = Some(res);

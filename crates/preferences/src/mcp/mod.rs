@@ -64,11 +64,10 @@ pub(crate) fn setup_mcp_page(builder: &gtk::Builder) -> PageHooks {
                 };
                 let haystack = format!("{} {}", server.name, subtitle).to_lowercase();
 
-                let row = adw::ActionRow::builder()
-                    .use_markup(false)
-                    .title(&server.name)
-                    .subtitle(&subtitle)
-                    .build();
+                let row = adw::ActionRow::new();
+                row.set_use_markup(false);
+                row.set_title(&server.name);
+                row.set_subtitle(&subtitle);
 
                 let switch = gtk::Switch::builder()
                     .active(server.enabled)

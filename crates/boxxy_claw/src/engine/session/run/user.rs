@@ -366,27 +366,25 @@ impl ClawSession {
         ctx.current_dir = cwd.clone();
         self.ensure_session_persisted(&cwd).await;
 
-        // Pre-resolve any `@path/to/image.png` file references so their square thumbnails
-        // also render in the user message bubble and are passed to vision models.
-        let pre_resolved =
-            crate::engine::turn::file_refs::resolve_prompt_file_refs(&query, &cwd).await;
-        for b64 in pre_resolved.image_attachments {
-            if !image_attachments.contains(&b64) {
-                image_attachments.push(b64);
+        let is_whats_new = crate::engine::turn::is_whats_new_prompt(&query);
+        let display_query = crate::engine::turn::extract_user_authored_prompt(&query).to_string();
+
+        // Pre-resolve any `@path/to/image.png` file references from user-authored text so their
+        // square thumbnails render in the user message bubble and are passed to vision models.
+        if !is_whats_new {
+            let pre_resolved =
+                crate::engine::turn::file_refs::resolve_prompt_file_refs(&display_query, &cwd)
+                    .await;
+            for b64 in pre_resolved.image_attachments {
+                if !image_attachments.contains(&b64) {
+                    image_attachments.push(b64);
+                }
             }
         }
 
         let thumb_paths = cache_user_attachment_thumbnails(&image_attachments).await;
-        let display_query = query
-            .split("\n\n--- UPDATE CHANGELOG CONTEXT ---")
-            .next()
-            .unwrap_or(&query)
-            .split("\n\n--- ATTACHMENTS ---")
-            .next()
-            .unwrap_or(&query)
-            .to_string();
         self.send_ui(ClawEngineEvent::UserMessage {
-            content: display_query,
+            content: display_query.clone(),
             images: thumb_paths,
         })
         .await;
@@ -452,20 +450,34 @@ impl ClawSession {
             return;
         }
 
-        let effective_query = match self.prepare_user_roundtable_turn(&query).await {
-            Ok(q) => q,
-            Err(status_msg) => {
-                self.send_ui(ClawEngineEvent::DiagnosisComplete {
-                    agent_name: self.name.clone(),
-                    character_id: self.character_id.clone(),
-                    diagnosis: status_msg,
-                    trace: Vec::new(),
-                    usage: None,
-                    typewriter: false,
-                })
-                .await;
-                let _ = self.tx_self.send(ClawMessage::TurnFinished).await;
-                return;
+        let effective_query = if is_whats_new {
+            query
+        } else {
+            let attachments_tail = query
+                .find(crate::engine::turn::ATTACHMENTS_CONTEXT_MARKER)
+                .map(|idx| &query[idx..])
+                .unwrap_or_default();
+            match self.prepare_user_roundtable_turn(&display_query).await {
+                Ok(q) => {
+                    if attachments_tail.is_empty() {
+                        q
+                    } else {
+                        format!("{q}{attachments_tail}")
+                    }
+                }
+                Err(status_msg) => {
+                    self.send_ui(ClawEngineEvent::DiagnosisComplete {
+                        agent_name: self.name.clone(),
+                        character_id: self.character_id.clone(),
+                        diagnosis: status_msg,
+                        trace: Vec::new(),
+                        usage: None,
+                        typewriter: false,
+                    })
+                    .await;
+                    let _ = self.tx_self.send(ClawMessage::TurnFinished).await;
+                    return;
+                }
             }
         };
 

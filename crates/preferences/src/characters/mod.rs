@@ -358,11 +358,10 @@ fn render_characters(
     }
 
     if characters.is_empty() {
-        let empty_row = adw::ActionRow::builder()
-            .use_markup(false)
-            .title("No characters found")
-            .subtitle("Open the characters folder below to add one.")
-            .build();
+        let empty_row = adw::ActionRow::new();
+        empty_row.set_use_markup(false);
+        empty_row.set_title("No characters found");
+        empty_row.set_subtitle("Open the characters folder below to add one.");
         chars_group.add(&empty_row);
         *empty_placeholder.borrow_mut() = Some(empty_row);
         return;
@@ -383,11 +382,12 @@ fn render_characters(
             .collect::<Vec<String>>()
             .join(" ");
 
-        let row = adw::ActionRow::builder()
-            .use_markup(false)
-            .title(&formatted_name)
-            .subtitle(&character.config.duties)
-            .build();
+        // Set `use_markup(false)` before `title` / `subtitle` (`ObjectBuilder` applies
+        // properties alphabetically, which would parse `subtitle` as Pango XML before `use-markup`).
+        let row = adw::ActionRow::new();
+        row.set_use_markup(false);
+        row.set_title(&formatted_name);
+        row.set_subtitle(&character.config.duties);
 
         let editable_avatar = boxxy_core_widgets::EditableAvatar::new(
             52,
