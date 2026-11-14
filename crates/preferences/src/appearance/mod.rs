@@ -1,23 +1,19 @@
 use crate::config::{CursorShape, Settings};
+use crate::ui_utils::{Debouncer, PageHooks, SearchRow, make_editable_color_dot};
 use adw::prelude::*;
 use gtk::pango;
 use gtk4 as gtk;
+use gtk4::glib;
 use libadwaita as adw;
-use std::cell::RefCell;
+use std::cell::Cell;
 use std::rc::Rc;
+use std::time::Duration;
 
-pub struct AppearanceWidgets {
-    pub theme_row: adw::ActionRow,
-    pub chat_width_spin: adw::SpinRow,
-    pub font_button: gtk::FontDialogButton,
-}
-
-pub fn setup_appearance_page(
+#[allow(clippy::too_many_lines)]
+pub(crate) fn setup_appearance_page(
     builder: &gtk::Builder,
-    settings_rc: Rc<RefCell<Settings>>,
-    on_change: Rc<dyn Fn(Settings) + 'static>,
     on_open_themes: Rc<dyn Fn() + 'static>,
-) -> (AppearanceWidgets, Box<dyn Fn(&str) -> bool>) {
+) -> PageHooks {
     let select_bg_image_btn: gtk::Button = builder.object("select_bg_image_btn").unwrap();
     let clear_bg_image_btn: gtk::Button = builder.object("clear_bg_image_btn").unwrap();
     let background_image_row: adw::ActionRow = builder.object("background_image_row").unwrap();
@@ -52,26 +48,31 @@ pub fn setup_appearance_page(
     let group_cursor: adw::PreferencesGroup = builder.object("group_cursor").unwrap();
     let group_layout: adw::PreferencesGroup = builder.object("group_layout").unwrap();
 
-    // 0.1 Background Image
-    let opacity_adj = gtk::Adjustment::new(settings_rc.borrow().opacity, 0.1, 1.0, 0.05, 0.1, 0.0);
+    let is_syncing = Rc::new(Cell::new(false));
+    let initial = Settings::load();
+
+    // 0.1 Background Image & Opacity
+    let opacity_adj = gtk::Adjustment::new(initial.opacity, 0.1, 1.0, 0.05, 0.1, 0.0);
     opacity_scale.set_adjustment(&opacity_adj);
 
-    let update_bg_subtitle = {
+    let update_bg_ui = {
         let row = background_image_row.clone();
-        let settings = settings_rc.clone();
-        move || {
-            if let Some(path) = &settings.borrow().background_image_path {
+        let clear_btn = clear_bg_image_btn.clone();
+        Rc::new(move |bg_path: Option<&str>| {
+            if let Some(path) = bg_path {
                 let filename = std::path::Path::new(path)
                     .file_name()
                     .and_then(|s| s.to_str())
                     .unwrap_or("Unknown");
-                row.set_subtitle(filename);
+                row.set_subtitle(&glib::markup_escape_text(filename));
+                clear_btn.set_sensitive(true);
             } else {
                 row.set_subtitle("No background image selected");
+                clear_btn.set_sensitive(false);
             }
-        }
+        })
     };
-    update_bg_subtitle();
+    update_bg_ui(initial.background_image_path.as_deref());
 
     let dialog: adw::Dialog = builder.object("dialog").unwrap();
     let file_dialog = gtk::FileDialog::new();
@@ -84,524 +85,442 @@ pub fn setup_appearance_page(
     filters.append(&filter);
     file_dialog.set_filters(Some(&filters));
 
-    let s_rc = settings_rc.clone();
-    let cb = on_change.clone();
-    let update_subtitle = update_bg_subtitle.clone();
-    let opacity_adj_for_select_bg = opacity_adj.clone();
-    select_bg_image_btn.connect_clicked(move |_| {
-        let s_rc = s_rc.clone();
-        let cb = cb.clone();
-        let update_subtitle = update_subtitle.clone();
-        let opacity_adj = opacity_adj_for_select_bg.clone();
-        file_dialog.open(
-            None::<&gtk::Window>,
-            gtk::gio::Cancellable::NONE,
-            move |res| {
-                if let Ok(file) = res
-                    && let Some(path) = file.path()
-                    && let Some(new_path) = boxxy_themes::copy_background_image(&path)
-                {
-                    let mut s = s_rc.borrow_mut();
-                    if let Some(old_path) = &s.background_image_path {
-                        boxxy_themes::delete_background_image(old_path);
-                    }
-                    s.background_image_path = Some(new_path);
-                    let nudged_opacity = if s.opacity >= 0.999 {
-                        s.opacity = 0.80;
-                        Some(0.80)
-                    } else {
-                        None
-                    };
-                    s.save();
-                    let s_clone = s.clone();
-                    drop(s);
-                    if let Some(new_op) = nudged_opacity {
-                        opacity_adj.set_value(new_op);
-                    }
-                    cb(s_clone);
-                    update_subtitle();
-                }
-            },
-        );
-    });
+    {
+        let update_bg_ui = update_bg_ui.clone();
+        let opacity_adj = opacity_adj.clone();
+        let is_syncing = is_syncing.clone();
+        select_bg_image_btn.connect_clicked(move |btn| {
+            let root_win = btn.root().and_downcast::<gtk::Window>();
+            let update_bg_ui = update_bg_ui.clone();
+            let opacity_adj = opacity_adj.clone();
+            let is_syncing = is_syncing.clone();
+            file_dialog.open(
+                root_win.as_ref(),
+                gtk::gio::Cancellable::NONE,
+                move |res| {
+                    let Ok(file) = res else { return };
+                    let Some(src_path) = file.path() else { return };
+                    let old_bg = Settings::load().background_image_path.clone();
+                    let update_bg_ui = update_bg_ui.clone();
+                    let opacity_adj = opacity_adj.clone();
+                    let is_syncing = is_syncing.clone();
+                    glib::spawn_future_local(async move {
+                        let copied = boxxy_sys_utils::runtime()
+                            .spawn_blocking(move || {
+                                let new_path = boxxy_themes::copy_background_image(&src_path)?;
+                                if let Some(old) = old_bg {
+                                    boxxy_themes::delete_background_image(&old);
+                                }
+                                Some(new_path)
+                            })
+                            .await
+                            .ok()
+                            .flatten();
 
-    let s_rc = settings_rc.clone();
-    let cb = on_change.clone();
-    let update_subtitle = update_bg_subtitle.clone();
-    let opacity_adj_for_clear_bg = opacity_adj.clone();
-    clear_bg_image_btn.connect_clicked(move |_| {
-        let mut s = s_rc.borrow_mut();
-        if let Some(old_path) = &s.background_image_path {
-            boxxy_themes::delete_background_image(old_path);
-        }
-        s.background_image_path = None;
-        s.opacity = 1.0;
-        s.save();
-        let s_clone = s.clone();
-        drop(s);
-        opacity_adj_for_clear_bg.set_value(1.0);
-        cb(s_clone);
-        update_subtitle();
-    });
+                        if let Some(new_path) = copied {
+                            let mut nudged_opacity = None;
+                            Settings::update(|s| {
+                                s.background_image_path = Some(new_path.clone());
+                                if s.opacity >= 0.999 {
+                                    s.opacity = 0.80;
+                                    nudged_opacity = Some(0.80);
+                                }
+                            });
+                            if let Some(new_op) = nudged_opacity {
+                                is_syncing.set(true);
+                                opacity_adj.set_value(new_op);
+                                is_syncing.set(false);
+                            }
+                            update_bg_ui(Some(&new_path));
+                        }
+                    });
+                },
+            );
+        });
+    }
+
+    {
+        let update_bg_ui = update_bg_ui.clone();
+        let opacity_adj = opacity_adj.clone();
+        let is_syncing = is_syncing.clone();
+        clear_bg_image_btn.connect_clicked(move |_| {
+            let old_path = Settings::load().background_image_path.clone();
+            let Some(old) = old_path else { return };
+
+            let reset_opacity = !Settings::load().frosted_glass;
+            Settings::update(|s| {
+                s.background_image_path = None;
+                if reset_opacity {
+                    s.opacity = 1.0;
+                }
+            });
+            if reset_opacity {
+                is_syncing.set(true);
+                opacity_adj.set_value(1.0);
+                is_syncing.set(false);
+            }
+            update_bg_ui(None);
+
+            boxxy_sys_utils::runtime().spawn_blocking(move || {
+                boxxy_themes::delete_background_image(&old);
+            });
+        });
+    }
 
     // 1. Font
     let font_dialog = gtk::FontDialog::new();
     let font_button = gtk::FontDialogButton::new(Some(font_dialog));
     font_button.set_valign(gtk::Align::Center);
     let mut initial_desc = pango::FontDescription::new();
-    initial_desc.set_family(&settings_rc.borrow().font_name);
-    initial_desc.set_size(settings_rc.borrow().font_size as i32 * pango::SCALE);
+    initial_desc.set_family(&initial.font_name);
+    initial_desc.set_size(i32::from(initial.font_size) * pango::SCALE);
     font_button.set_font_desc(&initial_desc);
     font_row.add_suffix(&font_button);
 
-    let s_rc = settings_rc.clone();
-    let cb = on_change.clone();
-    font_button.connect_font_desc_notify(move |btn| {
-        if let Some(desc) = btn.font_desc()
-            && let Some(family) = desc.family()
-        {
-            let size_pt = (desc.size() / pango::SCALE).max(6) as u16;
-            let mut s = s_rc.borrow_mut();
-            if s.font_name != family || s.font_size != size_pt {
-                s.font_name = family.to_string();
-                s.font_size = size_pt;
-                s.save();
-                cb(s.clone());
+    {
+        let is_syncing = is_syncing.clone();
+        font_button.connect_font_desc_notify(move |btn| {
+            if is_syncing.get() {
+                return;
             }
-        }
-    });
+            if let Some(desc) = btn.font_desc()
+                && let Some(family) = desc.family()
+            {
+                let size_pt = u16::try_from((desc.size() / pango::SCALE).clamp(4, 256)).unwrap_or(12);
+                let family_str = family.to_string();
+                Settings::update(|s| {
+                    s.font_name.clone_from(&family_str);
+                    s.font_size = size_pt;
+                });
+            }
+        });
+    }
 
     // 2. Adjustments
-    let s_rc = settings_rc.clone();
-    let cb = on_change.clone();
-    opacity_scale.connect_value_changed(move |scale| {
-        let mut s = s_rc.borrow_mut();
-        let val = scale.value();
-        if (s.opacity - val).abs() > 1e-4 {
-            s.opacity = val;
-            s.save();
-            cb(s.clone());
-        }
-    });
-
-    frosted_glass_row.set_active(settings_rc.borrow().frosted_glass);
-    let s_rc = settings_rc.clone();
-    let cb = on_change.clone();
-    let opacity_adj_for_frosted = opacity_adj.clone();
-    frosted_glass_row.connect_active_notify(move |row| {
-        let mut s = s_rc.borrow_mut();
-        let active = row.is_active();
-        if s.frosted_glass != active {
-            s.frosted_glass = active;
-            // If the user enables Frosted Glass while Background Tint is at 100% (1.0),
-            // nudge tint down to 80% so the blur is immediately visible with one click.
-            // When disabling Frosted Glass, reset tint back to 100% (1.0) full opaque.
-            let nudged_opacity = if active {
-                if s.opacity >= 0.999 {
-                    s.opacity = 0.80;
-                    Some(0.80)
-                } else {
-                    None
-                }
-            } else {
-                s.opacity = 1.0;
-                Some(1.0)
-            };
-            s.save();
-            let s_clone = s.clone();
-            drop(s);
-            if let Some(new_op) = nudged_opacity {
-                opacity_adj_for_frosted.set_value(new_op);
+    let opacity_debouncer = Debouncer::new();
+    opacity_debouncer.bind_flush_lifecycle(&opacity_scale);
+    {
+        let is_syncing = is_syncing.clone();
+        let debouncer = opacity_debouncer;
+        opacity_scale.connect_value_changed(move |scale| {
+            if is_syncing.get() {
+                return;
             }
-            cb(s_clone);
-        }
-    });
+            let val = scale.value();
+            debouncer.schedule(Duration::from_millis(40), move || {
+                Settings::update(|s| {
+                    if (s.opacity - val).abs() > 1e-4 {
+                        s.opacity = val;
+                    }
+                });
+            });
+        });
+    }
 
-    let padding_adj = gtk::Adjustment::new(
-        settings_rc.borrow().padding as f64,
-        0.0,
-        60.0,
-        2.0,
-        8.0,
-        0.0,
-    );
+    frosted_glass_row.set_active(initial.frosted_glass);
+    {
+        let is_syncing = is_syncing.clone();
+        let opacity_adj = opacity_adj.clone();
+        frosted_glass_row.connect_active_notify(move |row| {
+            if is_syncing.get() {
+                return;
+            }
+            let active = row.is_active();
+            let mut nudged_opacity = None;
+            Settings::update(|s| {
+                if s.frosted_glass != active {
+                    s.frosted_glass = active;
+                    if active {
+                        if s.opacity >= 0.999 {
+                            s.opacity = 0.80;
+                            nudged_opacity = Some(0.80);
+                        }
+                    } else if s.background_image_path.is_none() {
+                        s.opacity = 1.0;
+                        nudged_opacity = Some(1.0);
+                    }
+                }
+            });
+            if let Some(new_op) = nudged_opacity {
+                is_syncing.set(true);
+                opacity_adj.set_value(new_op);
+                is_syncing.set(false);
+            }
+        });
+    }
+
+    let padding_adj = gtk::Adjustment::new(f64::from(initial.padding), 0.0, 60.0, 2.0, 8.0, 0.0);
     padding_spin.set_adjustment(Some(&padding_adj));
-    padding_spin.set_value(settings_rc.borrow().padding as f64);
-    let s_rc = settings_rc.clone();
-    let cb = on_change.clone();
-    padding_spin.connect_value_notify(move |row| {
-        let mut s = s_rc.borrow_mut();
-        let v = row.value() as i32;
-        if s.padding != v {
-            s.padding = v;
-            s.save();
-            cb(s.clone());
-        }
-    });
+    padding_spin.set_value(f64::from(initial.padding));
+    {
+        let is_syncing = is_syncing.clone();
+        padding_spin.connect_value_notify(move |row| {
+            if is_syncing.get() {
+                return;
+            }
+            #[allow(clippy::cast_possible_truncation)]
+            let v = row.value().round() as i32;
+            Settings::update(|s| {
+                s.padding = v;
+            });
+        });
+    }
 
-    let line_spacing_adj = gtk::Adjustment::new(
-        settings_rc.borrow().cell_height_scale,
-        1.0,
-        3.0,
-        0.1,
-        0.5,
-        0.0,
-    );
+    let line_spacing_adj =
+        gtk::Adjustment::new(initial.cell_height_scale, 1.0, 3.0, 0.1, 0.5, 0.0);
     line_spacing_spin.set_adjustment(Some(&line_spacing_adj));
-    line_spacing_spin.set_value(settings_rc.borrow().cell_height_scale);
-    let s_rc = settings_rc.clone();
-    let cb = on_change.clone();
-    line_spacing_spin.connect_value_notify(move |row| {
-        let mut s = s_rc.borrow_mut();
-        if (s.cell_height_scale - row.value()).abs() > 1e-6 {
-            s.cell_height_scale = row.value();
-            s.save();
-            cb(s.clone());
-        }
-    });
+    line_spacing_spin.set_value(initial.cell_height_scale);
+    {
+        let is_syncing = is_syncing.clone();
+        line_spacing_spin.connect_value_notify(move |row| {
+            if is_syncing.get() {
+                return;
+            }
+            let val = row.value();
+            Settings::update(|s| {
+                if (s.cell_height_scale - val).abs() > 1e-6 {
+                    s.cell_height_scale = val;
+                }
+            });
+        });
+    }
 
-    let col_spacing_adj = gtk::Adjustment::new(
-        settings_rc.borrow().cell_width_scale,
-        1.0,
-        3.0,
-        0.1,
-        0.5,
-        0.0,
-    );
+    let col_spacing_adj = gtk::Adjustment::new(initial.cell_width_scale, 1.0, 3.0, 0.1, 0.5, 0.0);
     col_spacing_spin.set_adjustment(Some(&col_spacing_adj));
-    col_spacing_spin.set_value(settings_rc.borrow().cell_width_scale);
-    let s_rc = settings_rc.clone();
-    let cb = on_change.clone();
-    col_spacing_spin.connect_value_notify(move |row| {
-        let mut s = s_rc.borrow_mut();
-        if (s.cell_width_scale - row.value()).abs() > 1e-6 {
-            s.cell_width_scale = row.value();
-            s.save();
-            cb(s.clone());
-        }
-    });
+    col_spacing_spin.set_value(initial.cell_width_scale);
+    {
+        let is_syncing = is_syncing.clone();
+        col_spacing_spin.connect_value_notify(move |row| {
+            if is_syncing.get() {
+                return;
+            }
+            let val = row.value();
+            Settings::update(|s| {
+                if (s.cell_width_scale - val).abs() > 1e-6 {
+                    s.cell_width_scale = val;
+                }
+            });
+        });
+    }
 
-    let chat_width_adj = gtk::Adjustment::new(
-        settings_rc.borrow().ai_chat_width as f64,
-        200.0,
-        800.0,
-        10.0,
-        50.0,
-        0.0,
-    );
+    let chat_width_adj =
+        gtk::Adjustment::new(f64::from(initial.ai_chat_width), 200.0, 800.0, 10.0, 50.0, 0.0);
     chat_width_spin.set_adjustment(Some(&chat_width_adj));
-    chat_width_spin.set_value(settings_rc.borrow().ai_chat_width as f64);
-    let s_rc = settings_rc.clone();
-    let cb = on_change.clone();
-    chat_width_spin.connect_value_notify(move |row| {
-        let mut s = s_rc.borrow_mut();
-        let v = row.value() as i32;
-        if s.ai_chat_width != v {
-            s.ai_chat_width = v;
-            s.save();
-            cb(s.clone());
-        }
-    });
+    chat_width_spin.set_value(f64::from(initial.ai_chat_width));
+    {
+        let is_syncing = is_syncing.clone();
+        chat_width_spin.connect_value_notify(move |row| {
+            if is_syncing.get() {
+                return;
+            }
+            #[allow(clippy::cast_possible_truncation)]
+            let v = row.value().round() as i32;
+            Settings::update(|s| {
+                s.ai_chat_width = v;
+            });
+        });
+    }
 
     // 3. Theme ActionRow
-    theme_row.set_subtitle(&settings_rc.borrow().theme);
-
-    let dialog_clone = dialog.clone();
+    theme_row.set_subtitle(&glib::markup_escape_text(&initial.theme));
     theme_row.connect_activated(move |_| {
-        dialog_clone.close();
+        dialog.close();
         on_open_themes();
     });
 
     // 4. Switches
-    preserve_cwd_switch.set_active(settings_rc.borrow().preserve_working_dir);
-    let s_rc = settings_rc.clone();
-    let cb = on_change.clone();
-    preserve_cwd_switch.connect_active_notify(move |row| {
-        let mut s = s_rc.borrow_mut();
-        if s.preserve_working_dir != row.is_active() {
-            s.preserve_working_dir = row.is_active();
-            s.save();
-            cb(s.clone());
-        }
-    });
+    macro_rules! bind_bool_switch {
+        ($widget:ident, $field:ident) => {{
+            $widget.set_active(initial.$field);
+            let is_syncing = is_syncing.clone();
+            $widget.connect_active_notify(move |row| {
+                if is_syncing.get() {
+                    return;
+                }
+                let active = row.is_active();
+                Settings::update(|s| {
+                    s.$field = active;
+                });
+            });
+        }};
+    }
 
-    enable_progress_bar_switch.set_active(settings_rc.borrow().enable_progress_bar);
-    let s_rc_pb = settings_rc.clone();
-    let cb_pb = on_change.clone();
-    enable_progress_bar_switch.connect_active_notify(move |row| {
-        let mut s = s_rc_pb.borrow_mut();
-        if s.enable_progress_bar != row.is_active() {
-            s.enable_progress_bar = row.is_active();
-            s.save();
-            cb_pb(s.clone());
-        }
-    });
-
-    hide_scrollbars_switch.set_active(settings_rc.borrow().hide_scrollbars);
-    let s_rc = settings_rc.clone();
-    let cb = on_change.clone();
-    hide_scrollbars_switch.connect_active_notify(move |row| {
-        let mut s = s_rc.borrow_mut();
-        if s.hide_scrollbars != row.is_active() {
-            s.hide_scrollbars = row.is_active();
-            s.save();
-            cb(s.clone());
-        }
-    });
-
-    invert_scroll_switch.set_active(settings_rc.borrow().invert_scroll);
-    let s_rc = settings_rc.clone();
-    let cb = on_change.clone();
-    invert_scroll_switch.connect_active_notify(move |row| {
-        let mut s = s_rc.borrow_mut();
-        if s.invert_scroll != row.is_active() {
-            s.invert_scroll = row.is_active();
-            s.save();
-            cb(s.clone());
-        }
-    });
-
-    dim_inactive_switch.set_active(settings_rc.borrow().dim_inactive_panes);
-    let s_rc = settings_rc.clone();
-    let cb = on_change.clone();
-    dim_inactive_switch.connect_active_notify(move |row| {
-        let mut s = s_rc.borrow_mut();
-        if s.dim_inactive_panes != row.is_active() {
-            s.dim_inactive_panes = row.is_active();
-            s.save();
-            cb(s.clone());
-        }
-    });
-
-    fixed_width_tabs_switch.set_active(settings_rc.borrow().fixed_width_tabs);
-    let s_rc = settings_rc.clone();
-    let cb = on_change.clone();
-    fixed_width_tabs_switch.connect_active_notify(move |row| {
-        let mut s = s_rc.borrow_mut();
-        if s.fixed_width_tabs != row.is_active() {
-            s.fixed_width_tabs = row.is_active();
-            s.save();
-            cb(s.clone());
-        }
-    });
-
-    smart_tab_naming_switch.set_active(settings_rc.borrow().smart_tab_naming);
-    let s_rc = settings_rc.clone();
-    let cb = on_change.clone();
-    smart_tab_naming_switch.connect_active_notify(move |row| {
-        let mut s = s_rc.borrow_mut();
-        if s.smart_tab_naming != row.is_active() {
-            s.smart_tab_naming = row.is_active();
-            s.save();
-            cb(s.clone());
-        }
-    });
-
-    colored_tabs_switch.set_active(settings_rc.borrow().colored_tabs);
-    let s_rc = settings_rc.clone();
-    let cb = on_change.clone();
-    colored_tabs_switch.connect_active_notify(move |row| {
-        let mut s = s_rc.borrow_mut();
-        if s.colored_tabs != row.is_active() {
-            s.colored_tabs = row.is_active();
-            s.save();
-            cb(s.clone());
-        }
-    });
+    bind_bool_switch!(preserve_cwd_switch, preserve_working_dir);
+    bind_bool_switch!(enable_progress_bar_switch, enable_progress_bar);
+    bind_bool_switch!(hide_scrollbars_switch, hide_scrollbars);
+    bind_bool_switch!(invert_scroll_switch, invert_scroll);
+    bind_bool_switch!(dim_inactive_switch, dim_inactive_panes);
+    bind_bool_switch!(fixed_width_tabs_switch, fixed_width_tabs);
+    bind_bool_switch!(smart_tab_naming_switch, smart_tab_naming);
+    bind_bool_switch!(colored_tabs_switch, colored_tabs);
+    bind_bool_switch!(cursor_blinking_switch, cursor_blinking);
+    bind_bool_switch!(mouse_autohide_switch, mouse_autohide);
 
     // 5. Cursor settings
     let cursor_shapes_list = gtk::StringList::new(&["Block", "I-Beam", "Underline"]);
     cursor_shape_combo.set_model(Some(&cursor_shapes_list));
-    let shape_idx = match settings_rc.borrow().cursor_shape {
-        CursorShape::Block => 0,
-        CursorShape::IBeam => 1,
-        CursorShape::Underline => 2,
-    };
-    cursor_shape_combo.set_selected(shape_idx);
-    let s_rc = settings_rc.clone();
-    let cb = on_change.clone();
-    cursor_shape_combo.connect_selected_notify(move |row| {
-        let shape = match row.selected() {
-            0 => CursorShape::Block,
-            1 => CursorShape::IBeam,
-            2 => CursorShape::Underline,
-            _ => return,
-        };
-        let mut s = s_rc.borrow_mut();
-        if s.cursor_shape != shape {
-            s.cursor_shape = shape;
-            s.save();
-            cb(s.clone());
+    let shape_to_idx = |shape: CursorShape| -> u32 {
+        match shape {
+            CursorShape::Block => 0,
+            CursorShape::IBeam => 1,
+            CursorShape::Underline => 2,
         }
-    });
-
-    let initial_cursor_color = settings_rc.borrow().cursor_color.clone();
-    let s_rc = settings_rc.clone();
-    let cb = on_change.clone();
-    let cursor_color_button =
-        crate::characters::make_color_dot(&initial_cursor_color, "Cursor Color", move |hex| {
-            let mut s = s_rc.borrow_mut();
-            if s.cursor_color != hex {
-                s.cursor_color = hex;
-                s.save();
-                cb(s.clone());
+    };
+    cursor_shape_combo.set_selected(shape_to_idx(initial.cursor_shape));
+    {
+        let is_syncing = is_syncing.clone();
+        cursor_shape_combo.connect_selected_notify(move |row| {
+            if is_syncing.get() {
+                return;
             }
+            let shape = match row.selected() {
+                0 => CursorShape::Block,
+                1 => CursorShape::IBeam,
+                2 => CursorShape::Underline,
+                _ => return,
+            };
+            Settings::update(|s| {
+                s.cursor_shape = shape;
+            });
         });
+    }
 
-    // Add color picker to the row (as a prefix to keep it to the left of the switch)
+    let (cursor_color_button, set_cursor_dot_color) =
+        make_editable_color_dot(&initial.cursor_color, "Cursor Color", move |hex| {
+            Settings::update(|s| {
+                s.cursor_color.clone_from(&hex);
+            });
+        });
     cursor_color_row.add_prefix(&cursor_color_button);
 
-    cursor_color_switch.set_active(settings_rc.borrow().cursor_color_override);
-    cursor_color_button.set_sensitive(settings_rc.borrow().cursor_color_override);
-    let ccb_clone = cursor_color_button;
-    let s_rc = settings_rc.clone();
-    let cb = on_change.clone();
-    cursor_color_switch.connect_active_notify(move |switch| {
-        ccb_clone.set_sensitive(switch.is_active());
-        let mut s = s_rc.borrow_mut();
-        if s.cursor_color_override != switch.is_active() {
-            s.cursor_color_override = switch.is_active();
-            s.save();
-            cb(s.clone());
+    cursor_color_switch.set_active(initial.cursor_color_override);
+    cursor_color_button.set_sensitive(initial.cursor_color_override);
+    {
+        let is_syncing = is_syncing.clone();
+        let ccb_clone = cursor_color_button.clone();
+        cursor_color_switch.connect_active_notify(move |switch| {
+            let active = switch.is_active();
+            ccb_clone.set_sensitive(active);
+            if is_syncing.get() {
+                return;
+            }
+            Settings::update(|s| {
+                s.cursor_color_override = active;
+            });
+        });
+    }
+
+    // Build pre-indexed search rows before moving widgets into sync closure
+    let s_font = SearchRow::new(&font_row, "font family size");
+    let s_bg = SearchRow::new(&background_image_row, "background image wallpaper picture");
+    let s_theme = SearchRow::new(&theme_row, "terminal colors terminal theme palette");
+    let s_opacity = SearchRow::new(&opacity_row, "opacity transparent background tint");
+    let s_glass = SearchRow::new(
+        &frosted_glass_row,
+        "frosted glass blur mutter wayland translucency",
+    );
+    let s_colored_tabs =
+        SearchRow::new(&colored_tabs_switch, "random color colored tabs auto color");
+    let s_pad = SearchRow::new(&padding_spin, "padding px");
+    let s_line = SearchRow::new(&line_spacing_spin, "line spacing cell height");
+    let s_col = SearchRow::new(&col_spacing_spin, "column spacing cell width");
+    let s_cwd = SearchRow::new(&preserve_cwd_switch, "preserve working directory cwd");
+    let s_cshape = SearchRow::new(&cursor_shape_combo, "cursor shape block beam underline");
+    let s_ccolor = SearchRow::new(&cursor_color_row, "cursor custom color");
+    let s_cblink = SearchRow::new(&cursor_blinking_switch, "blinking cursor");
+    let s_cmouse = SearchRow::new(&mouse_autohide_switch, "hide mouse pointer cursor autohide");
+    let s_pb = SearchRow::new(&enable_progress_bar_switch, "progress bars osc 9 4");
+    let s_scroll = SearchRow::new(&hide_scrollbars_switch, "hide scrollbars vertical");
+    let s_inv = SearchRow::new(&invert_scroll_switch, "invert scroll direction wheel");
+    let s_dim = SearchRow::new(&dim_inactive_switch, "dim inactive panes splits");
+    let s_fixed_tabs = SearchRow::new(&fixed_width_tabs_switch, "fixed width tabs");
+    let s_smart_tabs = SearchRow::new(&smart_tab_naming_switch, "smart tab naming basename");
+    let s_cwidth = SearchRow::new(&chat_width_spin, "sidebar width px split view");
+
+    let sync = Box::new(move |s: &Settings| {
+        is_syncing.set(true);
+
+        update_bg_ui(s.background_image_path.as_deref());
+        theme_row.set_subtitle(&glib::markup_escape_text(&s.theme));
+
+        let mut desc = pango::FontDescription::new();
+        desc.set_family(&s.font_name);
+        desc.set_size(i32::from(s.font_size) * pango::SCALE);
+        if font_button.font_desc().as_ref() != Some(&desc) {
+            font_button.set_font_desc(&desc);
         }
-    });
 
-    cursor_blinking_switch.set_active(settings_rc.borrow().cursor_blinking);
-    let s_rc = settings_rc.clone();
-    let cb = on_change.clone();
-    cursor_blinking_switch.connect_active_notify(move |row| {
-        let mut s = s_rc.borrow_mut();
-        if s.cursor_blinking != row.is_active() {
-            s.cursor_blinking = row.is_active();
-            s.save();
-            cb(s.clone());
+        if (opacity_adj.value() - s.opacity).abs() > 1e-4 {
+            opacity_adj.set_value(s.opacity);
         }
-    });
-
-    mouse_autohide_switch.set_active(settings_rc.borrow().mouse_autohide);
-    let s_rc = settings_rc.clone();
-    let cb = on_change.clone();
-    mouse_autohide_switch.connect_active_notify(move |row| {
-        let mut s = s_rc.borrow_mut();
-        if s.mouse_autohide != row.is_active() {
-            s.mouse_autohide = row.is_active();
-            s.save();
-            cb(s.clone());
+        if frosted_glass_row.is_active() != s.frosted_glass {
+            frosted_glass_row.set_active(s.frosted_glass);
         }
+        if (padding_spin.value() - f64::from(s.padding)).abs() > 1e-6 {
+            padding_spin.set_value(f64::from(s.padding));
+        }
+        if (line_spacing_spin.value() - s.cell_height_scale).abs() > 1e-6 {
+            line_spacing_spin.set_value(s.cell_height_scale);
+        }
+        if (col_spacing_spin.value() - s.cell_width_scale).abs() > 1e-6 {
+            col_spacing_spin.set_value(s.cell_width_scale);
+        }
+        if (chat_width_spin.value() - f64::from(s.ai_chat_width)).abs() > 1e-6 {
+            chat_width_spin.set_value(f64::from(s.ai_chat_width));
+        }
+
+        preserve_cwd_switch.set_active(s.preserve_working_dir);
+        enable_progress_bar_switch.set_active(s.enable_progress_bar);
+        hide_scrollbars_switch.set_active(s.hide_scrollbars);
+        invert_scroll_switch.set_active(s.invert_scroll);
+        dim_inactive_switch.set_active(s.dim_inactive_panes);
+        fixed_width_tabs_switch.set_active(s.fixed_width_tabs);
+        smart_tab_naming_switch.set_active(s.smart_tab_naming);
+        colored_tabs_switch.set_active(s.colored_tabs);
+        cursor_blinking_switch.set_active(s.cursor_blinking);
+        mouse_autohide_switch.set_active(s.mouse_autohide);
+
+        let target_shape = shape_to_idx(s.cursor_shape);
+        if cursor_shape_combo.selected() != target_shape {
+            cursor_shape_combo.set_selected(target_shape);
+        }
+        cursor_color_switch.set_active(s.cursor_color_override);
+        cursor_color_button.set_sensitive(s.cursor_color_override);
+        set_cursor_dot_color(&s.cursor_color);
+
+        is_syncing.set(false);
     });
-
-    let font_row_clone = font_row.clone();
-    let theme_row_clone = theme_row.clone();
-    let padding_spin_clone = padding_spin.clone();
-    let line_spacing_spin_clone = line_spacing_spin.clone();
-    let col_spacing_spin_clone = col_spacing_spin.clone();
-    let preserve_cwd_switch_clone = preserve_cwd_switch.clone();
-    let cursor_shape_combo_clone = cursor_shape_combo.clone();
-    let cursor_color_row_clone = cursor_color_row.clone();
-    let cursor_blinking_switch_clone = cursor_blinking_switch.clone();
-    let mouse_autohide_switch_clone = mouse_autohide_switch.clone();
-    let enable_progress_bar_switch_clone = enable_progress_bar_switch.clone();
-    let hide_scrollbars_switch_clone = hide_scrollbars_switch.clone();
-    let invert_scroll_switch_clone = invert_scroll_switch.clone();
-    let dim_inactive_switch_clone = dim_inactive_switch.clone();
-    let fixed_width_tabs_switch_clone = fixed_width_tabs_switch.clone();
-    let smart_tab_naming_switch_clone = smart_tab_naming_switch.clone();
-    let colored_tabs_switch_clone = colored_tabs_switch.clone();
-    let chat_width_spin_clone = chat_width_spin.clone();
-    let opacity_row_clone = opacity_row.clone();
-    let frosted_glass_row_clone = frosted_glass_row.clone();
-    let background_image_row_clone = background_image_row.clone();
-
-    let widgets = AppearanceWidgets {
-        theme_row,
-        chat_width_spin,
-        font_button,
-    };
 
     let filter = Box::new(move |query: &str| {
-        let match_row = |r: &gtk::Widget, text: &str| {
-            let m = query.is_empty() || text.to_lowercase().contains(query);
-            r.set_visible(m);
-            m
-        };
+        let a = s_font.apply(query)
+            | s_bg.apply(query)
+            | s_theme.apply(query)
+            | s_opacity.apply(query)
+            | s_glass.apply(query)
+            | s_colored_tabs.apply(query);
+        let t = s_pad.apply(query)
+            | s_line.apply(query)
+            | s_col.apply(query)
+            | s_cwd.apply(query);
+        let c = s_cshape.apply(query)
+            | s_ccolor.apply(query)
+            | s_cblink.apply(query)
+            | s_cmouse.apply(query);
+        let l = s_pb.apply(query)
+            | s_scroll.apply(query)
+            | s_inv.apply(query)
+            | s_dim.apply(query)
+            | s_fixed_tabs.apply(query)
+            | s_smart_tabs.apply(query)
+            | s_cwidth.apply(query);
 
-        let f1 = match_row(font_row_clone.upcast_ref(), "font family size");
-        let t_bg = match_row(
-            background_image_row_clone.upcast_ref(),
-            "background image wallpaper picture",
-        );
-        let t1 = match_row(
-            theme_row_clone.upcast_ref(),
-            "terminal colors terminal theme",
-        );
-        let t_op = match_row(
-            opacity_row_clone.upcast_ref(),
-            "opacity transparent background tint",
-        );
-        let f_glass = match_row(
-            frosted_glass_row_clone.upcast_ref(),
-            "frosted glass blur mutter wayland translucency",
-        );
-        let c_tabs = match_row(
-            colored_tabs_switch_clone.upcast_ref(),
-            "new tab in random color colored tabs auto color",
-        );
-        let t2 = match_row(padding_spin_clone.upcast_ref(), "padding px");
-        let t3 = match_row(line_spacing_spin_clone.upcast_ref(), "line spacing");
-        let t4 = match_row(col_spacing_spin_clone.upcast_ref(), "column spacing");
-        let t5 = match_row(
-            preserve_cwd_switch_clone.upcast_ref(),
-            "preserve working directory new tabs open in active tab directory",
-        );
-        let c1 = match_row(cursor_shape_combo_clone.upcast_ref(), "cursor shape");
-        let c3 = match_row(cursor_color_row_clone.upcast_ref(), "cursor custom color");
-        let c4 = match_row(
-            cursor_blinking_switch_clone.upcast_ref(),
-            "blinking cursor fades in out",
-        );
-        let c5 = match_row(
-            mouse_autohide_switch_clone.upcast_ref(),
-            "hide mouse when typing pointer cursor autohide restore movement",
-        );
-        let pb = match_row(
-            enable_progress_bar_switch_clone.upcast_ref(),
-            "progress bars show visual osc 9 4 flatpak cargo",
-        );
-        let l1 = match_row(
-            hide_scrollbars_switch_clone.upcast_ref(),
-            "hide scrollbars do not show vertical",
-        );
-        let l2 = match_row(
-            invert_scroll_switch_clone.upcast_ref(),
-            "invert scroll direction reverse mouse wheel",
-        );
-        let l3 = match_row(
-            dim_inactive_switch_clone.upcast_ref(),
-            "dim inactive panes terminal splits slightly",
-        );
-        let l5 = match_row(
-            fixed_width_tabs_switch_clone.upcast_ref(),
-            "fixed width tabs do not expand",
-        );
-        let l_smart_tabs = match_row(
-            smart_tab_naming_switch_clone.upcast_ref(),
-            "smart tab naming titles concise directory folder command basename full path hover",
-        );
-        let l6 = match_row(
-            chat_width_spin_clone.upcast_ref(),
-            "sidebar width px hacky mouse resize overlay split view",
-        );
+        group_appearance.set_visible(a);
+        group_terminal.set_visible(t);
+        group_cursor.set_visible(c);
+        group_layout.set_visible(l);
 
-        group_appearance.set_visible(f1 || t_bg || t1 || t_op || f_glass || c_tabs);
-        group_terminal.set_visible(t2 || t3 || t4 || t5);
-        group_cursor.set_visible(c1 || c3 || c4 || c5);
-        group_layout.set_visible(pb || l1 || l2 || l3 || l5 || l_smart_tabs || l6);
-
-        group_appearance.is_visible()
-            || group_terminal.is_visible()
-            || group_cursor.is_visible()
-            || group_layout.is_visible()
+        a || t || c || l
     });
 
-    (widgets, filter)
+    (sync, filter)
 }

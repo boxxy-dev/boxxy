@@ -1,17 +1,22 @@
 use crate::config::Settings;
+use crate::ui_utils::{Debouncer, PageHooks, SearchRow, open_directory, show_toast};
 use adw::prelude::*;
 use gtk4 as gtk;
+use gtk4::glib;
 use libadwaita as adw;
-use std::cell::RefCell;
+use std::cell::Cell;
 use std::fs;
 use std::rc::Rc;
+use std::time::Duration;
 
-pub fn setup_advanced_page(
+const DEFAULT_CUSTOM_REGEX: &str =
+    r#"(?:https?://[^\s"'<>]+|/[\w.@:/-]+|~[\w.@:/-]+|\.{1,2}/[\w.@:/-]+)"#;
+
+#[allow(clippy::too_many_lines)]
+pub(crate) fn setup_advanced_page(
     builder: &gtk::Builder,
-    settings_rc: Rc<RefCell<Settings>>,
-    on_change: Rc<dyn Fn(Settings) + 'static>,
     on_reload_engine: Rc<dyn Fn() + 'static>,
-) -> Box<dyn Fn(&str) -> bool> {
+) -> PageHooks {
     let login_shell_switch: adw::SwitchRow = builder.object("login_shell_switch").unwrap();
     let use_custom_command_switch: gtk::Switch =
         builder.object("use_custom_command_switch").unwrap();
@@ -31,111 +36,110 @@ pub fn setup_advanced_page(
         builder.object("group_terminal_interaction").unwrap();
     let group_config: adw::PreferencesGroup = builder.object("group_config").unwrap();
 
-    login_shell_switch.set_active(settings_rc.borrow().login_shell);
+    let is_syncing = Rc::new(Cell::new(false));
+    let initial = Settings::load();
 
-    let s_rc = settings_rc.clone();
-    let cb = on_change.clone();
-    login_shell_switch.connect_active_notify(move |row| {
-        let mut s = s_rc.borrow_mut();
-        if s.login_shell != row.is_active() {
-            s.login_shell = row.is_active();
-            s.save();
-            cb(s.clone());
-        }
+    macro_rules! bind_bool_switch {
+        ($widget:ident, $field:ident) => {{
+            $widget.set_active(initial.$field);
+            let is_syncing = is_syncing.clone();
+            $widget.connect_active_notify(move |row| {
+                if is_syncing.get() {
+                    return;
+                }
+                let active = row.is_active();
+                Settings::update(|s| {
+                    s.$field = active;
+                });
+            });
+        }};
+    }
+
+    bind_bool_switch!(login_shell_switch, login_shell);
+    bind_bool_switch!(use_custom_command_switch, use_custom_command);
+    bind_bool_switch!(show_vte_grid_switch, show_vte_grid);
+    bind_bool_switch!(pty_persistence_switch, pty_persistence);
+
+    custom_command_entry.set_text(&initial.custom_command);
+    let cmd_debouncer = Debouncer::new();
+    cmd_debouncer.bind_flush_lifecycle(&custom_command_entry);
+    {
+        let is_syncing = is_syncing.clone();
+        let debouncer = cmd_debouncer.clone();
+        custom_command_entry.connect_changed(move |entry| {
+            if is_syncing.get() {
+                return;
+            }
+            let text = entry.text().to_string();
+            debouncer.schedule(Duration::from_millis(300), move || {
+                Settings::update(|s| {
+                    s.custom_command.clone_from(&text);
+                });
+            });
+        });
+    }
+    {
+        let debouncer = cmd_debouncer;
+        custom_command_entry.connect_apply(move |entry| {
+            debouncer.cancel();
+            let text = entry.text().to_string();
+            Settings::update(|s| {
+                s.custom_command.clone_from(&text);
+            });
+        });
+    }
+
+    custom_regex_entry.set_text(&initial.custom_regex);
+    let regex_debouncer = Debouncer::new();
+    regex_debouncer.bind_flush_lifecycle(&custom_regex_entry);
+    {
+        let is_syncing = is_syncing.clone();
+        let debouncer = regex_debouncer.clone();
+        custom_regex_entry.connect_changed(move |entry| {
+            if is_syncing.get() {
+                return;
+            }
+            let pattern = entry.text().to_string();
+            if pattern.trim().is_empty() || regex::Regex::new(&pattern).is_err() {
+                debouncer.cancel();
+                entry.add_css_class("error");
+                entry.set_tooltip_text(Some("Invalid regular expression syntax"));
+                return;
+            }
+            entry.remove_css_class("error");
+            entry.set_tooltip_text(None);
+            debouncer.schedule(Duration::from_millis(300), move || {
+                Settings::update(|s| {
+                    s.custom_regex.clone_from(&pattern);
+                });
+            });
+        });
+    }
+
+    {
+        let regex_entry = custom_regex_entry.clone();
+        let is_syncing = is_syncing.clone();
+        let debouncer = regex_debouncer;
+        reset_regex_btn.connect_clicked(move |_| {
+            debouncer.cancel();
+            is_syncing.set(true);
+            regex_entry.set_text(DEFAULT_CUSTOM_REGEX);
+            regex_entry.remove_css_class("error");
+            regex_entry.set_tooltip_text(None);
+            is_syncing.set(false);
+
+            Settings::update(|s| {
+                DEFAULT_CUSTOM_REGEX.clone_into(&mut s.custom_regex);
+            });
+        });
+    }
+
+    open_config_btn.connect_clicked(|btn| {
+        open_directory(btn, boxxy_sys_utils::get_config_dir(), None);
     });
 
-    use_custom_command_switch.set_active(settings_rc.borrow().use_custom_command);
-    custom_command_entry.set_text(&settings_rc.borrow().custom_command);
-
-    let s_rc = settings_rc.clone();
-    let cb = on_change.clone();
-    use_custom_command_switch.connect_active_notify(move |row| {
-        let mut s = s_rc.borrow_mut();
-        if s.use_custom_command != row.is_active() {
-            s.use_custom_command = row.is_active();
-            s.save();
-            cb(s.clone());
-        }
-    });
-
-    let s_rc = settings_rc.clone();
-    let cb = on_change.clone();
-    custom_command_entry.connect_changed(move |entry| {
-        let mut s = s_rc.borrow_mut();
-        let text = entry.text().to_string();
-        if s.custom_command != text {
-            s.custom_command = text;
-            s.save();
-            cb(s.clone());
-        }
-    });
-
-    show_vte_grid_switch.set_active(settings_rc.borrow().show_vte_grid);
-    let s_rc = settings_rc.clone();
-    let cb = on_change.clone();
-    show_vte_grid_switch.connect_active_notify(move |row| {
-        let mut s = s_rc.borrow_mut();
-        if s.show_vte_grid != row.is_active() {
-            s.show_vte_grid = row.is_active();
-            s.save();
-            cb(s.clone());
-        }
-    });
-
-    pty_persistence_switch.set_active(settings_rc.borrow().pty_persistence);
-    let s_rc = settings_rc.clone();
-    let cb = on_change.clone();
-    pty_persistence_switch.connect_active_notify(move |row| {
-        let mut s = s_rc.borrow_mut();
-        if s.pty_persistence != row.is_active() {
-            s.pty_persistence = row.is_active();
-            s.save();
-            cb(s.clone());
-        }
-    });
-
-    custom_regex_entry.set_text(&settings_rc.borrow().custom_regex);
-    let s_rc = settings_rc.clone();
-    let cb = on_change.clone();
-    custom_regex_entry.connect_changed(move |entry| {
-        let mut s = s_rc.borrow_mut();
-        if s.custom_regex != entry.text().as_str() {
-            s.custom_regex = entry.text().to_string();
-            s.save();
-            cb(s.clone());
-        }
-    });
-
-    let s_rc = settings_rc.clone();
-    let cb = on_change.clone();
-    let regex_entry_clone = custom_regex_entry.clone();
-    reset_regex_btn.connect_clicked(move |_| {
-        regex_entry_clone.set_text(crate::config::DEFAULT_FILE_REGEX);
-        let mut s = s_rc.borrow_mut();
-        if s.custom_regex != crate::config::DEFAULT_FILE_REGEX {
-            s.custom_regex = crate::config::DEFAULT_FILE_REGEX.to_string();
-            s.save();
-            cb(s.clone());
-        }
-    });
-
-    open_config_btn.connect_clicked(|_| {
-        let config_dir = boxxy_sys_utils::get_config_dir();
-        if !config_dir.exists() {
-            let _ = fs::create_dir_all(&config_dir);
-        }
-        let uri = format!("file://{}", config_dir.display());
-        let _ = gtk::gio::AppInfo::launch_default_for_uri(
-            &uri,
-            None::<&gtk::gio::AppLaunchContext>,
-        );
-    });
-
-    let s_rc = settings_rc.clone();
-    let cb = on_change.clone();
     let dialog: adw::Dialog = builder.object("dialog").unwrap();
-    let reload_cb = on_reload_engine.clone();
-    reset_config_btn.connect_clicked(move |_| {
+    reset_config_btn.connect_clicked(move |btn| {
         let confirm = adw::AlertDialog::builder()
             .heading("Reset Everything?")
             .body("This will delete all settings and configuration. This action cannot be undone.")
@@ -143,85 +147,100 @@ pub fn setup_advanced_page(
         confirm.add_response("cancel", "Cancel");
         confirm.add_response("reset", "Reset");
         confirm.set_response_appearance("reset", adw::ResponseAppearance::Destructive);
+        confirm.set_default_response(Some("cancel"));
+        confirm.set_close_response("cancel");
 
-        let s_rc2 = s_rc.clone();
-        let cb2 = cb.clone();
-        let reload_cb2 = reload_cb.clone();
+        let reload_cb = on_reload_engine.clone();
+        let btn_weak = btn.downgrade();
         confirm.connect_response(None, move |_, response| {
-            if response == "reset" {
-                let config_dir = boxxy_sys_utils::get_config_dir();
-                let _ = fs::remove_dir_all(&config_dir);
-                crate::config::Settings::ensure_claw_skills();
-                let updated_settings = crate::config::Settings::default();
-                {
-                    let mut s = s_rc2.borrow_mut();
-                    *s = updated_settings.clone();
-                    s.save();
-                }
-                cb2(updated_settings);
-                reload_cb2();
+            if response != "reset" {
+                return;
             }
+            let reload_cb = reload_cb.clone();
+            let btn_weak = btn_weak.clone();
+            glib::spawn_future_local(async move {
+                let reseeded_chars = boxxy_sys_utils::runtime()
+                    .spawn_blocking(|| {
+                        let config_dir = boxxy_sys_utils::get_config_dir();
+                        let _ = fs::remove_dir_all(&config_dir);
+                        let fresh = Settings {
+                            install_id: Some(uuid::Uuid::new_v4().to_string()),
+                            ..Settings::default()
+                        };
+                        fresh.save();
+                        Settings::ensure_claw_skills();
+                        let _ = boxxy_themes::app_theme::ensure_app_themes_dir();
+                        let _ = boxxy_claw_protocol::character_loader::ensure_default_character();
+                        boxxy_claw_protocol::character_loader::load_characters().ok()
+                    })
+                    .await
+                    .ok()
+                    .flatten();
+
+                if let Some(chars) = reseeded_chars {
+                    boxxy_claw_protocol::characters::CHARACTER_CACHE
+                        .store(std::sync::Arc::new(chars));
+                }
+                reload_cb();
+                if let Some(b) = btn_weak.upgrade() {
+                    show_toast(&b, "All settings and configuration reset to defaults.");
+                }
+            });
         });
         confirm.present(Some(&dialog));
     });
 
-    let login_shell_switch_clone = login_shell_switch.clone();
-    let use_custom_command_switch_clone = use_custom_command_switch.clone();
-    let custom_command_entry_clone = custom_command_entry.clone();
-    let show_vte_grid_switch_clone = show_vte_grid_switch.clone();
-    let pty_persistence_switch_clone = pty_persistence_switch.clone();
-    let custom_regex_entry_clone = custom_regex_entry.clone();
-    let row_reset_regex_clone = row_reset_regex.clone();
-    let row_open_config_clone = row_open_config.clone();
-    let row_reset_config_clone = row_reset_config.clone();
+    let s_login = SearchRow::new(&login_shell_switch, "login shell spawn terminal");
+    let s_cmd = SearchRow::new(&custom_command_entry, "custom command shell");
+    let s_grid = SearchRow::new(&show_vte_grid_switch, "vte grid lines cells");
+    let s_pty = SearchRow::new(
+        &pty_persistence_switch,
+        "persistent shells detach background buffer running processes",
+    );
+    let s_regex = SearchRow::new(&custom_regex_entry, "file path regex ctrl+click");
+    let s_reset_rx = SearchRow::new(&row_reset_regex, "reset regex default");
+    let s_open_cfg = SearchRow::new(&row_open_config, "open config folder settings");
+    let s_reset_cfg = SearchRow::new(
+        &row_reset_config,
+        "reset everything delete configuration destructive",
+    );
 
-    Box::new(move |query: &str| {
-        let match_row = |r: &gtk::Widget, text: &str| {
-            let m = query.is_empty() || text.to_lowercase().contains(query);
-            r.set_visible(m);
-            m
-        };
+    let sync = Box::new(move |s: &Settings| {
+        is_syncing.set(true);
 
-        let ad1 = match_row(
-            login_shell_switch_clone.upcast_ref(),
-            "login shell spawn terminal",
-        );
-        let ad2 = match_row(
-            show_vte_grid_switch_clone.upcast_ref(),
-            "show vte grid lines representing cells",
-        );
-        let ad2a = match_row(
-            use_custom_command_switch_clone.upcast_ref(),
-            "run a custom command instead of my shell",
-        );
-        let ad2b = match_row(
-            custom_command_entry_clone.upcast_ref(),
-            "custom command instead of my shell",
-        );
-        let ad2c = match_row(
-            pty_persistence_switch_clone.upcast_ref(),
-            "persistent shells detach background buffer",
-        );
-        let ad3 = match_row(
-            custom_regex_entry_clone.upcast_ref(),
-            "file path regex ctrl+click freezes",
-        );
-        let ad4 = match_row(row_reset_regex_clone.upcast_ref(), "reset to default");
-        let ad5 = match_row(
-            row_open_config_clone.upcast_ref(),
-            "open config folder manage settings",
-        );
-        let ad6 = match_row(
-            row_reset_config_clone.upcast_ref(),
-            "reset everything delete all configuration destructive",
-        );
+        login_shell_switch.set_active(s.login_shell);
+        use_custom_command_switch.set_active(s.use_custom_command);
+        show_vte_grid_switch.set_active(s.show_vte_grid);
+        pty_persistence_switch.set_active(s.pty_persistence);
 
-        group_shell.set_visible(ad1 || ad2 || ad2a || ad2b || ad2c);
-        group_terminal_interaction.set_visible(ad3 || ad4);
-        group_config.set_visible(ad5 || ad6);
+        if !custom_command_entry.has_focus()
+            && custom_command_entry.text().as_str() != s.custom_command
+        {
+            custom_command_entry.set_text(&s.custom_command);
+        }
+        if !custom_regex_entry.has_focus() && custom_regex_entry.text().as_str() != s.custom_regex {
+            custom_regex_entry.set_text(&s.custom_regex);
+            custom_regex_entry.remove_css_class("error");
+            custom_regex_entry.set_tooltip_text(None);
+        }
 
-        group_shell.is_visible()
-            || group_terminal_interaction.is_visible()
-            || group_config.is_visible()
-    })
+        is_syncing.set(false);
+    });
+
+    let filter = Box::new(move |query: &str| {
+        let sh = s_login.apply(query)
+            | s_cmd.apply(query)
+            | s_grid.apply(query)
+            | s_pty.apply(query);
+        let inter = s_regex.apply(query) | s_reset_rx.apply(query);
+        let cfg = s_open_cfg.apply(query) | s_reset_cfg.apply(query);
+
+        group_shell.set_visible(sh);
+        group_terminal_interaction.set_visible(inter);
+        group_config.set_visible(cfg);
+
+        sh || inter || cfg
+    });
+
+    (sync, filter)
 }

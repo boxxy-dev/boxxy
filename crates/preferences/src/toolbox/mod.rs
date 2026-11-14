@@ -1,36 +1,25 @@
 use crate::config::{Settings, validate_vibe_trusted_dir};
+use crate::ui_utils::{PageHooks, SearchRow, show_toast};
 use adw::prelude::*;
 use gtk4 as gtk;
-use gtk4::glib;
 use libadwaita as adw;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
-
-fn show_toolbox_toast(widget: &impl IsA<gtk::Widget>, message: &str) {
-    let mut current: Option<gtk::Widget> = Some(widget.clone().upcast());
-    while let Some(w) = current {
-        if let Ok(overlay) = w.clone().downcast::<adw::ToastOverlay>() {
-            overlay.add_toast(adw::Toast::new(message));
-            return;
-        }
-        current = w.parent();
-    }
-}
 
 fn rebuild_vibe_location_rows(
     group: &adw::PreferencesGroup,
-    dynamic_rows: &Rc<RefCell<Vec<adw::ActionRow>>>,
-    settings_rc: &Rc<RefCell<Settings>>,
-    on_change: &Rc<dyn Fn(Settings) + 'static>,
+    dynamic_rows: &Rc<RefCell<Vec<(String, adw::ActionRow)>>>,
+    dirs: &[String],
 ) {
-    for old_row in dynamic_rows.borrow_mut().drain(..) {
+    for (_, old_row) in dynamic_rows.borrow_mut().drain(..) {
         group.remove(&old_row);
     }
 
-    let dirs = settings_rc.borrow().vibe_trusted_dirs.clone();
+    let mut built = Vec::with_capacity(dirs.len());
     for dir in dirs {
         let row = adw::ActionRow::builder()
-            .title(&dir)
+            .use_markup(false)
+            .title(dir)
             .build();
         let folder_icon = gtk::Image::from_icon_name("boxxy-folder-open-symbolic");
         folder_icon.add_css_class("dim-label");
@@ -45,30 +34,23 @@ fn rebuild_vibe_location_rows(
 
         let group_clone = group.clone();
         let rows_clone = dynamic_rows.clone();
-        let s_rc = settings_rc.clone();
-        let cb = on_change.clone();
         let dir_to_remove = dir.clone();
         remove_btn.connect_clicked(move |_| {
-            {
-                let mut s = s_rc.borrow_mut();
+            let updated = Settings::update(|s| {
                 s.vibe_trusted_dirs.retain(|d| d != &dir_to_remove);
-                s.save();
-                cb(s.clone());
-            }
-            rebuild_vibe_location_rows(&group_clone, &rows_clone, &s_rc, &cb);
+            });
+            rebuild_vibe_location_rows(&group_clone, &rows_clone, &updated.vibe_trusted_dirs);
         });
 
         row.add_suffix(&remove_btn);
         group.add(&row);
-        dynamic_rows.borrow_mut().push(row);
+        built.push((dir.clone(), row));
     }
+    *dynamic_rows.borrow_mut() = built;
 }
 
-pub fn setup_toolbox_page(
-    builder: &gtk::Builder,
-    settings_rc: Rc<RefCell<Settings>>,
-    on_change: Rc<dyn Fn(Settings) + 'static>,
-) -> Box<dyn Fn(&str) -> bool> {
+#[allow(clippy::too_many_lines)]
+pub(crate) fn setup_toolbox_page(builder: &gtk::Builder) -> PageHooks {
     let web_search_by_default_switch: adw::SwitchRow =
         builder.object("web_search_by_default_switch").unwrap();
     let max_roundtable_turns_spin: adw::SpinRow =
@@ -101,19 +83,23 @@ pub fn setup_toolbox_page(
         builder.object("group_toolbox_dreaming").unwrap();
     let group_toolbox_tools: adw::PreferencesGroup = builder.object("group_toolbox_tools").unwrap();
 
-    let vibe_dynamic_rows: Rc<RefCell<Vec<adw::ActionRow>>> = Rc::new(RefCell::new(Vec::new()));
+    let is_syncing = Rc::new(Cell::new(false));
+    let initial = Settings::load();
+
+    let vibe_dynamic_rows: Rc<RefCell<Vec<(String, adw::ActionRow)>>> =
+        Rc::new(RefCell::new(Vec::new()));
+    let last_vibe_dirs: Rc<RefCell<Vec<String>>> =
+        Rc::new(RefCell::new(initial.vibe_trusted_dirs.clone()));
     rebuild_vibe_location_rows(
         &group_vibe_locations,
         &vibe_dynamic_rows,
-        &settings_rc,
-        &on_change,
+        &initial.vibe_trusted_dirs,
     );
 
     let try_add_vibe_location = {
         let group_clone = group_vibe_locations.clone();
         let rows_clone = vibe_dynamic_rows.clone();
-        let s_rc = settings_rc.clone();
-        let cb = on_change.clone();
+        let last_dirs = last_vibe_dirs.clone();
         let entry_clone = vibe_location_entry.clone();
         Rc::new(move |raw: String| {
             let trimmed = raw.trim();
@@ -122,40 +108,45 @@ pub fn setup_toolbox_page(
             }
             match validate_vibe_trusted_dir(trimmed) {
                 Ok(valid_path) => {
-                    {
-                        let mut s = s_rc.borrow_mut();
+                    let updated = Settings::update(|s| {
                         if !s.vibe_trusted_dirs.contains(&valid_path) {
-                            s.vibe_trusted_dirs.push(valid_path);
-                            s.save();
-                            cb(s.clone());
+                            s.vibe_trusted_dirs.push(valid_path.clone());
                         }
-                    }
+                    });
                     entry_clone.set_text("");
-                    rebuild_vibe_location_rows(&group_clone, &rows_clone, &s_rc, &cb);
+                    last_dirs
+                        .borrow_mut()
+                        .clone_from(&updated.vibe_trusted_dirs);
+                    rebuild_vibe_location_rows(
+                        &group_clone,
+                        &rows_clone,
+                        &updated.vibe_trusted_dirs,
+                    );
                 }
                 Err(msg) => {
-                    show_toolbox_toast(&entry_clone, msg);
+                    show_toast(&entry_clone, msg);
                 }
             }
         })
     };
 
-    let add_apply = try_add_vibe_location.clone();
-    vibe_location_entry.connect_apply(move |entry| {
-        add_apply(entry.text().to_string());
-    });
+    {
+        let add_apply = try_add_vibe_location.clone();
+        vibe_location_entry.connect_apply(move |entry| {
+            add_apply(entry.text().to_string());
+        });
+    }
 
-    let add_browse = try_add_vibe_location;
     vibe_location_browse_btn.connect_clicked(move |btn| {
         let dialog = gtk::FileDialog::builder()
             .title("Select Trusted Folder for Vibe Mode")
             .modal(true)
             .build();
         let root_win = btn.root().and_downcast::<gtk::Window>();
-        let add_cb = add_browse.clone();
+        let add_cb = try_add_vibe_location.clone();
         dialog.select_folder(
             root_win.as_ref(),
-            None::<&gtk::gio::Cancellable>,
+            gtk::gio::Cancellable::NONE,
             move |res| {
                 if let Ok(file) = res
                     && let Some(path) = file.path()
@@ -166,227 +157,136 @@ pub fn setup_toolbox_page(
         );
     });
 
-    // Keep list synced if trusted folders are added from a terminal pane while Preferences is open.
-    {
-        let group_weak = group_vibe_locations.downgrade();
-        let rows_sync = vibe_dynamic_rows.clone();
-        let s_rc_sync = settings_rc.clone();
-        let cb_sync = on_change.clone();
-        let mut rx = crate::config::SETTINGS_EVENT_BUS.subscribe();
-        glib::spawn_future_local(async move {
-            while let Ok(updated) = rx.recv().await {
-                let Some(group) = group_weak.upgrade() else {
-                    break;
-                };
-                let changed = s_rc_sync.borrow().vibe_trusted_dirs != updated.vibe_trusted_dirs;
-                if changed {
-                    s_rc_sync.borrow_mut().vibe_trusted_dirs = updated.vibe_trusted_dirs;
-                    rebuild_vibe_location_rows(&group, &rows_sync, &s_rc_sync, &cb_sync);
-                }
-            }
-        });
-    }
-
     // Initialize values
-    web_search_by_default_switch.set_active(settings_rc.borrow().web_search_on_by_default);
     {
-        let turns_val = settings_rc.borrow().max_roundtable_turns.clamp(1, 100) as f64;
+        let turns_val = f64::from(initial.max_roundtable_turns.clamp(1, 100));
         let turns_adj = gtk::Adjustment::new(turns_val, 1.0, 100.0, 1.0, 5.0, 0.0);
         max_roundtable_turns_spin.set_adjustment(Some(&turns_adj));
         max_roundtable_turns_spin.set_value(turns_val);
     }
-    enable_auto_dreaming_switch.set_active(settings_rc.borrow().enable_auto_dreaming);
-    enable_file_tools_switch.set_active(settings_rc.borrow().enable_file_tools);
-    enable_system_tools_switch.set_active(settings_rc.borrow().enable_system_tools);
-    enable_dangerous_tools_switch.set_active(settings_rc.borrow().enable_dangerous_tools);
-    enable_web_tools_switch.set_active(settings_rc.borrow().enable_web_tools);
-    enable_web_search_switch.set_active(settings_rc.borrow().enable_web_search);
-    enable_os_context_switch.set_active(settings_rc.borrow().enable_os_context);
-    enable_clipboard_tools_switch.set_active(settings_rc.borrow().enable_clipboard_tools);
 
-    // Connect signals
-    let s_rc = settings_rc.clone();
-    let cb = on_change.clone();
-    web_search_by_default_switch.connect_active_notify(move |row| {
-        let mut s = s_rc.borrow_mut();
-        if s.web_search_on_by_default != row.is_active() {
-            s.web_search_on_by_default = row.is_active();
-            s.save();
-            cb(s.clone());
+    {
+        let is_syncing = is_syncing.clone();
+        max_roundtable_turns_spin.connect_value_notify(move |row: &adw::SpinRow| {
+            if is_syncing.get() {
+                return;
+            }
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let val = (row.value().round() as u32).clamp(1, 100);
+            Settings::update(|s| {
+                s.max_roundtable_turns = val;
+            });
+        });
+    }
+
+    macro_rules! bind_bool_switch {
+        ($widget:ident, $field:ident) => {{
+            $widget.set_active(initial.$field);
+            let is_syncing = is_syncing.clone();
+            $widget.connect_active_notify(move |row| {
+                if is_syncing.get() {
+                    return;
+                }
+                let active = row.is_active();
+                Settings::update(|s| {
+                    s.$field = active;
+                });
+            });
+        }};
+    }
+
+    bind_bool_switch!(web_search_by_default_switch, web_search_on_by_default);
+    bind_bool_switch!(enable_auto_dreaming_switch, enable_auto_dreaming);
+    bind_bool_switch!(enable_file_tools_switch, enable_file_tools);
+    bind_bool_switch!(enable_system_tools_switch, enable_system_tools);
+    bind_bool_switch!(enable_dangerous_tools_switch, enable_dangerous_tools);
+    bind_bool_switch!(enable_web_tools_switch, enable_web_tools);
+    bind_bool_switch!(enable_web_search_switch, enable_web_search);
+    bind_bool_switch!(enable_os_context_switch, enable_os_context);
+    bind_bool_switch!(enable_clipboard_tools_switch, enable_clipboard_tools);
+
+    let s_web_def = SearchRow::new(
+        &web_search_by_default_switch,
+        "web search on by default permissions toolbox",
+    );
+    let s_turns = SearchRow::new(
+        &max_roundtable_turns_spin,
+        "character chat turn limit max roundtable turns rounds debate drama autonomous",
+    );
+    let s_vibe_entry = SearchRow::new(
+        &vibe_location_entry,
+        "vibe mode locations trusted folders directories permissions auto run safe commands",
+    );
+    let s_dream = SearchRow::new(
+        &enable_auto_dreaming_switch,
+        "auto-dreaming memory consolidation durable facts",
+    );
+    let s_file = SearchRow::new(&enable_file_tools_switch, "file tools read write list delete");
+    let s_sys = SearchRow::new(&enable_system_tools_switch, "system tools monitoring processes");
+    let s_danger = SearchRow::new(&enable_dangerous_tools_switch, "dangerous terminate kill");
+    let s_web = SearchRow::new(&enable_web_tools_switch, "web tools fetch http documentation");
+    let s_search = SearchRow::new(&enable_web_search_switch, "web search tavily providers");
+    let s_os = SearchRow::new(&enable_os_context_switch, "location time context environment");
+    let s_clip = SearchRow::new(&enable_clipboard_tools_switch, "clipboard copy paste");
+
+    let group_vibe_sync = group_vibe_locations.clone();
+    let rows_vibe_sync = vibe_dynamic_rows.clone();
+    let sync = Box::new(move |s: &Settings| {
+        is_syncing.set(true);
+
+        web_search_by_default_switch.set_active(s.web_search_on_by_default);
+        let turns_val = f64::from(s.max_roundtable_turns.clamp(1, 100));
+        if (max_roundtable_turns_spin.value() - turns_val).abs() > 1e-6 {
+            max_roundtable_turns_spin.set_value(turns_val);
         }
+        enable_auto_dreaming_switch.set_active(s.enable_auto_dreaming);
+        enable_file_tools_switch.set_active(s.enable_file_tools);
+        enable_system_tools_switch.set_active(s.enable_system_tools);
+        enable_dangerous_tools_switch.set_active(s.enable_dangerous_tools);
+        enable_web_tools_switch.set_active(s.enable_web_tools);
+        enable_web_search_switch.set_active(s.enable_web_search);
+        enable_os_context_switch.set_active(s.enable_os_context);
+        enable_clipboard_tools_switch.set_active(s.enable_clipboard_tools);
+
+        if *last_vibe_dirs.borrow() != s.vibe_trusted_dirs {
+            last_vibe_dirs.borrow_mut().clone_from(&s.vibe_trusted_dirs);
+            rebuild_vibe_location_rows(&group_vibe_sync, &rows_vibe_sync, &s.vibe_trusted_dirs);
+        }
+
+        is_syncing.set(false);
     });
 
-    let s_rc = settings_rc.clone();
-    let cb = on_change.clone();
-    max_roundtable_turns_spin.connect_value_notify(move |row: &adw::SpinRow| {
-        let val = (row.value().round() as u32).clamp(1, 100);
-        let mut s = s_rc.borrow_mut();
-        if s.max_roundtable_turns != val {
-            s.max_roundtable_turns = val;
-            s.save();
-            cb(s.clone());
+    let filter = Box::new(move |query: &str| {
+        let perm_vis = s_web_def.apply(query) | s_turns.apply(query);
+        let mut vibe_vis = s_vibe_entry.apply(query);
+        for (dir, row) in vibe_dynamic_rows.borrow().iter() {
+            let dir_matched =
+                query.is_empty() || vibe_vis || dir.to_lowercase().contains(query);
+            row.set_visible(dir_matched);
+            if dir_matched {
+                vibe_vis = true;
+            }
         }
+        if vibe_vis {
+            vibe_location_entry.set_visible(true);
+        }
+
+        let dream_vis = s_dream.apply(query);
+        let tools_vis = s_file.apply(query)
+            | s_sys.apply(query)
+            | s_danger.apply(query)
+            | s_web.apply(query)
+            | s_search.apply(query)
+            | s_os.apply(query)
+            | s_clip.apply(query);
+
+        group_toolbox_permissions.set_visible(perm_vis);
+        group_vibe_locations.set_visible(vibe_vis);
+        group_toolbox_dreaming.set_visible(dream_vis);
+        group_toolbox_tools.set_visible(tools_vis);
+
+        perm_vis || vibe_vis || dream_vis || tools_vis
     });
 
-    let s_rc = settings_rc.clone();
-    let cb = on_change.clone();
-    enable_auto_dreaming_switch.connect_active_notify(move |row| {
-        let mut s = s_rc.borrow_mut();
-        if s.enable_auto_dreaming != row.is_active() {
-            s.enable_auto_dreaming = row.is_active();
-            s.save();
-            cb(s.clone());
-        }
-    });
-
-    let s_rc = settings_rc.clone();
-    let cb = on_change.clone();
-    enable_file_tools_switch.connect_active_notify(move |row| {
-        let mut s = s_rc.borrow_mut();
-        if s.enable_file_tools != row.is_active() {
-            s.enable_file_tools = row.is_active();
-            s.save();
-            cb(s.clone());
-        }
-    });
-
-    let s_rc = settings_rc.clone();
-    let cb = on_change.clone();
-    enable_system_tools_switch.connect_active_notify(move |row| {
-        let mut s = s_rc.borrow_mut();
-        if s.enable_system_tools != row.is_active() {
-            s.enable_system_tools = row.is_active();
-            s.save();
-            cb(s.clone());
-        }
-    });
-
-    let s_rc = settings_rc.clone();
-    let cb = on_change.clone();
-    enable_dangerous_tools_switch.connect_active_notify(move |row| {
-        let mut s = s_rc.borrow_mut();
-        if s.enable_dangerous_tools != row.is_active() {
-            s.enable_dangerous_tools = row.is_active();
-            s.save();
-            cb(s.clone());
-        }
-    });
-
-    let s_rc = settings_rc.clone();
-    let cb = on_change.clone();
-    enable_web_tools_switch.connect_active_notify(move |row| {
-        let mut s = s_rc.borrow_mut();
-        if s.enable_web_tools != row.is_active() {
-            s.enable_web_tools = row.is_active();
-            s.save();
-            cb(s.clone());
-        }
-    });
-
-    let s_rc = settings_rc.clone();
-    let cb = on_change.clone();
-    enable_web_search_switch.connect_active_notify(move |row| {
-        let mut s = s_rc.borrow_mut();
-        if s.enable_web_search != row.is_active() {
-            s.enable_web_search = row.is_active();
-            s.save();
-            cb(s.clone());
-        }
-    });
-
-    let s_rc = settings_rc.clone();
-    let cb = on_change.clone();
-    enable_os_context_switch.connect_active_notify(move |row| {
-        let mut s = s_rc.borrow_mut();
-        if s.enable_os_context != row.is_active() {
-            s.enable_os_context = row.is_active();
-            s.save();
-            cb(s.clone());
-        }
-    });
-
-    let s_rc = settings_rc.clone();
-    let cb = on_change.clone();
-    enable_clipboard_tools_switch.connect_active_notify(move |row| {
-        let mut s = s_rc.borrow_mut();
-        if s.enable_clipboard_tools != row.is_active() {
-            s.enable_clipboard_tools = row.is_active();
-            s.save();
-            cb(s.clone());
-        }
-    });
-
-    let web_search_by_default_switch_clone = web_search_by_default_switch.clone();
-    let max_roundtable_turns_spin_clone = max_roundtable_turns_spin.clone();
-    let vibe_location_entry_clone = vibe_location_entry.clone();
-    let enable_file_tools_switch_clone = enable_file_tools_switch.clone();
-    let enable_system_tools_switch_clone = enable_system_tools_switch.clone();
-    let enable_dangerous_tools_switch_clone = enable_dangerous_tools_switch.clone();
-    let enable_web_tools_switch_clone = enable_web_tools_switch.clone();
-    let enable_os_context_switch_clone = enable_os_context_switch.clone();
-    let enable_clipboard_tools_switch_clone = enable_clipboard_tools_switch.clone();
-    let enable_auto_dreaming_switch_clone = enable_auto_dreaming_switch.clone();
-
-    Box::new(move |query: &str| {
-        let match_row = |r: &gtk::Widget, text: &str| {
-            let m = query.is_empty() || text.to_lowercase().contains(query);
-            r.set_visible(m);
-            m
-        };
-
-        let ag_web_default = match_row(
-            web_search_by_default_switch_clone.upcast_ref(),
-            "web search on by default allowed automatically permissions toolbox",
-        );
-        let ag_roundtable_turns = match_row(
-            max_roundtable_turns_spin_clone.upcast_ref(),
-            "character chat turn limit max roundtable turns rounds debate drama autonomous conversation permissions toolbox",
-        );
-        let ag_vibe_locs = match_row(
-            vibe_location_entry_clone.upcast_ref(),
-            "vibe mode locations trusted folders directories permissions auto run safe commands",
-        );
-        let ag_dream = match_row(
-            enable_auto_dreaming_switch_clone.upcast_ref(),
-            "enable auto-dreaming memory consolidation durable facts patterns",
-        );
-        let ag3 = match_row(
-            enable_file_tools_switch_clone.upcast_ref(),
-            "enable file tools read write list delete search toolbox",
-        );
-        let ag4 = match_row(
-            enable_system_tools_switch_clone.upcast_ref(),
-            "enable system tools monitoring list processes",
-        );
-        let ag5 = match_row(
-            enable_dangerous_tools_switch_clone.upcast_ref(),
-            "enable dangerous tools terminate kill processes",
-        );
-        let ag6 = match_row(
-            enable_web_tools_switch_clone.upcast_ref(),
-            "enable web tools fetch content documentation",
-        );
-        let ag_search = match_row(
-            enable_web_search_switch.upcast_ref(),
-            "enable web search tools tavily providers",
-        );
-        let ag_os = match_row(
-            enable_os_context_switch_clone.upcast_ref(),
-            "enable location and time context injection environment",
-        );
-        let ag7 = match_row(
-            enable_clipboard_tools_switch_clone.upcast_ref(),
-            "enable clipboard tools read write copy paste",
-        );
-
-        group_toolbox_permissions.set_visible(ag_web_default || ag_roundtable_turns);
-        group_vibe_locations.set_visible(ag_vibe_locs);
-        group_toolbox_dreaming.set_visible(ag_dream);
-        group_toolbox_tools.set_visible(ag3 || ag4 || ag5 || ag6 || ag_search || ag_os || ag7);
-
-        group_toolbox_permissions.is_visible()
-            || group_vibe_locations.is_visible()
-            || group_toolbox_dreaming.is_visible()
-            || group_toolbox_tools.is_visible()
-    })
+    (sync, filter)
 }

@@ -24,6 +24,15 @@ entry:not(.flat):focus-within {
     box-shadow: 2px 3px 0px @boxxy_ink;
 }
 
+searchentry.error,
+entry.error:not(.flat),
+searchentry.error:focus-within,
+entry.error:not(.flat):focus-within {
+    outline: var(--boxxy-border-width) solid @error_color;
+    outline-offset: -2px;
+    color: @error_color;
+}
+
 /* ── Switches ────────────────────────────────────────────────────────────── */
 
 switch {

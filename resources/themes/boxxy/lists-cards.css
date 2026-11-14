@@ -114,3 +114,18 @@ preferencesgroup listbox > row.activatable:active {
     background-color: color-mix(in srgb, @window_bg_color 82%, @boxxy_ink 18%);
     background-image: none;
 }
+
+.boxed-list > row.error,
+.boxed-list-separate > row.error,
+listbox.boxed-list > row.error,
+listbox.boxed-list-separate > row.error,
+preferencesgroup .boxed-list > row.error,
+preferencesgroup listbox > row.error {
+    background-color: alpha(@error_bg_color, 0.14);
+    outline: var(--boxxy-border-width) solid @error_color;
+    outline-offset: -2px;
+}
+
+preferencesgroup listbox > row.error .title {
+    color: @error_color;
+}

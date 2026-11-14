@@ -1,27 +1,34 @@
 use crate::config::Settings;
+use crate::ui_utils::{
+    Debouncer, PageHooks, SearchRow, bind_mapped_poller, make_editable_color_dot, open_directory,
+    show_toast,
+};
 use crate::user_profile;
 use adw::prelude::*;
 use gtk4 as gtk;
 use gtk4::gdk;
 use gtk4::glib;
 use libadwaita as adw;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::sync::Arc;
+use std::time::Duration;
 
 struct RowData {
     char_id: String,
-    duties: String,
     title: String,
+    haystack: String,
+    last_active: Cell<Option<bool>>,
     row: adw::ActionRow,
 }
 
-pub fn setup_characters_page(
-    builder: &gtk::Builder,
-    settings_rc: Rc<RefCell<Settings>>,
-    on_change: Rc<dyn Fn(Settings) + 'static>,
-) -> Box<dyn Fn(&str) -> bool> {
+#[allow(clippy::too_many_lines)]
+pub(crate) fn setup_characters_page(builder: &gtk::Builder) -> PageHooks {
     let page: adw::PreferencesPage = builder.object("page_characters").unwrap();
+
+    let is_syncing = Rc::new(Cell::new(false));
+    let initial = Settings::load();
 
     // === User Profile group ===
     let user_group = adw::PreferencesGroup::new();
@@ -29,112 +36,121 @@ pub fn setup_characters_page(
 
     let display_name_row = adw::EntryRow::new();
     display_name_row.set_title("What the model calls you");
-    display_name_row.set_text(&settings_rc.borrow().user_profile.display_name);
+    display_name_row.set_text(&initial.user_profile.display_name);
 
     let user_avatar = boxxy_core_widgets::EditableAvatar::new(52, None, true);
     user_avatar.widget().set_margin_top(6);
     user_avatar.widget().set_margin_bottom(6);
-    user_profile::configure_avatar(
-        user_avatar.avatar(),
-        &user_profile::effective(&settings_rc.borrow()),
-    );
+    user_profile::configure_avatar(user_avatar.avatar(), &user_profile::effective(&initial));
     display_name_row.add_prefix(user_avatar.widget());
 
-    let s_rc = settings_rc.clone();
-    let cb = on_change.clone();
-    let avatar_clone = user_avatar.avatar().clone();
-    display_name_row.connect_changed(move |entry| {
-        let text = entry.text().to_string();
-        let mut s = s_rc.borrow_mut();
-        if s.user_profile.display_name != text {
-            s.user_profile.display_name = text.clone();
-            s.save();
-            user_profile::configure_avatar(&avatar_clone, &user_profile::effective(&s));
-            cb(s.clone());
-        }
-    });
-
-    let avatar_exists = boxxy_assets::user::get_user_avatar_path().exists();
-    user_avatar.set_remove_tooltip("Remove custom avatar");
-    user_avatar.set_removable(avatar_exists);
-
-    let s_rc_upload = settings_rc.clone();
-    let user_avatar_upload = user_avatar.clone();
-    let avatar_btn_toast = user_avatar.widget().clone();
-    user_avatar.connect_avatar_cropped("Crop Your Avatar", move |result| match result {
-        Ok(output) => {
-            let s_rc_upload = s_rc_upload.clone();
-            let user_avatar_upload = user_avatar_upload.clone();
-            let avatar_btn_toast = avatar_btn_toast.clone();
-
-            glib::spawn_future_local(async move {
-                let user_dir = boxxy_assets::user::get_user_dir();
-                let user_avatar_path = user_dir.join("AVATAR.png");
-                if tokio::fs::create_dir_all(&user_dir).await.is_ok()
-                    && tokio::fs::write(&user_avatar_path, &output.png_bytes)
-                        .await
-                        .is_ok()
-                {
-                    user_profile::configure_avatar(
-                        user_avatar_upload.avatar(),
-                        &user_profile::effective(&s_rc_upload.borrow()),
-                    );
-                    user_avatar_upload.set_removable(true);
-                    add_preferences_toast(&avatar_btn_toast, "Avatar updated");
-                } else {
-                    add_preferences_toast(&avatar_btn_toast, "Failed to save avatar.");
-                }
-            });
-        }
-        Err(err) => {
-            add_preferences_toast(
-                &avatar_btn_toast,
-                &format!("Failed to process avatar: {err}"),
-            );
-        }
-    });
-
-    let s_rc_remove = settings_rc.clone();
-    let user_avatar_remove = user_avatar.clone();
-    user_avatar.connect_avatar_removed(move || {
-        let s_rc_remove = s_rc_remove.clone();
-        let user_avatar_remove = user_avatar_remove.clone();
-
-        glib::spawn_future_local(async move {
-            let path = boxxy_assets::user::get_user_avatar_path();
-            if let Err(e) = tokio::fs::remove_file(&path).await
-                && e.kind() != std::io::ErrorKind::NotFound
-            {
-                log::error!("Failed to remove user avatar: {}", e);
-                add_preferences_toast(user_avatar_remove.widget(), "Failed to remove avatar.");
+    let name_debouncer = Debouncer::new();
+    name_debouncer.bind_flush_lifecycle(&display_name_row);
+    {
+        let is_syncing = is_syncing.clone();
+        let avatar_clone = user_avatar.avatar().clone();
+        let debouncer = name_debouncer.clone();
+        display_name_row.connect_changed(move |entry| {
+            if is_syncing.get() {
                 return;
             }
-
-            user_profile::configure_avatar(
-                user_avatar_remove.avatar(),
-                &user_profile::effective(&s_rc_remove.borrow()),
-            );
-            user_avatar_remove.set_removable(false);
-
-            add_preferences_toast(user_avatar_remove.widget(), "Avatar removed");
+            let text = entry.text().to_string();
+            let avatar_inner = avatar_clone.clone();
+            debouncer.schedule(Duration::from_millis(250), move || {
+                let updated = Settings::update(|s| {
+                    s.user_profile.display_name.clone_from(&text);
+                });
+                user_profile::configure_avatar(&avatar_inner, &user_profile::effective(&updated));
+            });
         });
-    });
+    }
+    display_name_row.connect_entry_activated(move |_| name_debouncer.flush());
 
-    let initial_user_color = user_profile::effective(&settings_rc.borrow()).color;
-    let color_btn = make_color_dot(&initial_user_color, "Profile Color", {
-        let s_rc2 = settings_rc;
-        let cb2 = on_change;
-        let avatar_color_clone = user_avatar.avatar().clone();
-        move |hex| {
-            let mut s = s_rc2.borrow_mut();
-            if s.user_profile.color.as_deref() != Some(&hex) {
-                s.user_profile.color = Some(hex);
-                s.save();
-                user_profile::configure_avatar(&avatar_color_clone, &user_profile::effective(&s));
-                cb2(s.clone());
+    user_avatar.set_remove_tooltip("Remove custom avatar");
+    user_avatar.set_removable(false);
+    {
+        let ua_init = user_avatar.clone();
+        glib::spawn_future_local(async move {
+            let exists = tokio::fs::try_exists(boxxy_assets::user::get_user_avatar_path())
+                .await
+                .unwrap_or(false);
+            ua_init.set_removable(exists);
+        });
+    }
+
+    {
+        let user_avatar_upload = user_avatar.clone();
+        let avatar_btn_toast = user_avatar.widget().clone();
+        user_avatar.connect_avatar_cropped("Crop Your Avatar", move |result| match result {
+            Ok(output) => {
+                let user_avatar_upload = user_avatar_upload.clone();
+                let avatar_btn_toast = avatar_btn_toast.clone();
+
+                glib::spawn_future_local(async move {
+                    let user_dir = boxxy_assets::user::get_user_dir();
+                    let user_avatar_path = user_dir.join("AVATAR.png");
+                    if tokio::fs::create_dir_all(&user_dir).await.is_ok()
+                        && tokio::fs::write(&user_avatar_path, &output.png_bytes)
+                            .await
+                            .is_ok()
+                    {
+                        user_profile::invalidate_avatar_cache();
+                        user_profile::configure_avatar(
+                            user_avatar_upload.avatar(),
+                            &user_profile::current(),
+                        );
+                        user_avatar_upload.set_removable(true);
+                        Settings::notify_changed();
+                        show_toast(&avatar_btn_toast, "Avatar updated");
+                    } else {
+                        show_toast(&avatar_btn_toast, "Failed to save avatar.");
+                    }
+                });
             }
-        }
-    });
+            Err(err) => {
+                show_toast(
+                    &avatar_btn_toast,
+                    &format!("Failed to process avatar: {err}"),
+                );
+            }
+        });
+    }
+
+    {
+        let user_avatar_remove = user_avatar.clone();
+        user_avatar.connect_avatar_removed(move || {
+            let user_avatar_remove = user_avatar_remove.clone();
+
+            glib::spawn_future_local(async move {
+                let path = boxxy_assets::user::get_user_avatar_path();
+                if let Err(e) = tokio::fs::remove_file(&path).await
+                    && e.kind() != std::io::ErrorKind::NotFound
+                {
+                    log::error!("Failed to remove user avatar: {e}");
+                    show_toast(user_avatar_remove.widget(), "Failed to remove avatar.");
+                    return;
+                }
+
+                user_profile::invalidate_avatar_cache();
+                user_profile::configure_avatar(
+                    user_avatar_remove.avatar(),
+                    &user_profile::current(),
+                );
+                user_avatar_remove.set_removable(false);
+                Settings::notify_changed();
+
+                show_toast(user_avatar_remove.widget(), "Avatar removed");
+            });
+        });
+    }
+
+    let initial_user_color = user_profile::effective(&initial).color;
+    let (color_btn, set_user_color_dot) =
+        make_editable_color_dot(&initial_user_color, "Profile Color", move |hex| {
+            Settings::update(|s| {
+                s.user_profile.color = Some(hex.clone());
+            });
+        });
     display_name_row.add_suffix(&color_btn);
 
     user_group.add(&display_name_row);
@@ -142,11 +158,9 @@ pub fn setup_characters_page(
 
     let chars_dir = boxxy_claw_protocol::character_loader::get_characters_dir().ok();
 
-    // Initial fetch from cache
     let initial_catalog = boxxy_claw_protocol::characters::CHARACTER_CACHE.load_full();
-    let characters = (*initial_catalog).clone();
-
-    let rows = Rc::new(RefCell::new(Vec::new()));
+    let rows: Rc<RefCell<Vec<RowData>>> = Rc::new(RefCell::new(Vec::new()));
+    let empty_placeholder: Rc<RefCell<Option<adw::ActionRow>>> = Rc::new(RefCell::new(None));
 
     // === Characters list group ===
     let chars_group = adw::PreferencesGroup::new();
@@ -157,60 +171,68 @@ pub fn setup_characters_page(
         Note: If a character is removed, any of their past sessions \
         will automatically be reassigned to the first available character.",
     ));
-
     page.add(&chars_group);
 
-    // Initial render
-    render_characters(&chars_group, characters, rows.clone(), chars_dir.clone());
+    render_characters(
+        &chars_group,
+        &initial_catalog,
+        &rows,
+        &empty_placeholder,
+        chars_dir.as_ref(),
+    );
 
-    // Setup reactivity: poll the CLAIMS_CACHE and CHARACTER_CACHE using a weak
-    // reference to `chars_group` so the timer automatically stops and frees the
-    // page widgets when the Preferences dialog is closed.
-    let mut last_catalog = initial_catalog;
-    let rows_poll = rows.clone();
-    let chars_group_weak = chars_group.downgrade();
-    let chars_dir_poll = chars_dir.clone();
+    // Refresh active claim badges & catalog changes strictly while the Characters page is mapped
+    let last_catalog = Rc::new(RefCell::new(initial_catalog));
+    let sync_claims_and_catalog: Rc<dyn Fn()> = {
+        let chars_group = chars_group.clone();
+        let rows_poll = rows.clone();
+        let empty_poll = empty_placeholder;
+        let chars_dir_poll = chars_dir.clone();
 
-    glib::timeout_add_local(std::time::Duration::from_millis(500), move || {
-        let Some(chars_group_poll) = chars_group_weak.upgrade() else {
-            return glib::ControlFlow::Break;
-        };
+        Rc::new(move || {
+            let claims = boxxy_claw_protocol::characters::CLAIMS_CACHE.load();
+            let catalog = boxxy_claw_protocol::characters::CHARACTER_CACHE.load_full();
 
-        let claims = boxxy_claw_protocol::characters::CLAIMS_CACHE.load();
-        let catalog = boxxy_claw_protocol::characters::CHARACTER_CACHE.load_full();
-
-        if !std::sync::Arc::ptr_eq(&catalog, &last_catalog) && *catalog != *last_catalog {
-            last_catalog = catalog.clone();
-            render_characters(
-                &chars_group_poll,
-                (*catalog).clone(),
-                rows_poll.clone(),
-                chars_dir_poll.clone(),
-            );
-        }
-
-        let current_rows = rows_poll.borrow();
-
-        for row_data in current_rows.iter() {
-            let active_claim = claims.iter().find(|c| c.character_id == row_data.char_id);
-
-            row_data
-                .row
-                .set_subtitle(&glib::markup_escape_text(&row_data.duties));
-
-            if active_claim.is_some() {
-                row_data
-                    .row
-                    .set_title(&format!("{} (Active)", row_data.title));
-                row_data.row.add_css_class("success");
-            } else {
-                row_data.row.set_title(&row_data.title);
-                row_data.row.remove_css_class("success");
+            let catalog_changed = {
+                let prev = last_catalog.borrow();
+                !Arc::ptr_eq(&catalog, &prev) && *catalog != **prev
+            };
+            if catalog_changed {
+                *last_catalog.borrow_mut() = Arc::clone(&catalog);
+                render_characters(
+                    &chars_group,
+                    &catalog,
+                    &rows_poll,
+                    &empty_poll,
+                    chars_dir_poll.as_ref(),
+                );
             }
-        }
 
-        glib::ControlFlow::Continue
-    });
+            for row_data in rows_poll.borrow().iter() {
+                let is_active = claims.iter().any(|c| c.character_id == row_data.char_id);
+                if row_data.last_active.get() != Some(is_active) {
+                    row_data.last_active.set(Some(is_active));
+                    if is_active {
+                        row_data
+                            .row
+                            .set_title(&format!("{} (Active)", row_data.title));
+                        row_data.row.add_css_class("success");
+                    } else {
+                        row_data.row.set_title(&row_data.title);
+                        row_data.row.remove_css_class("success");
+                    }
+                }
+            }
+        })
+    };
+    sync_claims_and_catalog();
+    {
+        let on_map = sync_claims_and_catalog.clone();
+        let on_tick = sync_claims_and_catalog;
+        bind_mapped_poller(&page, Duration::from_millis(500), move || on_map(), move || {
+            on_tick();
+        });
+    }
 
     // === Link to Toolbox & Permissions (Autonomous Turn Limit) ===
     let turns_link_group = adw::PreferencesGroup::new();
@@ -238,9 +260,7 @@ pub fn setup_characters_page(
     // === Management group ===
     let manage_group = adw::PreferencesGroup::new();
     manage_group.set_title("Manage");
-    // ... (rest of management group setup)
 
-    // Open characters folder
     let open_row = adw::ActionRow::new();
     open_row.set_title("Open Characters Folder");
     open_row.set_subtitle("Browse and edit character files in your file manager");
@@ -249,26 +269,18 @@ pub fn setup_characters_page(
     arrow.set_valign(gtk::Align::Center);
     open_row.add_suffix(&arrow);
 
-    let chars_dir_open = chars_dir.clone();
+    let chars_dir_open = chars_dir;
     open_row.connect_activated(move |row| {
-        let Some(dir) = &chars_dir_open else { return };
-        let _ = std::fs::create_dir_all(dir);
-        let uri = format!("file://{}", dir.display());
-        let _ =
-            gtk::gio::AppInfo::launch_default_for_uri(&uri, None::<&gtk::gio::AppLaunchContext>);
-
-        if let Some(overlay) = row
-            .ancestor(adw::ToastOverlay::static_type())
-            .and_downcast::<adw::ToastOverlay>()
-        {
-            let toast = adw::Toast::new("Changes in the characters folder apply automatically.");
-            toast.set_timeout(3);
-            overlay.add_toast(toast);
+        if let Some(ref dir) = chars_dir_open {
+            open_directory(
+                row,
+                dir.clone(),
+                Some("Changes in the characters folder apply automatically."),
+            );
         }
     });
     manage_group.add(&open_row);
 
-    // Reset to defaults
     let reset_row = adw::ActionRow::new();
     reset_row.set_title("Reset to Defaults");
     reset_row.set_subtitle(
@@ -279,112 +291,159 @@ pub fn setup_characters_page(
     reset_btn.set_valign(gtk::Align::Center);
     reset_btn.add_css_class("destructive-action");
     reset_row.add_suffix(&reset_btn);
-
-    reset_btn.connect_clicked(move |btn| {
-        show_reset_confirmation(btn);
-    });
+    reset_btn.connect_clicked(show_reset_confirmation);
 
     manage_group.add(&reset_row);
     page.add(&manage_group);
 
-    let chars_group_clone = chars_group.clone();
-    let turns_link_group_clone = turns_link_group.clone();
-    let manage_group_clone = manage_group.clone();
-    Box::new(move |query: &str| {
-        let matches = query.is_empty()
+    let s_user = SearchRow::new(
+        &display_name_row,
+        "you user profile display name what the model calls you avatar color",
+    );
+
+    let display_name_sync = display_name_row;
+    let user_avatar_sync = user_avatar;
+    let sync = Box::new(move |s: &Settings| {
+        is_syncing.set(true);
+        if !display_name_sync.has_focus()
+            && display_name_sync.focus_child().is_none()
+            && display_name_sync.text().as_str() != s.user_profile.display_name
+        {
+            display_name_sync.set_text(&s.user_profile.display_name);
+        }
+        let eff = user_profile::effective(s);
+        user_profile::configure_avatar(user_avatar_sync.avatar(), &eff);
+        set_user_color_dot(&eff.color);
+        is_syncing.set(false);
+    });
+
+    let filter = Box::new(move |query: &str| {
+        let user_vis = s_user.apply(query);
+        user_group.set_visible(user_vis);
+
+        let static_chars_match = query.is_empty()
             || "characters avatar personality agent niko levi kuro manage folder reset autonomous turn limit"
                 .contains(query);
-        chars_group_clone.set_visible(matches);
-        turns_link_group_clone.set_visible(matches);
-        manage_group_clone.set_visible(matches);
-        matches
-    })
+        let mut any_char_vis = static_chars_match;
+        for row_data in rows.borrow().iter() {
+            let m = query.is_empty() || static_chars_match || row_data.haystack.contains(query);
+            row_data.row.set_visible(m);
+            if m {
+                any_char_vis = true;
+            }
+        }
+        chars_group.set_visible(any_char_vis);
+        turns_link_group.set_visible(static_chars_match);
+        manage_group.set_visible(static_chars_match);
+
+        user_vis || any_char_vis || static_chars_match
+    });
+
+    (sync, filter)
 }
 
+#[allow(clippy::too_many_lines)]
 fn render_characters(
     chars_group: &adw::PreferencesGroup,
-    characters: Vec<boxxy_claw_protocol::characters::CharacterInfo>,
-    rows: Rc<RefCell<Vec<RowData>>>,
-    chars_dir: Option<PathBuf>,
+    characters: &[boxxy_claw_protocol::characters::CharacterInfo],
+    rows: &Rc<RefCell<Vec<RowData>>>,
+    empty_placeholder: &Rc<RefCell<Option<adw::ActionRow>>>,
+    chars_root: Option<&PathBuf>,
 ) {
-    // Clear the group first. Instead of trying to clear the group's internal children directly
-    // which causes GTK critical errors, we will just remove the specific rows we added.
-    let current_rows = rows.borrow();
-    for row_data in current_rows.iter() {
+    for row_data in rows.borrow_mut().drain(..) {
         chars_group.remove(&row_data.row);
     }
-    drop(current_rows);
-
-    let mut new_rows = Vec::new();
+    if let Some(old_empty) = empty_placeholder.borrow_mut().take() {
+        chars_group.remove(&old_empty);
+    }
 
     if characters.is_empty() {
-        let label = gtk::Label::new(Some(
-            "No characters found. Open the characters folder to add one.",
-        ));
-        label.set_wrap(true);
-        label.set_margin_top(8);
-        label.set_margin_bottom(8);
-        label.add_css_class("dim-label");
-        chars_group.add(&label);
-    } else {
-        for character in characters.iter() {
-            let row = adw::ActionRow::new();
+        let empty_row = adw::ActionRow::builder()
+            .use_markup(false)
+            .title("No characters found")
+            .subtitle("Open the characters folder below to add one.")
+            .build();
+        chars_group.add(&empty_row);
+        *empty_placeholder.borrow_mut() = Some(empty_row);
+        return;
+    }
 
-            // Format name: "niko-una" -> "Niko Una"
-            let formatted_name = character
-                .config
-                .name
-                .split('-')
-                .map(|word| {
-                    let mut c = word.chars();
-                    match c.next() {
-                        None => String::new(),
-                        Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+    let mut new_rows = Vec::with_capacity(characters.len());
+
+    for character in characters {
+        let formatted_name = character
+            .config
+            .name
+            .split('-')
+            .map(|word| {
+                let mut c = word.chars();
+                c.next()
+                    .map_or_else(String::new, |f| f.to_uppercase().collect::<String>() + c.as_str())
+            })
+            .collect::<Vec<String>>()
+            .join(" ");
+
+        let row = adw::ActionRow::builder()
+            .use_markup(false)
+            .title(&formatted_name)
+            .subtitle(&character.config.duties)
+            .build();
+
+        let editable_avatar = boxxy_core_widgets::EditableAvatar::new(
+            52,
+            Some(&character.config.display_name),
+            true,
+        );
+        let is_bundled = boxxy_claw_protocol::character_loader::bundled_default_avatar(
+            &character.config.name,
+        )
+        .is_some();
+        editable_avatar.set_remove_tooltip(if is_bundled {
+            "Reset to default avatar"
+        } else {
+            "Remove custom avatar"
+        });
+
+        if let Some(dir) = chars_root {
+            let profile_dir = dir.join(&character.config.name);
+            let avatar_path = profile_dir.join("AVATAR.png");
+            let has_avatar = character.has_avatar;
+            let char_slug = character.config.name.clone();
+            let ea_load = editable_avatar.clone();
+            glib::spawn_future_local(async move {
+                let (png_bytes, is_custom) = boxxy_sys_utils::runtime()
+                    .spawn_blocking(move || {
+                        let bytes = if has_avatar {
+                            std::fs::read(&avatar_path).ok()
+                        } else {
+                            None
+                        };
+                        let custom =
+                            boxxy_claw_protocol::character_loader::has_custom_character_avatar(
+                                &char_slug,
+                                &profile_dir,
+                            );
+                        (bytes, custom)
+                    })
+                    .await
+                    .unwrap_or((None, false));
+
+                if let Some(raw) = png_bytes {
+                    let gbytes = glib::Bytes::from_owned(raw);
+                    if let Ok(texture) = gdk::Texture::from_bytes(&gbytes) {
+                        ea_load.avatar().set_custom_image(Some(&texture));
                     }
-                })
-                .collect::<Vec<String>>()
-                .join(" ");
-
-            row.set_title(&glib::markup_escape_text(&formatted_name));
-            row.set_subtitle(&glib::markup_escape_text(&character.config.duties));
-
-            // Editable Avatar with pencil + hover reset/remove badges
-            let editable_avatar = boxxy_core_widgets::EditableAvatar::new(
-                52,
-                Some(&character.config.display_name),
-                true,
-            );
-            let is_bundled = boxxy_claw_protocol::character_loader::bundled_default_avatar(
-                &character.config.name,
-            )
-            .is_some();
-            editable_avatar.set_remove_tooltip(if is_bundled {
-                "Reset to default avatar"
-            } else {
-                "Remove custom avatar"
-            });
-
-            if let Some(dir) = &chars_dir {
-                let char_dir = dir.join(&character.config.name);
-                let avatar_path = char_dir.join("AVATAR.png");
-                if character.has_avatar
-                    && let Ok(texture) = gdk::Texture::from_filename(&avatar_path)
-                {
-                    editable_avatar.avatar().set_custom_image(Some(&texture));
                 }
-                editable_avatar.set_removable(
-                    boxxy_claw_protocol::character_loader::has_custom_character_avatar(
-                        &character.config.name,
-                        &char_dir,
-                    ),
-                );
-            }
-            editable_avatar.widget().set_margin_top(4);
-            editable_avatar.widget().set_margin_bottom(4);
-            row.add_prefix(editable_avatar.widget());
+                ea_load.set_removable(is_custom);
+            });
+        }
+        editable_avatar.widget().set_margin_top(4);
+        editable_avatar.widget().set_margin_bottom(4);
+        row.add_prefix(editable_avatar.widget());
 
+        {
             let char_name = character.config.name.clone();
-            let chars_dir_upload = chars_dir.clone();
+            let chars_dir_upload = chars_root.cloned();
             let editable_avatar_upload = editable_avatar.clone();
             let btn_toast = editable_avatar.widget().clone();
             let dialog_title = format!("Crop Avatar — {formatted_name}");
@@ -396,201 +455,241 @@ fn render_characters(
                     let btn_toast = btn_toast.clone();
 
                     glib::spawn_future_local(async move {
-                        if let Some(base_dir) = &chars_dir_upload {
-                            let char_dir = base_dir.join(&char_name);
-                            let avatar_path = char_dir.join("AVATAR.png");
+                        let Some(base_dir) = chars_dir_upload else {
+                            return;
+                        };
+                        let profile_dir = base_dir.join(&char_name);
+                        let avatar_path = profile_dir.join("AVATAR.png");
 
-                            if tokio::fs::write(&avatar_path, &output.png_bytes)
-                                .await
-                                .is_ok()
-                            {
-                                let bytes = glib::Bytes::from(&output.png_bytes);
-                                if let Ok(texture) = gdk::Texture::from_bytes(&bytes) {
-                                    editable_avatar_upload
-                                        .avatar()
-                                        .set_custom_image(Some(&texture));
-                                }
-                                editable_avatar_upload.set_removable(
+                        if tokio::fs::write(&avatar_path, &output.png_bytes)
+                            .await
+                            .is_ok()
+                        {
+                            let bytes = glib::Bytes::from(&output.png_bytes);
+                            if let Ok(texture) = gdk::Texture::from_bytes(&bytes) {
+                                editable_avatar_upload
+                                    .avatar()
+                                    .set_custom_image(Some(&texture));
+                            }
+                            let is_custom = boxxy_sys_utils::runtime()
+                                .spawn_blocking(move || {
                                     boxxy_claw_protocol::character_loader::has_custom_character_avatar(
                                         &char_name,
-                                        &char_dir,
-                                    ),
-                                );
-                                add_preferences_toast(&btn_toast, "Avatar updated.");
-                            } else {
-                                add_preferences_toast(&btn_toast, "Failed to save avatar.");
-                            }
+                                        &profile_dir,
+                                    )
+                                })
+                                .await
+                                .unwrap_or(true);
+                            editable_avatar_upload.set_removable(is_custom);
+                            show_toast(&btn_toast, "Avatar updated.");
+                        } else {
+                            show_toast(&btn_toast, "Failed to save avatar.");
                         }
                     });
                 }
                 Err(err) => {
-                    add_preferences_toast(&btn_toast, &format!("Failed to process avatar: {err}"));
+                    show_toast(&btn_toast, &format!("Failed to process avatar: {err}"));
                 }
-            });
-
-            // Editable color swatch
-            let char_name_color = character.config.name.clone();
-            let chars_dir_color = chars_dir.clone();
-            let editable_avatar_color = editable_avatar.clone();
-            let swatch_tooltip = format!("Click to change {formatted_name}'s color");
-            let (swatch, set_swatch_color) =
-                make_editable_color_dot(&character.config.color, &swatch_tooltip, move |new_hex| {
-                    let Some(base_dir) = &chars_dir_color else {
-                        return;
-                    };
-                    let char_dir = base_dir.join(&char_name_color);
-                    if let Err(e) = boxxy_claw_protocol::character_loader::save_character_color(
-                        &char_dir, &new_hex,
-                    ) {
-                        log::error!("Failed to save character color: {e}");
-                        add_preferences_toast(
-                            editable_avatar_color.widget(),
-                            "Failed to save character color.",
-                        );
-                        return;
-                    }
-                    editable_avatar_color.set_removable(
-                        boxxy_claw_protocol::character_loader::has_custom_character_avatar(
-                            &char_name_color,
-                            &char_dir,
-                        ),
-                    );
-                    if let Ok(reloaded) = boxxy_claw_protocol::character_loader::load_characters() {
-                        boxxy_claw_protocol::characters::CHARACTER_CACHE
-                            .store(std::sync::Arc::new(reloaded));
-                    }
-                });
-            row.add_suffix(&swatch);
-
-            let char_name_reset = character.config.name.clone();
-            let chars_dir_reset = chars_dir.clone();
-            let editable_avatar_reset = editable_avatar.clone();
-            editable_avatar.connect_avatar_removed(move || {
-                let Some(base_dir) = &chars_dir_reset else {
-                    return;
-                };
-                let char_dir = base_dir.join(&char_name_reset);
-                let restored_color = boxxy_claw_protocol::character_loader::character_default_color(
-                    &char_name_reset,
-                    &char_dir,
-                );
-                match boxxy_claw_protocol::character_loader::reset_character_avatar(
-                    &char_name_reset,
-                    &char_dir,
-                ) {
-                    Ok(Some(default_bytes)) => {
-                        let bytes = glib::Bytes::from_static(default_bytes);
-                        if let Ok(texture) = gdk::Texture::from_bytes(&bytes) {
-                            editable_avatar_reset
-                                .avatar()
-                                .set_custom_image(Some(&texture));
-                        }
-                        if let Some(ref c) = restored_color {
-                            set_swatch_color(c);
-                        }
-                        editable_avatar_reset.set_removable(false);
-                        if let Ok(reloaded) =
-                            boxxy_claw_protocol::character_loader::load_characters()
-                        {
-                            boxxy_claw_protocol::characters::CHARACTER_CACHE
-                                .store(std::sync::Arc::new(reloaded));
-                        }
-                        add_preferences_toast(
-                            editable_avatar_reset.widget(),
-                            "Avatar and color reset to default.",
-                        );
-                    }
-                    Ok(None) => {
-                        editable_avatar_reset
-                            .avatar()
-                            .set_custom_image(None::<&gdk::Texture>);
-                        if let Some(ref c) = restored_color {
-                            set_swatch_color(c);
-                        }
-                        editable_avatar_reset.set_removable(false);
-                        if let Ok(reloaded) =
-                            boxxy_claw_protocol::character_loader::load_characters()
-                        {
-                            boxxy_claw_protocol::characters::CHARACTER_CACHE
-                                .store(std::sync::Arc::new(reloaded));
-                        }
-                        add_preferences_toast(
-                            editable_avatar_reset.widget(),
-                            "Custom avatar and color reset.",
-                        );
-                    }
-                    Err(e) => {
-                        log::error!("Failed to reset character avatar: {e}");
-                        add_preferences_toast(
-                            editable_avatar_reset.widget(),
-                            "Failed to reset avatar.",
-                        );
-                    }
-                }
-            });
-
-            // Drag indicator
-            let drag_icon = gtk::Image::from_icon_name("list-drag-handle-symbolic");
-            drag_icon.set_valign(gtk::Align::Center);
-            drag_icon.add_css_class("dim-label");
-            drag_icon.set_margin_end(6);
-            row.add_prefix(&drag_icon);
-
-            // Drag and Drop
-            let drag_source = gtk::DragSource::new();
-            drag_source.set_actions(gdk::DragAction::MOVE);
-            let id_str = character.config.id.clone();
-            drag_source.connect_prepare(move |_, _, _| {
-                Some(gdk::ContentProvider::for_value(&id_str.to_value()))
-            });
-            row.add_controller(drag_source);
-
-            let drop_target = gtk::DropTarget::new(glib::Type::STRING, gdk::DragAction::MOVE);
-            let target_id = character.config.id.clone();
-            let characters_dnd = characters.clone();
-            let rows_dnd = rows.clone();
-            let chars_group_dnd = chars_group.clone();
-            let chars_dir_dnd = chars_dir.clone();
-            drop_target.connect_drop(move |_, value, _, _| {
-                if let Ok(source_id_str) = value.get::<String>() {
-                    if source_id_str != target_id {
-                        let mut chars = characters_dnd.clone();
-                        let source_idx_opt =
-                            chars.iter().position(|c| c.config.id == source_id_str);
-                        let target_idx_opt = chars.iter().position(|c| c.config.id == target_id);
-
-                        if let (Some(source_idx), Some(target_idx)) =
-                            (source_idx_opt, target_idx_opt)
-                        {
-                            let item = chars.remove(source_idx);
-                            chars.insert(target_idx, item);
-
-                            let order: Vec<String> =
-                                chars.iter().map(|c| c.config.name.clone()).collect();
-                            let _ =
-                                boxxy_claw_protocol::character_loader::save_character_order(order);
-                            render_characters(
-                                &chars_group_dnd,
-                                chars,
-                                rows_dnd.clone(),
-                                chars_dir_dnd.clone(),
-                            );
-                        }
-                    }
-                    return true;
-                }
-                false
-            });
-            row.add_controller(drop_target);
-
-            chars_group.add(&row);
-            new_rows.push(RowData {
-                char_id: character.config.id.clone(),
-                duties: character.config.duties.clone(),
-                title: formatted_name,
-                row,
             });
         }
+
+        // Editable color swatch (GPU-snapshotted ColorDot)
+        let char_name_color = character.config.name.clone();
+        let chars_dir_color = chars_root.cloned();
+        let editable_avatar_color = editable_avatar.clone();
+        let swatch_tooltip = format!("Click to change {formatted_name}'s color");
+        let (swatch, set_swatch_color) =
+            make_editable_color_dot(&character.config.color, &swatch_tooltip, move |new_hex| {
+                let Some(base_dir) = chars_dir_color.clone() else {
+                    return;
+                };
+                let char_name = char_name_color.clone();
+                let ea = editable_avatar_color.clone();
+                glib::spawn_future_local(async move {
+                    let res = boxxy_sys_utils::runtime()
+                        .spawn_blocking(move || {
+                            let profile_dir = base_dir.join(&char_name);
+                            boxxy_claw_protocol::character_loader::save_character_color(
+                                &profile_dir,
+                                &new_hex,
+                            )
+                            .map_err(|e| e.to_string())?;
+                            let is_custom =
+                                boxxy_claw_protocol::character_loader::has_custom_character_avatar(
+                                    &char_name,
+                                    &profile_dir,
+                                );
+                            let reloaded =
+                                boxxy_claw_protocol::character_loader::load_characters().ok();
+                            Ok::<_, String>((is_custom, reloaded))
+                        })
+                        .await;
+
+                    match res {
+                        Ok(Ok((is_custom, reloaded))) => {
+                            ea.set_removable(is_custom);
+                            if let Some(chars) = reloaded {
+                                boxxy_claw_protocol::characters::CHARACTER_CACHE
+                                    .store(Arc::new(chars));
+                            }
+                        }
+                        Ok(Err(e)) => {
+                            log::error!("Failed to save character color: {e}");
+                            show_toast(ea.widget(), "Failed to save character color.");
+                        }
+                        Err(e) => {
+                            log::error!("Character color task panicked: {e}");
+                        }
+                    }
+                });
+            });
+        row.add_suffix(&swatch);
+
+        {
+            let char_name_reset = character.config.name.clone();
+            let chars_dir_reset = chars_root.cloned();
+            let editable_avatar_reset = editable_avatar.clone();
+            editable_avatar.connect_avatar_removed(move || {
+                let Some(base_dir) = chars_dir_reset.clone() else {
+                    return;
+                };
+                let char_name = char_name_reset.clone();
+                let ea = editable_avatar_reset.clone();
+                let set_swatch = set_swatch_color.clone();
+
+                glib::spawn_future_local(async move {
+                    let outcome = boxxy_sys_utils::runtime()
+                        .spawn_blocking(move || {
+                            let profile_dir = base_dir.join(&char_name);
+                            let restored_color =
+                                boxxy_claw_protocol::character_loader::character_default_color(
+                                    &char_name,
+                                    &profile_dir,
+                                );
+                            let bytes_opt =
+                                boxxy_claw_protocol::character_loader::reset_character_avatar(
+                                    &char_name,
+                                    &profile_dir,
+                                )
+                                .map_err(|e| e.to_string())?;
+                            let reloaded =
+                                boxxy_claw_protocol::character_loader::load_characters().ok();
+                            Ok::<_, String>((bytes_opt, restored_color, reloaded))
+                        })
+                        .await;
+
+                    match outcome {
+                        Ok(Ok((Some(default_bytes), restored_color, reloaded))) => {
+                            let bytes = glib::Bytes::from_static(default_bytes);
+                            if let Ok(texture) = gdk::Texture::from_bytes(&bytes) {
+                                ea.avatar().set_custom_image(Some(&texture));
+                            }
+                            if let Some(ref c) = restored_color {
+                                set_swatch(c);
+                            }
+                            ea.set_removable(false);
+                            if let Some(chars) = reloaded {
+                                boxxy_claw_protocol::characters::CHARACTER_CACHE
+                                    .store(Arc::new(chars));
+                            }
+                            show_toast(ea.widget(), "Avatar and color reset to default.");
+                        }
+                        Ok(Ok((None, restored_color, reloaded))) => {
+                            ea.avatar().set_custom_image(None::<&gdk::Texture>);
+                            if let Some(ref c) = restored_color {
+                                set_swatch(c);
+                            }
+                            ea.set_removable(false);
+                            if let Some(chars) = reloaded {
+                                boxxy_claw_protocol::characters::CHARACTER_CACHE
+                                    .store(Arc::new(chars));
+                            }
+                            show_toast(ea.widget(), "Custom avatar and color reset.");
+                        }
+                        Ok(Err(e)) => {
+                            log::error!("Failed to reset character avatar: {e}");
+                            show_toast(ea.widget(), "Failed to reset avatar.");
+                        }
+                        Err(e) => {
+                            log::error!("Reset character avatar task panicked: {e}");
+                        }
+                    }
+                });
+            });
+        }
+
+        // Drag indicator
+        let drag_icon = gtk::Image::from_icon_name("list-drag-handle-symbolic");
+        drag_icon.set_valign(gtk::Align::Center);
+        drag_icon.add_css_class("dim-label");
+        drag_icon.set_margin_end(6);
+        row.add_prefix(&drag_icon);
+
+        // Drag and Drop reordering
+        let drag_source = gtk::DragSource::new();
+        drag_source.set_actions(gdk::DragAction::MOVE);
+        let id_str = character.config.id.clone();
+        drag_source.connect_prepare(move |_, _, _| {
+            Some(gdk::ContentProvider::for_value(&id_str.to_value()))
+        });
+        row.add_controller(drag_source);
+
+        let drop_target = gtk::DropTarget::new(glib::Type::STRING, gdk::DragAction::MOVE);
+        let target_id = character.config.id.clone();
+        let characters_dnd = characters.to_vec();
+        let rows_dnd = rows.clone();
+        let empty_dnd = empty_placeholder.clone();
+        let chars_group_dnd = chars_group.clone();
+        let chars_dir_dnd = chars_root.cloned();
+        drop_target.connect_drop(move |_, value, _, _| {
+            if let Ok(source_id_str) = value.get::<String>() {
+                if source_id_str != target_id {
+                    let mut chars = characters_dnd.clone();
+                    let source_idx_opt = chars.iter().position(|c| c.config.id == source_id_str);
+                    let target_idx_opt = chars.iter().position(|c| c.config.id == target_id);
+
+                    if let (Some(source_idx), Some(target_idx)) = (source_idx_opt, target_idx_opt) {
+                        let item = chars.remove(source_idx);
+                        chars.insert(target_idx, item);
+
+                        let order: Vec<String> =
+                            chars.iter().map(|c| c.config.name.clone()).collect();
+                        boxxy_sys_utils::runtime().spawn_blocking(move || {
+                            let _ =
+                                boxxy_claw_protocol::character_loader::save_character_order(order);
+                        });
+                        render_characters(
+                            &chars_group_dnd,
+                            &chars,
+                            &rows_dnd,
+                            &empty_dnd,
+                            chars_dir_dnd.as_ref(),
+                        );
+                    }
+                }
+                return true;
+            }
+            false
+        });
+        row.add_controller(drop_target);
+
+        let haystack = format!(
+            "{} {} {} {}",
+            formatted_name,
+            character.config.display_name,
+            character.config.name,
+            character.config.duties
+        )
+        .to_lowercase();
+
+        chars_group.add(&row);
+        new_rows.push(RowData {
+            char_id: character.config.id.clone(),
+            title: formatted_name,
+            haystack,
+            last_active: Cell::new(None),
+            row,
+        });
     }
 
     *rows.borrow_mut() = new_rows;
@@ -635,153 +734,41 @@ fn show_final_confirmation(parent: &gtk::Button) {
     dialog.set_default_response(Some("cancel"));
     dialog.set_close_response("cancel");
 
-    let parent_clone = parent.clone();
+    let parent_weak = parent.downgrade();
     dialog.connect_response(None, move |_, r| {
         if r == "confirm" {
-            if let Err(e) = boxxy_claw_protocol::character_loader::reset_to_defaults() {
-                log::error!("Failed to reset characters to defaults: {}", e);
-            } else {
-                add_preferences_toast(&parent_clone, "Characters reset to defaults.");
-            }
+            let parent_weak = parent_weak.clone();
+            glib::spawn_future_local(async move {
+                let res = boxxy_sys_utils::runtime()
+                    .spawn_blocking(|| {
+                        boxxy_claw_protocol::character_loader::reset_to_defaults()
+                            .map_err(|e| e.to_string())?;
+                        boxxy_claw_protocol::character_loader::load_characters()
+                            .map_err(|e| e.to_string())
+                    })
+                    .await;
+
+                match res {
+                    Ok(Ok(chars)) => {
+                        boxxy_claw_protocol::characters::CHARACTER_CACHE
+                            .store(Arc::new(chars));
+                        if let Some(btn) = parent_weak.upgrade() {
+                            show_toast(&btn, "Characters reset to defaults.");
+                        }
+                    }
+                    Ok(Err(e)) => {
+                        log::error!("Failed to reset characters to defaults: {e}");
+                        if let Some(btn) = parent_weak.upgrade() {
+                            show_toast(&btn, "Failed to reset characters.");
+                        }
+                    }
+                    Err(e) => {
+                        log::error!("Reset characters task panicked: {e}");
+                    }
+                }
+            });
         }
     });
 
     dialog.present(Some(parent));
-}
-
-fn add_preferences_toast(widget: &impl IsA<gtk::Widget>, message: &str) {
-    if let Some(overlay) = widget
-        .ancestor(adw::ToastOverlay::static_type())
-        .and_downcast::<adw::ToastOverlay>()
-    {
-        overlay.add_toast(adw::Toast::new(message));
-    }
-}
-
-pub(crate) fn make_color_dot<F>(color_hex: &str, tooltip: &str, on_color_chosen: F) -> gtk::Button
-where
-    F: Fn(String) + 'static,
-{
-    make_editable_color_dot(color_hex, tooltip, on_color_chosen).0
-}
-
-pub(crate) fn make_editable_color_dot<F>(
-    color_hex: &str,
-    tooltip: &str,
-    on_color_chosen: F,
-) -> (gtk::Button, Rc<dyn Fn(&str)>)
-where
-    F: Fn(String) + 'static,
-{
-    // Unique class per dot to ensure styles don't bleed between rows.
-    static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-    let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let class = format!("pref-color-dot-{n}");
-
-    let dot = gtk::Button::new();
-    dot.set_size_request(22, 22);
-    dot.set_valign(gtk::Align::Center);
-    dot.set_halign(gtk::Align::Center);
-    dot.set_focus_on_click(false);
-    dot.set_cursor_from_name(Some("pointer"));
-    dot.set_tooltip_text(Some(tooltip));
-    dot.add_css_class("color-dot-btn");
-    dot.add_css_class(&class);
-
-    let provider = gtk::CssProvider::new();
-    if let Some(display) = gtk::gdk::Display::default() {
-        gtk::style_context_add_provider_for_display(
-            &display,
-            &provider,
-            gtk::STYLE_PROVIDER_PRIORITY_USER + 50,
-        );
-        let provider_cleanup = provider.clone();
-        dot.connect_destroy(move |_| {
-            if let Some(display) = gtk::gdk::Display::default() {
-                gtk::style_context_remove_provider_for_display(&display, &provider_cleanup);
-            }
-        });
-    }
-
-    let current_hex = Rc::new(RefCell::new(String::new()));
-    let apply_color: Rc<dyn Fn(&str)> = {
-        let provider = provider.clone();
-        let class = class.clone();
-        let current_hex = current_hex.clone();
-        Rc::new(move |raw_hex: &str| {
-            let safe_color = if let Ok(rgba) = gdk::RGBA::parse(raw_hex) {
-                format!(
-                    "#{:02x}{:02x}{:02x}",
-                    (rgba.red() * 255.0).round() as u8,
-                    (rgba.green() * 255.0).round() as u8,
-                    (rgba.blue() * 255.0).round() as u8
-                )
-            } else {
-                "#808080".to_string()
-            };
-            *current_hex.borrow_mut() = safe_color.clone();
-            let css = format!(
-                "button.{class} {{ \
-                    background-color: {safe_color}; \
-                    background-image: none; \
-                    border-radius: 9999px; \
-                    min-width: 22px; \
-                    min-height: 22px; \
-                    padding: 0; \
-                    border: 2px solid alpha(currentColor, 0.22); \
-                    box-shadow: none; \
-                    transition: transform 150ms ease, border-color 150ms ease, opacity 150ms ease; \
-                }} \
-                button.{class}:hover {{ \
-                    background-color: {safe_color}; \
-                    background-image: none; \
-                    border-color: alpha(currentColor, 0.55); \
-                    transform: scale(1.1); \
-                }} \
-                button.{class}:active {{ \
-                    background-color: {safe_color}; \
-                    background-image: none; \
-                    border-color: currentColor; \
-                }} \
-                button.{class}:disabled {{ \
-                    background-color: {safe_color}; \
-                    background-image: none; \
-                    opacity: 0.45; \
-                }}"
-            );
-            provider.load_from_string(&css);
-        })
-    };
-
-    apply_color(color_hex);
-
-    let on_color_chosen = Rc::new(on_color_chosen);
-    let apply_for_click = apply_color.clone();
-    let current_hex_for_click = current_hex;
-    dot.connect_clicked(move |btn| {
-        let dialog = gtk::ColorDialog::builder().with_alpha(false).build();
-        let initial_rgba = gdk::RGBA::parse(&*current_hex_for_click.borrow()).ok();
-        let window = btn.root().and_downcast::<gtk::Window>();
-        let apply_cb = apply_for_click.clone();
-        let chosen_cb = on_color_chosen.clone();
-        dialog.choose_rgba(
-            window.as_ref(),
-            initial_rgba.as_ref(),
-            None::<&gtk::gio::Cancellable>,
-            move |res| {
-                if let Ok(rgba) = res {
-                    let hex = format!(
-                        "#{:02x}{:02x}{:02x}",
-                        (rgba.red() * 255.0).round() as u8,
-                        (rgba.green() * 255.0).round() as u8,
-                        (rgba.blue() * 255.0).round() as u8
-                    );
-                    apply_cb(&hex);
-                    chosen_cb(hex);
-                }
-            },
-        );
-    });
-
-    (dot, apply_color)
 }

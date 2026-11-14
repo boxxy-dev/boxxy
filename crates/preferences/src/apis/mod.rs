@@ -1,32 +1,59 @@
 use crate::config::{ModelConfigState, Settings};
+use crate::ui_utils::{Debouncer, PageHooks, SearchRow, VoidCallbackSlot};
 use adw::prelude::*;
 use gtk4 as gtk;
+use gtk4::glib;
 use libadwaita as adw;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
+use std::time::Duration;
 
 mod catalog_provider_dialog;
 mod openai_compat_dialog;
 
-fn add_class_to_title_label(widget: &gtk::Widget, title: &str) {
+fn tag_status_title_label_once(widget: &gtk::Widget, title: &str) -> bool {
     if let Some(label) = widget.downcast_ref::<gtk::Label>()
         && label.text() == title
     {
         label.add_css_class("status-title");
-        return;
+        return true;
     }
     let mut child = widget.first_child();
     while let Some(c) = child {
-        add_class_to_title_label(&c, title);
+        if tag_status_title_label_once(&c, title) {
+            return true;
+        }
         child = c.next_sibling();
     }
+    false
 }
 
-pub fn setup_apis_page(
-    builder: &gtk::Builder,
-    settings_rc: Rc<RefCell<Settings>>,
-    on_change: Rc<dyn Fn(Settings) + 'static>,
-) -> Box<dyn Fn(&str) -> bool> {
+fn make_unique_endpoint_name(
+    endpoints: &[boxxy_model_selection::OpenAiCompatibleEndpoint],
+    desired: &str,
+    skip_index: Option<usize>,
+) -> String {
+    let base = desired.trim();
+    let base = if base.is_empty() {
+        "Custom Endpoint"
+    } else {
+        base
+    };
+    let mut candidate = base.to_string();
+    let mut counter = 1usize;
+    while endpoints
+        .iter()
+        .enumerate()
+        .any(|(i, ep)| Some(i) != skip_index && ep.name == candidate)
+    {
+        candidate = format!("{base} ({counter})");
+        counter += 1;
+    }
+    candidate
+}
+
+#[allow(clippy::too_many_lines)]
+pub(crate) fn setup_apis_page(builder: &gtk::Builder) -> PageHooks {
     let apis_stack: gtk::Stack = builder.object("apis_stack").unwrap();
     let apis_back_btn: gtk::Button = builder.object("apis_back_btn").unwrap();
     let content_title: adw::WindowTitle = builder.object("content_title").unwrap();
@@ -63,11 +90,16 @@ pub fn setup_apis_page(
     let group_model_status: adw::PreferencesGroup = builder.object("group_model_status").unwrap();
     let model_status_row: adw::ActionRow = builder.object("model_status_row").unwrap();
 
+    // Tag the internal title label once on construction so `.model-status-*/.status-title` CSS applies
+    model_status_row.set_use_markup(false);
+    let _ = tag_status_title_label_once(model_status_row.upcast_ref(), "Models Status");
+
+    let is_syncing = Rc::new(Cell::new(false));
+    let initial = Settings::load();
+
     let update_model_status = {
         let row = model_status_row.clone();
-        let settings = settings_rc.clone();
-        move || {
-            let s = settings.borrow();
+        Rc::new(move |s: &Settings| {
             let is_complete = s.is_models_selection_complete();
             let title = if is_complete {
                 "All Models are set"
@@ -84,7 +116,7 @@ pub fn setup_apis_page(
             } else {
                 let subtitle = match s.resolve_model_state(&s.claw_model) {
                     ModelConfigState::MissingApiKey { provider_name: p } => {
-                        format!("{} API key is missing.", p)
+                        format!("{p} API key is missing.")
                     }
                     ModelConfigState::OllamaOffline => {
                         "Ollama is offline. Check that it is running.".to_string()
@@ -95,32 +127,51 @@ pub fn setup_apis_page(
                 row.remove_css_class("model-status-success");
                 row.add_css_class("model-status-warning");
             }
-
-            // Surgical class addition to the internal title label
-            add_class_to_title_label(row.upcast_ref(), title);
-        }
+        })
     };
-    update_model_status();
+    update_model_status(&initial);
 
     // --- Configured Catalog Providers Management ---
-    let catalog_added_rows =
-        Rc::new(RefCell::new(Vec::<(String, adw::PasswordEntryRow)>::new()));
-    let render_catalog_list: Rc<RefCell<Option<Rc<dyn Fn()>>>> = Rc::new(RefCell::new(None));
+    let catalog_added_rows: Rc<RefCell<Vec<(String, String, adw::PasswordEntryRow)>>> =
+        Rc::new(RefCell::new(Vec::new()));
+    let last_configured_catalog: Rc<RefCell<Vec<(String, String, bool)>>> =
+        Rc::new(RefCell::new(Vec::new()));
+    let render_catalog_list: VoidCallbackSlot = Rc::new(RefCell::new(None));
 
-    let render_catalog_impl = {
+    let compute_catalog_signature = |s: &Settings| -> Vec<(String, String, bool)> {
+        boxxy_model_selection::get_providers()
+            .into_iter()
+            .filter(|p| p.requires_api_key())
+            .filter_map(|p| {
+                let name = p.name().to_string();
+                let effective = s.get_effective_api_key(&name);
+                if effective.is_empty() {
+                    None
+                } else {
+                    let direct = s.api_keys.get(&name).cloned().unwrap_or_default();
+                    let from_env = direct.trim().is_empty();
+                    Some((name, direct, from_env))
+                }
+            })
+            .collect()
+    };
+
+    let render_catalog_impl: Rc<dyn Fn()> = {
         let group = dynamic_apis_group.clone();
         let add_row = add_catalog_provider_row.clone();
-        let s_rc = settings_rc.clone();
-        let cb = on_change.clone();
         let added_rows_inner = catalog_added_rows.clone();
+        let last_sig_inner = last_configured_catalog.clone();
         let render_ref = render_catalog_list.clone();
         let update_status = update_model_status.clone();
 
         Rc::new(move || {
             let mut rows_vec = added_rows_inner.borrow_mut();
-            for (_, row) in rows_vec.drain(..) {
+            for (_, _, row) in rows_vec.drain(..) {
                 group.remove(&row);
             }
+
+            let current = Settings::load();
+            *last_sig_inner.borrow_mut() = compute_catalog_signature(&current);
 
             let providers = boxxy_model_selection::get_providers();
             let mut unconfigured_count = 0usize;
@@ -131,65 +182,69 @@ pub fn setup_apis_page(
                 }
 
                 let prov_name = prov.name().to_string();
-                let (direct_key, effective_key) = {
-                    let s = s_rc.borrow();
-                    let direct = s.api_keys.get(&prov_name).cloned().unwrap_or_default();
-                    let effective = s.get_effective_api_key(&prov_name);
-                    (direct, effective)
-                };
+                let direct_key = current.api_keys.get(&prov_name).cloned().unwrap_or_default();
+                let effective_key = current.get_effective_api_key(&prov_name);
 
                 if effective_key.is_empty() {
                     unconfigured_count += 1;
                     continue;
                 }
 
-                let title = if direct_key.trim().is_empty() {
-                    format!("{} API Key (Set from environment)", prov_name)
-                } else {
-                    format!("{} API Key", prov_name)
+                let has_env_fallback = {
+                    let mut probe = (*current).clone();
+                    probe.api_keys.remove(&prov_name);
+                    !probe.get_effective_api_key(&prov_name).is_empty()
                 };
 
-                let row = adw::PasswordEntryRow::builder().title(&title).build();
+                let title = if direct_key.trim().is_empty() && has_env_fallback {
+                    format!("{prov_name} API Key (Set from environment)")
+                } else {
+                    format!("{prov_name} API Key")
+                };
+
+                let row = adw::PasswordEntryRow::builder()
+                    .use_markup(false)
+                    .title(&title)
+                    .build();
                 row.set_text(&direct_key);
 
+                let debouncer = Debouncer::new();
+                debouncer.bind_flush_lifecycle(&row);
                 {
-                    let s_rc_inner = s_rc.clone();
-                    let cb_inner = cb.clone();
                     let prov_name_inner = prov_name.clone();
                     let prov_name_title = prov_name.clone();
                     let update_status_inner = update_status.clone();
                     let row_clone = row.clone();
+                    let last_sig_edit = last_sig_inner.clone();
+                    let compute_sig = compute_catalog_signature;
+                    let debouncer_edit = debouncer.clone();
                     row.connect_changed(move |entry| {
-                        let mut settings_to_save = None;
-                        {
-                            let mut s = s_rc_inner.borrow_mut();
-                            let new_val = entry.text().to_string();
-                            if s.api_keys.get(&prov_name_inner) != Some(&new_val) {
-                                let is_empty = new_val.trim().is_empty();
-                                s.api_keys.insert(prov_name_inner.clone(), new_val);
-                                s.check_and_unset_invalid_models();
-                                s.save();
-                                settings_to_save = Some(s.clone());
-
-                                if is_empty {
-                                    if Settings::get_env_api_key(&prov_name_inner).is_some() {
-                                        row_clone.set_title(&format!(
-                                            "{} API Key (Set from environment)",
-                                            prov_name_title
-                                        ));
-                                    }
-                                } else {
-                                    row_clone
-                                        .set_title(&format!("{} API Key", prov_name_title));
-                                }
-                            }
+                        let new_val = entry.text().to_string();
+                        if new_val.trim().is_empty() && has_env_fallback {
+                            row_clone.set_title(&format!(
+                                "{prov_name_title} API Key (Set from environment)"
+                            ));
+                        } else {
+                            row_clone.set_title(&format!("{prov_name_title} API Key"));
                         }
 
-                        if let Some(s) = settings_to_save {
-                            update_status_inner();
-                            cb_inner(s);
-                        }
+                        let prov_save = prov_name_inner.clone();
+                        let update_status_save = update_status_inner.clone();
+                        let last_sig_save = last_sig_edit.clone();
+                        debouncer_edit.schedule(Duration::from_millis(250), move || {
+                            // Do NOT call check_and_unset_invalid_models() on text edits so
+                            // clearing/pasting a rotated key never wipes claw_model/memory_model.
+                            let updated = Settings::update(|s| {
+                                s.api_keys.insert(prov_save.clone(), new_val.clone());
+                            });
+                            *last_sig_save.borrow_mut() = compute_sig(&updated);
+                            update_status_save(&updated);
+                        });
                     });
+                }
+                {
+                    let debouncer_act = debouncer;
+                    row.connect_entry_activated(move |_| debouncer_act.flush());
                 }
 
                 let del_btn = gtk::Button::builder()
@@ -199,24 +254,18 @@ pub fn setup_apis_page(
                     .tooltip_text("Remove provider")
                     .build();
                 {
-                    let s_rc_inner = s_rc.clone();
-                    let cb_inner = cb.clone();
                     let render_ref_inner = render_ref.clone();
                     let update_status_inner = update_status.clone();
                     let prov_name_del = prov_name.clone();
                     del_btn.connect_clicked(move |_| {
                         Settings::remove_env_api_key(&prov_name_del);
-                        let s_clone = {
-                            let mut s = s_rc_inner.borrow_mut();
+                        let updated = Settings::update(|s| {
                             s.api_keys.remove(&prov_name_del);
                             s.check_and_unset_invalid_models();
-                            s.save();
-                            s.clone()
-                        };
-                        update_status_inner();
-                        cb_inner(s_clone);
+                        });
+                        update_status_inner(&updated);
                         let render_ref_idle = render_ref_inner.clone();
-                        gtk::glib::idle_add_local_once(move || {
+                        glib::idle_add_local_once(move || {
                             if let Some(render) = render_ref_idle.borrow().as_ref() {
                                 render();
                             }
@@ -225,8 +274,16 @@ pub fn setup_apis_page(
                 }
                 row.add_suffix(&del_btn);
 
+                let extra = match prov_name.as_str() {
+                    "Moonshot" => " kimi",
+                    "xAI" => " grok",
+                    "Z.ai" => " zai glm zhipu",
+                    _ => "",
+                };
+                let haystack = format!("{}{} api key", prov_name.to_lowercase(), extra);
+
                 group.add(&row);
-                rows_vec.push((prov_name, row));
+                rows_vec.push((prov_name, haystack, row));
             }
 
             if unconfigured_count == 0 {
@@ -242,17 +299,16 @@ pub fn setup_apis_page(
     render_catalog_impl();
 
     {
-        let s_rc = settings_rc.clone();
-        let cb = on_change.clone();
-        let render_ref = render_catalog_list.clone();
+        let render_ref = render_catalog_list;
         let update_status = update_model_status.clone();
-        let catalog_editor_page = catalog_editor_page;
         add_catalog_provider_row.connect_activated(move |_| {
             let unconfigured: Vec<String> = {
-                let s = s_rc.borrow();
+                let s = Settings::load();
                 boxxy_model_selection::get_providers()
                     .into_iter()
-                    .filter(|p| p.requires_api_key() && s.get_effective_api_key(p.name()).is_empty())
+                    .filter(|p| {
+                        p.requires_api_key() && s.get_effective_api_key(p.name()).is_empty()
+                    })
                     .map(|p| p.name().to_string())
                     .collect()
             };
@@ -260,23 +316,16 @@ pub fn setup_apis_page(
                 return;
             }
 
-            let s_rc_inner = s_rc.clone();
-            let cb_inner = cb.clone();
             let render_ref_inner = render_ref.clone();
             let update_status_inner = update_status.clone();
 
             catalog_editor_page.open_editor(unconfigured, move |provider_name, key| {
-                let s_clone = {
-                    let mut s = s_rc_inner.borrow_mut();
-                    s.api_keys.insert(provider_name, key);
-                    s.check_and_unset_invalid_models();
-                    s.save();
-                    s.clone()
-                };
-                update_status_inner();
-                cb_inner(s_clone);
+                let updated = Settings::update(|s| {
+                    s.api_keys.insert(provider_name.clone(), key.clone());
+                });
+                update_status_inner(&updated);
                 let render_ref_idle = render_ref_inner.clone();
-                gtk::glib::idle_add_local_once(move || {
+                glib::idle_add_local_once(move || {
                     if let Some(render) = render_ref_idle.borrow().as_ref() {
                         render();
                     }
@@ -285,56 +334,29 @@ pub fn setup_apis_page(
         });
     }
 
-    // Listen to SETTINGS_EVENT_BUS for real-time model setting changes (e.g., from the model selector dialog or env discovery)
-    let settings_rc_bus = settings_rc.clone();
-    let update_status_bus = update_model_status.clone();
-    let render_catalog_bus = render_catalog_impl.clone();
-    let catalog_rows_bus = catalog_added_rows.clone();
-    let mut settings_rx = crate::config::SETTINGS_EVENT_BUS.subscribe();
-    gtk::glib::spawn_future_local(async move {
-        loop {
-            let settings = match settings_rx.recv().await {
-                Ok(s) => s,
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                    (*crate::config::Settings::load()).clone()
-                }
-                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
-            };
-            *settings_rc_bus.borrow_mut() = settings;
-            update_status_bus();
-            let any_focused = catalog_rows_bus
-                .borrow()
-                .iter()
-                .any(|(_, r)| r.has_focus() || r.focus_child().is_some());
-            if !any_focused {
-                render_catalog_bus();
-            }
-        }
-    });
-
     // --- OpenAI-Compatible Endpoints Management ---
-    let compat_added_rows = Rc::new(RefCell::new(Vec::<adw::ActionRow>::new()));
-    let render_compat_list: Rc<RefCell<Option<Rc<dyn Fn()>>>> = Rc::new(RefCell::new(None));
+    let compat_added_rows: Rc<RefCell<Vec<(String, adw::ActionRow)>>> =
+        Rc::new(RefCell::new(Vec::new()));
+    let last_endpoints: Rc<RefCell<Vec<boxxy_model_selection::OpenAiCompatibleEndpoint>>> =
+        Rc::new(RefCell::new(Vec::new()));
+    let render_compat_list: VoidCallbackSlot = Rc::new(RefCell::new(None));
 
-    let render_compat_impl = {
+    let render_compat_impl: Rc<dyn Fn()> = {
         let group = group_openai_compatible.clone();
-        let s_rc = settings_rc.clone();
-        let cb = on_change.clone();
         let added_rows_inner = compat_added_rows.clone();
+        let last_ep_inner = last_endpoints.clone();
         let render_ref = render_compat_list.clone();
         let update_status = update_model_status.clone();
         let editor_page = editor_page.clone();
 
         Rc::new(move || {
             let mut rows_vec = added_rows_inner.borrow_mut();
-            for row in rows_vec.drain(..) {
+            for (_, row) in rows_vec.drain(..) {
                 group.remove(&row);
             }
 
-            let endpoints = {
-                let s = s_rc.borrow();
-                s.openai_compatible_endpoints.clone()
-            };
+            let endpoints = Settings::load().openai_compatible_endpoints.clone();
+            last_ep_inner.borrow_mut().clone_from(&endpoints);
 
             for (idx, ep) in endpoints.into_iter().enumerate() {
                 let model_count = ep.models.len();
@@ -350,10 +372,14 @@ pub fn setup_apis_page(
                     if model_count == 1 { "model" } else { "models" },
                     cost_badge
                 );
+                let model_ids: Vec<&str> = ep.models.iter().map(|m| m.id.as_str()).collect();
+                let haystack = format!("{} {} {}", ep.name, ep.base_url, model_ids.join(" "))
+                    .to_lowercase();
 
                 let row = adw::ActionRow::builder()
-                    .title(gtk::glib::markup_escape_text(&ep.name))
-                    .subtitle(gtk::glib::markup_escape_text(&subtitle))
+                    .use_markup(false)
+                    .title(&ep.name)
+                    .subtitle(&subtitle)
                     .build();
 
                 let switch = gtk::Switch::builder()
@@ -362,30 +388,26 @@ pub fn setup_apis_page(
                     .build();
 
                 {
-                    let s_rc_inner = s_rc.clone();
-                    let cb_inner = cb.clone();
                     let update_status_inner = update_status.clone();
                     let ep_name = ep.name.clone();
+                    let last_ep_sw = last_ep_inner.clone();
                     switch.connect_active_notify(move |sw| {
-                        let mut saved = None;
-                        {
-                            let mut s = s_rc_inner.borrow_mut();
+                        let active = sw.is_active();
+                        let updated = Settings::update(|s| {
                             if let Some(target) = s
                                 .openai_compatible_endpoints
                                 .iter_mut()
                                 .find(|e| e.name == ep_name)
-                                && target.enabled != sw.is_active()
+                                && target.enabled != active
                             {
-                                target.enabled = sw.is_active();
+                                target.enabled = active;
                                 s.check_and_unset_invalid_models();
-                                s.save();
-                                saved = Some(s.clone());
                             }
-                        }
-                        if let Some(s_val) = saved {
-                            update_status_inner();
-                            cb_inner(s_val);
-                        }
+                        });
+                        last_ep_sw
+                            .borrow_mut()
+                            .clone_from(&updated.openai_compatible_endpoints);
+                        update_status_inner(&updated);
                     });
                 }
                 row.add_suffix(&switch);
@@ -393,11 +415,10 @@ pub fn setup_apis_page(
                 let edit_btn = gtk::Button::builder()
                     .icon_name("document-edit-symbolic")
                     .valign(gtk::Align::Center)
+                    .tooltip_text("Edit endpoint")
                     .css_classes(["flat"])
                     .build();
                 {
-                    let s_rc_inner = s_rc.clone();
-                    let cb_inner = cb.clone();
                     let ep_clone = ep.clone();
                     let old_name = ep.name.clone();
                     let render_ref_inner = render_ref.clone();
@@ -405,14 +426,11 @@ pub fn setup_apis_page(
                     let editor_page_edit = editor_page.clone();
 
                     edit_btn.connect_clicked(move |_| {
-                        let initial_key = s_rc_inner
-                            .borrow()
+                        let initial_key = Settings::load()
                             .api_keys
                             .get(&old_name)
                             .cloned()
                             .unwrap_or_default();
-                        let s_rc_inner2 = s_rc_inner.clone();
-                        let cb_inner2 = cb_inner.clone();
                         let old_name_clone = old_name.clone();
                         let render_ref_inner2 = render_ref_inner.clone();
                         let update_status_inner2 = update_status_inner.clone();
@@ -420,16 +438,16 @@ pub fn setup_apis_page(
                         editor_page_edit.open_editor(
                             Some(&ep_clone),
                             &initial_key,
-                            move |new_ep, new_key| {
-                                let s_clone = {
-                                    let mut s = s_rc_inner2.borrow_mut();
+                            move |mut new_ep, new_key| {
+                                let updated = Settings::update(|s| {
+                                    new_ep.name = make_unique_endpoint_name(
+                                        &s.openai_compatible_endpoints,
+                                        &new_ep.name,
+                                        Some(idx),
+                                    );
                                     if old_name_clone != new_ep.name {
                                         s.api_keys.remove(&old_name_clone);
-                                        let s_mut = &mut *s;
-                                        for slot in [
-                                            &mut s_mut.claw_model,
-                                            &mut s_mut.memory_model,
-                                        ] {
+                                        for slot in [&mut s.claw_model, &mut s.memory_model] {
                                             if let Some(
                                                 boxxy_model_selection::ModelProvider::OpenAiCompatible {
                                                     provider_name,
@@ -438,26 +456,23 @@ pub fn setup_apis_page(
                                             ) = slot
                                                 && *provider_name == old_name_clone
                                             {
-                                                *provider_name = new_ep.name.clone();
+                                                provider_name.clone_from(&new_ep.name);
                                             }
                                         }
                                     }
-                                    s.api_keys.insert(new_ep.name.clone(), new_key);
-                                    if let Some(target) = s
-                                        .openai_compatible_endpoints
-                                        .iter_mut()
-                                        .find(|e| e.name == old_name_clone)
-                                    {
-                                        *target = new_ep;
+                                    if new_key.trim().is_empty() {
+                                        s.api_keys.remove(&new_ep.name);
+                                    } else {
+                                        s.api_keys.insert(new_ep.name.clone(), new_key.clone());
                                     }
-                                    s.check_and_unset_invalid_models();
-                                    s.save();
-                                    s.clone()
-                                };
-                                update_status_inner2();
-                                cb_inner2(s_clone);
+                                    if idx < s.openai_compatible_endpoints.len() {
+                                        s.openai_compatible_endpoints[idx] = new_ep.clone();
+                                    }
+                                    s.sanitize_unconfigured_models();
+                                });
+                                update_status_inner2(&updated);
                                 let render_ref_idle = render_ref_inner2.clone();
-                                gtk::glib::idle_add_local_once(move || {
+                                glib::idle_add_local_once(move || {
                                     if let Some(render) = render_ref_idle.borrow().as_ref() {
                                         render();
                                     }
@@ -471,29 +486,24 @@ pub fn setup_apis_page(
                 let del_btn = gtk::Button::builder()
                     .icon_name("user-trash-symbolic")
                     .valign(gtk::Align::Center)
+                    .tooltip_text("Remove endpoint")
                     .css_classes(["flat", "destructive-action"])
                     .build();
                 {
-                    let s_rc_inner = s_rc.clone();
-                    let cb_inner = cb.clone();
                     let render_ref_inner = render_ref.clone();
                     let update_status_inner = update_status.clone();
                     let ep_name = ep.name.clone();
                     del_btn.connect_clicked(move |_| {
-                        let s_clone = {
-                            let mut s = s_rc_inner.borrow_mut();
+                        let updated = Settings::update(|s| {
                             if idx < s.openai_compatible_endpoints.len() {
                                 s.openai_compatible_endpoints.remove(idx);
                             }
                             s.api_keys.remove(&ep_name);
                             s.check_and_unset_invalid_models();
-                            s.save();
-                            s.clone()
-                        };
-                        update_status_inner();
-                        cb_inner(s_clone);
+                        });
+                        update_status_inner(&updated);
                         let render_ref_idle = render_ref_inner.clone();
-                        gtk::glib::idle_add_local_once(move || {
+                        glib::idle_add_local_once(move || {
                             if let Some(render) = render_ref_idle.borrow().as_ref() {
                                 render();
                             }
@@ -503,7 +513,7 @@ pub fn setup_apis_page(
                 row.add_suffix(&del_btn);
 
                 group.add(&row);
-                rows_vec.push(row);
+                rows_vec.push((haystack, row));
             }
         })
     };
@@ -511,43 +521,25 @@ pub fn setup_apis_page(
     render_compat_impl();
 
     {
-        let s_rc = settings_rc.clone();
-        let cb = on_change.clone();
-        let render_ref = render_compat_list.clone();
+        let render_ref = render_compat_list;
         let update_status = update_model_status.clone();
         let editor_page_add = editor_page;
         add_openai_compat_row.connect_activated(move |_| {
-            let s_rc_inner = s_rc.clone();
-            let cb_inner = cb.clone();
             let render_ref_inner = render_ref.clone();
             let update_status_inner = update_status.clone();
 
             editor_page_add.open_editor(None, "", move |mut new_ep, key| {
-                let s_clone = {
-                    let mut s = s_rc_inner.borrow_mut();
-                    let mut unique_name = new_ep.name.clone();
-                    let mut counter = 1;
-                    while s
-                        .openai_compatible_endpoints
-                        .iter()
-                        .any(|e| e.name == unique_name)
-                    {
-                        unique_name = format!("{} ({})", new_ep.name, counter);
-                        counter += 1;
-                    }
-                    new_ep.name = unique_name.clone();
+                let updated = Settings::update(|s| {
+                    new_ep.name =
+                        make_unique_endpoint_name(&s.openai_compatible_endpoints, &new_ep.name, None);
                     if !key.trim().is_empty() {
-                        s.api_keys.insert(unique_name, key);
+                        s.api_keys.insert(new_ep.name.clone(), key.clone());
                     }
-                    s.openai_compatible_endpoints.push(new_ep);
-                    s.check_and_unset_invalid_models();
-                    s.save();
-                    s.clone()
-                };
-                update_status_inner();
-                cb_inner(s_clone);
+                    s.openai_compatible_endpoints.push(new_ep.clone());
+                });
+                update_status_inner(&updated);
                 let render_ref_idle = render_ref_inner.clone();
-                gtk::glib::idle_add_local_once(move || {
+                glib::idle_add_local_once(move || {
                     if let Some(render) = render_ref_idle.borrow().as_ref() {
                         render();
                     }
@@ -556,135 +548,159 @@ pub fn setup_apis_page(
         });
     }
 
-    tavily_api_key_entry.set_text(
-        &settings_rc
-            .borrow()
-            .api_keys
-            .get("Tavily")
-            .cloned()
-            .unwrap_or_default(),
-    );
-    let s_rc_tavily = settings_rc.clone();
-    let cb_tavily = on_change.clone();
-    let update_status_tavily = update_model_status.clone();
-    tavily_api_key_entry.connect_changed(move |entry| {
-        let mut settings_to_save = None;
-        {
-            let mut s = s_rc_tavily.borrow_mut();
+    tavily_api_key_entry.set_text(&initial.api_keys.get("Tavily").cloned().unwrap_or_default());
+    let tavily_debouncer = Debouncer::new();
+    tavily_debouncer.bind_flush_lifecycle(&tavily_api_key_entry);
+    {
+        let is_syncing = is_syncing.clone();
+        let debouncer = tavily_debouncer.clone();
+        tavily_api_key_entry.connect_changed(move |entry| {
+            if is_syncing.get() {
+                return;
+            }
             let new_val = entry.text().to_string();
-            if s.api_keys.get("Tavily") != Some(&new_val) {
-                s.api_keys.insert("Tavily".to_string(), new_val);
-                s.save();
-                settings_to_save = Some(s.clone());
+            debouncer.schedule(Duration::from_millis(250), move || {
+                Settings::update(|s| {
+                    s.api_keys.insert("Tavily".to_string(), new_val.clone());
+                });
+            });
+        });
+    }
+    tavily_api_key_entry.connect_entry_activated(move |_| tavily_debouncer.flush());
+
+    native_search_switch.set_active(initial.use_native_search);
+    {
+        let is_syncing = is_syncing.clone();
+        native_search_switch.connect_active_notify(move |row| {
+            if is_syncing.get() {
+                return;
             }
+            let active = row.is_active();
+            Settings::update(|s| {
+                s.use_native_search = active;
+            });
+        });
+    }
+
+    ollama_base_url_entry.set_text(&initial.ollama_base_url);
+    let ollama_debouncer = Debouncer::new();
+    ollama_debouncer.bind_flush_lifecycle(&ollama_base_url_entry);
+    {
+        let is_syncing = is_syncing.clone();
+        let debouncer = ollama_debouncer.clone();
+        ollama_base_url_entry.connect_changed(move |entry| {
+            if is_syncing.get() {
+                return;
+            }
+            let new_url = entry.text().to_string();
+            debouncer.schedule(Duration::from_millis(250), move || {
+                Settings::update(|s| {
+                    s.ollama_base_url.clone_from(&new_url);
+                });
+            });
+        });
+    }
+    ollama_base_url_entry.connect_entry_activated(move |_| ollama_debouncer.flush());
+
+    let s_add_cat = SearchRow::new(
+        &add_catalog_provider_row,
+        "add provider catalog api key gemini anthropic claude openai openrouter deepseek moonshot kimi xai grok zai glm zhipu mistral codestral minimax groq opencode zen go",
+    );
+    let s_models = SearchRow::new(
+        &model_status_row,
+        "open models selection ai claw memories status openai openrouter opencode",
+    );
+    let s_add_compat = SearchRow::new(
+        &add_openai_compat_row,
+        "openai compatible endpoints opencode zen go litellm vllm llamacpp custom base url model",
+    );
+    let s_ollama = SearchRow::new(&ollama_base_url_entry, "base url ollama local");
+    let s_tavily = SearchRow::new(&tavily_api_key_entry, "tavily api key search engines");
+    let s_native = SearchRow::new(
+        &native_search_switch,
+        "use native model search engines built in gemini gpt claude anthropic openai",
+    );
+
+    let catalog_rows_sync = catalog_added_rows.clone();
+    let tavily_sync = tavily_api_key_entry;
+    let native_sync = native_search_switch;
+    let ollama_sync = ollama_base_url_entry;
+
+    let sync = Box::new(move |s: &Settings| {
+        is_syncing.set(true);
+
+        update_model_status(s);
+
+        let any_cat_focused = catalog_rows_sync
+            .borrow()
+            .iter()
+            .any(|(_, _, r)| r.has_focus() || r.focus_child().is_some());
+        if !any_cat_focused && *last_configured_catalog.borrow() != compute_catalog_signature(s) {
+            render_catalog_impl();
         }
 
-        if let Some(s) = settings_to_save {
-            update_status_tavily();
-            cb_tavily(s);
+        if *last_endpoints.borrow() != s.openai_compatible_endpoints {
+            render_compat_impl();
         }
-    });
 
-    native_search_switch.set_active(settings_rc.borrow().use_native_search);
-    let s_rc_native_search = settings_rc.clone();
-    let cb_native_search = on_change.clone();
-    native_search_switch.connect_active_notify(move |row| {
-        let mut settings_to_save = None;
+        let tavily_val = s.api_keys.get("Tavily").map_or("", String::as_str);
+        if !tavily_sync.has_focus()
+            && tavily_sync.focus_child().is_none()
+            && tavily_sync.text().as_str() != tavily_val
         {
-            let mut s = s_rc_native_search.borrow_mut();
-            if s.use_native_search != row.is_active() {
-                s.use_native_search = row.is_active();
-                s.save();
-                settings_to_save = Some(s.clone());
-            }
+            tavily_sync.set_text(tavily_val);
         }
 
-        if let Some(s) = settings_to_save {
-            cb_native_search(s);
+        if native_sync.is_active() != s.use_native_search {
+            native_sync.set_active(s.use_native_search);
         }
-    });
 
-    ollama_base_url_entry.set_text(&settings_rc.borrow().ollama_base_url);
-    let s_rc3 = settings_rc.clone();
-    let cb3 = on_change.clone();
-    let update_status3 = update_model_status.clone();
-    ollama_base_url_entry.connect_changed(move |entry| {
-        let mut settings_to_save = None;
+        if !ollama_sync.has_focus()
+            && ollama_sync.focus_child().is_none()
+            && ollama_sync.text().as_str() != s.ollama_base_url
         {
-            let mut s = s_rc3.borrow_mut();
-            if s.ollama_base_url != entry.text().as_str() {
-                s.ollama_base_url = entry.text().to_string();
-                s.save();
-                settings_to_save = Some(s.clone());
-            }
+            ollama_sync.set_text(&s.ollama_base_url);
         }
 
-        if let Some(s) = settings_to_save {
-            update_status3();
-            cb3(s);
-        }
+        is_syncing.set(false);
     });
 
-    let ollama_base_url_entry_clone = ollama_base_url_entry.clone();
-    let model_status_row_clone = model_status_row.clone();
-    let add_catalog_provider_row_clone = add_catalog_provider_row.clone();
-    let catalog_added_rows_search = catalog_added_rows.clone();
-    let add_openai_compat_row_clone = add_openai_compat_row.clone();
-    let group_openai_compatible_clone = group_openai_compatible.clone();
+    let add_compat_filter = add_openai_compat_row;
+    let filter = Box::new(move |query: &str| {
+        let mut any_cat_visible = s_add_cat.apply(query);
+        for (_, haystack, row) in catalog_added_rows.borrow().iter() {
+            let m = query.is_empty() || haystack.contains(query);
+            row.set_visible(m);
+            if m {
+                any_cat_visible = true;
+            }
+        }
+        dynamic_apis_group.set_visible(any_cat_visible);
 
-    Box::new(move |query: &str| {
-        update_model_status();
-        let match_row = |r: &gtk::Widget, text: &str| {
-            let m = query.is_empty() || text.to_lowercase().contains(query);
-            r.set_visible(m);
-            m
-        };
+        let mut compat_visible = s_add_compat.apply(query);
+        for (haystack, row) in compat_added_rows.borrow().iter() {
+            let m = query.is_empty() || compat_visible || haystack.contains(query);
+            row.set_visible(m);
+            if m {
+                compat_visible = true;
+            }
+        }
+        if compat_visible {
+            add_compat_filter.set_visible(true);
+        }
+        group_openai_compatible.set_visible(compat_visible);
 
-        let mut any_visible = match_row(
-            add_catalog_provider_row_clone.upcast_ref(),
-            "add provider catalog api key gemini anthropic claude openai openrouter deepseek moonshot kimi xai grok zai glm zhipu mistral codestral minimax groq",
-        );
-
-        let models_visible = match_row(
-            model_status_row_clone.upcast_ref(),
-            "open models selection ai claw memories status openai openrouter opencode",
-        );
+        let models_visible = s_models.apply(query);
         group_model_status.set_visible(models_visible);
 
-        for (name, row) in catalog_added_rows_search.borrow().iter() {
-            let extra = match name.as_str() {
-                "Moonshot" => " kimi",
-                "xAI" => " grok",
-                "Z.ai" => " zai glm zhipu",
-                _ => "",
-            };
-            if match_row(row.upcast_ref(), &format!("{}{} api key", name, extra)) {
-                any_visible = true;
-            }
-        }
-
-        let compat_visible = match_row(
-            add_openai_compat_row_clone.upcast_ref(),
-            "openai compatible endpoints opencode zen go litellm vllm llamacpp custom base url model",
-        );
-        group_openai_compatible_clone.set_visible(compat_visible);
-
-        let ollama_visible = match_row(ollama_base_url_entry_clone.upcast_ref(), "base url ollama");
-        let search_tavily = match_row(
-            tavily_api_key_entry.upcast_ref(),
-            "tavily api key search engines",
-        );
-        let search_native = match_row(
-            native_search_switch.upcast_ref(),
-            "use native model search engines built in gemini gpt claude anthropic openai",
-        );
-
-        let search_visible = search_tavily || search_native;
-
+        let ollama_visible = s_ollama.apply(query);
         group_ollama_api.set_visible(ollama_visible);
-        group_search_engines.set_visible(search_visible);
-        dynamic_apis_group.set_visible(any_visible);
 
-        any_visible || compat_visible || ollama_visible || models_visible || search_visible
-    })
+        let search_visible = s_tavily.apply(query) | s_native.apply(query);
+        group_search_engines.set_visible(search_visible);
+
+        any_cat_visible || compat_visible || ollama_visible || models_visible || search_visible
+    });
+
+    (sync, filter)
 }

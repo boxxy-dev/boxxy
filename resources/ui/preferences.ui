@@ -657,7 +657,7 @@
                     <child>
                       <object class="AdwViewStackPage">
                         <property name="name">toolbox</property>
-                        <property name="title" translatable="yes">Toolbox &amp; Permissions</property>
+                        <property name="title" translatable="yes">Toolbox and Permissions</property>
                         <property name="child">
                           <object class="AdwPreferencesPage" id="page_toolbox">
                             <child>
@@ -813,7 +813,7 @@
                           <object class="AdwPreferencesPage" id="page_claw_ui">
                             <child>
                               <object class="AdwPreferencesGroup" id="group_claw_ui_behavior">
-                                <property name="title">Behavior</property>
+                                <property name="title" translatable="yes">Behavior</property>
                                 <child>
                                   <object class="AdwSwitchRow" id="overlay_bottom_gap_switch">
                                     <property name="title" translatable="yes">Leave Bottom Space in Overlay</property>
@@ -828,8 +828,8 @@
                                 </child>
                                 <child>
                                   <object class="AdwSwitchRow" id="enable_tips_switch">
-                                    <property name="title">Show usage tips</property>
-                                    <property name="subtitle">Display rotating usage hints in the Claw drawer while the agent is thinking.</property>
+                                    <property name="title" translatable="yes">Show usage tips</property>
+                                    <property name="subtitle" translatable="yes">Display rotating usage hints in the Claw drawer while the agent is thinking.</property>
                                   </object>
                                 </child>
                                 <child>
@@ -853,7 +853,7 @@
                               <object class="AdwPreferencesGroup" id="group_claw_ui_shortcuts">
                                 <property name="title" translatable="yes">Shortcuts</property>
                                 <child>
-                                  <object class="AdwActionRow">
+                                  <object class="AdwActionRow" id="row_claw_shortcut">
                                     <property name="title" translatable="yes">Message Bar Shortcut</property>
                                     <property name="subtitle" translatable="yes">Accelerator to open the Claw message bar (e.g. &amp;lt;Ctrl&amp;gt;slash)</property>
                                     <child>
@@ -865,7 +865,7 @@
                                   </object>
                                 </child>
                                 <child>
-                                  <object class="AdwActionRow">
+                                  <object class="AdwActionRow" id="row_reset_claw_shortcut">
                                     <property name="title" translatable="yes">Reset Shortcut</property>
                                     <child type="suffix">
                                       <object class="GtkButton" id="reset_claw_shortcut_btn">

@@ -1,13 +1,17 @@
+use crate::config::Settings;
+use crate::ui_utils::{PageHooks, SearchRow, open_uri};
 use adw::prelude::*;
-use gtk::glib;
 use gtk4 as gtk;
 use libadwaita as adw;
+use std::cell::Cell;
+use std::rc::Rc;
 
-pub fn populate_about_page(
+#[allow(clippy::too_many_lines)]
+pub(crate) fn populate_about_page(
     page: &adw::PreferencesPage,
     toast_overlay: &adw::ToastOverlay,
-) -> Box<dyn Fn(&str) -> bool> {
-    let mut elements = Vec::new();
+) -> PageHooks {
+    let is_syncing = Rc::new(Cell::new(false));
 
     // App Logo and Name
     let header_group = adw::PreferencesGroup::builder().build();
@@ -26,7 +30,7 @@ pub fn populate_about_page(
 
     let app_name = gtk::Label::builder()
         .label("Boxxy Terminal")
-        .css_classes(vec!["title-1".to_string()])
+        .css_classes(["title-1"])
         .halign(gtk::Align::Center)
         .build();
     logo_box.append(&logo);
@@ -36,9 +40,6 @@ pub fn populate_about_page(
 
     // Metadata
     let group = adw::PreferencesGroup::builder().build();
-    let mut rows = Vec::new();
-
-    // Version row with Copy button (Using baked-in commit hash)
     let version_str = env!("GIT_HASH").to_string();
 
     let copy_icon = gtk::Image::from_icon_name("boxxy-edit-copy-symbolic");
@@ -48,83 +49,40 @@ pub fn populate_about_page(
         .activatable(true)
         .build();
     version_row.add_suffix(&copy_icon);
-    rows.push(version_row.clone());
 
-    let toast_overlay_clone = toast_overlay.clone();
-    let version_str_clone = version_str.clone();
-    version_row.connect_activated(move |row| {
-        let display = row.display();
-        let clipboard = display.clipboard();
-        clipboard.set_text(&version_str_clone);
+    {
+        let toast_overlay = toast_overlay.clone();
+        version_row.connect_activated(move |row| {
+            row.display().clipboard().set_text(&version_str);
+            toast_overlay.add_toast(adw::Toast::new("Version copied to clipboard"));
+        });
+    }
 
-        let toast = adw::Toast::new("Version copied to clipboard");
-        toast_overlay_clone.add_toast(toast);
-    });
-
-    // Developer
     let dev_row = adw::ActionRow::builder()
         .title("Developer")
         .subtitle("Mii")
         .build();
-    rows.push(dev_row.clone());
 
-    // License
     let license_row = adw::ActionRow::builder()
         .title("License")
         .subtitle(env!("CARGO_PKG_LICENSE"))
         .build();
-    rows.push(license_row.clone());
 
-    // Website
-    let ext_icon1 = gtk::Image::from_icon_name("boxxy-external-link-symbolic");
-    let site_row = adw::ActionRow::builder()
-        .title("Website")
-        .subtitle("https://boxxy.dev")
-        .activatable(true)
-        .build();
-    site_row.add_suffix(&ext_icon1);
-    rows.push(site_row.clone());
+    let build_link_row = |title: &str, url: &'static str| -> adw::ActionRow {
+        let icon = gtk::Image::from_icon_name("boxxy-external-link-symbolic");
+        let row = adw::ActionRow::builder()
+            .title(title)
+            .subtitle(url)
+            .activatable(true)
+            .build();
+        row.add_suffix(&icon);
+        row.connect_activated(move |r| open_uri(r, url));
+        row
+    };
 
-    let site_row_clone = site_row.clone();
-    site_row.connect_activated(move |_| {
-        let uri = site_row_clone.subtitle().unwrap().to_string();
-        let _ =
-            gtk::gio::AppInfo::launch_default_for_uri(&uri, None::<&gtk::gio::AppLaunchContext>);
-    });
-
-    // Releases Row
-    let ext_icon_releases = gtk::Image::from_icon_name("boxxy-external-link-symbolic");
-    let releases_row = adw::ActionRow::builder()
-        .title("Changelogs")
-        .subtitle("https://boxxy.dev/releases/")
-        .activatable(true)
-        .build();
-    releases_row.add_suffix(&ext_icon_releases);
-    rows.push(releases_row.clone());
-
-    let releases_row_clone = releases_row.clone();
-    releases_row.connect_activated(move |_| {
-        let uri = releases_row_clone.subtitle().unwrap().to_string();
-        let _ =
-            gtk::gio::AppInfo::launch_default_for_uri(&uri, None::<&gtk::gio::AppLaunchContext>);
-    });
-
-    // Issues
-    let ext_icon2 = gtk::Image::from_icon_name("boxxy-external-link-symbolic");
-    let issues_row = adw::ActionRow::builder()
-        .title("Report an Issue")
-        .subtitle("https://github.com/boxxy-dev/boxxy/issues")
-        .activatable(true)
-        .build();
-    issues_row.add_suffix(&ext_icon2);
-    rows.push(issues_row.clone());
-
-    let issues_row_clone = issues_row.clone();
-    issues_row.connect_activated(move |_| {
-        let uri = issues_row_clone.subtitle().unwrap().to_string();
-        let _ =
-            gtk::gio::AppInfo::launch_default_for_uri(&uri, None::<&gtk::gio::AppLaunchContext>);
-    });
+    let site_row = build_link_row("Website", "https://boxxy.dev");
+    let releases_row = build_link_row("Changelogs", "https://boxxy.dev/releases/");
+    let issues_row = build_link_row("Report an Issue", "https://github.com/boxxy-dev/boxxy/issues");
 
     group.add(&version_row);
     group.add(&dev_row);
@@ -132,75 +90,74 @@ pub fn populate_about_page(
     group.add(&site_row);
     group.add(&releases_row);
     group.add(&issues_row);
-
     page.add(&group);
-    elements.push((group, rows));
 
     // Telemetry Group
     let telemetry_group = adw::PreferencesGroup::builder()
         .title("Telemetry")
         .description("During the Preview Phase, telemetry helps us identify performance issues and improve AI accuracy. Help us improve Boxxy by sharing anonymous usage statistics.")
         .build();
-    let mut telemetry_rows = Vec::new();
 
-    let telemetry_switch = gtk::Switch::builder()
-        .valign(gtk::Align::Center)
-        .active(crate::config::Settings::load().enable_telemetry)
-        .build();
-
-    let telemetry_row = adw::ActionRow::builder()
+    let telemetry_switch = adw::SwitchRow::builder()
         .title("Anonymous Usage Data")
         .subtitle("No PII, paths, or prompt text are ever collected.")
+        .active(Settings::load().enable_telemetry)
         .build();
-    telemetry_row.add_suffix(&telemetry_switch);
-    telemetry_rows.push(telemetry_row.clone());
 
-    telemetry_switch.connect_state_set(move |_, state| {
-        crate::config::Settings::update(|settings| {
-            settings.enable_telemetry = state;
+    {
+        let is_syncing = is_syncing.clone();
+        telemetry_switch.connect_active_notify(move |row| {
+            if is_syncing.get() {
+                return;
+            }
+            let active = row.is_active();
+            Settings::update(|s| {
+                s.enable_telemetry = active;
+            });
         });
-        glib::Propagation::Proceed
-    });
+    }
 
-    let view_stats_row = adw::ActionRow::builder()
-        .title("View Live Statistics")
-        .subtitle("https://boxxy.dev/live")
-        .activatable(true)
-        .build();
-    let ext_icon3 = gtk::Image::from_icon_name("boxxy-external-link-symbolic");
-    view_stats_row.add_suffix(&ext_icon3);
-    telemetry_rows.push(view_stats_row.clone());
+    let view_stats_row = build_link_row("View Live Statistics", "https://boxxy.dev/live");
 
-    view_stats_row.connect_activated(move |_| {
-        let _ = gtk::gio::AppInfo::launch_default_for_uri(
-            "https://boxxy.dev/live",
-            None::<&gtk::gio::AppLaunchContext>,
-        );
-    });
-
-    telemetry_group.add(&telemetry_row);
+    telemetry_group.add(&telemetry_switch);
     telemetry_group.add(&view_stats_row);
     page.add(&telemetry_group);
-    elements.push((telemetry_group, telemetry_rows));
 
-    Box::new(move |query: &str| {
-        let mut page_visible = false;
-        for (group, rows) in &elements {
-            let mut group_visible = false;
-            for row in rows {
-                let title = row.title().to_lowercase();
-                let subtitle = row.subtitle().unwrap_or_default().to_lowercase();
-                let m = query.is_empty() || title.contains(query) || subtitle.contains(query);
-                row.set_visible(m);
-                if m {
-                    group_visible = true;
-                }
-            }
-            group.set_visible(group_visible);
-            if group_visible {
-                page_visible = true;
-            }
+    let meta_rows = vec![
+        SearchRow::new(&version_row, "commit git hash"),
+        SearchRow::new(&dev_row, "author"),
+        SearchRow::new(&license_row, ""),
+        SearchRow::new(&site_row, ""),
+        SearchRow::new(&releases_row, "changelog whats new"),
+        SearchRow::new(&issues_row, "bug github"),
+    ];
+    let telem_rows = vec![
+        SearchRow::new(&telemetry_switch, "telemetry privacy metrics"),
+        SearchRow::new(&view_stats_row, "telemetry metrics"),
+    ];
+
+    let sync = Box::new(move |s: &Settings| {
+        is_syncing.set(true);
+        if telemetry_switch.is_active() != s.enable_telemetry {
+            telemetry_switch.set_active(s.enable_telemetry);
         }
-        page_visible
-    })
+        is_syncing.set(false);
+    });
+
+    let filter = Box::new(move |query: &str| {
+        let mut meta_vis = false;
+        for r in &meta_rows {
+            meta_vis |= r.apply(query);
+        }
+        let mut telem_vis = false;
+        for r in &telem_rows {
+            telem_vis |= r.apply(query);
+        }
+        header_group.set_visible(query.is_empty());
+        group.set_visible(meta_vis);
+        telemetry_group.set_visible(telem_vis);
+        meta_vis || telem_vis
+    });
+
+    (sync, filter)
 }

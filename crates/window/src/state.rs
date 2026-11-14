@@ -223,13 +223,11 @@ pub struct AppWindowInner {
 impl AppWindowInner {
     pub fn ensure_preferences(&mut self) -> &PreferencesComponent {
         if self.preferences.is_none() {
-            let tx_pref = self.tx.clone();
             let tx_themes_nav = self.tx.clone();
             let tx_reload = self.tx.clone();
+            // All preference mutations flow through `Settings::update` -> `SETTINGS_EVENT_BUS`
+            // (subscribed in `ui.rs`), avoiding duplicate `SettingsChanged` dispatches.
             let preferences = PreferencesComponent::new(
-                move |settings| {
-                    let _ = tx_pref.send_blocking(AppInput::SettingsChanged(settings));
-                },
                 move || {
                     let _ = tx_themes_nav.send_blocking(AppInput::ShowThemesSidebar);
                 },

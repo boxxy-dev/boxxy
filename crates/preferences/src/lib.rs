@@ -12,6 +12,7 @@ pub mod shortcuts;
 pub mod skills;
 pub mod themes_page;
 pub mod toolbox;
+mod ui_utils;
 pub mod user_profile;
 
 pub mod component;

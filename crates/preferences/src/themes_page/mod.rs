@@ -1,4 +1,7 @@
 use crate::config::{AppThemeMode, ColorScheme, Settings};
+use crate::ui_utils::{
+    PageHooks, VoidCallbackSlot, bind_mapped_poller, make_editable_color_dot, open_directory,
+};
 use adw::prelude::*;
 use boxxy_themes::ColorDot;
 use boxxy_themes::app_theme::{
@@ -8,8 +11,9 @@ use boxxy_themes::app_theme::{
 use gtk4 as gtk;
 use gtk4::glib;
 use libadwaita as adw;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
+use std::time::Duration;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum ThemeRowAction {
@@ -17,21 +21,21 @@ enum ThemeRowAction {
     LegacyAdwaita(ColorScheme),
 }
 
-type RefreshCallbackCell = Rc<RefCell<Option<Rc<dyn Fn()>>>>;
-
 fn open_themes_folder(widget: &impl IsA<gtk::Widget>) {
-    let dir = ensure_app_themes_dir();
-    let uri = format!("file://{}", dir.display());
-    let _ = gtk::gio::AppInfo::launch_default_for_uri(&uri, None::<&gtk::gio::AppLaunchContext>);
-
-    if let Some(overlay) = widget
-        .ancestor(adw::ToastOverlay::static_type())
-        .and_downcast::<adw::ToastOverlay>()
-    {
-        let toast = adw::Toast::new("Drop .toml theme files into the themes folder to load them.");
-        toast.set_timeout(3);
-        overlay.add_toast(toast);
-    }
+    let widget_weak = widget.downgrade();
+    glib::spawn_future_local(async move {
+        let dir = boxxy_sys_utils::runtime()
+            .spawn_blocking(ensure_app_themes_dir)
+            .await
+            .unwrap_or_else(|_| boxxy_sys_utils::get_config_dir().join("themes"));
+        if let Some(w) = widget_weak.upgrade() {
+            open_directory(
+                &w,
+                dir,
+                Some("Drop .toml theme files into the themes folder to load them."),
+            );
+        }
+    });
 }
 
 /// Builds a standardized `AdwActionRow` with tag pills, 4 color preview dots, and an active checkmark.
@@ -80,16 +84,14 @@ fn build_theme_action_row(
     (row, check_img)
 }
 
-pub fn setup_themes_page(
-    builder: &gtk::Builder,
-    settings_rc: Rc<RefCell<Settings>>,
-    on_change: Rc<dyn Fn(Settings) + 'static>,
-) -> Box<dyn Fn(&str) -> bool> {
+#[allow(clippy::too_many_lines)]
+pub(crate) fn setup_themes_page(builder: &gtk::Builder) -> PageHooks {
     let page: adw::PreferencesPage = builder.object("page_themes").unwrap();
 
     let static_rows: Rc<RefCell<Vec<(ThemeRowAction, gtk::Image)>>> =
         Rc::new(RefCell::new(Vec::new()));
-    let refresh_selection_ui: RefreshCallbackCell = Rc::new(RefCell::new(None));
+    let refresh_selection_ui: VoidCallbackSlot = Rc::new(RefCell::new(None));
+    let initial = Settings::load();
 
     // ── 1. Boxxy Official Themes Group ────────────────────────────────────────
     let official_group = adw::PreferencesGroup::new();
@@ -99,15 +101,10 @@ pub fn setup_themes_page(
     ));
 
     for theme in builtin_app_themes() {
-        let is_selected = {
-            let s = settings_rc.borrow();
-            s.app_theme_mode == AppThemeMode::Boxxy
-                && s.app_theme_id.eq_ignore_ascii_case(&theme.id)
-        };
+        let is_selected = initial.app_theme_mode == AppThemeMode::Boxxy
+            && initial.app_theme_id.eq_ignore_ascii_case(&theme.id);
         let dots = theme.colors.preview_dots();
         let theme_id = theme.id.clone();
-        let s_rc = settings_rc.clone();
-        let cb = on_change.clone();
         let refresh_ui = refresh_selection_ui.clone();
 
         let (row, check_img) = build_theme_action_row(
@@ -117,17 +114,12 @@ pub fn setup_themes_page(
             &dots,
             is_selected,
             move || {
-                let mut s = s_rc.borrow_mut();
-                if s.app_theme_mode != AppThemeMode::Boxxy || s.app_theme_id != theme_id {
+                Settings::update(|s| {
                     s.app_theme_mode = AppThemeMode::Boxxy;
-                    s.app_theme_id = theme_id.clone();
-                    s.save();
-                    let snapshot = s.clone();
-                    drop(s);
-                    if let Some(ref f) = *refresh_ui.borrow() {
-                        f();
-                    }
-                    cb(snapshot);
+                    s.app_theme_id.clone_from(&theme_id);
+                });
+                if let Some(ref f) = *refresh_ui.borrow() {
+                    f();
                 }
             },
         );
@@ -158,8 +150,6 @@ pub fn setup_themes_page(
     reset_accent_btn.set_tooltip_text(Some("Use the active theme's built-in accent color"));
 
     for &(preset_name, preset_hex) in ACCENT_PRESETS {
-        let s_rc = settings_rc.clone();
-        let cb = on_change.clone();
         let refresh_ui = refresh_selection_ui.clone();
         let hex_owned = preset_hex.to_string();
 
@@ -175,67 +165,42 @@ pub fn setup_themes_page(
         dot_btn.set_child(Some(&ColorDot::new(preset_hex, 18)));
 
         dot_btn.connect_clicked(move |_| {
-            let mut s = s_rc.borrow_mut();
-            if s.custom_accent_color.as_deref() != Some(hex_owned.as_str()) {
+            Settings::update(|s| {
                 s.custom_accent_color = Some(hex_owned.clone());
-                s.save();
-                let snapshot = s.clone();
-                drop(s);
-                if let Some(ref f) = *refresh_ui.borrow() {
-                    f();
-                }
-                cb(snapshot);
+            });
+            if let Some(ref f) = *refresh_ui.borrow() {
+                f();
             }
         });
         accent_suffix_box.append(&dot_btn);
     }
 
-    let initial_accent = settings_rc
-        .borrow()
+    let initial_accent = initial
         .custom_accent_color
         .clone()
-        .unwrap_or_else(|| {
-            resolve_app_theme(&settings_rc.borrow().app_theme_id)
-                .colors
-                .accent
-        });
-    let s_rc_custom = settings_rc.clone();
-    let cb_custom = on_change.clone();
+        .unwrap_or_else(|| resolve_app_theme(&initial.app_theme_id).colors.accent);
     let refresh_ui_custom = refresh_selection_ui.clone();
-    let (custom_picker_btn, update_custom_picker_color) =
-        crate::characters::make_editable_color_dot(
-            &initial_accent,
-            "Pick a custom accent color…",
-            move |chosen_hex| {
-                let mut s = s_rc_custom.borrow_mut();
-                if s.custom_accent_color.as_deref() != Some(chosen_hex.as_str()) {
-                    s.custom_accent_color = Some(chosen_hex);
-                    s.save();
-                    let snapshot = s.clone();
-                    drop(s);
-                    if let Some(ref f) = *refresh_ui_custom.borrow() {
-                        f();
-                    }
-                    cb_custom(snapshot);
-                }
-            },
-        );
-    accent_suffix_box.append(&custom_picker_btn);
-
-    let s_rc_reset = settings_rc.clone();
-    let cb_reset = on_change.clone();
-    let refresh_ui_reset = refresh_selection_ui.clone();
-    reset_accent_btn.connect_clicked(move |_| {
-        let mut s = s_rc_reset.borrow_mut();
-        if s.custom_accent_color.is_some() {
-            s.custom_accent_color = None;
-            s.save();
-            let snapshot = s.clone();
-            drop(s);
-            if let Some(ref f) = *refresh_ui_reset.borrow() {
+    let (custom_picker_btn, update_custom_picker_color) = make_editable_color_dot(
+        &initial_accent,
+        "Pick a custom accent color…",
+        move |chosen_hex| {
+            Settings::update(|s| {
+                s.custom_accent_color = Some(chosen_hex.clone());
+            });
+            if let Some(ref f) = *refresh_ui_custom.borrow() {
                 f();
             }
-            cb_reset(snapshot);
+        },
+    );
+    accent_suffix_box.append(&custom_picker_btn);
+
+    let refresh_ui_reset = refresh_selection_ui.clone();
+    reset_accent_btn.connect_clicked(move |_| {
+        Settings::update(|s| {
+            s.custom_accent_color = None;
+        });
+        if let Some(ref f) = *refresh_ui_reset.borrow() {
+            f();
         }
     });
     accent_suffix_box.append(&reset_accent_btn);
@@ -258,9 +223,7 @@ pub fn setup_themes_page(
     let folder_icon = gtk::Image::from_icon_name("boxxy-folder-open-symbolic");
     folder_icon.set_valign(gtk::Align::Center);
     open_folder_row.add_suffix(&folder_icon);
-    open_folder_row.connect_activated(|row| {
-        open_themes_folder(row);
-    });
+    open_folder_row.connect_activated(open_themes_folder);
     community_group.add(&open_folder_row);
     page.add(&community_group);
 
@@ -296,12 +259,8 @@ pub fn setup_themes_page(
     ];
 
     for (title, subtitle, tags, dots, scheme) in legacy_specs {
-        let is_selected = {
-            let s = settings_rc.borrow();
-            s.app_theme_mode == AppThemeMode::DefaultGtk && s.color_scheme == scheme
-        };
-        let s_rc = settings_rc.clone();
-        let cb = on_change.clone();
+        let is_selected =
+            initial.app_theme_mode == AppThemeMode::DefaultGtk && initial.color_scheme == scheme;
         let refresh_ui = refresh_selection_ui.clone();
 
         let (row, check_img) = build_theme_action_row(
@@ -311,17 +270,12 @@ pub fn setup_themes_page(
             &dots,
             is_selected,
             move || {
-                let mut s = s_rc.borrow_mut();
-                if s.app_theme_mode != AppThemeMode::DefaultGtk || s.color_scheme != scheme {
+                Settings::update(|s| {
                     s.app_theme_mode = AppThemeMode::DefaultGtk;
                     s.color_scheme = scheme;
-                    s.save();
-                    let snapshot = s.clone();
-                    drop(s);
-                    if let Some(ref f) = *refresh_ui.borrow() {
-                        f();
-                    }
-                    cb(snapshot);
+                });
+                if let Some(ref f) = *refresh_ui.borrow() {
+                    f();
                 }
             },
         );
@@ -339,16 +293,11 @@ pub fn setup_themes_page(
         Rc::new(RefCell::new(None));
 
     // Synchronize active checkmarks and subtitles across Official, Accent, Community, and Legacy rows
-    let update_selection_states: Rc<dyn Fn()> = {
-        let settings_rc = settings_rc.clone();
-        let static_rows = static_rows.clone();
+    let apply_selection_states: Rc<dyn Fn(&Settings)> = {
         let community_rows = community_rows.clone();
-        let accent_row = accent_row.clone();
         let accent_group = accent_group.clone();
-        let reset_accent_btn = reset_accent_btn.clone();
 
-        Rc::new(move || {
-            let s = settings_rc.borrow();
+        Rc::new(move |s: &Settings| {
             let is_boxxy = s.app_theme_mode == AppThemeMode::Boxxy;
 
             for (action, check_img) in static_rows.borrow().iter() {
@@ -356,9 +305,7 @@ pub fn setup_themes_page(
                     ThemeRowAction::BoxxyTheme(id) => {
                         is_boxxy && id.eq_ignore_ascii_case(&s.app_theme_id)
                     }
-                    ThemeRowAction::LegacyAdwaita(scheme) => {
-                        !is_boxxy && s.color_scheme == *scheme
-                    }
+                    ThemeRowAction::LegacyAdwaita(scheme) => !is_boxxy && s.color_scheme == *scheme,
                 };
                 check_img.set_visible(selected);
             }
@@ -380,148 +327,164 @@ pub fn setup_themes_page(
                 accent_row.set_subtitle("Select a Boxxy or Community theme to customize accent");
                 reset_accent_btn.set_sensitive(false);
             } else if let Some(ref custom_hex) = s.custom_accent_color {
-                accent_row.set_subtitle(&format!("Custom ({custom_hex})"));
+                accent_row
+                    .set_subtitle(&glib::markup_escape_text(&format!("Custom ({custom_hex})")));
                 reset_accent_btn.set_sensitive(true);
             } else {
-                accent_row.set_subtitle(&format!(
+                accent_row.set_subtitle(&glib::markup_escape_text(&format!(
                     "{} default ({})",
                     active_theme.name, active_theme.colors.accent
-                ));
+                )));
                 reset_accent_btn.set_sensitive(false);
             }
         })
     };
-    *refresh_selection_ui.borrow_mut() = Some(update_selection_states.clone());
 
-    // Populate / refresh Community Themes list
-    let rebuild_community_rows: Rc<dyn Fn(bool)> = {
+    let update_selection_states: Rc<dyn Fn()> = {
+        let apply = apply_selection_states.clone();
+        Rc::new(move || {
+            apply(&Settings::load());
+        })
+    };
+    *refresh_selection_ui.borrow_mut() = Some(update_selection_states.clone());
+    apply_selection_states(&initial);
+
+    // Asynchronously scan community themes off the GTK main thread
+    let scan_in_flight = Rc::new(Cell::new(false));
+    let trigger_community_scan: Rc<dyn Fn(bool)> = {
         let community_group = community_group.clone();
-        let open_folder_row = open_folder_row.clone();
-        let community_rows = community_rows.clone();
+        let open_folder_row = open_folder_row;
+        let community_rows = community_rows;
         let last_community_list = last_community_list.clone();
-        let settings_rc = settings_rc.clone();
-        let on_change = on_change.clone();
-        let update_ui = update_selection_states.clone();
+        let update_ui = update_selection_states;
 
         Rc::new(move |force: bool| {
-            let discovered = discover_community_themes();
-            if !force
-                && last_community_list
-                    .borrow()
-                    .as_ref()
-                    .is_some_and(|prev| prev == &discovered)
-            {
+            if scan_in_flight.get() {
                 return;
             }
-            *last_community_list.borrow_mut() = Some(discovered.clone());
+            scan_in_flight.set(true);
 
-            for (_, old_row, _) in community_rows.borrow_mut().drain(..) {
-                community_group.remove(&old_row);
-            }
-            community_group.remove(&open_folder_row);
+            let community_group = community_group.clone();
+            let open_folder_row = open_folder_row.clone();
+            let community_rows = community_rows.clone();
+            let last_community_list = last_community_list.clone();
+            let update_ui = update_ui.clone();
+            let scan_in_flight = scan_in_flight.clone();
 
-            for theme in discovered {
-                let subtitle = if theme.description.is_empty() {
-                    format!("by {}", theme.author)
-                } else {
-                    format!("{} · by {}", theme.description, theme.author)
-                };
-                let is_selected = {
-                    let s = settings_rc.borrow();
-                    s.app_theme_mode == AppThemeMode::Boxxy
-                        && s.app_theme_id.eq_ignore_ascii_case(&theme.id)
-                };
-                let dots = theme.colors.preview_dots();
-                let theme_id = theme.id.clone();
-                let s_rc = settings_rc.clone();
-                let cb = on_change.clone();
-                let update_ui = update_ui.clone();
+            glib::spawn_future_local(async move {
+                let discovered = boxxy_sys_utils::runtime()
+                    .spawn_blocking(discover_community_themes)
+                    .await
+                    .unwrap_or_default();
+                scan_in_flight.set(false);
 
-                let (row, check_img) = build_theme_action_row(
-                    &theme.name,
-                    &subtitle,
-                    &theme.tags,
-                    &dots,
-                    is_selected,
-                    move || {
-                        let mut s = s_rc.borrow_mut();
-                        if s.app_theme_id != theme_id || s.app_theme_mode != AppThemeMode::Boxxy {
-                            s.app_theme_id = theme_id.clone();
-                            s.app_theme_mode = AppThemeMode::Boxxy;
-                            s.save();
-                            let snapshot = s.clone();
-                            drop(s);
-                            update_ui();
-                            cb(snapshot);
-                        }
-                    },
-                );
-
-                community_group.add(&row);
-                community_rows
-                    .borrow_mut()
-                    .push((theme.id.clone(), row, check_img));
-            }
-
-            // Always keep "Open Themes Folder" as the final row in Community Themes
-            community_group.add(&open_folder_row);
-
-            update_ui();
-
-            // If this was a live hot-reload tick (`!force`) and the user's active theme is in
-            // the community list, trigger `on_change` so any `.toml` edits apply immediately.
-            if !force {
-                let snapshot = settings_rc.borrow().clone();
-                if snapshot.app_theme_mode == AppThemeMode::Boxxy {
-                    on_change(snapshot);
+                let unchanged = !force
+                    && last_community_list
+                        .borrow()
+                        .as_ref()
+                        .is_some_and(|prev| prev == &discovered);
+                if unchanged {
+                    return;
                 }
-            }
+                let had_previous = last_community_list.borrow().is_some();
+                *last_community_list.borrow_mut() = Some(discovered.clone());
+
+                for (_, old_row, _) in community_rows.borrow_mut().drain(..) {
+                    community_group.remove(&old_row);
+                }
+                community_group.remove(&open_folder_row);
+
+                let current = Settings::load();
+                for theme in discovered {
+                    let subtitle = if theme.description.is_empty() {
+                        format!("by {}", theme.author)
+                    } else {
+                        format!("{} · by {}", theme.description, theme.author)
+                    };
+                    let is_selected = current.app_theme_mode == AppThemeMode::Boxxy
+                        && current.app_theme_id.eq_ignore_ascii_case(&theme.id);
+                    let dots = theme.colors.preview_dots();
+                    let theme_id = theme.id.clone();
+                    let update_ui = update_ui.clone();
+
+                    let (row, check_img) = build_theme_action_row(
+                        &theme.name,
+                        &subtitle,
+                        &theme.tags,
+                        &dots,
+                        is_selected,
+                        move || {
+                            Settings::update(|s| {
+                                s.app_theme_id.clone_from(&theme_id);
+                                s.app_theme_mode = AppThemeMode::Boxxy;
+                            });
+                            update_ui();
+                        },
+                    );
+
+                    community_group.add(&row);
+                    community_rows
+                        .borrow_mut()
+                        .push((theme.id.clone(), row, check_img));
+                }
+
+                // Always keep "Open Themes Folder" as the final row in Community Themes
+                community_group.add(&open_folder_row);
+                update_ui();
+
+                // If a community `.toml` changed during live polling while Boxxy theme mode
+                // is active, notify all windows so edits apply immediately.
+                if !force && had_previous && Settings::load().app_theme_mode == AppThemeMode::Boxxy
+                {
+                    Settings::notify_changed();
+                }
+            });
         })
     };
 
-    rebuild_community_rows(true);
-
-    // Poll community themes folder every 500ms while the Themes page is mapped
+    // Kick off initial non-blocking discovery and single-instance 500ms poll while mapped
+    trigger_community_scan(true);
     {
-        let rebuild = rebuild_community_rows.clone();
-        let page_weak = page.downgrade();
-        page.connect_map(move |_| {
-            rebuild(false);
-            let rebuild_tick = rebuild.clone();
-            let page_weak_tick = page_weak.clone();
-            glib::timeout_add_local(std::time::Duration::from_millis(500), move || {
-                let Some(p) = page_weak_tick.upgrade() else {
-                    return glib::ControlFlow::Break;
-                };
-                if !p.is_mapped() {
-                    return glib::ControlFlow::Break;
-                }
-                rebuild_tick(false);
-                glib::ControlFlow::Continue
-            });
-        });
+        let scan_map = trigger_community_scan.clone();
+        let scan_tick = trigger_community_scan;
+        bind_mapped_poller(
+            &page,
+            Duration::from_millis(500),
+            move || scan_map(false),
+            move || scan_tick(false),
+        );
     }
 
-    let official_group_filter = official_group;
-    let accent_group_filter = accent_group;
-    let community_group_filter = community_group;
-    let legacy_group_filter = legacy_group;
+    let sync = Box::new(move |s: &Settings| {
+        apply_selection_states(s);
+    });
 
-    Box::new(move |query: &str| {
+    let filter = Box::new(move |query: &str| {
         if query.is_empty() {
-            official_group_filter.set_visible(true);
-            accent_group_filter.set_visible(true);
-            community_group_filter.set_visible(true);
-            legacy_group_filter.set_visible(true);
+            official_group.set_visible(true);
+            accent_group.set_visible(true);
+            community_group.set_visible(true);
+            legacy_group.set_visible(true);
             return true;
         }
 
-        let keywords = "theme themes boxxy dark light official legacy adwaita system follow gtk color scheme accent custom community toml cotton candy bauhaus";
-        let matched = keywords.contains(query);
-        official_group_filter.set_visible(matched);
-        accent_group_filter.set_visible(matched);
-        community_group_filter.set_visible(matched);
-        legacy_group_filter.set_visible(matched);
+        let static_keywords = "theme themes boxxy dark light official legacy adwaita system follow gtk color scheme accent custom community toml cotton candy bauhaus";
+        let community_match = last_community_list.borrow().as_ref().is_some_and(|list| {
+            list.iter().any(|t| {
+                t.name.to_lowercase().contains(query)
+                    || t.id.to_lowercase().contains(query)
+                    || t.author.to_lowercase().contains(query)
+                    || t.description.to_lowercase().contains(query)
+                    || t.tags.iter().any(|tag| tag.to_lowercase().contains(query))
+            })
+        });
+        let matched = static_keywords.contains(query) || community_match;
+        official_group.set_visible(matched);
+        accent_group.set_visible(matched);
+        community_group.set_visible(matched);
+        legacy_group.set_visible(matched);
         matched
-    })
+    });
+
+    (sync, filter)
 }

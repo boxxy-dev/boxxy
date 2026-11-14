@@ -1,3 +1,4 @@
+use crate::ui_utils::show_toast;
 use adw::prelude::*;
 use boxxy_model_selection::{
     CustomModelConfig, OpenAiApiRoute, OpenAiCompatibleEndpoint, ThinkingLevel,
@@ -12,7 +13,7 @@ use std::rc::Rc;
 type SaveCallback = Box<dyn Fn(OpenAiCompatibleEndpoint, String)>;
 
 #[derive(Clone)]
-pub struct OpenAiCompatEditorPage {
+pub(super) struct OpenAiCompatEditorPage {
     apis_stack: gtk::Stack,
     back_btn: gtk::Button,
     content_title: adw::WindowTitle,
@@ -22,19 +23,24 @@ pub struct OpenAiCompatEditorPage {
     api_key_entry: adw::PasswordEntryRow,
     env_var_entry: adw::EntryRow,
     zero_cost_switch: adw::SwitchRow,
+    preserved_enabled: Rc<Cell<bool>>,
+    session_gen: Rc<Cell<u64>>,
     models_state: Rc<RefCell<Vec<CustomModelConfig>>>,
     sync_picker: Rc<dyn Fn(Option<u32>)>,
     on_save_slot: Rc<RefCell<Option<SaveCallback>>>,
 }
 
 impl OpenAiCompatEditorPage {
-    pub fn new(
+    #[allow(clippy::too_many_lines)]
+    pub(super) fn new(
         page: &adw::PreferencesPage,
         apis_stack: &gtk::Stack,
         back_btn: &gtk::Button,
         content_title: &adw::WindowTitle,
     ) -> Self {
         let on_save_slot: Rc<RefCell<Option<SaveCallback>>> = Rc::new(RefCell::new(None));
+        let preserved_enabled = Rc::new(Cell::new(true));
+        let session_gen = Rc::new(Cell::new(0_u64));
 
         // --- 1. Connection & Authentication ---
         let conn_group = adw::PreferencesGroup::builder()
@@ -44,7 +50,7 @@ impl OpenAiCompatEditorPage {
 
         let name_entry = adw::EntryRow::builder().title("Provider Name").build();
         let url_entry = adw::EntryRow::builder()
-            .title("Base URL (with /v1)")
+            .title("Base URL (http:// or https://, with /v1)")
             .build();
         let requires_key_switch = adw::SwitchRow::builder()
             .title("Requires API Key")
@@ -68,6 +74,9 @@ impl OpenAiCompatEditorPage {
         conn_group.add(&env_var_entry);
         conn_group.add(&zero_cost_switch);
         page.add(&conn_group);
+
+        name_entry.connect_changed(|e| e.remove_css_class("error"));
+        url_entry.connect_changed(|e| e.remove_css_class("error"));
 
         requires_key_switch.connect_active_notify({
             let api_key_entry = api_key_entry.clone();
@@ -108,9 +117,7 @@ impl OpenAiCompatEditorPage {
         let model_picker_list = gtk::StringList::new(&["+ Add New Model…"]);
         model_picker_combo.set_model(Some(&model_picker_list));
 
-        let model_slug_entry = adw::EntryRow::builder()
-            .title("Model Slug / ID")
-            .build();
+        let model_slug_entry = adw::EntryRow::builder().title("Model Slug / ID").build();
 
         let route_combo = adw::ComboRow::builder().title("API Route").build();
         let route_list = gtk::StringList::new(&[
@@ -141,6 +148,7 @@ impl OpenAiCompatEditorPage {
         model_slug_entry.add_suffix(&save_model_btn);
 
         let status_row = adw::ActionRow::builder()
+            .use_markup(false)
             .title("Catalog Auto-Detection")
             .subtitle("Leave Context Window or Thinking Modes blank to auto-detect from models.dev.")
             .build();
@@ -220,18 +228,17 @@ impl OpenAiCompatEditorPage {
                     if let Some(spec) = resolve_any_catalog_spec(&m.id) {
                         let ctx_info = spec
                             .context_window
-                            .map(|c| format!("{c} tokens"))
-                            .unwrap_or_else(|| "unknown".to_string());
+                            .map_or_else(|| "unknown".to_string(), |c| format!("{c} tokens"));
                         let levels = boxxy_model_selection::thinking_levels_from_spec(spec);
                         let think_info = if levels.is_empty() {
                             "none".to_string()
                         } else {
                             ThinkingLevel::format_comma_separated(&levels)
                         };
-                        status_row.set_subtitle(&glib::markup_escape_text(&format!(
+                        status_row.set_subtitle(&format!(
                             "Matched in models.dev: {} • Context: {} • Thinking: [{}]",
                             spec.display_name, ctx_info, think_info
-                        )));
+                        ));
                     } else {
                         status_row.set_subtitle(
                             "Custom model (not in built-in catalog — uses values configured above).",
@@ -253,7 +260,7 @@ impl OpenAiCompatEditorPage {
         };
 
         let sync_picker: Rc<dyn Fn(Option<u32>)> = {
-            let picker_list = model_picker_list.clone();
+            let picker_list = model_picker_list;
             let picker_combo = model_picker_combo.clone();
             let state = models_state.clone();
             let syncing = syncing_picker.clone();
@@ -279,8 +286,8 @@ impl OpenAiCompatEditorPage {
         };
 
         model_picker_combo.connect_selected_notify({
-            let syncing = syncing_picker.clone();
-            let load_editor = load_selected_into_editor.clone();
+            let syncing = syncing_picker;
+            let load_editor = load_selected_into_editor;
             move |combo| {
                 if !syncing.get() {
                     load_editor(combo.selected());
@@ -289,12 +296,12 @@ impl OpenAiCompatEditorPage {
         });
 
         let commit_editor_model = {
-            let slug_e = model_slug_entry.clone();
-            let route_c = route_combo.clone();
-            let ctx_e = ctx_window_entry.clone();
-            let think_e = thinking_entry.clone();
-            let in_cost_e = input_cost_entry.clone();
-            let out_cost_e = output_cost_entry.clone();
+            let slug_e = model_slug_entry;
+            let route_c = route_combo;
+            let ctx_e = ctx_window_entry;
+            let think_e = thinking_entry;
+            let in_cost_e = input_cost_entry;
+            let out_cost_e = output_cost_entry;
             let state = models_state.clone();
             Rc::new(move || -> Option<u32> {
                 let id = slug_e.text().trim().to_string();
@@ -334,7 +341,7 @@ impl OpenAiCompatEditorPage {
                     list[pos].thinking_levels = thinking_levels;
                     list[pos].input_cost_per_1m = input_cost_per_1m;
                     list[pos].output_cost_per_1m = output_cost_per_1m;
-                    Some(pos as u32)
+                    u32::try_from(pos).ok()
                 } else {
                     list.push(CustomModelConfig {
                         id,
@@ -345,7 +352,7 @@ impl OpenAiCompatEditorPage {
                         input_cost_per_1m,
                         output_cost_per_1m,
                     });
-                    Some((list.len() - 1) as u32)
+                    u32::try_from(list.len().saturating_sub(1)).ok()
                 }
             })
         };
@@ -363,7 +370,7 @@ impl OpenAiCompatEditorPage {
         });
 
         remove_model_btn.connect_clicked({
-            let picker_combo = model_picker_combo.clone();
+            let picker_combo = model_picker_combo;
             let state = models_state.clone();
             let sync_picker = sync_picker.clone();
             move |_| {
@@ -387,11 +394,17 @@ impl OpenAiCompatEditorPage {
             let url_entry = url_entry.clone();
             let api_key_entry = api_key_entry.clone();
             let env_var_entry = env_var_entry.clone();
-            let status_row = status_row.clone();
+            let status_row = status_row;
             let state = models_state.clone();
             let sync_picker = sync_picker.clone();
+            let session_gen = session_gen.clone();
             move |btn| {
                 let base_url = url_entry.text().trim().to_string();
+                if !(base_url.starts_with("http://") || base_url.starts_with("https://")) {
+                    url_entry.add_css_class("error");
+                    status_row.set_subtitle("Enter a valid http:// or https:// Base URL first.");
+                    return;
+                }
                 let direct_key = api_key_entry.text().trim().to_string();
                 let env_var = env_var_entry.text().trim().to_string();
                 let key = if !direct_key.is_empty() {
@@ -404,6 +417,7 @@ impl OpenAiCompatEditorPage {
                     String::new()
                 };
 
+                let req_gen = session_gen.get();
                 btn.set_sensitive(false);
                 status_row.set_subtitle("Querying endpoint /models…");
 
@@ -411,6 +425,7 @@ impl OpenAiCompatEditorPage {
                 let status_clone = status_row.clone();
                 let state_clone = state.clone();
                 let sync_clone = sync_picker.clone();
+                let session_gen_check = session_gen.clone();
                 let base_url_for_route = base_url.clone();
 
                 glib::spawn_future_local(async move {
@@ -419,6 +434,9 @@ impl OpenAiCompatEditorPage {
                         .await;
 
                     btn_clone.set_sensitive(true);
+                    if session_gen_check.get() != req_gen {
+                        return;
+                    }
                     match res {
                         Ok(Ok(ids)) => {
                             let mut added = 0usize;
@@ -438,18 +456,17 @@ impl OpenAiCompatEditorPage {
                                 }
                             }
                             sync_clone(Some(0));
-                            status_clone.set_subtitle(&glib::markup_escape_text(&format!(
+                            status_clone.set_subtitle(&format!(
                                 "Fetched {} models from endpoint ({} new added).",
                                 ids.len(),
                                 added
-                            )));
+                            ));
                         }
                         Ok(Err(err)) => {
-                            status_clone.set_subtitle(&glib::markup_escape_text(&err));
+                            status_clone.set_subtitle(&err);
                         }
                         Err(e) => {
-                            status_clone
-                                .set_subtitle(&glib::markup_escape_text(&format!("Task error: {e}")));
+                            status_clone.set_subtitle(&format!("Task error: {e}"));
                         }
                     }
                 });
@@ -460,7 +477,9 @@ impl OpenAiCompatEditorPage {
             let apis_stack = apis_stack.clone();
             let back_btn = back_btn.clone();
             let content_title = content_title.clone();
+            let session_gen = session_gen.clone();
             Rc::new(move || {
+                session_gen.set(session_gen.get().wrapping_add(1));
                 apis_stack.set_visible_child_name("list");
                 back_btn.set_visible(false);
                 content_title.set_title("APIs");
@@ -488,16 +507,31 @@ impl OpenAiCompatEditorPage {
             let api_key_entry = api_key_entry.clone();
             let env_var_entry = env_var_entry.clone();
             let zero_cost_switch = zero_cost_switch.clone();
+            let preserved_enabled = preserved_enabled.clone();
             let models_state = models_state.clone();
-            let commit = commit_editor_model.clone();
+            let commit = commit_editor_model;
             let on_save_slot = on_save_slot.clone();
-            let go_back = go_back;
-            move |_| {
+            move |btn| {
                 let name = name_entry.text().trim().to_string();
                 let base_url = url_entry.text().trim().to_string();
-                if name.is_empty() || base_url.is_empty() {
+                let valid_name = !name.is_empty();
+                let valid_url =
+                    base_url.starts_with("http://") || base_url.starts_with("https://");
+
+                if !valid_name {
+                    name_entry.add_css_class("error");
+                }
+                if !valid_url {
+                    url_entry.add_css_class("error");
+                }
+                if !valid_name || !valid_url {
+                    show_toast(
+                        btn,
+                        "Enter a Provider Name and a valid http:// or https:// Base URL.",
+                    );
                     return;
                 }
+
                 let _ = commit();
 
                 let env_var = env_var_entry.text().trim().to_string();
@@ -509,7 +543,7 @@ impl OpenAiCompatEditorPage {
                     requires_api_key: requires_key_switch.is_active(),
                     zero_cost: zero_cost_switch.is_active(),
                     models,
-                    enabled: true,
+                    enabled: preserved_enabled.get(),
                 };
                 let key = api_key_entry.text().to_string();
                 go_back();
@@ -530,18 +564,22 @@ impl OpenAiCompatEditorPage {
             api_key_entry,
             env_var_entry,
             zero_cost_switch,
+            preserved_enabled,
+            session_gen,
             models_state,
             sync_picker,
             on_save_slot,
         }
     }
 
-    pub fn open_editor(
+    pub(super) fn open_editor(
         &self,
         existing: Option<&OpenAiCompatibleEndpoint>,
         existing_api_key: &str,
         on_save: impl Fn(OpenAiCompatibleEndpoint, String) + 'static,
     ) {
+        self.session_gen.set(self.session_gen.get().wrapping_add(1));
+
         let is_edit = existing.is_some();
         let initial_ep = existing.cloned().unwrap_or_else(|| OpenAiCompatibleEndpoint {
             name: String::new(),
@@ -553,6 +591,10 @@ impl OpenAiCompatEditorPage {
             enabled: true,
         });
 
+        self.preserved_enabled.set(initial_ep.enabled);
+
+        self.name_entry.remove_css_class("error");
+        self.url_entry.remove_css_class("error");
         self.name_entry.set_text(&initial_ep.name);
         self.url_entry.set_text(&initial_ep.base_url);
         self.requires_key_switch

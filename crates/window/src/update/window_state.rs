@@ -381,8 +381,10 @@ pub fn settings_changed(inner: &mut AppWindowInner, settings: Settings) {
 }
 
 pub fn theme_selected(inner: &mut AppWindowInner, palette: boxxy_themes::ParsedPaletteStatic) {
-    inner.current_settings.theme = palette.id.to_string();
-    inner.current_settings.save();
+    let updated = Settings::update(|s| {
+        palette.id.clone_into(&mut s.theme);
+    });
+    inner.current_settings = (*updated).clone();
 
     let is_dark = libadwaita::StyleManager::default().is_dark();
     let variant = if is_dark { palette.dark } else { palette.light };

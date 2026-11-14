@@ -1,15 +1,12 @@
 use crate::config::Settings;
+use crate::ui_utils::{PageHooks, SearchRow, open_uri};
 use adw::prelude::*;
 use gtk4 as gtk;
 use libadwaita as adw;
-use std::cell::RefCell;
+use std::cell::Cell;
 use std::rc::Rc;
 
-pub fn setup_integrations_page(
-    builder: &gtk::Builder,
-    settings_rc: Rc<RefCell<Settings>>,
-    on_change: Rc<dyn Fn(Settings) + 'static>,
-) -> Box<dyn Fn(&str) -> bool> {
+pub(crate) fn setup_integrations_page(builder: &gtk::Builder) -> PageHooks {
     let nautilus_integration_switch: adw::SwitchRow =
         builder.object("nautilus_integration_switch").unwrap();
     let gnome_companion_row: adw::ActionRow = builder.object("gnome_companion_row").unwrap();
@@ -20,69 +17,59 @@ pub fn setup_integrations_page(
     let group_integrations_cosmic: adw::PreferencesGroup =
         builder.object("group_integrations_cosmic").unwrap();
 
-    nautilus_integration_switch.set_active(settings_rc.borrow().nautilus_integration);
-    let s_rc = settings_rc.clone();
-    let cb = on_change.clone();
-    nautilus_integration_switch.connect_active_notify(move |row| {
-        let active = row.is_active();
-        let mut s = s_rc.borrow_mut();
-        if s.nautilus_integration != active {
-            s.nautilus_integration = active;
-            s.save();
+    let is_syncing = Rc::new(Cell::new(false));
+    nautilus_integration_switch.set_active(Settings::load().nautilus_integration);
+
+    {
+        let is_syncing = is_syncing.clone();
+        nautilus_integration_switch.connect_active_notify(move |row| {
+            if is_syncing.get() {
+                return;
+            }
+            let active = row.is_active();
+            Settings::update(|s| {
+                s.nautilus_integration = active;
+            });
             boxxy_sys_utils::runtime().spawn_blocking(move || {
                 Settings::sync_nautilus_extension(active);
             });
-            cb(s.clone());
+        });
+    }
+
+    gnome_companion_row.connect_activated(|row| {
+        if let Some(uri) = row.subtitle() {
+            open_uri(row, uri.as_str());
         }
     });
 
-    let gnome_companion_row_clone = gnome_companion_row.clone();
-    gnome_companion_row.connect_activated(move |_| {
-        if let Some(uri) = gnome_companion_row_clone.subtitle() {
-            let _ = gtk::gio::AppInfo::launch_default_for_uri(
-                uri.as_str(),
-                None::<&gtk::gio::AppLaunchContext>,
-            );
+    cosmic_companion_row.connect_activated(|row| {
+        if let Some(uri) = row.subtitle() {
+            open_uri(row, uri.as_str());
         }
     });
 
-    let cosmic_companion_row_clone = cosmic_companion_row.clone();
-    cosmic_companion_row.connect_activated(move |_| {
-        if let Some(uri) = cosmic_companion_row_clone.subtitle() {
-            let _ = gtk::gio::AppInfo::launch_default_for_uri(
-                uri.as_str(),
-                None::<&gtk::gio::AppLaunchContext>,
-            );
+    let s_nautilus = SearchRow::new(
+        &nautilus_integration_switch,
+        "gnome nautilus integration files context menu open with boxxy",
+    );
+    let s_gnome = SearchRow::new(&gnome_companion_row, "gnome shell extension companion");
+    let s_cosmic = SearchRow::new(&cosmic_companion_row, "cosmic boxxy companion applet");
+
+    let sync = Box::new(move |s: &Settings| {
+        is_syncing.set(true);
+        if nautilus_integration_switch.is_active() != s.nautilus_integration {
+            nautilus_integration_switch.set_active(s.nautilus_integration);
         }
+        is_syncing.set(false);
     });
 
-    let nautilus_integration_switch_clone = nautilus_integration_switch.clone();
-    let gnome_companion_row_filter = gnome_companion_row.clone();
-    let cosmic_companion_row_filter = cosmic_companion_row.clone();
+    let filter = Box::new(move |query: &str| {
+        let g = s_nautilus.apply(query) | s_gnome.apply(query);
+        let c = s_cosmic.apply(query);
+        group_integrations_gnome.set_visible(g);
+        group_integrations_cosmic.set_visible(c);
+        g || c
+    });
 
-    Box::new(move |query: &str| {
-        let match_row = |r: &gtk::Widget, text: &str| {
-            let m = query.is_empty() || text.to_lowercase().contains(query);
-            r.set_visible(m);
-            m
-        };
-
-        let g1 = match_row(
-            nautilus_integration_switch_clone.upcast_ref(),
-            "gnome nautilus integration files context menu open with boxxy",
-        );
-        let g2 = match_row(
-            gnome_companion_row_filter.upcast_ref(),
-            "gnome shell extension companion https://github.com/boxxy-dev/gnome-shell-boxxy-companion",
-        );
-        let c1 = match_row(
-            cosmic_companion_row_filter.upcast_ref(),
-            "cosmic boxxy companion applet https://github.com/boxxy-dev/cosmic-boxxy-companion",
-        );
-
-        group_integrations_gnome.set_visible(g1 || g2);
-        group_integrations_cosmic.set_visible(c1);
-
-        group_integrations_gnome.is_visible() || group_integrations_cosmic.is_visible()
-    })
+    (sync, filter)
 }

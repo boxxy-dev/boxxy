@@ -1092,7 +1092,6 @@ dependencies = [
 name = "boxxy-preferences"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "arc-swap",
  "boxxy-assets",
  "boxxy-claw-protocol",
@@ -1102,7 +1101,6 @@ dependencies = [
  "boxxy-model-selection",
  "boxxy-sys-utils",
  "boxxy-themes",
- "cairo-rs",
  "gtk4",
  "libadwaita",
  "log",

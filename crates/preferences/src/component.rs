@@ -1,311 +1,263 @@
 use crate::config::Settings;
+use crate::ui_utils::{PageFilter, PageSync};
 use adw::prelude::*;
 use gtk4 as gtk;
 use libadwaita as adw;
-use std::cell::{Cell, RefCell};
+use std::cell::Cell;
 use std::rc::Rc;
+
+struct NavCategory {
+    page_name: &'static str,
+    widget_id: &'static str,
+    header_title: &'static str,
+    row: gtk::ListBoxRow,
+    filter: PageFilter,
+}
 
 pub struct PreferencesComponent {
     dialog: adw::Dialog,
     stack: adw::ViewStack,
-    nav_appearance: gtk::ListBoxRow,
-    nav_themes: gtk::ListBoxRow,
-    nav_apis: gtk::ListBoxRow,
-    nav_mcp: gtk::ListBoxRow,
-    nav_skills: gtk::ListBoxRow,
-    nav_shortcuts: gtk::ListBoxRow,
-    nav_about: gtk::ListBoxRow,
-    nav_characters: gtk::ListBoxRow,
+    category_list: gtk::ListBox,
+    categories: Rc<Vec<NavCategory>>,
     search_entry: gtk::SearchEntry,
-    theme_row: adw::ActionRow,
-    chat_width_spin: adw::SpinRow,
-    overlay_font_scale_spin: adw::SpinRow,
-    always_show_code_blocks_switch: adw::SwitchRow,
-    font_button: gtk::FontDialogButton,
-    settings_rc: Rc<RefCell<Settings>>,
+    reset_apis_subpage: Rc<dyn Fn()>,
+    sync_hooks: Vec<PageSync>,
     handle_escape: Rc<dyn Fn()>,
     bound_parent_ptr: Cell<usize>,
 }
 
 impl std::fmt::Debug for PreferencesComponent {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("PreferencesComponent").finish()
+        f.debug_struct("PreferencesComponent").finish_non_exhaustive()
     }
 }
 
 impl PreferencesComponent {
-    pub fn new<F1: Fn(Settings) + 'static, F2: Fn() + 'static, F3: Fn() + 'static>(
-        on_settings_changed: F1,
-        on_open_themes: F2,
-        on_reload_engine: F3,
+    /// Creates the Preferences dialog and initializes all category pages.
+    ///
+    /// # Panics
+    /// Panics if the compiled `GResource` `/dev/boxxy/BoxxyTerminal/ui/preferences.ui`
+    /// is missing expected template object IDs.
+    #[allow(clippy::too_many_lines)]
+    pub fn new<F1: Fn() + 'static, F2: Fn() + 'static>(
+        on_open_themes: F1,
+        on_reload_engine: F2,
     ) -> Self {
-        let settings_rc = Rc::new(RefCell::new((*Settings::load()).clone()));
-        let cb_rc = Rc::new(on_settings_changed);
-
         let builder = gtk::Builder::from_resource("/dev/boxxy/BoxxyTerminal/ui/preferences.ui");
         let dialog: adw::Dialog = builder.object("dialog").unwrap();
         let stack: adw::ViewStack = builder.object("stack").unwrap();
         let content_title: adw::WindowTitle = builder.object("content_title").unwrap();
         let apis_stack: gtk::Stack = builder.object("apis_stack").unwrap();
         let apis_back_btn: gtk::Button = builder.object("apis_back_btn").unwrap();
+        let category_list: gtk::ListBox = builder.object("category_list").unwrap();
+        let search_entry: gtk::SearchEntry = builder.object("search_entry").unwrap();
+        let page_shortcuts: adw::PreferencesPage = builder.object("page_shortcuts").unwrap();
+        let page_about: adw::PreferencesPage = builder.object("page_about").unwrap();
+        let toast_overlay: adw::ToastOverlay = builder.object("toast_overlay").unwrap();
 
-        let dialog_esc_clone = dialog.clone();
-        let stack_esc = stack.clone();
-        let apis_stack_esc = apis_stack.clone();
-        let apis_back_esc = apis_back_btn.clone();
-        let title_esc = content_title.clone();
-        let handle_escape: Rc<dyn Fn()> = Rc::new(move || {
-            if stack_esc.visible_child_name().as_deref() == Some("apis")
-                && apis_stack_esc.visible_child_name().as_deref() != Some("list")
-            {
-                apis_stack_esc.set_visible_child_name("list");
-                apis_back_esc.set_visible(false);
-                title_esc.set_title("APIs");
-                return;
-            }
-            dialog_esc_clone.close();
-        });
+        let reset_apis_subpage: Rc<dyn Fn()> = {
+            let apis_stack = apis_stack.clone();
+            Rc::new(move || {
+                apis_stack.set_visible_child_name("list");
+                apis_back_btn.set_visible(false);
+            })
+        };
+
+        let handle_escape: Rc<dyn Fn()> = {
+            let dialog = dialog.clone();
+            let stack = stack.clone();
+            let apis_stack = apis_stack;
+            let reset_apis = reset_apis_subpage.clone();
+            let title = content_title.clone();
+            Rc::new(move || {
+                if stack.visible_child_name().as_deref() == Some("apis")
+                    && apis_stack.visible_child_name().as_deref() != Some("list")
+                {
+                    reset_apis();
+                    title.set_title("APIs");
+                    return;
+                }
+                dialog.close();
+            })
+        };
 
         let esc_handler = gtk::EventControllerKey::new();
         esc_handler.set_propagation_phase(gtk::PropagationPhase::Capture);
-        let handle_escape_dialog = handle_escape.clone();
-        esc_handler.connect_key_pressed(move |_, keyval, _, _| {
-            if keyval == gtk::gdk::Key::Escape {
-                handle_escape_dialog();
-                gtk::glib::Propagation::Stop
-            } else {
-                gtk::glib::Propagation::Proceed
-            }
-        });
+        {
+            let handle_escape_dialog = handle_escape.clone();
+            esc_handler.connect_key_pressed(move |_, keyval, _, _| {
+                if keyval == gtk::gdk::Key::Escape {
+                    handle_escape_dialog();
+                    gtk::glib::Propagation::Stop
+                } else {
+                    gtk::glib::Propagation::Proceed
+                }
+            });
+        }
         dialog.add_controller(esc_handler);
 
-        // Left sidebar category list
-        let category_list: gtk::ListBox = builder.object("category_list").unwrap();
-        let nav_appearance: gtk::ListBoxRow = builder.object("nav_appearance").unwrap();
-        nav_appearance.set_widget_name("nav_appearance");
-        let nav_themes: gtk::ListBoxRow = builder.object("nav_themes").unwrap();
-        nav_themes.set_widget_name("nav_themes");
-        let nav_apis: gtk::ListBoxRow = builder.object("nav_apis").unwrap();
-        nav_apis.set_widget_name("nav_apis");
-        let nav_characters: gtk::ListBoxRow = builder.object("nav_characters").unwrap();
-        nav_characters.set_widget_name("nav_characters");
-        let nav_integrations: gtk::ListBoxRow = builder.object("nav_integrations").unwrap();
-        nav_integrations.set_widget_name("nav_integrations");
-        let nav_toolbox: gtk::ListBoxRow = builder.object("nav_toolbox").unwrap();
-        nav_toolbox.set_widget_name("nav_toolbox");
-        let nav_mcp: gtk::ListBoxRow = builder.object("nav_mcp").unwrap();
-        nav_mcp.set_widget_name("nav_mcp");
-        let nav_skills: gtk::ListBoxRow = builder.object("nav_skills").unwrap();
-        nav_skills.set_widget_name("nav_skills");
-        let nav_claw_ui: gtk::ListBoxRow = builder.object("nav_claw_ui").unwrap();
-        nav_claw_ui.set_widget_name("nav_claw_ui");
-        let nav_shortcuts: gtk::ListBoxRow = builder.object("nav_shortcuts").unwrap();
-        nav_shortcuts.set_widget_name("nav_shortcuts");
-        let nav_advanced: gtk::ListBoxRow = builder.object("nav_advanced").unwrap();
-        nav_advanced.set_widget_name("nav_advanced");
-        let nav_about: gtk::ListBoxRow = builder.object("nav_about").unwrap();
-        nav_about.set_widget_name("nav_about");
-
-        let stack_clone = stack.clone();
-        let title_clone = content_title.clone();
-        let apis_stack_nav = apis_stack;
-        let apis_back_nav = apis_back_btn;
-        category_list.connect_row_selected(move |_, row| {
-            if let Some(r) = row {
-                apis_stack_nav.set_visible_child_name("list");
-                apis_back_nav.set_visible(false);
-                let name = match r.widget_name().as_str() {
-                    "nav_appearance" => {
-                        title_clone.set_title("Terminal");
-                        "appearance"
-                    }
-                    "nav_themes" => {
-                        title_clone.set_title("Themes");
-                        "themes"
-                    }
-                    "nav_apis" => {
-                        title_clone.set_title("APIs");
-                        "apis"
-                    }
-                    "nav_characters" => {
-                        title_clone.set_title("Characters");
-                        "characters"
-                    }
-                    "nav_integrations" => {
-                        title_clone.set_title("Desktop Integrations");
-                        "integrations"
-                    }
-                    "nav_toolbox" => {
-                        title_clone.set_title("Toolbox & Permissions");
-                        "toolbox"
-                    }
-                    "nav_mcp" => {
-                        title_clone.set_title("MCP");
-                        "mcp"
-                    }
-                    "nav_skills" => {
-                        title_clone.set_title("Skills");
-                        "skills"
-                    }
-                    "nav_claw_ui" => {
-                        title_clone.set_title("Claw UI");
-                        "claw_ui"
-                    }
-                    "nav_shortcuts" => {
-                        title_clone.set_title("Shortcuts");
-                        "shortcuts"
-                    }
-                    "nav_advanced" => {
-                        title_clone.set_title("Advanced");
-                        "advanced"
-                    }
-                    "nav_about" => {
-                        title_clone.set_title("About");
-                        "about"
-                    }
-                    _ => return,
-                };
-                stack_clone.set_visible_child_name(name);
-            }
-        });
-
-        // Initialize pages
-        let page_shortcuts: adw::PreferencesPage = builder.object("page_shortcuts").unwrap();
-        let page_about: adw::PreferencesPage = builder.object("page_about").unwrap();
-
-        let (appearance_widgets, appearance_filter) = crate::appearance::setup_appearance_page(
-            &builder,
-            settings_rc.clone(),
-            cb_rc.clone(),
-            Rc::new(on_open_themes),
-        );
-        let themes_filter =
-            crate::themes_page::setup_themes_page(&builder, settings_rc.clone(), cb_rc.clone());
-        let previews_filter =
-            crate::previews::setup_previews_page(&builder, settings_rc.clone(), cb_rc.clone());
-        let apis_filter =
-            crate::apis::setup_apis_page(&builder, settings_rc.clone(), cb_rc.clone());
-        let characters_filter =
-            crate::characters::setup_characters_page(&builder, settings_rc.clone(), cb_rc.clone());
-        let integrations_filter = crate::integrations::setup_integrations_page(
-            &builder,
-            settings_rc.clone(),
-            cb_rc.clone(),
-        );
-        let toolbox_filter =
-            crate::toolbox::setup_toolbox_page(&builder, settings_rc.clone(), cb_rc.clone());
-        let mcp_filter = crate::mcp::setup_mcp_page(&builder, settings_rc.clone(), cb_rc.clone());
-        let skills_filter =
-            crate::skills::setup_skills_page(&builder, settings_rc.clone(), cb_rc.clone());
-        let claw_ui_filter =
-            crate::claw_ui::setup_claw_ui_page(&builder, settings_rc.clone(), cb_rc.clone());
-        let advanced_filter = crate::advanced::setup_advanced_page(
-            &builder,
-            settings_rc.clone(),
-            cb_rc.clone(),
-            Rc::new(on_reload_engine),
-        );
+        // Initialize all pages and collect their sync + search filter hooks
+        let (appearance_sync, appearance_filter) =
+            crate::appearance::setup_appearance_page(&builder, Rc::new(on_open_themes));
+        let (previews_sync, previews_filter) = crate::previews::setup_previews_page(&builder);
+        let (themes_sync, themes_filter) = crate::themes_page::setup_themes_page(&builder);
+        let (apis_sync, apis_filter) = crate::apis::setup_apis_page(&builder);
+        let (characters_sync, characters_filter) =
+            crate::characters::setup_characters_page(&builder);
+        let (integrations_sync, integrations_filter) =
+            crate::integrations::setup_integrations_page(&builder);
+        let (toolbox_sync, toolbox_filter) = crate::toolbox::setup_toolbox_page(&builder);
+        let (mcp_sync, mcp_filter) = crate::mcp::setup_mcp_page(&builder);
+        let (skills_sync, skills_filter) = crate::skills::setup_skills_page(&builder);
+        let (claw_ui_sync, claw_ui_filter) = crate::claw_ui::setup_claw_ui_page(&builder);
+        let (advanced_sync, advanced_filter) =
+            crate::advanced::setup_advanced_page(&builder, Rc::new(on_reload_engine));
         let shortcuts_filter = crate::shortcuts::populate_shortcuts_page(&page_shortcuts);
-        let toast_overlay: adw::ToastOverlay = builder.object("toast_overlay").unwrap();
-        let about_filter = crate::about::populate_about_page(&page_about, &toast_overlay);
+        let (about_sync, about_filter) =
+            crate::about::populate_about_page(&page_about, &toast_overlay);
 
-        let theme_row = appearance_widgets.theme_row;
-        let chat_width_spin = appearance_widgets.chat_width_spin;
-        let font_button = appearance_widgets.font_button;
-        let overlay_font_scale_spin: adw::SpinRow =
-            builder.object("overlay_font_scale_spin").unwrap();
-        let always_show_code_blocks_switch: adw::SwitchRow =
-            builder.object("always_show_code_blocks_switch").unwrap();
-
-        // Search filtering logic
-        let search_entry: gtk::SearchEntry = builder.object("search_entry").unwrap();
-        let list_clone = category_list.clone();
-        let nav_appearance_clone = nav_appearance.clone();
-        let nav_themes_clone = nav_themes.clone();
-        let nav_apis_clone = nav_apis.clone();
-        let nav_characters_clone = nav_characters.clone();
-        let nav_integrations_clone = nav_integrations.clone();
-        let nav_toolbox_clone = nav_toolbox.clone();
-        let nav_mcp_clone = nav_mcp.clone();
-        let nav_skills_clone = nav_skills.clone();
-        let nav_claw_ui_clone = nav_claw_ui.clone();
-        let nav_advanced_clone = nav_advanced.clone();
-        let nav_shortcuts_clone = nav_shortcuts.clone();
-        let nav_about_clone = nav_about.clone();
-
-        search_entry.connect_search_changed(move |entry| {
-            let query = entry.text().to_lowercase();
-
-            let appearance_visible = appearance_filter(&query);
-            let previews_visible = previews_filter(&query);
-            nav_appearance_clone.set_visible(appearance_visible || previews_visible);
-            nav_themes_clone.set_visible(themes_filter(&query));
-            nav_apis_clone.set_visible(apis_filter(&query));
-            nav_characters_clone.set_visible(characters_filter(&query));
-            nav_integrations_clone.set_visible(integrations_filter(&query));
-            nav_toolbox_clone.set_visible(toolbox_filter(&query));
-            nav_mcp_clone.set_visible(mcp_filter(&query));
-            nav_skills_clone.set_visible(skills_filter(&query));
-            nav_claw_ui_clone.set_visible(claw_ui_filter(&query));
-            nav_advanced_clone.set_visible(advanced_filter(&query));
-            nav_shortcuts_clone.set_visible(shortcuts_filter(&query));
-            nav_about_clone.set_visible(about_filter(&query));
-
-            if let Some(selected) = list_clone.selected_row()
-                && !selected.is_visible()
-            {
-                for i in 0..20 {
-                    if let Some(row) = list_clone.row_at_index(i)
-                        && row.is_visible()
-                    {
-                        list_clone.select_row(Some(&row));
-                        break;
-                    }
-                }
-            }
+        let terminal_filter: PageFilter = Box::new(move |query: &str| {
+            let app_vis = appearance_filter(query);
+            let prev_vis = previews_filter(query);
+            app_vis || prev_vis
         });
 
-        // Ensure the first category ("Terminal") is selected by default on creation
-        category_list.select_row(Some(&nav_appearance));
+        let sync_hooks = vec![
+            appearance_sync,
+            previews_sync,
+            themes_sync,
+            apis_sync,
+            characters_sync,
+            integrations_sync,
+            toolbox_sync,
+            mcp_sync,
+            skills_sync,
+            claw_ui_sync,
+            advanced_sync,
+            about_sync,
+        ];
+
+        let make_cat = |page_name: &'static str,
+                        widget_id: &'static str,
+                        header_title: &'static str,
+                        filter: PageFilter|
+         -> NavCategory {
+            let row: gtk::ListBoxRow = builder.object(widget_id).unwrap();
+            row.set_widget_name(widget_id);
+            NavCategory {
+                page_name,
+                widget_id,
+                header_title,
+                row,
+                filter,
+            }
+        };
+
+        let categories = Rc::new(vec![
+            make_cat("appearance", "nav_appearance", "Terminal", terminal_filter),
+            make_cat("themes", "nav_themes", "Themes", themes_filter),
+            make_cat("apis", "nav_apis", "APIs", apis_filter),
+            make_cat(
+                "characters",
+                "nav_characters",
+                "Characters",
+                characters_filter,
+            ),
+            make_cat(
+                "integrations",
+                "nav_integrations",
+                "Desktop Integrations",
+                integrations_filter,
+            ),
+            make_cat("mcp", "nav_mcp", "MCP", mcp_filter),
+            make_cat("skills", "nav_skills", "Skills", skills_filter),
+            make_cat(
+                "claw_ui",
+                "nav_claw_ui",
+                "Claw UI & Sounds",
+                claw_ui_filter,
+            ),
+            make_cat(
+                "toolbox",
+                "nav_toolbox",
+                "Toolbox & Permissions",
+                toolbox_filter,
+            ),
+            make_cat(
+                "shortcuts",
+                "nav_shortcuts",
+                "Shortcuts",
+                shortcuts_filter,
+            ),
+            make_cat("advanced", "nav_advanced", "Advanced", advanced_filter),
+            make_cat("about", "nav_about", "About", about_filter),
+        ]);
+
+        {
+            let stack = stack.clone();
+            let title = content_title;
+            let reset_apis = reset_apis_subpage.clone();
+            let cats = categories.clone();
+            category_list.connect_row_selected(move |_, selected| {
+                let Some(row) = selected else { return };
+                reset_apis();
+                let row_name = row.widget_name();
+                if let Some(cat) = cats.iter().find(|c| c.widget_id == row_name.as_str()) {
+                    title.set_title(cat.header_title);
+                    stack.set_visible_child_name(cat.page_name);
+                }
+            });
+        }
+
+        // Real-time search filtering across all categories
+        {
+            let list = category_list.clone();
+            let cats = categories.clone();
+            search_entry.connect_search_changed(move |entry| {
+                let query = entry.text().trim().to_lowercase();
+
+                for cat in cats.iter() {
+                    let visible = (cat.filter)(&query);
+                    cat.row.set_visible(visible);
+                }
+
+                if list.selected_row().is_none_or(|r| !r.is_visible())
+                    && let Some(first_visible) = cats.iter().find(|c| c.row.is_visible())
+                {
+                    list.select_row(Some(&first_visible.row));
+                }
+            });
+        }
+
+        // Select the first category ("Terminal") by default on creation
+        if let Some(first) = categories.first() {
+            category_list.select_row(Some(&first.row));
+        }
 
         Self {
             dialog,
             stack,
-            nav_appearance,
-            nav_themes,
-            nav_apis,
-            nav_mcp,
-            nav_skills,
-            nav_shortcuts,
-            nav_about,
-            nav_characters,
+            category_list,
+            categories,
             search_entry,
-            theme_row,
-            chat_width_spin,
-            overlay_font_scale_spin,
-            always_show_code_blocks_switch,
-            font_button,
-            settings_rc,
+            reset_apis_subpage,
+            sync_hooks,
             handle_escape,
             bound_parent_ptr: Cell::new(0),
         }
     }
 
-    pub fn show(&self, parent: &gtk::Window) {
-        let parent_ptr = parent.as_ptr() as usize;
+    pub fn show(&self, parent: &impl IsA<gtk::Window>) {
+        let parent_win: &gtk::Window = parent.upcast_ref();
+        let parent_ptr = parent_win.as_ptr() as usize;
         if self.bound_parent_ptr.get() != parent_ptr {
             self.bound_parent_ptr.set(parent_ptr);
-            // Attach a fallback Capture-phase Escape handler on the host GtkWindow.
-            // In GTK 4, key events propagate from GtkRoot down to `window.focus()`.
-            // When an AdwDialog is closed and re-presented, or when a focused widget
-            // inside the dialog is hidden/unfocused, `window.focus()` can become `None`
-            // (leaving `AdwDialog` out of the propagation path). Handling Escape on the
-            // root window whenever `self.dialog` is the active `visible_dialog` ensures
-            // Escape always works.
+            // Fallback Capture-phase Escape handler on the host GtkWindow so Escape
+            // always closes Preferences even if internal focus becomes `None`.
             let win_esc = gtk::EventControllerKey::new();
             win_esc.set_propagation_phase(gtk::PropagationPhase::Capture);
             let dialog_weak = self.dialog.downgrade();
-            let parent_weak = parent.downgrade();
+            let parent_weak = parent_win.downgrade();
             let handle_escape = self.handle_escape.clone();
             win_esc.connect_key_pressed(move |_, keyval, _, _| {
                 if keyval != gtk::gdk::Key::Escape {
@@ -319,11 +271,11 @@ impl PreferencesComponent {
                 };
                 let is_top_dialog = win
                     .downcast_ref::<adw::ApplicationWindow>()
-                    .and_then(|aw| aw.visible_dialog())
+                    .and_then(adw::prelude::AdwApplicationWindowExt::visible_dialog)
                     .is_some_and(|d| d == dialog)
                     || win
                         .downcast_ref::<adw::Window>()
-                        .and_then(|aw| aw.visible_dialog())
+                        .and_then(adw::prelude::AdwWindowExt::visible_dialog)
                         .is_some_and(|d| d == dialog);
                 if !is_top_dialog {
                     return gtk::glib::Propagation::Proceed;
@@ -338,80 +290,44 @@ impl PreferencesComponent {
                 handle_escape();
                 gtk::glib::Propagation::Stop
             });
-            parent.add_controller(win_esc);
+            parent_win.add_controller(win_esc);
         }
 
+        (self.reset_apis_subpage)();
         self.search_entry.set_text("");
-        if let Some(list_box) = self
-            .nav_appearance
-            .parent()
-            .and_then(|p| p.downcast::<gtk::ListBox>().ok())
-            && list_box.selected_row().is_none()
+        if self.category_list.selected_row().is_none()
+            && let Some(first) = self.categories.first()
         {
-            list_box.select_row(Some(&self.nav_appearance));
+            self.category_list.select_row(Some(&first.row));
         }
-        let width = parent.width();
-        let height = parent.height();
-        let target_width = (width - 40).clamp(600, 950);
-        let target_height = (height - 40).max(300);
+
+        let target_width = (parent_win.width() - 40).clamp(600, 950);
+        let target_height = (parent_win.height() - 40).max(300);
         self.dialog.set_content_width(target_width);
         self.dialog.set_content_height(target_height);
         self.dialog.set_focus(Some(&self.search_entry));
-        self.dialog.present(Some(parent));
-        self.dialog.set_focus(Some(&self.search_entry));
+        self.dialog.present(Some(parent_win));
         self.search_entry.grab_focus();
     }
 
-    pub fn widget(&self) -> &adw::Dialog {
+    #[must_use]
+    pub const fn widget(&self) -> &adw::Dialog {
         &self.dialog
     }
 
     pub fn show_page(&self, page_name: &str) {
-        if let Some(list_box) = self
-            .nav_shortcuts
-            .parent()
-            .and_then(|p| p.downcast::<gtk::ListBox>().ok())
-        {
-            if page_name == "themes" {
-                list_box.select_row(Some(&self.nav_themes));
-            } else if page_name == "apis" {
-                list_box.select_row(Some(&self.nav_apis));
-            } else if page_name == "mcp" {
-                list_box.select_row(Some(&self.nav_mcp));
-            } else if page_name == "skills" {
-                list_box.select_row(Some(&self.nav_skills));
-            } else if page_name == "shortcuts" {
-                list_box.select_row(Some(&self.nav_shortcuts));
-            } else if page_name == "about" {
-                list_box.select_row(Some(&self.nav_about));
-            } else if page_name == "characters" {
-                list_box.select_row(Some(&self.nav_characters));
-            }
+        (self.reset_apis_subpage)();
+        self.search_entry.set_text("");
+        if let Some(cat) = self.categories.iter().find(|c| c.page_name == page_name) {
+            self.category_list.select_row(Some(&cat.row));
+        } else {
+            self.stack.set_visible_child_name(page_name);
         }
-        self.stack.set_visible_child_name(page_name);
     }
 
     pub fn sync_settings(&self, settings: &Settings) {
-        *self.settings_rc.borrow_mut() = settings.clone();
-        self.theme_row.set_subtitle(&settings.theme);
-        if (self.chat_width_spin.value() - settings.ai_chat_width as f64).abs() > 1e-6 {
-            self.chat_width_spin
-                .set_value(settings.ai_chat_width as f64);
-        }
-        if (self.overlay_font_scale_spin.value() - settings.overlay_font_scale as f64).abs() > 1e-6
-        {
-            self.overlay_font_scale_spin
-                .set_value(settings.overlay_font_scale as f64);
-        }
-        if self.always_show_code_blocks_switch.is_active() != settings.always_show_code_blocks {
-            self.always_show_code_blocks_switch
-                .set_active(settings.always_show_code_blocks);
-        }
-        let mut desc = gtk::pango::FontDescription::new();
-        desc.set_family(&settings.font_name);
-        desc.set_size(settings.font_size as i32 * gtk::pango::SCALE);
-        if self.font_button.font_desc().as_ref() != Some(&desc) {
-            self.font_button.set_font_desc(&desc);
+        for sync in &self.sync_hooks {
+            sync(settings);
         }
     }
 

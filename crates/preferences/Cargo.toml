@@ -6,14 +6,15 @@ description.workspace = true
 license.workspace = true
 name = "boxxy-preferences"
 
+[lints]
+workspace = true
+
 [dependencies]
-cairo-rs.workspace = true
 gtk4.workspace = true
 libadwaita.workspace = true
 serde_json.workspace = true
 serde.workspace = true
 boxxy-sys-utils.workspace = true
-anyhow.workspace = true
 boxxy-themes.workspace = true
 tokio.workspace = true
 log.workspace = true
@@ -21,8 +22,8 @@ regex.workspace = true
 boxxy-assets = { path = "../boxxy_assets" }
 boxxy-core-widgets.workspace = true
 boxxy-keybindings.workspace = true
-boxxy-model-selection = { path = "../model_selection" }
-boxxy-mcp = { path = "../boxxy_mcp" }
+boxxy-model-selection.workspace = true
+boxxy-mcp.workspace = true
 boxxy-claw-protocol = { path = "../boxxy_claw_protocol" }
 uuid.workspace = true
 arc-swap.workspace = true

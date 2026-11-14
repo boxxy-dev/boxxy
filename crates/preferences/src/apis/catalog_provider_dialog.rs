@@ -7,7 +7,7 @@ use std::rc::Rc;
 type AddProviderCallback = Rc<dyn Fn(String, String)>;
 
 #[derive(Clone)]
-pub struct CatalogProviderEditorPage {
+pub(super) struct CatalogProviderEditorPage {
     apis_stack: gtk::Stack,
     back_btn: gtk::Button,
     content_title: adw::WindowTitle,
@@ -16,7 +16,7 @@ pub struct CatalogProviderEditorPage {
 }
 
 impl CatalogProviderEditorPage {
-    pub fn new(
+    pub(super) fn new(
         page: &adw::PreferencesPage,
         apis_stack: &gtk::Stack,
         back_btn: &gtk::Button,
@@ -37,7 +37,7 @@ impl CatalogProviderEditorPage {
         }
     }
 
-    pub fn open_editor(
+    pub(super) fn open_editor(
         &self,
         unconfigured_providers: Vec<String>,
         on_add: impl Fn(String, String) + 'static,
@@ -59,7 +59,8 @@ impl CatalogProviderEditorPage {
 
         for prov_name in unconfigured_providers {
             let row = adw::PasswordEntryRow::builder()
-                .title(format!("{} API Key", prov_name))
+                .use_markup(false)
+                .title(format!("{prov_name} API Key"))
                 .build();
 
             let add_btn = gtk::Button::builder()
