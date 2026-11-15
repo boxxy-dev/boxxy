@@ -1,6 +1,6 @@
 #![allow(clippy::missing_errors_doc)]
 #![allow(clippy::missing_panics_doc)]
-#![allow(clippy::single_option_map)]
+
 use serde::{Deserialize, Serialize};
 use sqlx::prelude::FromRow;
 
@@ -29,7 +29,27 @@ pub struct Session {
     pub message_count: i64,
 }
 
-/// Represents an episodic interaction or summary linked to a session
+/// Typed payload for [`crate::store::Store::upsert_session`], avoiding error-prone
+/// positional `&str` parameter lists when persisting per-turn session state.
+#[derive(Debug, Clone, Copy)]
+pub struct SessionUpsert<'a> {
+    pub id: &'a str,
+    pub name: &'a str,
+    pub character_id: &'a str,
+    pub character_display_name: &'a str,
+    pub title: &'a str,
+    pub history_json: &'a str,
+    pub pending_tasks_json: &'a str,
+    pub agent_name: &'a str,
+    pub last_cwd: &'a str,
+    pub model_id: &'a str,
+    pub pinned: bool,
+    pub total_tokens: i64,
+    pub context_tokens: i64,
+    pub total_cost_usd: f64,
+}
+
+/// Represents an episodic interaction or summary linked to a session.
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct Interaction {
     pub id: i64,
@@ -43,7 +63,7 @@ pub struct Interaction {
     pub last_accessed_at: Option<String>,
 }
 
-/// Represents a global, long-term fact or preference
+/// Represents a global or project-scoped long-term fact or preference.
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct Memory {
     pub id: i64,
@@ -75,26 +95,54 @@ pub struct SkillRecord {
 pub struct MsgBarHistory {
     pub id: i64,
     pub text: String,
-    pub attachments_json: String, // Stored as a JSON string
+    pub attachments_json: String,
     pub created_at: Option<String>,
 }
 
-// Helper methods for embeddings (used in interactions)
+/// Durable local OpenTelemetry event queued in `telemetry_journal` for background export.
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct TelemetryJournalEntry {
+    pub id: i64,
+    pub metric_name: String,
+    pub value: f64,
+    pub attributes_json: String,
+    #[sqlx(default)]
+    pub created_at: Option<String>,
+}
+
+/// Summary of rows pruned during a background memory hygiene pass.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct HygieneStats {
+    pub deleted_interactions: u64,
+    pub deleted_stale_candidates: u64,
+    pub deleted_quarantine_noise: u64,
+}
+
 impl Interaction {
     #[must_use]
-    pub fn parse_embedding(blob: Option<Vec<u8>>) -> Option<Vec<f32>> {
-        blob.map(|bytes| {
-            let mut f32s = Vec::with_capacity(bytes.len() / 4);
-            for chunk in bytes.chunks_exact(4) {
-                f32s.push(f32::from_le_bytes(chunk.try_into().unwrap()));
-            }
-            f32s
-        })
+    pub fn parse_embedding(blob: Option<&[u8]>) -> Option<Vec<f32>> {
+        blob.map(Self::parse_embedding_slice)
+    }
+
+    #[must_use]
+    pub fn parse_embedding_slice(bytes: &[u8]) -> Vec<f32> {
+        let (chunks, remainder) = bytes.as_chunks::<4>();
+        if !remainder.is_empty() {
+            log::warn!(
+                "Embedding blob length ({}) is not a multiple of 4 bytes; ignoring {} trailing byte(s)",
+                bytes.len(),
+                remainder.len()
+            );
+        }
+        chunks
+            .iter()
+            .map(|chunk| f32::from_le_bytes(*chunk))
+            .collect()
     }
 
     #[must_use]
     pub fn serialize_embedding(f32s: &[f32]) -> Vec<u8> {
-        let mut bytes = Vec::with_capacity(f32s.len() * 4);
+        let mut bytes = Vec::with_capacity(f32s.len().saturating_mul(4));
         for &f in f32s {
             bytes.extend_from_slice(&f.to_le_bytes());
         }

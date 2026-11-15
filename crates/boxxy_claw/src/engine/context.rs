@@ -240,7 +240,7 @@ pub(crate) async fn upsert_candidate_deduped(
     let target_scope = project_path.unwrap_or("global");
     let mut effective_key = key.to_string();
 
-    if let Ok(existing) = store.get_all_memories().await {
+    if let Ok(existing) = store.get_memories_for_scope(project_path).await {
         for mem in existing {
             if mem.project_path != target_scope && mem.project_path != "global" {
                 continue;

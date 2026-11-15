@@ -14,55 +14,29 @@ pub async fn run_hygiene(db: Arc<Mutex<Option<Db>>>) -> anyhow::Result<()> {
         return Ok(());
     };
 
-    let pool = db_val.pool();
-
     debug!("Running Memory Hygiene...");
 
-    // 1. Delete episodic interactions older than 30 days
-    let deleted_interactions = sqlx::query(
-        "DELETE FROM interactions WHERE last_accessed_at < datetime('now', '-30 days')",
-    )
-    .execute(pool)
-    .await?
-    .rows_affected();
+    let stats = db_val.store().run_memory_hygiene().await?;
 
-    if deleted_interactions > 0 {
-        debug!("Hygiene: Pruned {deleted_interactions} old episodic interactions.");
+    if stats.deleted_interactions > 0 {
+        debug!(
+            "Hygiene: Pruned {} old episodic interactions.",
+            stats.deleted_interactions
+        );
     }
 
-    // 2. Delete unverified candidate memories that haven't been accessed in 30 days.
-    // Explicitly preserve verified, pinned, 'manual_sync', and 'preference' memories.
-    let deleted_memories = sqlx::query(
-        "DELETE FROM memories \
-         WHERE COALESCE(verified, 0) = 0 \
-           AND COALESCE(pinned, 0) = 0 \
-           AND category IN ('candidate', 'extracted') \
-           AND last_accessed_at < datetime('now', '-30 days')",
-    )
-    .execute(pool)
-    .await?
-    .rows_affected();
-
-    if deleted_memories > 0 {
-        debug!("Hygiene: Pruned {deleted_memories} stale candidate facts.");
+    if stats.deleted_stale_candidates > 0 {
+        debug!(
+            "Hygiene: Pruned {} stale candidate facts.",
+            stats.deleted_stale_candidates
+        );
     }
 
-    // 3. Prune noise from quarantine: unverified, unpinned candidates observed only once
-    // and not reinforced/updated in 14 days.
-    let pruned_noise = sqlx::query(
-        "DELETE FROM memories \
-         WHERE COALESCE(verified, 0) = 0 \
-           AND COALESCE(pinned, 0) = 0 \
-           AND category IN ('candidate', 'extracted') \
-           AND observation_count < 2 \
-           AND updated_at < datetime('now', '-14 days')",
-    )
-    .execute(pool)
-    .await?
-    .rows_affected();
-
-    if pruned_noise > 0 {
-        debug!("Hygiene: Pruned {pruned_noise} noise entries from memory quarantine.");
+    if stats.deleted_quarantine_noise > 0 {
+        debug!(
+            "Hygiene: Pruned {} noise entries from memory quarantine.",
+            stats.deleted_quarantine_noise
+        );
     }
 
     debug!("Memory Hygiene complete.");

@@ -1048,6 +1048,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sqlx",
+ "tempfile",
  "tokio",
 ]
 
@@ -1147,7 +1148,6 @@ dependencies = [
  "serde",
  "serde_json",
  "serial_test",
- "sqlx",
  "tokio",
  "uuid",
 ]

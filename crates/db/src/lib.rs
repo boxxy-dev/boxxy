@@ -1,19 +1,22 @@
 #![allow(clippy::missing_errors_doc)]
 #![allow(clippy::missing_panics_doc)]
+
 use anyhow::{Context, Result};
-use sqlx::{AssertSqlSafe, SqlitePool};
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
-use std::path::PathBuf;
+use sqlx::SqlitePool;
+use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
+use std::time::Duration;
 use tokio::sync::OnceCell;
 
+pub mod migrations;
 pub mod models;
 pub mod store;
 
 static DB: OnceCell<Db> = OnceCell::const_new();
 pub static DATABASE_WAS_RESET: AtomicBool = AtomicBool::new(false);
 
-const CURRENT_SCHEMA_VERSION: i32 = 15;
+const DEFAULT_MAX_CONNECTIONS: u32 = 5;
 
 #[derive(Clone)]
 pub struct Db {
@@ -21,342 +24,176 @@ pub struct Db {
 }
 
 impl Db {
+    /// Opens (or returns the cached process-wide handle to) the default Boxxy SQLite database
+    /// at `<config_dir>/boxxyclaw/boxxy.db`, running any pending journaled migrations.
     pub async fn new() -> Result<Self> {
         let db = DB
             .get_or_try_init(|| async {
-                let db_path = Self::get_db_path()?;
-
-                // Ensure directory exists
-                if let Some(parent) = db_path.parent() {
-                    tokio::fs::create_dir_all(parent)
-                        .await
-                        .context("Failed to create database directory")?;
-                }
-
-                // 1. Initial connection to check version
-                let options = SqliteConnectOptions::new()
-                    .filename(&db_path)
-                    .create_if_missing(true)
-                    .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
-                    .synchronous(sqlx::sqlite::SqliteSynchronous::Normal)
-                    .busy_timeout(std::time::Duration::from_secs(10))
-                    .foreign_keys(true);
-
-                let temp_pool = SqlitePoolOptions::new()
-                    .max_connections(1)
-                    .connect_with(options.clone())
-                    .await?;
-
-                let version: (i32,) = sqlx::query_as("PRAGMA user_version")
-                    .fetch_one(&temp_pool)
-                    .await?;
-
-                temp_pool.close().await;
-
-                // 2. Re-open official pool
-                let pool = SqlitePoolOptions::new()
-                    .max_connections(5)
-                    .connect_with(options)
-                    .await
-                    .context("Failed to connect to database")?;
-
-                let db = Self { pool };
-
-                // 3. Handle Migrations
-                let preserved_journal: Vec<(String, f64, String, String)> =
-                    if version.0 != CURRENT_SCHEMA_VERSION && version.0 != 0 {
-                        log::info!(
-                            "Database version mismatch (found {}, expected {}). Applying migrations.",
-                            version.0,
-                            CURRENT_SCHEMA_VERSION
-                        );
-
-                        let rows = sqlx::query_as(
-                            "SELECT metric_name, value, attributes_json, created_at FROM telemetry_journal ORDER BY id ASC LIMIT 1000",
-                        )
-                        .fetch_all(&db.pool)
-                        .await
-                        .unwrap_or_default();
-
-                        db.apply_migrations(version.0).await?;
-                        rows
-                    } else {
-                        Vec::new()
-                    };
-
-                db.initialize_schema().await?;
-
-                if !preserved_journal.is_empty() && DATABASE_WAS_RESET.load(std::sync::atomic::Ordering::SeqCst) {
-                    for (metric_name, value, attributes_json, created_at) in preserved_journal {
-                        let _ = sqlx::query(
-                            "INSERT INTO telemetry_journal (metric_name, value, attributes_json, created_at) VALUES (?, ?, ?, ?)",
-                        )
-                        .bind(metric_name)
-                        .bind(value)
-                        .bind(attributes_json)
-                        .bind(created_at)
-                        .execute(&db.pool)
-                        .await;
-                    }
-                }
-
-                // 4. Set/Update version
-                sqlx::query(AssertSqlSafe(format!("PRAGMA user_version = {CURRENT_SCHEMA_VERSION}")))
-                    .execute(&db.pool)
-                    .await?;
-
-                Ok::<Self, anyhow::Error>(db)
+                let db_path = Self::default_db_path();
+                Self::open_at_with_max_connections(&db_path, DEFAULT_MAX_CONNECTIONS).await
             })
             .await?;
 
         Ok(db.clone())
     }
 
-    async fn apply_migrations(&self, from_version: i32) -> Result<()> {
-        if from_version == 14 {
-            log::info!("Migrating memories_fts from v14 to v15 (indexing memory keys) without wiping data.");
-            let migrate_fts = r"
-                DROP TRIGGER IF EXISTS memories_ai;
-                DROP TRIGGER IF EXISTS memories_ad;
-                DROP TRIGGER IF EXISTS memories_au;
-                DROP TABLE IF EXISTS memories_fts;
-            ";
-            sqlx::query(migrate_fts).execute(&self.pool).await?;
-            return Ok(());
+    /// Opens a file-backed `Db` at an explicit `db_path` without touching the process-wide
+    /// `OnceCell` singleton. Useful for isolated disk/WAL/migration tests and headless tools.
+    pub async fn open_at(db_path: impl AsRef<Path>) -> Result<Self> {
+        Self::open_at_with_max_connections(db_path.as_ref(), DEFAULT_MAX_CONNECTIONS).await
+    }
+
+    async fn open_at_with_max_connections(db_path: &Path, max_connections: u32) -> Result<Self> {
+        if let Some(parent) = db_path.parent() {
+            tokio::fs::create_dir_all(parent)
+                .await
+                .context("Failed to create database directory")?;
+            restrict_dir_permissions(parent);
         }
 
-        log::warn!("Preview phase: Wiping database to apply schema changes.");
-        sqlx::query("PRAGMA writable_schema = 1; DELETE FROM sqlite_master; PRAGMA writable_schema = 0; VACUUM;")
-            .execute(&self.pool)
-            .await?;
+        // Pre-create missing DB file with 0600 permissions before SQLite opens it so another
+        // local user cannot read it in the window before chmod, without opening+closing an
+        // existing DB file (which would release POSIX fcntl advisory locks).
+        ensure_owner_only_db_files(db_path);
 
-        DATABASE_WAS_RESET.store(true, std::sync::atomic::Ordering::SeqCst);
-        Ok(())
+        let options = SqliteConnectOptions::new()
+            .filename(db_path)
+            .create_if_missing(true)
+            .journal_mode(SqliteJournalMode::Wal)
+            .synchronous(SqliteSynchronous::Normal)
+            .busy_timeout(Duration::from_secs(10))
+            .foreign_keys(true)
+            .pragma("temp_store", "MEMORY")
+            .pragma("cache_size", "-8000");
+
+        let pool = SqlitePoolOptions::new()
+            .max_connections(max_connections)
+            .connect_with(options)
+            .await
+            .context("Failed to connect to SQLite database")?;
+
+        ensure_owner_only_db_files(db_path);
+        migrations::apply(&pool, Some(db_path)).await?;
+
+        Ok(Self { pool })
     }
 
-    fn get_db_path() -> Result<PathBuf> {
-        let config_dir = boxxy_sys_utils::get_config_dir();
-        Ok(config_dir.join("boxxyclaw").join("boxxy.db"))
-    }
-
-    async fn initialize_schema(&self) -> Result<()> {
-        // Direct table creation without sqlx migration tracking.
-        // This makes development faster and avoids checksum/versioning conflicts.
-        let schema = r"
-            CREATE TABLE IF NOT EXISTS sessions (
-                id TEXT PRIMARY KEY,
-                name TEXT NOT NULL,
-                history_json TEXT,
-                pending_tasks_json TEXT,
-                agent_name TEXT,
-                character_id TEXT NOT NULL DEFAULT '',
-                character_display_name TEXT NOT NULL DEFAULT '',
-                last_cwd TEXT,
-                title TEXT,
-                model_id TEXT,
-                pinned BOOLEAN DEFAULT false,
-                cleared_at DATETIME,
-                total_tokens BIGINT DEFAULT 0,
-                context_tokens BIGINT DEFAULT 0,
-                total_cost_usd REAL DEFAULT 0.0,
-                last_dream_at DATETIME,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-            );
-
-            CREATE TABLE IF NOT EXISTS claw_events (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                session_id TEXT NOT NULL,
-                event_json TEXT NOT NULL,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_claw_events_session_id ON claw_events(session_id);
-            CREATE INDEX IF NOT EXISTS idx_sessions_pinned_updated ON sessions(pinned DESC, updated_at DESC);
-
-            CREATE TABLE IF NOT EXISTS interactions (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                session_id TEXT NOT NULL,
-                project_path TEXT,
-                content TEXT NOT NULL,
-                metadata TEXT,
-                embedding BLOB,
-                processing_state TEXT DEFAULT 'raw',
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                last_accessed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE
-            );
-
-            CREATE TABLE IF NOT EXISTS memories (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                key TEXT NOT NULL,
-                project_path TEXT NOT NULL,
-                content TEXT NOT NULL,
-                category TEXT,
-                verified BOOLEAN DEFAULT false,
-                pinned BOOLEAN DEFAULT false,
-                observation_count INTEGER DEFAULT 1,
-                confidence_score REAL DEFAULT 0.0,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                last_accessed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                access_count INTEGER DEFAULT 0,
-                UNIQUE(key, project_path)
-            );
-
-            CREATE TABLE IF NOT EXISTS skills (
-                name TEXT PRIMARY KEY,
-                description TEXT NOT NULL DEFAULT '',
-                triggers TEXT NOT NULL DEFAULT '',
-                content TEXT NOT NULL,
-                metadata TEXT,
-                pinned BOOLEAN DEFAULT false,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-            );
-
-            CREATE TABLE IF NOT EXISTS msgbar_history (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                text TEXT NOT NULL,
-                attachments_json TEXT,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-            );
-
-            CREATE TABLE IF NOT EXISTS telemetry_journal (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                metric_name TEXT NOT NULL,
-                value REAL NOT NULL,
-                attributes_json TEXT NOT NULL,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-            );
-
-            -- Search indexes for RAG and Skills
-            CREATE VIRTUAL TABLE IF NOT EXISTS interactions_fts USING fts5(
-                content='interactions',
-                content,
-                project_path
-            );
-
-            -- Triggers to keep FTS index updated for interactions
-            DROP TRIGGER IF EXISTS interactions_ai;
-            CREATE TRIGGER interactions_ai AFTER INSERT ON interactions BEGIN
-              INSERT INTO interactions_fts(rowid, content) VALUES (new.id, new.content);
-            END;
-
-            DROP TRIGGER IF EXISTS interactions_ad;
-            CREATE TRIGGER interactions_ad AFTER DELETE ON interactions BEGIN
-              INSERT INTO interactions_fts(interactions_fts, rowid, content) VALUES('delete', old.id, old.content);
-            END;
-
-            DROP TRIGGER IF EXISTS interactions_au;
-            CREATE TRIGGER interactions_au AFTER UPDATE ON interactions BEGIN
-              INSERT INTO interactions_fts(interactions_fts, rowid, content) VALUES('delete', old.id, old.content);
-              INSERT INTO interactions_fts(rowid, content) VALUES (new.id, new.content);
-            END;
-
-            CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
-                content='memories',
-                key,
-                content,
-                project_path
-            );
-
-            -- Triggers for memories
-            DROP TRIGGER IF EXISTS memories_ai;
-            CREATE TRIGGER memories_ai AFTER INSERT ON memories BEGIN
-              INSERT INTO memories_fts(rowid, key, content, project_path) VALUES (new.id, new.key, new.content, new.project_path);
-            END;
-
-            DROP TRIGGER IF EXISTS memories_ad;
-            CREATE TRIGGER memories_ad AFTER DELETE ON memories BEGIN
-              INSERT INTO memories_fts(memories_fts, rowid, key, content, project_path) VALUES('delete', old.id, old.key, old.content, old.project_path);
-            END;
-
-            DROP TRIGGER IF EXISTS memories_au;
-            CREATE TRIGGER memories_au AFTER UPDATE ON memories BEGIN
-              INSERT INTO memories_fts(memories_fts, rowid, key, content, project_path) VALUES('delete', old.id, old.key, old.content, old.project_path);
-              INSERT INTO memories_fts(rowid, key, content, project_path) VALUES (new.id, new.key, new.content, new.project_path);
-            END;
-
-            CREATE VIRTUAL TABLE IF NOT EXISTS skills_fts USING fts5(
-                content='skills',
-                name,
-                content
-            );
-
-            -- Triggers for skills
-            DROP TRIGGER IF EXISTS skills_ai;
-            CREATE TRIGGER skills_ai AFTER INSERT ON skills BEGIN
-              INSERT INTO skills_fts(rowid, name, content) VALUES (new.rowid, new.name, new.content);
-            END;
-
-            DROP TRIGGER IF EXISTS skills_ad;
-            CREATE TRIGGER skills_ad AFTER DELETE ON skills BEGIN
-              INSERT INTO skills_fts(skills_fts, rowid, name, content) VALUES('delete', old.rowid, old.name, old.content);
-            END;
-
-            DROP TRIGGER IF EXISTS skills_au;
-            CREATE TRIGGER skills_au AFTER UPDATE ON skills BEGIN
-              INSERT INTO skills_fts(skills_fts, rowid, name, content) VALUES('delete', old.rowid, old.name, old.content);
-              INSERT INTO skills_fts(rowid, name, content) VALUES (new.rowid, new.name, new.content);
-            END;
-        ";
-
-        sqlx::query(schema).execute(&self.pool).await?;
-
-        // Manual column migrations for existing tables if needed (not dropping)
-        // Check if pinned column exists in skills (added in v3)
-        let _ = sqlx::query("ALTER TABLE skills ADD COLUMN pinned BOOLEAN DEFAULT false")
-            .execute(&self.pool)
-            .await;
-
-        let _ = sqlx::query("ALTER TABLE memories ADD COLUMN observation_count INTEGER DEFAULT 1")
-            .execute(&self.pool)
-            .await;
-
-        let _ = sqlx::query("ALTER TABLE memories ADD COLUMN confidence_score REAL DEFAULT 0.0")
-            .execute(&self.pool)
-            .await;
-
-        let _ = sqlx::query("ALTER TABLE sessions ADD COLUMN context_tokens BIGINT DEFAULT 0")
-            .execute(&self.pool)
-            .await;
-
-        let _ = sqlx::query("ALTER TABLE sessions ADD COLUMN total_cost_usd REAL DEFAULT 0.0")
-            .execute(&self.pool)
-            .await;
-
-        let _ = sqlx::query("INSERT INTO memories_fts(memories_fts) VALUES('rebuild')")
-            .execute(&self.pool)
-            .await;
-
-        Ok(())
-    }
-
+    /// Creates an isolated in-memory SQLite database initialized with the canonical latest schema.
     pub async fn new_in_memory() -> Result<Self> {
         let options = SqliteConnectOptions::new()
             .filename(":memory:")
-            .busy_timeout(std::time::Duration::from_secs(5))
-            .foreign_keys(true);
+            .busy_timeout(Duration::from_secs(5))
+            .foreign_keys(true)
+            .pragma("temp_store", "MEMORY");
 
+        // Keep `idle_timeout` and `max_lifetime` disabled so the single `:memory:` connection
+        // is never reaped while a test or ephemeral caller holds the pool.
         let pool = SqlitePoolOptions::new()
             .max_connections(1)
+            .idle_timeout(None)
+            .max_lifetime(None)
             .connect_with(options)
-            .await?;
+            .await
+            .context("Failed to create in-memory SQLite database")?;
 
-        let db = Self { pool };
-        db.initialize_schema().await?;
+        migrations::apply(&pool, None).await?;
+        Ok(Self { pool })
+    }
 
-        sqlx::query(AssertSqlSafe(format!("PRAGMA user_version = {CURRENT_SCHEMA_VERSION}")))
-            .execute(&db.pool)
-            .await?;
-
-        Ok(db)
+    #[must_use]
+    pub fn default_db_path() -> PathBuf {
+        boxxy_sys_utils::get_config_dir()
+            .join("boxxyclaw")
+            .join("boxxy.db")
     }
 
     #[must_use]
     pub const fn pool(&self) -> &SqlitePool {
         &self.pool
+    }
+
+    #[must_use]
+    pub const fn store(&self) -> store::Store<'_> {
+        store::Store::new(&self.pool)
+    }
+}
+
+pub(crate) fn restrict_owner_permissions(path: &Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+    }
+    #[cfg(not(unix))]
+    let _ = path;
+}
+
+fn restrict_dir_permissions(dir: &Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
+    }
+    #[cfg(not(unix))]
+    let _ = dir;
+}
+
+fn ensure_owner_only_db_files(db_path: &Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        if !db_path.exists() {
+            let _ = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(db_path);
+        }
+        restrict_owner_permissions(db_path);
+        for suffix in ["-wal", "-shm"] {
+            let mut sidecar = db_path.as_os_str().to_os_string();
+            sidecar.push(suffix);
+            let sidecar_path = PathBuf::from(sidecar);
+            if sidecar_path.exists() {
+                restrict_owner_permissions(&sidecar_path);
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = db_path;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn open_at_persists_across_reopen_and_enforces_owner_only_permissions() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("nested").join("boxxy.db");
+
+        let db = Db::open_at(&db_path).await.unwrap();
+        db.store()
+            .add_memory("theme_mode", None, "dark", Some("preference"), true, false)
+            .await
+            .unwrap();
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&db_path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600);
+        }
+
+        db.pool().close().await;
+
+        let reopened = Db::open_at(&db_path).await.unwrap();
+        let loaded = reopened
+            .store()
+            .get_memory_by_key("theme_mode", None)
+            .await
+            .unwrap()
+            .expect("memory persisted across reopen");
+        assert_eq!(loaded.content, "dark");
     }
 }

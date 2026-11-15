@@ -337,13 +337,10 @@ pub(crate) async fn persist_pending_tasks(
     let Ok(tasks_json) = serde_json::to_string(tasks) else {
         return;
     };
-    let _ = sqlx::query(
-        "UPDATE sessions SET pending_tasks_json = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-    )
-    .bind(tasks_json)
-    .bind(session_id)
-    .execute(db.pool())
-    .await;
+    let _ = db
+        .store()
+        .update_session_pending_tasks(session_id, &tasks_json)
+        .await;
 }
 
 #[cfg(test)]

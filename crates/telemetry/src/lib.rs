@@ -380,9 +380,7 @@ pub async fn disable_and_purge() {
     };
 
     if let Some(db) = db_opt {
-        let _ = sqlx::query("DELETE FROM telemetry_journal")
-            .execute(db.pool())
-            .await;
+        let _ = db.store().purge_telemetry_journal().await;
         log::debug!("Purged local telemetry_journal table.");
     }
 }
@@ -429,11 +427,8 @@ pub async fn flush_journal() {
     }
 
     // Prune any stale events older than 7 days so offline machines never grow unboundedly.
-    let _ = sqlx::query(
-        "DELETE FROM telemetry_journal WHERE created_at < datetime('now', '-7 days')",
-    )
-    .execute(db.pool())
-    .await;
+    let store = db.store();
+    let _ = store.prune_stale_telemetry_events(7).await;
 
     loop {
         if !is_telemetry_enabled() {
@@ -442,14 +437,8 @@ pub async fn flush_journal() {
         }
 
         // 1. Fetch up to 100 pending events
-        let rows: Vec<(i32, String, f64, String)> = match sqlx::query_as(
-            "SELECT id, metric_name, value, attributes_json FROM telemetry_journal ORDER BY created_at ASC, id ASC LIMIT 100",
-        )
-        .fetch_all(db.pool())
-        .await
-        {
-            Ok(rows) => rows,
-            Err(_) => break,
+        let Ok(rows) = store.fetch_telemetry_batch(100).await else {
+            break;
         };
 
         if rows.is_empty() {
@@ -471,14 +460,19 @@ pub async fn flush_journal() {
                 return;
             };
 
-            for (id, name, value, attr_json) in &rows {
-                if !value.is_finite() || *value < 0.0 {
-                    processed_ids.push(*id);
+            for entry in &rows {
+                let id = entry.id;
+                let name = &entry.metric_name;
+                let value = entry.value;
+                let attr_json = &entry.attributes_json;
+
+                if !value.is_finite() || value < 0.0 {
+                    processed_ids.push(id);
                     continue;
                 }
 
                 let Ok(attrs_val) = serde_json::from_str::<serde_json::Value>(attr_json) else {
-                    processed_ids.push(*id);
+                    processed_ids.push(id);
                     continue;
                 };
 
@@ -515,8 +509,8 @@ pub async fn flush_journal() {
                 log::debug!(
                     "TELEMETRY_DEBUG_JSON: metric={name} value={value} attrs={attr_json}"
                 );
-                counter.add(*value, &otel_attrs);
-                processed_ids.push(*id);
+                counter.add(value, &otel_attrs);
+                processed_ids.push(id);
             }
 
             state.provider.clone()
@@ -539,14 +533,7 @@ pub async fn flush_journal() {
 
         // 4. Only delete from journal if flush succeeded
         if !processed_ids.is_empty() {
-            let mut builder =
-                sqlx::QueryBuilder::new("DELETE FROM telemetry_journal WHERE id IN (");
-            let mut separated = builder.separated(", ");
-            for id in &processed_ids {
-                separated.push_bind(id);
-            }
-            separated.push_unseparated(")");
-            let _ = builder.build().execute(db.pool()).await;
+            let _ = store.delete_telemetry_events(&processed_ids).await;
             log::debug!(
                 "Telemetry: Successfully exported and cleared {} events.",
                 processed_ids.len()
@@ -566,14 +553,10 @@ async fn record_to_journal(name: &str, value: f64, attributes: serde_json::Value
 
     if let Some(db) = DB.get() {
         let attr_str = attributes.to_string();
-        let _ = sqlx::query(
-            "INSERT INTO telemetry_journal (metric_name, value, attributes_json) VALUES (?, ?, ?)",
-        )
-        .bind(name)
-        .bind(value)
-        .bind(attr_str)
-        .execute(db.pool())
-        .await;
+        let _ = db
+            .store()
+            .insert_telemetry_event(name, value, &attr_str)
+            .await;
     }
 }
 
@@ -844,11 +827,9 @@ mod tests {
     async fn test_telemetry_journal_operations_and_opt_out_purge() {
         let db = Db::new_in_memory().await.unwrap();
         let _ = DB.set(db.clone());
+        let store = db.store();
         // Clear any leftover rows from shared OnceCell in test process
-        sqlx::query("DELETE FROM telemetry_journal")
-            .execute(db.pool())
-            .await
-            .unwrap();
+        store.purge_telemetry_journal().await.unwrap();
 
         TEST_TELEMETRY_OVERRIDE.store(1, std::sync::atomic::Ordering::SeqCst);
 
@@ -858,21 +839,17 @@ mod tests {
         track_tool_use("Flathub__search_apps").await;
 
         // 2. Verify they are in the database and MCP tool was normalized
-        let rows: Vec<(i32, String, f64, String)> = sqlx::query_as(
-            "SELECT id, metric_name, value, attributes_json FROM telemetry_journal ORDER BY id ASC",
-        )
-        .fetch_all(db.pool())
-        .await
-        .unwrap();
+        let rows = store.fetch_telemetry_batch(100).await.unwrap();
 
         assert_eq!(rows.len(), 3);
-        assert_eq!(rows[0].1, "test.metric.1");
-        assert_eq!(rows[0].2, 42.0);
-        assert_eq!(rows[1].1, "tool.use");
-        let parsed_builtin: serde_json::Value = serde_json::from_str(&rows[1].3).unwrap();
+        assert_eq!(rows[0].metric_name, "test.metric.1");
+        assert!((rows[0].value - 42.0).abs() < f64::EPSILON);
+        assert_eq!(rows[1].metric_name, "tool.use");
+        let parsed_builtin: serde_json::Value =
+            serde_json::from_str(&rows[1].attributes_json).unwrap();
         assert_eq!(parsed_builtin["tool_name"], "grep_search");
 
-        let parsed_mcp: serde_json::Value = serde_json::from_str(&rows[2].3).unwrap();
+        let parsed_mcp: serde_json::Value = serde_json::from_str(&rows[2].attributes_json).unwrap();
         assert_eq!(parsed_mcp["tool_name"], EXTERNAL_MCP_TOOL_NAME);
 
         // 3. Turn off telemetry -> verify new events are ignored 100%
@@ -880,20 +857,13 @@ mod tests {
         track_tool_use("file_read").await;
         record_to_journal("test.metric.ignored", 1.0, serde_json::json!({})).await;
 
-        let count_before_purge: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM telemetry_journal")
-            .fetch_one(db.pool())
-            .await
-            .unwrap();
-        assert_eq!(count_before_purge.0, 3);
+        let count_before_purge = store.count_telemetry_events().await.unwrap();
+        assert_eq!(count_before_purge, 3);
 
         // 4. Calling disable_and_purge() or flush_journal() while disabled purges the journal
         flush_journal().await;
 
-        let remaining: Vec<(i32,)> = sqlx::query_as("SELECT id FROM telemetry_journal")
-            .fetch_all(db.pool())
-            .await
-            .unwrap();
-        assert!(remaining.is_empty());
+        assert_eq!(store.count_telemetry_events().await.unwrap(), 0);
 
         TEST_TELEMETRY_OVERRIDE.store(0, std::sync::atomic::Ordering::SeqCst);
     }

@@ -1,32 +1,63 @@
 # boxxy-db
 
 ## Role
-Provides a persistent SQLite database for Boxxy-Terminal, serving as the Long-Term Memory (RAG) backend for `boxxy-claw` and the persistent history store for the `boxxy-msgbar`.
+Provides the persistent SQLite storage layer for Boxxy-Terminal, backing Long-Term Memory (RAG), episodic interaction history, conversation/session resumption, skill FTS5 indexing, input history (`msgbar_history`), and the durable OpenTelemetry event journal (`telemetry_journal`).
 
-## Responsibilities
-- **Connection Management**: Handles connecting to the local `boxxyclaw/boxxy.db` SQLite file, creating the database and directories if they don't exist.
-- **Migrations**: During the **Preview Phase**, formal migrations are bypassed in favor of an **Auto-Drop Strategy**. The database tracks its own version via `PRAGMA user_version`. If a mismatch is detected (e.g., after an update with breaking schema changes), the application automatically drops the `.db` file and recreates it. A system notification is then sent to the user via the first initialized Claw agent.
-- **Data Access**: Exposes asynchronous CRUD operations for memories (RAG facts), sessions, and persistent visual logs.
-- **Testing Standard**: ALL database operations must have corresponding unit tests in `store.rs`. New schema changes must be verified using the `Db::new_in_memory()` pattern to prevent regressions.
-- **Memory Schema (Long-term Facts)**:
-  - **Verified Status**: Employs a threshold-based reinforcement model. Extracted facts are stored as unverified candidates and only auto-promoted to `verified = true` if they cross strict `observation_count` and `confidence_score` thresholds.
-  - **Reinforcement Tracking**: The `memories` table includes `observation_count` (frequency of extraction) and `confidence_score` (max LLM certainty) to drive the automated promotion system.
-  - **FTS5 Integration**: All memories are automatically indexed in a virtual FTS5 table (`memories_fts`) indexing `key`, `content`, and `project_path` for fast semantic retrieval by both key name and fact content.
-  - **Bootstrap & Preference Recall**: `get_bootstrap_memories` unconditionally retrieves both core system keys (`os_type`, `package_manager`, etc.) and all verified user preferences (`category IN ('preference', 'manual_sync')`) scoped to the active project or `'global'`.
-  - **Automatic Pruning**: Supported via `access_count` and `last_accessed_at` tracking, with enhanced hygiene rules for pruning unverified noise.
-- **Interaction Schema (Episodic Memory & Dreaming)**:
-  - Tracks raw conversation and command history in the `interactions` table.
-  - Uses a `processing_state` column (`raw`, `seeded`, `dreamed`) to power the async Memory Consolidation pipeline, allowing the background `DreamOrchestrator` to batch-process un-consolidated interactions.
-- **Session Persistence (Schema v9)**:
-  - **Pinned Sessions**: The `sessions` table includes a `pinned` column. Pinned sessions are excluded from the "last 10" limit and sorted to the top.
-  - **Total Tokens**: Tracks the cumulative context cost of a session across different model providers and application restarts.
-  - **Character Identity**: The `sessions` table stores `character_id` and `character_display_name` recorded at session-creation time so `/resume` can display the original character even if the live catalog changes.
-  - **Dream History**: Includes `last_dream_at` to orchestrate when a session's history was last consolidated.
-  - **Interaction Logs**: The `claw_events` table stores serialized UI events (diagnoses, proposals). It is indexed by `session_id` and returns the full event history for a session during `/resume`.
-  - Note: there is no `active_pane_assignments` table. Character claim state is volatile in-memory only (owned by `boxxy-agent`).
-- **Session-Scoped Task Persistence**: Scheduled tasks are serialized atomically on every turn and saved alongside the conversation history. These tasks are only re-hydrated and executed when the specific session is actively resumed in a pane.
+All SQLite queries across the workspace live inside `boxxy-db` (`Store`) — higher-level crates (`boxxy-claw`, `boxxy-agent`, `boxxy-claw-ui`, `boxxy-claw-widget`, `boxxy-telemetry`) interact strictly through typed `Db` and `Store` APIs rather than raw `sqlx` queries.
 
-## Key Modules
-- `db`: The core connection pool and initialization logic.
-- `models`: Defines the data structures stored in the database.
-- `store`: Implements the SQL queries and operations.
+## Architecture & Module Layout
+
+```text
+crates/db/
+├── migrations/
+│   ├── schema_latest.sql                              # Canonical schema for fresh installs & Db::new_in_memory()
+│   └── 20261115000001_harden_schema_fts_and_indexes.sql # Non-destructive v15 -> journaled schema upgrade
+└── src/
+    ├── lib.rs          # Db pool lifecycle, 0700/0600 POSIX permissions, WAL/MEMORY pragmas, Db::open_at(), db.store()
+    ├── migrations.rs   # OpenCode-style `migration` journal runner, pre-upgrade `.bak` snapshot, zero-drift tests
+    ├── models.rs       # Session, SessionUpsert, Interaction, Memory, SkillRecord, MsgBarHistory, TelemetryJournalEntry, HygieneStats
+    └── store/
+        ├── mod.rs          # Store<'a> handle & SQLITE_BIND_CHUNK_SIZE batch ceiling
+        ├── sessions.rs     # Sessions, transactional character migration, pending tasks, claw_events
+        ├── memories.rs     # Long-term facts, candidate reinforcement, promotion, conflict demotion, FTS5, hygiene
+        ├── interactions.rs # Episodic summaries, dreaming state transitions, embeddings, FTS5 search
+        ├── skills.rs       # Diff-aware transactional sync_skills & weighted FTS5 search
+        ├── msgbar.rs       # Message bar input history & single-statement atomic pruning
+        └── telemetry.rs    # Durable telemetry_journal append, batch drain, stale prune, and opt-out purge
+```
+
+## Connection & Security Posture (`lib.rs`)
+- **Location**: Resolves via `boxxy_sys_utils::get_config_dir().join("boxxyclaw/boxxy.db")`. Use `Db::open_at(path)` for isolated file-backed tests and `Db::new_in_memory()` (`max_connections = 1`, `idle_timeout = None`, `max_lifetime = None`) for unit tests.
+- **Owner-Only Permissions**: On Unix, parent directories are restricted to `0700` and `boxxy.db` (plus `-wal` and `-shm` sidecars and `.bak` backups) are restricted to `0600` without opening/closing existing files (preserving POSIX `fcntl` advisory locks).
+- **SQLite Pragmas**: Configured with `journal_mode = WAL`, `synchronous = NORMAL`, `busy_timeout = 10s`, `foreign_keys = ON`, `temp_store = MEMORY`, and `cache_size = -8000` (8 MiB per connection).
+
+## Journaled Migration System (`migrations.rs` & `migrations/`)
+Boxxy uses an OpenCode-style `migration` journal table designed for continuous commit-based updates across Native Nightly, Flatpak, and Nix without sequential integer collisions across Git branches:
+
+```sql
+CREATE TABLE IF NOT EXISTS migration (
+    id TEXT PRIMARY KEY,           -- e.g. "20261115000001_harden_schema_fts_and_indexes"
+    time_completed INTEGER NOT NULL
+);
+```
+
+- **Read-Only Fast Path**: On normal startups (`boxxy-app` and `boxxy-agent`), `migrations::apply` checks `SELECT id FROM migration` first. When all registered `MIGRATIONS` are present, it returns immediately with **zero write locks, zero DDL, and zero FTS rebuilds**.
+- **Fresh Bootstrap**: Empty databases apply `migrations/schema_latest.sql` inside a `BEGIN IMMEDIATE` transaction and seed `migration` with all registered IDs in one shot.
+- **Incremental Upgrades (`v15+`)**:
+  - Creates a WAL-consistent rolling backup (`boxxy.db.bak`) via `VACUUM INTO` before applying pending steps on file-backed databases.
+  - Executes each unapplied `Migration` (`MigrationUp::Sql` or `MigrationUp::Custom`) inside its own `BEGIN IMMEDIATE` transaction, re-checking `SELECT id FROM migration WHERE id = ?` under the lock so concurrent UI + daemon startups never double-apply.
+  - When `foreign_keys: false` is set on a `Migration` (for SQLite's 12-step table-rebuild pattern), the runner disables `PRAGMA foreign_keys` outside the transaction, verifies `PRAGMA foreign_key_check` before `COMMIT`, and always restores `PRAGMA foreign_keys = ON` afterward.
+- **Legacy `< v15` Reset**: Ancient preview databases without a `migration` table and `PRAGMA user_version < 15` are cleanly dropped and bootstrapped to `schema_latest.sql` (`DATABASE_WAS_RESET = true`).
+
+### Workflow for Adding a Schema Change
+1. Update `crates/db/migrations/schema_latest.sql`.
+2. Add `crates/db/migrations/YYYYMMDDHHMMSS_<slug>.sql` and append a `Migration` entry to `MIGRATIONS` in `crates/db/src/migrations.rs`.
+3. Run `cargo test -p boxxy-db` — `zero_drift_fresh_schema_matches_migrated_v15_schema_and_preserves_data` automatically verifies that fresh bootstrap and incremental migrations produce an identical schema and pass FTS5 `'integrity-check'`.
+
+## FTS5 & Indexing Design
+- **External-Content FTS5 Tables**:
+  - `memories_fts` (`key`, `content`, `project_path`, `content_rowid='id'`), ranked with `bm25(memories_fts, 5.0, 1.0, 0.5)`.
+  - `interactions_fts` (`content`, `project_path`, `content_rowid='id'`), ranked with `bm25(interactions_fts, 1.0, 0.5)`.
+  - `skills_fts` (`name`, `description`, `triggers`, `content`, `content_rowid='rowid'`), joined on `m.rowid = f.rowid` and ranked with `bm25(skills_fts, 10.0, 5.0, 8.0, 1.0)`.
+- **Column-Scoped `AFTER UPDATE OF ... WHEN ...` Triggers**: `memories_au`, `interactions_au`, and `skills_au` fire strictly when indexed text columns actually change, avoiding FTS5 delete+retokenize churn when `access_count`, `last_accessed_at`, `verified`, `pinned`, or `processing_state` are updated on hot paths.
+- **Memory Protection Invariants**: `upsert_dream_candidate` never overwrites `content` on `verified`, `pinned`, `manual_sync`, `preference`, or `system` memories; `demote_memory_by_key` resets both `observation_count = 0` and `confidence_score = 0.0` while refusing to demote protected or `pinned` rows.
