@@ -100,7 +100,7 @@ impl DynamicColorRegistry {
         self.next_id += 1;
         let _ = writeln!(
             self.stylesheet,
-            ".{class_name} label {{ background-image: radial-gradient(circle, alpha({normalized}, 0.85) 62%, transparent 70%); }}"
+            ".{class_name} .claw-char-color-dot {{ color: {normalized}; }} .{class_name} .claw-char-portrait-fallback {{ background-color: alpha({normalized}, 0.18); }}"
         );
         self.reload_stylesheet();
         self.char_btn_classes.insert(normalized, class_name.clone());
@@ -159,7 +159,7 @@ thread_local! {
 /// Returns a deduplicated CSS class setting `color: <hex>` for `.claw-avatar-frame`.
 /// Subsequent lookups for the same color return in 0 ns without touching `GtkCssProvider`.
 #[must_use]
-pub(crate) fn avatar_ring_color_class(raw_color: &str) -> String {
+pub fn avatar_ring_color_class(raw_color: &str) -> String {
     COLOR_CSS_REGISTRY.with(|reg| reg.borrow_mut().get_or_register_ring_class(raw_color))
 }
 

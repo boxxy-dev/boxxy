@@ -399,6 +399,13 @@ impl TerminalComponent {
                     });
                 }
             }
+            PaneOutput::OpenModelSelection(_id, character_id) => {
+                let term_id = self.inner.borrow().id.clone();
+                let _ = TERMINAL_EVENT_BUS.send(TerminalEvent {
+                    id: term_id,
+                    kind: TerminalEventKind::OpenModelSelection(character_id),
+                });
+            }
             PaneOutput::RequestFocus(id) => {
                 self.focus_pane_by_id(&id);
             }

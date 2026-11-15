@@ -38,6 +38,7 @@ pub enum TerminalEventKind {
     Osc133D(String, Option<i32>),
     ClawEvent(String, boxxy_claw_protocol::ClawEngineEvent),
     FocusClawSidebar,
+    OpenModelSelection(Option<String>),
     PaneFocused(String),
     ForegroundProcessChanged(String),
     AltScreenChanged(bool),
@@ -78,6 +79,7 @@ pub enum PaneOutput {
     Osc133D(String, Option<i32>),
     ClawEvent(String, boxxy_claw_protocol::ClawEngineEvent),
     FocusClawSidebar(String),
+    OpenModelSelection(String, Option<String>),
     RequestFocus(String),
     ForegroundProcessChanged(String, String), // id, process_name
     AltScreenChanged(String, bool),           // id, is_alt_screen

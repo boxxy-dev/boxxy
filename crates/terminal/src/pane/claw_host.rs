@@ -188,6 +188,13 @@ impl ClawHost for PaneClawHost {
         (self.callback)(PaneOutput::FocusClawSidebar(self.id.clone()));
     }
 
+    fn open_model_selection(&self, character_id: Option<String>) {
+        (self.callback)(PaneOutput::OpenModelSelection(
+            self.id.clone(),
+            character_id,
+        ));
+    }
+
     fn focus(&self) {
         (self.callback)(PaneOutput::RequestFocus(self.id.clone()));
     }

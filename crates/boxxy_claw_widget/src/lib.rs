@@ -1,4 +1,8 @@
-#![allow(clippy::missing_errors_doc, clippy::missing_panics_doc)]
+#![allow(
+    clippy::missing_errors_doc,
+    clippy::missing_panics_doc,
+    clippy::redundant_pub_crate
+)]
 //! `boxxy_claw_widget` — the reusable Claw drawer UI.
 //!
 //! Consumers interact with the widget through the `ClawHost` trait —
@@ -6,6 +10,7 @@
 //! host any surface that implements `ClawHost` (terminal panes today;
 //! standalone chat windows or mobile shells in the future).
 
+pub(crate) mod character_picker;
 pub mod claw_host;
 pub mod claw_indicator;
 pub mod dispatch;

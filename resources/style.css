@@ -1047,43 +1047,127 @@ spinrow button.down image {
 }
 
 
-/* --- Character Selector --- */
+/* --- Character Selector Cards --- */
+.claw-picker-heading {
+    font-size: 1.24em;
+    font-weight: 700;
+    opacity: 0.90;
+    letter-spacing: 0.01em;
+}
+
 .character-btn {
-    background-color: color-mix(in srgb, currentColor 10%, transparent);
+    background-color: color-mix(in srgb, currentColor 6%, transparent);
     background-image: none;
-    border-radius: 8px;
-    padding: 2px 8px;
-    font-weight: 500;
-    font-size: 0.75em;
-    border: 1px solid transparent;
-    transition: opacity 150ms ease, border-color 150ms ease;
-    box-shadow: none;
-    opacity: 0.8;
+    border-radius: 12px;
+    padding: 0;
+    border: 2px solid color-mix(in srgb, currentColor 14%, transparent);
+    transition: opacity 160ms ease, border-color 160ms ease, box-shadow 160ms ease, transform 160ms cubic-bezier(0.22, 1, 0.36, 1);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.14);
+    opacity: 0.92;
 }
 
-.character-btn label {
-    margin-right: 4px;
-    padding-left: 5px;
-    min-height: 20px;
-    background-size: 18px 18px;
-    background-position: 0px center;
-    background-repeat: no-repeat;
-}
-
-.character-btn.selected-character {
-    border-color: color-mix(in srgb, currentColor 28%, transparent);
-    box-shadow: none;
+.character-btn:hover:not(:disabled) {
+    border-color: color-mix(in srgb, currentColor 32%, transparent);
+    transform: translateY(-2px);
     opacity: 1.0;
 }
 
-.character-btn:hover {
-    border-color: color-mix(in srgb, currentColor 18%, transparent);
+.character-btn.selected-character {
+    border-color: @accent_bg_color;
+    box-shadow: 0 0 0 1px alpha(@accent_bg_color, 0.45), 0 6px 20px alpha(@accent_bg_color, 0.22);
     opacity: 1.0;
 }
 
 .character-btn.in-use {
-    filter: grayscale(100%);
-    opacity: 0.4;
+    filter: grayscale(85%);
+    opacity: 0.45;
+}
+
+.claw-char-portrait {
+    background-color: rgba(0, 0, 0, 0.16);
+    border-bottom: 1px solid alpha(currentColor, 0.08);
+}
+
+.claw-char-check-badge {
+    min-width: 24px;
+    min-height: 24px;
+    border-radius: 9999px;
+    background-color: @accent_bg_color;
+    color: @accent_fg_color;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35);
+}
+
+.claw-char-inuse-badge {
+    background-color: rgba(16, 18, 24, 0.80);
+    color: #ffffff;
+    border-radius: 9999px;
+    padding: 2px 8px;
+    font-size: 0.70em;
+    font-weight: 700;
+}
+
+.claw-char-custom-pill {
+    background-color: rgba(16, 18, 24, 0.80);
+    color: #ffffff;
+    border: 1px solid rgba(255, 255, 255, 0.22);
+    border-radius: 9999px;
+    padding: 1px 8px;
+    font-size: 0.69em;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+}
+
+.claw-char-color-dot {
+    font-size: 0.72em;
+}
+
+.claw-char-card-name {
+    font-size: 0.98em;
+    font-weight: 700;
+}
+
+.claw-char-card-role {
+    font-size: 0.78em;
+    opacity: 0.70;
+    line-height: 1.25;
+}
+
+.claw-char-card-model {
+    font-size: 0.71em;
+    font-weight: 600;
+    opacity: 0.88;
+    background-color: alpha(currentColor, 0.08);
+    border-radius: 9999px;
+    padding: 2px 9px;
+}
+
+.claw-char-card-thinking {
+    font-size: 0.69em;
+    font-weight: 700;
+    border-radius: 9999px;
+    padding: 2px 8px;
+    background-color: alpha(currentColor, 0.08);
+    border: 1px solid transparent;
+}
+
+.claw-char-card-thinking.thinking-active {
+    background-color: alpha(@accent_bg_color, 0.18);
+    color: @accent_color;
+    border-color: alpha(@accent_color, 0.35);
+}
+
+.claw-char-card-thinking.thinking-off {
+    opacity: 0.62;
+}
+
+.claw-models-link {
+    font-size: 0.84em;
+    font-weight: 600;
+    opacity: 0.82;
+}
+
+.claw-models-link:hover {
+    opacity: 1.0;
 }
 
 /* Active character row: keep only the title green, not the duties subtitle */

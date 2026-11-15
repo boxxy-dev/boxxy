@@ -263,6 +263,11 @@ pub fn handle_terminal_event(inner: &mut AppWindowInner, event: TerminalEvent) {
         TerminalEventKind::FocusClawSidebar => {
             super::window_state::show_claw_sidebar(inner);
         }
+        TerminalEventKind::OpenModelSelection(character_id) => {
+            if is_tab_selected(inner, pos) {
+                super::claw::open_model_selection(inner, character_id);
+            }
+        }
         TerminalEventKind::ClawEvent(p_id, claw_event) => {
             if is_tab_selected(inner, pos) {
                 let session_usage = inner.tabs[pos].controller.get_session_usage();

@@ -96,6 +96,12 @@ pub trait ClawHost: 'static {
     /// this host (e.g. when the user clicks the bug/inspect icon).
     fn focus_sidebar(&self);
 
+    /// Ask the surrounding UI to open the global Model Selection dialog,
+    /// optionally pre-selecting `character_id` in Character Overrides.
+    fn open_model_selection(&self, character_id: Option<String>) {
+        let _ = character_id;
+    }
+
     /// Raise the window and select the tab / pane that contains this host.
     fn focus(&self);
 

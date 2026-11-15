@@ -9,23 +9,24 @@ The crate is **surface-agnostic**. It talks to its host — the thing that owns 
 
 ```
 boxxy_claw_widget/
-├── overlay.rs         drawer UI (TerminalOverlay) — loaded from
-│                      /dev/boxxy/BoxxyTerminal/ui/claw_overlay.ui
-├── claw_indicator.rs  floating status pill / badge (ClawIndicator)
-├── msgbar/            merged input bar (formerly a crate)
-│   ├── mod.rs         MsgBarComponent constructor + status / update_ui + TextTag highlighting
-│   ├── attachment.rs  clipboard paste → image/text chips
+├── overlay.rs          drawer UI (TerminalOverlay) — loaded from
+│                       /dev/boxxy/BoxxyTerminal/ui/claw_overlay.ui
+├── character_picker.rs centered empty-state character banner cards (model + thinking pills) + discreet Models Selection link
+├── claw_indicator.rs   floating status pill / badge (ClawIndicator)
+├── msgbar/             merged input bar (formerly a crate)
+│   ├── mod.rs          MsgBarComponent constructor + status / update_ui + TextTag highlighting
+│   ├── attachment.rs   clipboard paste → image/text chips
 │   ├── autocomplete.rs @file / :character / /debate / /drama / /resume completion providers
-│   ├── file_index.rs  async ignore::WalkBuilder file indexer + frizbee fuzzy matcher + frecency
-│   └── history.rs     lazy-loaded MsgHistory backed by boxxy-db
-├── dispatch.rs        spawn_dispatch(rx, host, overlay, …) event loop
-├── claw_host.rs       ClawHost trait — the decoupling boundary
-├── proposal.rs        Proposal enum (UI shape)
-└── lib.rs             re-exports the public surface
+│   ├── file_index.rs   async ignore::WalkBuilder file indexer + frizbee fuzzy matcher + frecency
+│   └── history.rs      lazy-loaded MsgHistory backed by boxxy-db
+├── dispatch.rs         spawn_dispatch(rx, host, overlay, …) event loop
+├── claw_host.rs        ClawHost trait — the decoupling boundary
+├── proposal.rs         Proposal enum (UI shape)
+└── lib.rs              re-exports the public surface
 ```
 
 ### The `ClawHost` trait (`claw_host.rs`)
-The single boundary between widget code and surface-specific code. Ten methods: `host_id`, `inject_line`, `execute_script`, `snapshot` (async), `grab_focus`, `set_focusable`, `is_busy`, `working_dir`, `send_claw`, `focus_sidebar`, `cd`, `notify`, `forward_event`. The trait is `!Send` / `!Sync` — GTK widgets are single-threaded and every call happens on the main thread; a `Send` bound would be a lie and would force `Arc<Mutex<…>>` ceremony in impls.
+The single boundary between widget code and surface-specific code. Core methods include `host_id`, `inject_line`, `execute_script`, `snapshot` (async), `grab_focus`, `set_focusable`, `is_busy`, `working_dir`, `send_claw`, `focus_sidebar`, `open_model_selection`, `cd`, `notify`, `forward_event`, and `request_character`. The trait is `!Send` / `!Sync` — GTK widgets are single-threaded and every call happens on the main thread; a `Send` bound would be a lie and would force `Arc<Mutex<…>>` ceremony in impls.
 
 ### The drawer (`overlay.rs`)
 Defines `TerminalOverlay` and `OverlayMode { Claw, Bookmark }`. Constructed via `TerminalOverlay::new(indicator, msg_bar, host, pending_character)`. The `.ui` file wires most of the layout; Rust code attaches `ClawIndicator::widget()` into `indicator_slot`, appends `msg_bar.widget` into `msgbar_slot`, and stitches up button handlers (each one is two lines of `host.xyz()`).
@@ -40,7 +41,7 @@ Defines `TerminalOverlay` and `OverlayMode { Claw, Bookmark }`. Constructed via 
 - `show_input_only(agent_name)` — the `Ctrl+/` entry point. Reveals the drawer if closed; focuses the input if sensitive; never hides or clobbers an active `Thinking` or `Action` state. The Okay/Reject/Accept buttons are the explicit dismiss paths — silent hiding would strand the user when the agent is waiting for a message.
 - `enter_waiting_state()` — collapses proposal controls and transitions immediately to `OverlayState::Thinking` so the drawer reads as "thinking…" the moment the user submits a reply or approves an in-turn tool proposal.
 
-The character selector renders from `CHARACTER_CACHE` and `CLAIMS_CACHE`; it is refreshed via `RegistrySnapshot` push signals, not polling.
+The character selector (`character_picker.rs`) renders centered wide banner cards (`PortraitBanner` `ConstantSize` wrapper around `GtkPicture` + `AdwWrapBox`, displaying each character's resolved model and thinking level pills) and a discreet `"Models Selection"` link wired to `ClawHost::open_model_selection` when no session or history is active yet. It reads coherently from `load_coherent_registry()` and live-refreshes via `RegistrySnapshot` push signals and `SETTINGS_EVENT_BUS` updates without polling, updating selection state in-place on click.
 
 ### History list + sticky-bottom auto-scroll
 The drawer's scrollable history is a `gtk::ListView` over a `gio::ListStore` (`history_store`, synced from `full_history_store` via a `clear_offset` tail slice so temporary `/clear` preserves session history). Virtualization means `adj.upper()` grows asynchronously as rows realize and Markdown/diff blocks measure.

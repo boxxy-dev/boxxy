@@ -17,9 +17,9 @@ pub mod sidebar;
 pub mod trace_widget;
 
 pub use character_style::{
-    character_btn_color_class, claw_badge_bg_color_class, claw_pill_spinner_color_class,
-    format_relative_age, is_safe_hex_color, load_character_avatar_texture, prettify_character_name,
-    resolve_character_display_name,
+    avatar_ring_color_class, character_btn_color_class, claw_badge_bg_color_class,
+    claw_pill_spinner_color_class, format_relative_age, is_safe_hex_color,
+    load_character_avatar_texture, prettify_character_name, resolve_character_display_name,
 };
 pub use message_list::{
     add_approval_row, add_clipboard_get_approval_row, add_clipboard_set_approval_row,

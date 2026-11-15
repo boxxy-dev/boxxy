@@ -1,3 +1,4 @@
+use crate::character_picker::CharacterPicker;
 use crate::claw_host::ClawHost;
 use crate::claw_indicator::ClawIndicator;
 use crate::msgbar::MsgBarComponent;
@@ -7,6 +8,7 @@ use crate::tips::TipsCycle;
 use boxxy_claw_protocol::ClawMessage;
 use boxxy_preferences::config::Settings;
 use boxxy_viewer::StructuredViewer;
+use gtk::glib::types::StaticTypeExt;
 use gtk::prelude::*;
 use gtk4 as gtk;
 use gtk4::gio;
@@ -28,7 +30,7 @@ pub struct TerminalOverlay {
     bottom_area: gtk::Box,
     indicator: ClawIndicator,
     indicator_slot: gtk::Box,
-    character_selector_box: gtk::Box,
+    character_picker: CharacterPicker,
     single_scroll: gtk::ScrolledWindow,
     history_scroll: gtk::ScrolledWindow,
     history_list: gtk::ListView,
@@ -77,6 +79,9 @@ impl TerminalOverlay {
         host: Rc<dyn ClawHost>,
         pending_character: Rc<RefCell<String>>,
     ) -> Self {
+        adw::WrapBox::ensure_type();
+        adw::Clamp::ensure_type();
+        adw::Avatar::ensure_type();
         let builder = gtk::Builder::from_resource("/dev/boxxy/BoxxyTerminal/ui/claw_overlay.ui");
 
         let revealer: gtk::Revealer = builder.object("root_revealer").unwrap();
@@ -92,7 +97,7 @@ impl TerminalOverlay {
         });
         Self::attach_zoom_controllers(&main_drawer, &host);
         let indicator_slot: gtk::Box = builder.object("indicator_slot").unwrap();
-        let character_selector_box: gtk::Box = builder.object("character_selector_box").unwrap();
+        let character_picker = CharacterPicker::from_builder(&builder, &host, &pending_character);
 
         indicator_slot.append(indicator.widget());
         let esc_interrupt_label = gtk::Label::builder()
@@ -348,7 +353,7 @@ impl TerminalOverlay {
             bottom_area,
             indicator: indicator.clone(),
             indicator_slot,
-            character_selector_box,
+            character_picker,
             single_scroll,
             history_scroll,
             diagnosis_viewer,
@@ -684,9 +689,28 @@ impl TerminalOverlay {
             overlay_for_clear.clear_visible_history();
         });
 
-        // Reactively sync `always_show_code_blocks` across all open overlays whenever toggled
-        // via Ctrl+Shift+D, Command Palette, `/code`, or Preferences.
+        // Hide the empty-state character picker as soon as session rows arrive (e.g. session restore).
+        let picker_for_hist = s.character_picker.clone();
+        let hist_scroll_for_hist = s.history_scroll.clone();
+        let mode_for_hist = s.current_mode.clone();
+        s.full_history_store
+            .connect_items_changed(move |store, _, _, _| {
+                if *mode_for_hist.borrow() == OverlayMode::Claw
+                    && store.n_items() > 0
+                    && picker_for_hist.is_visible()
+                {
+                    picker_for_hist.set_visible(false);
+                    hist_scroll_for_hist.set_visible(true);
+                }
+            });
+
+        // Reactively sync `always_show_code_blocks` and character model labels across all open
+        // overlays whenever settings change via Ctrl+Shift+D, Model Selection, or Preferences.
         let history_store_for_policy = s.history_store.clone();
+        let picker_for_settings = s.character_picker.clone();
+        let selected_for_settings = s.selected_character.clone();
+        let msg_bar_for_settings = s.msg_bar.clone();
+        let host_id_for_settings = s.host.host_id();
         let revealer_weak_for_policy = s.revealer.downgrade();
         let last_always_code = Rc::new(Cell::new(initial_settings.always_show_code_blocks));
         let mut rx_settings = boxxy_preferences::SETTINGS_EVENT_BUS.subscribe();
@@ -699,29 +723,61 @@ impl TerminalOverlay {
                     }
                     Err(boxxy_preferences::config::BroadcastRecvError::Closed) => break,
                 };
-                let Some(_rev) = revealer_weak_for_policy.upgrade() else {
+                let Some(rev) = revealer_weak_for_policy.upgrade() else {
                     break;
                 };
+                if rev.root().is_none() {
+                    break;
+                }
                 if last_always_code.replace(next_always) != next_always {
                     boxxy_claw_ui::apply_code_blocks_visibility_policy(
                         &history_store_for_policy,
                         next_always,
                     );
                 }
+                if picker_for_settings.is_visible() {
+                    let entry = msg_bar_for_settings.entry.clone();
+                    picker_for_settings.refresh(
+                        &host_id_for_settings,
+                        &selected_for_settings,
+                        &msg_bar_for_settings,
+                        move || {
+                            if entry.is_sensitive() {
+                                entry.grab_focus();
+                            }
+                        },
+                    );
+                }
             }
         });
 
         // Reactively refresh the character selector whenever the catalog or claims change.
-        let overlay_for_watch = s.clone();
+        let picker_for_watch = s.character_picker.clone();
+        let selected_for_watch = s.selected_character.clone();
+        let msg_bar_for_watch = s.msg_bar.clone();
+        let host_id_for_watch = s.host.host_id();
         let revealer_weak = s.revealer.downgrade();
         let mut rx_registry = boxxy_claw_protocol::characters::subscribe_registry_changes();
         gtk::glib::spawn_future_local(async move {
             while rx_registry.changed().await.is_ok() {
-                let Some(_rev) = revealer_weak.upgrade() else {
+                let Some(rev) = revealer_weak.upgrade() else {
                     break;
                 };
-                if overlay_for_watch.character_selector_box.is_visible() {
-                    overlay_for_watch.refresh_character_selector("");
+                if rev.root().is_none() {
+                    break;
+                }
+                if picker_for_watch.is_visible() {
+                    let entry = msg_bar_for_watch.entry.clone();
+                    picker_for_watch.refresh(
+                        &host_id_for_watch,
+                        &selected_for_watch,
+                        &msg_bar_for_watch,
+                        move || {
+                            if entry.is_sensitive() {
+                                entry.grab_focus();
+                            }
+                        },
+                    );
                 }
             }
         });
@@ -785,6 +841,7 @@ impl TerminalOverlay {
         let effective = (pane_height - v_pad - bottom_h).max(80);
         self.single_scroll.set_max_content_height(effective);
         self.history_scroll.set_max_content_height(effective);
+        self.character_picker.set_max_content_height(effective);
     }
 
     #[must_use]
@@ -866,115 +923,17 @@ impl TerminalOverlay {
 
         self.sync_action_state();
 
-        // If the picker isn't visible, don't waste time rebuilding the buttons.
-        if !self.character_selector_box.is_visible() {
-            return;
-        }
-
-        while let Some(child) = self.character_selector_box.first_child() {
-            self.character_selector_box.remove(&child);
-        }
-
-        let claims = boxxy_claw_protocol::characters::CLAIMS_CACHE.load();
-        let host_id = self.host.host_id();
-
-        // Returns true if the character with the given UUID is Active in another holder
-        // (including detached background holders).
-        let is_taken = |id: &str| -> bool {
-            claims
-                .iter()
-                .any(|claim| claim.character_id == id && claim.holder_id != host_id)
-        };
-
-        // Auto-default (or auto-correct): ensure `pending` always points to a
-        // character UUID that isn't claimed by another holder.
-        let registry = boxxy_claw_protocol::characters::CHARACTER_CACHE.load();
-        {
-            let mut pending = self.selected_character.borrow_mut();
-            if pending.is_empty() || is_taken(&pending) {
-                // Pick the first registry entry that isn't taken elsewhere.
-                let first_free = boxxy_claw_protocol::characters::find_first_available_in(
-                    &registry,
-                    &claims,
-                    Some(&host_id),
-                );
-                if let Some(info) = first_free {
-                    pending.clone_from(&info.config.id);
-                } else if pending.is_empty() {
-                    // All characters are in use — fall back to first so the
-                    // picker is never completely blank.
-                    if let Some(first) = registry.first() {
-                        pending.clone_from(&first.config.id);
-                    }
+        let overlay_for_focus = self.clone();
+        self.character_picker.refresh(
+            &self.host.host_id(),
+            &self.selected_character,
+            &self.msg_bar,
+            move || {
+                if !overlay_for_focus.msg_bar.entry.has_focus() {
+                    overlay_for_focus.grab_input_focus();
                 }
-                // If every character is taken and pending already has a value,
-                // leave it as-is (the button will be insensitive anyway).
-            }
-        }
-        let pending = self.selected_character.borrow().clone();
-        if !pending.is_empty() {
-            *self.msg_bar.character_id.borrow_mut() = Some(pending.clone());
-        }
-
-        for info in registry.iter() {
-            let btn = gtk::Button::new();
-            let inner_box = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-            inner_box.set_margin_start(4);
-            inner_box.set_margin_end(4);
-            inner_box.set_margin_top(1);
-            inner_box.set_margin_bottom(1);
-
-            let is_current = info.config.id == pending;
-            let is_in_use = is_taken(&info.config.id);
-
-            let avatar = adw::Avatar::new(32, Some(&info.config.display_name), true);
-            avatar.set_valign(gtk::Align::Center);
-            if let Some(texture) = boxxy_claw_ui::load_character_avatar_texture(info) {
-                avatar.set_custom_image(Some(&texture));
-            }
-
-            inner_box.append(&avatar);
-
-            let label = gtk::Label::new(Some(&info.config.display_name.to_uppercase()));
-            label.set_valign(gtk::Align::Center);
-            label.set_halign(gtk::Align::Center);
-            inner_box.append(&label);
-
-            if is_current {
-                let check_icon = gtk::Image::from_icon_name("boxxy-object-select-2-symbolic");
-                check_icon.set_pixel_size(16);
-                check_icon.set_valign(gtk::Align::Center);
-                inner_box.append(&check_icon);
-            }
-
-            btn.set_child(Some(&inner_box));
-            btn.add_css_class("character-btn");
-
-            if is_in_use {
-                btn.set_sensitive(false);
-                btn.add_css_class("in-use");
-            }
-            if is_current {
-                btn.add_css_class("selected-character");
-            }
-
-            if let Some(color_cls) = boxxy_claw_ui::character_btn_color_class(&info.config.color) {
-                btn.add_css_class(&color_cls);
-            }
-
-            // Clicking only updates the local pre-selection so the checkmark
-            // moves immediately. The actual session is created lazily when the
-            // user sends their first message.
-            let selected_rc = self.selected_character.clone();
-            let overlay_clone = self.clone();
-            let char_id = info.config.id.clone();
-            btn.connect_clicked(move |_| {
-                selected_rc.borrow_mut().clone_from(&char_id);
-                overlay_clone.refresh_character_selector("");
-            });
-
-            self.character_selector_box.append(&btn);
-        }
+            },
+        );
     }
 
     pub fn show(
@@ -1220,19 +1179,18 @@ impl TerminalOverlay {
         self.file_action_box.set_visible(false);
         self.template_box.set_visible(false);
 
-        // 2. Base components based on mode
+        // 2. Base components & centered Character Picker vs Conversation History
         let is_claw = mode == OverlayMode::Claw;
+        let is_working = matches!(state, OverlayState::Thinking | OverlayState::Pending);
+        let has_history = self.full_history_store.n_items() > 0;
+        let show_picker = is_claw && !is_working && !has_active_agent && !has_history;
+
         self.single_scroll.set_visible(!is_claw);
-        self.history_scroll.set_visible(is_claw);
+        self.character_picker.set_visible(show_picker);
+        self.history_scroll.set_visible(is_claw && !show_picker);
         self.msgbar_slot.set_visible(is_claw);
         self.msg_bar.widget.set_visible(is_claw);
         self.inspect_btn.set_visible(is_claw);
-
-        // 3. Character Selector Box logic
-        // Only visible if in Claw mode, NOT thinking/pending, and no active agent is set yet.
-        let is_working = matches!(state, OverlayState::Thinking | OverlayState::Pending);
-        let show_picker = mode == OverlayMode::Claw && !is_working && !has_active_agent;
-        self.character_selector_box.set_visible(show_picker);
 
         let overlay_had_focus = self.revealer.focus_child().is_some();
 

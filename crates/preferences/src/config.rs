@@ -1,5 +1,5 @@
 use arc_swap::ArcSwap;
-use boxxy_model_selection::ModelProvider;
+pub use boxxy_model_selection::{ModelProvider, ThinkingLevel};
 use parking_lot::{Mutex, RwLock};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

@@ -33,6 +33,73 @@
           </object>
         </child>
         <child>
+          <object class="GtkScrolledWindow" id="character_picker_scroll">
+            <property name="visible">false</property>
+            <property name="hscrollbar-policy">never</property>
+            <property name="vscrollbar-policy">automatic</property>
+            <property name="vexpand">true</property>
+            <property name="hexpand">true</property>
+            <child>
+              <object class="AdwClamp">
+                <property name="hexpand">true</property>
+                <property name="maximum-size">840</property>
+                <property name="tightening-threshold">600</property>
+                <child>
+                  <object class="GtkBox" id="character_picker_container">
+                    <property name="orientation">vertical</property>
+                    <property name="valign">center</property>
+                    <property name="halign">fill</property>
+                    <property name="vexpand">true</property>
+                    <property name="hexpand">true</property>
+                    <property name="spacing">18</property>
+                    <property name="margin-top">24</property>
+                    <property name="margin-bottom">12</property>
+                    <property name="margin-start">20</property>
+                    <property name="margin-end">20</property>
+                    <child>
+                      <object class="GtkLabel" id="character_picker_subtitle">
+                        <property name="label">Pick a character to start a new conversation.</property>
+                        <property name="halign">fill</property>
+                        <property name="hexpand">true</property>
+                        <property name="xalign">0.5</property>
+                        <property name="justify">center</property>
+                        <property name="wrap">false</property>
+                        <property name="ellipsize">end</property>
+                        <style>
+                          <class name="claw-picker-heading"/>
+                        </style>
+                      </object>
+                    </child>
+                    <child>
+                      <object class="AdwWrapBox" id="character_cards_wrap">
+                        <property name="align">0.5</property>
+                        <property name="child-spacing">16</property>
+                        <property name="line-spacing">16</property>
+                        <property name="halign">fill</property>
+                        <property name="hexpand">true</property>
+                      </object>
+                    </child>
+                    <child>
+                      <object class="GtkLabel" id="picker_models_link_lbl">
+                        <property name="label">Models Selection</property>
+                        <property name="tooltip-text">Configure default and character-specific AI models</property>
+                        <property name="halign">center</property>
+                        <property name="valign">center</property>
+                        <style>
+                          <class name="caption"/>
+                          <class name="accent"/>
+                          <class name="boxxy-link"/>
+                          <class name="claw-models-link"/>
+                        </style>
+                      </object>
+                    </child>
+                  </object>
+                </child>
+              </object>
+            </child>
+          </object>
+        </child>
+        <child>
           <object class="GtkScrolledWindow" id="history_scroll">
             <property name="visible">true</property>
             <property name="hscrollbar-policy">never</property>
@@ -67,13 +134,6 @@
                     </style>
                   </object>
                 </child>
-              </object>
-            </child>
-            <child>
-              <object class="GtkBox" id="character_selector_box">
-                <property name="orientation">horizontal</property>
-                <property name="spacing">12</property>
-                <property name="halign">start</property>
               </object>
             </child>
             <child>

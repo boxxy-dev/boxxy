@@ -104,7 +104,7 @@ pub fn resume_claw_session(
     }
 }
 
-pub fn open_model_selection(inner: &AppWindowInner) {
+pub fn open_model_selection(inner: &AppWindowInner, initial_character_id: Option<String>) {
     let tx_apis = inner.tx.clone();
     let tx_model_close = inner.tx.clone();
 
@@ -140,17 +140,21 @@ pub fn open_model_selection(inner: &AppWindowInner) {
         })
         .collect();
 
-    let active_char_id = inner
-        .active_tab()
-        .map(|t| t.controller.active_pane_id())
-        .and_then(|pane_id| {
-            boxxy_claw_protocol::characters::CLAIMS_CACHE
-                .load()
-                .iter()
-                .find(|claim| claim.holder_id == pane_id)
-                .map(|claim| claim.character_id.clone())
-        })
-        .filter(|id| !boxxy_claw_protocol::characters::is_incognito_character(id));
+    let active_char_id = initial_character_id
+        .filter(|id| !id.is_empty() && !boxxy_claw_protocol::characters::is_incognito_character(id))
+        .or_else(|| {
+            inner
+                .active_tab()
+                .map(|t| t.controller.active_pane_id())
+                .and_then(|pane_id| {
+                    boxxy_claw_protocol::characters::CLAIMS_CACHE
+                        .load()
+                        .iter()
+                        .find(|claim| claim.holder_id == pane_id)
+                        .map(|claim| claim.character_id.clone())
+                })
+                .filter(|id| !boxxy_claw_protocol::characters::is_incognito_character(id))
+        });
 
     let config = boxxy_model_selection::ModelAssignmentConfig {
         default_claw_model: inner.current_settings.claw_model.clone(),

@@ -287,7 +287,7 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
             claw::reload_engine(&mut inner);
         }
         AppInput::ModelSelection => {
-            claw::open_model_selection(&inner);
+            claw::open_model_selection(&inner, None);
         }
         AppInput::CloseRequested => {
             window_state::handle_close_request(inner_ref, &mut inner);

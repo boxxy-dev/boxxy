@@ -440,6 +440,18 @@ impl ThinkingLevel {
         }
     }
 
+    #[must_use]
+    pub const fn short_label(self) -> &'static str {
+        match self {
+            ThinkingLevel::None => "Off",
+            ThinkingLevel::Minimal => "Minimal",
+            ThinkingLevel::Low => "Low",
+            ThinkingLevel::Medium => "Medium",
+            ThinkingLevel::High => "High",
+            ThinkingLevel::XHigh => "Max",
+        }
+    }
+
     pub fn anthropic_budget_tokens(&self) -> u32 {
         match self {
             ThinkingLevel::Low => 2_000,
@@ -1487,6 +1499,50 @@ impl ModelProvider {
         }
     }
 
+    /// Returns the human-readable model name without the provider prefix
+    /// (e.g. `"Gemini 3.8 Flash"`, `"Claude Sonnet 4.6"`, `"llama3.3:70b"`).
+    #[must_use]
+    pub fn display_model_name(&self) -> String {
+        match self {
+            ModelProvider::Gemini(model, _) => model.to_string(),
+            ModelProvider::Ollama(model) | ModelProvider::OpenRouter(model) => model.clone(),
+            ModelProvider::Anthropic(model, _) => model.to_string(),
+            ModelProvider::OpenAi(model, _) => model.to_string(),
+            ModelProvider::DeepSeek(model) => model.to_string(),
+            ModelProvider::Moonshot(model, _) => model.to_string(),
+            ModelProvider::Xai(model, _) => model.to_string(),
+            ModelProvider::Zai(model, _) => model.to_string(),
+            ModelProvider::Mistral(model, _) => model.to_string(),
+            ModelProvider::MiniMax(model, _) => model.to_string(),
+            ModelProvider::Groq(model, _) => model.to_string(),
+            ModelProvider::OpenCodeZen(model, _) => model.to_string(),
+            ModelProvider::OpenCodeGo(model, _) => model.to_string(),
+            ModelProvider::OpenAiCompatible { model_id, .. } => model_id.clone(),
+        }
+    }
+
+    /// Resolves the active thinking level for this model (explicit override if set,
+    /// otherwise the model's catalog default when supported).
+    #[must_use]
+    pub fn effective_thinking_level(&self) -> Option<ThinkingLevel> {
+        match self {
+            ModelProvider::Gemini(model, t) => (*t).or_else(|| model.default_thinking_level()),
+            ModelProvider::Anthropic(model, t) => (*t).or_else(|| model.default_thinking_level()),
+            ModelProvider::OpenAi(model, t) => (*t).or_else(|| model.default_thinking_level()),
+            ModelProvider::Moonshot(model, t) => (*t).or_else(|| model.default_thinking_level()),
+            ModelProvider::Xai(model, t) => (*t).or_else(|| model.default_thinking_level()),
+            ModelProvider::Zai(model, t) => (*t).or_else(|| model.default_thinking_level()),
+            ModelProvider::Mistral(model, t) => (*t).or_else(|| model.default_thinking_level()),
+            ModelProvider::MiniMax(model, t) => (*t).or_else(|| model.default_thinking_level()),
+            ModelProvider::Groq(model, t) => (*t).or_else(|| model.default_thinking_level()),
+            ModelProvider::OpenCodeZen(model, t) => (*t).or_else(|| model.default_thinking_level()),
+            ModelProvider::OpenCodeGo(model, t) => (*t).or_else(|| model.default_thinking_level()),
+            ModelProvider::DeepSeek(model) => model.default_thinking_level(),
+            ModelProvider::OpenAiCompatible { thinking, .. } => *thinking,
+            ModelProvider::Ollama(_) | ModelProvider::OpenRouter(_) => None,
+        }
+    }
+
     /// Returns `true` if this provider supports built-in server-side web search
     /// (Gemini Google Search grounding, OpenAI Responses `web_search`, Anthropic `web_search_20250305`).
     pub fn supports_native_search(&self) -> bool {
@@ -1741,6 +1797,29 @@ mod tests {
             }
             .supports_native_search()
         );
+    }
+
+    #[test]
+    fn test_display_model_name_and_effective_thinking() {
+        let gemini = ModelProvider::Gemini(
+            GeminiModel::new("gemini-3.8-flash"),
+            Some(ThinkingLevel::High),
+        );
+        assert_eq!(gemini.display_model_name(), "Gemini 3.8 Flash");
+        assert_eq!(gemini.effective_thinking_level(), Some(ThinkingLevel::High));
+        assert_eq!(ThinkingLevel::High.short_label(), "High");
+        assert_eq!(ThinkingLevel::XHigh.short_label(), "Max");
+        assert_eq!(ThinkingLevel::None.short_label(), "Off");
+
+        let gemini_default = ModelProvider::Gemini(GeminiModel::new("gemini-3.8-flash"), None);
+        assert_eq!(
+            gemini_default.effective_thinking_level(),
+            Some(ThinkingLevel::Medium)
+        );
+
+        let ollama = ModelProvider::Ollama("qwen3:32b".to_string());
+        assert_eq!(ollama.display_model_name(), "qwen3:32b");
+        assert_eq!(ollama.effective_thinking_level(), None);
     }
 
     #[test]

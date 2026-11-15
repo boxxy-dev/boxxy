@@ -73,33 +73,37 @@
     box-shadow: none;
 }
 
-/* Character Selector Pills inside Claw Drawer */
+/* Character Selector Cards inside Claw Drawer */
 .claw-drawer .character-btn {
     background-color: @card_bg_color;
     color: @card_fg_color;
-    border-radius: var(--boxxy-radius-md);
-    border: var(--boxxy-border-thin) solid @boxxy_ink;
-    box-shadow: 1.5px 2px 0px @boxxy_shadow;
-    opacity: 0.9;
+    border-radius: var(--boxxy-radius-lg);
+    border: var(--boxxy-border-width) solid @boxxy_ink;
+    box-shadow: 2px 3px 0px @boxxy_shadow;
+    padding: 0;
+    opacity: 0.94;
 }
 
-.claw-drawer .character-btn:hover {
-    background-color: @boxxy_surface_hover;
-    border-color: @boxxy_ink;
+.claw-drawer .character-btn:hover:not(:disabled) {
+    background-color: @card_bg_color;
+    color: @card_fg_color;
+    border-color: @accent_color;
+    box-shadow: 3px 4px 0px @boxxy_shadow;
     opacity: 1.0;
 }
 
 .claw-drawer .character-btn.selected-character {
-    background-color: @accent_bg_color;
-    color: @accent_fg_color;
-    border-color: @boxxy_ink;
-    box-shadow: 2px 2.5px 0px @boxxy_shadow;
+    background-color: @card_bg_color;
+    color: @card_fg_color;
+    border-color: @accent_bg_color;
+    box-shadow: 0 0 0 1px @accent_bg_color, 0 6px 18px alpha(@accent_bg_color, 0.28), 2px 3px 0px @boxxy_shadow;
     opacity: 1.0;
 }
 
-.claw-drawer .character-btn.selected-character label {
+.claw-drawer .claw-char-check-badge {
+    background-color: @accent_bg_color;
     color: @accent_fg_color;
-    font-weight: 700;
+    border: var(--boxxy-border-thin) solid @boxxy_ink;
 }
 
 /* Claw Thinking / Tool Activity Status Pill ("Drinking Water..") */
