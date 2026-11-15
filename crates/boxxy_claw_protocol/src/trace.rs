@@ -1,11 +1,14 @@
-//! Structured per-turn agent activity trace (`TurnTraceItem`), OpenCode-style
-//! activity summarization (`+ 4 commands, 19 edits, 8 thoughts, 2 reads, 1 tool`),
-//! reasoning title extraction, and history coalescing for session resumption.
+//! Structured per-turn agent activity trace (`TurnTraceItem`) and history coalescing.
+//!
+//! Provides `OpenCode`-style activity summarization (`+ 4 commands, 19 edits, 8 thoughts`),
+//! reasoning header extraction, and legacy DB row folding on session resumption.
 
 use crate::{FileDiff, PersistentClawRow};
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 
 const MAX_TRACE_PREVIEW_CHARS: usize = 800;
+const MAX_CMD_LABEL_CHARS: usize = 72;
 
 /// High-level bucket for a tool execution inside a turn's collapsible trace.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -50,7 +53,7 @@ pub enum TurnTraceItem {
     Skill { name: String },
 }
 
-/// Aggregated counts across a turn's trace, matching OpenCode's `activitySummary` buckets.
+/// Aggregated counts across a turn's trace, matching `OpenCode`'s `activitySummary` buckets.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ActivitySummary {
     pub commands: usize,
@@ -62,7 +65,7 @@ pub struct ActivitySummary {
 }
 
 impl ActivitySummary {
-    /// Summarizes a slice of trace items into OpenCode-aligned activity buckets.
+    /// Summarizes a slice of trace items into `OpenCode`-aligned activity buckets.
     #[must_use]
     pub fn summarize(items: &[TurnTraceItem]) -> Self {
         let mut out = Self::default();
@@ -102,7 +105,7 @@ impl ActivitySummary {
             || self.tools > 0
     }
 
-    /// Formats the compact 1-line summary in OpenCode's canonical bucket order:
+    /// Formats the compact 1-line summary in `OpenCode`'s canonical bucket order:
     /// `"4 commands, 19 edits, 8 thoughts, 2 reads, 1 tool"`.
     #[must_use]
     pub fn format_label(&self) -> String {
@@ -127,11 +130,19 @@ impl ActivitySummary {
     }
 }
 
-/// Cleans a reasoning block (dropping `[REDACTED]` placeholders) and extracts a leading
-/// `**Bold Summary**` title when present, mirroring OpenCode's `reasoningSummary()`.
+fn strip_redacted(raw: &str) -> Cow<'_, str> {
+    if raw.contains("[REDACTED]") {
+        Cow::Owned(raw.replace("[REDACTED]", ""))
+    } else {
+        Cow::Borrowed(raw)
+    }
+}
+
+/// Cleans a reasoning block and extracts a leading `**Bold Summary**` title when present,
+/// mirroring `OpenCode`'s `reasoningSummary()`.
 #[must_use]
 pub fn extract_reasoning_summary(raw: &str) -> Option<(Option<String>, String)> {
-    let cleaned = raw.replace("[REDACTED]", "");
+    let cleaned = strip_redacted(raw);
     let trimmed = cleaned.trim();
     if trimmed.is_empty() {
         return None;
@@ -142,25 +153,29 @@ pub fn extract_reasoning_summary(raw: &str) -> Option<(Option<String>, String)> 
     {
         let candidate = &rest_after_open[..close_idx];
         if !candidate.is_empty() && !candidate.contains('\n') && !candidate.contains('*') {
-            let after_close = &rest_after_open[close_idx + 2..];
+            // Allow optional trailing horizontal whitespace (` ` / `\t`) after `**Title**` before `\n`.
+            let after_close = rest_after_open[close_idx + 2..].trim_start_matches([' ', '\t']);
             if after_close.is_empty() {
                 let title = candidate.trim().to_string();
-                return Some((Some(title.clone()), title));
-            }
-            if let Some(body) = after_close
+                if !title.is_empty() {
+                    return Some((Some(title.clone()), title));
+                }
+            } else if let Some(body) = after_close
                 .strip_prefix("\r\n\r\n")
                 .or_else(|| after_close.strip_prefix("\n\n"))
                 .or_else(|| after_close.strip_prefix("\r\n"))
                 .or_else(|| after_close.strip_prefix('\n'))
             {
                 let title = candidate.trim().to_string();
-                let clean_body = body.trim();
-                let final_body = if clean_body.is_empty() {
-                    title.clone()
-                } else {
-                    clean_body.to_string()
-                };
-                return Some((Some(title), final_body));
+                if !title.is_empty() {
+                    let clean_body = body.trim();
+                    let final_body = if clean_body.is_empty() {
+                        title.clone()
+                    } else {
+                        clean_body.to_string()
+                    };
+                    return Some((Some(title), final_body));
+                }
             }
         }
     }
@@ -168,15 +183,17 @@ pub fn extract_reasoning_summary(raw: &str) -> Option<(Option<String>, String)> 
     Some((None, trimmed.to_string()))
 }
 
-/// Extracts a completed leading `**Title**` from an in-flight streaming reasoning buffer.
+/// Extracts a completed leading `**Title**` from an in-flight streaming reasoning buffer,
+/// scanning only the opening line without cloning the entire buffer on every delta.
 #[must_use]
 pub fn live_reasoning_title(partial: &str) -> Option<String> {
-    let cleaned = partial.replace("[REDACTED]", "");
-    let trimmed = cleaned.trim_start();
-    let rest = trimmed.strip_prefix("**")?;
+    let trimmed_start = partial.trim_start();
+    let head = trimmed_start.lines().next().unwrap_or(trimmed_start);
+    let cleaned = strip_redacted(head);
+    let rest = cleaned.trim_start().strip_prefix("**")?;
     let close_idx = rest.find("**")?;
     let candidate = rest[..close_idx].trim();
-    if candidate.is_empty() || candidate.contains('\n') || candidate.contains('*') {
+    if candidate.is_empty() || candidate.contains('*') {
         return None;
     }
     Some(candidate.to_string())
@@ -185,7 +202,11 @@ pub fn live_reasoning_title(partial: &str) -> Option<String> {
 /// Human-friendly status string for an actively streaming or running tool call.
 #[must_use]
 pub fn busy_tool_label(tool_name: &str, streaming_args: bool) -> String {
-    let verb = if streaming_args { "Preparing" } else { "Running" };
+    let verb = if streaming_args {
+        "Preparing"
+    } else {
+        "Running"
+    };
     match tool_name {
         "sys_shell_exec" | "terminal_exec" => format!("{verb} command…"),
         "run_background_command" => "Launching background command…".to_string(),
@@ -219,25 +240,44 @@ pub fn busy_tool_label(tool_name: &str, streaming_args: bool) -> String {
     }
 }
 
+/// Truncates `text` to at most `max_chars` Unicode scalar values, appending `…` if clipped.
+fn truncate_chars_with_ellipsis(text: &str, max_chars: usize) -> String {
+    if text.len() <= max_chars {
+        return text.to_string();
+    }
+    if text.is_ascii() {
+        return format!("{}…", &text[..max_chars]);
+    }
+    text.char_indices()
+        .nth(max_chars)
+        .map_or_else(|| text.to_string(), |(byte_idx, _)| format!("{}…", &text[..byte_idx]))
+}
+
 fn clip_preview(text: &str) -> Option<String> {
     let trimmed = text.trim();
     if trimmed.is_empty() {
         return None;
     }
-    if trimmed.len() <= MAX_TRACE_PREVIEW_CHARS {
-        return Some(trimmed.to_string());
-    }
-    let cut = trimmed.floor_char_boundary(MAX_TRACE_PREVIEW_CHARS);
-    Some(format!("{}…", &trimmed[..cut]))
+    Some(truncate_chars_with_ellipsis(trimmed, MAX_TRACE_PREVIEW_CHARS))
 }
 
-fn detect_result_failure(raw: &str) -> bool {
-    let trimmed = raw.trim();
+/// Parses `trimmed` as JSON only when it looks like a JSON string or object (`"` or `{`),
+/// avoiding expensive DOM allocations for plain text or large `list_processes` `[...]` arrays.
+fn parse_json_object_or_string(trimmed: &str) -> Option<serde_json::Value> {
+    let first = trimmed.as_bytes().first().copied()?;
+    if first == b'{' || first == b'"' {
+        serde_json::from_str::<serde_json::Value>(trimmed).ok()
+    } else {
+        None
+    }
+}
+
+fn detect_result_failure(trimmed: &str, parsed: Option<&serde_json::Value>) -> bool {
     if trimmed.contains("[USER_EXPLICIT_REJECT]") || trimmed.contains("[USER_INTERRUPTION]") {
         return true;
     }
-    if let Ok(val) = serde_json::from_str::<serde_json::Value>(trimmed) {
-        if val.get("error").and_then(|e| e.as_str()).is_some() {
+    if let Some(val) = parsed {
+        if val.get("error").and_then(serde_json::Value::as_str).is_some() {
             return true;
         }
         if val.get("success").and_then(serde_json::Value::as_bool) == Some(false) {
@@ -248,27 +288,39 @@ fn detect_result_failure(raw: &str) -> bool {
         {
             return true;
         }
+        if let Some(s) = val.as_str()
+            && s.trim_start().starts_with("Error:")
+        {
+            return true;
+        }
     }
     trimmed.starts_with("Error:") || trimmed.starts_with("\"Error:")
 }
 
-fn extract_readable_result_summary(tool_name: &str, raw: &str) -> (String, Option<String>) {
-    let parsed = serde_json::from_str::<serde_json::Value>(raw.trim()).ok();
-
+fn extract_readable_result_summary(
+    tool_name: &str,
+    trimmed: &str,
+    parsed: Option<&serde_json::Value>,
+) -> (String, Option<String>) {
     let unquoted = parsed
-        .as_ref()
         .and_then(serde_json::Value::as_str)
-        .unwrap_or_else(|| raw.trim());
+        .unwrap_or(trimmed);
 
     match tool_name {
         "sys_shell_exec" | "terminal_exec" | "run_background_command" => {
-            if let Some(ref v) = parsed {
+            if let Some(v) = parsed.filter(|v| v.is_object()) {
                 let cmd = v
                     .get("command")
                     .and_then(serde_json::Value::as_str)
                     .or_else(|| v.get("message").and_then(serde_json::Value::as_str));
-                let stdout = v.get("stdout").and_then(serde_json::Value::as_str).unwrap_or("");
-                let stderr = v.get("stderr").and_then(serde_json::Value::as_str).unwrap_or("");
+                let stdout = v
+                    .get("stdout")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("");
+                let stderr = v
+                    .get("stderr")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("");
                 let combined = if !stderr.trim().is_empty() && !stdout.trim().is_empty() {
                     format!("{}\n{}", stdout.trim(), stderr.trim())
                 } else if !stderr.trim().is_empty() {
@@ -282,11 +334,10 @@ fn extract_readable_result_summary(tool_name: &str, raw: &str) -> (String, Optio
                     || format!("$ {}", tool_name.replace('_', " ")),
                     |c| {
                         let first = c.lines().next().unwrap_or(c).trim();
-                        if first.len() > 72 {
-                            format!("$ {}…", &first[..first.floor_char_boundary(72)])
-                        } else {
-                            format!("$ {first}")
-                        }
+                        format!(
+                            "$ {}",
+                            truncate_chars_with_ellipsis(first, MAX_CMD_LABEL_CHARS)
+                        )
                     },
                 );
                 return (label, clip_preview(&combined));
@@ -294,7 +345,6 @@ fn extract_readable_result_summary(tool_name: &str, raw: &str) -> (String, Optio
             ("$ command".to_string(), clip_preview(unquoted))
         }
         "file_read" | "read_file" => {
-            // `[Showing lines X-Y of Z in path]` or plain content
             let first_line = unquoted.lines().next().unwrap_or("");
             let label = if first_line.starts_with("[Showing ") && first_line.ends_with(']') {
                 first_line
@@ -313,29 +363,32 @@ fn extract_readable_result_summary(tool_name: &str, raw: &str) -> (String, Optio
         "grep_search" => ("Searched file contents".to_string(), clip_preview(unquoted)),
         "web_search" | "native_web_search" => {
             let first = unquoted.lines().next().unwrap_or("Web search").trim();
-            let label = if let Some(q) = first.strip_prefix("Queries: ") {
-                format!("Web search: {q}")
-            } else {
-                "Web search".to_string()
-            };
+            let label = first
+                .strip_prefix("Queries: ")
+                .map_or_else(|| "Web search".to_string(), |q| format!("Web search: {q}"));
             (label, clip_preview(unquoted))
         }
         "http_fetch" => ("Fetched URL".to_string(), clip_preview(unquoted)),
         "file_delete" => ("Deleted file".to_string(), clip_preview(unquoted)),
         "list_processes" => ("Inspected running processes".to_string(), None),
-        "get_system_info" => ("Checked system hardware & OS".to_string(), clip_preview(unquoted)),
+        "get_system_info" => (
+            "Checked system hardware & OS".to_string(),
+            clip_preview(unquoted),
+        ),
         other => (other.replace('_', " "), clip_preview(unquoted)),
     }
 }
 
-/// Converts a `ToolResult` payload into a `TurnTraceItem`.
+/// Converts a `ToolResult` payload into a `TurnTraceItem`, parsing JSON at most once.
 ///
 /// Successful `replace_in_file` and `file_write` calls return `None` because their rich
 /// `FileDiff` is already captured as [`TurnTraceItem::Edit`] when the write is approved;
 /// failed or rejected file edits still emit a failed `Edit` tool item so errors remain visible.
 #[must_use]
 pub fn tool_result_to_trace_item(tool_name: &str, result_json: &str) -> Option<TurnTraceItem> {
-    let failed = detect_result_failure(result_json);
+    let trimmed = result_json.trim();
+    let parsed = parse_json_object_or_string(trimmed);
+    let failed = detect_result_failure(trimmed, parsed.as_ref());
 
     if matches!(
         tool_name,
@@ -344,7 +397,7 @@ pub fn tool_result_to_trace_item(tool_name: &str, result_json: &str) -> Option<T
         if !failed {
             return None;
         }
-        let (_, preview) = extract_readable_result_summary(tool_name, result_json);
+        let (_, preview) = extract_readable_result_summary(tool_name, trimmed, parsed.as_ref());
         return Some(TurnTraceItem::Tool {
             tool_name: tool_name.to_string(),
             category: TraceCategory::Edit,
@@ -355,14 +408,16 @@ pub fn tool_result_to_trace_item(tool_name: &str, result_json: &str) -> Option<T
     }
 
     if tool_name == "activate_skill" && !failed {
-        let parsed = serde_json::from_str::<serde_json::Value>(result_json.trim()).ok();
         let text = parsed
             .as_ref()
             .and_then(serde_json::Value::as_str)
-            .unwrap_or_else(|| result_json.trim());
+            .unwrap_or(trimmed);
         let name = text
             .lines()
-            .find_map(|l| l.strip_prefix("# Skill: ").or_else(|| l.strip_prefix("Skill: ")))
+            .find_map(|l| {
+                l.strip_prefix("# Skill: ")
+                    .or_else(|| l.strip_prefix("Skill: "))
+            })
             .map(str::trim)
             .filter(|s| !s.is_empty())
             .unwrap_or("activated")
@@ -381,7 +436,7 @@ pub fn tool_result_to_trace_item(tool_name: &str, result_json: &str) -> Option<T
         _ => TraceCategory::Other,
     };
 
-    let (label, preview) = extract_readable_result_summary(tool_name, result_json);
+    let (label, preview) = extract_readable_result_summary(tool_name, trimmed, parsed.as_ref());
     Some(TurnTraceItem::Tool {
         tool_name: tool_name.to_string(),
         category,
@@ -391,36 +446,94 @@ pub fn tool_result_to_trace_item(tool_name: &str, result_json: &str) -> Option<T
     })
 }
 
-/// Coalesces persisted `PersistentClawRow` history on session resumption so sequential
-/// `ToolCall`, `ProcessList`, and `FileDiff` events belonging to a turn fold cleanly into
-/// the turn's `Diagnosis` or `Suggested` row `trace`.
-#[must_use]
-pub fn coalesce_restored_history(rows: Vec<PersistentClawRow>) -> Vec<PersistentClawRow> {
-    let mut out = Vec::with_capacity(rows.len());
-    let mut pending_trace: Vec<TurnTraceItem> = Vec::new();
-    let mut pending_meta: Option<(String, Option<String>, Option<String>)> = None;
+fn is_different_speaker(
+    pending_name: Option<&str>,
+    pending_cid: Option<&str>,
+    row_name: Option<&str>,
+    row_cid: Option<&str>,
+) -> bool {
+    match (pending_cid, row_cid) {
+        (Some(a), Some(b)) => a != b,
+        (None, None) => pending_name != row_name,
+        _ => match (pending_name, row_name) {
+            (Some(a), Some(b)) => a != b,
+            _ => false,
+        },
+    }
+}
 
-    let flush_orphan_trace = |out: &mut Vec<PersistentClawRow>,
-                              pending_trace: &mut Vec<TurnTraceItem>,
-                              pending_meta: &mut Option<(String, Option<String>, Option<String>)>| {
-        if pending_trace.is_empty() {
-            *pending_meta = None;
+struct CoalesceState {
+    out: Vec<PersistentClawRow>,
+    pending_trace: Vec<TurnTraceItem>,
+    pending_meta: Option<(String, Option<String>, Option<String>)>,
+}
+
+impl CoalesceState {
+    fn with_capacity(cap: usize) -> Self {
+        Self {
+            out: Vec::with_capacity(cap),
+            pending_trace: Vec::new(),
+            pending_meta: None,
+        }
+    }
+
+    fn flush_orphan(&mut self) {
+        if self.pending_trace.is_empty() {
+            self.pending_meta = None;
             return;
         }
-        let (pane_id, agent_name, character_id) = pending_meta
+        let (pane_id, agent_name, character_id) = self
+            .pending_meta
             .take()
             .unwrap_or_else(|| (String::new(), None, None));
-        out.push(PersistentClawRow::Diagnosis {
+        self.out.push(PersistentClawRow::Diagnosis {
             pane_id,
             agent_name,
             character_id,
             content: String::new(),
-            trace: std::mem::take(pending_trace),
+            trace: std::mem::take(&mut self.pending_trace),
             usage: None,
         });
-    };
+    }
 
-    for row in rows {
+    fn flush_if_speaker_changed(
+        &mut self,
+        agent_name: Option<&str>,
+        character_id: Option<&str>,
+    ) {
+        if let Some((_, ref p_name, ref p_cid)) = self.pending_meta
+            && is_different_speaker(p_name.as_deref(), p_cid.as_deref(), agent_name, character_id)
+        {
+            self.flush_orphan();
+        }
+    }
+
+    fn push_trace_item(
+        &mut self,
+        pane_id: String,
+        agent_name: Option<String>,
+        character_id: Option<String>,
+        item: TurnTraceItem,
+    ) {
+        self.flush_if_speaker_changed(agent_name.as_deref(), character_id.as_deref());
+        if self.pending_meta.is_none() {
+            self.pending_meta = Some((pane_id, agent_name, character_id));
+        }
+        self.pending_trace.push(item);
+    }
+
+    fn take_merged_trace(
+        &mut self,
+        agent_name: Option<&str>,
+        character_id: Option<&str>,
+        persisted_turn_trace: Vec<TurnTraceItem>,
+    ) -> Vec<TurnTraceItem> {
+        self.flush_if_speaker_changed(agent_name, character_id);
+        self.pending_meta = None;
+        merge_turn_traces(&mut self.pending_trace, persisted_turn_trace)
+    }
+
+    fn ingest(&mut self, row: PersistentClawRow) {
         match row {
             PersistentClawRow::ToolCall {
                 pane_id,
@@ -430,11 +543,8 @@ pub fn coalesce_restored_history(rows: Vec<PersistentClawRow>) -> Vec<Persistent
                 result,
                 ..
             } => {
-                if pending_meta.is_none() {
-                    pending_meta = Some((pane_id, agent_name, character_id));
-                }
                 if let Some(item) = tool_result_to_trace_item(&tool_name, &result) {
-                    pending_trace.push(item);
+                    self.push_trace_item(pane_id, agent_name, character_id, item);
                 }
             }
             PersistentClawRow::ProcessList {
@@ -443,16 +553,14 @@ pub fn coalesce_restored_history(rows: Vec<PersistentClawRow>) -> Vec<Persistent
                 character_id,
                 ..
             } => {
-                if pending_meta.is_none() {
-                    pending_meta = Some((pane_id, agent_name, character_id));
-                }
-                pending_trace.push(TurnTraceItem::Tool {
+                let item = TurnTraceItem::Tool {
                     tool_name: "list_processes".to_string(),
                     category: TraceCategory::Other,
                     label: "Inspected running processes".to_string(),
                     preview: None,
                     failed: false,
-                });
+                };
+                self.push_trace_item(pane_id, agent_name, character_id, item);
             }
             PersistentClawRow::FileDiff {
                 pane_id,
@@ -462,13 +570,11 @@ pub fn coalesce_restored_history(rows: Vec<PersistentClawRow>) -> Vec<Persistent
                 auto_approved,
                 ..
             } => {
-                if pending_meta.is_none() {
-                    pending_meta = Some((pane_id, agent_name, character_id));
-                }
-                pending_trace.push(TurnTraceItem::Edit {
+                let item = TurnTraceItem::Edit {
                     diff,
                     auto_approved,
-                });
+                };
+                self.push_trace_item(pane_id, agent_name, character_id, item);
             }
             PersistentClawRow::Diagnosis {
                 pane_id,
@@ -478,17 +584,9 @@ pub fn coalesce_restored_history(rows: Vec<PersistentClawRow>) -> Vec<Persistent
                 trace,
                 usage,
             } => {
-                if let Some((_, ref p_name, ref p_cid)) = pending_meta
-                    && ((p_cid.is_some() && character_id.is_some() && p_cid != &character_id)
-                        || (p_cid.is_none()
-                            && character_id.is_none()
-                            && p_name != &agent_name))
-                {
-                    flush_orphan_trace(&mut out, &mut pending_trace, &mut pending_meta);
-                }
-                let merged_trace = merge_turn_traces(&mut pending_trace, trace);
-                pending_meta = None;
-                out.push(PersistentClawRow::Diagnosis {
+                let merged_trace =
+                    self.take_merged_trace(agent_name.as_deref(), character_id.as_deref(), trace);
+                self.out.push(PersistentClawRow::Diagnosis {
                     pane_id,
                     agent_name,
                     character_id,
@@ -506,17 +604,9 @@ pub fn coalesce_restored_history(rows: Vec<PersistentClawRow>) -> Vec<Persistent
                 trace,
                 usage,
             } => {
-                if let Some((_, ref p_name, ref p_cid)) = pending_meta
-                    && ((p_cid.is_some() && character_id.is_some() && p_cid != &character_id)
-                        || (p_cid.is_none()
-                            && character_id.is_none()
-                            && p_name != &agent_name))
-                {
-                    flush_orphan_trace(&mut out, &mut pending_trace, &mut pending_meta);
-                }
-                let merged_trace = merge_turn_traces(&mut pending_trace, trace);
-                pending_meta = None;
-                out.push(PersistentClawRow::Suggested {
+                let merged_trace =
+                    self.take_merged_trace(agent_name.as_deref(), character_id.as_deref(), trace);
+                self.out.push(PersistentClawRow::Suggested {
                     pane_id,
                     agent_name,
                     character_id,
@@ -529,14 +619,25 @@ pub fn coalesce_restored_history(rows: Vec<PersistentClawRow>) -> Vec<Persistent
             other @ (PersistentClawRow::User { .. }
             | PersistentClawRow::Command { .. }
             | PersistentClawRow::SystemMessage { .. }) => {
-                flush_orphan_trace(&mut out, &mut pending_trace, &mut pending_meta);
-                out.push(other);
+                self.flush_orphan();
+                self.out.push(other);
             }
         }
     }
+}
 
-    flush_orphan_trace(&mut out, &mut pending_trace, &mut pending_meta);
-    out
+/// Coalesces persisted `PersistentClawRow` history on session resumption.
+///
+/// Sequential `ToolCall`, `ProcessList`, and `FileDiff` events belonging to a turn
+/// fold cleanly into the turn's `Diagnosis` or `Suggested` row `trace`.
+#[must_use]
+pub fn coalesce_restored_history(rows: Vec<PersistentClawRow>) -> Vec<PersistentClawRow> {
+    let mut state = CoalesceState::with_capacity(rows.len());
+    for row in rows {
+        state.ingest(row);
+    }
+    state.flush_orphan();
+    state.out
 }
 
 fn merge_turn_traces(
@@ -622,11 +723,11 @@ mod tests {
     }
 
     #[test]
-    fn extract_reasoning_summary_parses_leading_bold_title_and_strips_redacted() {
+    fn extract_reasoning_summary_parses_leading_bold_title_trailing_spaces_and_strips_redacted() {
         assert_eq!(extract_reasoning_summary("   [REDACTED]  "), None);
 
         let (title, body) = extract_reasoning_summary(
-            "**Inspecting CLI parser**\n\nNeed to verify flag handling in src/parser.rs.",
+            "**Inspecting CLI parser**   \n\nNeed to verify flag handling in src/parser.rs.",
         )
         .expect("non-empty thought");
         assert_eq!(title.as_deref(), Some("Inspecting CLI parser"));
@@ -642,6 +743,17 @@ mod tests {
             Some("Checking types")
         );
         assert_eq!(live_reasoning_title("**Incomplete header"), None);
+    }
+
+    #[test]
+    fn preview_truncation_counts_unicode_characters_not_bytes() {
+        let box_chars = "─".repeat(500);
+        let preview = clip_preview(&box_chars).unwrap();
+        assert_eq!(preview.chars().count(), 500);
+
+        let over = "─".repeat(900);
+        let clipped = clip_preview(&over).unwrap();
+        assert_eq!(clipped.chars().count(), MAX_TRACE_PREVIEW_CHARS + 1);
     }
 
     #[test]
@@ -713,7 +825,7 @@ mod tests {
     }
 
     #[test]
-    fn coalesce_restored_history_separates_orphan_trace_when_speaker_changes() {
+    fn coalesce_restored_history_isolates_traces_across_interrupted_speaker_handoff() {
         let rows = vec![
             PersistentClawRow::ToolCall {
                 pane_id: "pane-1".to_string(),
@@ -723,11 +835,20 @@ mod tests {
                 result: "\"[Showing lines 1-5 of 5 in src/parser.rs]\"".to_string(),
                 usage: None,
             },
+            PersistentClawRow::ToolCall {
+                pane_id: "pane-1".to_string(),
+                agent_name: Some("Agent Beta".to_string()),
+                character_id: Some("char-beta".to_string()),
+                tool_name: "sys_shell_exec".to_string(),
+                result: r#"{"command":"cargo check","stdout":"ok","stderr":"","exit_code":0}"#
+                    .to_string(),
+                usage: None,
+            },
             PersistentClawRow::Diagnosis {
                 pane_id: "pane-1".to_string(),
                 agent_name: Some("Agent Beta".to_string()),
                 character_id: Some("char-beta".to_string()),
-                content: "I agree with that approach.".to_string(),
+                content: "Check passed.".to_string(),
                 trace: Vec::new(),
                 usage: None,
             },
@@ -743,10 +864,12 @@ mod tests {
                 ..
             } => {
                 assert_eq!(character_id.as_deref(), Some("char-alpha"));
-                assert!(content.is_empty());
-                assert_eq!(trace.len(), 1);
+                assert_eq!(content, "");
+                let summary = ActivitySummary::summarize(trace);
+                assert_eq!(summary.reads, 1);
+                assert_eq!(summary.commands, 0);
             }
-            other => panic!("expected flushed orphan Diagnosis, got {other:?}"),
+            other => panic!("expected flushed orphan Diagnosis for Alpha, got {other:?}"),
         }
         match &coalesced[1] {
             PersistentClawRow::Diagnosis {
@@ -756,10 +879,12 @@ mod tests {
                 ..
             } => {
                 assert_eq!(character_id.as_deref(), Some("char-beta"));
-                assert_eq!(content, "I agree with that approach.");
-                assert!(trace.is_empty());
+                assert_eq!(content, "Check passed.");
+                let summary = ActivitySummary::summarize(trace);
+                assert_eq!(summary.commands, 1);
+                assert_eq!(summary.reads, 0);
             }
-            other => panic!("expected second speaker Diagnosis, got {other:?}"),
+            other => panic!("expected Diagnosis with Beta's command trace, got {other:?}"),
         }
     }
 }

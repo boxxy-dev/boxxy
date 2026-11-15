@@ -1,5 +1,9 @@
+//! Character catalog DTOs, active lease claims, peer lookup queries, and lock-free UI/daemon caches.
+
 use arc_swap::ArcSwap;
 use serde::{Deserialize, Serialize};
+use std::cmp::Ordering;
+use std::fmt;
 use std::sync::{Arc, LazyLock};
 use tokio::sync::watch;
 
@@ -18,6 +22,32 @@ pub const INCOGNITO_COLOR: &str = "#7C5CFF";
 /// Subtitle description shown in the sidebar during `/incognito`.
 pub const INCOGNITO_DUTIES: &str = "Private Chat • No context sent • Nothing saved";
 
+/// Zero-allocation case-insensitive equality check (ASCII fast-path + full Unicode fallback).
+#[must_use]
+pub(crate) fn eq_case_insensitive(a: &str, b: &str) -> bool {
+    if a.is_ascii() && b.is_ascii() {
+        a.eq_ignore_ascii_case(b)
+    } else {
+        a.chars()
+            .flat_map(char::to_lowercase)
+            .eq(b.chars().flat_map(char::to_lowercase))
+    }
+}
+
+/// Zero-allocation case-insensitive ordering (ASCII fast-path + full Unicode fallback).
+#[must_use]
+pub(crate) fn cmp_case_insensitive(a: &str, b: &str) -> Ordering {
+    if a.is_ascii() && b.is_ascii() {
+        a.bytes()
+            .map(|c| c.to_ascii_lowercase())
+            .cmp(b.bytes().map(|c| c.to_ascii_lowercase()))
+    } else {
+        a.chars()
+            .flat_map(char::to_lowercase)
+            .cmp(b.chars().flat_map(char::to_lowercase))
+    }
+}
+
 /// Returns `true` if `id_or_name` identifies the built-in `/incognito` persona.
 #[must_use]
 pub fn is_incognito_character(id_or_name: &str) -> bool {
@@ -28,13 +58,22 @@ pub fn is_incognito_character(id_or_name: &str) -> bool {
 }
 
 /// A globally accessible, lock-free reactive cache of the character registry.
-/// This is updated via D-Bus (in the UI) and directly by `CharacterRegistry` (in the daemon).
+/// Updated via D-Bus (in the UI) and directly by `CharacterRegistry` (in the daemon).
 pub static CHARACTER_CACHE: LazyLock<ArcSwap<Vec<CharacterInfo>>> =
     LazyLock::new(|| ArcSwap::from_pointee(Vec::new()));
 
 /// A globally accessible, lock-free reactive cache of current character assignments.
 pub static CLAIMS_CACHE: LazyLock<ArcSwap<Vec<CharacterClaim>>> =
     LazyLock::new(|| ArcSwap::from_pointee(Vec::new()));
+
+type CoherentRegistryState = (Arc<Vec<CharacterInfo>>, Arc<Vec<CharacterClaim>>, u64);
+
+/// Coherent atomic tuple `(catalog, claims, revision)` sharing the exact same `Arc`
+/// allocations as `CHARACTER_CACHE` and `CLAIMS_CACHE` so availability queries never
+/// observe a torn `(new_claims, stale_catalog)` pair across concurrent updates.
+static COHERENT_REGISTRY_CACHE: LazyLock<ArcSwap<CoherentRegistryState>> = LazyLock::new(|| {
+    ArcSwap::from_pointee((Arc::new(Vec::new()), Arc::new(Vec::new()), 0))
+});
 
 static REGISTRY_REVISION_WATCH: LazyLock<(watch::Sender<u64>, watch::Receiver<u64>)> =
     LazyLock::new(|| watch::channel(0));
@@ -57,24 +96,42 @@ pub fn update_mcp_status_cache(statuses: Vec<(String, bool)>) {
 }
 
 /// Subscribes to local `MCP_STATUS_CACHE` updates.
+#[must_use]
 pub fn subscribe_mcp_status_changes() -> watch::Receiver<u64> {
     MCP_STATUS_WATCH.1.clone()
 }
 
-/// Updates both `CHARACTER_CACHE` and `CLAIMS_CACHE` atomically and notifies local subscribers.
+/// Updates `CHARACTER_CACHE`, `CLAIMS_CACHE`, and the coherent snapshot cache atomically,
+/// then notifies local subscribers.
 pub fn update_caches(catalog: Vec<CharacterInfo>, claims: Vec<CharacterClaim>, revision: u64) {
-    CLAIMS_CACHE.store(Arc::new(claims));
-    CHARACTER_CACHE.store(Arc::new(catalog));
+    let catalog_arc = Arc::new(catalog);
+    let claims_arc = Arc::new(claims);
+    COHERENT_REGISTRY_CACHE.store(Arc::new((
+        Arc::clone(&catalog_arc),
+        Arc::clone(&claims_arc),
+        revision,
+    )));
+    CLAIMS_CACHE.store(claims_arc);
+    CHARACTER_CACHE.store(catalog_arc);
     let _ = REGISTRY_REVISION_WATCH.0.send(revision);
 }
 
+/// Loads a consistent `(catalog, claims, revision)` view from a single atomic snapshot.
+#[must_use]
+pub fn load_coherent_registry() -> (Arc<Vec<CharacterInfo>>, Arc<Vec<CharacterClaim>>, u64) {
+    let guard = COHERENT_REGISTRY_CACHE.load();
+    (Arc::clone(&guard.0), Arc::clone(&guard.1), guard.2)
+}
+
 /// Subscribes to local cache updates triggered by `update_caches`.
+#[must_use]
 pub fn subscribe_registry_changes() -> watch::Receiver<u64> {
     REGISTRY_REVISION_WATCH.1.clone()
 }
 
 /// Finds the first character in `catalog` that is not claimed in `claims`
 /// (optionally ignoring a claim held by `exclude_holder_id`).
+#[must_use]
 pub fn find_first_available_in<'a>(
     catalog: &'a [CharacterInfo],
     claims: &[CharacterClaim],
@@ -88,24 +145,25 @@ pub fn find_first_available_in<'a>(
     })
 }
 
-/// Returns the first unclaimed character from the global `CHARACTER_CACHE` and `CLAIMS_CACHE`,
+/// Returns the first unclaimed character from the coherent global registry cache,
 /// optionally ignoring a claim held by `exclude_holder_id`.
+#[must_use]
 pub fn find_first_available_character(exclude_holder_id: Option<&str>) -> Option<CharacterInfo> {
-    let catalog = CHARACTER_CACHE.load();
-    let claims = CLAIMS_CACHE.load();
-    find_first_available_in(&catalog, &claims, exclude_holder_id).cloned()
+    let guard = COHERENT_REGISTRY_CACHE.load();
+    find_first_available_in(&guard.0, &guard.1, exclude_holder_id).cloned()
 }
 
 /// Returns `true` if at least one character in the catalog is currently unclaimed
 /// (optionally ignoring a claim held by `exclude_holder_id`).
+#[must_use]
 pub fn has_available_character(exclude_holder_id: Option<&str>) -> bool {
-    let catalog = CHARACTER_CACHE.load();
-    let claims = CLAIMS_CACHE.load();
-    find_first_available_in(&catalog, &claims, exclude_holder_id).is_some()
+    let guard = COHERENT_REGISTRY_CACHE.load();
+    find_first_available_in(&guard.0, &guard.1, exclude_holder_id).is_some()
 }
 
 /// Returns all characters in `catalog` that are not claimed in `claims`
 /// (optionally ignoring a claim held by `exclude_holder_id`).
+#[must_use]
 pub fn find_available_characters_in<'a>(
     catalog: &'a [CharacterInfo],
     claims: &[CharacterClaim],
@@ -122,12 +180,12 @@ pub fn find_available_characters_in<'a>(
         .collect()
 }
 
-/// Returns all currently unclaimed characters from the global `CHARACTER_CACHE` and `CLAIMS_CACHE`,
+/// Returns all currently unclaimed characters from the coherent global registry cache,
 /// optionally ignoring a claim held by `exclude_holder_id`.
+#[must_use]
 pub fn get_available_characters(exclude_holder_id: Option<&str>) -> Vec<CharacterInfo> {
-    let catalog = CHARACTER_CACHE.load();
-    let claims = CLAIMS_CACHE.load();
-    find_available_characters_in(&catalog, &claims, exclude_holder_id)
+    let guard = COHERENT_REGISTRY_CACHE.load();
+    find_available_characters_in(&guard.0, &guard.1, exclude_holder_id)
         .into_iter()
         .cloned()
         .collect()
@@ -135,9 +193,11 @@ pub fn get_available_characters(exclude_holder_id: Option<&str>) -> Vec<Characte
 
 /// Looks up a character in `catalog` by exact `character_id` first, then by case-insensitive
 /// matches on `name` or `display_name` in `fallback_names`.
-/// Unlike `resolve_character`, returns `None` when the character is not in `catalog`
+///
+/// Unlike [`resolve_character`], returns `None` when the character is not in `catalog`
 /// (e.g., it was deleted), allowing historical rows to preserve the deleted character's
 /// original name and render an initials avatar.
+#[must_use]
 pub fn find_character_exact<'a>(
     catalog: &'a [CharacterInfo],
     character_id: &str,
@@ -153,8 +213,8 @@ pub fn find_character_exact<'a>(
         let trimmed = name.trim();
         if !trimmed.is_empty()
             && let Some(found) = catalog.iter().find(|c| {
-                c.config.name.eq_ignore_ascii_case(trimmed)
-                    || c.config.display_name.eq_ignore_ascii_case(trimmed)
+                eq_case_insensitive(&c.config.name, trimmed)
+                    || eq_case_insensitive(&c.config.display_name, trimmed)
             })
         {
             return Some(found);
@@ -164,9 +224,9 @@ pub fn find_character_exact<'a>(
     None
 }
 
-/// Resolves a character from `catalog` by matching `character_id` first, then
-/// falling back to case-insensitive matches on `name` or `display_name` in
-/// `fallback_names`, and finally falling back to the first character in `catalog`.
+/// Resolves a character from `catalog` by `character_id`, falling back to `fallback_names`
+/// or the first catalog entry.
+#[must_use]
 pub fn resolve_character<'a>(
     catalog: &'a [CharacterInfo],
     character_id: &str,
@@ -175,15 +235,29 @@ pub fn resolve_character<'a>(
     find_character_exact(catalog, character_id, fallback_names).or_else(|| catalog.first())
 }
 
-/// What kind of entity holds a character claim. Today the only variant is
-/// `Pane` (a terminal pane). The enum exists so future non-pane holders
-/// (headless background agents, voice sessions, external apps) can be added
-/// without a breaking protocol change.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+/// What kind of entity holds a character claim.
+///
+/// Today the only variant is `Pane` (a terminal pane). The enum exists so future
+/// non-pane holders (headless background agents, voice sessions, external apps)
+/// can be added without a breaking protocol change.
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub enum HolderKind {
-    /// A terminal pane in the UI. The holder_id equals the pane_id.
-    Pane,
-    // Future: Headless, Voice, External, ...
+    /// A terminal pane in the UI. The `holder_id` equals the `pane_id`.
+    Pane = 0,
+}
+
+impl HolderKind {
+    #[must_use]
+    pub const fn as_u8(self) -> u8 {
+        self as u8
+    }
+}
+
+impl From<HolderKind> for u8 {
+    fn from(kind: HolderKind) -> Self {
+        kind.as_u8()
+    }
 }
 
 impl TryFrom<u8> for HolderKind {
@@ -191,14 +265,14 @@ impl TryFrom<u8> for HolderKind {
 
     fn try_from(value: u8) -> Result<Self, Self::Error> {
         match value {
-            0 => Ok(HolderKind::Pane),
-            _ => Err(format!("Unknown HolderKind variant: {}", value)),
+            0 => Ok(Self::Pane),
+            _ => Err(format!("Unknown HolderKind variant: {value}")),
         }
     }
 }
 
 /// A single live claim of a character by some holder.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CharacterClaim {
     /// Opaque lifecycle/ownership identifier. For `HolderKind::Pane` this is
     /// string-equal to the pane's `pane_id`. Surface-specific tools that
@@ -209,19 +283,18 @@ pub struct CharacterClaim {
     pub character_id: String,
     pub session_id: String,
     /// Petname (Red Pony Protocol) for swarm peer addressing. Stable per
-    /// holder_id across character swaps within a single daemon run.
+    /// `holder_id` across character swaps within a single daemon run.
     pub petname: String,
-    /// The bus-unique name of the client that owns this lease (e.g. ":1.42").
-    /// Used by the daemon for NameOwnerChanged-driven cleanup; the UI ignores it.
+    /// The bus-unique name of the client that owns this lease (e.g. `":1.42"`).
+    /// Used by the daemon for `NameOwnerChanged`-driven cleanup; the UI ignores it.
     pub owner_bus_name: String,
 }
 
 /// One coherent snapshot of registry state. Sent on initial fetch and on every
 /// push update.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RegistrySnapshot {
-    /// Static for the daemon's lifetime. Carried in every snapshot so a
-    /// reconnecting UI can rebuild its full mirror in one round trip.
+    /// Carried in every snapshot so a reconnecting UI can rebuild its full mirror in one round trip.
     pub catalog: Vec<CharacterInfo>,
     pub claims: Vec<CharacterClaim>,
     /// Monotonic, incremented per emitted snapshot. UI uses it to drop
@@ -231,7 +304,7 @@ pub struct RegistrySnapshot {
 
 /// Typed claim error so the UI can show specific feedback (or recover) instead
 /// of relying on a desktop-notification side effect.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum ClaimError {
     AlreadyTaken {
         holder_id: String,
@@ -249,14 +322,37 @@ pub enum ClaimError {
     },
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+impl fmt::Display for ClaimError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::AlreadyTaken {
+                holder_id,
+                holder_display_name,
+                ..
+            } => write!(
+                f,
+                "Character is already claimed by {holder_display_name} ({holder_id})"
+            ),
+            Self::UnknownCharacter { character_id } => {
+                write!(f, "Unknown character ID: {character_id}")
+            }
+            Self::Migrated { from_id, to_id } => {
+                write!(f, "Character {from_id} was migrated to {to_id}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for ClaimError {}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ClaimedSession {
     pub session_id: String,
     pub claim: CharacterClaim,
 }
 
 /// Returned by `claim_startup_token()`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct StartupToken {
     pub daemon_version: String,
     pub initial_revision: u64,
@@ -265,7 +361,7 @@ pub struct StartupToken {
 }
 
 /// Used by swarm peer discovery.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum PeerQuery {
     ByCharacterId(String),
     ByCharacterDisplayName(String),
@@ -273,7 +369,7 @@ pub enum PeerQuery {
     ByHolderId(String),
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PeerInfo {
     pub holder_id: String,
     pub holder_kind: HolderKind,
@@ -283,17 +379,17 @@ pub struct PeerInfo {
     pub petname: String,
 }
 
-/// Represents the static configuration of a Character, loaded from a CHARACTER.toml file.
+/// Represents the static configuration of a Character, loaded from a `CHARACTER.toml` file.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CharacterConfig {
     /// Stable UUID — persists even when the character is renamed or its directory moved.
-    /// Written to CHARACTER.toml on first load if absent.
+    /// Written to `CHARACTER.toml` on first load if absent.
     pub id: String,
     /// Directory slug (derived from the subdirectory name, not read from TOML).
     pub name: String,
     /// Human-readable name displayed in the UI.
     pub display_name: String,
-    /// CSS hex color used for UI branding (e.g., "#7B61FF").
+    /// CSS hex color used for UI branding (e.g., `"#7B61FF"`).
     pub color: String,
     /// High-level description of the character's role, injected into the system prompt.
     pub duties: String,
@@ -333,13 +429,14 @@ pub struct CharacterInfo {
     pub config: CharacterConfig,
     /// The dynamic status managed by the daemon.
     pub status: CharacterStatus,
-    /// Indicates whether an AVATAR.png was found in the character's directory.
+    /// Indicates whether an `AVATAR.png` was found in the character's directory.
     pub has_avatar: bool,
 }
 
 impl CharacterInfo {
-    /// Creates a new CharacterInfo instance.
-    pub fn new(config: CharacterConfig, has_avatar: bool) -> Self {
+    /// Creates a new `CharacterInfo` instance with `CharacterStatus::Available`.
+    #[must_use]
+    pub const fn new(config: CharacterConfig, has_avatar: bool) -> Self {
         Self {
             config,
             status: CharacterStatus::Available,
@@ -369,7 +466,7 @@ mod tests {
                 CharacterConfig {
                     id: "uuid-b".to_string(),
                     name: "kuro".to_string(),
-                    display_name: "kuro".to_string(),
+                    display_name: "Kürö".to_string(),
                     color: "#B31825".to_string(),
                     duties: "Arch".to_string(),
                     personality: "Sardonic".to_string(),
@@ -380,24 +477,27 @@ mod tests {
     }
 
     #[test]
-    fn test_resolve_character_priority() {
+    fn resolve_character_priority_and_unicode_case_matching() {
         let catalog = sample_catalog();
 
         // 1. Exact UUID match wins even when Character A is first in the list
         let resolved = resolve_character(&catalog, "uuid-b", &["kuro"]).unwrap();
         assert_eq!(resolved.config.id, "uuid-b");
 
-        // 2. Fallback by display name / slug when UUID is empty or stale
-        let by_name = resolve_character(&catalog, "missing-uuid", &["Kuro"]).unwrap();
-        assert_eq!(by_name.config.id, "uuid-b");
+        // 2. Fallback by Unicode display name when UUID is stale
+        let by_unicode_name = resolve_character(&catalog, "missing-uuid", &["kürö"]).unwrap();
+        assert_eq!(by_unicode_name.config.id, "uuid-b");
 
         // 3. Fallback to first available character when deleted and no name matches
         let fallback = resolve_character(&catalog, "deleted-uuid", &["deleted-char"]).unwrap();
         assert_eq!(fallback.config.id, "uuid-a");
+
+        // 4. Exact lookup returns None for deleted characters
+        assert!(find_character_exact(&catalog, "deleted-uuid", &["deleted-char"]).is_none());
     }
 
     #[test]
-    fn test_find_first_available_in() {
+    fn find_first_available_and_coherent_cache_sync() {
         let catalog = sample_catalog();
         let claims = vec![CharacterClaim {
             holder_id: "pane-1".to_string(),
@@ -416,18 +516,20 @@ mod tests {
         let free_for_pane1 = find_first_available_in(&catalog, &claims, Some("pane-1")).unwrap();
         assert_eq!(free_for_pane1.config.id, "uuid-a");
 
-        // When all characters are claimed, returns None
-        let all_claimed = vec![
-            claims[0].clone(),
-            CharacterClaim {
-                holder_id: "pane-2".to_string(),
-                holder_kind: HolderKind::Pane,
-                character_id: "uuid-b".to_string(),
-                session_id: "sess-2".to_string(),
-                petname: "blue-fox".to_string(),
-                owner_bus_name: ":1.1".to_string(),
-            },
-        ];
-        assert!(find_first_available_in(&catalog, &all_claimed, None).is_none());
+        // Coherent snapshot update mirrors both caches and revision atomically
+        update_caches(catalog.clone(), claims.clone(), 42);
+        let (snap_cat, snap_claims, rev) = load_coherent_registry();
+        assert_eq!(rev, 42);
+        assert_eq!(*snap_cat, catalog);
+        assert_eq!(*snap_claims, claims);
+        assert_eq!(
+            find_first_available_character(None)
+                .map(|c| c.config.id),
+            Some("uuid-b".to_string())
+        );
+
+        // HolderKind wire round-trip
+        assert_eq!(HolderKind::try_from(u8::from(HolderKind::Pane)), Ok(HolderKind::Pane));
+        assert!(HolderKind::try_from(99).is_err());
     }
 }

@@ -1,13 +1,18 @@
+//! Lightweight YAML frontmatter scanner and skill discovery shared between `boxxy-preferences` and `boxxy-claw`.
+
+use crate::characters::cmp_case_insensitive;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs::File;
-use std::io::{BufRead, BufReader, Read};
+use std::io::{ErrorKind, Read};
 use std::path::{Path, PathBuf};
 
 /// Maximum bytes read when scanning a skill's YAML frontmatter header for UI display.
-const MAX_FRONTMATTER_SCAN_BYTES: u64 = 4096;
+const MAX_FRONTMATTER_SCAN_BYTES: usize = 4096;
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SkillFrontmatter {
+    #[serde(default)]
     pub name: String,
     #[serde(default)]
     pub description: String,
@@ -30,7 +35,7 @@ pub struct SkillSummary {
     pub description: String,
 }
 
-/// Returns the base directory for skills: `~/.config/boxxy-terminal/boxxyclaw/skills/`
+/// Returns the base directory for skills: `~/.config/boxxy-terminal/boxxyclaw/skills/`.
 #[must_use]
 pub fn get_skills_dir() -> PathBuf {
     boxxy_sys_utils::get_config_dir()
@@ -42,15 +47,21 @@ pub fn get_skills_dir() -> PathBuf {
 /// on-disk `slug` or its frontmatter `name`).
 #[must_use]
 pub fn is_skill_disabled(disabled_skills: &[String], slug: &str, name: &str) -> bool {
+    let trimmed_name = name.trim();
     disabled_skills
         .iter()
-        .any(|d| d == slug || (!name.is_empty() && d == name))
+        .any(|d| d == slug || (!trimmed_name.is_empty() && d == trimmed_name))
 }
 
 /// Resolves a directory entry inside `skills_dir` to `(slug, markdown_file_path)`
-/// without reading the file contents.
+/// without reading the file contents. Hidden entries starting with `.` are ignored.
 #[must_use]
 pub fn resolve_skill_entry(path: &Path) -> Option<(String, PathBuf)> {
+    let file_name = path.file_name()?.to_str()?;
+    if file_name.starts_with('.') {
+        return None;
+    }
+
     if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("md") {
         let slug = path.file_stem()?.to_str()?.trim().to_string();
         if slug.is_empty() {
@@ -58,124 +69,160 @@ pub fn resolve_skill_entry(path: &Path) -> Option<(String, PathBuf)> {
         }
         Some((slug, path.to_path_buf()))
     } else if path.is_dir() {
-        let slug = path.file_name()?.to_str()?.trim().to_string();
+        let slug = file_name.trim().to_string();
         if slug.is_empty() {
             return None;
         }
         let skill_md = path.join("SKILL.md");
-        if skill_md.is_file() {
-            Some((slug, skill_md))
-        } else {
-            None
-        }
+        skill_md.is_file().then_some((slug, skill_md))
     } else {
         None
     }
+}
+
+/// Splits a markdown document into `(yaml_frontmatter_slice, remaining_body_slice)` when a
+/// valid opening `---` line and matching closing `---` line exist.
+fn split_frontmatter(raw_content: &str) -> Option<(&str, &str)> {
+    let content = raw_content.strip_prefix('\u{feff}').unwrap_or(raw_content);
+    let first_nl = content.find('\n')?;
+    let first_line = content[..first_nl].trim_end_matches(['\r', ' ', '\t']);
+    if first_line != "---" {
+        return None;
+    }
+
+    let fm_start = first_nl + 1;
+    let mut line_start = fm_start;
+    while line_start <= content.len() {
+        let (line_end, next_start) = content[line_start..]
+            .find('\n')
+            .map_or((content.len(), content.len() + 1), |rel| {
+                (line_start + rel, line_start + rel + 1)
+            });
+
+        let line = content[line_start..line_end].trim_end_matches(['\r', ' ', '\t']);
+        if line == "---" {
+            let yaml_str = &content[fm_start..line_start];
+            let body = if line_end < content.len() {
+                &content[line_end + 1..]
+            } else {
+                ""
+            };
+            return Some((yaml_str, body));
+        }
+
+        line_start = next_start;
+    }
+
+    None
 }
 
 /// Parses frontmatter from the start of a markdown document, returning `(frontmatter, body)`
 /// if a valid YAML frontmatter block is present.
 #[must_use]
 pub fn parse_frontmatter_block(content: &str) -> Option<(SkillFrontmatter, &str)> {
-    if !(content.starts_with("---\n") || content.starts_with("---\r\n")) {
-        return None;
+    let (frontmatter_str, body) = split_frontmatter(content)?;
+    if frontmatter_str.trim().is_empty() {
+        return Some((SkillFrontmatter::default(), body));
     }
-    let after_open = if content.starts_with("---\r\n") { 5 } else { 4 };
-    let rest = &content[after_open..];
-    let end_idx = rest.find("\n---")?;
-    let frontmatter_str = &rest[..end_idx];
-    let after_close = &rest[end_idx + 4..];
-    let body = after_close
-        .strip_prefix("\r\n")
-        .or_else(|| after_close.strip_prefix('\n'))
-        .unwrap_or(after_close);
 
     #[allow(deprecated)]
     let parsed = serde_yml::from_str::<SkillFrontmatter>(frontmatter_str).ok()?;
     Some((parsed, body))
 }
 
+fn normalize_name_and_description(slug: &str, name: &str, description: &str) -> (String, String) {
+    let fallback_slug = if slug.trim().is_empty() {
+        "legacy-skill"
+    } else {
+        slug.trim()
+    };
+    let resolved_name = {
+        let trimmed = name.trim();
+        if trimmed.is_empty() {
+            fallback_slug.to_string()
+        } else {
+            trimmed.to_string()
+        }
+    };
+    let resolved_desc = {
+        let trimmed = description.trim();
+        if trimmed.is_empty() {
+            "Custom skill".to_string()
+        } else {
+            trimmed.to_string()
+        }
+    };
+    (resolved_name, resolved_desc)
+}
+
 /// Parses a full skill document into `(SkillFrontmatter, body_markdown)`, falling back
-/// to `slug` and `"Custom skill"` when frontmatter is absent.
+/// to `slug` and `"Custom skill"` when frontmatter is absent or fields are blank.
 #[must_use]
 pub fn parse_skill_document(slug: &str, content: &str) -> (SkillFrontmatter, String) {
     if let Some((mut fm, body)) = parse_frontmatter_block(content) {
-        if fm.name.trim().is_empty() {
-            fm.name = slug.to_string();
-        }
-        if fm.description.trim().is_empty() {
-            fm.description = "Custom skill".to_string();
-        }
+        let (name, description) = normalize_name_and_description(slug, &fm.name, &fm.description);
+        fm.name = name;
+        fm.description = description;
         (fm, body.trim_start().to_string())
     } else {
-        let fallback_name = if slug.trim().is_empty() {
-            "legacy-skill".to_string()
-        } else {
-            slug.to_string()
-        };
+        let (name, description) = normalize_name_and_description(slug, "", "");
+        let stripped = content.strip_prefix('\u{feff}').unwrap_or(content);
         (
             SkillFrontmatter {
-                name: fallback_name,
-                description: "Custom skill".to_string(),
+                name,
+                description,
                 triggers: Vec::new(),
                 pinned: false,
             },
-            content.to_string(),
+            stripped.to_string(),
         )
     }
 }
 
-/// Reads only the frontmatter header (capped at 4 KB, stopping at the closing `---`)
-/// so listing skills in Preferences never loads full markdown bodies into memory.
-pub fn read_skill_summary(slug: &str, md_path: &Path) -> Option<SkillSummary> {
-    let file = File::open(md_path).ok()?;
-    let mut reader = BufReader::new(file.take(MAX_FRONTMATTER_SCAN_BYTES));
-
-    let mut first_line = String::new();
-    reader.read_line(&mut first_line).ok()?;
-
-    if first_line.trim_end_matches(['\r', '\n']) == "---" {
-        let mut yaml_buf = String::new();
-        let mut found_close = false;
-        loop {
-            let mut line = String::new();
-            let bytes = reader.read_line(&mut line).ok()?;
-            if bytes == 0 {
-                break;
-            }
-            if line.trim_end_matches(['\r', '\n']) == "---" {
-                found_close = true;
-                break;
-            }
-            yaml_buf.push_str(&line);
-        }
-
-        if found_close {
-            #[allow(deprecated)]
-            if let Ok(fm) = serde_yml::from_str::<SkillFrontmatter>(&yaml_buf) {
-                let name = if fm.name.trim().is_empty() {
-                    slug.to_string()
-                } else {
-                    fm.name.trim().to_string()
-                };
-                let description = if fm.description.trim().is_empty() {
-                    "Custom skill".to_string()
-                } else {
-                    fm.description.trim().to_string()
-                };
-                return Some(SkillSummary {
-                    slug: slug.to_string(),
-                    name,
-                    description,
-                });
-            }
+/// Reads at most `buf.len()` bytes from `file`, retrying on `ErrorKind::Interrupted`.
+fn read_bounded_prefix(mut file: File, buf: &mut [u8]) -> std::io::Result<usize> {
+    let mut total = 0;
+    while total < buf.len() {
+        match file.read(&mut buf[total..]) {
+            Ok(0) => break,
+            Ok(n) => total += n,
+            Err(e) if e.kind() == ErrorKind::Interrupted => {}
+            Err(e) => return Err(e),
         }
     }
+    Ok(total)
+}
 
+/// Reads only the frontmatter header (capped at 4 KiB on the stack) so listing skills
+/// in Preferences never loads full markdown bodies into heap memory.
+#[must_use]
+pub fn read_skill_summary(slug: &str, md_path: &Path) -> Option<SkillSummary> {
+    let file = File::open(md_path).ok()?;
+    let mut buf = [0u8; MAX_FRONTMATTER_SCAN_BYTES];
+    let n = read_bounded_prefix(file, &mut buf).ok()?;
+    let slice = &buf[..n];
+
+    // If the 4 KiB boundary cut through the middle of a multi-byte UTF-8 codepoint in the
+    // markdown body, slice cleanly up to `valid_up_to()` instead of dropping the skill.
+    let head_str = match std::str::from_utf8(slice) {
+        Ok(s) => s,
+        Err(err) => std::str::from_utf8(&slice[..err.valid_up_to()]).ok()?,
+    };
+
+    if let Some((fm, _)) = parse_frontmatter_block(head_str) {
+        let (name, description) = normalize_name_and_description(slug, &fm.name, &fm.description);
+        return Some(SkillSummary {
+            slug: slug.to_string(),
+            name,
+            description,
+        });
+    }
+
+    let (name, description) = normalize_name_and_description(slug, "", "");
     Some(SkillSummary {
         slug: slug.to_string(),
-        name: slug.to_string(),
-        description: "Custom skill".to_string(),
+        name,
+        description,
     })
 }
 
@@ -185,28 +232,38 @@ pub fn discover_skill_summaries() -> Vec<SkillSummary> {
     discover_skill_summaries_in(&get_skills_dir())
 }
 
-/// Discovers all skills in `skills_dir` using lightweight header reads, sorted by name.
+/// Discovers all skills in `skills_dir` using lightweight header reads.
+///
+/// Deduplicates colliding slugs (preferring `<slug>/SKILL.md` over legacy `<slug>.md`)
+/// and sorts case-insensitively by display name without per-comparison allocations.
 #[must_use]
 pub fn discover_skill_summaries_in(skills_dir: &Path) -> Vec<SkillSummary> {
-    let mut summaries = Vec::new();
     let Ok(entries) = std::fs::read_dir(skills_dir) else {
-        return summaries;
+        return Vec::new();
     };
+
+    // Track `(is_dir_layout, summary)` by slug so `<slug>/SKILL.md` wins deterministically
+    // if both `<slug>/SKILL.md` and `<slug>.md` exist on disk.
+    let mut by_slug: HashMap<String, (bool, SkillSummary)> = HashMap::new();
 
     for entry in entries.flatten() {
         let path = entry.path();
-        if let Some((slug, md_path)) = resolve_skill_entry(&path)
-            && let Some(summary) = read_skill_summary(&slug, &md_path)
-        {
-            summaries.push(summary);
+        let is_dir = path.is_dir();
+        if let Some((slug, md_path)) = resolve_skill_entry(&path) {
+            if let Some((existing_is_dir, _)) = by_slug.get(&slug)
+                && (*existing_is_dir || !is_dir)
+            {
+                continue;
+            }
+            if let Some(summary) = read_skill_summary(&slug, &md_path) {
+                by_slug.insert(slug, (is_dir, summary));
+            }
         }
     }
 
+    let mut summaries: Vec<SkillSummary> = by_slug.into_values().map(|(_, s)| s).collect();
     summaries.sort_by(|a, b| {
-        a.name
-            .to_lowercase()
-            .cmp(&b.name.to_lowercase())
-            .then_with(|| a.slug.cmp(&b.slug))
+        cmp_case_insensitive(&a.name, &b.name).then_with(|| a.slug.cmp(&b.slug))
     });
     summaries
 }
@@ -234,6 +291,9 @@ mod tests {
         )
         .unwrap();
 
+        // Hidden files/folders must be ignored
+        std::fs::write(skills_dir.join(".hidden-swap.md"), "---\nname: Hidden\n---\n").unwrap();
+
         let summaries = discover_skill_summaries_in(skills_dir);
         assert_eq!(summaries.len(), 2);
 
@@ -247,13 +307,44 @@ mod tests {
     }
 
     #[test]
-    fn is_skill_disabled_matches_slug_or_name() {
+    fn frontmatter_parser_handles_bom_empty_block_and_embedded_triple_dashes() {
+        // 1. UTF-8 BOM + embedded `---flag` line inside YAML description must NOT terminate early
+        let doc = "\u{feff}---\nname: \"  CLI Flag Guide  \"\ndescription: |\n  Explains flags like:\n  ---verbose\n---\n# Actual Body\n";
+        let (fm, body) = parse_skill_document("cli-guide", doc);
+        assert_eq!(fm.name, "CLI Flag Guide");
+        assert!(fm.description.contains("---verbose"));
+        assert_eq!(body, "# Actual Body\n");
+
+        // 2. Empty frontmatter `---\n---\n` strips delimiters cleanly and falls back to slug
+        let (empty_fm, empty_body) = parse_skill_document("my-slug", "---\n---\n# Heading");
+        assert_eq!(empty_fm.name, "my-slug");
+        assert_eq!(empty_fm.description, "Custom skill");
+        assert_eq!(empty_body, "# Heading");
+
+        // 3. Truncated mid-UTF8 codepoint at byte 4096 in `read_skill_summary` still succeeds
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("unicode-boundary.md");
+        let mut payload = String::from("---\nunclosed_frontmatter: |\n  ");
+        while payload.len() < MAX_FRONTMATTER_SCAN_BYTES - 1 {
+            payload.push('a');
+        }
+        // Push a 3-byte UTF-8 character (`•` = E2 80 A2) straddling byte 4096
+        payload.push('•');
+        std::fs::write(&path, payload).unwrap();
+
+        let summary = read_skill_summary("unicode-boundary", &path).expect("must not drop skill");
+        assert_eq!(summary.slug, "unicode-boundary");
+        assert_eq!(summary.name, "unicode-boundary");
+    }
+
+    #[test]
+    fn is_skill_disabled_matches_slug_or_trimmed_name() {
         let disabled = vec!["rust-helper".to_string(), "Docker Admin".to_string()];
         assert!(is_skill_disabled(&disabled, "rust-helper", "Rust Helper"));
         assert!(is_skill_disabled(
             &disabled,
             "docker-folder",
-            "Docker Admin"
+            "  Docker Admin  "
         ));
         assert!(!is_skill_disabled(&disabled, "git-flow", "Git Flow"));
     }
