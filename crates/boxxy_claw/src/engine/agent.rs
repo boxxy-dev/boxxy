@@ -280,34 +280,14 @@ impl ClawAgent {
                     endpoints,
                 );
 
-                // Track Invocations
-                boxxy_telemetry::track_ai_invocation(&self.provider_name, &self.model_name, "claw")
-                    .await;
-
-                // Track Latency
-                boxxy_telemetry::track_ai_latency(
-                    &self.model_name,
+                // Record invocation, latency, and input/output tokens in a single journal transaction
+                boxxy_telemetry::track_ai_turn(
                     &self.provider_name,
+                    &self.model_name,
+                    "claw",
                     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX),
-                    "claw",
-                )
-                .await;
-
-                // Track Tokens
-                boxxy_telemetry::track_ai_tokens(
-                    &self.model_name,
-                    &self.provider_name,
-                    "input",
                     usage.input_tokens.unwrap_or(0),
-                    "claw",
-                )
-                .await;
-                boxxy_telemetry::track_ai_tokens(
-                    &self.model_name,
-                    &self.provider_name,
-                    "output",
                     usage.output_tokens.unwrap_or(0),
-                    "claw",
                 )
                 .await;
 

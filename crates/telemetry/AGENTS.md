@@ -1,59 +1,33 @@
 # Telemetry Crate (`boxxy-telemetry`)
 
 ## Responsibility
-Provides a privacy-first, industry-standard observability layer for Boxxy Terminal using **OpenTelemetry (OTel) v0.33.0**. It handles the collection, batching, and secure export of anonymous usage statistics to a Supabase backend.
+Provides a privacy-first, lightweight observability layer for Boxxy Terminal that records anonymous usage metrics to a coalescing SQLite journal (`telemetry_journal` in `boxxy-db`) and exports spec-compliant **OTLP/HTTP JSON** (`ExportMetricsServiceRequest`) batches to the Supabase backend (`telemetry-ingest`).
 
-## Architectural Design
+## Module Layout
 
-### 1. Isolation & Efficiency
-- **Heavy Dependency Guard**: All OpenTelemetry SDK and OTLP exporter dependencies are contained within this crate to minimize build times and binary bloat for other crates.
-- **Asynchronous & Non-Blocking**: Telemetry operations never block the GTK UI thread. All networking and batching occur in background threads managed by the OTel SDK.
-- **Native Retries & Resilience**: Leverages OTel 0.33's automatic exponential backoff retries with jitter on transient HTTP codes (429, 502, 503, 504) and respects `Retry-After` headers. Built-in 64 MiB request and 4 MiB response body size guards protect against unbounded allocations.
-- **Delta Temporality**: Uses `Temporality::Delta` to report only new values since the last export, preventing duplicate data and keeping the database lean.
-- **30-Minute Periodic Batching + Flush on App Quit**: Metrics are written immediately to the local SQLite `telemetry_journal` table and exported by `boxxy-agent` every 30 minutes, as well as immediately when a UI client disconnects (app quit), on daemon reload/stop, or on `SIGTERM`/`SIGINT`. `force_flush()` runs on `tokio::task::spawn_blocking` so network exports never block async Tokio worker threads.
-- **100% Opt-Out Compliance**: Every tracking and flush entry point checks `Settings::load().enable_telemetry`. Toggling telemetry off in Preferences immediately drops the OTel provider and purges all unsent rows from `telemetry_journal` without requiring an app or daemon restart.
-- **Default Boxxy Tool, Provider, & Theme Allowlists**: `track_tool_use` validates tool names against `BUILTIN_BOXXY_TOOLS` (the 44 built-in Boxxy tools) and groups any external MCP server tools under `"external_mcp_tool"` so private user MCP server names are never exported. Likewise, `normalize_provider_name` validates `model_provider` against the 12 built-in providers (`Gemini`, `Ollama`, `Anthropic`, `OpenAI`, `OpenRouter`, `DeepSeek`, `Moonshot`, `xAI`, `Z.ai`, `Mistral`, `MiniMax`, `Groq`) and groups all user-configured `OpenAiCompatible` endpoints under `"Custom Endpoints"` so custom endpoint names are never exposed. `resolve_theme_telemetry` and `normalize_theme` bucket active app themes strictly into `"Boxxy Dark"`, `"Boxxy Light"`, `"Boxxy Community"`, or `"Adwaita"` so custom `.toml` theme filenames are never exposed.
+- **`src/lib.rs`**: Public constants and high-level tracking & lifecycle API (`init_with_db`, `init_db`, `init`, `flush_journal`, `disable_and_purge`, `track_launch`, `track_ai_turn`, `track_ai_invocation`, `track_ai_tokens`, `track_ai_latency`, `track_tool_use`, `track_session_resume`).
+- **`src/identity.rs`**: Lock-free `session_id` management (`ArcSwap`), `UUID` validation for `install_id` and `session_id`, and `is_telemetry_enabled()` fast-path checks.
+- **`src/normalize.rs`**: Canonical privacy normalizers and allowlists:
+  - **`BUILTIN_BOXXY_TOOLS` (46 sorted tools):** Buckets any external user MCP tool under `"external_mcp_tool"`.
+  - **`BUILTIN_PROVIDERS` (14 built-in providers):** `Gemini`, `Ollama`, `Anthropic`, `OpenAI`, `OpenRouter`, `DeepSeek`, `Moonshot`, `xAI`, `Z.ai`, `Mistral`, `MiniMax`, `Groq`, `OpenCode Zen`, `OpenCode Go`; all user-defined `OpenAiCompatible` endpoints map to `"Custom Endpoints"`.
+  - **Model Privacy (`normalize_model_name`):** Redacts `model_name` to `"redacted"` for `"Ollama"` and `"Custom Endpoints"` before writing to SQLite so private local tags or custom fine-tuned model IDs never leave the machine.
+  - **Environment & Theme Buckets:** `normalize_os`, `normalize_shell`, `normalize_desktop`, `normalize_pkg_type` (`"flatpak"`, `"distro"`, `"native"`), `resolve_theme_telemetry`, and `normalize_theme` (`"Boxxy Dark"`, `"Boxxy Light"`, `"Boxxy Community"`, `"Adwaita"`).
+- **`src/event.rs`**: Deterministic `BTreeMap`-ordered `MetricRecord` serializer ensuring stable JSON key order for SQLite `UNIQUE` coalescing.
+- **`src/journal.rs`**: Shared `boxxy-db` pool handle (`parking_lot::RwLock<Option<Db>>`), single-transaction batch recording, 7-day / 5,000-row retention bounds, and instant opt-out purge.
+- **`src/exporter.rs`**: `FLUSH_LOCK`-serialized async `reqwest` OTLP/HTTP JSON exporter (`Temporality::Delta` = `1`), preserving exact `recorded_at_ms -> timeUnixNano`, attaching per-row `event_id` UUIDs for end-to-end idempotency, retrying transient `408`/`429`/`5xx` responses with exponential backoff + jitter and `Retry-After` headers, and acknowledging exported values atomically via `Store::ack_telemetry_events`.
 
-### 2. Anonymous Identity Management
-- **`install_id`**: A random UUIDv4 generated on first launch and persisted in `settings.json`. This tracks unique installs without any connection to PII.
-- **`session_id`**: A random UUIDv4 rotated by `boxxy-agent` when a fresh UI session attaches and synchronized with `boxxy-app` via `StartupToken.telemetry_session_id` so UI and daemon events share the same session identifier.
-- **Zero PII Policy**: The system is designed to never capture file paths, usernames, prompt contents, or terminal outputs.
-
-### 3. Ingestion Pipeline
-- **Protocol**: Exports data via **OTLP/HTTP JSON** for maximum compatibility with serverless environments (Supabase Edge Functions).
-- **Secure Gateway**: Data is sent to a Supabase Edge Function which validates the schema (`v: 1`) and enforces rate limiting before inserting flattened rows into the `telemetry_events` table.
+## Key Invariants
+1. **Zero OTel SDK Bloat:** Emits standard OTLP/HTTP JSON directly via `serde` + `reqwest`, avoiding `opentelemetry_sdk` background OS threads, `PeriodicReader` timer races, and duplicate timestamp erasure.
+2. **Serialized & Lossless Concurrent Export:** `FLUSH_LOCK` prevents concurrent callers (30m daemon timer, client disconnect, reload, `SIGTERM`) from exporting the same batch twice, while `Store::ack_telemetry_events` subtracts `exported_value` and rotates `event_id` if new increments coalesced while an HTTP POST was in flight.
+3. **100% Opt-Out Compliance:** Disabling `enable_telemetry` in Preferences immediately drops the HTTP exporter and purges `telemetry_journal` without requiring an app or daemon restart. Isolated `--dev` instances disable telemetry automatically unless `BOXXY_TELEMETRY_ENDPOINT` is explicitly set.
 
 ## Instrumentation Points
 
-| Metric Name | Tracking Location | Description |
+| Metric Name | Tracking Location | Attributes |
 | :--- | :--- | :--- |
-| `app.launch` | `boxxy-app` | Tracks OS, Architecture, Shell, Desktop, Theme (`Boxxy Dark`, `Boxxy Light`, `Boxxy Community`, `Adwaita`), and Version. |
-| `ai.tokens` | `boxxy-claw` | Tracks input/output token counts per model. |
-| `ai.latency` | `boxxy-claw` | Tracks time-to-first-token for performance monitoring. |
-| `tool.use` | `core-toolbox` | Tracks which AI tools (e.g., `file_read`, `sys_shell`) are most popular. |
-| `claw.session_resume` | `boxxy-claw` | Tracks retention via session restoration frequency. |
-
-## Usage Guidelines
-
-### Initialization
-Telemetry is initialized in `boxxy-app`'s main entry point. It respects the `enable_telemetry` user preference but is **enabled by default** during the Preview Phase.
-
-```rust
-// In boxxy-app main.rs
-boxxy_telemetry::init().await;
-```
-
-### Tracking Events
-Other crates should use the high-level, Boxxy-specific API:
-
-```rust
-// Track AI usage
-boxxy_telemetry::track_ai_tokens("gemini-1.5-pro", "output", 150).await;
-
-// Track tool execution
-boxxy_telemetry::track_tool_use("sys_shell_exec").await;
-```
-
-### Debugging
-In local development (debug builds), telemetry events are also mirrored to **Stdout** for easy verification. To see detailed activity, run with:
-`RUST_LOG=boxxy_telemetry=debug cargo run -p boxxy-app`
+| `app.launch` | `boxxy-app` | `os`, `arch`, `pkg_type` (`flatpak`/`native`/`distro`), `version`, `shell`, `desktop`, `theme` |
+| `ai.invocations` | `boxxy-claw` (`track_ai_turn`) | `model_provider`, `model_name` (`redacted` for Ollama/Custom), `feature` |
+| `ai.tokens` | `boxxy-claw` (`track_ai_turn`) | `model_provider`, `model_name` (`redacted` for Ollama/Custom), `role` (`input`/`output`), `feature` |
+| `ai.latency` | `boxxy-claw` (`track_ai_turn`) | `model_provider`, `model_name` (`redacted` for Ollama/Custom), `feature` |
+| `tool.use` | `boxxy-claw` & `core-toolbox` | `tool_name` (46 built-ins or `external_mcp_tool`) |
+| `claw.session_resume` | `boxxy-claw` | `session_type` (`normal`/`pinned`) |

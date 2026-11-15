@@ -85,10 +85,15 @@ CREATE TABLE IF NOT EXISTS msgbar_history (
 
 CREATE TABLE IF NOT EXISTS telemetry_journal (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_id TEXT NOT NULL,
+    schema_version INTEGER NOT NULL DEFAULT 1,
+    install_id TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    day_bucket INTEGER NOT NULL,
+    recorded_at_ms INTEGER NOT NULL,
     metric_name TEXT NOT NULL,
-    value REAL NOT NULL,
-    attributes_json TEXT NOT NULL,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    value REAL NOT NULL CHECK (value > 0.0),
+    attributes_json TEXT NOT NULL DEFAULT '{}'
 );
 
 -- Relational indexes for hot-path lookups, FK cascades, and background hygiene/dreaming
@@ -101,7 +106,10 @@ CREATE INDEX IF NOT EXISTS idx_interactions_last_accessed ON interactions(last_a
 CREATE INDEX IF NOT EXISTS idx_memories_scope_lookup ON memories(project_path, verified, pinned, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_memories_pinned ON memories(project_path, key ASC) WHERE pinned = true;
 CREATE INDEX IF NOT EXISTS idx_memories_unverified_candidates ON memories(category, observation_count, confidence_score) WHERE verified = false;
-CREATE INDEX IF NOT EXISTS idx_telemetry_journal_created_at ON telemetry_journal(created_at ASC, id ASC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_telemetry_journal_coalesce
+    ON telemetry_journal(schema_version, install_id, session_id, day_bucket, metric_name, attributes_json);
+CREATE INDEX IF NOT EXISTS idx_telemetry_journal_recorded_at
+    ON telemetry_journal(recorded_at_ms ASC, id ASC);
 
 -- FTS5 External-Content Indexes & Column-Scoped Triggers
 

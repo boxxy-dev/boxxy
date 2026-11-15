@@ -103,11 +103,40 @@ pub struct MsgBarHistory {
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct TelemetryJournalEntry {
     pub id: i64,
+    pub event_id: String,
+    pub schema_version: i64,
+    pub install_id: String,
+    pub session_id: String,
+    pub day_bucket: i64,
+    pub recorded_at_ms: i64,
     pub metric_name: String,
     pub value: f64,
     pub attributes_json: String,
-    #[sqlx(default)]
-    pub created_at: Option<String>,
+}
+
+/// Typed payload for [`crate::store::Store::record_telemetry_events`].
+#[derive(Debug, Clone, Copy)]
+pub struct TelemetryJournalInsert<'a> {
+    pub event_id: &'a str,
+    pub schema_version: i64,
+    pub install_id: &'a str,
+    pub session_id: &'a str,
+    pub recorded_at_ms: i64,
+    pub metric_name: &'a str,
+    pub value: f64,
+    pub attributes_json: &'a str,
+}
+
+/// Typed acknowledgement for [`crate::store::Store::ack_telemetry_events`].
+///
+/// If new increments coalesced into row `id` while an HTTP export was in flight,
+/// `exported_value` is subtracted atomically and `replacement_event_id` is assigned to
+/// the residual delta so neither increments nor idempotency are lost.
+#[derive(Debug, Clone, Copy)]
+pub struct TelemetryJournalAck<'a> {
+    pub id: i64,
+    pub exported_value: f64,
+    pub replacement_event_id: &'a str,
 }
 
 /// Summary of rows pruned during a background memory hygiene pass.

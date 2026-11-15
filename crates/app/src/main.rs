@@ -72,7 +72,7 @@ fn main() -> ExitCode {
         tokio::spawn(async {
             let agent = boxxy_terminal::get_agent().await;
 
-            let is_flatpak = std::env::var("FLATPAK_ID").is_ok();
+            let is_flatpak = boxxy_sys_utils::is_flatpak();
             let mut keys_to_check: Vec<(String, String)> =
                 boxxy_sys_utils::env::PROVIDER_ENV_KEY_MAP
                     .iter()
@@ -142,7 +142,7 @@ fn main() -> ExitCode {
                 };
                 let arch = System::cpu_arch();
                 let version = env!("CARGO_PKG_VERSION");
-                let pkg_type = if is_flatpak { "flatpak" } else { "native" };
+                let pkg_type = boxxy_sys_utils::detect_package_type();
                 let shell = agent
                     .get_preferred_shell()
                     .await

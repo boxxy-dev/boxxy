@@ -124,9 +124,14 @@ impl DaemonCore {
             }
         });
 
+        let db_for_telemetry = db.clone();
         tokio::spawn(async move {
-            boxxy_telemetry::init_db().await;
-            boxxy_telemetry::init().await;
+            boxxy_telemetry::init_with_db(db_for_telemetry);
+            boxxy_telemetry::init();
+
+            // Drain any leftover events from an earlier abrupt power-off after a brief warm-up.
+            tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+            boxxy_telemetry::flush_journal().await;
 
             let mut tick = tokio::time::interval(std::time::Duration::from_secs(30 * 60));
             // Consume the immediate first tick so periodic flushes occur every 30 minutes

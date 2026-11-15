@@ -7,7 +7,11 @@ license.workspace = true
 name = "boxxy-app"
 
 [features]
-disable-self-update = ["boxxy-window/disable-self-update", "boxxy-cli/disable-self-update"]
+disable-self-update = [
+    "boxxy-window/disable-self-update",
+    "boxxy-cli/disable-self-update",
+    "boxxy-sys-utils/disable-self-update",
+]
 
 [dependencies]
 boxxy-cli.workspace = true

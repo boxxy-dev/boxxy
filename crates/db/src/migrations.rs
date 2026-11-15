@@ -27,7 +27,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 const LEGACY_MIN_SUPPORTED_PRAGMA_VERSION: i32 = 15;
 
 /// Informational `PRAGMA user_version` written alongside journal updates for external SQLite tools.
-const INFORMATIONAL_USER_VERSION: i32 = 16;
+const INFORMATIONAL_USER_VERSION: i32 = 17;
 
 const SCHEMA_LATEST_SQL: &str = include_str!("../migrations/schema_latest.sql");
 
@@ -55,13 +55,22 @@ pub struct Migration {
 ///
 /// Every new schema change MUST update `migrations/schema_latest.sql` AND append a `Migration`
 /// entry here. Unit tests enforce structural equivalence between fresh bootstraps and migrated DBs.
-pub const MIGRATIONS: &[Migration] = &[Migration {
-    id: "20261115000001_harden_schema_fts_and_indexes",
-    foreign_keys: false,
-    up: MigrationUp::Sql(include_str!(
-        "../migrations/20261115000001_harden_schema_fts_and_indexes.sql"
-    )),
-}];
+pub const MIGRATIONS: &[Migration] = &[
+    Migration {
+        id: "20261115000001_harden_schema_fts_and_indexes",
+        foreign_keys: false,
+        up: MigrationUp::Sql(include_str!(
+            "../migrations/20261115000001_harden_schema_fts_and_indexes.sql"
+        )),
+    },
+    Migration {
+        id: "20261115000002_upgrade_telemetry_journal",
+        foreign_keys: true,
+        up: MigrationUp::Sql(include_str!(
+            "../migrations/20261115000002_upgrade_telemetry_journal.sql"
+        )),
+    },
+];
 
 enum BootstrapState {
     FreshBootstrapped,
@@ -688,7 +697,11 @@ mod tests {
                 VALUES ('lint-helper', 'Runs clippy checks', 'clippy, lints', 'Check warnings', NULL);
             INSERT INTO msgbar_history (text, attachments_json) VALUES ('hello', NULL);
             INSERT INTO telemetry_journal (metric_name, value, attributes_json)
-                VALUES ('app.launch', 1.0, '{}');
+                VALUES (
+                    'app.launch',
+                    1.0,
+                    '{"install_id":"11111111-1111-4111-8111-111111111111","session_id":"22222222-2222-4222-8222-222222222222","v":1,"os":"Linux"}'
+                );
             "#,
         )
         .execute(&v15_pool)
@@ -721,6 +734,18 @@ mod tests {
         );
         // Trigger keyword 'clippy' is now indexed in skills_fts after v15 -> latest migration
         assert_eq!(store.search_skills("clippy", 5).await.unwrap().len(), 1);
+        // Valid v15 telemetry_journal row was normalized and preserved across migration
+        let migrated_tel = store.fetch_telemetry_batch(10).await.unwrap();
+        assert_eq!(migrated_tel.len(), 1);
+        assert_eq!(
+            migrated_tel[0].install_id,
+            "11111111-1111-4111-8111-111111111111"
+        );
+        assert_eq!(
+            migrated_tel[0].session_id,
+            "22222222-2222-4222-8222-222222222222"
+        );
+        assert_eq!(migrated_tel[0].attributes_json, r#"{"os":"Linux"}"#);
     }
 
     #[tokio::test]

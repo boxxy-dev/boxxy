@@ -1,599 +1,59 @@
-use arc_swap::ArcSwap;
-use opentelemetry::KeyValue;
-use opentelemetry::metrics::{Counter, Meter, MeterProvider as _};
-use opentelemetry_otlp::{Protocol, WithExportConfig, WithHttpConfig};
-use opentelemetry_sdk::Resource;
-use opentelemetry_sdk::metrics::{PeriodicReader, SdkMeterProvider, Temporality};
-use serde_json::json;
-use std::collections::HashMap;
-use std::sync::{Arc, LazyLock};
-use tokio::sync::{Mutex, OnceCell};
-use uuid::Uuid;
+#![allow(clippy::redundant_pub_crate)]
 
-static SESSION_ID: LazyLock<ArcSwap<String>> =
-    LazyLock::new(|| ArcSwap::from_pointee(Uuid::new_v4().to_string()));
-static METRICS_STATE: LazyLock<Mutex<Option<MetricsState>>> = LazyLock::new(|| Mutex::new(None));
+mod event;
+mod exporter;
+mod identity;
+mod journal;
+mod normalize;
 
-static DB: OnceCell<boxxy_db::Db> = OnceCell::const_new();
+pub use identity::{rotate_session_id, session_id, set_session_id};
+pub use normalize::{
+    BUILTIN_BOXXY_TOOLS, BUILTIN_PROVIDERS, CUSTOM_ENDPOINT_PROVIDER_NAME, EXTERNAL_MCP_TOOL_NAME,
+    REDACTED_MODEL_NAME, normalize_desktop, normalize_model_name, normalize_os,
+    normalize_pkg_type, normalize_provider_name, normalize_shell, normalize_theme,
+    normalize_tool_name, resolve_theme_telemetry,
+};
 
-#[cfg(test)]
-static TEST_TELEMETRY_OVERRIDE: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+use event::{
+    METRIC_AI_INVOCATIONS, METRIC_AI_LATENCY, METRIC_AI_TOKENS, METRIC_APP_LAUNCH,
+    METRIC_SESSION_RESUME, METRIC_TOOL_USE, MetricRecord,
+};
+use identity::is_telemetry_enabled;
+use normalize::sanitize_attr_text;
 
-/// Exhaustive allowlist of default built-in Boxxy tools (sorted alphabetically).
-/// Any tool not in this list (e.g., user-configured MCP tools) is grouped under
-/// [`EXTERNAL_MCP_TOOL_NAME`] so private MCP server names never leak into telemetry.
-pub const BUILTIN_BOXXY_TOOLS: &[&str] = &[
-    "abort_agent_task",
-    "acquire_lock",
-    "activate_skill",
-    "await_tasks",
-    "cancel_task",
-    "close_agent",
-    "delegate_task",
-    "delegate_task_async",
-    "file_delete",
-    "file_read",
-    "file_write",
-    "get_clipboard",
-    "get_system_info",
-    "glob_search",
-    "grep_search",
-    "http_fetch",
-    "kill_process",
-    "list_active_agents",
-    "list_directory",
-    "list_my_tasks",
-    "list_processes",
-    "memory_delete",
-    "memory_store",
-    "native_web_search",
-    "orchestrate_agent",
-    "publish_custom_event",
-    "read_pane_buffer",
-    "read_scrollback_page",
-    "release_lock",
-    "replace_in_file",
-    "restore_background_shell",
-    "run_background_command",
-    "schedule_task",
-    "send_command_to_pane",
-    "send_keystrokes_to_pane",
-    "set_agent_state",
-    "set_clipboard",
-    "set_global_intent",
-    "spawn_agent",
-    "subscribe_to_pane",
-    "summon_headless_worker",
-    "sys_shell_exec",
-    "terminal_exec",
-    "web_search",
-];
-
-pub const EXTERNAL_MCP_TOOL_NAME: &str = "external_mcp_tool";
-pub const CUSTOM_ENDPOINT_PROVIDER_NAME: &str = "Custom Endpoints";
-
-struct MetricsState {
-    provider: SdkMeterProvider,
-    meter: Meter,
-    counters: HashMap<String, Counter<f64>>,
-    install_id: String,
+/// Shares an already-opened [`boxxy_db::Db`] pool with the telemetry journal
+/// (avoiding duplicate SQLite connection pools inside `boxxy-agent`).
+pub fn init_with_db(db: boxxy_db::Db) {
+    journal::set_db(db);
 }
 
-impl MetricsState {
-    fn get_counter(&mut self, name: &str) -> &Counter<f64> {
-        self.counters
-            .entry(name.to_string())
-            .or_insert_with(|| self.meter.f64_counter(name.to_string()).build())
-    }
-}
-
-/// Fast lock-free check of whether telemetry is currently enabled in user preferences.
-#[inline]
-fn is_telemetry_enabled() -> bool {
-    #[cfg(test)]
-    {
-        match TEST_TELEMETRY_OVERRIDE.load(std::sync::atomic::Ordering::Relaxed) {
-            1 => return true,
-            2 => return false,
-            _ => {}
-        }
-    }
-    if boxxy_sys_utils::is_dev_instance()
-        && boxxy_sys_utils::env::telemetry_endpoint().is_none()
-    {
-        return false;
-    }
-    boxxy_preferences::Settings::load().enable_telemetry
-}
-
-/// Returns the active telemetry `session_id`.
-#[must_use]
-pub fn session_id() -> String {
-    (**SESSION_ID.load()).clone()
-}
-
-/// Sets the active telemetry `session_id` (used to synchronize the UI process with `boxxy-agent`).
-pub fn set_session_id(id: &str) {
-    let trimmed = id.trim();
-    if !trimmed.is_empty() {
-        SESSION_ID.store(Arc::new(trimmed.to_string()));
-    }
-}
-
-/// Rotates to a fresh `session_id` (called by `boxxy-agent` when a new UI session attaches)
-/// and returns the new UUID string.
-#[must_use]
-pub fn rotate_session_id() -> String {
-    let fresh = Uuid::new_v4().to_string();
-    SESSION_ID.store(Arc::new(fresh.clone()));
-    fresh
-}
-
-/// Normalizes a tool name to either a known built-in Boxxy tool or `"external_mcp_tool"`.
-#[must_use]
-pub fn normalize_tool_name(tool_name: &str) -> &'static str {
-    let trimmed = tool_name.trim();
-    if let Ok(idx) = BUILTIN_BOXXY_TOOLS.binary_search(&trimmed) {
-        BUILTIN_BOXXY_TOOLS[idx]
-    } else {
-        EXTERNAL_MCP_TOOL_NAME
-    }
-}
-
-/// Normalizes a model provider name to one of the 12 built-in providers or `"Custom Endpoints"`,
-/// ensuring user-defined custom endpoint names never leak into telemetry.
-#[must_use]
-pub fn normalize_provider_name(provider: &str) -> &'static str {
-    match provider.trim().to_ascii_lowercase().as_str() {
-        "gemini" => "Gemini",
-        "ollama" => "Ollama",
-        "anthropic" => "Anthropic",
-        "openai" => "OpenAI",
-        "openrouter" => "OpenRouter",
-        "deepseek" => "DeepSeek",
-        "moonshot" => "Moonshot",
-        "xai" => "xAI",
-        "z.ai" | "zai" => "Z.ai",
-        "mistral" => "Mistral",
-        "minimax" => "MiniMax",
-        "groq" => "Groq",
-        _ => CUSTOM_ENDPOINT_PROVIDER_NAME,
-    }
-}
-
-/// Normalizes an OS name string from `/etc/os-release` or `sysinfo`, stripping quotes.
-#[must_use]
-pub fn normalize_os(raw: &str) -> String {
-    let cleaned = raw.trim().trim_matches(['"', '\'']).trim();
-    if cleaned.is_empty() || cleaned.eq_ignore_ascii_case("gnome") {
-        "Unknown".to_string()
-    } else {
-        cleaned.to_string()
-    }
-}
-
-/// Normalizes a shell path (e.g. `/usr/bin/zsh`, `/run/current-system/sw/bin/fish`) to its binary basename (`zsh`, `fish`).
-#[must_use]
-pub fn normalize_shell(raw: &str) -> String {
-    let trimmed = raw.trim().trim_matches(['"', '\'']).trim();
-    let base = trimmed.rsplit('/').next().unwrap_or(trimmed).trim();
-    if base.is_empty() {
-        "unknown".to_string()
-    } else {
-        base.to_string()
-    }
-}
-
-/// Normalizes `XDG_CURRENT_DESKTOP` (e.g. `ubuntu:GNOME`, `zorin:GNOME`, `X-Cinnamon`, `sway:wlroots`).
-#[must_use]
-pub fn normalize_desktop(raw: &str) -> String {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("unknown") {
-        return "unknown".to_string();
-    }
-    let lower = trimmed.to_ascii_lowercase();
-    if lower.contains("gnome") {
-        "GNOME".to_string()
-    } else if lower.contains("kde") || lower.contains("plasma") {
-        "KDE".to_string()
-    } else if lower.contains("cosmic") {
-        "COSMIC".to_string()
-    } else if lower.contains("hyprland") {
-        "Hyprland".to_string()
-    } else if lower.contains("cinnamon") {
-        "Cinnamon".to_string()
-    } else if lower.contains("sway") {
-        "Sway".to_string()
-    } else if lower.contains("xfce") {
-        "XFCE".to_string()
-    } else if lower.contains("mate") {
-        "MATE".to_string()
-    } else if lower.contains("lxqt") {
-        "LXQt".to_string()
-    } else if lower.contains("budgie") {
-        "Budgie".to_string()
-    } else if lower.contains("niri") {
-        "Niri".to_string()
-    } else {
-        trimmed
-            .split(':')
-            .find(|s| !s.trim().is_empty())
-            .unwrap_or(trimmed)
-            .trim()
-            .to_string()
-    }
-}
-
-/// Resolves the active app theme mode and ID into one of the 4 privacy-safe telemetry buckets:
-/// `"Boxxy Dark"`, `"Boxxy Light"`, `"Boxxy Community"`, or `"Adwaita"`.
-#[must_use]
-pub fn resolve_theme_telemetry(
-    mode: boxxy_preferences::AppThemeMode,
-    theme_id: &str,
-) -> &'static str {
-    match mode {
-        boxxy_preferences::AppThemeMode::DefaultGtk => "Adwaita",
-        boxxy_preferences::AppThemeMode::Boxxy => {
-            let trimmed = theme_id.trim();
-            if trimmed.is_empty()
-                || trimmed.eq_ignore_ascii_case("boxxy-dark")
-                || trimmed.eq_ignore_ascii_case("boxxy dark")
-            {
-                "Boxxy Dark"
-            } else if trimmed.eq_ignore_ascii_case("boxxy-light")
-                || trimmed.eq_ignore_ascii_case("boxxy light")
-            {
-                "Boxxy Light"
-            } else {
-                "Boxxy Community"
-            }
-        }
-    }
-}
-
-/// Normalizes a raw theme attribute string into strictly one of the 4 allowed telemetry buckets
-/// (`"Boxxy Dark"`, `"Boxxy Light"`, `"Boxxy Community"`, `"Adwaita"`), ensuring user-created
-/// `.toml` theme names never leak into telemetry.
-#[must_use]
-pub fn normalize_theme(raw: &str) -> &'static str {
-    let cleaned = raw.trim().trim_matches(['"', '\'']).trim();
-    if cleaned.is_empty() {
-        return "Boxxy Dark";
-    }
-    match cleaned.to_ascii_lowercase().as_str() {
-        "boxxy dark" | "boxxy-dark" | "boxxy_dark" => "Boxxy Dark",
-        "boxxy light" | "boxxy-light" | "boxxy_light" => "Boxxy Light",
-        "adwaita" | "legacy adwaita" | "default_gtk" | "default-gtk" | "system follow"
-        | "system dark" | "system light" => "Adwaita",
-        _ => "Boxxy Community",
-    }
-}
-
-/// Initialize the telemetry database connection.
-/// This allows the telemetry crate to write to the local journal.
+/// Lazily initializes the local SQLite telemetry journal connection if telemetry is enabled.
 pub async fn init_db() {
     if !is_telemetry_enabled() {
         return;
     }
-
-    if DB.get().is_none()
-        && let Ok(db) = boxxy_db::Db::new().await
-    {
-        let _ = DB.set(db);
-    }
+    let _ = journal::ensure_db().await;
 }
 
-pub async fn init() {
-    if !is_telemetry_enabled() {
-        log::debug!("Telemetry is disabled by user.");
-        return;
-    }
-
-    {
-        let state_guard = METRICS_STATE.lock().await;
-        if state_guard.is_some() {
-            return;
-        }
-    }
-
-    let settings = boxxy_preferences::Settings::load();
-    let install_id = settings
-        .install_id
-        .clone()
-        .unwrap_or_else(|| "unknown".to_string());
-
-    let endpoint = boxxy_sys_utils::env::telemetry_endpoint().unwrap_or_else(|| {
-        "https://qfwhesnmixgmczkdnvsu.supabase.co/functions/v1/telemetry-ingest".to_string()
-    });
-    let api_key = "sb_publishable_Z-SbIil88PSj3ri24CM7aw_8vzsCFie";
-
-    let exporter = match opentelemetry_otlp::MetricExporter::builder()
-        .with_http()
-        .with_protocol(Protocol::HttpJson)
-        .with_endpoint(endpoint)
-        .with_headers(std::collections::HashMap::from([(
-            "apikey".to_string(),
-            api_key.to_string(),
-        )]))
-        .with_temporality(Temporality::Delta)
-        .build()
-    {
-        Ok(exporter) => exporter,
-        Err(e) => {
-            log::error!("Failed to create OTLP metric exporter: {e}");
-            return;
-        }
-    };
-
-    // Export is driven explicitly by `flush_journal()` every 30 minutes and on app quit;
-    // keep the internal reader interval at 30 minutes to match.
-    let reader = PeriodicReader::builder(exporter)
-        .with_interval(std::time::Duration::from_secs(30 * 60))
-        .build();
-
-    let provider = SdkMeterProvider::builder()
-        .with_resource(
-            Resource::builder_empty()
-                .with_attributes(vec![
-                    KeyValue::new("service.name", "boxxy-terminal"),
-                    KeyValue::new("service.version", env!("CARGO_PKG_VERSION")),
-                ])
-                .build(),
-        )
-        .with_reader(reader)
-        .build();
-
-    let meter = provider.meter("boxxy-terminal");
-
-    let mut state = METRICS_STATE.lock().await;
-    *state = Some(MetricsState {
-        provider,
-        meter,
-        counters: HashMap::new(),
-        install_id: install_id.clone(),
-    });
-
-    log::debug!("Telemetry initialized with install_id: {install_id}");
+/// Initializes the background OTLP HTTP exporter client when telemetry is enabled.
+pub fn init() {
+    exporter::init_exporter();
 }
 
-/// Immediately disables in-memory telemetry state and purges all unsent rows from
-/// `telemetry_journal` when the user opts out (`enable_telemetry = false`).
+/// Immediately drops exporter state and purges all unsent rows from `telemetry_journal`
+/// when the user opts out (`enable_telemetry = false`).
 pub async fn disable_and_purge() {
-    let removed_state = {
-        let mut state_lock = METRICS_STATE.lock().await;
-        state_lock.take()
-    };
-
-    if let Some(state) = removed_state {
-        log::info!("Telemetry disabled by user; dropping OTel provider without flushing.");
-        // Drop on a blocking thread in case PeriodicReader teardown joins its background thread.
-        let _ = tokio::task::spawn_blocking(move || {
-            drop(state);
-        })
-        .await;
-    }
-
-    let db_opt = if let Some(db) = DB.get().cloned() {
-        Some(db)
-    } else {
-        boxxy_db::Db::new().await.ok()
-    };
-
-    if let Some(db) = db_opt {
-        let _ = db.store().purge_telemetry_journal().await;
-        log::debug!("Purged local telemetry_journal table.");
-    }
+    exporter::drop_exporter();
+    journal::purge_all().await;
 }
 
-pub async fn shutdown() {
-    let removed_state = {
-        let mut state_lock = METRICS_STATE.lock().await;
-        state_lock.take()
-    };
-    if let Some(state) = removed_state {
-        if is_telemetry_enabled() {
-            log::debug!("Shutting down telemetry and flushing metrics...");
-            let _ = tokio::task::spawn_blocking(move || state.provider.shutdown()).await;
-        } else {
-            let _ = tokio::task::spawn_blocking(move || drop(state)).await;
-        }
-    }
-}
-
-pub async fn seed_dream() {
-    if let Some(db) = DB.get() {
-        let store = boxxy_db::store::Store::new(db.pool());
-        let _ = store.seed_all_raw_interactions().await;
-    }
-}
-
+/// Drains `telemetry_journal` and exports coalesced OTLP/HTTP JSON batches to the collector.
+/// Serialized by an internal async mutex so concurrent callers never double-export a batch.
 pub async fn flush_journal() {
-    if !is_telemetry_enabled() {
-        disable_and_purge().await;
-        return;
-    }
-
-    log::debug!("Telemetry: Starting flush_journal...");
-    if DB.get().is_none() {
-        init_db().await;
-    }
-    let Some(db) = DB.get() else {
-        log::warn!("Telemetry: flush_journal aborted - Database not initialized (DB is None).");
-        return;
-    };
-
-    if METRICS_STATE.lock().await.is_none() {
-        init().await;
-    }
-
-    // Prune any stale events older than 7 days so offline machines never grow unboundedly.
-    let store = db.store();
-    let _ = store.prune_stale_telemetry_events(7).await;
-
-    loop {
-        if !is_telemetry_enabled() {
-            disable_and_purge().await;
-            return;
-        }
-
-        // 1. Fetch up to 100 pending events
-        let Ok(rows) = store.fetch_telemetry_batch(100).await else {
-            break;
-        };
-
-        if rows.is_empty() {
-            break;
-        }
-
-        log::debug!("Telemetry: Processing {} events from journal...", rows.len());
-
-        let mut processed_ids = Vec::with_capacity(rows.len());
-
-        // 2. Record points into OTel counters and clone the provider so we can
-        // release `METRICS_STATE` before the blocking network export.
-        let provider_for_flush = {
-            let mut state_lock = METRICS_STATE.lock().await;
-            let Some(state) = &mut *state_lock else {
-                log::warn!(
-                    "Telemetry: flush_journal aborted - OTel state not initialized (METRICS_STATE is None)."
-                );
-                return;
-            };
-
-            for entry in &rows {
-                let id = entry.id;
-                let name = &entry.metric_name;
-                let value = entry.value;
-                let attr_json = &entry.attributes_json;
-
-                if !value.is_finite() || value < 0.0 {
-                    processed_ids.push(id);
-                    continue;
-                }
-
-                let Ok(attrs_val) = serde_json::from_str::<serde_json::Value>(attr_json) else {
-                    processed_ids.push(id);
-                    continue;
-                };
-
-                let mut otel_attrs = Vec::new();
-                if let Some(obj) = attrs_val.as_object() {
-                    for (k, v) in obj {
-                        let val = match v {
-                            serde_json::Value::String(s) => {
-                                if k == "tool_name" {
-                                    opentelemetry::Value::String(normalize_tool_name(s).into())
-                                } else if k == "model_provider" {
-                                    opentelemetry::Value::String(normalize_provider_name(s).into())
-                                } else if k == "theme" {
-                                    opentelemetry::Value::String(normalize_theme(s).into())
-                                } else {
-                                    opentelemetry::Value::String(s.clone().into())
-                                }
-                            }
-                            serde_json::Value::Number(n) => {
-                                if let Some(i) = n.as_i64() {
-                                    opentelemetry::Value::I64(i)
-                                } else {
-                                    opentelemetry::Value::F64(n.as_f64().unwrap_or(0.0))
-                                }
-                            }
-                            serde_json::Value::Bool(b) => opentelemetry::Value::Bool(*b),
-                            _ => opentelemetry::Value::String(v.to_string().into()),
-                        };
-                        otel_attrs.push(KeyValue::new(k.clone(), val));
-                    }
-                }
-
-                let counter = state.get_counter(name);
-                log::debug!(
-                    "TELEMETRY_DEBUG_JSON: metric={name} value={value} attrs={attr_json}"
-                );
-                counter.add(value, &otel_attrs);
-                processed_ids.push(id);
-            }
-
-            state.provider.clone()
-        };
-
-        // 3. Force OTel flush to the network on a blocking thread so we never stall Tokio workers.
-        log::debug!("Telemetry: Flushed to OTel SDK, forcing network export...");
-        let flush_res = tokio::task::spawn_blocking(move || provider_for_flush.force_flush()).await;
-        match flush_res {
-            Ok(Ok(())) => {}
-            Ok(Err(e)) => {
-                log::error!("Telemetry network flush failed: {e:?}. Data stays in journal.");
-                break;
-            }
-            Err(join_err) => {
-                log::error!("Telemetry flush task panicked: {join_err:?}. Data stays in journal.");
-                break;
-            }
-        }
-
-        // 4. Only delete from journal if flush succeeded
-        if !processed_ids.is_empty() {
-            let _ = store.delete_telemetry_events(&processed_ids).await;
-            log::debug!(
-                "Telemetry: Successfully exported and cleared {} events.",
-                processed_ids.len()
-            );
-        }
-    }
+    exporter::flush_all().await;
 }
 
-async fn record_to_journal(name: &str, value: f64, attributes: serde_json::Value) {
-    if !is_telemetry_enabled() || !value.is_finite() || value < 0.0 {
-        return;
-    }
-
-    if DB.get().is_none() {
-        init_db().await;
-    }
-
-    if let Some(db) = DB.get() {
-        let attr_str = attributes.to_string();
-        let _ = db
-            .store()
-            .insert_telemetry_event(name, value, &attr_str)
-            .await;
-    }
-}
-
-pub async fn track_event(name: &str, value: f64, attributes: Vec<KeyValue>) {
-    if !is_telemetry_enabled() {
-        return;
-    }
-
-    let install_id = {
-        let state_lock = METRICS_STATE.lock().await;
-        if let Some(state) = &*state_lock {
-            state.install_id.clone()
-        } else {
-            drop(state_lock);
-            let settings = boxxy_preferences::Settings::load();
-            settings
-                .install_id
-                .clone()
-                .unwrap_or_else(|| "unknown".to_string())
-        }
-    };
-
-    // Prepare attributes for both Journal and OTel
-    let mut journal_attrs = json!({
-        "install_id": install_id,
-        "session_id": session_id(),
-        "v": 1
-    });
-    for attr in &attributes {
-        journal_attrs[attr.key.as_str()] = json!(attr.value.to_string());
-    }
-
-    // We strictly write to SQLite here. The background boxxy-agent process
-    // will drain this table and push it to OTel safely in the background.
-    record_to_journal(name, value, journal_attrs).await;
-}
-
+#[allow(clippy::too_many_arguments)]
 pub async fn track_launch(
     os: &str,
     arch: &str,
@@ -603,100 +63,225 @@ pub async fn track_launch(
     desktop: &str,
     theme: &str,
 ) {
+    if !is_telemetry_enabled() {
+        return;
+    }
+
     let clean_os = normalize_os(os);
+    let clean_arch = sanitize_attr_text(arch);
+    let clean_pkg = normalize_pkg_type(pkg_type);
+    let clean_ver = sanitize_attr_text(version);
     let clean_shell = normalize_shell(shell);
     let clean_desktop = normalize_desktop(desktop);
     let clean_theme = normalize_theme(theme);
 
-    track_event(
-        "app.launch",
+    if let Some(rec) = MetricRecord::new(
+        METRIC_APP_LAUNCH,
         1.0,
-        vec![
-            KeyValue::new("os", clean_os),
-            KeyValue::new("arch", arch.trim().to_string()),
-            KeyValue::new("pkg_type", pkg_type.trim().to_string()),
-            KeyValue::new("version", version.trim().to_string()),
-            KeyValue::new("shell", clean_shell),
-            KeyValue::new("desktop", clean_desktop),
-            KeyValue::new("theme", clean_theme.to_string()),
+        [
+            ("os", clean_os.as_str()),
+            ("arch", clean_arch.as_str()),
+            ("pkg_type", clean_pkg),
+            ("version", clean_ver.as_str()),
+            ("shell", clean_shell.as_str()),
+            ("desktop", clean_desktop.as_str()),
+            ("theme", clean_theme),
         ],
-    )
-    .await;
+    ) {
+        journal::record_metrics(&[rec]).await;
+    }
+}
+
+/// Records all metrics for a completed AI turn (invocation, latency, input tokens, output tokens)
+/// in a single atomic SQLite transaction (4x fewer WAL commits than separate calls).
+pub async fn track_ai_turn(
+    provider: &str,
+    model: &str,
+    feature: &str,
+    latency_ms: u64,
+    input_tokens: u64,
+    output_tokens: u64,
+) {
+    if !is_telemetry_enabled() {
+        return;
+    }
+
+    let clean_provider = normalize_provider_name(provider);
+    let clean_model = normalize_model_name(clean_provider, model);
+    let clean_feature = sanitize_attr_text(feature);
+
+    let mut batch = Vec::with_capacity(4);
+
+    if let Some(inv) = MetricRecord::new(
+        METRIC_AI_INVOCATIONS,
+        1.0,
+        [
+            ("model_provider", clean_provider),
+            ("model_name", clean_model.as_str()),
+            ("feature", clean_feature.as_str()),
+        ],
+    ) {
+        batch.push(inv);
+    }
+
+    #[allow(clippy::cast_precision_loss)]
+    if latency_ms > 0
+        && let Some(lat) = MetricRecord::new(
+            METRIC_AI_LATENCY,
+            latency_ms as f64,
+            [
+                ("model_provider", clean_provider),
+                ("model_name", clean_model.as_str()),
+                ("feature", clean_feature.as_str()),
+            ],
+        )
+    {
+        batch.push(lat);
+    }
+
+    #[allow(clippy::cast_precision_loss)]
+    if input_tokens > 0
+        && let Some(inp) = MetricRecord::new(
+            METRIC_AI_TOKENS,
+            input_tokens as f64,
+            [
+                ("model_provider", clean_provider),
+                ("model_name", clean_model.as_str()),
+                ("role", "input"),
+                ("feature", clean_feature.as_str()),
+            ],
+        )
+    {
+        batch.push(inp);
+    }
+
+    #[allow(clippy::cast_precision_loss)]
+    if output_tokens > 0
+        && let Some(out) = MetricRecord::new(
+            METRIC_AI_TOKENS,
+            output_tokens as f64,
+            [
+                ("model_provider", clean_provider),
+                ("model_name", clean_model.as_str()),
+                ("role", "output"),
+                ("feature", clean_feature.as_str()),
+            ],
+        )
+    {
+        batch.push(out);
+    }
+
+    journal::record_metrics(&batch).await;
 }
 
 pub async fn track_ai_tokens(model: &str, provider: &str, role: &str, count: u64, feature: &str) {
-    if count == 0 {
+    if count == 0 || !is_telemetry_enabled() {
         return;
     }
-    let normalized_provider = normalize_provider_name(provider);
-    track_event(
-        "ai.tokens",
+    let clean_provider = normalize_provider_name(provider);
+    let clean_model = normalize_model_name(clean_provider, model);
+    let clean_role = sanitize_attr_text(role);
+    let clean_feature = sanitize_attr_text(feature);
+
+    #[allow(clippy::cast_precision_loss)]
+    if let Some(rec) = MetricRecord::new(
+        METRIC_AI_TOKENS,
         count as f64,
-        vec![
-            KeyValue::new("model_provider", normalized_provider.to_string()),
-            KeyValue::new("model_name", model.to_string()),
-            KeyValue::new("role", role.to_string()),
-            KeyValue::new("feature", feature.to_string()),
+        [
+            ("model_provider", clean_provider),
+            ("model_name", clean_model.as_str()),
+            ("role", clean_role.as_str()),
+            ("feature", clean_feature.as_str()),
         ],
-    )
-    .await;
+    ) {
+        journal::record_metrics(&[rec]).await;
+    }
 }
 
 pub async fn track_ai_invocation(provider: &str, model: &str, feature: &str) {
-    let normalized_provider = normalize_provider_name(provider);
-    track_event(
-        "ai.invocations",
+    if !is_telemetry_enabled() {
+        return;
+    }
+    let clean_provider = normalize_provider_name(provider);
+    let clean_model = normalize_model_name(clean_provider, model);
+    let clean_feature = sanitize_attr_text(feature);
+
+    if let Some(rec) = MetricRecord::new(
+        METRIC_AI_INVOCATIONS,
         1.0,
-        vec![
-            KeyValue::new("model_provider", normalized_provider.to_string()),
-            KeyValue::new("model_name", model.to_string()),
-            KeyValue::new("feature", feature.to_string()),
+        [
+            ("model_provider", clean_provider),
+            ("model_name", clean_model.as_str()),
+            ("feature", clean_feature.as_str()),
         ],
-    )
-    .await;
+    ) {
+        journal::record_metrics(&[rec]).await;
+    }
 }
 
 pub async fn track_ai_latency(model: &str, provider: &str, ms: u64, feature: &str) {
-    let normalized_provider = normalize_provider_name(provider);
-    track_event(
-        "ai.latency",
+    if ms == 0 || !is_telemetry_enabled() {
+        return;
+    }
+    let clean_provider = normalize_provider_name(provider);
+    let clean_model = normalize_model_name(clean_provider, model);
+    let clean_feature = sanitize_attr_text(feature);
+
+    #[allow(clippy::cast_precision_loss)]
+    if let Some(rec) = MetricRecord::new(
+        METRIC_AI_LATENCY,
         ms as f64,
-        vec![
-            KeyValue::new("model_provider", normalized_provider.to_string()),
-            KeyValue::new("model_name", model.to_string()),
-            KeyValue::new("feature", feature.to_string()),
+        [
+            ("model_provider", clean_provider),
+            ("model_name", clean_model.as_str()),
+            ("feature", clean_feature.as_str()),
         ],
-    )
-    .await;
+    ) {
+        journal::record_metrics(&[rec]).await;
+    }
 }
 
 pub async fn track_tool_use(tool_name: &str) {
+    if !is_telemetry_enabled() {
+        return;
+    }
     let normalized = normalize_tool_name(tool_name);
-    track_event(
-        "tool.use",
-        1.0,
-        vec![KeyValue::new("tool_name", normalized.to_string())],
-    )
-    .await;
+    if let Some(rec) = MetricRecord::new(METRIC_TOOL_USE, 1.0, [("tool_name", normalized)]) {
+        journal::record_metrics(&[rec]).await;
+    }
 }
 
 pub async fn track_session_resume(session_type: &str) {
-    track_event(
-        "claw.session_resume",
-        1.0,
-        vec![KeyValue::new("session_type", session_type.to_string())],
-    )
-    .await;
+    if !is_telemetry_enabled() {
+        return;
+    }
+    let clean_type = sanitize_attr_text(session_type);
+    if let Some(rec) =
+        MetricRecord::new(METRIC_SESSION_RESUME, 1.0, [("session_type", clean_type.as_str())])
+    {
+        journal::record_metrics(&[rec]).await;
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::identity::TEST_TELEMETRY_OVERRIDE;
     use boxxy_db::Db;
+    use boxxy_model_selection::{
+        AnthropicModel, DeepSeekModel, GeminiModel, GroqModel, MiniMaxModel, MistralModel,
+        ModelProvider, MoonshotModel, OpenAiModel, OpenCodeGoModel, OpenCodeZenModel, XaiModel,
+        ZaiModel,
+    };
     use serial_test::serial;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
 
     #[test]
-    fn test_builtin_boxxy_tools_is_sorted_and_normalizes_mcp_tools() {
+    fn test_builtin_boxxy_tools_is_sorted_and_normalizes_all_tools() {
+        assert_eq!(BUILTIN_BOXXY_TOOLS.len(), 46);
         for window in BUILTIN_BOXXY_TOOLS.windows(2) {
             assert!(
                 window[0] < window[1],
@@ -712,13 +297,15 @@ mod tests {
             normalize_tool_name("native_web_search"),
             "native_web_search"
         );
+        assert_eq!(normalize_tool_name("invite_character"), "invite_character");
+        assert_eq!(
+            normalize_tool_name("request_assistance"),
+            "request_assistance"
+        );
+
         // External MCP server tools must be bucketed as external_mcp_tool
         assert_eq!(
             normalize_tool_name("Flathub__get_recently_updated_apps"),
-            EXTERNAL_MCP_TOOL_NAME
-        );
-        assert_eq!(
-            normalize_tool_name("Flathub__search_apps"),
             EXTERNAL_MCP_TOOL_NAME
         );
         assert_eq!(
@@ -728,16 +315,69 @@ mod tests {
     }
 
     #[test]
-    fn test_environment_normalizers() {
+    fn test_all_model_provider_variants_sync_with_telemetry_allowlist() {
+        let variants = [
+            ModelProvider::Gemini(GeminiModel::new("gemini-3.8-flash"), None),
+            ModelProvider::Ollama("llama3:8b".to_string()),
+            ModelProvider::Anthropic(AnthropicModel::new("claude-sonnet-5-5"), None),
+            ModelProvider::OpenAi(OpenAiModel::new("gpt-6-astra"), None),
+            ModelProvider::OpenRouter("anthropic/claude-sonnet-5-5".to_string()),
+            ModelProvider::DeepSeek(DeepSeekModel::new("deepseek-flash")),
+            ModelProvider::Moonshot(MoonshotModel::new("kimi-k3"), None),
+            ModelProvider::Xai(XaiModel::new("grok-4.7"), None),
+            ModelProvider::Zai(ZaiModel::new("glm-5.3"), None),
+            ModelProvider::Mistral(MistralModel::new("mistral-large-latest"), None),
+            ModelProvider::MiniMax(MiniMaxModel::new("MiniMax-M3"), None),
+            ModelProvider::Groq(GroqModel::new("openai/gpt-oss-120b"), None),
+            ModelProvider::OpenCodeZen(OpenCodeZenModel::new("claude-sonnet-5-5"), None),
+            ModelProvider::OpenCodeGo(OpenCodeGoModel::new("glm-5.3"), None),
+            ModelProvider::OpenAiCompatible {
+                provider_name: "Private Internal vLLM".to_string(),
+                model_id: "finetuned-internal-70b".to_string(),
+                thinking: None,
+            },
+        ];
+
+        for variant in &variants {
+            let expected = variant.telemetry_provider_name();
+            let normalized = normalize_provider_name(variant.provider_name());
+            assert_eq!(
+                normalized, expected,
+                "Provider {variant:?} drifted between ModelProvider::telemetry_provider_name ({expected}) and normalize_provider_name ({normalized})"
+            );
+            if !matches!(variant, ModelProvider::OpenAiCompatible { .. }) {
+                assert!(
+                    BUILTIN_PROVIDERS.contains(&normalized),
+                    "Built-in provider {normalized} missing from BUILTIN_PROVIDERS"
+                );
+            }
+        }
+
+        // Model-name privacy guard: Ollama & Custom Endpoints must redact model names
+        assert_eq!(normalize_model_name("Ollama", "private-local:7b"), REDACTED_MODEL_NAME);
+        assert_eq!(
+            normalize_model_name(CUSTOM_ENDPOINT_PROVIDER_NAME, "company-finetune-v2"),
+            REDACTED_MODEL_NAME
+        );
+        assert_eq!(
+            normalize_model_name("OpenCode Go", "glm-5.3"),
+            "glm-5.3"
+        );
+        assert_eq!(
+            normalize_model_name("Gemini", "gemini-3.8-flash"),
+            "gemini-3.8-flash"
+        );
+    }
+
+    #[test]
+    fn test_environment_and_pkg_normalizers() {
         assert_eq!(normalize_os("'Gentoo'"), "Gentoo");
         assert_eq!(normalize_os("\"Fedora Linux\""), "Fedora Linux");
+        assert_eq!(normalize_os("CachyOS"), "CachyOS Linux");
         assert_eq!(normalize_os("GNOME"), "Unknown");
 
         assert_eq!(normalize_shell("/usr/bin/zsh"), "zsh");
-        assert_eq!(
-            normalize_shell("/run/current-system/sw/bin/fish"),
-            "fish"
-        );
+        assert_eq!(normalize_shell("/run/current-system/sw/bin/fish"), "fish");
         assert_eq!(normalize_shell("/bin/bash"), "bash");
 
         assert_eq!(normalize_desktop("ubuntu:GNOME"), "GNOME");
@@ -745,38 +385,14 @@ mod tests {
         assert_eq!(normalize_desktop("X-Cinnamon"), "Cinnamon");
         assert_eq!(normalize_desktop("sway:wlroots"), "Sway");
 
-        assert_eq!(normalize_provider_name("Gemini"), "Gemini");
-        assert_eq!(normalize_provider_name("gemini"), "Gemini");
-        assert_eq!(normalize_provider_name("OpenAI"), "OpenAI");
-        assert_eq!(normalize_provider_name("OpenRouter"), "OpenRouter");
-        assert_eq!(normalize_provider_name("DeepSeek"), "DeepSeek");
-        assert_eq!(normalize_provider_name("Moonshot"), "Moonshot");
-        assert_eq!(normalize_provider_name("xAI"), "xAI");
-        assert_eq!(normalize_provider_name("Z.ai"), "Z.ai");
-        assert_eq!(normalize_provider_name("Mistral"), "Mistral");
-        assert_eq!(normalize_provider_name("MiniMax"), "MiniMax");
-        assert_eq!(normalize_provider_name("Groq"), "Groq");
-        assert_eq!(normalize_provider_name("Anthropic"), "Anthropic");
-        assert_eq!(normalize_provider_name("Ollama"), "Ollama");
-        assert_eq!(
-            normalize_provider_name("Ollama Test"),
-            CUSTOM_ENDPOINT_PROVIDER_NAME
-        );
-        assert_eq!(
-            normalize_provider_name("Test"),
-            CUSTOM_ENDPOINT_PROVIDER_NAME
-        );
-        assert_eq!(
-            normalize_provider_name("OpenCode Go"),
-            CUSTOM_ENDPOINT_PROVIDER_NAME
-        );
+        assert_eq!(normalize_pkg_type("flatpak"), "flatpak");
+        assert_eq!(normalize_pkg_type("nix"), "distro");
+        assert_eq!(normalize_pkg_type("system-package"), "distro");
+        assert_eq!(normalize_pkg_type("distro"), "distro");
+        assert_eq!(normalize_pkg_type("native"), "native");
 
         assert_eq!(
             resolve_theme_telemetry(boxxy_preferences::AppThemeMode::Boxxy, "boxxy-dark"),
-            "Boxxy Dark"
-        );
-        assert_eq!(
-            resolve_theme_telemetry(boxxy_preferences::AppThemeMode::Boxxy, ""),
             "Boxxy Dark"
         );
         assert_eq!(
@@ -788,83 +404,122 @@ mod tests {
             "Boxxy Community"
         );
         assert_eq!(
-            resolve_theme_telemetry(boxxy_preferences::AppThemeMode::Boxxy, "cotton-candy"),
-            "Boxxy Community"
-        );
-        assert_eq!(
-            resolve_theme_telemetry(boxxy_preferences::AppThemeMode::Boxxy, "my-custom-theme"),
-            "Boxxy Community"
-        );
-        assert_eq!(
             resolve_theme_telemetry(boxxy_preferences::AppThemeMode::DefaultGtk, "boxxy-dark"),
             "Adwaita"
         );
-
-        assert_eq!(normalize_theme("Boxxy Dark"), "Boxxy Dark");
-        assert_eq!(normalize_theme("boxxy-dark"), "Boxxy Dark");
-        assert_eq!(normalize_theme("Boxxy Light"), "Boxxy Light");
-        assert_eq!(normalize_theme("boxxy-light"), "Boxxy Light");
-        assert_eq!(normalize_theme("Adwaita"), "Adwaita");
-        assert_eq!(normalize_theme("default_gtk"), "Adwaita");
-        assert_eq!(normalize_theme("Boxxy Community"), "Boxxy Community");
-        assert_eq!(normalize_theme("custom-user-theme"), "Boxxy Community");
     }
 
     #[test]
     #[serial]
-    fn test_session_id_rotation_and_sync() {
+    fn test_session_id_rotation_and_uuid_validation() {
         let initial = session_id();
+        assert!(uuid::Uuid::parse_str(&initial).is_ok());
+
         let rotated = rotate_session_id();
         assert_ne!(initial, rotated);
         assert_eq!(session_id(), rotated);
 
-        set_session_id("custom-session-uuid");
-        assert_eq!(session_id(), "custom-session-uuid");
+        // Non-UUID session IDs must be rejected
+        set_session_id("not-a-valid-uuid");
+        assert_eq!(session_id(), rotated);
+
+        let valid_custom = "12345678-1234-4234-8234-1234567890ab";
+        set_session_id(valid_custom);
+        assert_eq!(session_id(), valid_custom);
     }
 
     #[tokio::test]
     #[serial]
-    async fn test_telemetry_journal_operations_and_opt_out_purge() {
+    async fn test_coalescing_redaction_opt_out_and_serialized_otlp_export() {
         let db = Db::new_in_memory().await.unwrap();
-        let _ = DB.set(db.clone());
+        init_with_db(db.clone());
         let store = db.store();
-        // Clear any leftover rows from shared OnceCell in test process
-        store.purge_telemetry_journal().await.unwrap();
 
-        TEST_TELEMETRY_OVERRIDE.store(1, std::sync::atomic::Ordering::SeqCst);
+        TEST_TELEMETRY_OVERRIDE.store(1, Ordering::SeqCst);
+        let _ = rotate_session_id();
 
-        // 1. Record direct events and tool events (built-in + external MCP)
-        record_to_journal("test.metric.1", 42.0, serde_json::json!({"key": "value"})).await;
+        // 1. Repeated tool calls coalesce into a single SQLite row; MCP tools are masked
+        track_tool_use("grep_search").await;
         track_tool_use("grep_search").await;
         track_tool_use("Flathub__search_apps").await;
 
-        // 2. Verify they are in the database and MCP tool was normalized
+        // 2. AI turn writes invocation + latency + input/output tokens atomically and redacts Ollama model_name
+        track_ai_turn("Ollama", "private-local-model:32b", "claw", 450, 120, 80).await;
+
         let rows = store.fetch_telemetry_batch(100).await.unwrap();
+        // Expect: 1 coalesced grep_search (2.0), 1 external_mcp_tool (1.0), 1 invocation, 1 latency, 2 token rows = 6 rows
+        assert_eq!(rows.len(), 6);
 
-        assert_eq!(rows.len(), 3);
-        assert_eq!(rows[0].metric_name, "test.metric.1");
-        assert!((rows[0].value - 42.0).abs() < f64::EPSILON);
-        assert_eq!(rows[1].metric_name, "tool.use");
-        let parsed_builtin: serde_json::Value =
-            serde_json::from_str(&rows[1].attributes_json).unwrap();
-        assert_eq!(parsed_builtin["tool_name"], "grep_search");
+        let grep_row = rows
+            .iter()
+            .find(|r| r.attributes_json.contains("grep_search"))
+            .unwrap();
+        assert!((grep_row.value - 2.0).abs() < f64::EPSILON);
 
-        let parsed_mcp: serde_json::Value = serde_json::from_str(&rows[2].attributes_json).unwrap();
-        assert_eq!(parsed_mcp["tool_name"], EXTERNAL_MCP_TOOL_NAME);
+        for ai_row in rows.iter().filter(|r| r.metric_name.starts_with("ai.")) {
+            assert!(
+                !ai_row.attributes_json.contains("private-local-model"),
+                "Private Ollama model leaked into local journal: {}",
+                ai_row.attributes_json
+            );
+            assert!(ai_row.attributes_json.contains(REDACTED_MODEL_NAME));
+        }
 
-        // 3. Turn off telemetry -> verify new events are ignored 100%
-        TEST_TELEMETRY_OVERRIDE.store(2, std::sync::atomic::Ordering::SeqCst);
-        track_tool_use("file_read").await;
-        record_to_journal("test.metric.ignored", 1.0, serde_json::json!({})).await;
+        // 3. Spin up an in-memory loopback HTTP server that returns 503 once (testing retry)
+        //    and then 202 Accepted, counting successful deliveries under concurrent flush_journal().
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let attempt_counter = Arc::new(AtomicUsize::new(0));
+        let accepted_counter = Arc::new(AtomicUsize::new(0));
+        let attempts_clone = attempt_counter.clone();
+        let accepted_clone = accepted_counter.clone();
 
-        let count_before_purge = store.count_telemetry_events().await.unwrap();
-        assert_eq!(count_before_purge, 3);
+        let server_task = tokio::spawn(async move {
+            while let Ok((mut socket, _)) = listener.accept().await {
+                let mut buf = vec![0_u8; 32_768];
+                let n = socket.read(&mut buf).await.unwrap_or(0);
+                if n == 0 {
+                    continue;
+                }
+                let req_str = String::from_utf8_lossy(&buf[..n]);
+                assert!(req_str.contains("\"resourceMetrics\""));
+                assert!(req_str.contains("\"event_id\""));
 
-        // 4. Calling disable_and_purge() or flush_journal() while disabled purges the journal
-        flush_journal().await;
+                let call_idx = attempts_clone.fetch_add(1, Ordering::SeqCst);
+                let resp = if call_idx == 0 {
+                    "HTTP/1.1 503 Service Unavailable\r\nRetry-After: 0\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                } else {
+                    accepted_clone.fetch_add(1, Ordering::SeqCst);
+                    "HTTP/1.1 202 Accepted\r\nContent-Type: application/json\r\nContent-Length: 21\r\nConnection: close\r\n\r\n{\"status\":\"accepted\"}"
+                };
+                let _ = socket.write_all(resp.as_bytes()).await;
+            }
+        });
 
+        let endpoint_url = format!("http://{addr}/v1/metrics");
+        unsafe { std::env::set_var("BOXXY_TELEMETRY_ENDPOINT", &endpoint_url) };
+
+        // Concurrent flushes must serialize via FLUSH_LOCK and export the journal strictly ONCE
+        tokio::join!(flush_journal(), flush_journal());
+
+        unsafe { std::env::remove_var("BOXXY_TELEMETRY_ENDPOINT") };
+        server_task.abort();
+
+        assert_eq!(attempt_counter.load(Ordering::SeqCst), 2);
+        assert_eq!(accepted_counter.load(Ordering::SeqCst), 1);
         assert_eq!(store.count_telemetry_events().await.unwrap(), 0);
 
-        TEST_TELEMETRY_OVERRIDE.store(0, std::sync::atomic::Ordering::SeqCst);
+        // 4. Opt-out compliance: disabled telemetry ignores new events and purges any unsent rows
+        track_tool_use("file_read").await;
+        assert_eq!(store.count_telemetry_events().await.unwrap(), 1);
+
+        TEST_TELEMETRY_OVERRIDE.store(2, Ordering::SeqCst);
+        track_tool_use("file_write").await;
+        assert_eq!(store.count_telemetry_events().await.unwrap(), 1);
+
+        flush_journal().await;
+        assert_eq!(store.count_telemetry_events().await.unwrap(), 0);
+
+        TEST_TELEMETRY_OVERRIDE.store(0, Ordering::SeqCst);
     }
 }

@@ -113,7 +113,49 @@ pub fn current_worker_index() -> Option<usize> {
 
 /// Returns true if the application is running inside a Flatpak sandbox.
 pub fn is_flatpak() -> bool {
-    ashpd::is_sandboxed()
+    ashpd::is_sandboxed() || std::env::var_os("FLATPAK_ID").is_some()
+}
+
+/// Classifies the installation channel into one of the three telemetry-safe package buckets:
+/// - `"flatpak"` — Flatpak sandboxed build
+/// - `"distro"` — Nix, Arch AUR, Fedora/RPM, Debian/APT, Gentoo, or any system-packaged build
+/// - `"native"` — Official standalone install (`~/.local/boxxy-terminal`) or local cargo build
+#[must_use]
+pub fn classify_package_type(
+    flatpak: bool,
+    self_update_compiled_in: bool,
+    exe_path: Option<&std::path::Path>,
+) -> &'static str {
+    if flatpak {
+        return "flatpak";
+    }
+    if !self_update_compiled_in {
+        return "distro";
+    }
+    if let Some(path) = exe_path {
+        let s = path.to_string_lossy();
+        if s.starts_with("/nix/store/")
+            || s.starts_with("/usr/")
+            || s.starts_with("/opt/")
+            || s.starts_with("/snap/")
+            || s.starts_with("/bin/")
+            || s.starts_with("/sbin/")
+        {
+            return "distro";
+        }
+    }
+    "native"
+}
+
+/// Detects the active runtime installation channel (`"flatpak"`, `"distro"`, or `"native"`).
+#[must_use]
+pub fn detect_package_type() -> &'static str {
+    let self_update_compiled_in =
+        cfg!(all(feature = "self-update", not(feature = "disable-self-update")));
+    let exe = std::env::current_exe()
+        .ok()
+        .map(|p| std::fs::canonicalize(&p).unwrap_or(p));
+    classify_package_type(is_flatpak(), self_update_compiled_in, exe.as_deref())
 }
 
 /// Returns true if the internal self-updater is allowed to run.
@@ -600,6 +642,43 @@ mod tests {
                 ("PATH".to_string(), "/usr/bin".to_string()),
                 ("BOXXY_SHELL_INTEGRATION".to_string(), "0".to_string()),
             ]
+        );
+    }
+
+    #[test]
+    fn test_classify_package_type() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let standalone_bin = tmp.path().join("boxxy-terminal/bin/boxxy-terminal");
+
+        assert_eq!(
+            classify_package_type(true, true, Some(&standalone_bin)),
+            "flatpak"
+        );
+        assert_eq!(
+            classify_package_type(false, false, Some(&standalone_bin)),
+            "distro"
+        );
+        assert_eq!(
+            classify_package_type(
+                false,
+                true,
+                Some(std::path::Path::new(
+                    "/nix/store/00000000000000000000000000000000-boxxy/bin/boxxy-terminal"
+                ))
+            ),
+            "distro"
+        );
+        assert_eq!(
+            classify_package_type(
+                false,
+                true,
+                Some(std::path::Path::new("/usr/bin/boxxy-terminal"))
+            ),
+            "distro"
+        );
+        assert_eq!(
+            classify_package_type(false, true, Some(&standalone_bin)),
+            "native"
         );
     }
 }

@@ -5,25 +5,23 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 
+[lints]
+workspace = true
+
 [dependencies]
-reqwest = { workspace = true, features = ["rustls"] }
-opentelemetry.workspace = true
-opentelemetry_sdk.workspace = true
-opentelemetry-otlp = { workspace = true, features = ["reqwest-rustls"] }
-opentelemetry-http.workspace = true
-opentelemetry-stdout.workspace = true
+arc-swap.workspace = true
+boxxy-db = { path = "../db" }
+boxxy-preferences = { path = "../preferences" }
+boxxy-sys-utils.workspace = true
+log.workspace = true
+parking_lot.workspace = true
+rand.workspace = true
+reqwest = { workspace = true, features = ["rustls", "json"] }
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
 uuid.workspace = true
-log.workspace = true
-boxxy-preferences = { path = "../preferences" }
-boxxy-db = { path = "../db" }
-boxxy-sys-utils = { workspace = true }
-async-trait.workspace = true
-arc-swap.workspace = true
 
 [dev-dependencies]
+boxxy-model-selection.workspace = true
 serial_test.workspace = true
-
-
