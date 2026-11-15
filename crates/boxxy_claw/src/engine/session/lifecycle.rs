@@ -560,14 +560,6 @@ impl ClawSession {
 
         let name = self.name.clone();
 
-        if boxxy_db::DATABASE_WAS_RESET.swap(false, std::sync::atomic::Ordering::SeqCst) {
-            self.send_ui(ClawEngineEvent::SystemMessage {
-                text: "⚠️ Database reset for update. This only happens during the Preview."
-                    .to_string(),
-            })
-            .await;
-        }
-
         self.total_tokens = 0;
         self.context_tokens = 0;
         self.total_cost_usd = 0.0;

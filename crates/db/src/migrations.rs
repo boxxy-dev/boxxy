@@ -6,20 +6,20 @@
 //!
 //! - **Fresh databases** (`:memory:` or new installs) apply `migrations/schema_latest.sql` in one
 //!   transaction and seed the `migration` journal with all current migration IDs.
-//! - **Existing databases (`v15+`)** apply only unrecorded `Migration` steps, each in its own
-//!   `BEGIN IMMEDIATE` transaction (re-checked under lock so concurrent `boxxy-app` and `boxxy-agent`
-//!   startups never double-apply).
-//! - **Ancient preview databases (`user_version < 15` without a `migration` table)** are cleanly reset
-//!   and bootstrapped to the latest schema (`DATABASE_WAS_RESET = true`).
+//! - **Existing databases (`v15+`)** serialize pending upgrades across `boxxy-agent` and
+//!   `boxxy-app` via `<db_path>.migrate.lock` (`flock`), create an atomic pre-migration backup
+//!   (`<db_path>.bak`), and apply only unrecorded `Migration` steps in individual
+//!   `BEGIN IMMEDIATE` transactions.
+//! - **Ancient preview databases (`user_version < 15` without a `migration` table)** are backed up
+//!   to `<db_path>.bak` and cleanly bootstrapped to the latest schema.
 
-use crate::DATABASE_WAS_RESET;
 use anyhow::{Context, Result};
 use sqlx::{AssertSqlSafe, SqliteConnection, SqlitePool};
 use std::collections::HashSet;
+use std::fs::{File, OpenOptions};
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::sync::atomic::Ordering;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Minimum legacy `PRAGMA user_version` eligible for non-destructive journaled migration.
@@ -77,9 +77,39 @@ enum BootstrapState {
     ReadyForPending(HashSet<String>),
 }
 
+struct MigrationLockGuard {
+    file: File,
+}
+
+impl Drop for MigrationLockGuard {
+    fn drop(&mut self) {
+        let _ = self.file.unlock();
+    }
+}
+
 /// Ensures `pool` is initialized and migrated to the current schema.
 pub async fn apply(pool: &SqlitePool, db_path: Option<&Path>) -> Result<()> {
-    if is_fully_migrated_fast_path(pool, MIGRATIONS).await? {
+    apply_with_migrations(pool, db_path, MIGRATIONS).await
+}
+
+pub(crate) async fn apply_with_migrations(
+    pool: &SqlitePool,
+    db_path: Option<&Path>,
+    migrations: &[Migration],
+) -> Result<()> {
+    if is_fully_migrated_fast_path(pool, migrations).await? {
+        return Ok(());
+    }
+
+    // Serialize bootstrap, `.bak` creation, and multi-step migrations across concurrent
+    // `boxxy-agent` and `boxxy-app` startups so a second process never snapshots a
+    // half-migrated database over `<db_path>.bak`.
+    let migration_lock = match db_path {
+        Some(path) => Some(acquire_migration_lock(path).await?),
+        None => None,
+    };
+
+    if migration_lock.is_some() && is_fully_migrated_fast_path(pool, migrations).await? {
         return Ok(());
     }
 
@@ -88,14 +118,14 @@ pub async fn apply(pool: &SqlitePool, db_path: Option<&Path>) -> Result<()> {
         .await
         .context("Failed to acquire SQLite connection for migrations")?;
 
-    let state = prepare_bootstrap_state(&mut conn).await?;
+    let state = prepare_bootstrap_state(&mut conn, db_path, migrations).await?;
     if let BootstrapState::ReadyForPending(completed) = state {
-        let has_pending = MIGRATIONS.iter().any(|m| !completed.contains(m.id));
+        let has_pending = migrations.iter().any(|m| !completed.contains(m.id));
         if has_pending {
             if let Some(path) = db_path {
                 create_pre_migration_backup(&mut conn, path).await;
             }
-            apply_only(&mut conn, MIGRATIONS, &completed).await?;
+            apply_only(&mut conn, migrations, &completed).await?;
             sqlx::raw_sql(AssertSqlSafe(format!(
                 "PRAGMA user_version = {INFORMATIONAL_USER_VERSION}"
             )))
@@ -105,6 +135,38 @@ pub async fn apply(pool: &SqlitePool, db_path: Option<&Path>) -> Result<()> {
     }
 
     Ok(())
+}
+
+async fn acquire_migration_lock(db_path: &Path) -> Result<MigrationLockGuard> {
+    let lock_path = migration_lock_path_for(db_path);
+    tokio::task::spawn_blocking(move || {
+        if let Some(parent) = lock_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let mut opts = OpenOptions::new();
+        opts.read(true).write(true).create(true).truncate(false);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.mode(0o600);
+        }
+        let file = opts.open(&lock_path).with_context(|| {
+            format!(
+                "Failed to open database migration lock file {}",
+                lock_path.display()
+            )
+        })?;
+        crate::restrict_owner_permissions(&lock_path);
+        file.lock().with_context(|| {
+            format!(
+                "Failed to acquire database migration lock on {}",
+                lock_path.display()
+            )
+        })?;
+        Ok(MigrationLockGuard { file })
+    })
+    .await
+    .context("Database migration lock task panicked")?
 }
 
 /// Lock-free read check for the 99.9% startup case where all migrations are already applied.
@@ -126,7 +188,11 @@ async fn is_fully_migrated_fast_path(pool: &SqlitePool, migrations: &[Migration]
     Ok(migrations.iter().all(|m| completed.contains(m.id)))
 }
 
-async fn prepare_bootstrap_state(conn: &mut SqliteConnection) -> Result<BootstrapState> {
+async fn prepare_bootstrap_state(
+    conn: &mut SqliteConnection,
+    db_path: Option<&Path>,
+    migrations: &[Migration],
+) -> Result<BootstrapState> {
     sqlx::raw_sql("BEGIN IMMEDIATE").execute(&mut *conn).await?;
 
     let outcome: Result<Option<BootstrapState>> = async {
@@ -137,7 +203,7 @@ async fn prepare_bootstrap_state(conn: &mut SqliteConnection) -> Result<Bootstra
         .await?;
 
         if tables.is_empty() {
-            bootstrap_fresh_schema_in_tx(conn).await?;
+            bootstrap_fresh_schema_in_tx(conn, migrations).await?;
             sqlx::raw_sql("COMMIT").execute(&mut *conn).await?;
             return Ok(Some(BootstrapState::FreshBootstrapped));
         }
@@ -153,7 +219,7 @@ async fn prepare_bootstrap_state(conn: &mut SqliteConnection) -> Result<Bootstra
             .await?;
 
         if user_version < LEGACY_MIN_SUPPORTED_PRAGMA_VERSION {
-            // Release transaction before toggling `foreign_keys = OFF` for full reset.
+            // Release transaction before snapshotting `.bak` and toggling `foreign_keys = OFF`.
             sqlx::raw_sql("COMMIT").execute(&mut *conn).await?;
             return Ok(None);
         }
@@ -161,11 +227,8 @@ async fn prepare_bootstrap_state(conn: &mut SqliteConnection) -> Result<Bootstra
         log::info!(
             "Adopting existing v{user_version} database into the journaled migration system."
         );
-        sqlx::raw_sql(
-            "CREATE TABLE IF NOT EXISTS migration (id TEXT PRIMARY KEY, time_completed INTEGER NOT NULL)",
-        )
-        .execute(&mut *conn)
-        .await?;
+        // Defer creating `migration` until `apply_only` runs so `<db_path>.bak` captures the
+        // untouched pre-migration database prior to any DDL.
         sqlx::raw_sql("COMMIT").execute(&mut *conn).await?;
         Ok(Some(BootstrapState::ReadyForPending(HashSet::new())))
     }
@@ -174,7 +237,10 @@ async fn prepare_bootstrap_state(conn: &mut SqliteConnection) -> Result<Bootstra
     match outcome {
         Ok(Some(state)) => Ok(state),
         Ok(None) => {
-            reset_legacy_pre_v15_database(conn).await?;
+            if let Some(path) = db_path {
+                create_pre_migration_backup(conn, path).await;
+            }
+            reset_legacy_pre_v15_database(conn, migrations).await?;
             Ok(BootstrapState::FreshBootstrapped)
         }
         Err(err) => {
@@ -184,14 +250,17 @@ async fn prepare_bootstrap_state(conn: &mut SqliteConnection) -> Result<Bootstra
     }
 }
 
-async fn bootstrap_fresh_schema_in_tx(conn: &mut SqliteConnection) -> Result<()> {
+async fn bootstrap_fresh_schema_in_tx(
+    conn: &mut SqliteConnection,
+    migrations: &[Migration],
+) -> Result<()> {
     sqlx::raw_sql(SCHEMA_LATEST_SQL)
         .execute(&mut *conn)
         .await
         .context("Failed to initialize canonical database schema")?;
 
     let now_ms = now_epoch_ms();
-    for migration in MIGRATIONS {
+    for migration in migrations {
         sqlx::query("INSERT OR IGNORE INTO migration (id, time_completed) VALUES (?, ?)")
             .bind(migration.id)
             .bind(now_ms)
@@ -209,7 +278,10 @@ async fn bootstrap_fresh_schema_in_tx(conn: &mut SqliteConnection) -> Result<()>
 }
 
 /// Atomically drops all legacy `< v15` objects and bootstraps the current schema.
-async fn reset_legacy_pre_v15_database(conn: &mut SqliteConnection) -> Result<()> {
+async fn reset_legacy_pre_v15_database(
+    conn: &mut SqliteConnection,
+    migrations: &[Migration],
+) -> Result<()> {
     sqlx::raw_sql("PRAGMA foreign_keys = OFF")
         .execute(&mut *conn)
         .await?;
@@ -229,14 +301,13 @@ async fn reset_legacy_pre_v15_database(conn: &mut SqliteConnection) -> Result<()
         }
 
         log::warn!(
-            "Legacy pre-v{LEGACY_MIN_SUPPORTED_PRAGMA_VERSION} database detected; resetting to fresh schema."
+            "Legacy pre-v{LEGACY_MIN_SUPPORTED_PRAGMA_VERSION} database detected; bootstrapping fresh schema."
         );
 
         drop_all_user_objects_in_tx(conn).await?;
-        bootstrap_fresh_schema_in_tx(conn).await?;
+        bootstrap_fresh_schema_in_tx(conn, migrations).await?;
 
         sqlx::raw_sql("COMMIT").execute(&mut *conn).await?;
-        DATABASE_WAS_RESET.store(true, Ordering::SeqCst);
         Ok(())
     }
     .await;
@@ -248,7 +319,7 @@ async fn reset_legacy_pre_v15_database(conn: &mut SqliteConnection) -> Result<()
         .execute(&mut *conn)
         .await;
 
-    res.context("Failed to reset legacy pre-v15 database")
+    res.context("Failed to bootstrap legacy pre-v15 database")
 }
 
 async fn drop_all_user_objects_in_tx(conn: &mut SqliteConnection) -> Result<()> {
@@ -415,26 +486,46 @@ async fn fetch_completed_ids(conn: &mut SqliteConnection) -> Result<HashSet<Stri
     Ok(rows.into_iter().map(|(id,)| id).collect())
 }
 
-/// Creates a WAL-consistent single rolling backup (`<db_path>.bak`) via `VACUUM INTO`
+/// Creates an atomic WAL-consistent single rolling backup (`<db_path>.bak`) via `VACUUM INTO`
 /// right before running pending migrations on an existing file-backed database.
+///
+/// Writes to `<db_path>.bak.tmp` first and atomically renames over `<db_path>.bak` so an
+/// existing backup is never lost if `VACUUM INTO` fails.
 async fn create_pre_migration_backup(conn: &mut SqliteConnection, db_path: &Path) {
     let bak_path = backup_path_for(db_path);
-    let _ = tokio::fs::remove_file(&bak_path).await;
+    let tmp_bak_path = temp_backup_path_for(db_path);
+    let _ = tokio::fs::remove_file(&tmp_bak_path).await;
 
-    let Some(bak_str) = bak_path.to_str() else {
+    let Some(tmp_str) = tmp_bak_path.to_str() else {
         return;
     };
 
     match sqlx::query("VACUUM INTO ?")
-        .bind(bak_str)
+        .bind(tmp_str)
         .execute(&mut *conn)
         .await
     {
         Ok(_) => {
-            crate::restrict_owner_permissions(&bak_path);
-            log::info!("Created pre-migration database backup at {}", bak_path.display());
+            crate::restrict_owner_permissions(&tmp_bak_path);
+            match tokio::fs::rename(&tmp_bak_path, &bak_path).await {
+                Ok(()) => {
+                    crate::restrict_owner_permissions(&bak_path);
+                    log::info!(
+                        "Created pre-migration database backup at {}",
+                        bak_path.display()
+                    );
+                }
+                Err(err) => {
+                    let _ = tokio::fs::remove_file(&tmp_bak_path).await;
+                    log::warn!(
+                        "Could not finalize pre-migration backup at {}: {err}",
+                        bak_path.display()
+                    );
+                }
+            }
         }
         Err(err) => {
+            let _ = tokio::fs::remove_file(&tmp_bak_path).await;
             log::warn!(
                 "Could not create pre-migration backup at {}: {err}",
                 bak_path.display()
@@ -447,6 +538,18 @@ async fn create_pre_migration_backup(conn: &mut SqliteConnection, db_path: &Path
 pub(crate) fn backup_path_for(db_path: &Path) -> PathBuf {
     let mut os = db_path.as_os_str().to_os_string();
     os.push(".bak");
+    PathBuf::from(os)
+}
+
+fn temp_backup_path_for(db_path: &Path) -> PathBuf {
+    let mut os = db_path.as_os_str().to_os_string();
+    os.push(".bak.tmp");
+    PathBuf::from(os)
+}
+
+fn migration_lock_path_for(db_path: &Path) -> PathBuf {
+    let mut os = db_path.as_os_str().to_os_string();
+    os.push(".migrate.lock");
     PathBuf::from(os)
 }
 
@@ -749,7 +852,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn pre_v15_database_resets_cleanly_and_sets_flag() {
+    async fn pre_v15_database_bootstraps_cleanly_with_backup() {
         let dir = tempfile::tempdir().unwrap();
         let db_path = dir.path().join("legacy_v12.db");
 
@@ -771,9 +874,8 @@ mod tests {
         .unwrap();
         legacy_pool.close().await;
 
-        DATABASE_WAS_RESET.store(false, Ordering::SeqCst);
         let reopened = Db::open_at(&db_path).await.unwrap();
-        assert!(DATABASE_WAS_RESET.swap(false, Ordering::SeqCst));
+        assert!(backup_path_for(&db_path).exists());
 
         let obsolete: Option<(String,)> = sqlx::query_as(
             "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'obsolete_preview_table'",
@@ -788,6 +890,116 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(applied_count, i64::try_from(MIGRATIONS.len()).unwrap());
+    }
+
+    #[tokio::test]
+    async fn concurrent_multi_pool_upgrade_preserves_untouched_pre_migration_backup() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("concurrent.db");
+
+        // Seed a v15 database on disk with synthetic rows
+        let seed_opts = SqliteConnectOptions::new()
+            .filename(&db_path)
+            .create_if_missing(true)
+            .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal);
+        let seed_pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(seed_opts)
+            .await
+            .unwrap();
+        sqlx::raw_sql(LEGACY_V15_SCHEMA)
+            .execute(&seed_pool)
+            .await
+            .unwrap();
+        sqlx::raw_sql(
+            "INSERT INTO sessions (id, name) VALUES ('s_pre', 'AgentA'); \
+             INSERT INTO memories (key, project_path, content, verified) \
+                 VALUES ('shell_pref', 'global', 'fish', true);",
+        )
+        .execute(&seed_pool)
+        .await
+        .unwrap();
+        seed_pool.close().await;
+
+        // Simulate `boxxy-agent` and `boxxy-app` opening the unmigrated DB concurrently,
+        // including an extra custom step with an async yield between steps.
+        let mut extended = MIGRATIONS.to_vec();
+        extended.push(Migration {
+            id: "20261201000001_slow_step",
+            foreign_keys: true,
+            up: MigrationUp::Custom(|conn| {
+                Box::pin(async move {
+                    tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+                    sqlx::raw_sql(
+                        "CREATE TABLE post_upgrade_marker (marker TEXT PRIMARY KEY); \
+                         INSERT INTO post_upgrade_marker VALUES ('done');",
+                    )
+                    .execute(&mut *conn)
+                    .await?;
+                    Ok(())
+                })
+            }),
+        });
+
+        let open_pool = || async {
+            let opts = SqliteConnectOptions::new()
+                .filename(&db_path)
+                .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
+                .busy_timeout(std::time::Duration::from_secs(5))
+                .foreign_keys(true);
+            SqlitePoolOptions::new()
+                .max_connections(2)
+                .connect_with(opts)
+                .await
+                .unwrap()
+        };
+
+        let (pool_a, pool_b) = tokio::join!(open_pool(), open_pool());
+        let (res_a, res_b) = tokio::join!(
+            apply_with_migrations(&pool_a, Some(&db_path), &extended),
+            apply_with_migrations(&pool_b, Some(&db_path), &extended),
+        );
+        res_a.unwrap();
+        res_b.unwrap();
+
+        // Live DB must have all migrations and preserved data
+        let live_applied: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM migration")
+            .fetch_one(&pool_a)
+            .await
+            .unwrap();
+        assert_eq!(live_applied, i64::try_from(extended.len()).unwrap());
+
+        // `.bak` must be the exact untouched pre-migration v15 database (NOT overwritten mid-migration)
+        let bak_path = backup_path_for(&db_path);
+        assert!(bak_path.exists());
+        let bak_pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(SqliteConnectOptions::new().filename(&bak_path))
+            .await
+            .unwrap();
+
+        let bak_has_migration_tbl: Option<(i32,)> = sqlx::query_as(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'migration' LIMIT 1",
+        )
+        .fetch_optional(&bak_pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            bak_has_migration_tbl, None,
+            "Backup must capture untouched pre-migration state without mid-upgrade DDL"
+        );
+
+        let bak_sessions: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sessions")
+            .fetch_one(&bak_pool)
+            .await
+            .unwrap();
+        assert_eq!(bak_sessions, 1);
+
+        let bak_memories: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM memories")
+            .fetch_one(&bak_pool)
+            .await
+            .unwrap();
+        assert_eq!(bak_memories, 1);
     }
 
     #[tokio::test]

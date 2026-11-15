@@ -23,7 +23,7 @@ The crate is the only place where a definition appears in *both* the UI process 
   - `RegistrySnapshot { catalog: Vec<CharacterInfo>, claims: Vec<CharacterClaim>, revision: u64 }` — full consistent view; revision is monotonic so stale out-of-order signal deliveries can be dropped.
   - `ClaimedSession { session_id, claim }` — returned by a successful `try_claim_character`.
   - `ClaimError { AlreadyTaken { holder_id, holder_kind, holder_display_name }, UnknownCharacter { character_id }, Migrated { from_id, to_id } }` — typed error so the UI can recover (re-issue with `to_id` on `Migrated`) rather than just log.
-  - `StartupToken { daemon_version, db_was_reset, initial_revision }` — returned by `claim_startup_token()`; lets a reconnecting UI detect DB resets and seed its initial revision.
+  - `StartupToken { daemon_version, initial_revision, telemetry_session_id }` — returned by `claim_startup_token()`; seeds the connecting UI's initial revision and shared telemetry session ID.
   - `PeerQuery { ByCharacterId, ByCharacterDisplayName, ByPetname, ByHolderId }` / `PeerInfo` — used by swarm tools to locate peers via `resolve_peer`.
   - `CHARACTER_CACHE: ArcSwap<Vec<CharacterInfo>>` and `CLAIMS_CACHE: ArcSwap<Vec<CharacterClaim>>` — global lock-free caches kept in sync by `agent_manager` via push signals. Read synchronously by UI components (autocomplete, indicator) without D-Bus round-trips.
 - **Skill Loader (`skill_loader.rs`)**: Lightweight YAML frontmatter header scanner (`discover_skill_summaries`, capped at 4 KB so UI discovery never reads full markdown bodies), full skill parser (`parse_skill_document`), and `is_skill_disabled` helper shared between `boxxy-preferences` and `boxxy-claw`.

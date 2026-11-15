@@ -53,7 +53,7 @@ Top-level orchestration interface, split into focused submodules:
 - **`ipc/broadcasters.rs`** — background coalescing D-Bus signal emitters (`ClaimsChanged`, `DetachedSessionsChanged`, `PendingTasksChanged`, `McpStatusChanged`).
 
 **Character claim RPC** (all results serialized as JSON strings over D-Bus):
-- `claim_startup_token()` — increments the ghost-mode client counter and returns a `StartupToken` with daemon version, whether the DB was reset, and the current registry revision.
+- `claim_startup_token()` — increments the ghost-mode client counter and returns a `StartupToken` with daemon version, current registry revision, and shared telemetry session ID.
 - `get_registry_snapshot()` — returns the full `RegistrySnapshot` (catalog + all claims + revision).
 - `try_claim_character(holder_id, holder_kind: u8, character_id)` → `Result<ClaimedSession, ClaimError>`.
 - `release_holder(holder_id)` — releases a single claim and cascades swarm lock cleanup for Pane holders.

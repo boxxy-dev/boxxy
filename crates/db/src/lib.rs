@@ -5,7 +5,6 @@ use anyhow::{Context, Result};
 use sqlx::SqlitePool;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 use tokio::sync::OnceCell;
 
@@ -14,7 +13,6 @@ pub mod models;
 pub mod store;
 
 static DB: OnceCell<Db> = OnceCell::const_new();
-pub static DATABASE_WAS_RESET: AtomicBool = AtomicBool::new(false);
 
 const DEFAULT_MAX_CONNECTIONS: u32 = 5;
 
@@ -150,7 +148,7 @@ fn ensure_owner_only_db_files(db_path: &Path) {
                 .open(db_path);
         }
         restrict_owner_permissions(db_path);
-        for suffix in ["-wal", "-shm"] {
+        for suffix in ["-wal", "-shm", ".bak", ".migrate.lock"] {
             let mut sidecar = db_path.as_os_str().to_os_string();
             sidecar.push(suffix);
             let sidecar_path = PathBuf::from(sidecar);

@@ -259,7 +259,6 @@ pub struct ClaimedSession {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StartupToken {
     pub daemon_version: String,
-    pub db_was_reset: bool,
     pub initial_revision: u64,
     #[serde(default)]
     pub telemetry_session_id: String,

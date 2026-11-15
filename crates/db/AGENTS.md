@@ -29,7 +29,7 @@ crates/db/
 
 ## Connection & Security Posture (`lib.rs`)
 - **Location**: Resolves via `boxxy_sys_utils::get_config_dir().join("boxxyclaw/boxxy.db")`. Use `Db::open_at(path)` for isolated file-backed tests and `Db::new_in_memory()` (`max_connections = 1`, `idle_timeout = None`, `max_lifetime = None`) for unit tests.
-- **Owner-Only Permissions**: On Unix, parent directories are restricted to `0700` and `boxxy.db` (plus `-wal` and `-shm` sidecars and `.bak` backups) are restricted to `0600` without opening/closing existing files (preserving POSIX `fcntl` advisory locks).
+- **Owner-Only Permissions**: On Unix, parent directories are restricted to `0700` and `boxxy.db` (plus `-wal`, `-shm`, `.bak`, and `.migrate.lock` sidecars) are restricted to `0600` without opening/closing existing files (preserving POSIX `fcntl` advisory locks).
 - **SQLite Pragmas**: Configured with `journal_mode = WAL`, `synchronous = NORMAL`, `busy_timeout = 10s`, `foreign_keys = ON`, `temp_store = MEMORY`, and `cache_size = -8000` (8 MiB per connection).
 
 ## Journaled Migration System (`migrations.rs` & `migrations/`)
@@ -45,10 +45,11 @@ CREATE TABLE IF NOT EXISTS migration (
 - **Read-Only Fast Path**: On normal startups (`boxxy-app` and `boxxy-agent`), `migrations::apply` checks `SELECT id FROM migration` first. When all registered `MIGRATIONS` are present, it returns immediately with **zero write locks, zero DDL, and zero FTS rebuilds**.
 - **Fresh Bootstrap**: Empty databases apply `migrations/schema_latest.sql` inside a `BEGIN IMMEDIATE` transaction and seed `migration` with all registered IDs in one shot.
 - **Incremental Upgrades (`v15+`)**:
-  - Creates a WAL-consistent rolling backup (`boxxy.db.bak`) via `VACUUM INTO` before applying pending steps on file-backed databases.
-  - Executes each unapplied `Migration` (`MigrationUp::Sql` or `MigrationUp::Custom`) inside its own `BEGIN IMMEDIATE` transaction, re-checking `SELECT id FROM migration WHERE id = ?` under the lock so concurrent UI + daemon startups never double-apply.
+  - Serializes pending upgrade passes across concurrent `boxxy-agent` and `boxxy-app` startups via an exclusive advisory `flock` on `<db_path>.migrate.lock` (re-checking the read-only fast path once acquired so the second process returns immediately without touching `.bak` or opening write transactions).
+  - Creates an atomic WAL-consistent rolling backup (`boxxy.db.bak.tmp` renamed over `boxxy.db.bak`) via `VACUUM INTO` before applying pending steps on file-backed databases, preserving the untouched pre-migration snapshot.
+  - Executes each unapplied `Migration` (`MigrationUp::Sql` or `MigrationUp::Custom`) inside its own `BEGIN IMMEDIATE` transaction, re-checking `SELECT id FROM migration WHERE id = ?` under the lock so concurrent callers never double-apply.
   - When `foreign_keys: false` is set on a `Migration` (for SQLite's 12-step table-rebuild pattern), the runner disables `PRAGMA foreign_keys` outside the transaction, verifies `PRAGMA foreign_key_check` before `COMMIT`, and always restores `PRAGMA foreign_keys = ON` afterward.
-- **Legacy `< v15` Reset**: Ancient preview databases without a `migration` table and `PRAGMA user_version < 15` are cleanly dropped and bootstrapped to `schema_latest.sql` (`DATABASE_WAS_RESET = true`).
+- **Legacy `< v15` Bootstrap**: Ancient pre-v15 preview databases without a `migration` table are backed up to `boxxy.db.bak` and bootstrapped cleanly to `schema_latest.sql`.
 
 ### Workflow for Adding a Schema Change
 1. Update `crates/db/migrations/schema_latest.sql`.

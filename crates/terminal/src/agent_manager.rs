@@ -459,11 +459,6 @@ pub struct AgentManager {
     maintenance_proxy: AgentMaintenanceProxy<'static>,
     connection: AgentConnection,
     preferred_shell: Arc<tokio::sync::OnceCell<String>>,
-    /// Notification produced during init (e.g. DB reset). Stored here instead
-    /// of sent to TERMINAL_EVENT_BUS immediately, because the bus is a
-    /// broadcast channel that drops messages when there are no subscribers —
-    /// and the window hasn't subscribed yet when AgentManager is initialized.
-    startup_notification: Arc<Mutex<Option<String>>>,
 }
 
 impl AgentManager {
@@ -500,21 +495,13 @@ impl AgentManager {
                 }
             }
         };
-        let startup_notification = if let Ok(token) = serde_json::from_str::<
+        if let Ok(token) = serde_json::from_str::<
             boxxy_claw_protocol::characters::StartupToken,
         >(&startup_token_json)
+            && !token.telemetry_session_id.is_empty()
         {
-            if !token.telemetry_session_id.is_empty() {
-                boxxy_telemetry::set_session_id(&token.telemetry_session_id);
-            }
-            if token.db_was_reset {
-                Some("Database reset: Conversation history was cleared for a schema update. This only happens during the Preview.".to_string())
-            } else {
-                None
-            }
-        } else {
-            None
-        };
+            boxxy_telemetry::set_session_id(&token.telemetry_session_id);
+        }
 
         // Seed the UI character cache
         if let Ok(snapshot_json) = agent_proxy.get_registry_snapshot().await
@@ -537,15 +524,7 @@ impl AgentManager {
             maintenance_proxy,
             connection,
             preferred_shell: Arc::new(tokio::sync::OnceCell::new()),
-            startup_notification: Arc::new(Mutex::new(startup_notification)),
         })
-    }
-
-    /// Returns any notification generated during initialization (e.g. DB reset
-    /// message), consuming it so it is only shown once. Call this after the
-    /// window has subscribed to TERMINAL_EVENT_BUS.
-    pub fn take_startup_notification(&self) -> Option<String> {
-        self.startup_notification.lock().take()
     }
 
     pub async fn disconnect(&self) {

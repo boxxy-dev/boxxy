@@ -117,13 +117,10 @@ impl AgentInterface {
         };
         log::info!("Client connected. Total clients: {}", new_count);
 
-        let db_was_reset =
-            boxxy_db::DATABASE_WAS_RESET.swap(false, std::sync::atomic::Ordering::SeqCst);
         let snapshot = self.core.registry.snapshot().await;
 
         let token = boxxy_claw_protocol::characters::StartupToken {
             daemon_version: crate::daemon::singleton::AGENT_VERSION.to_string(),
-            db_was_reset,
             initial_revision: snapshot.revision,
             telemetry_session_id,
         };

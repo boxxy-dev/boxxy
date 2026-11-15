@@ -28,13 +28,6 @@ impl ToastRequest {
             timeout_secs: 3,
         }
     }
-
-    pub fn persistent(message: impl Into<String>) -> Self {
-        Self {
-            message: message.into(),
-            timeout_secs: 0,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
