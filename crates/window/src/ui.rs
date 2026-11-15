@@ -393,6 +393,7 @@ impl AppWindow {
             toast_overlay,
             frosted_container,
             active_update_notification: None,
+            last_notified_broken_default: None,
             initial_launch: Some(crate::init::TabLaunchSpec {
                 working_dir: init.working_dir,
                 command: init.initial_command.clone(),
@@ -661,6 +662,12 @@ impl AppWindow {
         }
 
         window.present();
+
+        if !is_drag_window
+            && let Ok(mut inner) = inner_ref.try_borrow_mut()
+        {
+            crate::update::window_state::maybe_notify_broken_default_model(&mut inner);
+        }
 
         // Hydrate Command Palette bookmarks asynchronously off the UI thread and pre-warm
         // deferred dialogs/models right after the window has presented on screen.

@@ -436,8 +436,9 @@ pub fn spawn_turn(
         } else {
             session_ctx_clone.clone()
         };
-        let config = crate::engine::agent_config::AgentConfig::from_env(
+        let config = crate::engine::agent_config::AgentConfig::from_env_for_character(
             &settings,
+            Some(&character_id),
             web_search_enabled,
             effective_preamble,
         );

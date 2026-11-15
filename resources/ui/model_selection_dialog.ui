@@ -1,0 +1,484 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<interface>
+  <requires lib="gtk" version="4.0"/>
+  <requires lib="libadwaita" version="1.0"/>
+  <object class="AdwDialog" id="model_selection_dialog">
+    <property name="title">Model Assignment</property>
+    <property name="content-width">760</property>
+    <property name="content-height">580</property>
+    <property name="default-widget">done_btn</property>
+    <child>
+      <object class="GtkBox">
+        <style>
+          <class name="model-assignment-root"/>
+        </style>
+        <property name="orientation">vertical</property>
+        <property name="spacing">0</property>
+
+        <!-- Standard Adwaita HeaderBar with Centered ViewSwitcher (matches Sidebar) -->
+        <child>
+          <object class="AdwHeaderBar">
+            <style>
+              <class name="flat"/>
+              <class name="sidebar-header"/>
+              <class name="model-assignment-header"/>
+            </style>
+            <property name="show-start-title-buttons">false</property>
+            <property name="show-end-title-buttons">false</property>
+            <property name="title-widget">
+              <object class="AdwViewSwitcher" id="mode_switcher">
+                <property name="stack">main_stack</property>
+                <property name="policy">wide</property>
+              </object>
+            </property>
+          </object>
+        </child>
+
+        <!-- Main Body ViewStack: Characters vs System Dreams -->
+        <child>
+          <object class="AdwViewStack" id="main_stack">
+            <property name="vexpand">true</property>
+            <property name="hexpand">true</property>
+
+            <!-- Page 1: Characters (Mandatory Default + Per-Character Overrides) -->
+            <child>
+              <object class="AdwViewStackPage">
+                <property name="name">characters</property>
+                <property name="title">Characters</property>
+                <property name="icon-name">boxxy-boxxyclaw-symbolic</property>
+                <property name="child">
+                  <object class="GtkBox">
+                    <property name="orientation">vertical</property>
+                    <property name="spacing">10</property>
+                    <property name="margin-start">18</property>
+                    <property name="margin-end">18</property>
+                    <property name="margin-top">4</property>
+                    <property name="margin-bottom">6</property>
+                    <property name="vexpand">true</property>
+
+                    <!-- Mandatory Global Default Section -->
+                    <child>
+                      <object class="GtkBox">
+                        <style>
+                          <class name="model-default-card"/>
+                        </style>
+                        <property name="orientation">vertical</property>
+                        <property name="spacing">6</property>
+                        <child>
+                          <object class="GtkBox">
+                            <property name="orientation">horizontal</property>
+                            <property name="spacing">8</property>
+                            <child>
+                              <object class="GtkLabel">
+                                <style>
+                                  <class name="heading"/>
+                                </style>
+                                <property name="label">Default for all characters</property>
+                                <property name="xalign">0</property>
+                              </object>
+                            </child>
+                            <child>
+                              <object class="GtkLabel" id="default_required_lbl">
+                                <style>
+                                  <class name="caption"/>
+                                  <class name="dim-label"/>
+                                </style>
+                                <property name="label">Required — used unless overridden below</property>
+                                <property name="hexpand">true</property>
+                                <property name="xalign">1</property>
+                              </object>
+                            </child>
+                          </object>
+                        </child>
+
+                        <!-- Broken Default Warning Banner -->
+                        <child>
+                          <object class="GtkBox" id="broken_default_banner">
+                            <style>
+                              <class name="model-broken-banner"/>
+                            </style>
+                            <property name="orientation">horizontal</property>
+                            <property name="spacing">8</property>
+                            <property name="visible">false</property>
+                            <child>
+                              <object class="GtkImage">
+                                <property name="icon-name">boxxy-dialog-warning-symbolic</property>
+                                <property name="pixel-size">15</property>
+                                <property name="valign">center</property>
+                              </object>
+                            </child>
+                            <child>
+                              <object class="GtkLabel" id="broken_default_lbl">
+                                <property name="xalign">0</property>
+                                <property name="hexpand">true</property>
+                                <property name="wrap">true</property>
+                              </object>
+                            </child>
+                          </object>
+                        </child>
+
+                        <!-- Horizontal 3-Column Default Model Selector Slot -->
+                        <child>
+                          <object class="GtkBox" id="default_selector_slot">
+                            <property name="orientation">vertical</property>
+                            <property name="hexpand">true</property>
+                          </object>
+                        </child>
+                      </object>
+                    </child>
+
+                    <!-- Per-Character Overrides Section -->
+                    <child>
+                      <object class="GtkBox" id="overrides_section">
+                        <property name="orientation">vertical</property>
+                        <property name="spacing">8</property>
+                        <property name="vexpand">true</property>
+
+                        <child>
+                          <object class="GtkBox">
+                            <property name="orientation">horizontal</property>
+                            <property name="spacing">8</property>
+                            <child>
+                              <object class="GtkLabel">
+                                <style>
+                                  <class name="heading"/>
+                                </style>
+                                <property name="label">Character Overrides</property>
+                                <property name="xalign">0</property>
+                              </object>
+                            </child>
+                            <child>
+                              <object class="GtkLabel" id="overrides_locked_lbl">
+                                <style>
+                                  <class name="caption"/>
+                                  <class name="warning"/>
+                                </style>
+                                <property name="label">Select a default model above first</property>
+                                <property name="hexpand">true</property>
+                                <property name="xalign">1</property>
+                                <property name="visible">false</property>
+                              </object>
+                            </child>
+                          </object>
+                        </child>
+
+                        <!-- Master-Detail Split -->
+                        <child>
+                          <object class="GtkBox" id="overrides_split">
+                            <property name="orientation">horizontal</property>
+                            <property name="spacing">12</property>
+                            <property name="vexpand">true</property>
+                            <property name="hexpand">true</property>
+
+                            <!-- Left Character List -->
+                            <child>
+                              <object class="GtkScrolledWindow">
+                                <style>
+                                  <class name="model-character-list-frame"/>
+                                </style>
+                                <property name="width-request">248</property>
+                                <property name="hscrollbar-policy">never</property>
+                                <property name="vscrollbar-policy">automatic</property>
+                                <property name="vexpand">true</property>
+                                <child>
+                                  <object class="GtkListBox" id="character_list">
+                                    <style>
+                                      <class name="navigation-sidebar"/>
+                                      <class name="model-character-list"/>
+                                    </style>
+                                    <property name="selection-mode">single</property>
+                                  </object>
+                                </child>
+                              </object>
+                            </child>
+
+                            <!-- Right Character Detail Card -->
+                            <child>
+                              <object class="GtkBox" id="character_detail_card">
+                                <style>
+                                  <class name="model-override-card"/>
+                                </style>
+                                <property name="orientation">vertical</property>
+                                <property name="spacing">10</property>
+                                <property name="hexpand">true</property>
+                                <property name="vexpand">true</property>
+
+                                <!-- Selected Character Hero -->
+                                <child>
+                                  <object class="GtkBox">
+                                    <property name="orientation">horizontal</property>
+                                    <property name="spacing">12</property>
+                                    <child>
+                                      <object class="AdwAvatar" id="detail_avatar">
+                                        <property name="size">44</property>
+                                        <property name="show-initials">true</property>
+                                        <property name="valign">center</property>
+                                      </object>
+                                    </child>
+                                    <child>
+                                      <object class="GtkBox">
+                                        <property name="orientation">vertical</property>
+                                        <property name="spacing">2</property>
+                                        <property name="valign">center</property>
+                                        <property name="hexpand">true</property>
+                                        <child>
+                                          <object class="GtkLabel" id="detail_name_lbl">
+                                            <style>
+                                              <class name="title-4"/>
+                                            </style>
+                                            <property name="xalign">0</property>
+                                            <property name="ellipsize">end</property>
+                                          </object>
+                                        </child>
+                                        <child>
+                                          <object class="GtkLabel" id="detail_duties_lbl">
+                                            <style>
+                                              <class name="caption"/>
+                                              <class name="dim-label"/>
+                                            </style>
+                                            <property name="xalign">0</property>
+                                            <property name="ellipsize">end</property>
+                                            <property name="max-width-chars">48</property>
+                                          </object>
+                                        </child>
+                                      </object>
+                                    </child>
+                                  </object>
+                                </child>
+
+                                <!-- Use Default Model Switch Row -->
+                                <child>
+                                  <object class="GtkBox">
+                                    <property name="orientation">horizontal</property>
+                                    <property name="spacing">12</property>
+                                    <property name="margin-top">2</property>
+                                    <child>
+                                      <object class="GtkBox">
+                                        <property name="orientation">vertical</property>
+                                        <property name="spacing">2</property>
+                                        <property name="hexpand">true</property>
+                                        <property name="valign">center</property>
+                                        <child>
+                                          <object class="GtkLabel">
+                                            <style>
+                                              <class name="heading"/>
+                                            </style>
+                                            <property name="label">Use default model</property>
+                                            <property name="xalign">0</property>
+                                          </object>
+                                        </child>
+                                        <child>
+                                          <object class="GtkLabel">
+                                            <style>
+                                              <class name="caption"/>
+                                              <class name="dim-label"/>
+                                            </style>
+                                            <property name="label">Use the global default model settings for this character.</property>
+                                            <property name="xalign">0</property>
+                                            <property name="wrap">true</property>
+                                          </object>
+                                        </child>
+                                      </object>
+                                    </child>
+                                    <child>
+                                      <object class="GtkSwitch" id="use_default_switch">
+                                        <property name="valign">center</property>
+                                        <property name="active">true</property>
+                                      </object>
+                                    </child>
+                                  </object>
+                                </child>
+
+                                <!-- Shared SingleModelSelector Slot for Active Character -->
+                                <child>
+                                  <object class="GtkBox" id="char_selector_slot">
+                                    <property name="orientation">vertical</property>
+                                    <property name="hexpand">true</property>
+                                  </object>
+                                </child>
+
+                                <!-- Footer Note -->
+                                <child>
+                                  <object class="GtkLabel" id="detail_footer_lbl">
+                                    <style>
+                                      <class name="caption"/>
+                                      <class name="dim-label"/>
+                                      <class name="model-override-hint"/>
+                                    </style>
+                                    <property name="label">Only this character will use these settings.</property>
+                                    <property name="xalign">0</property>
+                                    <property name="valign">end</property>
+                                    <property name="vexpand">true</property>
+                                  </object>
+                                </child>
+                              </object>
+                            </child>
+                          </object>
+                        </child>
+                      </object>
+                    </child>
+                  </object>
+                </property>
+              </object>
+            </child>
+
+            <!-- Page 2: System-Wide Dreams and Memories Model -->
+            <child>
+              <object class="AdwViewStackPage">
+                <property name="name">dreams</property>
+                <property name="title">Dreams</property>
+                <property name="icon-name">boxxy-bedtime-symbolic</property>
+                <property name="child">
+                  <object class="GtkBox">
+                    <property name="orientation">vertical</property>
+                    <property name="spacing">12</property>
+                    <property name="margin-start">18</property>
+                    <property name="margin-end">18</property>
+                    <property name="margin-top">8</property>
+                    <property name="margin-bottom">8</property>
+                    <property name="vexpand">true</property>
+
+                    <child>
+                      <object class="GtkBox">
+                        <style>
+                          <class name="model-override-card"/>
+                        </style>
+                        <property name="orientation">vertical</property>
+                        <property name="spacing">12</property>
+                        <child>
+                          <object class="GtkBox">
+                            <property name="orientation">vertical</property>
+                            <property name="spacing">4</property>
+                            <child>
+                              <object class="GtkLabel">
+                                <style>
+                                  <class name="title-4"/>
+                                </style>
+                                <property name="label">System Dreams and Memories Model</property>
+                                <property name="xalign">0</property>
+                              </object>
+                            </child>
+                            <child>
+                              <object class="GtkLabel">
+                                <style>
+                                  <class name="caption"/>
+                                  <class name="dim-label"/>
+                                </style>
+                                <property name="label">System-wide background model shared across all characters for fact extraction, sleep catch-up summaries, and the Dream Cycle. This is a system model and is not configured per character. A fast, lightweight model is recommended.</property>
+                                <property name="xalign">0</property>
+                                <property name="wrap">true</property>
+                              </object>
+                            </child>
+                          </object>
+                        </child>
+
+                        <child>
+                          <object class="GtkSeparator">
+                            <property name="orientation">horizontal</property>
+                          </object>
+                        </child>
+
+                        <child>
+                          <object class="GtkBox">
+                            <property name="orientation">horizontal</property>
+                            <property name="spacing">12</property>
+                            <child>
+                              <object class="GtkBox">
+                                <property name="orientation">vertical</property>
+                                <property name="spacing">2</property>
+                                <property name="hexpand">true</property>
+                                <property name="valign">center</property>
+                                <child>
+                                  <object class="GtkLabel">
+                                    <style>
+                                      <class name="heading"/>
+                                    </style>
+                                    <property name="label">Use default character model</property>
+                                    <property name="xalign">0</property>
+                                  </object>
+                                </child>
+                                <child>
+                                  <object class="GtkLabel">
+                                    <style>
+                                      <class name="caption"/>
+                                      <class name="dim-label"/>
+                                    </style>
+                                    <property name="label">Automatically follow the global default model set on the Characters tab.</property>
+                                    <property name="xalign">0</property>
+                                    <property name="wrap">true</property>
+                                  </object>
+                                </child>
+                              </object>
+                            </child>
+                            <child>
+                              <object class="GtkSwitch" id="dreams_use_default_switch">
+                                <property name="valign">center</property>
+                                <property name="active">true</property>
+                              </object>
+                            </child>
+                          </object>
+                        </child>
+
+                        <child>
+                          <object class="GtkBox" id="dreams_selector_slot">
+                            <property name="orientation">vertical</property>
+                            <property name="hexpand">true</property>
+                          </object>
+                        </child>
+                      </object>
+                    </child>
+                  </object>
+                </property>
+              </object>
+            </child>
+          </object>
+        </child>
+
+        <!-- Dialog Footer Row -->
+        <child>
+          <object class="GtkBox">
+            <property name="orientation">horizontal</property>
+            <property name="spacing">10</property>
+            <property name="margin-start">18</property>
+            <property name="margin-end">18</property>
+            <property name="margin-top">6</property>
+            <property name="margin-bottom">14</property>
+            <child>
+              <object class="GtkLabel" id="apis_link_lbl">
+                <style>
+                  <class name="caption"/>
+                  <class name="accent"/>
+                  <class name="boxxy-link"/>
+                </style>
+                <property name="label">Manage APIs and Search Engine…</property>
+                <property name="tooltip-text">Open API Keys, Custom Endpoints, and Search Engine in Preferences</property>
+                <property name="halign">start</property>
+                <property name="valign">center</property>
+                <property name="hexpand">true</property>
+                <property name="xalign">0</property>
+              </object>
+            </child>
+            <child>
+              <object class="GtkButton" id="reset_overrides_btn">
+                <property name="label">Reset to Default</property>
+                <property name="tooltip-text">Reset all character overrides to use the global default model</property>
+                <property name="valign">center</property>
+                <property name="sensitive">false</property>
+              </object>
+            </child>
+            <child>
+              <object class="GtkButton" id="done_btn">
+                <style>
+                  <class name="suggested-action"/>
+                  <class name="pill"/>
+                </style>
+                <property name="label">Done</property>
+                <property name="valign">center</property>
+              </object>
+            </child>
+          </object>
+        </child>
+      </object>
+    </child>
+  </object>
+</interface>

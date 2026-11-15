@@ -74,10 +74,7 @@ impl ClawSession {
 
         let db_cell = std::sync::Arc::new(tokio::sync::Mutex::new(Some(db_val)));
         let settings = boxxy_preferences::Settings::load();
-        let model = settings
-            .memory_model
-            .clone()
-            .or(settings.claw_model.clone());
+        let model = settings.effective_memory_model();
         let creds = boxxy_ai_core::AiCredentials::new(
             settings.get_effective_api_keys(),
             settings.ollama_base_url.clone(),
@@ -350,7 +347,7 @@ impl ClawSession {
             let mut state_lock = self.state.lock().await;
             state_lock.persistent_agent = None;
             state_lock.current_claw_model = after.claw_model.clone();
-            state_lock.current_memory_model = after.memory_model.clone();
+            state_lock.current_memory_model = after.effective_memory_model();
             return;
         }
 
@@ -450,14 +447,20 @@ impl ClawSession {
         crate::registry::skills::reload_if_initialized().await;
 
         let after = boxxy_preferences::Settings::load();
+        let resolved_claw_model = after.resolve_character_model(&self.character_id);
+        let resolved_memory_model = after.effective_memory_model();
         let (new_claw, new_memory, new_search) = (
-            model_label(&after.claw_model),
-            model_label(&after.memory_model),
-            crate::engine::agent_config::resolve_active_search_label(&after, web_search_enabled)
-                .to_string(),
+            model_label(&resolved_claw_model),
+            model_label(&resolved_memory_model),
+            crate::engine::agent_config::resolve_active_search_label_for_model(
+                &after,
+                &resolved_claw_model,
+                web_search_enabled,
+            )
+            .to_string(),
         );
         let new_context_window = boxxy_ai_core::model_context_window_with_endpoints(
-            &after.claw_model,
+            &resolved_claw_model,
             &after.openai_compatible_endpoints,
         );
 
@@ -518,8 +521,8 @@ impl ClawSession {
 
         {
             let mut state_lock = self.state.lock().await;
-            state_lock.current_claw_model = after.claw_model.clone();
-            state_lock.current_memory_model = after.memory_model.clone();
+            state_lock.current_claw_model = resolved_claw_model;
+            state_lock.current_memory_model = resolved_memory_model;
             state_lock.current_search_label = new_search;
         }
 
@@ -541,8 +544,9 @@ impl ClawSession {
         }
 
         let event = ClawEngineEvent::SystemMessage {
-            text: crate::engine::agent_config::format_session_models_banner(
+            text: crate::engine::agent_config::format_session_models_banner_for_character(
                 &after,
+                &self.character_id,
                 web_search_enabled,
             ),
         };
@@ -649,8 +653,9 @@ impl ClawSession {
             .await;
 
         let settings = boxxy_preferences::Settings::load();
+        let resolved_claw_model = settings.resolve_character_model(&self.character_id);
         let context_window = boxxy_ai_core::model_context_window_with_endpoints(
-            &settings.claw_model,
+            &resolved_claw_model,
             &settings.openai_compatible_endpoints,
         );
         let (web_search_enabled, vibe_enabled) = {
@@ -672,18 +677,22 @@ impl ClawSession {
             })
             .await;
 
-        let banner = crate::engine::agent_config::format_session_models_banner(
+        let banner = crate::engine::agent_config::format_session_models_banner_for_character(
             &settings,
+            &self.character_id,
             web_search_enabled,
         );
-        let search_label =
-            crate::engine::agent_config::resolve_active_search_label(&settings, web_search_enabled)
-                .to_string();
+        let search_label = crate::engine::agent_config::resolve_active_search_label_for_model(
+            &settings,
+            &resolved_claw_model,
+            web_search_enabled,
+        )
+        .to_string();
 
         {
             let mut state_lock = self.state.lock().await;
-            state_lock.current_claw_model = settings.claw_model.clone();
-            state_lock.current_memory_model = settings.memory_model.clone();
+            state_lock.current_claw_model = resolved_claw_model;
+            state_lock.current_memory_model = settings.effective_memory_model();
             state_lock.current_search_label = search_label;
         }
 

@@ -296,7 +296,7 @@ impl ClawSession {
                 let total_cost_for_db = state_lock.total_cost_usd;
                 let settings = boxxy_preferences::Settings::load();
                 let model_id = settings
-                    .claw_model
+                    .resolve_character_model(&self.character_id)
                     .as_ref()
                     .map(|m| format!("{m:?}"))
                     .unwrap_or_default();

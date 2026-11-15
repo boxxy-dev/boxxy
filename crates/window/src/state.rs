@@ -207,6 +207,7 @@ pub struct AppWindowInner {
     pub toast_overlay: adw::ToastOverlay,
     pub frosted_container: crate::widgets::frosted_glass::FrostedGlassContainer,
     pub active_update_notification: Option<Notification>,
+    pub last_notified_broken_default: Option<String>,
     pub initial_launch: Option<TabLaunchSpec>,
     pub force_close: Rc<Cell<bool>>,
     pub tx: async_channel::Sender<AppInput>,

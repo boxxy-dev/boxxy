@@ -181,10 +181,7 @@ async fn run_one_cycle(
         openai_compatible_endpoints: settings.openai_compatible_endpoints.clone(),
     };
 
-    let model = settings
-        .memory_model
-        .clone()
-        .or_else(|| settings.claw_model.clone());
+    let model = settings.effective_memory_model();
 
     let orchestrator = boxxy_claw::memories::DreamOrchestrator::new(db_arc, creds, model);
     orchestrator.run_cycle().await

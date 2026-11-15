@@ -50,6 +50,8 @@ pub struct ClawSidebarComponent {
     dreams_model_lbl: gtk::Label,
     dream_status_lbl: gtk::Label,
     search_lbl: gtk::Label,
+    default_broken_row: gtk::Box,
+    active_character_id: Rc<RefCell<Option<String>>>,
     context_box: gtk::Box,
     tokens_lbl: gtk::Label,
     window_row: gtk::Box,
@@ -320,6 +322,27 @@ impl ClawSidebarComponent {
         let (search_row, search_lbl) = make_kv_row("Search", "Off");
         models_box.append(&search_row);
 
+        let default_broken_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        default_broken_row.add_css_class("claw-models-broken-banner");
+        default_broken_row.set_visible(false);
+        let warn_icon = gtk::Image::builder()
+            .icon_name("boxxy-dialog-warning-symbolic")
+            .pixel_size(13)
+            .valign(gtk::Align::Center)
+            .build();
+        let warn_lbl = gtk::Label::builder()
+            .label("Default model broken · Fix…")
+            .css_classes(["caption"])
+            .halign(gtk::Align::Start)
+            .hexpand(true)
+            .xalign(0.0)
+            .ellipsize(gtk::pango::EllipsizeMode::End)
+            .build();
+        default_broken_row.append(&warn_icon);
+        default_broken_row.append(&warn_lbl);
+        attach_window_action_click(&default_broken_row, "win.model-selection");
+        models_box.append(&default_broken_row);
+
         footer_info_vbox.append(&models_box);
 
         // 2. Context Usage Section
@@ -419,6 +442,8 @@ impl ClawSidebarComponent {
             dreams_model_lbl,
             dream_status_lbl,
             search_lbl,
+            default_broken_row,
+            active_character_id: Rc::new(RefCell::new(None)),
             context_box,
             tokens_lbl,
             window_row,
@@ -466,6 +491,8 @@ impl ClawSidebarComponent {
         let claw_model_weak = comp.claw_model_lbl.downgrade();
         let dreams_model_weak = comp.dreams_model_lbl.downgrade();
         let search_weak = comp.search_lbl.downgrade();
+        let broken_row_weak = comp.default_broken_row.downgrade();
+        let active_char_sub = comp.active_character_id.clone();
         let web_search_sub = comp.web_search_enabled.clone();
         let mcp_box_weak = comp.mcp_box.downgrade();
         let mcp_rows_weak = comp.mcp_rows_box.downgrade();
@@ -486,6 +513,7 @@ impl ClawSidebarComponent {
                     Some(claw_model_sub),
                     Some(dreams_model_sub),
                     Some(search_sub),
+                    Some(broken_row_sub),
                     Some(mcp_box_sub),
                     Some(mcp_rows_sub),
                     Some(cost_lbl_sub),
@@ -493,6 +521,7 @@ impl ClawSidebarComponent {
                     claw_model_weak.upgrade(),
                     dreams_model_weak.upgrade(),
                     search_weak.upgrade(),
+                    broken_row_weak.upgrade(),
                     mcp_box_weak.upgrade(),
                     mcp_rows_weak.upgrade(),
                     cost_lbl_weak.upgrade(),
@@ -500,11 +529,14 @@ impl ClawSidebarComponent {
                 else {
                     break;
                 };
+                let char_id_opt = active_char_sub.borrow().clone();
                 populate_models_info(
                     &claw_model_sub,
                     &dreams_model_sub,
                     &search_sub,
+                    &broken_row_sub,
                     &settings,
+                    char_id_opt.as_deref(),
                     web_search_sub.get(),
                 );
                 populate_mcp_rows(
@@ -643,6 +675,7 @@ impl ClawSidebarComponent {
             let resolved_char_display: String;
 
             if is_incognito {
+                *self.active_character_id.borrow_mut() = None;
                 let disp = boxxy_claw_protocol::characters::INCOGNITO_DISPLAY_NAME;
                 let color = boxxy_claw_protocol::characters::INCOGNITO_COLOR;
                 resolved_char_display = disp.to_string();
@@ -660,6 +693,7 @@ impl ClawSidebarComponent {
             } else if let Some(info) =
                 boxxy_claw_protocol::characters::find_character_exact(&cache, "", &fallback_names)
             {
+                *self.active_character_id.borrow_mut() = Some(info.config.id.clone());
                 let formatted_name = resolve_character_display_name(info);
                 resolved_char_display = formatted_name.clone();
                 self.set_hero_title_colored(&formatted_name, &info.config.color);
@@ -673,6 +707,7 @@ impl ClawSidebarComponent {
                 self.hero_vibe_badge.set_visible(vibe_enabled && !sleep);
                 self.hero_icon.set_visible(false);
             } else {
+                *self.active_character_id.borrow_mut() = None;
                 resolved_char_display = prettify_character_name(agent_name);
                 self.hero_title.set_label(&resolved_char_display);
                 self.hero_subtitle
@@ -732,6 +767,7 @@ impl ClawSidebarComponent {
             self.hero_icon.set_pixel_size(96);
             self.context_box.set_visible(true);
         } else {
+            *self.active_character_id.borrow_mut() = None;
             self.hero_title.set_visible(false);
             self.hero_subtitle
                 .set_label("Conversations will appear here");
@@ -837,11 +873,14 @@ impl ClawSidebarComponent {
     pub const fn refresh_visibility(&self) {}
 
     pub fn refresh_models_info(&self, settings: &boxxy_preferences::Settings) {
+        let char_id_opt = self.active_character_id.borrow().clone();
         populate_models_info(
             &self.claw_model_lbl,
             &self.dreams_model_lbl,
             &self.search_lbl,
+            &self.default_broken_row,
             settings,
+            char_id_opt.as_deref(),
             self.web_search_enabled.get(),
         );
     }
@@ -945,21 +984,16 @@ fn attach_window_action_click(target: &impl IsA<gtk::Widget>, action_name: &'sta
     widget.add_controller(gesture);
 }
 
-#[allow(clippy::redundant_closure_for_method_calls)]
 fn resolve_active_search_label(
     settings: &boxxy_preferences::Settings,
+    model_supports_native_search: bool,
     web_search_local_enabled: bool,
 ) -> &'static str {
     if !settings.enable_web_search || !web_search_local_enabled {
         return "Off";
     }
 
-    if settings.use_native_search
-        && settings
-            .claw_model
-            .as_ref()
-            .is_some_and(|m| m.supports_native_search())
-    {
+    if settings.use_native_search && model_supports_native_search {
         return "Native";
     }
 
@@ -975,22 +1009,45 @@ fn populate_models_info(
     claw_model_lbl: &gtk::Label,
     dreams_model_lbl: &gtk::Label,
     search_lbl: &gtk::Label,
+    default_broken_row: &gtk::Box,
     settings: &boxxy_preferences::Settings,
+    active_character_id: Option<&str>,
     web_search_local_enabled: bool,
 ) {
-    let claw_label = settings
-        .claw_model
-        .as_ref()
-        .map_or_else(|| "Default".to_string(), |m| m.format_label());
+    let char_id = active_character_id.unwrap_or_default();
+    let effective_claw = settings.resolve_character_model(char_id);
+    let is_custom = settings.has_custom_character_model(char_id);
+    let claw_label = effective_claw.as_ref().map_or_else(
+        || "Not Set".to_string(),
+        |m| {
+            if is_custom {
+                format!("{} (Custom)", m.format_label())
+            } else {
+                m.format_label()
+            }
+        },
+    );
     let memory_label = settings
-        .memory_model
+        .effective_memory_model()
         .as_ref()
-        .map_or_else(|| "Default".to_string(), |m| m.format_label());
-    let search_label = resolve_active_search_label(settings, web_search_local_enabled);
+        .map_or_else(|| "Not Set".to_string(), |m| m.format_label());
+    let supports_native = effective_claw
+        .as_ref()
+        .is_some_and(|m| m.supports_native_search());
+    let search_label =
+        resolve_active_search_label(settings, supports_native, web_search_local_enabled);
 
     claw_model_lbl.set_label(&claw_label);
     dreams_model_lbl.set_label(&memory_label);
     search_lbl.set_label(search_label);
+
+    if let Some(reason) = settings.default_model_broken_reason() {
+        default_broken_row.set_tooltip_text(Some(&reason));
+        default_broken_row.set_visible(true);
+    } else {
+        default_broken_row.set_tooltip_text(None);
+        default_broken_row.set_visible(false);
+    }
 }
 
 fn populate_mcp_rows(

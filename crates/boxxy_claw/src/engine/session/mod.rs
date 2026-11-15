@@ -199,7 +199,7 @@ impl ClawSession {
                 pending_lazy_diagnosis: None,
                 persistent_agent: None,
                 current_claw_model: settings.claw_model.clone(),
-                current_memory_model: settings.memory_model.clone(),
+                current_memory_model: settings.effective_memory_model(),
                 current_search_label: crate::engine::agent_config::resolve_active_search_label(
                     &settings,
                     settings.enable_web_search && settings.web_search_on_by_default,
@@ -242,6 +242,12 @@ impl ClawSession {
         self.incognito = is_incognito;
         self.session_id = session_id.clone();
         if let Ok(mut state) = self.state.try_lock() {
+            let settings = boxxy_preferences::Settings::load();
+            let resolved_claw = if is_incognito {
+                settings.claw_model.clone()
+            } else {
+                settings.resolve_character_model(&character_id)
+            };
             state.agent_name = character_display_name.clone();
             state.character_id = character_id;
             state.character_display_name = character_display_name;
@@ -252,6 +258,15 @@ impl ClawSession {
                 state.vibe_enabled = false;
                 state.pinned = false;
             }
+            state.current_search_label =
+                crate::engine::agent_config::resolve_active_search_label_for_model(
+                    &settings,
+                    &resolved_claw,
+                    state.web_search_enabled,
+                )
+                .to_string();
+            state.current_claw_model = resolved_claw;
+            state.current_memory_model = settings.effective_memory_model();
         }
         self
     }

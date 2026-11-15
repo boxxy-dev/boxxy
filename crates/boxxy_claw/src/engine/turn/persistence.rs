@@ -31,8 +31,11 @@ pub async fn perform_persistence(ctx: PersistenceContext, state: Arc<Mutex<Sessi
     // compact at 75% (or < 16k headroom) before exceeding the API's maximum input limit.
     // Never cut inside a tool-call loop (`find_safe_exchange_cut`), and always retain at least
     // the newest 6 full user exchanges plus a rolling `[SESSION_CHECKPOINT]` pair at index 0..2.
+    let host_model = ctx
+        .settings
+        .resolve_character_model(&state_lock.character_id);
     let input_limit = boxxy_ai_core::model_input_limit_with_endpoints(
-        &ctx.settings.claw_model,
+        &host_model,
         &ctx.settings.openai_compatible_endpoints,
     );
     let token_budget_exceeded = input_limit.is_some_and(|limit| {
@@ -81,9 +84,7 @@ pub async fn perform_persistence(ctx: PersistenceContext, state: Arc<Mutex<Sessi
     let total_tokens_for_db = i64::try_from(state_lock.total_tokens).unwrap_or(i64::MAX);
     let context_tokens_for_db = i64::try_from(state_lock.context_tokens).unwrap_or(i64::MAX);
     let total_cost_for_db = state_lock.total_cost_usd;
-    let model_id = ctx
-        .settings
-        .claw_model
+    let model_id = host_model
         .as_ref()
         .map_or_else(String::new, |m| format!("{m:?}"));
 
@@ -128,11 +129,7 @@ pub async fn perform_persistence(ctx: PersistenceContext, state: Arc<Mutex<Sessi
     if !evicted_messages.is_empty() {
         let extractor = crate::engine::summarization::history::DemotionExtractor {
             db: ctx.db.clone(),
-            claw_model: ctx
-                .settings
-                .memory_model
-                .clone()
-                .or_else(|| ctx.settings.claw_model.clone()),
+            claw_model: ctx.settings.effective_memory_model(),
             creds: creds.clone(),
             project_path: ctx.cwd.clone(),
         };
@@ -182,9 +179,8 @@ pub async fn perform_persistence(ctx: PersistenceContext, state: Arc<Mutex<Sessi
             }
 
             let title_model = settings_clone
-                .memory_model
-                .clone()
-                .or_else(|| settings_clone.claw_model.clone());
+                .effective_memory_model()
+                .or_else(|| settings_clone.resolve_character_model(&character_id_for_db));
             let title_agent = boxxy_ai_core::create_agent(
                 &title_model,
                 &creds,

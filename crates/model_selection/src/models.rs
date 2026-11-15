@@ -1508,6 +1508,26 @@ impl Default for ModelProvider {
     }
 }
 
+/// Decoupled character descriptor passed into the Model Assignment dialog.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CharacterModelTarget {
+    pub id: String,
+    pub display_name: String,
+    pub duties: String,
+    pub color: String,
+    pub avatar_path: Option<std::path::PathBuf>,
+}
+
+/// Complete initial/output configuration state for [`crate::GlobalModelSelectorDialog`].
+#[derive(Debug, Clone, Default)]
+pub struct ModelAssignmentConfig {
+    pub default_claw_model: Option<ModelProvider>,
+    pub character_models: std::collections::HashMap<String, ModelProvider>,
+    pub memory_model: Option<ModelProvider>,
+    pub broken_default_notice: Option<String>,
+    pub initial_selected_character_id: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

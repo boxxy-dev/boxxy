@@ -51,10 +51,7 @@ pub async fn summarize_wake_delta(
             ));
         } else {
             let settings = boxxy_preferences::Settings::load();
-            let model_config = settings
-                .memory_model
-                .clone()
-                .or_else(|| settings.claw_model.clone());
+            let model_config = settings.effective_memory_model();
 
             let creds = boxxy_ai_core::AiCredentials::new(
                 settings.get_effective_api_keys(),

@@ -460,15 +460,18 @@ fn check_models(settings: &Settings) -> DiagnosticCheck {
 
     let describe = |slot: &str, state: &ModelConfigState| -> (CheckLevel, String) {
         match state {
-            ModelConfigState::Ready(mp) => {
-                (CheckLevel::Ok, format!("{slot}: Ready ({mp:?})"))
-            }
-            ModelConfigState::Unconfigured => {
-                (CheckLevel::Ok, format!("{slot}: Not configured"))
-            }
+            ModelConfigState::Ready(mp) => (
+                CheckLevel::Ok,
+                format!("{slot}: Ready ({})", mp.format_label()),
+            ),
+            ModelConfigState::Unconfigured => (CheckLevel::Ok, format!("{slot}: Not configured")),
             ModelConfigState::MissingApiKey { provider_name } => (
                 CheckLevel::Warn,
                 format!("{slot}: {provider_name} selected, but API key is missing"),
+            ),
+            ModelConfigState::ProviderUnavailable { provider_name } => (
+                CheckLevel::Warn,
+                format!("{slot}: {provider_name} endpoint was removed or disabled"),
             ),
             ModelConfigState::OllamaOffline => (
                 CheckLevel::Warn,
@@ -477,20 +480,52 @@ fn check_models(settings: &Settings) -> DiagnosticCheck {
         }
     };
 
-    let (claw_lvl, claw_msg) = describe("Claw", &claw_state);
-    let (mem_lvl, mem_msg) = describe("Dreams", &mem_state);
-    let level = if claw_lvl == CheckLevel::Warn || mem_lvl == CheckLevel::Warn {
+    let (mut claw_lvl, mut claw_msg) = describe("Default", &claw_state);
+    if matches!(claw_state, ModelConfigState::Unconfigured) && !settings.character_models.is_empty()
+    {
+        claw_lvl = CheckLevel::Warn;
+        claw_msg =
+            "Default: Missing (required even when character overrides are set)".to_string();
+    }
+    let (mem_lvl, mem_msg) = match mem_state {
+        ModelConfigState::Unconfigured => (
+            CheckLevel::Ok,
+            "Dreams: Inherits Default".to_string(),
+        ),
+        ref other => describe("Dreams", other),
+    };
+
+    let mut details = Vec::new();
+    let mut override_warn = false;
+    let mut sorted_overrides: Vec<_> = settings.character_models.iter().collect();
+    sorted_overrides.sort_by_key(|(id, _)| *id);
+    for (char_id, mp) in sorted_overrides {
+        let st = settings.resolve_model_state(&Some(mp.clone()));
+        let (lvl, msg) = describe(&format!("Character ({char_id})"), &st);
+        if lvl == CheckLevel::Warn {
+            override_warn = true;
+        }
+        details.push(msg);
+    }
+
+    let level = if claw_lvl == CheckLevel::Warn || mem_lvl == CheckLevel::Warn || override_warn {
         CheckLevel::Warn
     } else {
         CheckLevel::Ok
+    };
+
+    let overrides_note = if settings.character_models.is_empty() {
+        String::new()
+    } else {
+        format!("; {} character override(s)", settings.character_models.len())
     };
 
     DiagnosticCheck {
         id: "models",
         label: "AI Models",
         level,
-        summary: format!("{claw_msg}; {mem_msg}"),
-        details: Vec::new(),
+        summary: format!("{claw_msg}; {mem_msg}{overrides_note}"),
+        details,
     }
 }
 

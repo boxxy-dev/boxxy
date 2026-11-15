@@ -200,6 +200,30 @@ fn only_ui_chrome_changed(prev: &Settings, next: &Settings) -> bool {
     probe == *next
 }
 
+/// Emits a deduplicated in-window toast with a 1-click "Select Models" action whenever
+/// the mandatory global Default model transitions into a broken state (e.g. its provider
+/// or API key was removed), even if an individual character's custom model is still working.
+pub fn maybe_notify_broken_default_model(inner: &mut AppWindowInner) {
+    let Some(reason) = inner.current_settings.default_model_broken_reason() else {
+        inner.last_notified_broken_default = None;
+        return;
+    };
+    if inner.last_notified_broken_default.as_deref() == Some(reason.as_str()) {
+        return;
+    }
+    inner.last_notified_broken_default = Some(reason.clone());
+
+    let toast = libadwaita::Toast::new(&format!("Default AI model is broken — {reason}"));
+    toast.set_use_markup(false);
+    toast.set_timeout(8);
+    toast.set_button_label(Some("Select Models"));
+    let tx_fix = inner.tx.clone();
+    toast.connect_button_clicked(move |_| {
+        let _ = tx_fix.send_blocking(AppInput::ModelSelection);
+    });
+    inner.toast_overlay.add_toast(toast);
+}
+
 pub fn settings_changed(inner: &mut AppWindowInner, settings: Settings) {
     if inner.current_settings == settings {
         return;
@@ -262,6 +286,7 @@ pub fn settings_changed(inner: &mut AppWindowInner, settings: Settings) {
     let agent_sync_needed = !only_ui_chrome_changed(&prev, &settings);
     if agent_sync_needed {
         inner.claw.refresh_mcp_list(&settings);
+        maybe_notify_broken_default_model(inner);
     }
 
     for tab in &inner.tabs {

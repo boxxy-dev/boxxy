@@ -2086,3 +2086,95 @@ button.claw-task-dismiss-btn:active {
     outline: none;
     box-shadow: none;
 }
+
+/* --- Model Assignment Dialog (Layer 1 Fallback — Adwaita) --- */
+.model-assignment-header {
+    padding-top: 4px;
+    padding-bottom: 2px;
+}
+
+.model-default-card {
+    background-color: @card_bg_color;
+    color: @card_fg_color;
+    border: 1px solid alpha(currentColor, 0.14);
+    border-radius: 12px;
+    padding: 12px 14px;
+}
+
+.model-character-list-frame {
+    background-color: @card_bg_color;
+    color: @card_fg_color;
+    border: 1px solid alpha(currentColor, 0.14);
+    border-radius: 12px;
+}
+
+.model-character-list {
+    background: transparent;
+    background-color: transparent;
+    padding: 6px;
+}
+
+.model-character-list > row {
+    border-radius: 9px;
+    padding: 6px 8px;
+    margin-bottom: 2px;
+}
+
+.model-override-card {
+    background-color: @card_bg_color;
+    color: @card_fg_color;
+    border: 1px solid alpha(currentColor, 0.14);
+    border-radius: 12px;
+    padding: 14px 16px;
+}
+
+.model-broken-banner {
+    background-color: alpha(@warning_bg_color, 0.18);
+    color: @warning_color;
+    border: 1px solid alpha(@warning_bg_color, 0.42);
+    border-radius: 8px;
+    padding: 6px 10px;
+    font-size: 0.86em;
+    font-weight: 600;
+}
+
+.model-badge-default {
+    background-color: alpha(currentColor, 0.11);
+    color: inherit;
+    opacity: 0.80;
+    border-radius: 9999px;
+    padding: 2px 9px;
+    font-size: 0.74em;
+    font-weight: 700;
+}
+
+.model-badge-custom {
+    background-color: @accent_bg_color;
+    color: @accent_fg_color;
+    border-radius: 9999px;
+    padding: 2px 9px;
+    font-size: 0.74em;
+    font-weight: 800;
+}
+
+.model-badge-broken {
+    background-color: @warning_bg_color;
+    color: @warning_fg_color;
+    border-radius: 9999px;
+    padding: 2px 9px;
+    font-size: 0.74em;
+    font-weight: 800;
+}
+
+.model-override-hint {
+    font-style: italic;
+}
+
+.claw-models-broken-banner {
+    background-color: alpha(@warning_bg_color, 0.16);
+    color: @warning_color;
+    border: 1px solid alpha(@warning_bg_color, 0.40);
+    border-radius: 8px;
+    padding: 5px 8px;
+    margin-top: 2px;
+}

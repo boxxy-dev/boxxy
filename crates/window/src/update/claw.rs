@@ -107,15 +107,69 @@ pub fn resume_claw_session(
 pub fn open_model_selection(inner: &AppWindowInner) {
     let tx_apis = inner.tx.clone();
     let tx_model_close = inner.tx.clone();
-    let dialog = boxxy_model_selection::GlobalModelSelectorDialog::new_with_custom(
-        inner.current_settings.claw_model.clone(),
-        inner.current_settings.memory_model.clone(),
+
+    let cached_catalog = boxxy_claw_protocol::characters::CHARACTER_CACHE.load();
+    let catalog: Vec<boxxy_claw_protocol::characters::CharacterInfo> = if cached_catalog.is_empty()
+    {
+        boxxy_claw_protocol::character_loader::load_characters().unwrap_or_default()
+    } else {
+        (**cached_catalog).clone()
+    };
+
+    let chars_dir = boxxy_claw_protocol::character_loader::get_characters_dir().ok();
+    let characters: Vec<boxxy_model_selection::CharacterModelTarget> = catalog
+        .into_iter()
+        .filter(|c| !boxxy_claw_protocol::characters::is_incognito_character(&c.config.id))
+        .map(|info| {
+            let avatar_path = info
+                .has_avatar
+                .then(|| {
+                    chars_dir
+                        .as_ref()
+                        .map(|d| d.join(&info.config.name).join("AVATAR.png"))
+                })
+                .flatten();
+            let display_name = boxxy_claw_ui::resolve_character_display_name(&info);
+            boxxy_model_selection::CharacterModelTarget {
+                id: info.config.id,
+                display_name,
+                duties: info.config.duties,
+                color: info.config.color,
+                avatar_path,
+            }
+        })
+        .collect();
+
+    let active_char_id = inner
+        .active_tab()
+        .map(|t| t.controller.active_pane_id())
+        .and_then(|pane_id| {
+            boxxy_claw_protocol::characters::CLAIMS_CACHE
+                .load()
+                .iter()
+                .find(|claim| claim.holder_id == pane_id)
+                .map(|claim| claim.character_id.clone())
+        })
+        .filter(|id| !boxxy_claw_protocol::characters::is_incognito_character(id));
+
+    let config = boxxy_model_selection::ModelAssignmentConfig {
+        default_claw_model: inner.current_settings.claw_model.clone(),
+        character_models: inner.current_settings.character_models.clone(),
+        memory_model: inner.current_settings.memory_model.clone(),
+        broken_default_notice: inner.current_settings.default_model_broken_reason(),
+        initial_selected_character_id: active_char_id,
+    };
+
+    let dialog = boxxy_model_selection::GlobalModelSelectorDialog::new_with_characters(
+        config,
+        characters,
         inner.current_settings.ollama_base_url.clone(),
         inner.current_settings.get_effective_api_keys(),
         inner.current_settings.openai_compatible_endpoints.clone(),
-        move |claw_provider, memory_provider| {
+        move |claw_provider, character_models, memory_provider| {
             boxxy_preferences::Settings::update(|settings| {
                 settings.claw_model = claw_provider.clone();
+                settings.character_models = character_models.clone();
                 settings.memory_model = memory_provider.clone();
             });
         },

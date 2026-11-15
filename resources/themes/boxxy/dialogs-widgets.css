@@ -338,3 +338,95 @@ toastoverlay > toast > button.circular.flat:active image {
     color: @window_fg_color;
 }
 
+/* ── Model Assignment Dialog (Boxxy Theme Layer 2) ───────────────────────── */
+
+headerbar.model-assignment-header {
+    min-height: 0;
+    padding-top: 8px;
+    padding-bottom: 4px;
+}
+
+headerbar.model-assignment-header viewswitcher > button.toggle {
+    min-height: 24px;
+    min-width: 0;
+    padding: 4px 14px;
+}
+
+headerbar.model-assignment-header viewswitcher > button.toggle + button.toggle {
+    margin-left: 6px;
+}
+
+.model-default-card,
+.model-character-list-frame,
+.model-override-card {
+    background-color: @window_bg_color;
+    color: @dialog_fg_color;
+    border: var(--boxxy-border-thin) solid @boxxy_ink;
+    border-radius: var(--boxxy-radius-lg);
+    outline: none;
+    box-shadow: none;
+}
+
+.model-character-list.navigation-sidebar > row {
+    border-radius: var(--boxxy-radius-input);
+    border: var(--boxxy-border-thin) solid transparent;
+    outline: none;
+    box-shadow: none;
+}
+
+.model-character-list.navigation-sidebar > row:hover:not(:selected) {
+    background-color: @card_bg_color;
+    color: @dialog_fg_color;
+    border-color: alpha(@boxxy_ink, 0.75);
+    outline: none;
+    box-shadow: none;
+}
+
+.model-character-list.navigation-sidebar > row:hover:not(:selected) label:not(.model-badge-custom):not(.model-badge-broken) {
+    color: @dialog_fg_color;
+}
+
+.model-character-list.navigation-sidebar > row:selected {
+    background-color: alpha(@accent_bg_color, 0.14);
+    color: @dialog_fg_color;
+    border-color: @accent_bg_color;
+    outline: none;
+    box-shadow: none;
+}
+
+.model-character-list.navigation-sidebar > row:selected label:not(.model-badge-custom):not(.model-badge-broken) {
+    color: @dialog_fg_color;
+    font-weight: 700;
+}
+
+.model-character-list.navigation-sidebar > row:hover:not(:selected) label.model-badge-custom,
+.model-character-list.navigation-sidebar > row:selected label.model-badge-custom {
+    color: @accent_fg_color;
+}
+
+.model-character-list.navigation-sidebar > row:hover:not(:selected) label.model-badge-broken,
+.model-character-list.navigation-sidebar > row:selected label.model-badge-broken {
+    color: @warning_fg_color;
+}
+
+.model-badge-default {
+    background-color: alpha(@dialog_fg_color, 0.10);
+    color: @dialog_fg_color;
+    border: 1px solid alpha(@boxxy_ink, 0.60);
+    opacity: 0.90;
+}
+
+.model-badge-custom {
+    background-color: @accent_bg_color;
+    color: @accent_fg_color;
+    border: var(--boxxy-border-thin) solid @boxxy_ink;
+    box-shadow: 1px 1.5px 0px @boxxy_shadow;
+}
+
+.model-badge-broken {
+    background-color: @warning_bg_color;
+    color: @warning_fg_color;
+    border: var(--boxxy-border-thin) solid @boxxy_ink;
+    box-shadow: 1px 1.5px 0px @boxxy_shadow;
+}
+

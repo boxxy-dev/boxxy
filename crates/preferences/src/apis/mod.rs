@@ -1,5 +1,5 @@
 use crate::config::{ModelConfigState, Settings};
-use crate::ui_utils::{Debouncer, PageHooks, SearchRow, VoidCallbackSlot};
+use crate::ui_utils::{Debouncer, PageHooks, SearchRow, VoidCallbackSlot, show_toast};
 use adw::prelude::*;
 use gtk4 as gtk;
 use gtk4::glib;
@@ -101,27 +101,36 @@ pub(crate) fn setup_apis_page(builder: &gtk::Builder) -> PageHooks {
         let row = model_status_row.clone();
         Rc::new(move |s: &Settings| {
             let is_complete = s.is_models_selection_complete();
-            let title = if is_complete {
-                "All Models are set"
-            } else {
-                "Models selection is incomplete"
-            };
-
-            row.set_title(title);
-
             if is_complete {
-                row.set_subtitle("Boxxy Claw is ready to use.");
+                row.set_title("All Models are set");
+                let custom_count = s.character_models.len();
+                let subtitle = match custom_count {
+                    0 => "Boxxy Claw is ready to use.".to_string(),
+                    1 => "Default model and 1 character override ready.".to_string(),
+                    n => format!("Default model and {n} character overrides ready."),
+                };
+                row.set_subtitle(&subtitle);
                 row.remove_css_class("model-status-warning");
                 row.add_css_class("model-status-success");
+            } else if let Some(broken_default) = s.default_model_broken_reason() {
+                row.set_title("Default model is broken");
+                row.set_subtitle(&format!(
+                    "{broken_default} Open Models Selection to choose a new default model."
+                ));
+                row.remove_css_class("model-status-success");
+                row.add_css_class("model-status-warning");
+            } else if let Some(broken_secondary) = s.secondary_model_broken_reason() {
+                row.set_title("Models selection needs attention");
+                row.set_subtitle(&broken_secondary);
+                row.remove_css_class("model-status-success");
+                row.add_css_class("model-status-warning");
             } else {
+                row.set_title("Models selection is incomplete");
                 let subtitle = match s.resolve_model_state(&s.claw_model) {
-                    ModelConfigState::MissingApiKey { provider_name: p } => {
-                        format!("{p} API key is missing.")
-                    }
                     ModelConfigState::OllamaOffline => {
                         "Ollama is offline. Check that it is running.".to_string()
                     }
-                    _ => "Open Models Selection to set your models.".to_string(),
+                    _ => "Open Models Selection to set your default model.".to_string(),
                 };
                 row.set_subtitle(&subtitle);
                 row.remove_css_class("model-status-success");
@@ -257,13 +266,32 @@ pub(crate) fn setup_apis_page(builder: &gtk::Builder) -> PageHooks {
                     let render_ref_inner = render_ref.clone();
                     let update_status_inner = update_status.clone();
                     let prov_name_del = prov_name.clone();
+                    let toast_anchor = group.clone();
                     del_btn.connect_clicked(move |_| {
+                        let was_default_broken =
+                            Settings::load().default_model_broken_reason().is_some();
                         Settings::remove_env_api_key(&prov_name_del);
+                        let mut reverted_count = 0usize;
                         let updated = Settings::update(|s| {
                             s.api_keys.remove(&prov_name_del);
-                            s.check_and_unset_invalid_models();
+                            reverted_count = s.revert_non_default_invalid_models();
                         });
                         update_status_inner(&updated);
+                        if !was_default_broken
+                            && let Some(reason) = updated.default_model_broken_reason()
+                        {
+                            show_toast(
+                                &toast_anchor,
+                                &format!("Default model is broken: {reason}"),
+                            );
+                        } else if reverted_count > 0 {
+                            show_toast(
+                                &toast_anchor,
+                                &format!(
+                                    "{prov_name_del} removed — {reverted_count} character override(s) reverted to default model."
+                                ),
+                            );
+                        }
                         let render_ref_idle = render_ref_inner.clone();
                         glib::idle_add_local_once(move || {
                             if let Some(render) = render_ref_idle.borrow().as_ref() {
@@ -390,8 +418,11 @@ pub(crate) fn setup_apis_page(builder: &gtk::Builder) -> PageHooks {
                     let update_status_inner = update_status.clone();
                     let ep_name = ep.name.clone();
                     let last_ep_sw = last_ep_inner.clone();
+                    let toast_anchor = group.clone();
                     switch.connect_active_notify(move |sw| {
                         let active = sw.is_active();
+                        let was_default_broken =
+                            Settings::load().default_model_broken_reason().is_some();
                         let updated = Settings::update(|s| {
                             if let Some(target) = s
                                 .openai_compatible_endpoints
@@ -400,13 +431,21 @@ pub(crate) fn setup_apis_page(builder: &gtk::Builder) -> PageHooks {
                                 && target.enabled != active
                             {
                                 target.enabled = active;
-                                s.check_and_unset_invalid_models();
                             }
                         });
                         last_ep_sw
                             .borrow_mut()
                             .clone_from(&updated.openai_compatible_endpoints);
                         update_status_inner(&updated);
+                        if !active
+                            && !was_default_broken
+                            && let Some(reason) = updated.default_model_broken_reason()
+                        {
+                            show_toast(
+                                &toast_anchor,
+                                &format!("Default model is broken: {reason}"),
+                            );
+                        }
                     });
                 }
                 row.add_suffix(&switch);
@@ -458,6 +497,16 @@ pub(crate) fn setup_apis_page(builder: &gtk::Builder) -> PageHooks {
                                                 provider_name.clone_from(&new_ep.name);
                                             }
                                         }
+                                        for mp in s.character_models.values_mut() {
+                                            if let boxxy_model_selection::ModelProvider::OpenAiCompatible {
+                                                provider_name,
+                                                ..
+                                            } = mp
+                                                && *provider_name == old_name_clone
+                                            {
+                                                provider_name.clone_from(&new_ep.name);
+                                            }
+                                        }
                                     }
                                     if new_key.trim().is_empty() {
                                         s.api_keys.remove(&new_ep.name);
@@ -492,15 +541,34 @@ pub(crate) fn setup_apis_page(builder: &gtk::Builder) -> PageHooks {
                     let render_ref_inner = render_ref.clone();
                     let update_status_inner = update_status.clone();
                     let ep_name = ep.name.clone();
+                    let toast_anchor = group.clone();
                     del_btn.connect_clicked(move |_| {
+                        let was_default_broken =
+                            Settings::load().default_model_broken_reason().is_some();
+                        let mut reverted_count = 0usize;
                         let updated = Settings::update(|s| {
                             if idx < s.openai_compatible_endpoints.len() {
                                 s.openai_compatible_endpoints.remove(idx);
                             }
                             s.api_keys.remove(&ep_name);
-                            s.check_and_unset_invalid_models();
+                            reverted_count = s.revert_non_default_invalid_models();
                         });
                         update_status_inner(&updated);
+                        if !was_default_broken
+                            && let Some(reason) = updated.default_model_broken_reason()
+                        {
+                            show_toast(
+                                &toast_anchor,
+                                &format!("Default model is broken: {reason}"),
+                            );
+                        } else if reverted_count > 0 {
+                            show_toast(
+                                &toast_anchor,
+                                &format!(
+                                    "{ep_name} removed — {reverted_count} character override(s) reverted to default model."
+                                ),
+                            );
+                        }
                         let render_ref_idle = render_ref_inner.clone();
                         glib::idle_add_local_once(move || {
                             if let Some(render) = render_ref_idle.borrow().as_ref() {

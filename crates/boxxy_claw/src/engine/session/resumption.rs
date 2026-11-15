@@ -276,8 +276,9 @@ impl ClawSession {
                     .await;
 
                 let settings = boxxy_preferences::Settings::load();
+                let resolved_claw_model = settings.resolve_character_model(&self.character_id);
                 let context_window = boxxy_ai_core::model_context_window_with_endpoints(
-                    &settings.claw_model,
+                    &resolved_claw_model,
                     &settings.openai_compatible_endpoints,
                 );
 
@@ -312,24 +313,24 @@ impl ClawSession {
                 let session_type = if self.pinned { "pinned" } else { "normal" };
                 boxxy_telemetry::track_session_resume(session_type).await;
 
-                let banner = crate::engine::agent_config::format_session_models_banner(
-                    &settings,
-                    web_search_enabled,
-                );
-                let search_label = crate::engine::agent_config::resolve_active_search_label(
-                    &settings,
-                    web_search_enabled,
-                )
-                .to_string();
+                let banner =
+                    crate::engine::agent_config::format_session_models_banner_for_character(
+                        &settings,
+                        &self.character_id,
+                        web_search_enabled,
+                    );
+                let search_label =
+                    crate::engine::agent_config::resolve_active_search_label_for_model(
+                        &settings,
+                        &resolved_claw_model,
+                        web_search_enabled,
+                    )
+                    .to_string();
 
                 {
                     let mut state_lock = self.state.lock().await;
-                    state_lock
-                        .current_claw_model
-                        .clone_from(&settings.claw_model);
-                    state_lock
-                        .current_memory_model
-                        .clone_from(&settings.memory_model);
+                    state_lock.current_claw_model = resolved_claw_model;
+                    state_lock.current_memory_model = settings.effective_memory_model();
                     state_lock.current_search_label = search_label;
                 }
 
@@ -406,8 +407,9 @@ impl ClawSession {
             .await;
 
         let settings = boxxy_preferences::Settings::load();
+        let resolved_claw_model = settings.resolve_character_model(&character_id);
         let context_window = boxxy_ai_core::model_context_window_with_endpoints(
-            &settings.claw_model,
+            &resolved_claw_model,
             &settings.openai_compatible_endpoints,
         );
 

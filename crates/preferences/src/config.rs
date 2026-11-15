@@ -261,6 +261,38 @@ where
     }
 }
 
+fn deserialize_character_models<'de, D>(
+    deserializer: D,
+) -> Result<HashMap<String, ModelProvider>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let val = Option::<serde_json::Value>::deserialize(deserializer)?;
+    let Some(serde_json::Value::Object(map)) = val else {
+        return Ok(HashMap::new());
+    };
+    let mut out = HashMap::with_capacity(map.len());
+    for (char_id, entry) in map {
+        if char_id.trim().is_empty()
+            || boxxy_claw_protocol::characters::is_incognito_character(&char_id)
+            || entry.is_null()
+        {
+            continue;
+        }
+        match serde_json::from_value::<ModelProvider>(entry) {
+            Ok(mp) => {
+                out.insert(char_id, mp);
+            }
+            Err(e) => {
+                log::warn!(
+                    "Ignoring unrecognized character model override for '{char_id}' in settings.json: {e}"
+                );
+            }
+        }
+    }
+    Ok(out)
+}
+
 // --- User Configurable Settings ---
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -313,6 +345,8 @@ pub struct Settings {
     pub preview_max_height: i32,
     #[serde(default, deserialize_with = "deserialize_optional_model_provider")]
     pub claw_model: Option<ModelProvider>,
+    #[serde(default, deserialize_with = "deserialize_character_models")]
+    pub character_models: HashMap<String, ModelProvider>,
     #[serde(default, deserialize_with = "deserialize_optional_model_provider")]
     pub memory_model: Option<ModelProvider>,
     pub enable_auto_dreaming: bool,
@@ -396,6 +430,7 @@ impl Default for Settings {
             preview_max_width: 300,
             preview_max_height: 200,
             claw_model: None,
+            character_models: HashMap::new(),
             memory_model: None,
             enable_auto_dreaming: true,
             invert_scroll: true,
@@ -909,19 +944,79 @@ You can add your own sensitive paths here. One path per line. Lines starting wit
         keys
     }
 
-    /// Clears model slots that are no longer `Ready` (used when explicitly removing or
-    /// disabling a provider/endpoint).
-    pub fn check_and_unset_invalid_models(&mut self) {
-        if !matches!(self.resolve_model_state(&self.claw_model), ModelConfigState::Ready(_)) {
-            self.claw_model = None;
+    /// Resolves the effective model for a character UUID.
+    ///
+    /// Returns the character's custom override from `character_models` when present,
+    /// otherwise falls back to the mandatory global `claw_model`. Ephemeral `/incognito`
+    /// sessions and empty character IDs always resolve to `claw_model`.
+    #[must_use]
+    pub fn resolve_character_model(&self, character_id: &str) -> Option<ModelProvider> {
+        let trimmed = character_id.trim();
+        if !trimmed.is_empty()
+            && !boxxy_claw_protocol::characters::is_incognito_character(trimmed)
+            && let Some(custom) = self.character_models.get(trimmed)
+        {
+            return Some(custom.clone());
         }
-        if !matches!(self.resolve_model_state(&self.memory_model), ModelConfigState::Ready(_)) {
-            self.memory_model = None;
-        }
+        self.claw_model.clone()
     }
 
-    /// Clears model slots referencing deleted/disabled custom endpoints or transient Ollama
-    /// placeholder strings while preserving `MissingApiKey` slots across startup/reload.
+    /// Returns `true` when `character_id` has an explicit custom model override.
+    #[must_use]
+    pub fn has_custom_character_model(&self, character_id: &str) -> bool {
+        let trimmed = character_id.trim();
+        !trimmed.is_empty()
+            && !boxxy_claw_protocol::characters::is_incognito_character(trimmed)
+            && self.character_models.contains_key(trimmed)
+    }
+
+    /// Resolves the system-wide model for Memories and Dreams (`memory_model`, falling
+    /// back to the mandatory global `claw_model` when `None`).
+    #[must_use]
+    pub fn effective_memory_model(&self) -> Option<ModelProvider> {
+        self.memory_model.clone().or_else(|| self.claw_model.clone())
+    }
+
+    /// Reverts non-default model overrides (`character_models` and `memory_model`) that are
+    /// no longer `Ready` back to the global default when a provider or endpoint is deleted,
+    /// while intentionally preserving `claw_model` so `default_model_broken_reason()` can
+    /// notify the user if their mandatory Default model broke.
+    ///
+    /// Returns the number of character overrides that were reverted to Default.
+    pub fn revert_non_default_invalid_models(&mut self) -> usize {
+        if !matches!(
+            self.resolve_model_state(&self.memory_model),
+            ModelConfigState::Ready(_)
+        ) {
+            self.memory_model = None;
+        }
+        let before = self.character_models.len();
+        let invalid_ids: Vec<String> = self
+            .character_models
+            .iter()
+            .filter(|(_, mp)| {
+                !matches!(
+                    self.resolve_model_state(&Some((*mp).clone())),
+                    ModelConfigState::Ready(_)
+                )
+            })
+            .map(|(char_id, _)| char_id.clone())
+            .collect();
+        for id in invalid_ids {
+            self.character_models.remove(&id);
+        }
+        before.saturating_sub(self.character_models.len())
+    }
+
+    /// Legacy helper retained for callers that explicitly clear all invalid slots;
+    /// prefer [`Self::revert_non_default_invalid_models`] when removing a provider so
+    /// broken Default models surface a clear warning notification.
+    pub fn check_and_unset_invalid_models(&mut self) {
+        let _ = self.revert_non_default_invalid_models();
+    }
+
+    /// Clears empty/transient placeholder model entries (`Unconfigured` or `OllamaOffline`)
+    /// while preserving `MissingApiKey` and `ProviderUnavailable` slots across startup/reload.
     pub fn sanitize_unconfigured_models(&mut self) {
         if matches!(
             self.resolve_model_state(&self.claw_model),
@@ -934,6 +1029,20 @@ You can add your own sensitive paths here. One path per line. Lines starting wit
             ModelConfigState::Unconfigured | ModelConfigState::OllamaOffline
         ) {
             self.memory_model = None;
+        }
+        let invalid_ids: Vec<String> = self
+            .character_models
+            .iter()
+            .filter(|(_, mp)| {
+                matches!(
+                    self.resolve_model_state(&Some((*mp).clone())),
+                    ModelConfigState::Unconfigured | ModelConfigState::OllamaOffline
+                )
+            })
+            .map(|(char_id, _)| char_id.clone())
+            .collect();
+        for id in invalid_ids {
+            self.character_models.remove(&id);
         }
     }
 
@@ -965,10 +1074,14 @@ You can add your own sensitive paths here. One path per line. Lines starting wit
                 .iter()
                 .find(|e| e.name == *provider_name)
             else {
-                return ModelConfigState::Unconfigured;
+                return ModelConfigState::ProviderUnavailable {
+                    provider_name: provider_name.clone(),
+                };
             };
             if !ep.enabled || ep.base_url.trim().is_empty() {
-                return ModelConfigState::Unconfigured;
+                return ModelConfigState::ProviderUnavailable {
+                    provider_name: provider_name.clone(),
+                };
             }
             if !ep.requires_api_key || !self.get_effective_api_key(provider_name).is_empty() {
                 return ModelConfigState::Ready(m.clone());
@@ -994,12 +1107,96 @@ You can add your own sensitive paths here. One path per line. Lines starting wit
         }
     }
 
+    /// Returns a human-readable explanation when the mandatory global Default model is broken
+    /// (its provider was removed/disabled, its API key is missing, or character overrides exist
+    /// without a Default model), returning `None` on a brand-new unconfigured install or when
+    /// `claw_model` is `Ready`.
+    #[must_use]
+    pub fn default_model_broken_reason(&self) -> Option<String> {
+        match self.resolve_model_state(&self.claw_model) {
+            ModelConfigState::Ready(_) => None,
+            ModelConfigState::Unconfigured => {
+                if self.character_models.is_empty() {
+                    None
+                } else {
+                    Some("No default model is set (required for all characters).".to_string())
+                }
+            }
+            ModelConfigState::MissingApiKey { provider_name } => {
+                Some(format!("{provider_name} API key was removed or is missing."))
+            }
+            ModelConfigState::ProviderUnavailable { provider_name } => {
+                Some(format!("{provider_name} provider was removed or disabled."))
+            }
+            ModelConfigState::OllamaOffline => {
+                Some("Ollama is offline for the default model.".to_string())
+            }
+        }
+    }
+
+    /// Returns the first broken non-default model reason (a custom character override or the
+    /// system Dreams model whose provider/key is unavailable), if any.
+    #[must_use]
+    pub fn secondary_model_broken_reason(&self) -> Option<String> {
+        if self.memory_model.is_some() {
+            match self.resolve_model_state(&self.memory_model) {
+                ModelConfigState::MissingApiKey { provider_name } => {
+                    return Some(format!("Dreams model: {provider_name} API key is missing."));
+                }
+                ModelConfigState::ProviderUnavailable { provider_name } => {
+                    return Some(format!(
+                        "Dreams model: {provider_name} provider is unavailable."
+                    ));
+                }
+                ModelConfigState::OllamaOffline => {
+                    return Some("Dreams model: Ollama is offline.".to_string());
+                }
+                ModelConfigState::Ready(_) | ModelConfigState::Unconfigured => {}
+            }
+        }
+        for mp in self.character_models.values() {
+            match self.resolve_model_state(&Some(mp.clone())) {
+                ModelConfigState::MissingApiKey { provider_name } => {
+                    return Some(format!(
+                        "Character override: {provider_name} API key is missing."
+                    ));
+                }
+                ModelConfigState::ProviderUnavailable { provider_name } => {
+                    return Some(format!(
+                        "Character override: {provider_name} provider is unavailable."
+                    ));
+                }
+                ModelConfigState::OllamaOffline => {
+                    return Some("Character override: Ollama is offline.".to_string());
+                }
+                ModelConfigState::Ready(_) | ModelConfigState::Unconfigured => {}
+            }
+        }
+        None
+    }
+
     #[must_use]
     pub fn is_models_selection_complete(&self) -> bool {
-        matches!(
+        if !matches!(
             self.resolve_model_state(&self.claw_model),
             ModelConfigState::Ready(_)
-        )
+        ) {
+            return false;
+        }
+        if self.memory_model.is_some()
+            && !matches!(
+                self.resolve_model_state(&self.memory_model),
+                ModelConfigState::Ready(_)
+            )
+        {
+            return false;
+        }
+        self.character_models.values().all(|mp| {
+            matches!(
+                self.resolve_model_state(&Some(mp.clone())),
+                ModelConfigState::Ready(_)
+            )
+        })
     }
 
     /// Returns `true` if `cwd` is inside (or equal to) at least one valid directory
@@ -1150,6 +1347,9 @@ pub enum ModelConfigState {
 
     /// A provider is selected, but the required API key is empty/missing.
     MissingApiKey { provider_name: String },
+
+    /// A custom OpenAI-compatible endpoint was removed or disabled.
+    ProviderUnavailable { provider_name: String },
 
     /// Ollama is selected, but the local instance is offline or unreachable.
     OllamaOffline,
@@ -1453,5 +1653,112 @@ mod tests {
             assert!(!fm.pinned, "Default-off skill '{slug}' must not be pinned");
             assert!(!body.trim().is_empty(), "Skill '{slug}' body is empty");
         }
+    }
+
+    #[test]
+    fn per_character_models_and_mandatory_default_health() {
+        let mut s = Settings::default();
+        // Brand-new install: unconfigured, not "broken".
+        assert_eq!(s.default_model_broken_reason(), None);
+        assert!(!s.is_models_selection_complete());
+
+        let mut primary_ep = boxxy_model_selection::OpenAiCompatibleEndpoint::preset_litellm();
+        primary_ep.name = "Synthetic Default Gateway".to_string();
+        primary_ep.api_key_env = Some("SYNTHETIC_DEFAULT_GW_UNSET".to_string());
+
+        let mut custom_ep = boxxy_model_selection::OpenAiCompatibleEndpoint::preset_litellm();
+        custom_ep.name = "Synthetic Override Gateway".to_string();
+        custom_ep.api_key_env = Some("SYNTHETIC_OVERRIDE_GW_UNSET".to_string());
+
+        s.openai_compatible_endpoints = vec![primary_ep, custom_ep];
+        s.api_keys.insert(
+            "Synthetic Default Gateway".to_string(),
+            "sk-default-ok".to_string(),
+        );
+        s.api_keys.insert(
+            "Synthetic Override Gateway".to_string(),
+            "sk-override-ok".to_string(),
+        );
+
+        let default_model = ModelProvider::OpenAiCompatible {
+            provider_name: "Synthetic Default Gateway".to_string(),
+            model_id: "gpt-6.1-terra".to_string(),
+            thinking: None,
+        };
+        let override_model = ModelProvider::OpenAiCompatible {
+            provider_name: "Synthetic Override Gateway".to_string(),
+            model_id: "claude-sonnet".to_string(),
+            thinking: None,
+        };
+
+        // Bypassing default (setting character override only) must be flagged as broken!
+        s.character_models
+            .insert("char-alpha-uuid".to_string(), override_model.clone());
+        assert!(s.default_model_broken_reason().is_some());
+        assert!(!s.is_models_selection_complete());
+
+        // Setting mandatory default completes setup.
+        s.claw_model = Some(default_model.clone());
+        assert_eq!(s.default_model_broken_reason(), None);
+        assert!(s.is_models_selection_complete());
+        assert_eq!(
+            s.resolve_character_model("char-alpha-uuid"),
+            Some(override_model.clone())
+        );
+        assert_eq!(
+            s.resolve_character_model("char-beta-uuid"),
+            Some(default_model.clone())
+        );
+        // Ephemeral incognito always uses the mandatory default model.
+        assert_eq!(
+            s.resolve_character_model("__incognito__"),
+            Some(default_model)
+        );
+
+        // Removing the Default model's provider key marks models broken EVEN THOUGH
+        // char-alpha-uuid's override model is still Ready and working!
+        s.api_keys.remove("Synthetic Default Gateway");
+        let reverted = s.revert_non_default_invalid_models();
+        assert_eq!(reverted, 0);
+        assert!(
+            s.default_model_broken_reason()
+                .as_deref()
+                .is_some_and(|r| r.contains("Synthetic Default Gateway"))
+        );
+        assert!(!s.is_models_selection_complete());
+        // Working character override stays intact.
+        assert_eq!(
+            s.resolve_character_model("char-alpha-uuid"),
+            Some(override_model)
+        );
+
+        // Restoring Default key and removing Override provider reverts char-alpha-uuid to Default.
+        s.api_keys.insert(
+            "Synthetic Default Gateway".to_string(),
+            "sk-default-ok".to_string(),
+        );
+        s.openai_compatible_endpoints.retain(|e| e.name != "Synthetic Override Gateway");
+        let reverted_override = s.revert_non_default_invalid_models();
+        assert_eq!(reverted_override, 1);
+        assert!(!s.has_custom_character_model("char-alpha-uuid"));
+        assert_eq!(s.default_model_broken_reason(), None);
+        assert!(s.is_models_selection_complete());
+    }
+
+    #[test]
+    fn deserialize_character_models_skips_invalid_and_incognito_entries() {
+        let json = r#"{
+            "character_models": {
+                "char-valid": { "Ollama": "qwen3:8b" },
+                "char-invalid": { "UnknownVendor": 123 },
+                "__incognito__": { "Ollama": "llama3.2" }
+            }
+        }"#;
+        let parsed = Settings::parse_lenient(json).expect("should parse leniently");
+        assert_eq!(parsed.character_models.len(), 1);
+        assert_eq!(
+            parsed.character_models.get("char-valid"),
+            Some(&ModelProvider::Ollama("qwen3:8b".to_string()))
+        );
     }
 }
