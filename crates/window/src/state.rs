@@ -173,6 +173,7 @@ pub enum AppInput {
     UpdateDetachedSessionsBadge(Vec<boxxy_terminal::DetachedSessionInfo>),
     ReattachDetachedSession(u32, Option<String>),
     ReattachDetachedBatch(Vec<boxxy_terminal::DetachedSessionInfo>),
+    SpawnCharacterTab(String, Option<String>),
     RefreshMaintenanceStatus(String, bool),
     RefreshMcpStatuses(Vec<(String, bool)>),
     PrewarmDeferredUi,

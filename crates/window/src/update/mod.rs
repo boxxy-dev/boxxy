@@ -366,6 +366,9 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
         AppInput::ReattachDetachedBatch(sessions) => {
             detached_sessions::reattach_batch(&mut inner, sessions);
         }
+        AppInput::SpawnCharacterTab(character_id, cwd) => {
+            let _ = tabs::new_tab_with_character(&mut inner, character_id, cwd);
+        }
         AppInput::RefreshDetachedSessions => {
             detached_sessions::refresh_detached_sessions(&inner);
         }

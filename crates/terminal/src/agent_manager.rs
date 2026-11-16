@@ -357,6 +357,30 @@ impl AgentConnection {
             });
         }
 
+        // 2b. External Companion Spawn Character Supervisor
+        {
+            let proxy = agent_proxy.clone();
+            tokio::spawn(async move {
+                loop {
+                    if let Ok(mut stream) = proxy.receive_spawn_character_requested().await {
+                        while let Some(msg) = stream.next().await {
+                            if let Ok(args) = msg.args() {
+                                let event = crate::TerminalEvent {
+                                    id: String::new(),
+                                    kind: crate::TerminalEventKind::SpawnCharacter(
+                                        args.character_id.to_string(),
+                                        args.cwd.to_string(),
+                                    ),
+                                };
+                                let _ = crate::TERMINAL_EVENT_BUS.send(event);
+                            }
+                        }
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+                }
+            });
+        }
+
         // 2c. MCP Server Status Supervisor
         {
             let proxy = agent_proxy.clone();
@@ -957,6 +981,13 @@ impl AgentManager {
             .take_pending_restores()
             .await
             .context("Agent take_pending_restores failed")
+    }
+
+    pub async fn take_pending_character_spawns(&self) -> Result<Vec<(String, String)>> {
+        self.agent_proxy
+            .take_pending_character_spawns()
+            .await
+            .context("Agent take_pending_character_spawns failed")
     }
 
     /// Queries the daemon's Maintenance interface for `(dream_status_label, is_on_battery)`.

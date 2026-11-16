@@ -8,6 +8,7 @@
 pub trait Agent {
     async fn get_version(&self) -> zbus::Result<String>;
     async fn get_config_dir(&self) -> zbus::Result<String>;
+    async fn get_daemon_status(&self) -> zbus::Result<String>;
     async fn update_credentials(
         &self,
         api_keys: std::collections::HashMap<String, String>,
@@ -50,6 +51,15 @@ pub trait Agent {
 
     /// Drains any PIDs queued via `request_restore_detached` while no UI window was open.
     async fn take_pending_restores(&self) -> zbus::Result<Vec<(u32, String)>>;
+
+    /// Requests that `character` (UUID, slug, or display name) be focused if already active,
+    /// or spawned into a new Claw-enabled tab (`cwd` optional). Queues for startup if no UI
+    /// window is currently open.
+    async fn request_spawn_character(&self, character: String, cwd: String) -> zbus::Result<()>;
+
+    /// Drains any `(character_id, cwd)` entries queued via `request_spawn_character` while
+    /// no UI window was open.
+    async fn take_pending_character_spawns(&self) -> zbus::Result<Vec<(String, String)>>;
 
     /// Terminates a detached background shell (`pid`, or `0` for all).
     async fn terminate_detached_session(&self, pid: u32) -> zbus::Result<()>;
@@ -119,6 +129,10 @@ pub trait Agent {
 
     #[zbus(signal)]
     async fn restore_detached_requested(&self, pid: u32, cwd: String) -> zbus::Result<()>;
+
+    #[zbus(signal)]
+    async fn spawn_character_requested(&self, character_id: String, cwd: String)
+    -> zbus::Result<()>;
 
     #[zbus(signal)]
     async fn mcp_status_changed(&self, statuses_json: String) -> zbus::Result<()>;

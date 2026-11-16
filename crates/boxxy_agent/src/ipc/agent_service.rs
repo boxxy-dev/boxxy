@@ -18,14 +18,35 @@ pub struct AgentInterface {
     pub(crate) session_manager: Arc<Mutex<ClawSessionManager>>,
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct DaemonStatusSnapshot {
+    pub bus_name: String,
+    pub version: String,
+    pub is_stale_binary: bool,
+    pub is_dev: bool,
+    pub instance_slug: Option<String>,
+    pub is_ephemeral: bool,
+    pub config_dir: String,
+    pub on_battery: bool,
+    pub power_source: String,
+    pub dream_cycle: String,
+    pub is_ghost: bool,
+    pub active_claw_panes: usize,
+    pub detached_shells: usize,
+    pub pending_tasks: usize,
+}
+
+fn is_self_exe_deleted() -> bool {
+    std::fs::read_link("/proc/self/exe")
+        .ok()
+        .and_then(|p| p.to_str().map(|s| s.ends_with(" (deleted)")))
+        .unwrap_or(false)
+}
+
 #[zbus::interface(name = "dev.boxxy.BoxxyTerminal.Agent")]
 impl AgentInterface {
     async fn get_version(&self) -> String {
-        let is_deleted_on_disk = std::fs::read_link("/proc/self/exe")
-            .ok()
-            .and_then(|p| p.to_str().map(|s| s.ends_with(" (deleted)")))
-            .unwrap_or(false);
-        if is_deleted_on_disk {
+        if is_self_exe_deleted() {
             format!("{}-stale", crate::daemon::singleton::AGENT_VERSION)
         } else {
             crate::daemon::singleton::AGENT_VERSION.to_string()
@@ -36,6 +57,51 @@ impl AgentInterface {
         boxxy_sys_utils::get_config_dir()
             .to_string_lossy()
             .into_owned()
+    }
+
+    async fn get_daemon_status(&self) -> String {
+        let on_battery = self.core.power.is_on_battery();
+        let dream_cycle = self.core.dream_status.get().await.label().to_string();
+        let active_claw_panes = {
+            let mut manager = self.session_manager.lock().await;
+            manager.prune_dead();
+            let mut seen_panes = std::collections::HashSet::new();
+            for s in manager.sessions.values() {
+                seen_panes.insert(s.pane_id.clone());
+            }
+            seen_panes.len()
+        };
+        let detached_shells =
+            crate::pty::query_detached_sessions_detailed(&self.core.state.pty_registry)
+                .await
+                .len();
+        let pending_tasks = build_pending_tasks_snapshot(&self.core.state.pty_registry)
+            .await
+            .len();
+
+        let snap = DaemonStatusSnapshot {
+            bus_name: boxxy_sys_utils::agent_bus_name().to_string(),
+            version: crate::daemon::singleton::AGENT_VERSION.to_string(),
+            is_stale_binary: is_self_exe_deleted(),
+            is_dev: boxxy_sys_utils::is_dev_instance(),
+            instance_slug: boxxy_sys_utils::instance_id(),
+            is_ephemeral: boxxy_sys_utils::is_ephemeral_mode(),
+            config_dir: boxxy_sys_utils::get_config_dir()
+                .to_string_lossy()
+                .into_owned(),
+            on_battery,
+            power_source: if on_battery {
+                "Battery".to_string()
+            } else {
+                "AC".to_string()
+            },
+            dream_cycle,
+            is_ghost: self.core.ghost.is_ghost(),
+            active_claw_panes,
+            detached_shells,
+            pending_tasks,
+        };
+        serde_json::to_string(&snap).unwrap_or_default()
     }
 
     async fn update_credentials(
@@ -520,6 +586,66 @@ impl AgentInterface {
         pid: u32,
         cwd: String,
     ) -> zbus::Result<()>;
+
+    #[zbus(signal)]
+    pub async fn spawn_character_requested(
+        emitter: &SignalEmitter<'_>,
+        character_id: String,
+        cwd: String,
+    ) -> zbus::Result<()>;
+
+    async fn request_spawn_character(
+        &self,
+        #[zbus(signal_emitter)] emitter: zbus::object_server::SignalEmitter<'_>,
+        character: &str,
+        cwd: &str,
+    ) {
+        let query = character.trim();
+        if query.is_empty() {
+            return;
+        }
+
+        let snapshot = self.core.registry.snapshot().await;
+        let Some(info) = boxxy_claw_protocol::characters::find_character_exact(
+            &snapshot.catalog,
+            query,
+            &[query],
+        ) else {
+            log::warn!("RequestSpawnCharacter: unknown character '{query}'");
+            return;
+        };
+
+        if let boxxy_claw_protocol::characters::CharacterStatus::Active { ref pane_id } =
+            info.status
+        {
+            log::info!(
+                "RequestSpawnCharacter: '{}' is already active in pane {}; focusing instead",
+                info.config.name,
+                pane_id
+            );
+            self.request_focus_pane(emitter, pane_id).await;
+            return;
+        }
+
+        let target_id = info.config.id.clone();
+        let cwd_owned = cwd.trim().to_string();
+
+        if self.core.ghost.is_ghost() {
+            let mut pending = self.core.state.pending_character_spawns.write().await;
+            if let Some(existing) = pending.iter_mut().find(|(cid, _)| cid == &target_id) {
+                existing.1 = cwd_owned;
+            } else {
+                pending.push((target_id, cwd_owned));
+            }
+        } else {
+            let _ = Self::spawn_character_requested(&emitter, target_id, cwd_owned).await;
+        }
+    }
+
+    async fn take_pending_character_spawns(&self) -> Vec<(String, String)> {
+        let mut pending = self.core.state.pending_character_spawns.write().await;
+        std::mem::take(&mut *pending)
+    }
 
     async fn get_detached_sessions(&self) -> String {
         let list =

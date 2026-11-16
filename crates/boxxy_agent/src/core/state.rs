@@ -20,6 +20,9 @@ pub struct AgentState {
     /// PIDs requested for restoration by an external desktop companion while
     /// no Boxxy UI window was open. Drained by the first window that connects.
     pub pending_restores: Arc<RwLock<Vec<u32>>>,
+    /// `(character_id, cwd)` entries requested via `RequestSpawnCharacter` while
+    /// no Boxxy UI window was open. Drained by the first window that connects.
+    pub pending_character_spawns: Arc<RwLock<Vec<(String, String)>>>,
 }
 
 impl Default for AgentState {
@@ -31,6 +34,7 @@ impl Default for AgentState {
             ollama_url: Arc::new(RwLock::new(String::new())),
             pty_registry: PtyRegistry::new(),
             pending_restores: Arc::new(RwLock::new(Vec::new())),
+            pending_character_spawns: Arc::new(RwLock::new(Vec::new())),
         }
     }
 }

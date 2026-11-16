@@ -837,6 +837,14 @@ impl TerminalComponent {
             .is_some_and(|p| p.controller.start_claw_query_with_default_character(query))
     }
 
+    pub fn activate_character(&self, character_id: String) -> bool {
+        let inner = self.inner.borrow();
+        inner
+            .panes
+            .get(&inner.active_pane_id)
+            .is_some_and(|p| p.controller.activate_character(character_id))
+    }
+
     /// Returns `(pane_id, formatted_agent_name)` for every pane in this tab that
     /// currently has an active Claw agent session.
     pub fn get_active_claw_panes(&self) -> Vec<(String, String)> {

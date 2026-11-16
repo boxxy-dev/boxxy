@@ -995,4 +995,130 @@ impl TerminalPaneComponent {
             });
         });
     }
+
+    /// Activates the Claw overlay on this pane and claims `character_id` (UUID, slug,
+    /// or display name) so the user can start chatting immediately.
+    pub fn activate_character(&self, character_id: String) -> bool {
+        let query = character_id.trim().to_string();
+        if query.is_empty() || self.is_claw_active.get() {
+            return false;
+        }
+
+        let (pane_id, session_id_ref, claw_sub_ref, event_tx, cb) = {
+            let inner = self.inner.borrow();
+            (
+                inner.id.clone(),
+                inner.session_id.clone(),
+                inner.claw_subscription.clone(),
+                inner.claw_event_tx.clone(),
+                inner.callback.clone(),
+            )
+        };
+
+        let catalog = boxxy_claw_protocol::characters::CHARACTER_CACHE.load();
+        let chosen =
+            boxxy_claw_protocol::characters::find_character_exact(&catalog, &query, &[&query]);
+        let (target_id, display_name) = if let Some(info) = chosen {
+            let disp = if info.config.display_name.is_empty() {
+                info.config.name.clone()
+            } else {
+                info.config.display_name.clone()
+            };
+            (info.config.id.clone(), disp)
+        } else {
+            (query.clone(), query)
+        };
+
+        *self.agent_name.borrow_mut() = display_name.clone();
+        self.is_claw_active.set(true);
+        *self.session_status.borrow_mut() = AgentStatus::Waiting;
+        self.claw_indicator.set_visible(true);
+        self.msg_bar.update_ui(
+            AgentStatus::Waiting,
+            self.is_pinned.get(),
+            self.is_web_search.get(),
+            self.is_vibe.get(),
+        );
+        let terminal = self.terminal();
+        terminal.set_focusable(false);
+        self.claw_popover.show_input_only(&display_name);
+        self.claw_popover.grab_input_focus();
+        cb(PaneOutput::ClawStateChanged(pane_id.clone(), true, false));
+
+        let claw_popover = self.claw_popover.clone();
+        let claw_indicator = self.claw_indicator.clone();
+        let is_claw_active = self.is_claw_active.clone();
+        let session_status = self.session_status.clone();
+        let is_pinned = self.is_pinned.clone();
+        let is_web_search = self.is_web_search.clone();
+        let is_vibe = self.is_vibe.clone();
+        let agent_name_rc = self.agent_name.clone();
+        let msg_bar = self.msg_bar.clone();
+        let inner_weak = std::rc::Rc::downgrade(&self.inner);
+
+        glib::spawn_future_local(async move {
+            // Wait briefly for PTY spawn so foreground tracking and workspace registration attach cleanly.
+            for _ in 0..30 {
+                let ready = inner_weak
+                    .upgrade()
+                    .is_none_or(|rc| rc.borrow().pid.is_some());
+                if ready {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+
+            if session_id_ref.lock().await.is_none() {
+                let agent = crate::get_agent().await;
+                match agent
+                    .create_claw_session_with_sender(pane_id.clone(), target_id, event_tx)
+                    .await
+                {
+                    Ok((sid, sub_guard)) if !sid.is_empty() => {
+                        *claw_sub_ref.lock() = Some(sub_guard);
+                        *session_id_ref.lock().await = Some(sid.clone());
+                        let _ = agent
+                            .post_claw_message(sid, ClawMessage::Initialize)
+                            .await;
+                    }
+                    _ => {
+                        // Roll back optimistic UI state cleanly if the character was claimed elsewhere in a race.
+                        is_claw_active.set(false);
+                        *session_status.borrow_mut() = AgentStatus::Off;
+                        *agent_name_rc.borrow_mut() = String::new();
+                        claw_indicator.set_visible(false);
+                        msg_bar.clear_character();
+                        msg_bar.update_ui(
+                            AgentStatus::Off,
+                            is_pinned.get(),
+                            is_web_search.get(),
+                            is_vibe.get(),
+                        );
+                        claw_popover.reset_for_exit();
+                        terminal.set_focusable(true);
+                        terminal.grab_focus();
+                        cb(PaneOutput::ClawStateChanged(pane_id, false, false));
+                        return;
+                    }
+                }
+            }
+
+            glib::timeout_add_local_once(std::time::Duration::from_millis(60), move || {
+                if !is_claw_active.get() {
+                    return;
+                }
+                terminal.set_focusable(false);
+                let aname = agent_name_rc.borrow().clone();
+                let label = if aname.is_empty() {
+                    display_name.as_str()
+                } else {
+                    aname.as_str()
+                };
+                claw_popover.show_input_only(label);
+                msg_bar.entry.grab_focus();
+            });
+        });
+
+        true
+    }
 }

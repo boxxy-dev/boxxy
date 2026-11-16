@@ -44,6 +44,7 @@ pub enum TerminalEventKind {
     AltScreenChanged(bool),
     Notification(String),
     RestoreDetached(u32, String),
+    SpawnCharacter(String, String),
     ClawStateChanged(bool, bool),
     MovePaneToSplit {
         source_pane_id: String,

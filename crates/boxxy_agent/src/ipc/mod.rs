@@ -492,4 +492,94 @@ mod tests {
             "Pane 2 leaked a /dev/ptmx master FD from Pane 1:\n{fd_listing}"
         );
     }
+
+    #[tokio::test]
+    async fn p2p_agent_status_and_spawn_character_roundtrip() {
+        use crate::claw::CharacterRegistry;
+        use crate::daemon::lifecycle;
+
+        let (p0, p1) = UnixStream::pair().expect("unix stream pair");
+        let state = AgentState::new();
+        let db = boxxy_db::Db::new_in_memory().await.expect("in-memory db");
+        let registry = Arc::new(CharacterRegistry::load_or_default(&db).await);
+        let (client_tx, client_rx) = watch::channel(0usize);
+        let ghost = lifecycle::start(client_rx);
+        let dream_status = DreamStatusCell::new(DreamStatus::Idle);
+        let power_monitor = power::ac_only();
+
+        let core = Arc::new(DaemonCore {
+            state: state.clone(),
+            registry: registry.clone(),
+            power: power_monitor,
+            ghost,
+            dream_status,
+            db,
+        });
+        let claw_subsystem = ClawSubsystem::new(state);
+        let session_manager = Arc::new(Mutex::new(ClawSessionManager::new(Arc::new(
+            claw_subsystem,
+        ))));
+
+        let (server_conn, client_conn) = futures_util::try_join!(
+            Builder::unix_stream(p0)
+                .server(Guid::generate())
+                .p2p()
+                .serve_at(
+                    "/dev/boxxy/Agent",
+                    AgentInterface {
+                        core,
+                        client_count_tx: client_tx,
+                        session_manager,
+                    },
+                )
+                .build(),
+            Builder::unix_stream(p1).p2p().build(),
+        )
+        .expect("p2p connections should build");
+
+        let _server_task = tokio::spawn(async move {
+            let _keep = server_conn;
+            std::future::pending::<()>().await;
+        });
+
+        let agent_proxy = AgentProxy::new(&client_conn).await.expect("agent proxy");
+
+        // 1. GetDaemonStatus returns valid JSON with expected fields
+        let status_json = agent_proxy
+            .get_daemon_status()
+            .await
+            .expect("get_daemon_status");
+        let parsed: agent_service::DaemonStatusSnapshot =
+            serde_json::from_str(&status_json).expect("valid status JSON");
+        assert_eq!(parsed.dream_cycle, "idle");
+        assert_eq!(parsed.power_source, "AC");
+        assert!(parsed.is_ghost);
+
+        // 2. RequestSpawnCharacter while in Ghost Mode queues character for TakePendingCharacterSpawns
+        let snap_json = agent_proxy
+            .get_registry_snapshot()
+            .await
+            .expect("get_registry_snapshot");
+        let snap: boxxy_claw_protocol::characters::RegistrySnapshot =
+            serde_json::from_str(&snap_json).expect("snapshot json");
+        let first_char = snap.catalog.first().expect("at least one character");
+
+        agent_proxy
+            .request_spawn_character(first_char.config.name.clone(), "/tmp".to_string())
+            .await
+            .expect("request_spawn_character");
+
+        let queued = agent_proxy
+            .take_pending_character_spawns()
+            .await
+            .expect("take_pending_character_spawns");
+        assert_eq!(queued, vec![(first_char.config.id.clone(), "/tmp".to_string())]);
+
+        // Second drain is empty
+        let empty = agent_proxy
+            .take_pending_character_spawns()
+            .await
+            .expect("second drain");
+        assert!(empty.is_empty());
+    }
 }

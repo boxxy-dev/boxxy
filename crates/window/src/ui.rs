@@ -569,6 +569,17 @@ impl AppWindow {
                         }
                     }
                 }
+                if let Ok(pending_spawns) = agent.take_pending_character_spawns().await
+                    && !pending_spawns.is_empty()
+                {
+                    for (char_id, cwd) in pending_spawns {
+                        restored_any = true;
+                        let cwd_opt = (!cwd.is_empty()).then_some(cwd);
+                        let _ = tx_startup
+                            .send(AppInput::SpawnCharacterTab(char_id, cwd_opt))
+                            .await;
+                    }
+                }
                 if restored_any {
                     if let Some(init_id) = initial_tab_id {
                         let _ = tx_startup.send(AppInput::CloseTab(init_id)).await;

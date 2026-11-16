@@ -62,7 +62,7 @@ Top-level orchestration interface, split into focused submodules:
 
 **Session management**: `post_claw_message(session_id, message_json)` routes a `ClawMessage` to the named session; `list_claw_sessions()` returns `[(session_id, pane_id, agent_name)]` for active sessions. Session events flow back as `claw_event(session_id, event_json)` signals. Dead sessions are pruned on every map touch.
 
-**Other**: `update_credentials` (UI → daemon API-key sync), `notify_settings_invalidated` (daemon reloads `settings.json`), `request_reload` / `request_stop`.
+**Other**: `get_daemon_status()` (single-call JSON status snapshot for desktop companions), `request_spawn_character(character, cwd)` / `take_pending_character_spawns()` + `spawn_character_requested(character_id, cwd)` signal (focuses active character or spawns a new Claw tab), `update_credentials` (UI → daemon API-key sync), `notify_settings_invalidated` (daemon reloads `settings.json`), `request_reload` / `request_stop`.
 
 **`ipc/client_tracker.rs`** — `spawn_owner_tracker` subscribes to `org.freedesktop.DBus.NameOwnerChanged`, filters for unique bus names (`:…`) being released (`new_owner` is empty), auto-detaches (or terminates) any PTYs owned by that client via `pty_registry.release_owner`, and for character claims calls `release_owner`, shuts down the corresponding `ClawSession` actors via `ClawSessionManager::shutdown_pane` (flushing unflushed history to SQLite), and cascades `WorkspaceRegistry::release_all_locks` + `unregister_pane` for each released Pane claim.
 

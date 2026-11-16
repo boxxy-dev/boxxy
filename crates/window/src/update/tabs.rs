@@ -64,6 +64,25 @@ pub fn new_tab_reattach(
     )
 }
 
+pub fn new_tab_with_character(
+    inner: &mut AppWindowInner,
+    character_id: String,
+    working_dir: Option<String>,
+) -> TerminalComponent {
+    let controller = new_tab_internal(
+        inner,
+        None,
+        TabLaunchSpec {
+            working_dir,
+            ..Default::default()
+        },
+        None,
+    );
+    let _ = controller.activate_character(character_id);
+    inner.window.present();
+    controller
+}
+
 /// Restores a batch of detached sessions, grouping sessions that originated from
 /// splits within the same tab (`{tab_id}::{idx}::{v|h}`) back into a single tab's
 /// split layout while opening unrelated tabs separately.
