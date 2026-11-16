@@ -94,6 +94,7 @@ pub enum AppInput {
     SidebarVisibleChanged(bool),
     SidebarPageChanged(String),
     OpenPreferences,
+    OpenPreferencesPage(String),
     OpenThemesPreferences,
     OpenApisPreferences,
     OpenMcpPreferences,

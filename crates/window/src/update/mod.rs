@@ -98,6 +98,9 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
         AppInput::OpenPreferences => {
             open_preferences_page(&mut inner, None);
         }
+        AppInput::OpenPreferencesPage(ref page) => {
+            open_preferences_page(&mut inner, Some(page));
+        }
         AppInput::OpenThemesPreferences => {
             open_preferences_page(&mut inner, Some("themes"));
         }

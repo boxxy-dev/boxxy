@@ -128,6 +128,7 @@ fn main() {
     <file compressed="true" alias="ui/bookmark_editor.ui">ui/bookmark_editor.ui</file>
     <file compressed="true" alias="ui/whats_new_dialog.ui">ui/whats_new_dialog.ui</file>
     <file compressed="true" alias="ui/model_selection_dialog.ui">ui/model_selection_dialog.ui</file>
+    <file compressed="true" alias="ui/command_palette.ui">ui/command_palette.ui</file>
     <file compressed="true" alias="sounds/task.wav">sounds/task.wav</file>
     <file compressed="true" alias="sounds/timer.wav">sounds/timer.wav</file>
   </gresource>
@@ -244,6 +245,7 @@ fn main() {
     println!("cargo:rerun-if-changed=../../resources/ui/bookmark_editor.ui");
     println!("cargo:rerun-if-changed=../../resources/ui/whats_new_dialog.ui");
     println!("cargo:rerun-if-changed=../../resources/ui/model_selection_dialog.ui");
+    println!("cargo:rerun-if-changed=../../resources/ui/command_palette.ui");
     println!("cargo:rerun-if-changed=../../resources/sounds/task.wav");
     println!("cargo:rerun-if-changed=../../resources/sounds/timer.wav");
 

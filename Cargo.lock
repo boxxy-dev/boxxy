@@ -999,8 +999,11 @@ dependencies = [
 name = "boxxy-command-palette"
 version = "0.1.0"
 dependencies = [
+ "boxxy-keybindings",
+ "frizbee",
  "gtk4",
  "libadwaita",
+ "log",
 ]
 
 [[package]]

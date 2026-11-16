@@ -36,14 +36,10 @@ async fn sync_bookmarks_to_palette(cp: &CommandPaletteComponent) {
     if let Ok(entries) = loaded {
         let commands = entries
             .into_iter()
-            .map(
-                |(name, filename, script)| boxxy_command_palette::CommandItem {
-                    title: format!("Bookmark: {name}"),
-                    action: "win.execute-bookmark".to_string(),
-                    parameter: Some((name, filename, script).to_variant()),
-                    shortcut: None,
-                },
-            )
+            .map(|(name, filename, script)| {
+                let param = (name.clone(), filename.clone(), script).to_variant();
+                boxxy_command_palette::CommandItem::bookmark(&name, filename, param)
+            })
             .collect();
         cp.set_dynamic_commands(commands);
     }
@@ -663,9 +659,7 @@ impl AppWindow {
 
         window.present();
 
-        if !is_drag_window
-            && let Ok(mut inner) = inner_ref.try_borrow_mut()
-        {
+        if !is_drag_window && let Ok(mut inner) = inner_ref.try_borrow_mut() {
             crate::update::window_state::maybe_notify_broken_default_model(&mut inner);
         }
 
@@ -1200,11 +1194,7 @@ mod tests {
                 )
                 .unwrap();
             assert!(
-                is_point_on_tab(
-                    wh,
-                    f64::from(tab0_center.x()),
-                    f64::from(tab0_center.y()),
-                ),
+                is_point_on_tab(wh, f64::from(tab0_center.x()), f64::from(tab0_center.y()),),
                 "Point on tab should deny drag on all ancestor GtkWindowHandles"
             );
 

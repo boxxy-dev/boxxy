@@ -565,17 +565,24 @@ popover.command-palette > contents {
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
     padding: 0px;
     margin-top: 8px; /* Extra padding from the headerbar */
-    min-width:460px;
+    min-width: 280px;
+}
 
+popover.command-palette label.command-palette-title {
+    font-weight: 600;
+}
+
+popover.command-palette label.command-palette-subtitle {
+    font-weight: 500;
 }
 
 shortcutlabel.palette-shortcut {
     font-size: 0.7em;
-    opacity: 0.8;
+    opacity: 0.85;
 }
 
 .palette-shortcut .keycap {
-    padding: 4px 4px;
+    padding: 4px 5px;
     min-width: 16px;
     min-height: 16px;
     font-size: 0.85em;

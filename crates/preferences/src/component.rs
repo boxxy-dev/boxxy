@@ -6,6 +6,22 @@ use libadwaita as adw;
 use std::cell::Cell;
 use std::rc::Rc;
 
+/// Canonical `(page_name, header_title)` list for the 12 top-level Preferences categories.
+pub const PREFERENCE_CATEGORIES: [(&str, &str); 12] = [
+    ("appearance", "Terminal"),
+    ("themes", "Themes"),
+    ("apis", "APIs"),
+    ("characters", "Characters"),
+    ("integrations", "Desktop Integrations"),
+    ("mcp", "MCP"),
+    ("skills", "Skills"),
+    ("claw_ui", "Claw UI & Sounds"),
+    ("toolbox", "Toolbox & Permissions"),
+    ("shortcuts", "Shortcuts"),
+    ("advanced", "Advanced"),
+    ("about", "About"),
+];
+
 struct NavCategory {
     page_name: &'static str,
     widget_id: &'static str,
@@ -16,6 +32,7 @@ struct NavCategory {
 
 pub struct PreferencesComponent {
     dialog: adw::Dialog,
+    split_view: adw::NavigationSplitView,
     stack: adw::ViewStack,
     category_list: gtk::ListBox,
     categories: Rc<Vec<NavCategory>>,
@@ -28,7 +45,8 @@ pub struct PreferencesComponent {
 
 impl std::fmt::Debug for PreferencesComponent {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("PreferencesComponent").finish_non_exhaustive()
+        f.debug_struct("PreferencesComponent")
+            .finish_non_exhaustive()
     }
 }
 
@@ -45,6 +63,7 @@ impl PreferencesComponent {
     ) -> Self {
         let builder = gtk::Builder::from_resource("/dev/boxxy/BoxxyTerminal/ui/preferences.ui");
         let dialog: adw::Dialog = builder.object("dialog").unwrap();
+        let split_view: adw::NavigationSplitView = builder.object("split_view").unwrap();
         let stack: adw::ViewStack = builder.object("stack").unwrap();
         let content_title: adw::WindowTitle = builder.object("content_title").unwrap();
         let apis_stack: gtk::Stack = builder.object("apis_stack").unwrap();
@@ -171,24 +190,14 @@ impl PreferencesComponent {
             ),
             make_cat("mcp", "nav_mcp", "MCP", mcp_filter),
             make_cat("skills", "nav_skills", "Skills", skills_filter),
-            make_cat(
-                "claw_ui",
-                "nav_claw_ui",
-                "Claw UI & Sounds",
-                claw_ui_filter,
-            ),
+            make_cat("claw_ui", "nav_claw_ui", "Claw UI & Sounds", claw_ui_filter),
             make_cat(
                 "toolbox",
                 "nav_toolbox",
                 "Toolbox & Permissions",
                 toolbox_filter,
             ),
-            make_cat(
-                "shortcuts",
-                "nav_shortcuts",
-                "Shortcuts",
-                shortcuts_filter,
-            ),
+            make_cat("shortcuts", "nav_shortcuts", "Shortcuts", shortcuts_filter),
             make_cat("advanced", "nav_advanced", "Advanced", advanced_filter),
             make_cat("about", "nav_about", "About", about_filter),
         ]);
@@ -236,6 +245,7 @@ impl PreferencesComponent {
 
         Self {
             dialog,
+            split_view,
             stack,
             category_list,
             categories,
@@ -323,6 +333,7 @@ impl PreferencesComponent {
         } else {
             self.stack.set_visible_child_name(page_name);
         }
+        self.split_view.set_show_content(true);
     }
 
     pub fn sync_settings(&self, settings: &Settings) {

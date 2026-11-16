@@ -299,3 +299,37 @@ popover.menu > contents listview > row:selected:hover label,
 popover.menu > contents listview > row:selected:hover image {
     color: @accent_fg_color;
 }
+
+/* ── Command Palette Typography & Keycaps ────────────────────────────────── */
+
+popover.command-palette > contents label.command-palette-title {
+    font-weight: 600;
+}
+
+popover.command-palette .navigation-sidebar > row:selected label.command-palette-title {
+    font-weight: 700;
+}
+
+popover.command-palette .navigation-sidebar > row:hover:not(:selected) label.command-palette-subtitle,
+popover.command-palette .navigation-sidebar > row:selected label.command-palette-subtitle {
+    font-weight: 500;
+    opacity: 0.82;
+}
+
+popover.command-palette .navigation-sidebar > row:not(:selected):not(:hover) .palette-shortcut .keycap {
+    background-color: @card_bg_color;
+    color: @card_fg_color;
+    outline: var(--boxxy-border-thin) solid alpha(@boxxy_ink, 0.45);
+    outline-offset: -1px;
+    box-shadow: none;
+}
+
+popover.command-palette .navigation-sidebar > row:hover:not(:selected) .palette-shortcut .keycap,
+popover.command-palette .navigation-sidebar > row:selected .palette-shortcut .keycap {
+    background-color: alpha(@boxxy_ink, 0.12);
+    color: @accent_fg_color;
+    outline: var(--boxxy-border-thin) solid alpha(@boxxy_ink, 0.35);
+    outline-offset: -1px;
+    box-shadow: none;
+}
+

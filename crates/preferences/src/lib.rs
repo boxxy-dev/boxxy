@@ -16,7 +16,7 @@ mod ui_utils;
 pub mod user_profile;
 
 pub mod component;
-pub use component::PreferencesComponent;
+pub use component::{PREFERENCE_CATEGORIES, PreferencesComponent};
 pub use config::{
     AppState, AppThemeMode, CursorShape, ImagePreviewTrigger, SETTINGS_EVENT_BUS, Settings,
 };

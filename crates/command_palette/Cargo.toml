@@ -7,5 +7,11 @@ license.workspace = true
 name = "boxxy-command-palette"
 
 [dependencies]
+boxxy-keybindings.workspace = true
+frizbee.workspace = true
 gtk4.workspace = true
 libadwaita.workspace = true
+log.workspace = true
+
+[lints]
+workspace = true

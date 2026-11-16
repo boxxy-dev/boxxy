@@ -66,6 +66,19 @@ pub fn setup_actions(
     add_action!("preferences", AppInput::OpenPreferences);
     add_action!("open-apis", AppInput::OpenApisPreferences);
     add_action!("open-mcp", AppInput::OpenMcpPreferences);
+
+    let open_prefs_page_name = boxxy_command_palette::OPEN_PREFERENCES_PAGE_ACTION
+        .strip_prefix("win.")
+        .unwrap_or("open-preferences-page");
+    let open_prefs_page =
+        gio::SimpleAction::new(open_prefs_page_name, Some(gtk4::glib::VariantTy::STRING));
+    let s_prefs_page = sender.clone();
+    open_prefs_page.connect_activate(move |_, param| {
+        if let Some(page) = param.and_then(|p| p.get::<String>()) {
+            let _ = s_prefs_page.send_blocking(AppInput::OpenPreferencesPage(page));
+        }
+    });
+    action_group.add_action(&open_prefs_page);
     add_action!("bookmarks", AppInput::OpenBookmarks);
     add_action!("shortcuts", AppInput::OpenShortcuts);
     add_action!("whats-new", AppInput::OpenWhatsNew);
@@ -115,4 +128,24 @@ pub fn setup_actions(
     add_action!("swap-down", AppInput::SwapDown);
 
     window.insert_action_group("win", Some(&action_group));
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn command_palette_preferences_categories_match_preferences_component() {
+        let palette_cats: Vec<(&str, &str)> = boxxy_command_palette::PREFERENCES_CATEGORIES
+            .iter()
+            .map(|c| (c.page_name, c.title))
+            .collect();
+        assert_eq!(
+            palette_cats.as_slice(),
+            boxxy_preferences::PREFERENCE_CATEGORIES.as_slice(),
+            "Command Palette Preferences categories drifted from PreferencesComponent"
+        );
+        assert!(
+            boxxy_command_palette::OPEN_PREFERENCES_PAGE_ACTION.starts_with("win."),
+            "Expected win.* action for opening Preferences pages"
+        );
+    }
 }
