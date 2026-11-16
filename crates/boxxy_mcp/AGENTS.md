@@ -1,28 +1,25 @@
 # Boxxy-MCP Architecture & Guidelines
 
 ## Component Overview
-The `boxxy-mcp` crate provides a generic Model Context Protocol (MCP) client integration for Boxxy-Terminal built on `rmcp 3.9.0` (supporting the MCP `2026-07-28` specification as well as `2025-11-25` and earlier servers). It bridges standard MCP servers (JSON-RPC + JSON Schema Draft 7 / 2020-12) and `rig-core` (the agentic reasoning framework used by Boxxy).
+The `boxxy-mcp` crate provides a Model Context Protocol (MCP) client integration for Boxxy-Terminal built directly on `rmcp 3.10.0` (supporting the MCP `2026-07-28` specification via `server/discover` as well as `2025-11-25` and earlier servers via `initialize`). It bridges MCP servers (JSON-RPC + JSON Schema Draft 7 / 2020-12) to `rig` (`rig 0.46.0` `DynamicTool`).
 
-### Design Philosophy
-- **Strict Modularity:** Boxxy's core UI (`boxxy-preferences`) and agent reasoning (`boxxy-claw`) remain completely decoupled from the underlying MCP SDK (`rmcp`).
-- **Dynamic Ingestion & Schema Normalization:** Tools are discovered dynamically via `list_all_tools()` (automatically walking paginated catalogs) and converted into `rig::tool::DynamicTool` via `to_dynamic_tool()`. `translate_schema()` strips `$schema` dialect keys and ensures top-level object schemas carry `"properties": {}` for strict LLM function-calling compatibility.
-- **Namespacing:** All MCP tools injected into an agent are prefixed with `{server_name}__` and normalized to `[a-zA-Z0-9_-]+` to prevent naming collisions with Boxxy's native tools (e.g. `github__search_code`).
-- **UI & Telemetry Observability (`McpToolObserver`):** `DynamicMcpTool` invokes `McpToolObserver::on_tool_started` and `on_tool_result` (implemented by `ClawApprovalHandler` in `boxxy-claw`) so MCP tool calls appear in the real-time Claw indicator badge, the read-only Claw sidebar debug log, and telemetry.
+> **Why `rmcp` Directly Instead of `rig-rmcp`:** `rig-rmcp` wraps `rmcp` with legacy `initialize`-only startup (`ProtocolVersion::LATEST_WITH_INITIALIZE`), retires tools permanently on disconnect instead of reconnecting, omits `$schema` / empty-object schema normalization and `FastMCP` deduplication, and provides no pre/post `McpToolObserver` hooks for Boxxy's live Claw indicator pill, sidebar debug rows, and telemetry. `boxxy-mcp` retains direct `rmcp 3.10.0` lifecycle control while incorporating `rig 0.46`'s typed `ToolExecutionError`s, `ToolAnnotations`, capability checks, and multimodal `ToolOutput` image forwarding.
 
-### Connection Lifecycle & Resilience
-1. **Protocol Negotiation (`ClientLifecycleMode`):**
-   - Streamable HTTP clients use `ClientLifecycleMode::Auto`, probing MCP `2026-07-28` (`server/discover` with inline per-request `_meta` and SEP-2243 headers) and transparently falling back to the legacy `initialize` handshake (`ProtocolVersion::LATEST_WITH_INITIALIZE`) for older servers.
-   - Stdio child-process clients use the `initialize` handshake with configurable timeouts.
-2. **Client Identity & Cache Invalidation (`BoxxyClientHandler`):**
-   - Advertises `Implementation::new("boxxy-terminal", env!("CARGO_PKG_VERSION"))` via `ClientConfig`.
-   - Listens for `notifications/tools/list_changed` and immediately invalidates the server's entry in `McpClientManager::tool_cache`.
-   - Configures `rmcp`'s per-peer response cache with `with_serve_stale_on_error(false)` so transport failures surface cleanly.
-3. **Full Config Diffing, Auto-Reconnection & In-Memory Circuit Breaker (`McpClientManager`):**
-   - `update_configs()` compares full `McpServerConfig` structs. Any server that is removed, disabled, or modified (URL, command, args, headers, env, timeout) is gracefully closed via `close_with_timeout`, evicted from `tool_cache`, and has its circuit-breaker state cleared.
-   - `ensure_client()` checks `client.is_closed() || client.is_transport_closed()` before every tool discovery or execution, automatically reconnecting with exponential backoff (`max_retries` + `BackoffConfig`) if a child process or HTTP session died.
-   - **Fail-Fast & Circuit Breaker (`failed_servers`):** Permanent configuration or auth errors (`PermanentConfigError` for invalid/non-HTTP(S) URLs, bad HTTP headers, or missing Stdio binaries in `PATH`, plus 401/403 authorization challenges) skip retry sleeps immediately on attempt 1. When all attempts fail, `McpClientManager` trips an in-memory circuit breaker (`60s` cooldown for transient errors, `300s` for permanent config/auth errors, cleared immediately if the server config changes in Preferences) so subsequent turns and settings hot-swaps never stall re-probing broken servers.
-
-### Process Safety (Zombification Prevention)
-Node.js and Python processes spawned via Stdio are notoriously difficult to clean up if the parent process crashes.
-- The `client::stdio` module uses `rmcp::transport::which_command` + `tokio::process::Command` wrapped with `.kill_on_drop(true)` and `process-wrap` 10.0 via `TokioChildProcess`.
-- This guarantees that if the Rust client is dropped or the application exits unexpectedly, the OS terminates the child process immediately.
+## Module Layout & Feature Gating
+- **`Cargo.toml` (`runtime` feature):** Default `runtime` feature enables `rmcp`, `rig`, `tokio`, and `reqwest`. Config-only consumers (`boxxy-preferences`, `boxxy-cli`) depend on `boxxy-mcp` with `default-features = false` so UI/CLI crates compile pure `serde` DTOs (`config.rs`) without pulling in the MCP/AI runtime stack.
+- **`config.rs`:** `McpServerConfig`, `McpTransport` (`Stdio` / `Http`), and `BackoffConfig` with clamped timeout and finite exponential-backoff helpers.
+- **`client/` (`error.rs`, `handler.rs`, `stdio.rs`, `http.rs`):**
+  - `handler.rs`: `BoxxyClientHandler` advertises `boxxy-terminal` with `ProtocolVersion::LATEST_WITH_INITIALIZE` for stateful Stdio handshakes and invalidates `McpClientManager`'s generation-stamped tool cache on `notifications/tools/list_changed`.
+  - `stdio.rs`: Validates non-empty commands via `rmcp::transport::which_command`, scrubs `boxxy_sys_utils::env::scrubbed_pty_var_names()` session/dev markers before applying user `env` overrides, and wraps child processes in `TokioChildProcess` (`kill_on_drop(true)` + `SIGTERM`-first `graceful_shutdown`).
+  - `http.rs`: Uses `ClientLifecycleMode::Auto` (`2026-07-28` `server/discover` -> `2025-11-25` `initialize` fallback), same-origin `307`/`308` redirect policy, UTF-8-safe `Authorization` parsing (routing `Bearer` / raw tokens to `auth_header` while preserving `Basic` / `ApiKey` / `Token` schemes verbatim in `custom_headers`), HTTP keep-alive connection pooling for remote servers (with `pool_max_idle_per_host(0)` for loopback dev servers), and sub-millisecond TCP loopback liveness probes.
+  - `error.rs`: Typed `PermanentConfigError`, `reqwest::Error::is_connect()` / `ConnectionRefused` detection, `ReservedHeaderConflict` classification, `HttpStatusError` (`Retry-After`), and `401`/`403` `WWW-Authenticate` diagnostics.
+- **`manager/` (`mod.rs`, `breaker.rs`):**
+  - Per-server single-flight connection locks (`connect_locks`) prevent duplicate Stdio process spawns or racing HTTP handshakes under concurrent calls.
+  - Generation-stamped `tool_cache` (`cache_generations`) prevents slow in-flight `list_all_tools()` responses from overwriting concurrent `notifications/tools/list_changed` or `update_configs()` invalidations, and skips `tools/list` on servers whose handshake declared `capabilities.tools == None`.
+  - `get_server_statuses()` and `build_rig_tools()` probe and fetch across all enabled servers concurrently (`join_all`) while sorting server names deterministically to preserve LLM prompt prefix caching.
+  - Holds the sole resting strong `Arc<McpClientWrapper>` (`DynamicMcpTool` holds `Weak`), allowing `update_configs()` and dead-session eviction to run `close_with_timeout(7s)` (`SIGTERM` on Stdio, `HTTP DELETE` session cleanup on Streamable HTTP).
+  - In-memory circuit breaker (`60s` transient cooldown, `300s` permanent config/auth cooldown, reset immediately when edited in Preferences).
+- **`rig_bridge/` (`schema.rs`, `output.rs`, `tool.rs`):**
+  - `schema.rs`: Recursively strips `$schema` dialect URIs from root and nested `$defs` / subschemas (preserving any user tool property literally named `"$schema"` and Draft-07 property-name `dependencies` arrays) and injects `"properties": {}` on bare object schemas.
+  - `output.rs`: Preserves multimodal MCP images (`ContentBlock::Image` and image `BlobResourceContents`) as native `ToolResultContent::image_base64` for vision models while keeping compact summaries for `McpToolObserver` and deduplicating `FastMCP` / SEP-2106 `structured_content`.
+  - `tool.rs`: Normalizes `{server}__{tool}` names to `^[a-zA-Z_][a-zA-Z0-9_-]{0,63}$` (capping >64-char names with a deterministic FNV-1a hash suffix), rejects non-object/non-null JSON arguments via `ToolExecutionError::invalid_args`, forwards `ToolAnnotations`, and maps failures to typed `ToolExecutionError::{timeout, provider, other}` with `.with_model_output(...)`.

@@ -2,7 +2,7 @@ use std::sync::Weak;
 
 use rmcp::{
     ClientHandler,
-    model::{ClientCapabilities, ClientConfig, Implementation},
+    model::{ClientCapabilities, ClientConfig, Implementation, ProtocolVersion},
     service::{NotificationContext, RoleClient},
 };
 
@@ -29,10 +29,14 @@ impl BoxxyClientHandler {
 
 impl ClientHandler for BoxxyClientHandler {
     fn get_info(&self) -> ClientConfig {
+        // Advertise the latest protocol version with an `initialize` handshake (`2025-11-25`)
+        // for stateful Stdio sessions (and HTTP fallback). Streamable HTTP sessions still
+        // probe `ProtocolVersion::LATEST` (`2026-07-28`) first via `ClientLifecycleMode::Auto`.
         ClientConfig::new(
             ClientCapabilities::default(),
             Implementation::new("boxxy-terminal", env!("CARGO_PKG_VERSION")),
         )
+        .with_protocol_version(ProtocolVersion::LATEST_WITH_INITIALIZE)
     }
 
     async fn on_tool_list_changed(&self, _context: NotificationContext<RoleClient>) {

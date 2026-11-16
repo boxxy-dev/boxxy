@@ -6,17 +6,45 @@ authors.workspace = true
 description = "Model Context Protocol (MCP) client for Boxxy"
 license.workspace = true
 
+[lints]
+workspace = true
+
+[features]
+default = ["runtime"]
+# Enables the live MCP client manager, transports (`rmcp`), and Rig tool bridge.
+# Config-only consumers (`boxxy-preferences`, `boxxy-cli`) disable default features
+# so UI/CLI crates compile without pulling in `rmcp` or `rig`.
+runtime = [
+    "dep:anyhow",
+    "dep:async-trait",
+    "dep:boxxy-sys-utils",
+    "dep:futures-util",
+    "dep:log",
+    "dep:parking_lot",
+    "dep:reqwest",
+    "dep:rig",
+    "dep:rmcp",
+    "dep:serde_json",
+    "dep:thiserror",
+    "dep:tokio",
+]
+
 [dependencies]
 serde = { workspace = true, features = ["derive"] }
-serde_json.workspace = true
-anyhow.workspace = true
-log.workspace = true
-rmcp.workspace = true
-tokio = { workspace = true, features = ["process", "sync", "time", "macros", "rt"] }
-rig.workspace = true
-async-trait.workspace = true
-thiserror.workspace = true
-reqwest.workspace = true
+
+anyhow = { workspace = true, optional = true }
+async-trait = { workspace = true, optional = true }
+boxxy-sys-utils = { workspace = true, optional = true }
+futures-util = { workspace = true, optional = true }
+log = { workspace = true, optional = true }
+parking_lot = { workspace = true, optional = true }
+reqwest = { workspace = true, optional = true }
+rig = { workspace = true, optional = true }
+rmcp = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
+thiserror = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true, features = ["net", "process", "sync", "time", "macros", "rt"] }
 
 [dev-dependencies]
+serde_json.workspace = true
 tokio = { workspace = true, features = ["full", "test-util"] }

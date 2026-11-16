@@ -128,7 +128,7 @@ boxxy-viewer = { path = "crates/viewer" }
 boxxy-telemetry = { path = "crates/telemetry" }
 boxxy-sys-utils = { path = "crates/sys_utils" }
 boxxy-mcp = { path = "crates/boxxy_mcp" }
-rmcp = { version = "3.9.0", default-features = false, features = ["client", "transport-streamable-http-client-reqwest", "transport-child-process", "transport-async-rw", "which-command"] }
+rmcp = { version = "3.10.0", default-features = false, features = ["client", "transport-streamable-http-client-reqwest", "transport-child-process", "transport-async-rw", "which-command"] }
 serial_test = "4.0.1"
 frizbee = "0.13.0"
 ignore = "0.4.34"

@@ -1,28 +1,49 @@
-use std::sync::Arc;
+use std::fmt::Write as _;
+use std::sync::{Arc, Weak};
 use std::time::Duration;
 
+use rig::completion::ToolAnnotations;
 use rig::message::ToolName;
 use rig::tool::{DynamicTool, ToolExecutionError, ToolOutput};
-use rmcp::model::{
-    CallToolRequestParams, CallToolResult, ContentBlock, ResourceContents, Tool as McpToolDefinition,
-};
+use rmcp::model::{CallToolRequestParams, JsonObject, Tool as McpToolDefinition};
+use serde_json::Value;
 
+use super::output::build_tool_outputs;
+pub use super::output::format_call_tool_result;
 use super::schema::translate_schema;
-use crate::client::http::format_service_error;
+use crate::client::error::format_service_error;
+use crate::config::MIN_TIMEOUT_MS;
 use crate::manager::{McpClientManager, McpClientWrapper};
 
-/// Decoupled observer trait so `boxxy-claw` can surface MCP tool invocations
-/// in the Claw indicator badge, sidebar debug log, and telemetry without
-/// introducing a circular dependency between `boxxy-mcp` and `boxxy-preferences`.
+/// Strict `OpenAI` / Gemini / Anthropic maximum function tool name length.
+const MAX_TOOL_NAME_LEN: usize = 64;
+
+/// Observer trait for surfacing MCP tool calls in Boxxy's UI and telemetry.
+///
+/// Keeps `boxxy-mcp` decoupled from `boxxy-claw` and `boxxy-preferences`.
 #[async_trait::async_trait]
 pub trait McpToolObserver: Send + Sync {
     async fn on_tool_started(&self, tool_name: String);
     async fn on_tool_result(&self, tool_name: String, result: String);
 }
 
+#[derive(Clone)]
+struct ToolInvocationContext {
+    manager: Option<Arc<McpClientManager>>,
+    fallback_client: Weak<McpClientWrapper>,
+    server_name: String,
+    mcp_tool_name: String,
+    normalized_name: String,
+    timeout_ms: u64,
+    observer: Option<Arc<dyn McpToolObserver>>,
+}
+
 pub struct DynamicMcpTool {
     pub manager: Option<Arc<McpClientManager>>,
-    pub client: Arc<McpClientWrapper>,
+    /// Weak fallback reference so `DynamicMcpTool` never pins a disconnected
+    /// `RunningService` alive when `McpClientManager::update_configs` runs
+    /// graceful `close_with_timeout` shutdown.
+    pub fallback_client: Weak<McpClientWrapper>,
     pub mcp_tool: McpToolDefinition,
     pub server_name: String,
     pub timeout_ms: u64,
@@ -30,16 +51,19 @@ pub struct DynamicMcpTool {
 }
 
 impl DynamicMcpTool {
+    #[must_use]
     pub fn name(&self) -> String {
         sanitize_tool_name(&self.server_name, &self.mcp_tool.name)
     }
 
+    #[must_use]
     pub fn to_dynamic_tool(&self) -> Option<DynamicTool> {
         let normalized_name = self.name();
         let name = ToolName::new(normalized_name.clone()).ok()?;
         let parameters = translate_schema(self.mcp_tool.schema_as_json_value());
+        let annotations = to_rig_annotations(&self.mcp_tool);
 
-        let base_desc = self
+        let description = self
             .mcp_tool
             .description
             .as_deref()
@@ -50,272 +74,230 @@ impl DynamicMcpTool {
                     .as_ref()
                     .and_then(|a| a.title.as_deref())
             })
-            .unwrap_or("External MCP tool");
-        let description = base_desc.to_string();
+            .unwrap_or("External MCP tool")
+            .to_string();
 
-        let manager = self.manager.clone();
-        let fallback_client = self.client.clone();
-        let server_name = self.server_name.clone();
-        let mcp_tool_name = self.mcp_tool.name.clone();
-        let timeout_ms = self.timeout_ms.max(1_000);
-        let observer = self.observer.clone();
+        let call_ctx = Arc::new(ToolInvocationContext {
+            manager: self.manager.clone(),
+            fallback_client: self.fallback_client.clone(),
+            server_name: self.server_name.clone(),
+            mcp_tool_name: self.mcp_tool.name.to_string(),
+            normalized_name,
+            timeout_ms: self.timeout_ms.max(MIN_TIMEOUT_MS),
+            observer: self.observer.clone(),
+        });
 
-        Some(DynamicTool::new(
-            name,
-            description,
-            parameters,
-            move |args| {
-                let manager = manager.clone();
-                let fallback_client = fallback_client.clone();
-                let server_name = server_name.clone();
-                let mcp_tool_name = mcp_tool_name.clone();
-                let normalized_name = normalized_name.clone();
-                let observer = observer.clone();
-
-                Box::pin(async move {
-                    if let Some(obs) = &observer {
-                        obs.on_tool_started(normalized_name.clone()).await;
-                    }
-
-                    // Obtain a live client from the manager (reconnecting if the child process
-                    // or HTTP session died), falling back to the captured client handle.
-                    let client = if let Some(mgr) = &manager {
-                        match mgr.ensure_client(&server_name).await {
-                            Ok(c) => c,
-                            Err(e) => {
-                                let err_msg = format!(
-                                    "Failed to connect to MCP server '{server_name}': {e}"
-                                );
-                                if let Some(obs) = &observer {
-                                    obs.on_tool_result(normalized_name, err_msg.clone()).await;
-                                }
-                                return Err(ToolExecutionError::other(err_msg));
-                            }
-                        }
-                    } else {
-                        fallback_client
-                    };
-
-                    let mut params = CallToolRequestParams::new(mcp_tool_name.clone());
-                    if let Some(obj) = args.as_object() {
-                        params.arguments = Some(obj.clone());
-                    }
-
-                    let call_res = tokio::time::timeout(
-                        Duration::from_millis(timeout_ms),
-                        client.call_tool(params),
-                    )
-                    .await;
-
-                    match call_res {
-                        Ok(Ok(result)) => {
-                            let formatted = format_call_tool_result(&result);
-                            if let Some(obs) = &observer {
-                                obs.on_tool_result(normalized_name, formatted.clone()).await;
-                            }
-                            if result.is_error.unwrap_or(false) {
-                                Err(ToolExecutionError::other(formatted))
-                            } else {
-                                Ok(ToolOutput::text(formatted))
-                            }
-                        }
-                        Ok(Err(e)) => {
-                            let err_msg = format!(
-                                "MCP tool '{mcp_tool_name}' failed: {}",
-                                format_service_error(&e)
-                            );
-                            if let Some(obs) = &observer {
-                                obs.on_tool_result(normalized_name, err_msg.clone()).await;
-                            }
-                            Err(ToolExecutionError::other(err_msg))
-                        }
-                        Err(_) => {
-                            let err_msg = format!(
-                                "MCP tool '{mcp_tool_name}' on server '{server_name}' timed out after {timeout_ms}ms"
-                            );
-                            if let Some(obs) = &observer {
-                                obs.on_tool_result(normalized_name, err_msg.clone()).await;
-                            }
-                            Err(ToolExecutionError::other(err_msg))
-                        }
-                    }
-                })
-            },
-        ))
+        Some(
+            DynamicTool::new(name, description, parameters, move |args| {
+                let ctx = call_ctx.clone();
+                Box::pin(async move { execute_mcp_tool_call(&ctx, args).await })
+            })
+            .with_annotations(annotations),
+        )
     }
 }
 
-/// Strictly normalizes `{server_name}__{tool_name}` to `[a-zA-Z0-9_-]+` for LLM compatibility.
-pub fn sanitize_tool_name(server_name: &str, tool_name: &str) -> String {
-    let mut name = format!("{server_name}__{tool_name}")
-        .replace(' ', "_")
-        .chars()
-        .filter(|c| c.is_alphanumeric() || *c == '_' || *c == '-')
-        .collect::<String>();
-
-    // Ensure name doesn't start with a digit (invalid for several LLM function schemas).
-    if name.chars().next().is_some_and(|c| c.is_ascii_digit()) {
-        name = format!("_{name}");
+async fn execute_mcp_tool_call(
+    ctx: &ToolInvocationContext,
+    args: Value,
+) -> Result<ToolOutput, ToolExecutionError> {
+    if let Some(obs) = &ctx.observer {
+        obs.on_tool_started(ctx.normalized_name.clone()).await;
     }
-    if name.is_empty() {
-        name = "_mcp_tool".to_string();
-    }
-    name
-}
 
-/// Extracts a clean, human- and LLM-readable string from an MCP `CallToolResult`.
-///
-/// Handles SEP-2106 `structured_content` (any JSON value, including primitives/arrays/null)
-/// and avoids wrapping plain text blocks in redundant JSON envelopes.
-pub fn format_call_tool_result(result: &CallToolResult) -> String {
-    let rendered_blocks: Vec<String> = result
-        .content
-        .iter()
-        .map(format_content_block)
-        .filter(|s| !s.is_empty())
-        .collect();
-
-    let text_body = rendered_blocks.join("\n\n");
-
-    match (&result.structured_content, text_body.is_empty()) {
-        (Some(structured), true) => {
-            if let Some(s) = structured.as_str() {
-                s.to_string()
-            } else {
-                serde_json::to_string(structured).unwrap_or_else(|_| structured.to_string())
-            }
+    let arguments = match parse_mcp_arguments(args) {
+        Ok(arguments) => arguments,
+        Err(bad_kind) => {
+            let err_msg = format!(
+                "MCP tool '{}' expected a JSON object or null arguments, got {bad_kind}",
+                ctx.mcp_tool_name
+            );
+            notify_result(ctx.observer.as_ref(), &ctx.normalized_name, &err_msg).await;
+            return Err(ToolExecutionError::invalid_args(err_msg));
         }
-        (Some(structured), false) if !structured.is_null() => {
-            // If `structured` is FastMCP's single-key `{"result": "<string>"}` wrapper around
-            // the exact same plain text block, return the plain text directly.
-            if let Some(inner_str) = unwrap_single_result_field(structured).and_then(|v| v.as_str())
-                && text_body.trim() == inner_str.trim()
-            {
-                return text_body;
-            }
+    };
 
-            let structured_str =
-                serde_json::to_string(structured).unwrap_or_else(|_| structured.to_string());
-            if is_redundant_text_representation(&rendered_blocks, &text_body, structured, &structured_str) {
-                structured_str
-            } else {
-                serde_json::json!({
-                    "content": text_body,
-                    "structured_content": structured
-                })
-                .to_string()
-            }
-        }
-        _ => text_body,
-    }
-}
+    let client = resolve_live_client(ctx).await?;
+    let mut params = CallToolRequestParams::new(ctx.mcp_tool_name.clone());
+    params.arguments = arguments;
 
-fn unwrap_single_result_field(val: &serde_json::Value) -> Option<&serde_json::Value> {
-    let obj = val.as_object()?;
-    if obj.len() == 1 {
-        obj.get("result")
-    } else {
-        None
-    }
-}
-
-/// Checks whether the MCP `content` text blocks are merely a serialized mirror of `structured_content`
-/// (covering standard JSON objects, FastMCP pretty-printed JSON, and FastMCP `{"result": [...]}` list blocks).
-fn is_redundant_text_representation(
-    rendered_blocks: &[String],
-    text_body: &str,
-    structured: &serde_json::Value,
-    structured_str: &str,
-) -> bool {
-    let trimmed = text_body.trim();
-    if trimmed == structured_str.trim() {
-        return true;
-    }
-
-    if looks_like_json(trimmed)
-        && let Ok(parsed) = serde_json::from_str::<serde_json::Value>(trimmed)
-    {
-        if &parsed == structured {
-            return true;
-        }
-        if let Some(inner) = unwrap_single_result_field(structured)
-            && &parsed == inner
-        {
-            return true;
-        }
-    }
-
-    // FastMCP serializes `list[T]` return values as N separate TextContent JSON blocks
-    // alongside `structured_content: {"result": [item_0, item_1, ...]}`.
-    if let Some(serde_json::Value::Array(arr)) = unwrap_single_result_field(structured)
-        && arr.len() == rendered_blocks.len()
-        && !arr.is_empty()
-        && arr.iter().zip(rendered_blocks.iter()).all(|(expected, block_str)| {
-            let b = block_str.trim();
-            looks_like_json(b)
-                && serde_json::from_str::<serde_json::Value>(b)
-                    .ok()
-                    .as_ref()
-                    == Some(expected)
-        })
-    {
-        return true;
-    }
-
-    false
-}
-
-fn looks_like_json(s: &str) -> bool {
-    matches!(
-        s.as_bytes().first(),
-        Some(b'{' | b'[' | b'"' | b't' | b'f' | b'n' | b'-' | b'0'..=b'9')
+    let call_res = tokio::time::timeout(
+        Duration::from_millis(ctx.timeout_ms),
+        client.call_tool(params),
     )
+    .await;
+
+    match call_res {
+        Ok(Ok(result)) => {
+            let is_error = result.is_error.unwrap_or(false);
+            let (summary, model_output) = match build_tool_outputs(&result) {
+                Ok(pair) => pair,
+                Err(err) => {
+                    notify_result(ctx.observer.as_ref(), &ctx.normalized_name, &err.to_string())
+                        .await;
+                    return Err(err);
+                }
+            };
+
+            notify_result(ctx.observer.as_ref(), &ctx.normalized_name, &summary).await;
+
+            if is_error {
+                Err(ToolExecutionError::other(summary).with_model_output(model_output))
+            } else {
+                Ok(model_output)
+            }
+        }
+        Ok(Err(e)) => {
+            let err_msg = format!(
+                "MCP tool '{}' failed: {}",
+                ctx.mcp_tool_name,
+                format_service_error(&e)
+            );
+            notify_result(ctx.observer.as_ref(), &ctx.normalized_name, &err_msg).await;
+            Err(ToolExecutionError::provider(err_msg).with_source(e))
+        }
+        Err(_) => {
+            let err_msg = format!(
+                "MCP tool '{}' on server '{}' timed out after {}ms",
+                ctx.mcp_tool_name, ctx.server_name, ctx.timeout_ms
+            );
+            notify_result(ctx.observer.as_ref(), &ctx.normalized_name, &err_msg).await;
+            Err(ToolExecutionError::timeout(err_msg))
+        }
+    }
 }
 
-fn format_content_block(block: &ContentBlock) -> String {
-    match block {
-        ContentBlock::Text(text) => text.text.clone(),
-        ContentBlock::Image(img) => {
-            format!("[Image ({}, {} bytes base64)]", img.mime_type, img.data.len())
-        }
-        ContentBlock::Audio(audio) => {
-            format!(
-                "[Audio ({}, {} bytes base64)]",
-                audio.mime_type,
-                audio.data.len()
-            )
-        }
-        ContentBlock::Resource(embedded) => match &embedded.resource {
-            ResourceContents::TextResourceContents {
-                uri,
-                mime_type,
-                text,
-                ..
-            } => {
-                let mime = mime_type.as_deref().unwrap_or("text/plain");
-                format!("[Resource {uri} ({mime})]\n{text}")
+async fn resolve_live_client(
+    ctx: &ToolInvocationContext,
+) -> Result<Arc<McpClientWrapper>, ToolExecutionError> {
+    if let Some(mgr) = &ctx.manager {
+        return match mgr.ensure_client(&ctx.server_name).await {
+            Ok(c) => Ok(c),
+            Err(e) => {
+                let err_msg = format!(
+                    "Failed to connect to MCP server '{}': {e}",
+                    ctx.server_name
+                );
+                notify_result(ctx.observer.as_ref(), &ctx.normalized_name, &err_msg).await;
+                Err(ToolExecutionError::provider(err_msg))
             }
-            ResourceContents::BlobResourceContents {
-                uri,
-                mime_type,
-                blob,
-                ..
-            } => {
-                let mime = mime_type.as_deref().unwrap_or("application/octet-stream");
-                format!("[Binary Resource {uri} ({mime}, {} bytes base64)]", blob.len())
-            }
-            _ => serde_json::to_string(&embedded.resource).unwrap_or_default(),
-        },
-        ContentBlock::ResourceLink(resource) => {
-            let desc = resource
-                .description
-                .as_deref()
-                .map(|d| format!(" — {d}"))
-                .unwrap_or_default();
-            format!("[Resource Link: {} ({}){desc}]", resource.name, resource.uri)
-        }
-        _ => serde_json::to_string(block).unwrap_or_default(),
+        };
     }
+
+    if let Some(c) = ctx.fallback_client.upgrade() {
+        return Ok(c);
+    }
+
+    let err_msg = format!(
+        "MCP connection for server '{}' has been closed",
+        ctx.server_name
+    );
+    notify_result(ctx.observer.as_ref(), &ctx.normalized_name, &err_msg).await;
+    Err(ToolExecutionError::provider(err_msg))
+}
+
+async fn notify_result(
+    observer: Option<&Arc<dyn McpToolObserver>>,
+    normalized_name: &str,
+    result: &str,
+) {
+    if let Some(obs) = observer {
+        obs.on_tool_result(normalized_name.to_string(), result.to_string())
+            .await;
+    }
+}
+
+fn to_rig_annotations(tool: &McpToolDefinition) -> ToolAnnotations {
+    let mut out = ToolAnnotations::default();
+    if let Some(hints) = &tool.annotations {
+        out.title.clone_from(&hints.title);
+        out.read_only_hint = hints.read_only_hint;
+        out.destructive_hint = hints.destructive_hint;
+        out.idempotent_hint = hints.idempotent_hint;
+        out.open_world_hint = hints.open_world_hint;
+    }
+    out
+}
+
+fn parse_mcp_arguments(value: Value) -> Result<Option<JsonObject>, &'static str> {
+    match value {
+        Value::Null => Ok(None),
+        Value::Object(map) => Ok(Some(map)),
+        Value::Bool(_) => Err("boolean"),
+        Value::Number(_) => Err("number"),
+        Value::String(_) => Err("string"),
+        Value::Array(_) => Err("array"),
+    }
+}
+
+/// Normalizes a single name segment to ASCII `[a-zA-Z0-9_-]+`, mapping common
+/// separators (` `, `.`, `/`, `:`, `\`) to `_` and collapsing consecutive `_`.
+fn sanitize_segment(raw: &str, fallback_prefix: &str) -> String {
+    let mut out = String::with_capacity(raw.len());
+    let mut last_underscore = false;
+
+    for ch in raw.chars() {
+        if ch.is_ascii_alphanumeric() || ch == '-' {
+            out.push(ch);
+            last_underscore = false;
+        } else if (ch == '_' || ch.is_whitespace() || matches!(ch, '.' | '/' | ':' | '\\'))
+            && !out.is_empty()
+            && !last_underscore
+        {
+            out.push('_');
+            last_underscore = true;
+        }
+    }
+
+    if out.ends_with('_') {
+        out.pop();
+    }
+
+    if out.is_empty() {
+        format!("{fallback_prefix}_{:08x}", fnv1a_32(raw.as_bytes()))
+    } else {
+        out
+    }
+}
+
+const fn fnv1a_32(bytes: &[u8]) -> u32 {
+    let mut hash: u32 = 0x811c_9dc5;
+    let mut i = 0;
+    while i < bytes.len() {
+        hash ^= bytes[i] as u32;
+        hash = hash.wrapping_mul(0x0100_0193);
+        i += 1;
+    }
+    hash
+}
+
+/// Strictly normalizes `{server_name}__{tool_name}` to `^[a-zA-Z_][a-zA-Z0-9_-]{0,63}$`
+/// for universal LLM function-calling compatibility (`OpenAI`, Gemini, Anthropic).
+#[must_use]
+pub fn sanitize_tool_name(server_name: &str, tool_name: &str) -> String {
+    if server_name.trim().is_empty() && tool_name.trim().is_empty() {
+        return "_mcp_tool".to_string();
+    }
+
+    let srv = sanitize_segment(server_name, "srv");
+    let tool = sanitize_segment(tool_name, "tool");
+    let mut name = format!("{srv}__{tool}");
+
+    if name
+        .as_bytes()
+        .first()
+        .is_some_and(|b| b.is_ascii_digit() || *b == b'-')
+    {
+        name.insert(0, '_');
+    }
+
+    if name.len() > MAX_TOOL_NAME_LEN {
+        let hash = fnv1a_32(format!("{server_name}\0{tool_name}").as_bytes());
+        name.truncate(MAX_TOOL_NAME_LEN - 9);
+        let _ = write!(name, "_{hash:08x}");
+    }
+
+    name
 }
 
 #[cfg(test)]
@@ -325,6 +307,7 @@ mod tests {
     use rig::tool::server::ToolServer;
     use rmcp::service::{ClientLifecycleMode, serve_client_with_lifecycle};
     use serde_json::json;
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     use tokio::sync::Mutex;
 
     struct RecordingObserver {
@@ -352,125 +335,148 @@ mod tests {
         }
     }
 
+    fn discover_ok_response(id: &Value) -> Value {
+        json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "result": {
+                "resultType": "complete",
+                "supportedVersions": ["2026-07-28"],
+                "capabilities": { "tools": {} },
+                "ttlMs": 0,
+                "cacheScope": "private"
+            }
+        })
+    }
+
     #[test]
-    fn sanitize_tool_name_normalizes_invalid_chars() {
+    fn sanitize_tool_name_normalizes_separators_unicode_and_64_char_cap() {
         assert_eq!(
             sanitize_tool_name("My Server!", "search.code/v2"),
-            "My_Server__searchcodev2"
+            "My_Server__search_code_v2"
         );
         assert_eq!(sanitize_tool_name("123server", "run"), "_123server__run");
         assert_eq!(sanitize_tool_name("github", "get_issue"), "github__get_issue");
-    }
+        assert_eq!(sanitize_tool_name("", ""), "_mcp_tool");
 
-    #[test]
-    fn format_call_tool_result_extracts_plain_text() {
-        let res = CallToolResult::success(vec![
-            ContentBlock::text("First line"),
-            ContentBlock::text("Second line"),
-        ]);
-        assert_eq!(format_call_tool_result(&res), "First line\n\nSecond line");
-    }
-
-    #[test]
-    fn format_call_tool_result_formats_errors_cleanly() {
-        let res = CallToolResult::error(vec![ContentBlock::text("Permission denied: /etc/shadow")]);
-        assert_eq!(
-            format_call_tool_result(&res),
-            "Permission denied: /etc/shadow"
+        let jp_a = sanitize_tool_name("サーバーA", "ping");
+        let jp_b = sanitize_tool_name("サーバーB", "ping");
+        assert!(
+            jp_a.chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
         );
-    }
+        assert_ne!(jp_a, jp_b);
 
-    #[test]
-    fn format_call_tool_result_handles_structured_content() {
-        let mut res = CallToolResult::success(vec![]);
-        res.structured_content = Some(json!({"count": 42, "items": ["a", "b"]}));
-        assert_eq!(
-            format_call_tool_result(&res),
-            r#"{"count":42,"items":["a","b"]}"#
+        let long_a = sanitize_tool_name(
+            "enterprise_observability_cluster_primary",
+            "fetch_distributed_trace_span_attributes_by_service_a",
         );
-    }
-
-    #[test]
-    fn format_call_tool_result_deduplicates_matching_text_and_structured() {
-        let payload = json!({"status": "ok", "items": [1, 2, 3]});
-        // Pretty-printed text block (as emitted by FastMCP) vs compact structured_content
-        let pretty_text = serde_json::to_string_pretty(&payload).unwrap();
-        let mut res = CallToolResult::success(vec![ContentBlock::text(pretty_text)]);
-        res.structured_content = Some(payload);
-        assert_eq!(
-            format_call_tool_result(&res),
-            r#"{"status":"ok","items":[1,2,3]}"#
+        let long_b = sanitize_tool_name(
+            "enterprise_observability_cluster_primary",
+            "fetch_distributed_trace_span_attributes_by_service_b",
         );
-
-        // FastMCP `list[dict]` return shape: N pretty-printed TextContent blocks + `{"result": [...]}`
-        let item1 = json!({"a": 1});
-        let item2 = json!({"b": 2});
-        let mut list_res = CallToolResult::success(vec![
-            ContentBlock::text(serde_json::to_string_pretty(&item1).unwrap()),
-            ContentBlock::text(serde_json::to_string_pretty(&item2).unwrap()),
-        ]);
-        list_res.structured_content = Some(json!({"result": [item1, item2]}));
-        assert_eq!(
-            format_call_tool_result(&list_res),
-            r#"{"result":[{"a":1},{"b":2}]}"#
-        );
-
-        // FastMCP `str` return shape: plain text block + `{"result": "hello"}`
-        let mut str_res = CallToolResult::success(vec![ContentBlock::text("hello world")]);
-        str_res.structured_content = Some(json!({"result": "hello world"}));
-        assert_eq!(format_call_tool_result(&str_res), "hello world");
+        assert_eq!(long_a.len(), MAX_TOOL_NAME_LEN);
+        assert_eq!(long_b.len(), MAX_TOOL_NAME_LEN);
+        assert_ne!(long_a, long_b);
     }
 
     #[tokio::test]
-    async fn dynamic_mcp_tool_executes_and_notifies_observer_over_2026_07_28_discover() {
-        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-
+    async fn dynamic_mcp_tool_rejects_non_object_arguments_without_calling_server() {
         let (server_io, client_io) = tokio::io::duplex(8192);
         let (server_read, mut server_write) = tokio::io::split(server_io);
         let mut reader = BufReader::new(server_read).lines();
 
         let server_task = tokio::spawn(async move {
-            // 1. Handle `server/discover`
             let line = reader.next_line().await.unwrap().expect("discover line");
-            let req: serde_json::Value = serde_json::from_str(&line).unwrap();
+            let req: Value = serde_json::from_str(&line).unwrap();
+            let resp = discover_ok_response(&req["id"]);
+            server_write
+                .write_all(format!("{resp}\n").as_bytes())
+                .await
+                .unwrap();
+            server_write.flush().await.unwrap();
+        });
+
+        let manager = McpClientManager::new();
+        let handler =
+            crate::client::handler::BoxxyClientHandler::new("demo", Arc::downgrade(&manager));
+        let client = Arc::new(
+            serve_client_with_lifecycle(
+                handler,
+                client_io,
+                ClientLifecycleMode::Discover {
+                    preferred_versions: vec![rmcp::model::ProtocolVersion::V_2026_07_28],
+                },
+            )
+            .await
+            .unwrap(),
+        );
+        server_task.await.unwrap();
+
+        let schema_obj = json!({ "type": "object", "properties": {} })
+            .as_object()
+            .unwrap()
+            .clone();
+        let mcp_tool = McpToolDefinition::new("strict_op", "Strict tool", Arc::new(schema_obj));
+        let observer = RecordingObserver::new();
+
+        let dyn_mcp_tool = DynamicMcpTool {
+            manager: None,
+            fallback_client: Arc::downgrade(&client),
+            mcp_tool,
+            server_name: "demo".to_string(),
+            timeout_ms: 2_000,
+            observer: Some(observer.clone()),
+        };
+
+        let rig_tool = dyn_mcp_tool.to_dynamic_tool().unwrap();
+        let tool_handle = ToolServer::new().dynamic_tools(vec![rig_tool]).run();
+        let mut ctx = ToolContext::default();
+        let result = tool_handle
+            .toolset()
+            .execute("demo__strict_op", r#"["unexpected_array"]"#, &mut ctx)
+            .await;
+
+        assert!(result.is_error());
+        let recorded = observer.results.lock().await.clone();
+        assert_eq!(recorded.len(), 1);
+        assert!(recorded[0].1.contains("got array"));
+    }
+
+    #[tokio::test]
+    async fn dynamic_mcp_tool_executes_and_notifies_observer_over_2026_07_28_discover() {
+        let (server_io, client_io) = tokio::io::duplex(8192);
+        let (server_read, mut server_write) = tokio::io::split(server_io);
+        let mut reader = BufReader::new(server_read).lines();
+
+        let server_task = tokio::spawn(async move {
+            let line = reader.next_line().await.unwrap().expect("discover line");
+            let req: Value = serde_json::from_str(&line).unwrap();
             assert_eq!(req["method"], "server/discover");
             assert_eq!(
                 req["params"]["_meta"]["io.modelcontextprotocol/clientInfo"]["name"],
                 "boxxy-terminal"
             );
 
-            let discover_resp = json!({
-                "jsonrpc": "2.0",
-                "id": req["id"],
-                "result": {
-                    "resultType": "complete",
-                    "supportedVersions": ["2026-07-28"],
-                    "capabilities": { "tools": {} },
-                    "ttlMs": 0,
-                    "cacheScope": "private"
-                }
-            });
+            let discover_resp = discover_ok_response(&req["id"]);
             server_write
                 .write_all(format!("{discover_resp}\n").as_bytes())
                 .await
                 .unwrap();
             server_write.flush().await.unwrap();
 
-            // 2. Handle `tools/call`
             let call_line = reader.next_line().await.unwrap().expect("tools/call line");
-            let call_req: serde_json::Value = serde_json::from_str(&call_line).unwrap();
+            let call_req: Value = serde_json::from_str(&call_line).unwrap();
             assert_eq!(call_req["method"], "tools/call");
             assert_eq!(call_req["params"]["name"], "echo_msg");
-            assert_eq!(call_req["params"]["arguments"]["message"], "hello rmcp 3.5.1");
+            assert_eq!(call_req["params"]["arguments"]["message"], "hello rmcp 3.10");
 
             let call_resp = json!({
                 "jsonrpc": "2.0",
                 "id": call_req["id"],
                 "result": {
                     "resultType": "complete",
-                    "content": [
-                        { "type": "text", "text": "echo: hello rmcp 3.5.1" }
-                    ]
+                    "content": [{ "type": "text", "text": "echo: hello rmcp 3.10" }]
                 }
             });
             server_write
@@ -481,36 +487,37 @@ mod tests {
         });
 
         let manager = McpClientManager::new();
-        let handler = crate::client::handler::BoxxyClientHandler::new("demo", Arc::downgrade(&manager));
-        let client = serve_client_with_lifecycle(
-            handler,
-            client_io,
-            ClientLifecycleMode::Auto {
-                preferred_versions: vec![rmcp::model::ProtocolVersion::V_2026_07_28],
-                legacy_version: Some(rmcp::model::ProtocolVersion::LATEST_WITH_INITIALIZE),
-            },
-        )
-        .await
-        .expect("client initialized via server/discover");
+        let handler =
+            crate::client::handler::BoxxyClientHandler::new("demo", Arc::downgrade(&manager));
+        let client_arc = Arc::new(
+            serve_client_with_lifecycle(
+                handler,
+                client_io,
+                ClientLifecycleMode::Auto {
+                    preferred_versions: vec![rmcp::model::ProtocolVersion::V_2026_07_28],
+                    legacy_version: Some(rmcp::model::ProtocolVersion::LATEST_WITH_INITIALIZE),
+                },
+            )
+            .await
+            .expect("client initialized via server/discover"),
+        );
 
-        let client_arc = Arc::new(client);
         let schema_obj = json!({
             "type": "object",
-            "properties": {
-                "message": { "type": "string" }
-            },
+            "properties": { "message": { "type": "string" } },
             "required": ["message"]
         })
         .as_object()
         .unwrap()
         .clone();
 
-        let mcp_tool = McpToolDefinition::new("echo_msg", "Echoes a message", Arc::new(schema_obj));
+        let mcp_tool =
+            McpToolDefinition::new("echo_msg", "Echoes a message", Arc::new(schema_obj));
         let observer = RecordingObserver::new();
 
         let dyn_mcp_tool = DynamicMcpTool {
             manager: None,
-            client: client_arc.clone(),
+            fallback_client: Arc::downgrade(&client_arc),
             mcp_tool,
             server_name: "demo".to_string(),
             timeout_ms: 5_000,
@@ -524,21 +531,21 @@ mod tests {
             .toolset()
             .execute(
                 "demo__echo_msg",
-                r#"{"message":"hello rmcp 3.5.1"}"#,
+                r#"{"message":"hello rmcp 3.10"}"#,
                 &mut ctx,
             )
             .await;
 
         assert!(!result.is_error());
         assert_eq!(
-            observer.started.lock().await.as_slice(),
-            &["demo__echo_msg".to_string()]
+            observer.started.lock().await.clone(),
+            vec!["demo__echo_msg".to_string()]
         );
         assert_eq!(
-            observer.results.lock().await.as_slice(),
-            &[(
+            observer.results.lock().await.clone(),
+            vec![(
                 "demo__echo_msg".to_string(),
-                "echo: hello rmcp 3.5.1".to_string()
+                "echo: hello rmcp 3.10".to_string()
             )]
         );
 
@@ -547,46 +554,31 @@ mod tests {
 
     #[tokio::test]
     async fn dynamic_mcp_tool_timeout_emits_abandoned_request_cancellation() {
-        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-
         let (server_io, client_io) = tokio::io::duplex(8192);
         let (server_read, mut server_write) = tokio::io::split(server_io);
         let mut reader = BufReader::new(server_read).lines();
 
         let server_task = tokio::spawn(async move {
-            // 1. Handle `server/discover`
             let line = reader.next_line().await.unwrap().expect("discover line");
-            let req: serde_json::Value = serde_json::from_str(&line).unwrap();
-            let discover_resp = json!({
-                "jsonrpc": "2.0",
-                "id": req["id"],
-                "result": {
-                    "resultType": "complete",
-                    "supportedVersions": ["2026-07-28"],
-                    "capabilities": { "tools": {} },
-                    "ttlMs": 0,
-                    "cacheScope": "private"
-                }
-            });
+            let req: Value = serde_json::from_str(&line).unwrap();
+            let discover_resp = discover_ok_response(&req["id"]);
             server_write
                 .write_all(format!("{discover_resp}\n").as_bytes())
                 .await
                 .unwrap();
             server_write.flush().await.unwrap();
 
-            // 2. Receive `tools/call` and intentionally do not respond so client times out
             let call_line = reader.next_line().await.unwrap().expect("tools/call line");
-            let call_req: serde_json::Value = serde_json::from_str(&call_line).unwrap();
+            let call_req: Value = serde_json::from_str(&call_line).unwrap();
             assert_eq!(call_req["method"], "tools/call");
             let call_id = call_req["id"].clone();
 
-            // 3. Verify `rmcp 3.8.0`'s `AbandonedRequestGuard` sends `notifications/cancelled`
             let cancel_line = reader
                 .next_line()
                 .await
                 .unwrap()
                 .expect("notifications/cancelled line");
-            let cancel_notif: serde_json::Value = serde_json::from_str(&cancel_line).unwrap();
+            let cancel_notif: Value = serde_json::from_str(&cancel_line).unwrap();
             assert_eq!(cancel_notif["method"], "notifications/cancelled");
             assert_eq!(cancel_notif["params"]["requestId"], call_id);
         });
@@ -594,15 +586,17 @@ mod tests {
         let manager = McpClientManager::new();
         let handler =
             crate::client::handler::BoxxyClientHandler::new("demo", Arc::downgrade(&manager));
-        let client = serve_client_with_lifecycle(
-            handler,
-            client_io,
-            ClientLifecycleMode::Discover {
-                preferred_versions: vec![rmcp::model::ProtocolVersion::V_2026_07_28],
-            },
-        )
-        .await
-        .expect("client initialized");
+        let client_arc = Arc::new(
+            serve_client_with_lifecycle(
+                handler,
+                client_io,
+                ClientLifecycleMode::Discover {
+                    preferred_versions: vec![rmcp::model::ProtocolVersion::V_2026_07_28],
+                },
+            )
+            .await
+            .expect("client initialized"),
+        );
 
         let schema_obj = json!({ "type": "object", "properties": {} })
             .as_object()
@@ -613,10 +607,9 @@ mod tests {
 
         let dyn_mcp_tool = DynamicMcpTool {
             manager: None,
-            client: Arc::new(client),
+            fallback_client: Arc::downgrade(&client_arc),
             mcp_tool,
             server_name: "demo".to_string(),
-            // DynamicMcpTool clamps timeout_ms to at least 1_000ms
             timeout_ms: 1_000,
             observer: Some(observer.clone()),
         };
@@ -626,7 +619,7 @@ mod tests {
         let mut ctx = ToolContext::default();
         let result = tool_handle
             .toolset()
-            .execute("demo__slow_op", r#"{}"#, &mut ctx)
+            .execute("demo__slow_op", "{}", &mut ctx)
             .await;
 
         assert!(result.is_error());

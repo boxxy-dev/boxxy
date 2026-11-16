@@ -1,26 +1,30 @@
 use std::collections::HashMap;
-use std::error::Error as StdError;
+use std::hash::BuildHasher;
+use std::net::IpAddr;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use reqwest::header::{HeaderName, HeaderValue};
+use reqwest::header::{AUTHORIZATION, HeaderName, HeaderValue};
 use rmcp::RoleClient;
 use rmcp::model::ProtocolVersion;
 use rmcp::service::{
-    ClientCacheConfig, ClientInitializeError, ClientLifecycleMode, RunningService, ServiceError,
-    serve_client_with_lifecycle,
+    ClientCacheConfig, ClientLifecycleMode, RunningService, serve_client_with_lifecycle,
 };
 use rmcp::transport::streamable_http_client::{
-    AuthRequiredError, HttpStatusError, InsufficientScopeError, StreamableHttpClientTransport,
-    StreamableHttpClientTransportConfig,
+    StreamableHttpClientTransport, StreamableHttpClientTransportConfig,
 };
 
+pub use super::error::{
+    PermanentConfigError, find_auth_error_detail, find_http_status_error, format_client_init_error,
+    format_service_error, is_anyhow_connection_refused, is_connection_refused,
+};
 use super::handler::BoxxyClientHandler;
+use crate::config::MIN_TIMEOUT_MS;
 
 /// Maximum number of same-origin 307/308 redirects followed per request.
 const MAX_REDIRECTS: usize = 10;
 
-/// Redirect policy matching `rmcp 3.9.0`'s default Streamable HTTP client:
+/// Redirect policy matching `rmcp 3.10.0`'s Streamable HTTP semantics:
 /// follows only same-origin 307/308 redirects (up to 10 hops) so JSON-RPC POST
 /// bodies are preserved and custom headers / session IDs are never leaked to
 /// another origin or rewritten into bodyless GET requests (301/302/303).
@@ -46,8 +50,7 @@ pub(crate) fn same_origin_redirect_policy() -> reqwest::redirect::Policy {
                 attempt
                     .previous()
                     .last()
-                    .map(reqwest::Url::path)
-                    .unwrap_or_default(),
+                    .map_or("", reqwest::Url::path),
                 attempt.url().path(),
             );
             attempt.follow()
@@ -55,53 +58,8 @@ pub(crate) fn same_origin_redirect_policy() -> reqwest::redirect::Policy {
     })
 }
 
-/// Walks an error source chain (and fallback debug/display formatting when `rmcp`
-/// worker channels wrap transport errors as strings) to detect a local TCP `ConnectionRefused` error.
-pub fn is_connection_refused(mut source: Option<&(dyn StdError + 'static)>) -> bool {
-    while let Some(err) = source {
-        if let Some(io_err) = err.downcast_ref::<std::io::Error>()
-            && io_err.kind() == std::io::ErrorKind::ConnectionRefused
-        {
-            return true;
-        }
-        if let Some(init_err) = err.downcast_ref::<ClientInitializeError>() {
-            match init_err {
-                ClientInitializeError::TransportError { error, .. } => {
-                    if is_connection_refused(Some(error.error.as_ref())) {
-                        return true;
-                    }
-                }
-                ClientInitializeError::LegacyFallbackFailed {
-                    discover, fallback, ..
-                } => {
-                    if is_connection_refused(Some(discover.as_ref()))
-                        || is_connection_refused(Some(fallback.as_ref()))
-                    {
-                        return true;
-                    }
-                }
-                _ => {}
-            }
-        }
-        source = err.source();
-    }
-    false
-}
-
-/// Checks an `anyhow::Error` chain for a local `ConnectionRefused` failure,
-/// including `rmcp::transport::worker` errors that close the worker channel on TCP connect failure.
-pub fn is_anyhow_connection_refused(err: &anyhow::Error) -> bool {
-    if is_connection_refused(Some(err.as_ref())) || is_connection_refused(Some(err.root_cause())) {
-        return true;
-    }
-    let full = format!("{err:#}");
-    full.contains("Connection refused")
-        || full.contains("ConnectionRefused")
-        || full.contains("tcp connect error")
-        || full.contains("error sending request for url")
-}
-
 /// Returns `true` if `url` points to a loopback host (`localhost`, `127.0.0.1`, `[::1]`).
+#[must_use]
 pub fn is_loopback_http_url(url: &str) -> bool {
     let Ok(parsed) = reqwest::Url::parse(url.trim()) else {
         return false;
@@ -113,9 +71,7 @@ pub fn is_loopback_http_url(url: &str) -> bool {
         return true;
     }
     let trimmed = host_str.trim_start_matches('[').trim_end_matches(']');
-    trimmed
-        .parse::<std::net::IpAddr>()
-        .is_ok_and(|ip| ip.is_loopback())
+    trimmed.parse::<IpAddr>().is_ok_and(|ip| ip.is_loopback())
 }
 
 /// Performs a sub-millisecond non-blocking TCP probe to a loopback HTTP URL's port
@@ -140,7 +96,7 @@ pub async fn probe_loopback_http_port(url: &str) -> bool {
         )
         .await
         .is_ok_and(|r| r.is_ok())
-    } else if let Ok(ip) = trimmed_host.parse::<std::net::IpAddr>() {
+    } else if let Ok(ip) = trimmed_host.parse::<IpAddr>() {
         let addr = std::net::SocketAddr::new(ip, port);
         tokio::time::timeout(
             Duration::from_millis(150),
@@ -153,111 +109,62 @@ pub async fn probe_loopback_http_port(url: &str) -> bool {
     }
 }
 
-/// Walks an error source chain to find `rmcp 3.8.0`'s body-free [`HttpStatusError`]
-/// (emitted for HTTP 429 and 5xx responses with optional `Retry-After` metadata).
-pub fn find_http_status_error<'a>(
-    mut source: Option<&'a (dyn StdError + 'static)>,
-) -> Option<&'a HttpStatusError> {
-    while let Some(err) = source {
-        if let Some(http_status) = err.downcast_ref::<HttpStatusError>() {
-            return Some(http_status);
-        }
-        source = err.source();
-    }
-    None
+#[derive(Debug, PartialEq, Eq)]
+enum AuthorizationDisposition {
+    /// Empty header value — omit completely.
+    Skip,
+    /// Bearer token (without `"Bearer "` prefix) routed to `StreamableHttpClientTransportConfig::auth_header`.
+    BearerToken(String),
+    /// Non-Bearer scheme (`Basic ...`, `ApiKey ...`, `Token ...`) preserved verbatim in `custom_headers`.
+    CustomHeader(HeaderValue),
 }
 
-/// Walks an error source chain to detect HTTP 401/403 authorization challenges.
-pub fn find_auth_error_detail<'a>(
-    mut source: Option<&'a (dyn StdError + 'static)>,
-) -> Option<String> {
-    while let Some(err) = source {
-        if let Some(auth_req) = err.downcast_ref::<AuthRequiredError>() {
-            return Some(format!(
-                "HTTP 401 Unauthorized (WWW-Authenticate: {})",
-                auth_req.www_authenticate_header
-            ));
-        }
-        if let Some(scope_err) = err.downcast_ref::<InsufficientScopeError>() {
-            return Some(format!(
-                "HTTP 403 Insufficient Scope (WWW-Authenticate: {})",
-                scope_err.www_authenticate_header
-            ));
-        }
-        source = err.source();
+/// Parses an `Authorization` header value safely without UTF-8 byte-slice panics
+/// and without corrupting non-Bearer authentication schemes (`Basic`, `ApiKey`, `Token`).
+fn parse_authorization_header(raw_value: &str) -> Result<AuthorizationDisposition, PermanentConfigError> {
+    let trimmed = raw_value.trim();
+    if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("bearer") {
+        return Ok(AuthorizationDisposition::Skip);
     }
-    None
-}
 
-/// Formats a [`ClientInitializeError`] with full transport, `HttpStatusError` (`Retry-After`),
-/// and 401/403 `WWW-Authenticate` challenge details, unwrapping `LegacyFallbackFailed`.
-pub fn format_client_init_error(err: &ClientInitializeError) -> String {
-    if let Some(challenge) = err.auth_challenge() {
-        return format!("Authorization required by MCP server (WWW-Authenticate: {challenge})");
-    }
-    if err.is_authorization_required() {
-        return "Authorization required by MCP server (HTTP 401/403)".to_string();
-    }
-    match err {
-        ClientInitializeError::LegacyFallbackFailed { fallback, .. } => {
-            format_client_init_error(fallback)
-        }
-        ClientInitializeError::TransportError { error, context } => {
-            if let Some(status_err) = find_http_status_error(Some(error.error.as_ref())) {
-                if let Some(retry_after) = &status_err.retry_after {
-                    return format!(
-                        "HTTP {} during {context} (Retry-After: {retry_after})",
-                        status_err.status
-                    );
-                }
-                return format!("HTTP {} during {context}", status_err.status);
+    if let Some((scheme, rest)) = trimmed.split_once(char::is_whitespace) {
+        if scheme.eq_ignore_ascii_case("bearer") {
+            let token = rest.trim();
+            if token.is_empty() {
+                return Ok(AuthorizationDisposition::Skip);
             }
-            if let Some(auth_detail) = find_auth_error_detail(Some(error.error.as_ref())) {
-                return format!("{auth_detail} during {context}");
-            }
-            err.to_string()
+            HeaderValue::from_str(token).map_err(|e| {
+                PermanentConfigError(format!("Invalid HTTP Authorization bearer token: {e}"))
+            })?;
+            return Ok(AuthorizationDisposition::BearerToken(token.to_string()));
         }
-        _ => err.to_string(),
+
+        // Preserve non-Bearer schemes (`Basic ...`, `ApiKey ...`, `Token ...`) verbatim.
+        let value = HeaderValue::from_str(trimmed).map_err(|e| {
+            PermanentConfigError(format!("Invalid HTTP Authorization header value: {e}"))
+        })?;
+        return Ok(AuthorizationDisposition::CustomHeader(value));
     }
+
+    // Bare single-token value (user supplied raw token without "Bearer " prefix):
+    // validate it can form a legal HTTP header value before passing to `rmcp`.
+    HeaderValue::from_str(trimmed).map_err(|e| {
+        PermanentConfigError(format!("Invalid HTTP Authorization token value: {e}"))
+    })?;
+    Ok(AuthorizationDisposition::BearerToken(trimmed.to_string()))
 }
 
-/// Formats a [`ServiceError`] from an active MCP session, enriching transport errors
-/// with HTTP 429/5xx `Retry-After` or 401/403 challenge metadata when present.
-pub fn format_service_error(err: &ServiceError) -> String {
-    if let ServiceError::TransportSend(dyn_err) = err {
-        if let Some(status_err) = find_http_status_error(Some(dyn_err.error.as_ref())) {
-            if let Some(retry_after) = &status_err.retry_after {
-                return format!(
-                    "HTTP {} (Retry-After: {retry_after})",
-                    status_err.status
-                );
-            }
-            return format!("HTTP {}", status_err.status);
-        }
-        if let Some(auth_detail) = find_auth_error_detail(Some(dyn_err.error.as_ref())) {
-            return auth_detail;
-        }
-    }
-    err.to_string()
-}
-
-/// Marker error indicating a permanent configuration issue (invalid URL, unsupported
-/// scheme, invalid HTTP header, or missing Stdio binary) that cannot succeed on retry.
-#[derive(Debug)]
-pub struct PermanentConfigError(pub String);
-
-impl std::fmt::Display for PermanentConfigError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
-    }
-}
-
-impl StdError for PermanentConfigError {}
-
-pub async fn build_streamable_http_client(
+/// Connects to a Streamable HTTP MCP server, probing MCP `2026-07-28` (`server/discover`)
+/// first and automatically falling back to `2025-11-25` (`initialize`).
+///
+/// # Errors
+///
+/// Returns an error if the URL/scheme or HTTP headers are invalid (`PermanentConfigError`),
+/// the HTTP client cannot be constructed, or the MCP handshake fails or times out.
+pub async fn build_streamable_http_client<S: BuildHasher + Sync>(
     handler: BoxxyClientHandler,
     url: &str,
-    headers: &HashMap<String, String>,
+    headers: &HashMap<String, String, S>,
     timeout_ms: u64,
 ) -> Result<RunningService<RoleClient, BoxxyClientHandler>> {
     let trimmed_url = url.trim();
@@ -277,23 +184,25 @@ pub async fn build_streamable_http_client(
     let mut auth_header = None;
 
     for (k, v) in headers {
-        if k.trim().is_empty() {
+        let key_trimmed = k.trim();
+        if key_trimmed.is_empty() {
             continue;
         }
 
-        // rmcp's StreamableHttpClientTransportConfig has a dedicated `auth_header` method
-        // which expects the raw bearer token (without the "Bearer " prefix).
-        if k.eq_ignore_ascii_case("authorization") {
-            let trimmed = v.trim();
-            if trimmed.len() >= 7 && trimmed[..7].eq_ignore_ascii_case("bearer ") {
-                auth_header = Some(trimmed[7..].trim().to_string());
-            } else {
-                auth_header = Some(trimmed.to_string());
+        if key_trimmed.eq_ignore_ascii_case("authorization") {
+            match parse_authorization_header(v).map_err(anyhow::Error::new)? {
+                AuthorizationDisposition::Skip => {}
+                AuthorizationDisposition::BearerToken(token) => {
+                    auth_header = Some(token);
+                }
+                AuthorizationDisposition::CustomHeader(header_val) => {
+                    parsed_headers.insert(AUTHORIZATION, header_val);
+                }
             }
             continue;
         }
 
-        let name = HeaderName::from_bytes(k.trim().as_bytes()).map_err(|e| {
+        let name = HeaderName::from_bytes(key_trimmed.as_bytes()).map_err(|e| {
             anyhow::Error::new(PermanentConfigError(format!(
                 "Invalid HTTP header name '{k}': {e}"
             )))
@@ -306,30 +215,42 @@ pub async fn build_streamable_http_client(
         parsed_headers.insert(name, value);
     }
 
-    let request_timeout = Duration::from_millis(timeout_ms.max(1_000));
+    let request_timeout = Duration::from_millis(timeout_ms.max(MIN_TIMEOUT_MS));
 
     let mut config = StreamableHttpClientTransportConfig::with_uri(trimmed_url)
         .custom_headers(parsed_headers)
         .reinit_on_expired_session(true);
 
-    if let Some(token) = auth_header {
-        if !token.is_empty() {
-            config = config.auth_header(token);
-        }
+    if let Some(token) = auth_header
+        && !token.is_empty()
+    {
+        config = config.auth_header(token);
     }
 
-    let http_client = reqwest::Client::builder()
-        .pool_max_idle_per_host(0)
+    let is_loopback = is_loopback_http_url(trimmed_url);
+    let mut client_builder = reqwest::Client::builder()
         .redirect(same_origin_redirect_policy())
         .connect_timeout(Duration::from_secs(10))
-        .timeout(request_timeout)
+        .timeout(request_timeout);
+
+    if is_loopback {
+        // Avoid retaining idle sockets against local dev servers that may restart frequently.
+        client_builder = client_builder.pool_max_idle_per_host(0);
+    } else {
+        // Reuse warm TLS 1.3 / HTTP/2 sessions across repeated tool calls on remote servers.
+        client_builder = client_builder
+            .pool_idle_timeout(Duration::from_secs(60))
+            .tcp_keepalive(Duration::from_secs(30));
+    }
+
+    let http_client = client_builder
         .build()
         .context("Failed to build reqwest client for MCP HTTP transport")?;
 
     let transport = StreamableHttpClientTransport::with_client(http_client, config);
 
     // Probe MCP 2026-07-28 `server/discover` first and transparently fall back to
-    // the legacy `initialize` handshake (2025-11-25) when talking to older servers.
+    // the legacy `initialize` handshake (`2025-11-25`) when talking to older servers.
     let lifecycle = ClientLifecycleMode::Auto {
         preferred_versions: vec![ProtocolVersion::LATEST],
         legacy_version: Some(ProtocolVersion::LATEST_WITH_INITIALIZE),
@@ -342,7 +263,7 @@ pub async fn build_streamable_http_client(
     .await
     .with_context(|| {
         format!(
-            "Timed out after {}ms connecting to HTTP MCP server at '{url}'",
+            "Timed out after {}ms connecting to HTTP MCP server at '{trimmed_url}'",
             request_timeout.as_millis()
         )
     })?
@@ -359,4 +280,57 @@ pub async fn build_streamable_http_client(
         .await;
 
     Ok(client)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_authorization_header_handles_bearer_basic_and_multibyte_utf8_safely() {
+        assert_eq!(
+            parse_authorization_header("Bearer sk-test-123").unwrap(),
+            AuthorizationDisposition::BearerToken("sk-test-123".to_string())
+        );
+        assert_eq!(
+            parse_authorization_header("bearer   tok_abc  ").unwrap(),
+            AuthorizationDisposition::BearerToken("tok_abc".to_string())
+        );
+        assert_eq!(
+            parse_authorization_header("raw_token_without_scheme").unwrap(),
+            AuthorizationDisposition::BearerToken("raw_token_without_scheme".to_string())
+        );
+        assert_eq!(
+            parse_authorization_header("Basic dXNlcjpwYXNz").unwrap(),
+            AuthorizationDisposition::CustomHeader(HeaderValue::from_static("Basic dXNlcjpwYXNz"))
+        );
+        assert_eq!(
+            parse_authorization_header("ApiKey secret-key-42").unwrap(),
+            AuthorizationDisposition::CustomHeader(HeaderValue::from_static(
+                "ApiKey secret-key-42"
+            ))
+        );
+        assert_eq!(
+            parse_authorization_header("Bearer   ").unwrap(),
+            AuthorizationDisposition::Skip
+        );
+
+        // Multi-byte UTF-8 crossing byte index 7 ("éééé..." has 2-byte chars crossing index 7)
+        // must never panic, and control characters must return `PermanentConfigError`.
+        let multibyte = "éééé-token";
+        assert_eq!(
+            parse_authorization_header(multibyte).unwrap(),
+            AuthorizationDisposition::BearerToken(multibyte.to_string())
+        );
+        assert!(parse_authorization_header("Bearer bad\ntoken").is_err());
+    }
+
+    #[test]
+    fn loopback_url_detection_covers_ipv4_ipv6_and_localhost() {
+        assert!(is_loopback_http_url("http://localhost:3000/mcp"));
+        assert!(is_loopback_http_url("http://127.0.0.1:8080/mcp"));
+        assert!(is_loopback_http_url("http://[::1]:9000/mcp"));
+        assert!(!is_loopback_http_url("https://example.com/mcp"));
+        assert!(!is_loopback_http_url("not-a-url"));
+    }
 }

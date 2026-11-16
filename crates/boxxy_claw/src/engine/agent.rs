@@ -639,11 +639,13 @@ pub async fn create_claw_agent(
     };
     // Always sync the latest configs before building tools
     mcp_manager.update_configs(config.mcp_servers.clone()).await;
+    // Probe server liveness first so loopback servers that came online clear their circuit
+    // breaker and stopped servers are evicted before assembling the agent's toolset.
+    let mcp_statuses = mcp_manager.get_server_statuses().await;
+    boxxy_claw_protocol::characters::update_mcp_status_cache(mcp_statuses.clone());
     let mcp_tools = mcp_manager
         .build_rig_tools(Some(approval_handler.clone()))
         .await;
-    let mcp_statuses = mcp_manager.get_server_statuses().await;
-    boxxy_claw_protocol::characters::update_mcp_status_cache(mcp_statuses.clone());
     tool_server = tool_server.dynamic_tools(mcp_tools);
 
     let tool_handle = tool_server.run();

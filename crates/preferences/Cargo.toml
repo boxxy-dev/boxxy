@@ -23,7 +23,7 @@ boxxy-assets = { path = "../boxxy_assets" }
 boxxy-core-widgets.workspace = true
 boxxy-keybindings.workspace = true
 boxxy-model-selection.workspace = true
-boxxy-mcp.workspace = true
+boxxy-mcp = { workspace = true, default-features = false }
 boxxy-claw-protocol = { path = "../boxxy_claw_protocol" }
 uuid.workspace = true
 arc-swap.workspace = true
