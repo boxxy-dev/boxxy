@@ -7,20 +7,24 @@ description = "Core high-level tools for Boxxy agents"
 license.workspace = true
 
 [dependencies]
-anyhow.workspace = true
-serde.workspace = true
-serde_json.workspace = true
-rig.workspace = true
-boxxy-claw-protocol = { path = "../boxxy_claw_protocol" }
-boxxy-telemetry = { path = "../telemetry" }
-log = { workspace = true }
-reqwest = { workspace = true }
 async-trait = { workspace = true }
-tokio = { workspace = true }
-thiserror = { workspace = true }
-directories = { workspace = true }
-regex = { workspace = true }
+boxxy-claw-protocol = { path = "../boxxy_claw_protocol" }
 boxxy-sys-utils = { workspace = true }
+boxxy-telemetry = { path = "../telemetry" }
+directories = { workspace = true }
+ignore = { workspace = true }
+parking_lot = { workspace = true }
+regex = { workspace = true }
+reqwest = { workspace = true }
+rig = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
 
 [dev-dependencies]
+anyhow = { workspace = true }
 tempfile = { workspace = true }
+
+[lints]
+workspace = true

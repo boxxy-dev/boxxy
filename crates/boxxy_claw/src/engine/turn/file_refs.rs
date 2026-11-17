@@ -11,6 +11,7 @@ const BINARY_CHECK_BYTES: usize = 8192;
 const MAX_DIR_ENTRIES: usize = 250;
 const MAX_TEXT_FILE_BYTES: u64 = 5 * 1024 * 1024;
 const MAX_IMAGE_BYTES: u64 = 10 * 1024 * 1024;
+const MAX_STALE_CHECK_FILES: usize = 16;
 
 const BUILTIN_BLACKLIST: &[&str] = &[
     "/etc/shadow",
@@ -427,6 +428,78 @@ fn format_directory_ref(raw_token: &str, resolved_path: &str, path: &Path) -> Op
     ))
 }
 
+/// Checks files previously read or edited in this session (`tracked_hashes`) against disk,
+/// skipping any path already freshly pre-loaded on the current turn (`freshly_loaded`).
+///
+/// Returns `(notice_block, deleted_paths_to_prune)` so the model never relies on stale
+/// `file_read` history after the user edits or deletes a file externally.
+pub async fn check_externally_modified_files<S: std::hash::BuildHasher>(
+    env: &dyn boxxy_claw_protocol::ClawEnvironment,
+    tracked_hashes: &std::collections::HashMap<String, u64, S>,
+    freshly_loaded: &[(String, u64)],
+) -> (String, Vec<String>) {
+    if tracked_hashes.is_empty() {
+        return (String::new(), Vec::new());
+    }
+
+    let mut candidates: Vec<(String, u64)> = tracked_hashes
+        .iter()
+        .filter(|(path, _)| !freshly_loaded.iter().any(|(fresh, _)| fresh == *path))
+        .map(|(path, &hash)| (path.clone(), hash))
+        .collect();
+    if candidates.is_empty() {
+        return (String::new(), Vec::new());
+    }
+    candidates.sort_by(|a, b| a.0.cmp(&b.0));
+    candidates.truncate(MAX_STALE_CHECK_FILES);
+
+    let checks = futures_util::future::join_all(candidates.into_iter().map(
+        |(path, known_hash)| async move {
+            match env.read_file(path.clone(), 0, 0).await {
+                Ok(disk_content) => {
+                    let disk_hash = boxxy_core_toolbox::hash_file_content(&disk_content);
+                    (path, disk_hash != known_hash, false)
+                }
+                Err(e) => {
+                    let msg = e.to_string();
+                    let is_missing =
+                        msg.contains("File not found") || msg.contains("No such file");
+                    (path, false, is_missing)
+                }
+            }
+        },
+    ))
+    .await;
+
+    let mut modified_lines = Vec::new();
+    let mut deleted_paths = Vec::new();
+    for (path, is_modified, is_deleted) in checks {
+        if is_modified {
+            modified_lines.push(format!(
+                "- `{path}` (modified on disk — your earlier `file_read` output in history is STALE)"
+            ));
+        } else if is_deleted {
+            modified_lines.push(format!("- `{path}` (deleted or moved on disk)"));
+            deleted_paths.push(path);
+        }
+    }
+
+    if modified_lines.is_empty() {
+        return (String::new(), deleted_paths);
+    }
+
+    let notice = format!(
+        "\n--- EXTERNALLY MODIFIED FILES NOTICE ---\n\
+        The following file(s) you read or edited earlier in this session were changed on disk outside this chat (e.g. edited by the user in an editor or by a command):\n\
+        {}\n\
+        CRITICAL: Do NOT trust or quote earlier `file_read` outputs in conversation history for any file listed above. Call `file_read` on the file FIRST to inspect the latest disk contents before answering questions about it or calling `replace_in_file` / `file_write`.\n\
+        ----------------------------------------\n",
+        modified_lines.join("\n")
+    );
+
+    (notice, deleted_paths)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -492,5 +565,103 @@ mod tests {
             &link,
             &merged
         ));
+    }
+
+    #[tokio::test]
+    async fn check_externally_modified_files_emits_notice_only_when_disk_diverges() {
+        struct SyntheticDiskEnv {
+            files: std::collections::HashMap<String, String>,
+        }
+
+        #[async_trait::async_trait]
+        impl boxxy_claw_protocol::ClawEnvironment for SyntheticDiskEnv {
+            async fn exec_shell(&self, _: String) -> anyhow::Result<(i32, String, String)> {
+                Ok((0, String::new(), String::new()))
+            }
+            async fn spawn_detached(&self, _: String, _: String) -> anyhow::Result<u32> {
+                Ok(1)
+            }
+            async fn read_file(
+                &self,
+                path: String,
+                _start: u32,
+                _end: u32,
+            ) -> anyhow::Result<String> {
+                self.files
+                    .get(&path)
+                    .cloned()
+                    .ok_or_else(|| anyhow::anyhow!("File not found: {path}"))
+            }
+            async fn write_file(&self, _: String, _: String) -> anyhow::Result<()> {
+                Ok(())
+            }
+            async fn list_directory(
+                &self,
+                _: String,
+            ) -> anyhow::Result<Vec<(String, bool, u64)>> {
+                Ok(Vec::new())
+            }
+            async fn delete_file(&self, _: String) -> anyhow::Result<()> {
+                Ok(())
+            }
+            async fn kill_process(&self, _: u32, _: i32) -> anyhow::Result<()> {
+                Ok(())
+            }
+            async fn get_clipboard(&self) -> anyhow::Result<String> {
+                Ok(String::new())
+            }
+            async fn set_clipboard(&self, _: String) -> anyhow::Result<()> {
+                Ok(())
+            }
+        }
+
+        let mut disk_files = std::collections::HashMap::new();
+        disk_files.insert("/workspace/src/unchanged.rs".to_string(), "fn a() {}\n".to_string());
+        disk_files.insert(
+            "/workspace/src/edited.rs".to_string(),
+            "fn b() { /* externally modified */ }\n".to_string(),
+        );
+        disk_files.insert(
+            "/workspace/src/reattached.rs".to_string(),
+            "fn c() { /* fresh @mention */ }\n".to_string(),
+        );
+        let env = SyntheticDiskEnv { files: disk_files };
+
+        let mut tracked = std::collections::HashMap::new();
+        tracked.insert(
+            "/workspace/src/unchanged.rs".to_string(),
+            boxxy_core_toolbox::hash_file_content("fn a() {}\n"),
+        );
+
+        // 1. All tracked files match disk -> zero-token empty notice
+        let (empty_notice, pruned_none) =
+            check_externally_modified_files(&env, &tracked, &[]).await;
+        assert_eq!(empty_notice, "");
+        assert_eq!(pruned_none, Vec::<String>::new());
+
+        // 2. Track modified, deleted, and freshly @-attached files
+        tracked.insert(
+            "/workspace/src/edited.rs".to_string(),
+            boxxy_core_toolbox::hash_file_content("fn b() {}\n"),
+        );
+        tracked.insert(
+            "/workspace/src/removed.rs".to_string(),
+            boxxy_core_toolbox::hash_file_content("fn gone() {}\n"),
+        );
+        tracked.insert(
+            "/workspace/src/reattached.rs".to_string(),
+            boxxy_core_toolbox::hash_file_content("fn c() {}\n"),
+        );
+
+        let freshly_loaded = vec![("/workspace/src/reattached.rs".to_string(), 123_u64)];
+        let (notice, deleted) =
+            check_externally_modified_files(&env, &tracked, &freshly_loaded).await;
+
+        assert!(notice.contains("EXTERNALLY MODIFIED FILES NOTICE"));
+        assert!(notice.contains("/workspace/src/edited.rs"));
+        assert!(notice.contains("/workspace/src/removed.rs"));
+        assert!(!notice.contains("/workspace/src/unchanged.rs"));
+        assert!(!notice.contains("/workspace/src/reattached.rs"));
+        assert_eq!(deleted, vec!["/workspace/src/removed.rs".to_string()]);
     }
 }

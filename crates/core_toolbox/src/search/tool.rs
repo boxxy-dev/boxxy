@@ -1,6 +1,11 @@
+//! `web_search` tool wrapper around [`SearchProvider`].
+
+use crate::ApprovalHandler;
+use crate::approval::{begin_tool, finish_tool};
 use crate::search::{SearchDepth, SearchOptions, SearchProvider};
 use rig::tool::{Tool, ToolContext};
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 #[derive(Deserialize)]
 pub struct WebSearchArgs {
@@ -14,6 +19,8 @@ pub struct WebSearchOutput {
     pub query: String,
     pub answer: Option<String>,
     pub results: Vec<WebSearchResult>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -25,7 +32,7 @@ pub struct WebSearchResult {
 
 pub struct WebSearchTool {
     pub provider: Box<dyn SearchProvider>,
-    pub approval: std::sync::Arc<dyn crate::ApprovalHandler>,
+    pub approval: Arc<dyn ApprovalHandler>,
 }
 
 impl Tool for WebSearchTool {
@@ -66,46 +73,150 @@ impl Tool for WebSearchTool {
         _context: &mut ToolContext,
         args: Self::Args,
     ) -> Result<Self::Output, Self::Error> {
-        self.approval
-            .report_tool_started(Self::NAME.to_string())
-            .await;
-        boxxy_telemetry::track_tool_use(Self::NAME).await;
+        begin_tool(self.approval.as_ref(), Self::NAME).await;
+
+        let trimmed_query = args.query.trim();
+        if trimmed_query.is_empty() {
+            let out = WebSearchOutput {
+                query: String::new(),
+                answer: None,
+                results: Vec::new(),
+                error: Some("`query` must not be empty.".to_string()),
+            };
+            finish_tool(self.approval.as_ref(), Self::NAME, &out).await;
+            return Ok(out);
+        }
 
         let depth = match args.search_depth.as_deref() {
-            Some("advanced") => SearchDepth::Advanced,
+            Some(s) if s.eq_ignore_ascii_case("advanced") => SearchDepth::Advanced,
             _ => SearchDepth::Basic,
         };
 
         let options = SearchOptions {
-            max_results: args.max_results.unwrap_or(5).min(10),
+            max_results: args.max_results.unwrap_or(5).clamp(1, 10),
             search_depth: depth,
-            include_raw_content: false, // We keep it simple for now to save tokens
+            include_raw_content: false,
         };
 
-        match self.provider.search(&args.query, options).await {
-            Ok(response) => {
-                let out = WebSearchOutput {
-                    query: response.query,
-                    answer: response.answer,
-                    results: response
-                        .results
-                        .into_iter()
-                        .map(|r| WebSearchResult {
-                            title: r.title,
-                            url: r.url,
-                            content: r.content,
-                        })
-                        .collect(),
-                };
-                self.approval
-                    .report_tool_result(
-                        Self::NAME.to_string(),
-                        serde_json::to_string(&out).unwrap_or_default(),
-                    )
-                    .await;
-                Ok(out)
-            }
-            Err(e) => Err(std::io::Error::other(format!("Search Error: {e}"))),
+        let out = match self.provider.search(trimmed_query, options).await {
+            Ok(response) => WebSearchOutput {
+                query: response.query,
+                answer: response.answer,
+                results: response
+                    .results
+                    .into_iter()
+                    .map(|r| WebSearchResult {
+                        title: r.title,
+                        url: r.url,
+                        content: r.content,
+                    })
+                    .collect(),
+                error: None,
+            },
+            Err(e) => WebSearchOutput {
+                query: trimmed_query.to_string(),
+                answer: None,
+                results: Vec::new(),
+                error: Some(format!("Search Error: {e}")),
+            },
+        };
+
+        finish_tool(self.approval.as_ref(), Self::NAME, &out).await;
+        Ok(out)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::search::{SearchError, SearchResponse, SearchResult};
+    use crate::test_support::MockApproval;
+
+    struct SyntheticSearchProvider {
+        fail: bool,
+    }
+
+    #[async_trait::async_trait]
+    impl SearchProvider for SyntheticSearchProvider {
+        fn name(&self) -> &'static str {
+            "Synthetic"
         }
+
+        async fn search(
+            &self,
+            query: &str,
+            options: SearchOptions,
+        ) -> Result<SearchResponse, SearchError> {
+            if self.fail {
+                return Err(SearchError::ApiError("synthetic 503".to_string()));
+            }
+            assert!((1..=10).contains(&options.max_results));
+            Ok(SearchResponse {
+                query: query.to_string(),
+                answer: Some("Synthetic summary".to_string()),
+                results: vec![SearchResult {
+                    title: "Example Docs".to_string(),
+                    url: "https://example.com/docs".to_string(),
+                    content: "Snippet text".to_string(),
+                    raw_content: None,
+                    score: 0.95,
+                }],
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn web_search_validates_inputs_clamps_limits_and_reports_errors() {
+        let approval = Arc::new(MockApproval::approved(None));
+        let tool = WebSearchTool {
+            provider: Box::new(SyntheticSearchProvider { fail: false }),
+            approval: approval.clone(),
+        };
+        let mut ctx = ToolContext::default();
+
+        let empty_q = tool
+            .call(
+                &mut ctx,
+                WebSearchArgs {
+                    query: "   ".to_string(),
+                    search_depth: None,
+                    max_results: None,
+                },
+            )
+            .await
+            .unwrap();
+        assert!(empty_q.error.is_some());
+
+        let ok = tool
+            .call(
+                &mut ctx,
+                WebSearchArgs {
+                    query: "rust async trait".to_string(),
+                    search_depth: Some("ADVANCED".to_string()),
+                    max_results: Some(0),
+                },
+            )
+            .await
+            .unwrap();
+        assert!(ok.error.is_none());
+        assert_eq!(ok.results.len(), 1);
+
+        let failing_tool = WebSearchTool {
+            provider: Box::new(SyntheticSearchProvider { fail: true }),
+            approval: approval.clone(),
+        };
+        let err_out = failing_tool
+            .call(
+                &mut ctx,
+                WebSearchArgs {
+                    query: "rust".to_string(),
+                    search_depth: None,
+                    max_results: None,
+                },
+            )
+            .await
+            .unwrap();
+        assert!(err_out.error.unwrap().contains("synthetic 503"));
+        assert_eq!(approval.results.lock().len(), 3);
     }
 }

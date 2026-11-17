@@ -1,5 +1,8 @@
+//! Detached background application and server launcher tool (`run_background_command`).
+
 use crate::ApprovalHandler;
-use crate::utils::resolve_path;
+use crate::approval::{await_proposal, begin_tool, finish_tool};
+use crate::utils::resolve_dir_path;
 use boxxy_claw_protocol::ClawEnvironment;
 use rig::tool::{Tool, ToolContext};
 use serde::{Deserialize, Serialize};
@@ -16,7 +19,11 @@ pub struct RunBackgroundCommandArgs {
 pub struct RunBackgroundCommandOutput {
     pub success: bool,
     pub pid: Option<u32>,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub command: String,
     pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 pub struct RunBackgroundCommandTool {
@@ -61,166 +68,83 @@ impl Tool for RunBackgroundCommandTool {
         _context: &mut ToolContext,
         args: Self::Args,
     ) -> Result<Self::Output, Self::Error> {
-        self.approval
-            .report_tool_started(Self::NAME.to_string())
-            .await;
-        boxxy_telemetry::track_tool_use(Self::NAME).await;
+        begin_tool(self.approval.as_ref(), Self::NAME).await;
+
+        let trimmed_cmd = args.command.trim();
+        if trimmed_cmd.is_empty() {
+            let msg = "`command` must not be empty.".to_string();
+            let out = RunBackgroundCommandOutput {
+                success: false,
+                pid: None,
+                command: String::new(),
+                message: msg.clone(),
+                error: Some(msg),
+            };
+            finish_tool(self.approval.as_ref(), Self::NAME, &out).await;
+            return Ok(out);
+        }
 
         let base_dir = self.approval.current_dir().await.unwrap_or_default();
-        let resolved_cwd = match args.cwd.as_deref().map(str::trim) {
-            Some(c) if !c.is_empty() => resolve_path(&base_dir, c),
-            _ if !base_dir.is_empty() => base_dir,
-            _ => ".".to_string(),
-        };
+        let resolved_cwd = resolve_dir_path(&base_dir, args.cwd.as_deref());
 
-        self.approval.set_thinking(false).await;
-        let outcome = self
-            .approval
-            .propose_background_command(args.command.clone(), args.explanation.clone())
-            .await;
-        self.approval.set_thinking(true).await;
+        let outcome = await_proposal(
+            self.approval.as_ref(),
+            self.approval
+                .propose_background_command(args.command.clone(), args.explanation),
+        )
+        .await;
 
-        if outcome.is_approved() {
+        let out = if outcome.is_approved() {
             match self
                 .env
                 .spawn_detached(args.command.clone(), resolved_cwd)
                 .await
             {
-                Ok(pid) => {
-                    let out = RunBackgroundCommandOutput {
-                        success: true,
-                        pid: Some(pid),
-                        message: format!(
-                            "Successfully launched process in background with PID: {}",
-                            pid
-                        ),
-                    };
-                    self.approval
-                        .report_tool_result(
-                            Self::NAME.to_string(),
-                            serde_json::to_string(&out).unwrap_or_default(),
-                        )
-                        .await;
-                    Ok(out)
-                }
+                Ok(pid) => RunBackgroundCommandOutput {
+                    success: true,
+                    pid: Some(pid),
+                    command: args.command,
+                    message: format!(
+                        "Successfully launched process in background with PID: {pid}"
+                    ),
+                    error: None,
+                },
                 Err(e) => {
-                    let out = RunBackgroundCommandOutput {
+                    let msg = format!("Failed to spawn background process: {e}");
+                    RunBackgroundCommandOutput {
                         success: false,
                         pid: None,
-                        message: format!("Failed to spawn background process: {}", e),
-                    };
-                    self.approval
-                        .report_tool_result(
-                            Self::NAME.to_string(),
-                            serde_json::to_string(&out).unwrap_or_default(),
-                        )
-                        .await;
-                    Ok(out)
+                        command: args.command,
+                        message: msg.clone(),
+                        error: Some(msg),
+                    }
                 }
             }
         } else {
-            let out = RunBackgroundCommandOutput {
+            let msg = outcome.rejection_message();
+            RunBackgroundCommandOutput {
                 success: false,
                 pid: None,
-                message: outcome.rejection_message(),
-            };
-            self.approval
-                .report_tool_result(
-                    Self::NAME.to_string(),
-                    serde_json::to_string(&out).unwrap_or_default(),
-                )
-                .await;
-            Ok(out)
-        }
+                command: args.command,
+                message: msg.clone(),
+                error: Some(msg),
+            }
+        };
+
+        finish_tool(self.approval.as_ref(), Self::NAME, &out).await;
+        Ok(out)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
-
-    struct TrackCwdEnv {
-        spawned_cwd: Mutex<Option<String>>,
-    }
-
-    #[async_trait::async_trait]
-    impl ClawEnvironment for TrackCwdEnv {
-        async fn exec_shell(&self, _: String) -> anyhow::Result<(i32, String, String)> {
-            Ok((0, String::new(), String::new()))
-        }
-        async fn spawn_detached(&self, _command: String, cwd: String) -> anyhow::Result<u32> {
-            *self.spawned_cwd.lock().unwrap() = Some(cwd);
-            Ok(4242)
-        }
-        async fn read_file(&self, _: String, _: u32, _: u32) -> anyhow::Result<String> {
-            Ok(String::new())
-        }
-        async fn write_file(&self, _: String, _: String) -> anyhow::Result<()> {
-            Ok(())
-        }
-        async fn list_directory(&self, _: String) -> anyhow::Result<Vec<(String, bool, u64)>> {
-            Ok(vec![])
-        }
-        async fn delete_file(&self, _: String) -> anyhow::Result<()> {
-            Ok(())
-        }
-        async fn kill_process(&self, _: u32, _: i32) -> anyhow::Result<()> {
-            Ok(())
-        }
-        async fn get_clipboard(&self) -> anyhow::Result<String> {
-            Ok(String::new())
-        }
-        async fn set_clipboard(&self, _: String) -> anyhow::Result<()> {
-            Ok(())
-        }
-    }
-
-    struct ApproveWithCwd(String);
-
-    #[async_trait::async_trait]
-    impl ApprovalHandler for ApproveWithCwd {
-        async fn propose_file_write(
-            &self,
-            _: String,
-            _: String,
-            _: crate::FileDiff,
-        ) -> crate::ApprovalOutcome {
-            crate::ApprovalOutcome::Approved
-        }
-        async fn propose_file_delete(&self, _: String) -> crate::ApprovalOutcome {
-            crate::ApprovalOutcome::Approved
-        }
-        async fn propose_background_command(
-            &self,
-            _: String,
-            _: String,
-        ) -> crate::ApprovalOutcome {
-            crate::ApprovalOutcome::Approved
-        }
-        async fn propose_kill_process(&self, _: u32, _: String) -> crate::ApprovalOutcome {
-            crate::ApprovalOutcome::Approved
-        }
-        async fn propose_get_clipboard(&self) -> crate::ApprovalOutcome {
-            crate::ApprovalOutcome::Approved
-        }
-        async fn propose_set_clipboard(&self, _: String) -> crate::ApprovalOutcome {
-            crate::ApprovalOutcome::Approved
-        }
-        async fn report_tool_result(&self, _: String, _: String) {}
-        async fn report_tool_started(&self, _: String) {}
-        async fn set_thinking(&self, _: bool) {}
-        async fn current_dir(&self) -> Option<String> {
-            Some(self.0.clone())
-        }
-    }
+    use crate::test_support::{MockApproval, MockEnv};
 
     #[tokio::test]
     async fn run_background_command_defaults_and_resolves_cwd() {
-        let env = Arc::new(TrackCwdEnv {
-            spawned_cwd: Mutex::new(None),
-        });
-        let approval = Arc::new(ApproveWithCwd("/workspace/project".to_string()));
+        let env = Arc::new(MockEnv::new());
+        let approval = Arc::new(MockApproval::approved(Some("/workspace/project")));
         let tool = RunBackgroundCommandTool {
             env: env.clone(),
             approval,
@@ -240,8 +164,9 @@ mod tests {
             .unwrap();
         assert!(out.success);
         assert_eq!(out.pid, Some(4242));
+        assert_eq!(out.command, "npm run dev");
         assert_eq!(
-            env.spawned_cwd.lock().unwrap().as_deref(),
+            env.spawned_cwd.lock().as_deref(),
             Some("/workspace/project")
         );
 
@@ -258,7 +183,7 @@ mod tests {
             .unwrap();
         assert!(out_rel.success);
         assert_eq!(
-            env.spawned_cwd.lock().unwrap().as_deref(),
+            env.spawned_cwd.lock().as_deref(),
             Some("/workspace/project/frontend")
         );
     }

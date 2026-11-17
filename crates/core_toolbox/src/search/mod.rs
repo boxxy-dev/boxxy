@@ -1,3 +1,5 @@
+//! Web search abstraction (`SearchProvider`), `WebSearchTool`, and `TavilyProvider`.
+
 use serde::{Deserialize, Serialize};
 
 #[async_trait::async_trait]
@@ -18,7 +20,7 @@ pub struct SearchOptions {
     pub include_raw_content: bool,
 }
 
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum SearchDepth {
     #[default]
     Basic,

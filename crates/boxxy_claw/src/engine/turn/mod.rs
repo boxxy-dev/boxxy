@@ -141,6 +141,7 @@ pub fn spawn_turn(
             let mut state_lock = state.lock().await;
             state_lock.history.clear();
             state_lock.flushed_watermark = 0;
+            state_lock.read_file_hashes.clear();
         }
 
         let user_authored_prompt = extract_user_authored_prompt(&prompt_clone).to_string();
@@ -167,6 +168,14 @@ pub fn spawn_turn(
                 images_clone.push(b64);
             }
         }
+        let prior_read_hashes = state.lock().await.read_file_hashes.clone();
+        let (stale_files_notice, deleted_tracked_paths) =
+            file_refs::check_externally_modified_files(
+                env.as_ref(),
+                &prior_read_hashes,
+                &resolved_file_refs.read_hashes,
+            )
+            .await;
 
         // 2. Fetch Global Workspace Radar + Detached Background Shells
         let workspace = crate::registry::workspace::global_workspace().await;
@@ -260,6 +269,9 @@ pub fn spawn_turn(
         ) = {
             let mut state_lock = state.lock().await;
             state_lock.current_dir = cwd_clone.clone();
+            for stale_deleted in &deleted_tracked_paths {
+                state_lock.read_file_hashes.remove(stale_deleted);
+            }
             for (path, hash) in &resolved_file_refs.read_hashes {
                 state_lock.read_file_hashes.insert(path.clone(), *hash);
             }
@@ -382,6 +394,7 @@ pub fn spawn_turn(
                 {}\n\
                 {}\n\
                 {}\n\
+                {}\n\
                 {}\n",
                 identity,
                 now.to_rfc3339(),
@@ -389,6 +402,7 @@ pub fn spawn_turn(
                 vibe_ctx,
                 roundtable_context,
                 guest_home_context,
+                stale_files_notice,
                 resolved_file_refs.context_block,
                 skills_context,
                 past_memories,
