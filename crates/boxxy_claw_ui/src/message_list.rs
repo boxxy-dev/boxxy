@@ -476,7 +476,7 @@ fn bind_or_refresh_slot(hbox: &gtk::Box, obj: &ClawRowObject) {
         let profile = user_profile::current();
 
         icon.set_visible(false);
-        user_profile::configure_avatar(&*avatar, &profile);
+        user_profile::configure_avatar(&avatar, &profile);
         update_avatar_ring_color(&profile.color);
         avatar_frame.remove_css_class("claw-avatar-typing");
         avatar_frame.set_visible(true);

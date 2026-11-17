@@ -1029,14 +1029,13 @@ dependencies = [
 name = "boxxy-core-widgets"
 version = "0.1.0"
 dependencies = [
- "async-channel",
  "boxxy-assets",
- "cairo-rs",
+ "boxxy-sys-utils",
  "glib",
  "gtk4",
  "libadwaita",
  "log",
- "tokio",
+ "tempfile",
 ]
 
 [[package]]

@@ -203,6 +203,9 @@ Provides a privacy-first, modular observability layer (`identity`, `normalize`, 
 ### 17. `boxxy-cli` (Library Crate)
 GTK-free command-line parser and Ghostty-style `+action` dispatcher (`crates/cli`). Parses greedy `-e <cmd> [args...]` / `-- <cmd>` tails, `--hold`, `--title`, window/tab routing (`--new-window`, `-t/--tab`, `--present`, `+new-window`, `+new-tab`), and isolated `--dev` flags (`DevFlags`), encoding validated GUI launches across `gio::Application::run_with_args` so GLib's `GOptionContext` never intercepts child `--help`/`--version` flags while preserving Wayland `XDG_ACTIVATION_TOKEN` focus handoff. Hosts headless `+actions` (`+version`, `+doctor`, `+env`, `+agent`, `+completions`) via `ActionContext` — the shared D-Bus execution boundary designed for future headless `+claw` CLI workflows.
 
+### 18. `boxxy-core-widgets` (Library Crate)
+Domain-agnostic GTK4/Libadwaita UI primitives and safe GObject utilities (`crates/core_widgets`), organized into `utils`, `autocomplete/{mod,engine,style}`, and `avatar_cropper/{mod,editable,geometry,render,dialog}`. Provides `ObjectExtSafe` (namespaced, thread-cached `Quark`s storing write-once `ThreadGuard<RefCell<Option<Box<dyn Any>>>>` slots to guarantee zero type-confusion, use-after-free, or cross-thread `!Send` UB across virtualized list slots), `AutocompleteController` (`Weak`-wired lifecycle with `Popover::unparent()` teardown, modifier- and cursor-position-aware completion splicing, single-provider CSS-sanitized luminance-contrasted badges, and 2 s TTL avatar texture caching), and `EditableAvatar` / `AvatarCropDialog` (single-flight `GtkFileDialog` guard, bounded local & portal stream reads, cancel-safe off-thread `boxxy_sys_utils::runtime()` decoding, premultiplied-alpha 4-tap backdrop/preview sampling free of transparent-edge halos, and 120 Hz integer-crop-deduplicated live previews).
+
 ## Distribution & Updates
 
 Boxxy supports three primary distribution channels:

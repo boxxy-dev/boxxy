@@ -63,7 +63,6 @@ boxxy-themes = { path = "crates/themes" }
 boxxy-window = { path = "crates/window" }
 boxxy-core-widgets = { path = "crates/core_widgets" }
 directories = "6.0.0"
-cairo-rs = "0.22"
 gdk-pixbuf = "0.22"
 gio = { version = "0.22", features = ["v2_76"] }
 glib = "0.22"

@@ -613,7 +613,7 @@ impl MsgBarComponent {
             let is_ctrl = state.contains(gtk::gdk::ModifierType::CONTROL_MASK);
             let is_shift = state.contains(gtk::gdk::ModifierType::SHIFT_MASK);
 
-            if k_autocomplete.handle_key_pressed(key) == glib::Propagation::Stop {
+            if k_autocomplete.handle_key_pressed_with_state(key, state) == glib::Propagation::Stop {
                 return glib::Propagation::Stop;
             }
 
