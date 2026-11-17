@@ -1,257 +1,187 @@
-use std::path::Path;
+use std::fmt::Write as _;
+use std::path::{Path, PathBuf};
+
+/// Resource entry discovered under `../../resources`.
+struct ResourceEntry {
+    /// Forward-slash path relative to `resources/` (used as both `GResource` `alias` and source path).
+    rel_path: String,
+    /// Whether `glib-compile-resources` should deflate-compress this payload.
+    /// Text/XML assets benefit substantially; already-compressed PNGs and seekable WAV audio
+    /// streams stay uncompressed so GIO serves zero-copy `GMemoryInputStream` slices from `.rodata`.
+    compressed: bool,
+    /// Emit an explicit `alias="..."` attribute (kept on all nested entries for clarity and
+    /// compatibility with `crates/themes` `GResource` manifest assertions).
+    with_alias: bool,
+}
 
 fn main() {
     let resources_dir = Path::new("../../resources");
-    let boxxy_theme_dir = resources_dir.join("themes/boxxy");
-    let mut boxxy_css_files: Vec<String> = std::fs::read_dir(&boxxy_theme_dir)
-        .ok()
-        .into_iter()
-        .flatten()
-        .filter_map(Result::ok)
-        .filter(|e| {
-            e.path()
-                .extension()
-                .and_then(|ext| ext.to_str())
-                .is_some_and(|ext| ext.eq_ignore_ascii_case("css"))
-        })
-        .filter_map(|e| e.file_name().into_string().ok())
-        .collect();
-    boxxy_css_files.sort();
+    println!("cargo:rerun-if-changed=build.rs");
 
-    let boxxy_css_xml_entries: String = boxxy_css_files
-        .iter()
-        .map(|name| {
-            format!(
-                "    <file compressed=\"true\" alias=\"themes/boxxy/{name}\">themes/boxxy/{name}</file>\n"
-            )
-        })
-        .collect();
+    let mut entries = Vec::with_capacity(128);
 
-    let xml = format!(
-        r#"<?xml version="1.0" encoding="UTF-8"?>
-<gresources>
-  <gresource prefix="/dev/boxxy/BoxxyTerminal">
-    <file compressed="true">style.css</file>
-    <file compressed="true" alias="themes/boxxy_skeleton.css">themes/boxxy_skeleton.css</file>
-{boxxy_css_xml_entries}    <file compressed="true" alias="icons/dev.boxxy.BoxxyTerminal.png">icons/dev.boxxy.BoxxyTerminal.png</file>"#,
-    ) + r#"
-    <file compressed="true" alias="icons/whats_new_banner.png">icons/whats_new_banner.png</file>
-    <file compressed="true" alias="icons/boxxy-paper-plane-symbolic.svg">icons/boxxy-paper-plane-symbolic.svg</file>
-    <file compressed="true" alias="icons/boxxy-edit-clear-all-symbolic.svg">icons/boxxy-edit-clear-all-symbolic.svg</file>
-    <file compressed="true" alias="icons/boxxy-split-close-symbolic.svg">icons/boxxy-split-close-symbolic.svg</file>
-    <file compressed="true" alias="icons/boxxy-split-horizontal-symbolic.svg">icons/boxxy-split-horizontal-symbolic.svg</file>
-    <file compressed="true" alias="icons/boxxy-split-maximize-symbolic.svg">icons/boxxy-split-maximize-symbolic.svg</file>
-    <file compressed="true" alias="icons/boxxy-split-unmaximize-symbolic.svg">icons/boxxy-split-unmaximize-symbolic.svg</file>
-    <file compressed="true" alias="icons/boxxy-split-vertical-symbolic.svg">icons/boxxy-split-vertical-symbolic.svg</file>
-    <file compressed="true" alias="icons/boxxy-appearance-symbolic.svg">icons/boxxy-appearance-symbolic.svg</file>
-    <file compressed="true" alias="icons/boxxy-ai-slop-symbolic.svg">icons/boxxy-ai-slop-symbolic.svg</file>
-    <file compressed="true" alias="icons/boxxy-visual-bell-symbolic.svg">icons/boxxy-visual-bell-symbolic.svg</file>
-    <file compressed="true" alias="icons/boxxy-timer-symbolic.svg">icons/boxxy-timer-symbolic.svg</file>
-    <file compressed="true" alias="icons/boxxy-chat-symbolic.svg">icons/boxxy-chat-symbolic.svg</file>
-    <file compressed="true" alias="icons/boxxy-comic-bubble-symbolic.svg">icons/boxxy-comic-bubble-symbolic.svg</file>
-    <file compressed="true" alias="icons/boxxyclaw.svg">icons/boxxyclaw.svg</file>
-    <file compressed="true" alias="icons/boxxy-boxxyclaw-symbolic.svg">icons/boxxy-boxxyclaw-symbolic.svg</file>
-    <file compressed="true" alias="icons/boxxy-running-symbolic.svg">icons/boxxy-running-symbolic.svg</file>
-    <file compressed="true" alias="icons/boxxy-walking2-symbolic.svg">icons/boxxy-walking2-symbolic.svg</file>
-    <file compressed="true" alias="icons/boxxy-sleep-symbolic.svg">icons/boxxy-sleep-symbolic.svg</file>
-    <file compressed="true" alias="icons/boxxy-bedtime-symbolic.svg">icons/boxxy-bedtime-symbolic.svg</file>
-    <file compressed="true" alias="icons/boxxy-bug-symbolic.svg">icons/boxxy-bug-symbolic.svg</file>
-    <file compressed="true" alias="icons/boxxy-user-bookmarks-symbolic.svg">icons/boxxy-user-bookmarks-symbolic.svg</file>
-    <file compressed="true" alias="icons/boxxy-external-link-symbolic.svg">icons/boxxy-external-link-symbolic.svg</file>
-    <file compressed="true" alias="icons/console.svg">icons/console.svg</file>
-    <file compressed="true" alias="icons/python.svg">icons/python.svg</file>
-    <file compressed="true" alias="icons/boxxy-dock-left-symbolic.svg">icons/boxxy-dock-left-symbolic.svg</file>
-    <file compressed="true" alias="icons/boxxy-bookmark-filled-symbolic.svg">icons/boxxy-bookmark-filled-symbolic.svg</file>
-    <file compressed="true" alias="icons/boxxy-edit-find-symbolic.svg">icons/boxxy-edit-find-symbolic.svg</file>
-    <file compressed="true" alias="icons/boxxy-globe-symbolic.svg">icons/boxxy-globe-symbolic.svg</file>
-    <file compressed="true" alias="icons/boxxy-up-symbolic.svg">icons/boxxy-up-symbolic.svg</file>
-    <file compressed="true" alias="icons/boxxy-down-symbolic.svg">icons/boxxy-down-symbolic.svg</file>
-    <file compressed="true" alias="icons/boxxy-settings-symbolic.svg">icons/boxxy-settings-symbolic.svg</file>
-    <file compressed="true" alias="icons/boxxy-cross-small-symbolic.svg">icons/boxxy-cross-small-symbolic.svg</file>
-    <file compressed="true" alias="icons/boxxy-right-symbolic.svg">icons/boxxy-right-symbolic.svg</file>
-    <file compressed="true" alias="icons/boxxy-plus-symbolic.svg">icons/boxxy-plus-symbolic.svg</file>
-    <file compressed="true" alias="icons/boxxy-minus-symbolic.svg">icons/boxxy-minus-symbolic.svg</file>
-    <file compressed="true" alias="icons/boxxy-entry-clear-symbolic.svg">icons/boxxy-entry-clear-symbolic.svg</file>
-    <file compressed="true" alias="icons/boxxy-build-circle-symbolic.svg">icons/boxxy-build-circle-symbolic.svg</file>
-    <file compressed="true" alias="icons/boxxy-dialog-warning-symbolic.svg">icons/boxxy-dialog-warning-symbolic.svg</file>
-    <file compressed="true" alias="icons/boxxy-document-edit-symbolic.svg">icons/boxxy-document-edit-symbolic.svg</file>
-    <file compressed="true" alias="icons/boxxy-edit-clear-symbolic.svg">icons/boxxy-edit-clear-symbolic.svg</file>
-    <file compressed="true" alias="icons/boxxy-edit-copy-symbolic.svg">icons/boxxy-edit-copy-symbolic.svg</file>
-    <file compressed="true" alias="icons/boxxy-folder-open-symbolic.svg">icons/boxxy-folder-open-symbolic.svg</file>
-    <file compressed="true" alias="icons/boxxy-media-playback-start-symbolic.svg">icons/boxxy-media-playback-start-symbolic.svg</file>
-    <file compressed="true" alias="icons/boxxy-media-playback-pause-symbolic.svg">icons/boxxy-media-playback-pause-symbolic.svg</file>
-    <file compressed="true" alias="icons/boxxy-media-playback-stop-symbolic.svg">icons/boxxy-media-playback-stop-symbolic.svg</file>
-    <file compressed="true" alias="icons/boxxy-object-select-symbolic.svg">icons/boxxy-object-select-symbolic.svg</file>
-    <file compressed="true" alias="icons/boxxy-object-select-2-symbolic.svg">icons/boxxy-object-select-2-symbolic.svg</file>
-    <file compressed="true" alias="icons/boxxy-check-round-symbolic.svg">icons/boxxy-check-round-symbolic.svg</file>
-    <file compressed="true" alias="icons/boxxy-up-arrow-in-a-star-symbolic.svg">icons/boxxy-up-arrow-in-a-star-symbolic.svg</file>
-    <file compressed="true" alias="icons/boxxy-user-trash-symbolic.svg">icons/boxxy-user-trash-symbolic.svg</file>
-    <file compressed="true" alias="icons/boxxy-window-close-symbolic.svg">icons/boxxy-window-close-symbolic.svg</file>
-    <file compressed="true" alias="icons/boxxy-open-menu-symbolic.svg">icons/boxxy-open-menu-symbolic.svg</file>
-    <file compressed="true" alias="icons/boxxy-brain-symbolic.svg">icons/boxxy-brain-symbolic.svg</file>
-    <file compressed="true" alias="icons/boxxy-window-new-symbolic.svg">icons/boxxy-window-new-symbolic.svg</file>
-    <file compressed="true" alias="icons/boxxy-chat-none-symbolic.svg">icons/boxxy-chat-none-symbolic.svg</file>
-    <file compressed="true" alias="icons/boxxy-view-pin-symbolic.svg">icons/boxxy-view-pin-symbolic.svg</file>
-    <file compressed="true" alias="icons/boxxy-vibe-symbolic.svg">icons/boxxy-vibe-symbolic.svg</file>
-    <file compressed="true" alias="icons/boxxy-lock-symbolic.svg">icons/boxxy-lock-symbolic.svg</file>
-    <file compressed="true" alias="icons/boxxy-expand-vertical-symbolic.svg">icons/boxxy-expand-vertical-symbolic.svg</file>
-    <file compressed="true" alias="icons/boxxy-drag-handle-symbolic.svg">icons/boxxy-drag-handle-symbolic.svg</file>
-    <file compressed="true" alias="icons/boxxy-spinner.gpa">icons/boxxy-spinner.gpa</file>
-    <file compressed="true" alias="icons/boxxy-terminal-working.gpa">icons/boxxy-terminal-working.gpa</file>
-    <file compressed="true" alias="icons/boxxy-pencil.gpa">icons/boxxy-pencil.gpa</file>
-    <file compressed="true" alias="icons/boxxy-ai-slop.gpa">icons/boxxy-ai-slop.gpa</file>
-    <file compressed="true" alias="icons/boxxy-folder-silhouette.gpa">icons/boxxy-folder-silhouette.gpa</file>
-    <file compressed="true" alias="icons/boxxy-git.gpa">icons/boxxy-git.gpa</file>
-    <file compressed="true" alias="icons/boxxy-text-left.gpa">icons/boxxy-text-left.gpa</file>
-    <file compressed="true" alias="icons/boxxy-monitor.gpa">icons/boxxy-monitor.gpa</file>
-    <file compressed="true" alias="icons/boxxy-terminal.gpa">icons/boxxy-terminal.gpa</file>
-    <file compressed="true" alias="icons/boxxy-celestial-loader.gpa">icons/boxxy-celestial-loader.gpa</file>
-    <file compressed="true" alias="icons/boxxy-boxxyclaw.gpa">icons/boxxy-boxxyclaw.gpa</file>
-    <file compressed="true" alias="icons/boxxy-clock.gpa">icons/boxxy-clock.gpa</file>
-    <file compressed="true" alias="icons/boxxy-bell.gpa">icons/boxxy-bell.gpa</file>
-    <file compressed="true" alias="icons/boxxy-zoom-fit.gpa">icons/boxxy-zoom-fit.gpa</file>
-    <file compressed="true" alias="icons/boxxy-folder-remote.gpa">icons/boxxy-folder-remote.gpa</file>
-    <file compressed="true" alias="icons/boxxy-3d-box.gpa">icons/boxxy-3d-box.gpa</file>
-    <file compressed="true" alias="icons/boxxy-git-branch-symbolic.svg">icons/boxxy-git-branch-symbolic.svg</file>
-    <file compressed="true" alias="icons/boxxy-pager-symbolic.svg">icons/boxxy-pager-symbolic.svg</file>
-    <file compressed="true" alias="icons/boxxy-tui-symbolic.svg">icons/boxxy-tui-symbolic.svg</file>
-    <file compressed="true" alias="prompts/ai_chat.md">prompts/ai_chat.md</file>
-    <file compressed="true" alias="prompts/claw.md">prompts/claw.md</file>
-    <file compressed="true" alias="prompts/bookmark_generator.md">prompts/bookmark_generator.md</file>
-    <file compressed="true" alias="prompts/memory_flush.md">prompts/memory_flush.md</file>
-    <file compressed="true" alias="prompts/privacy_policy.md">prompts/privacy_policy.md</file>
-    <file compressed="true" alias="ui/preferences.ui">ui/preferences.ui</file>
-    <file compressed="true" alias="ui/widgets/avatar_crop_dialog.ui">ui/widgets/avatar_crop_dialog.ui</file>
-    <file compressed="true" alias="ui/claw_overlay.ui">ui/claw_overlay.ui</file>
-    <file compressed="true" alias="ui/bookmarks_tab.ui">ui/bookmarks_tab.ui</file>
-    <file compressed="true" alias="ui/bookmarks_sidebar.ui">ui/bookmarks_sidebar.ui</file>
-    <file compressed="true" alias="ui/bookmark_editor.ui">ui/bookmark_editor.ui</file>
-    <file compressed="true" alias="ui/whats_new_dialog.ui">ui/whats_new_dialog.ui</file>
-    <file compressed="true" alias="ui/model_selection_dialog.ui">ui/model_selection_dialog.ui</file>
-    <file compressed="true" alias="ui/command_palette.ui">ui/command_palette.ui</file>
-    <file compressed="true" alias="sounds/task.wav">sounds/task.wav</file>
-    <file compressed="true" alias="sounds/timer.wav">sounds/timer.wav</file>
-  </gresource>
-</gresources>
-"#;
-
-    // Only write if changed — avoids spurious rebuild loops.
-    let xml_path = resources_dir.join("resources.gresource.xml");
-    let existing = std::fs::read_to_string(&xml_path).unwrap_or_default();
-    if existing != xml {
-        std::fs::write(&xml_path, &xml).expect("failed to write resources.gresource.xml");
-    }
-
-    // Rerun if any palette or theme CSS file is added/removed/modified.
+    // 1. Core stylesheets & modular Boxxy theme CSS files.
     println!("cargo:rerun-if-changed=../../resources/style.css");
+    entries.push(ResourceEntry {
+        rel_path: "style.css".to_string(),
+        compressed: true,
+        with_alias: false,
+    });
+
     println!("cargo:rerun-if-changed=../../resources/themes/boxxy_skeleton.css");
-    println!("cargo:rerun-if-changed=../../resources/themes/boxxy");
-    for name in &boxxy_css_files {
-        println!("cargo:rerun-if-changed=../../resources/themes/boxxy/{name}");
+    entries.push(ResourceEntry {
+        rel_path: "themes/boxxy_skeleton.css".to_string(),
+        compressed: true,
+        with_alias: true,
+    });
+
+    collect_dir_files(resources_dir, "themes/boxxy", false, &["css"], &mut entries);
+
+    // 2. Icons (`.svg`, `.gpa` compressed; `.png` uncompressed to avoid double DEFLATE).
+    collect_dir_files(
+        resources_dir,
+        "icons",
+        false,
+        &["png", "svg", "gpa"],
+        &mut entries,
+    );
+
+    // 3. System & memory prompts (`.md`).
+    collect_dir_files(resources_dir, "prompts", false, &["md"], &mut entries);
+
+    // 4. Declarative GTK Builder UI definitions (`ui/**/*.ui`).
+    collect_dir_files(resources_dir, "ui", true, &["ui"], &mut entries);
+
+    // 5. Notification audio cues (`.wav` kept uncompressed for seekable zero-copy GStreamer playback).
+    collect_dir_files(resources_dir, "sounds", false, &["wav"], &mut entries);
+
+    let xml = render_gresource_xml(&entries);
+
+    // Best-effort sync of the checked-in manifest in dev checkouts without failing builds
+    // when the source tree is mounted read-only (e.g. Nix `buildRustPackage` or distro chroots).
+    let repo_xml_path = resources_dir.join("resources.gresource.xml");
+    if std::fs::read_to_string(&repo_xml_path).ok().as_deref() != Some(xml.as_str()) {
+        let _ = std::fs::write(&repo_xml_path, &xml);
     }
-    println!("cargo:rerun-if-changed=../../resources/icons/dev.boxxy.BoxxyTerminal.png");
-    println!("cargo:rerun-if-changed=../../resources/icons/whats_new_banner.png");
-    println!("cargo:rerun-if-changed=../../resources/icons/boxxy-paper-plane-symbolic.svg");
-    println!("cargo:rerun-if-changed=../../resources/icons/boxxy-edit-clear-all-symbolic.svg");
-    println!("cargo:rerun-if-changed=../../resources/icons/boxxy-split-close-symbolic.svg");
-    println!("cargo:rerun-if-changed=../../resources/icons/boxxy-split-horizontal-symbolic.svg");
-    println!("cargo:rerun-if-changed=../../resources/icons/boxxy-split-maximize-symbolic.svg");
-    println!("cargo:rerun-if-changed=../../resources/icons/boxxy-split-unmaximize-symbolic.svg");
-    println!("cargo:rerun-if-changed=../../resources/icons/boxxy-split-vertical-symbolic.svg");
-    println!("cargo:rerun-if-changed=../../resources/icons/boxxy-appearance-symbolic.svg");
-    println!("cargo:rerun-if-changed=../../resources/icons/boxxy-ai-slop-symbolic.svg");
-    println!("cargo:rerun-if-changed=../../resources/icons/boxxy-visual-bell-symbolic.svg");
-    println!("cargo:rerun-if-changed=../../resources/icons/boxxy-timer-symbolic.svg");
-    println!("cargo:rerun-if-changed=../../resources/icons/boxxy-brain-symbolic.svg");
-    println!("cargo:rerun-if-changed=../../resources/icons/boxxy-chat-symbolic.svg");
-    println!("cargo:rerun-if-changed=../../resources/icons/boxxy-chat-none-symbolic.svg");
-    println!("cargo:rerun-if-changed=../../resources/icons/boxxy-comic-bubble-symbolic.svg");
-    println!("cargo:rerun-if-changed=../../resources/icons/boxxy-view-pin-symbolic.svg");
-    println!("cargo:rerun-if-changed=../../resources/icons/boxxy-vibe-symbolic.svg");
-    println!("cargo:rerun-if-changed=../../resources/icons/boxxy-lock-symbolic.svg");
-    println!("cargo:rerun-if-changed=../../resources/icons/boxxy-expand-vertical-symbolic.svg");
-    println!("cargo:rerun-if-changed=../../resources/icons/boxxy-drag-handle-symbolic.svg");
-    println!("cargo:rerun-if-changed=../../resources/icons/boxxy-check-round-symbolic.svg");
-    println!("cargo:rerun-if-changed=../../resources/icons/boxxy-spinner.gpa");
-    println!("cargo:rerun-if-changed=../../resources/icons/boxxy-terminal-working.gpa");
-    println!("cargo:rerun-if-changed=../../resources/icons/boxxy-pencil.gpa");
-    println!("cargo:rerun-if-changed=../../resources/icons/boxxy-ai-slop.gpa");
-    println!("cargo:rerun-if-changed=../../resources/icons/boxxy-folder-silhouette.gpa");
-    println!("cargo:rerun-if-changed=../../resources/icons/boxxy-git.gpa");
-    println!("cargo:rerun-if-changed=../../resources/icons/boxxy-text-left.gpa");
-    println!("cargo:rerun-if-changed=../../resources/icons/boxxy-monitor.gpa");
-    println!("cargo:rerun-if-changed=../../resources/icons/boxxy-terminal.gpa");
-    println!("cargo:rerun-if-changed=../../resources/icons/boxxy-celestial-loader.gpa");
-    println!("cargo:rerun-if-changed=../../resources/icons/boxxy-boxxyclaw.gpa");
-    println!("cargo:rerun-if-changed=../../resources/icons/boxxy-clock.gpa");
-    println!("cargo:rerun-if-changed=../../resources/icons/boxxy-bell.gpa");
-    println!("cargo:rerun-if-changed=../../resources/icons/boxxy-zoom-fit.gpa");
-    println!("cargo:rerun-if-changed=../../resources/icons/boxxy-folder-remote.gpa");
-    println!("cargo:rerun-if-changed=../../resources/icons/boxxy-3d-box.gpa");
-    println!("cargo:rerun-if-changed=../../resources/icons/boxxy-git-branch-symbolic.svg");
-    println!("cargo:rerun-if-changed=../../resources/icons/boxxy-pager-symbolic.svg");
-    println!("cargo:rerun-if-changed=../../resources/icons/boxxy-tui-symbolic.svg");
-    println!("cargo:rerun-if-changed=../../resources/icons/boxxyclaw.svg");
-    println!("cargo:rerun-if-changed=../../resources/icons/boxxy-running-symbolic.svg");
-    println!("cargo:rerun-if-changed=../../resources/icons/boxxy-walking2-symbolic.svg");
-    println!("cargo:rerun-if-changed=../../resources/icons/boxxy-sleep-symbolic.svg");
-    println!("cargo:rerun-if-changed=../../resources/icons/boxxy-bedtime-symbolic.svg");
-    println!("cargo:rerun-if-changed=../../resources/icons/boxxy-bug-symbolic.svg");
-    println!("cargo:rerun-if-changed=../../resources/icons/boxxy-user-bookmarks-symbolic.svg");
-    println!("cargo:rerun-if-changed=../../resources/icons/boxxy-external-link-symbolic.svg");
-    println!("cargo:rerun-if-changed=../../resources/icons/console.svg");
-    println!("cargo:rerun-if-changed=../../resources/icons/python.svg");
-    println!("cargo:rerun-if-changed=../../resources/icons/boxxy-dock-left-symbolic.svg");
-    println!("cargo:rerun-if-changed=../../resources/icons/boxxy-bookmark-filled-symbolic.svg");
-    println!("cargo:rerun-if-changed=../../resources/icons/boxxy-edit-find-symbolic.svg");
-    println!("cargo:rerun-if-changed=../../resources/icons/boxxy-globe-symbolic.svg");
-    println!("cargo:rerun-if-changed=../../resources/icons/boxxy-up-symbolic.svg");
-    println!("cargo:rerun-if-changed=../../resources/icons/boxxy-down-symbolic.svg");
-    println!("cargo:rerun-if-changed=../../resources/icons/boxxy-settings-symbolic.svg");
-    println!("cargo:rerun-if-changed=../../resources/icons/boxxy-cross-small-symbolic.svg");
-    println!("cargo:rerun-if-changed=../../resources/icons/boxxy-right-symbolic.svg");
-    println!("cargo:rerun-if-changed=../../resources/icons/boxxy-plus-symbolic.svg");
-    println!("cargo:rerun-if-changed=../../resources/icons/boxxy-minus-symbolic.svg");
-    println!("cargo:rerun-if-changed=../../resources/icons/boxxy-entry-clear-symbolic.svg");
-    println!("cargo:rerun-if-changed=../../resources/icons/boxxy-build-circle-symbolic.svg");
-    println!("cargo:rerun-if-changed=../../resources/icons/boxxy-dialog-warning-symbolic.svg");
-    println!("cargo:rerun-if-changed=../../resources/icons/boxxy-document-edit-symbolic.svg");
-    println!("cargo:rerun-if-changed=../../resources/icons/boxxy-edit-clear-symbolic.svg");
-    println!("cargo:rerun-if-changed=../../resources/icons/boxxy-edit-copy-symbolic.svg");
-    println!("cargo:rerun-if-changed=../../resources/icons/boxxy-folder-open-symbolic.svg");
-    println!(
-        "cargo:rerun-if-changed=../../resources/icons/boxxy-media-playback-start-symbolic.svg"
-    );
-    println!(
-        "cargo:rerun-if-changed=../../resources/icons/boxxy-media-playback-pause-symbolic.svg"
-    );
-    println!("cargo:rerun-if-changed=../../resources/icons/boxxy-media-playback-stop-symbolic.svg");
-    println!("cargo:rerun-if-changed=../../resources/icons/boxxy-object-select-symbolic.svg");
-    println!("cargo:rerun-if-changed=../../resources/icons/boxxy-object-select-2-symbolic.svg");
-    println!("cargo:rerun-if-changed=../../resources/icons/boxxy-up-arrow-in-a-star-symbolic.svg");
-    println!("cargo:rerun-if-changed=../../resources/icons/boxxy-user-trash-symbolic.svg");
-    println!("cargo:rerun-if-changed=../../resources/icons/boxxy-window-close-symbolic.svg");
-    println!("cargo:rerun-if-changed=../../resources/icons/boxxy-open-menu-symbolic.svg");
-    println!("cargo:rerun-if-changed=../../resources/prompts/ai_chat.md");
-    println!("cargo:rerun-if-changed=../../resources/prompts/claw.md");
-    println!("cargo:rerun-if-changed=../../resources/prompts/bookmark_generator.md");
-    println!("cargo:rerun-if-changed=../../resources/prompts/memory_flush.md");
-    println!("cargo:rerun-if-changed=../../resources/prompts/privacy_policy.md");
-    println!("cargo:rerun-if-changed=../../resources/ui/preferences.ui");
-    println!("cargo:rerun-if-changed=../../resources/ui/widgets/avatar_crop_dialog.ui");
-    println!("cargo:rerun-if-changed=../../resources/ui/claw_overlay.ui");
-    println!("cargo:rerun-if-changed=../../resources/ui/bookmarks_tab.ui");
-    println!("cargo:rerun-if-changed=../../resources/ui/bookmarks_sidebar.ui");
-    println!("cargo:rerun-if-changed=../../resources/ui/bookmark_editor.ui");
-    println!("cargo:rerun-if-changed=../../resources/ui/whats_new_dialog.ui");
-    println!("cargo:rerun-if-changed=../../resources/ui/model_selection_dialog.ui");
-    println!("cargo:rerun-if-changed=../../resources/ui/command_palette.ui");
-    println!("cargo:rerun-if-changed=../../resources/sounds/task.wav");
-    println!("cargo:rerun-if-changed=../../resources/sounds/timer.wav");
+
+    // Always compile from `$OUT_DIR/resources.gresource.xml` so builds succeed on read-only trees.
+    let out_dir = PathBuf::from(std::env::var_os("OUT_DIR").expect("OUT_DIR must be set by Cargo"));
+    let out_xml_path = out_dir.join("resources.gresource.xml");
+    if std::fs::read_to_string(&out_xml_path).ok().as_deref() != Some(xml.as_str()) {
+        std::fs::write(&out_xml_path, &xml)
+            .expect("failed to write $OUT_DIR/resources.gresource.xml");
+    }
 
     glib_build_tools::compile_resources(
-        &["../../resources"],
-        "../../resources/resources.gresource.xml",
+        &[resources_dir],
+        out_xml_path.to_str().expect("OUT_DIR must be valid UTF-8"),
         "compiled.gresource",
     );
+}
+
+fn should_compress_extension(ext_lower: &str) -> bool {
+    !matches!(ext_lower, "png" | "jpg" | "jpeg" | "webp" | "wav")
+}
+
+fn collect_dir_files(
+    resources_dir: &Path,
+    subdir: &str,
+    recursive: bool,
+    allowed_exts: &[&str],
+    out: &mut Vec<ResourceEntry>,
+) {
+    let root = resources_dir.join(subdir);
+    let mut discovered = Vec::new();
+    walk_dir(
+        resources_dir,
+        &root,
+        recursive,
+        allowed_exts,
+        &mut discovered,
+    );
+    discovered.sort_by(|a, b| a.rel_path.cmp(&b.rel_path));
+
+    for entry in &discovered {
+        println!("cargo:rerun-if-changed=../../resources/{}", entry.rel_path);
+    }
+    out.extend(discovered);
+}
+
+fn walk_dir(
+    resources_dir: &Path,
+    dir: &Path,
+    recursive: bool,
+    allowed_exts: &[&str],
+    out: &mut Vec<ResourceEntry>,
+) {
+    println!("cargo:rerun-if-changed={}", dir.display());
+
+    let entries = std::fs::read_dir(dir)
+        .unwrap_or_else(|e| panic!("failed to read resource directory '{}': {e}", dir.display()));
+
+    let mut subdirs = Vec::new();
+    for entry in entries.filter_map(Result::ok) {
+        let path = entry.path();
+        let Ok(ft) = entry.file_type() else {
+            continue;
+        };
+        if ft.is_dir() {
+            if recursive {
+                subdirs.push(path);
+            }
+            continue;
+        }
+        if !ft.is_file() {
+            continue;
+        }
+        let Some(ext) = path.extension().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        let ext_lower = ext.to_ascii_lowercase();
+        if !allowed_exts.iter().any(|allowed| *allowed == ext_lower) {
+            continue;
+        }
+        let rel = path
+            .strip_prefix(resources_dir)
+            .expect("resource file must lie under resources_dir");
+        let rel_path = rel
+            .components()
+            .map(|c| c.as_os_str().to_str().expect("UTF-8 resource path"))
+            .collect::<Vec<_>>()
+            .join("/");
+
+        out.push(ResourceEntry {
+            rel_path,
+            compressed: should_compress_extension(&ext_lower),
+            with_alias: true,
+        });
+    }
+
+    subdirs.sort();
+    for sub in subdirs {
+        walk_dir(resources_dir, &sub, recursive, allowed_exts, out);
+    }
+}
+
+fn render_gresource_xml(entries: &[ResourceEntry]) -> String {
+    let mut xml = String::with_capacity(entries.len() * 96 + 128);
+    xml.push_str(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+<gresources>\n\
+  <gresource prefix=\"/dev/boxxy/BoxxyTerminal\">\n",
+    );
+
+    for entry in entries {
+        xml.push_str("    <file");
+        if entry.compressed {
+            xml.push_str(" compressed=\"true\"");
+        }
+        if entry.with_alias {
+            let _ = write!(xml, " alias=\"{}\"", entry.rel_path);
+        }
+        let _ = writeln!(xml, ">{}</file>", entry.rel_path);
+    }
+
+    xml.push_str("  </gresource>\n</gresources>\n");
+    xml
 }

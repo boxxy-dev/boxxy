@@ -809,26 +809,19 @@ dependencies = [
 name = "boxxy-app"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "boxxy-bookmarks",
- "boxxy-claw",
  "boxxy-cli",
- "boxxy-db",
  "boxxy-preferences",
  "boxxy-sys-utils",
  "boxxy-telemetry",
  "boxxy-terminal",
  "boxxy-window",
  "env_logger",
- "gdk-pixbuf",
- "gio",
  "glib-build-tools",
- "gstreamer",
  "gtk4",
  "libadwaita",
  "log",
  "serde_json",
- "sysinfo",
  "tokio",
 ]
 

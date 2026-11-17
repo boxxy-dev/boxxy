@@ -63,7 +63,6 @@ boxxy-themes = { path = "crates/themes" }
 boxxy-window = { path = "crates/window" }
 boxxy-core-widgets = { path = "crates/core_widgets" }
 directories = "6.0.0"
-gdk-pixbuf = "0.22"
 gio = { version = "0.22", features = ["v2_76"] }
 glib = "0.22"
 pango = "0.22"
@@ -88,7 +87,6 @@ libc = "0.2"
 ashpd = { version = "0.14.0", features = ["open_uri"] }
 gstreamer = "0.25.4"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "gif", "bmp"] }
-gsk4 = "0.11"
 regex = "1.13.1"
 parking_lot = "0.13.0"
 base64 = "0.23.1"

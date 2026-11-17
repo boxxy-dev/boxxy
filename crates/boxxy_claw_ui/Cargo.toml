@@ -12,7 +12,7 @@ boxxy-claw-protocol = { path = "../boxxy_claw_protocol" }
 boxxy-db = { path = "../db" }
 boxxy-preferences = { path = "../preferences" }
 boxxy-sys-utils = { workspace = true }
-boxxy-viewer = { path = "../viewer" }
+boxxy-viewer.workspace = true
 boxxy-core-widgets.workspace = true
 serde = { workspace = true }
 serde_json = { workspace = true }

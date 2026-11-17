@@ -1,16 +1,17 @@
 # boxxy-app Agents & Architecture
 
 ## Responsibilities
-This crate is the binary entry point for the application. It is responsible for:
-- Initializing the GTK environment.
-- Setting up the application state.
-- **Compiling and registering GResources** (icons, CSS) via `build.rs`.
-- Bootstrapping the main application window.
+Binary entry point (`boxxy-terminal`) for Boxxy Terminal. Orchestrates pre-GTK headless CLI dispatch, isolated/ephemeral development configuration, `GResource` compilation and registration, primary-instance background hydration, single-instance `GApplication` command-line routing, and clean shutdown.
 
-## Entry Point
+## Module Layout
 
-### `main()`
-- Invokes `boxxy_cli::dispatch_from_env()` before initializing GTK or GResources: headless `+actions` (`+version`, `+doctor`, `+env`, `+agent`, `+completions`), `-h`/`--help`, and `-V`/`--version` execute immediately and exit.
-- Applies `LaunchRequest.dev` (`--dev`, `--instance <slug>`, `--ephemeral`, `--sync-settings`, `--config-dir <path>`, `--debug-context`) and prepares the isolated or ephemeral configuration directory via `boxxy_sys_utils::prepare_dev_environment()`.
-- Registers compiled resources (`compiled.gresource`).
-- Initializes `libadwaita::Application` with `boxxy_sys_utils::gtk_app_id()` (`dev.boxxy.BoxxyTerminal` or `dev.boxxy.BoxxyTerminal.Devel`), forwarding validated `LaunchRequest` payloads (`working_dir`, `-e` `command`, `--hold`, `--title`, window/tab target) through `app.run_with_args` and `connect_command_line` with `boxxy_window::AppWindow`.
+- **`build.rs`**: Deterministic `GResource` manifest generator and compiler. Auto-discovers `style.css`, `themes/boxxy_skeleton.css`, `themes/boxxy/*.css`, `icons/*.{png,svg,gpa}`, `prompts/*.md`, `ui/**/*.ui`, and `sounds/*.wav` (emitting directory + per-file `cargo:rerun-if-changed` directives). Compresses text/XML assets (`compressed="true"`) while leaving already-compressed PNGs and seekable WAV audio uncompressed for zero-copy `GMemoryInputStream` access. Compiles from `$OUT_DIR/resources.gresource.xml` and best-effort syncs `resources/resources.gresource.xml` so read-only source sandboxes (Nix, distro chroots) never fail.
+- **`src/main.rs`**: Slim process orchestrator. Invokes `boxxy_cli::dispatch_from_env()` before touching GTK or runtimes, applies `LaunchRequest.dev` overrides via `boxxy_sys_utils::configure_dev_options()`, initializes logging, awaits restarting self-update parents when `--gapplication-replace` is active, enters `boxxy_sys_utils::runtime()`, and runs `libadwaita::Application` (`boxxy_sys_utils::gtk_app_id()`).
+- **`src/logging.rs`**: Configures `env_logger` with quiet defaults for noisy third-party crates (`zbus`, `sqlx`, `rig`, `rmcp`, `h2`, `hyper`, `reqwest`, `rustls`) *before* parsing `RUST_LOG` so explicit developer overrides (`RUST_LOG=zbus=debug`) always win, and promotes `model-context=info` whenever `--debug-context` / `BOXXY_DEBUG_CONTEXT=1` is set.
+- **`src/restart_guard.rs`**: Self-update restart barrier (`wait_for_restarting_parent`). Strictly gated on `replace_existing` (`--gapplication-replace`) so normal launches incur zero `/proc` syscalls, polling `/proc/<ppid>/stat` (ignoring zombie `'Z'`/`'X'` states) until an exiting parent `boxxy-terminal` releases its D-Bus bus name.
+- **`src/startup.rs`**: Primary GUI instance `connect_startup` pipeline (never executed on secondary `--tab` / `--present` forwarders):
+  - Calls `prepare_dev_environment()`, registers `compiled.gresource`, and initializes `Settings` + `AppState`.
+  - Synchronously hydrates deduplicated local environment API keys on Native builds *before* `AppWindow::new()` so Frame-1 model validation sees env-supplied keys immediately, storing keys under both mapped provider names and raw `env_var` identifiers (supporting Flatpak custom-endpoint `/models` discovery).
+  - Offloads bookmark/skill filesystem seeding and post-Frame-1 `GStreamer` initialization onto `tokio::task::spawn_blocking` so Tokio async workers never block on disk/`dlopen` I/O.
+  - Registers a heap-pinned (`Box::pin`) `ensure_agent_running` hook, queries any remaining host environment keys concurrently (`JoinSet`), syncs initial credentials to `boxxy-agent`, and records `app.launch` telemetry (skipping DB/OS/D-Bus probes completely when telemetry is disabled).
+- **`src/launch.rs`**: Single-instance `connect_command_line` router (`plan_launch_route`). Filters `app.windows()` down to `libadwaita::ApplicationWindow` in MRU order (so auxiliary `GtkWindow`s like the GTK Inspector never swallow `win.new-tab-launch` or `win.new-window` actions), short-circuits `--gapplication-service` warmups, opens new windows synchronously when `preserve_working_dir` is disabled to preserve Wayland `XDG_ACTIVATION_TOKEN` focus handoff, and falls back to `AppWindow::new` if action dispatch ever fails.

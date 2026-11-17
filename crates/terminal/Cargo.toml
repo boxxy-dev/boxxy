@@ -18,7 +18,7 @@ boxxy-claw = { path = "../boxxy_claw" }
 boxxy-claw-protocol = { path = "../boxxy_claw_protocol" }
 boxxy-telemetry.workspace = true
 boxxy-claw-widget = { path = "../boxxy_claw_widget" }
-boxxy-viewer = { path = "../viewer" }
+boxxy-viewer.workspace = true
 async-channel.workspace = true
 ashpd.workspace = true
 tokio.workspace = true

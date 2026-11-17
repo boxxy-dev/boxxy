@@ -24,7 +24,7 @@ boxxy-core-widgets.workspace = true
 boxxy-db = { path = "../db" }
 boxxy-preferences = { path = "../preferences" }
 boxxy-themes.workspace = true
-boxxy-viewer = { path = "../viewer" }
+boxxy-viewer.workspace = true
 parking_lot.workspace = true
 frizbee.workspace = true
 ignore.workspace = true

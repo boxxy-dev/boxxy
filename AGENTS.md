@@ -32,8 +32,7 @@ Boxxy provides deep, real-time visibility into LLM interactions for developers a
 ### 3. UI & Resource Management
 - **Declarative UI:** Do NOT write massive XML strings inside Rust source code. Always extract GTK widget trees into `.ui` XML files located in the `resources/ui/` directory.
 - **GTK CSS Specificity:** Avoid using `!important` in CSS files. GTK's CSS engine does not reliably support it; instead, use higher selector specificity (e.g., `tabbar tab.color` instead of just `.color`) to override default styles.
-- **GResource Integration:** Register all `.ui`, `.md` (prompts), `.css`, and icon files in `resources/resources.gresource.xml`. Load them at runtime via `gtk::Builder::from_resource` or `gio::resources_lookup_data`.
-- **Build Automation:** Ensure all resources are tracked in `crates/app/build.rs` for automatic recompilation.
+- **GResource Integration & Auto-Discovery:** `crates/app/build.rs` deterministically discovers `style.css`, `themes/boxxy_skeleton.css`, `themes/boxxy/*.css`, `icons/*.{png,svg,gpa}`, `prompts/*.md`, `ui/**/*.ui`, and `sounds/*.wav`, compiling `compiled.gresource` from `$OUT_DIR/resources.gresource.xml` (while best-effort syncing `resources/resources.gresource.xml` for read-only Nix/chroot safety and leaving `.png`/`.wav` uncompressed for zero-copy seekable `GMemoryInputStream` access). Load resources at runtime via `gtk::Builder::from_resource` or `gio::resources_lookup_data`.
 
 ### 4. Concurrency & Performance
 - **Non-Blocking UI:** Never perform synchronous disk I/O, heavy parsing, or network calls on the main GTK thread. Use `glib::spawn_future_local` and delegate heavy tasks to the global Tokio runtime.
@@ -48,7 +47,7 @@ Boxxy provides deep, real-time visibility into LLM interactions for developers a
 ## Component Responsibilities
 
 ### 1. `boxxy-app` (Binary Crate)
-Entry point. Initializes GTK/Libadwaita, registers GResources, bootstraps the main window, and ensures clean process termination.
+Modular binary entry point (`main`, `logging`, `restart_guard`, `startup`, `launch`, plus deterministic `GResource` auto-discovery in `build.rs`). Dispatches headless `+actions` before GTK init, configures `RUST_LOG`-override-friendly logging and `--debug-context`, gates `--gapplication-replace` parent-exit synchronization, hydrates deduplicated local & concurrent host D-Bus API keys without Frame-1 false-broken-model toasts or Tokio worker blocking (`spawn_blocking`), routes single-instance launches strictly to MRU `AdwApplicationWindow`s while preserving Wayland `XDG_ACTIVATION_TOKEN` focus, and gates `app.launch` telemetry.
 
 ### 2. `boxxy-window` (Library Crate)
 Main UI Orchestrator using a modular MVU pattern. Manages the `AdwApplicationWindow`, tabs, and global state routing via `state.rs`, `ui.rs`, `tab_title.rs` (**Smart Tab Naming**, enabled by default via `smart_tab_naming` in Preferences → Terminal → Layout: prioritizes remote host `host · dir`, foreground command `vim`, and directory basename `boxxy-terminal` with `src · parent` collision disambiguation across tabs while keeping the full path in the tab hover tooltip), and the `update/` module. Acts as the primary orchestrator for the **Global Workspace Radar**, ensuring peer-to-peer agent discovery and global intent propagation across all windows. It monitors the active terminal pane to reflect its specific Claw mode state. It provides the **Primary Notification Surface** for agent events, emitting rich desktop alerts (character avatars, first-name attribution, and response summaries) for timers and long-running tasks, while intelligently suppressing redundant in-app toasts for task completions already visible in the overlay.

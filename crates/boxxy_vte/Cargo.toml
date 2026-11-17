@@ -19,7 +19,7 @@ async-channel = { workspace = true }
 
 # vte dependencies
 base64 = { workspace = true }
-bitflags = "2.13.2"
+bitflags = { workspace = true }
 regex-automata = { workspace = true, features = ["unicode-word-boundary"] }
 unicode-width = { workspace = true }
 serde = { workspace = true, features = ["rc"], optional = true }
