@@ -27,12 +27,14 @@ pub enum ClawMessage {
         query: String,
         snapshot: String,
         cwd: String,
+        #[serde(default)]
         image_attachments: Vec<String>,
     },
     UserMessage {
         message: String,
         snapshot: String,
         cwd: String,
+        #[serde(default)]
         image_attachments: Vec<String>,
     },
     FileWriteReply {
@@ -348,4 +350,133 @@ pub enum ClawEngineEvent {
         title: String,
         message: String,
     },
+}
+
+impl ClawEngineEvent {
+    /// Returns the attributing `character_id` when this event originated from a character turn.
+    #[must_use]
+    pub fn character_id(&self) -> Option<&str> {
+        match self {
+            Self::Identity { character_id, .. }
+            | Self::AgentThinking { character_id, .. }
+            | Self::SessionStateChanged { character_id, .. }
+            | Self::DiagnosisComplete { character_id, .. }
+            | Self::TurnTraceProgress { character_id, .. }
+            | Self::AssistantTextDelta { character_id, .. }
+            | Self::InjectCommand { character_id, .. }
+            | Self::ProposeFileWrite { character_id, .. }
+            | Self::ProposeFileDelete { character_id, .. }
+            | Self::ProposeKillProcess { character_id, .. }
+            | Self::ProposeBackgroundCommand { character_id, .. }
+            | Self::ProposeGetClipboard { character_id, .. }
+            | Self::ProposeSetClipboard { character_id, .. }
+            | Self::ProposeTerminalCommand { character_id, .. }
+            | Self::ProposalResolved { character_id, .. }
+            | Self::RequestScrollback { character_id, .. }
+            | Self::ToolResult { character_id, .. }
+            | Self::ToolCallStarted { character_id, .. }
+            | Self::LazyErrorIndicator { character_id, .. }
+            | Self::TaskStatusChanged { character_id, .. }
+            | Self::TaskCompleted { character_id, .. }
+            | Self::LongTaskCompleted { character_id, .. } => Some(character_id),
+            Self::UserMessage { .. }
+            | Self::DismissDrawer
+            | Self::FocusPane
+            | Self::SystemMessage { .. }
+            | Self::RequestSpawnAgent { .. }
+            | Self::RequestCloseAgent { .. }
+            | Self::RequestReattachShell { .. }
+            | Self::DelegatedTaskReply { .. }
+            | Self::InjectKeystrokes { .. }
+            | Self::RequestCwdSwitch { .. }
+            | Self::PinStatusChanged(_)
+            | Self::WebSearchStatusChanged(_)
+            | Self::VibeStatusChanged(_)
+            | Self::RestoreHistory(_)
+            | Self::Evicted
+            | Self::PushGlobalNotification { .. } => None,
+        }
+    }
+
+    /// Returns the attributing `agent_name` when carried by this event.
+    #[must_use]
+    pub fn agent_name(&self) -> Option<&str> {
+        match self {
+            Self::Identity { agent_name, .. }
+            | Self::AgentThinking { agent_name, .. }
+            | Self::SessionStateChanged { agent_name, .. }
+            | Self::DiagnosisComplete { agent_name, .. }
+            | Self::TurnTraceProgress { agent_name, .. }
+            | Self::AssistantTextDelta { agent_name, .. }
+            | Self::InjectCommand { agent_name, .. }
+            | Self::ProposeFileWrite { agent_name, .. }
+            | Self::ProposeFileDelete { agent_name, .. }
+            | Self::ProposeKillProcess { agent_name, .. }
+            | Self::ProposeBackgroundCommand { agent_name, .. }
+            | Self::ProposeGetClipboard { agent_name, .. }
+            | Self::ProposeSetClipboard { agent_name, .. }
+            | Self::ProposeTerminalCommand { agent_name, .. }
+            | Self::ProposalResolved { agent_name, .. }
+            | Self::RequestScrollback { agent_name, .. }
+            | Self::ToolResult { agent_name, .. }
+            | Self::ToolCallStarted { agent_name, .. }
+            | Self::LazyErrorIndicator { agent_name, .. }
+            | Self::TaskStatusChanged { agent_name, .. }
+            | Self::TaskCompleted { agent_name, .. }
+            | Self::LongTaskCompleted { agent_name, .. } => Some(agent_name),
+            Self::UserMessage { .. }
+            | Self::DismissDrawer
+            | Self::FocusPane
+            | Self::SystemMessage { .. }
+            | Self::RequestSpawnAgent { .. }
+            | Self::RequestCloseAgent { .. }
+            | Self::RequestReattachShell { .. }
+            | Self::DelegatedTaskReply { .. }
+            | Self::InjectKeystrokes { .. }
+            | Self::RequestCwdSwitch { .. }
+            | Self::PinStatusChanged(_)
+            | Self::WebSearchStatusChanged(_)
+            | Self::VibeStatusChanged(_)
+            | Self::RestoreHistory(_)
+            | Self::Evicted
+            | Self::PushGlobalNotification { .. } => None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn claw_message_and_engine_event_roundtrip_with_serde_defaults() {
+        // Omitted `image_attachments` defaults cleanly to empty Vec
+        let raw_query =
+            r#"{"ClawQuery":{"query":"check status","snapshot":"","cwd":"/workspace"}}"#;
+        let msg: ClawMessage = serde_json::from_str(raw_query).unwrap();
+        assert_eq!(
+            msg,
+            ClawMessage::ClawQuery {
+                query: "check status".to_string(),
+                snapshot: String::new(),
+                cwd: "/workspace".to_string(),
+                image_attachments: Vec::new(),
+            }
+        );
+
+        let ev = ClawEngineEvent::DiagnosisComplete {
+            agent_name: "red-pony".to_string(),
+            character_id: "char-1".to_string(),
+            diagnosis: "Build succeeded.".to_string(),
+            trace: Vec::new(),
+            usage: None,
+            typewriter: false,
+        };
+        assert_eq!(ev.character_id(), Some("char-1"));
+        assert_eq!(ev.agent_name(), Some("red-pony"));
+
+        let json = serde_json::to_string(&ev).unwrap();
+        let decoded: ClawEngineEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded, ev);
+    }
 }

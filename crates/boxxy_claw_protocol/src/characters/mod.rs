@@ -1,11 +1,17 @@
 //! Character catalog DTOs, active lease claims, peer lookup queries, and lock-free UI/daemon caches.
 
-use arc_swap::ArcSwap;
+mod cache;
+
+pub use cache::{
+    CHARACTER_CACHE, CLAIMS_CACHE, MCP_STATUS_CACHE, find_first_available_character,
+    get_available_characters, has_available_character, load_coherent_registry,
+    subscribe_mcp_status_changes, subscribe_registry_changes, update_caches,
+    update_catalog_preserving_claims, update_mcp_status_cache,
+};
+
+use crate::str_utils::eq_case_insensitive;
 use serde::{Deserialize, Serialize};
-use std::cmp::Ordering;
 use std::fmt;
-use std::sync::{Arc, LazyLock};
-use tokio::sync::watch;
 
 /// Reserved character ID for ephemeral `/incognito` overlay sessions.
 pub const INCOGNITO_CHARACTER_ID: &str = "__incognito__";
@@ -22,32 +28,6 @@ pub const INCOGNITO_COLOR: &str = "#7C5CFF";
 /// Subtitle description shown in the sidebar during `/incognito`.
 pub const INCOGNITO_DUTIES: &str = "Private Chat • No context sent • Nothing saved";
 
-/// Zero-allocation case-insensitive equality check (ASCII fast-path + full Unicode fallback).
-#[must_use]
-pub(crate) fn eq_case_insensitive(a: &str, b: &str) -> bool {
-    if a.is_ascii() && b.is_ascii() {
-        a.eq_ignore_ascii_case(b)
-    } else {
-        a.chars()
-            .flat_map(char::to_lowercase)
-            .eq(b.chars().flat_map(char::to_lowercase))
-    }
-}
-
-/// Zero-allocation case-insensitive ordering (ASCII fast-path + full Unicode fallback).
-#[must_use]
-pub(crate) fn cmp_case_insensitive(a: &str, b: &str) -> Ordering {
-    if a.is_ascii() && b.is_ascii() {
-        a.bytes()
-            .map(|c| c.to_ascii_lowercase())
-            .cmp(b.bytes().map(|c| c.to_ascii_lowercase()))
-    } else {
-        a.chars()
-            .flat_map(char::to_lowercase)
-            .cmp(b.chars().flat_map(char::to_lowercase))
-    }
-}
-
 /// Returns `true` if `id_or_name` identifies the built-in `/incognito` persona.
 #[must_use]
 pub fn is_incognito_character(id_or_name: &str) -> bool {
@@ -55,78 +35,6 @@ pub fn is_incognito_character(id_or_name: &str) -> bool {
     trimmed == INCOGNITO_CHARACTER_ID
         || trimmed.eq_ignore_ascii_case(INCOGNITO_CHARACTER_SLUG)
         || trimmed.eq_ignore_ascii_case(INCOGNITO_DISPLAY_NAME)
-}
-
-/// A globally accessible, lock-free reactive cache of the character registry.
-/// Updated via D-Bus (in the UI) and directly by `CharacterRegistry` (in the daemon).
-pub static CHARACTER_CACHE: LazyLock<ArcSwap<Vec<CharacterInfo>>> =
-    LazyLock::new(|| ArcSwap::from_pointee(Vec::new()));
-
-/// A globally accessible, lock-free reactive cache of current character assignments.
-pub static CLAIMS_CACHE: LazyLock<ArcSwap<Vec<CharacterClaim>>> =
-    LazyLock::new(|| ArcSwap::from_pointee(Vec::new()));
-
-type CoherentRegistryState = (Arc<Vec<CharacterInfo>>, Arc<Vec<CharacterClaim>>, u64);
-
-/// Coherent atomic tuple `(catalog, claims, revision)` sharing the exact same `Arc`
-/// allocations as `CHARACTER_CACHE` and `CLAIMS_CACHE` so availability queries never
-/// observe a torn `(new_claims, stale_catalog)` pair across concurrent updates.
-static COHERENT_REGISTRY_CACHE: LazyLock<ArcSwap<CoherentRegistryState>> = LazyLock::new(|| {
-    ArcSwap::from_pointee((Arc::new(Vec::new()), Arc::new(Vec::new()), 0))
-});
-
-static REGISTRY_REVISION_WATCH: LazyLock<(watch::Sender<u64>, watch::Receiver<u64>)> =
-    LazyLock::new(|| watch::channel(0));
-
-/// Globally accessible, lock-free reactive cache of MCP server connection statuses
-/// `[(server_name, is_connected)]`, updated via D-Bus push signals from `boxxy-agent`.
-pub static MCP_STATUS_CACHE: LazyLock<ArcSwap<Vec<(String, bool)>>> =
-    LazyLock::new(|| ArcSwap::from_pointee(Vec::new()));
-
-static MCP_STATUS_WATCH: LazyLock<(watch::Sender<u64>, watch::Receiver<u64>)> =
-    LazyLock::new(|| watch::channel(0));
-
-/// Updates `MCP_STATUS_CACHE` atomically and notifies local UI subscribers.
-pub fn update_mcp_status_cache(statuses: Vec<(String, bool)>) {
-    if **MCP_STATUS_CACHE.load() != statuses {
-        MCP_STATUS_CACHE.store(Arc::new(statuses));
-        let next = MCP_STATUS_WATCH.0.borrow().wrapping_add(1);
-        let _ = MCP_STATUS_WATCH.0.send(next);
-    }
-}
-
-/// Subscribes to local `MCP_STATUS_CACHE` updates.
-#[must_use]
-pub fn subscribe_mcp_status_changes() -> watch::Receiver<u64> {
-    MCP_STATUS_WATCH.1.clone()
-}
-
-/// Updates `CHARACTER_CACHE`, `CLAIMS_CACHE`, and the coherent snapshot cache atomically,
-/// then notifies local subscribers.
-pub fn update_caches(catalog: Vec<CharacterInfo>, claims: Vec<CharacterClaim>, revision: u64) {
-    let catalog_arc = Arc::new(catalog);
-    let claims_arc = Arc::new(claims);
-    COHERENT_REGISTRY_CACHE.store(Arc::new((
-        Arc::clone(&catalog_arc),
-        Arc::clone(&claims_arc),
-        revision,
-    )));
-    CLAIMS_CACHE.store(claims_arc);
-    CHARACTER_CACHE.store(catalog_arc);
-    let _ = REGISTRY_REVISION_WATCH.0.send(revision);
-}
-
-/// Loads a consistent `(catalog, claims, revision)` view from a single atomic snapshot.
-#[must_use]
-pub fn load_coherent_registry() -> (Arc<Vec<CharacterInfo>>, Arc<Vec<CharacterClaim>>, u64) {
-    let guard = COHERENT_REGISTRY_CACHE.load();
-    (Arc::clone(&guard.0), Arc::clone(&guard.1), guard.2)
-}
-
-/// Subscribes to local cache updates triggered by `update_caches`.
-#[must_use]
-pub fn subscribe_registry_changes() -> watch::Receiver<u64> {
-    REGISTRY_REVISION_WATCH.1.clone()
 }
 
 /// Finds the first character in `catalog` that is not claimed in `claims`
@@ -145,22 +53,6 @@ pub fn find_first_available_in<'a>(
     })
 }
 
-/// Returns the first unclaimed character from the coherent global registry cache,
-/// optionally ignoring a claim held by `exclude_holder_id`.
-#[must_use]
-pub fn find_first_available_character(exclude_holder_id: Option<&str>) -> Option<CharacterInfo> {
-    let guard = COHERENT_REGISTRY_CACHE.load();
-    find_first_available_in(&guard.0, &guard.1, exclude_holder_id).cloned()
-}
-
-/// Returns `true` if at least one character in the catalog is currently unclaimed
-/// (optionally ignoring a claim held by `exclude_holder_id`).
-#[must_use]
-pub fn has_available_character(exclude_holder_id: Option<&str>) -> bool {
-    let guard = COHERENT_REGISTRY_CACHE.load();
-    find_first_available_in(&guard.0, &guard.1, exclude_holder_id).is_some()
-}
-
 /// Returns all characters in `catalog` that are not claimed in `claims`
 /// (optionally ignoring a claim held by `exclude_holder_id`).
 #[must_use]
@@ -177,17 +69,6 @@ pub fn find_available_characters_in<'a>(
                     && exclude_holder_id.is_none_or(|excluded| claim.holder_id != excluded)
             })
         })
-        .collect()
-}
-
-/// Returns all currently unclaimed characters from the coherent global registry cache,
-/// optionally ignoring a claim held by `exclude_holder_id`.
-#[must_use]
-pub fn get_available_characters(exclude_holder_id: Option<&str>) -> Vec<CharacterInfo> {
-    let guard = COHERENT_REGISTRY_CACHE.load();
-    find_available_characters_in(&guard.0, &guard.1, exclude_holder_id)
-        .into_iter()
-        .cloned()
         .collect()
 }
 
@@ -497,7 +378,7 @@ mod tests {
     }
 
     #[test]
-    fn find_first_available_and_coherent_cache_sync() {
+    fn find_first_available_and_coherent_cache_deduplication() {
         let catalog = sample_catalog();
         let claims = vec![CharacterClaim {
             holder_id: "pane-1".to_string(),
@@ -516,20 +397,49 @@ mod tests {
         let free_for_pane1 = find_first_available_in(&catalog, &claims, Some("pane-1")).unwrap();
         assert_eq!(free_for_pane1.config.id, "uuid-a");
 
-        // Coherent snapshot update mirrors both caches and revision atomically
+        // Initial seed with revision == 0 bumps the monotonic watch generation
+        let mut rx = subscribe_registry_changes();
+        let before_gen = *rx.borrow_and_update();
+        update_caches(catalog.clone(), claims.clone(), 0);
+        assert!(rx.has_changed().unwrap());
+        let first_gen = *rx.borrow_and_update();
+        assert_eq!(first_gen, before_gen.wrapping_add(1));
+
+        // Identical snapshot is deduplicated (no Arc churn, no spurious watch notification)
+        update_caches(catalog.clone(), claims.clone(), 0);
+        assert!(!rx.has_changed().unwrap());
+
+        // Daemon revision update stores new revision and advances watch generation
         update_caches(catalog.clone(), claims.clone(), 42);
+        assert!(rx.has_changed().unwrap());
         let (snap_cat, snap_claims, rev) = load_coherent_registry();
         assert_eq!(rev, 42);
         assert_eq!(*snap_cat, catalog);
         assert_eq!(*snap_claims, claims);
         assert_eq!(
-            find_first_available_character(None)
-                .map(|c| c.config.id),
+            find_first_available_character(None).map(|c| c.config.id),
             Some("uuid-b".to_string())
         );
 
+        // Local catalog update preserves `CharacterStatus::Active` from coherent claims
+        let mut edited_catalog = catalog;
+        edited_catalog[0].config.color = "#FFAA00".to_string();
+        edited_catalog[0].status = CharacterStatus::Available;
+        update_catalog_preserving_claims(edited_catalog);
+        let refreshed = CHARACTER_CACHE.load();
+        assert_eq!(refreshed[0].config.color, "#FFAA00");
+        assert_eq!(
+            refreshed[0].status,
+            CharacterStatus::Active {
+                pane_id: "pane-1".to_string()
+            }
+        );
+
         // HolderKind wire round-trip
-        assert_eq!(HolderKind::try_from(u8::from(HolderKind::Pane)), Ok(HolderKind::Pane));
+        assert_eq!(
+            HolderKind::try_from(u8::from(HolderKind::Pane)),
+            Ok(HolderKind::Pane)
+        );
         assert!(HolderKind::try_from(99).is_err());
     }
 }

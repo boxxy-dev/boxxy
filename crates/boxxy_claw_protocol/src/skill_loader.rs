@@ -1,9 +1,9 @@
 //! Lightweight YAML frontmatter scanner and skill discovery shared between `boxxy-preferences` and `boxxy-claw`.
 
-use crate::characters::cmp_case_insensitive;
+use crate::str_utils::cmp_case_insensitive;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::fs::File;
+use std::fs::{DirEntry, File};
 use std::io::{ErrorKind, Read};
 use std::path::{Path, PathBuf};
 
@@ -44,40 +44,68 @@ pub fn get_skills_dir() -> PathBuf {
 }
 
 /// Returns `true` if a skill is marked disabled in `disabled_skills` (matching either its
-/// on-disk `slug` or its frontmatter `name`).
+/// on-disk `slug` or its frontmatter `name`, ignoring surrounding whitespace).
 #[must_use]
 pub fn is_skill_disabled(disabled_skills: &[String], slug: &str, name: &str) -> bool {
+    let trimmed_slug = slug.trim();
     let trimmed_name = name.trim();
-    disabled_skills
-        .iter()
-        .any(|d| d == slug || (!trimmed_name.is_empty() && d == trimmed_name))
+    disabled_skills.iter().any(|d| {
+        let dt = d.trim();
+        dt == trimmed_slug || (!trimmed_name.is_empty() && dt == trimmed_name)
+    })
+}
+
+fn resolve_skill_with_kind(
+    path: &Path,
+    is_file: bool,
+    is_dir: bool,
+) -> Option<(String, PathBuf, bool)> {
+    let file_name = path.file_name()?.to_str()?;
+    if file_name.starts_with('.') {
+        return None;
+    }
+
+    if is_file
+        && path
+            .extension()
+            .and_then(|s| s.to_str())
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
+    {
+        let slug = path.file_stem()?.to_str()?.trim().to_string();
+        if slug.is_empty() {
+            return None;
+        }
+        Some((slug, path.to_path_buf(), false))
+    } else if is_dir {
+        let slug = file_name.trim().to_string();
+        if slug.is_empty() {
+            return None;
+        }
+        let skill_md = path.join("SKILL.md");
+        skill_md.is_file().then_some((slug, skill_md, true))
+    } else {
+        None
+    }
+}
+
+/// Resolves a `DirEntry` using `d_type` (`entry.file_type()`) on Linux filesystems so
+/// regular files and directories require zero extra `stat()` syscalls.
+fn resolve_skill_dir_entry(entry: &DirEntry) -> Option<(String, PathBuf, bool)> {
+    let path = entry.path();
+    let (is_file, is_dir) = match entry.file_type() {
+        Ok(ft) if ft.is_symlink() => (path.is_file(), path.is_dir()),
+        Ok(ft) => (ft.is_file(), ft.is_dir()),
+        Err(_) => (path.is_file(), path.is_dir()),
+    };
+    resolve_skill_with_kind(&path, is_file, is_dir)
 }
 
 /// Resolves a directory entry inside `skills_dir` to `(slug, markdown_file_path)`
 /// without reading the file contents. Hidden entries starting with `.` are ignored.
 #[must_use]
 pub fn resolve_skill_entry(path: &Path) -> Option<(String, PathBuf)> {
-    let file_name = path.file_name()?.to_str()?;
-    if file_name.starts_with('.') {
-        return None;
-    }
-
-    if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("md") {
-        let slug = path.file_stem()?.to_str()?.trim().to_string();
-        if slug.is_empty() {
-            return None;
-        }
-        Some((slug, path.to_path_buf()))
-    } else if path.is_dir() {
-        let slug = file_name.trim().to_string();
-        if slug.is_empty() {
-            return None;
-        }
-        let skill_md = path.join("SKILL.md");
-        skill_md.is_file().then_some((slug, skill_md))
-    } else {
-        None
-    }
+    let meta = std::fs::metadata(path).ok()?;
+    resolve_skill_with_kind(path, meta.is_file(), meta.is_dir()).map(|(slug, md, _)| (slug, md))
 }
 
 /// Splits a markdown document into `(yaml_frontmatter_slice, remaining_body_slice)` when a
@@ -125,7 +153,6 @@ pub fn parse_frontmatter_block(content: &str) -> Option<(SkillFrontmatter, &str)
         return Some((SkillFrontmatter::default(), body));
     }
 
-    #[allow(deprecated)]
     let parsed = serde_yml::from_str::<SkillFrontmatter>(frontmatter_str).ok()?;
     Some((parsed, body))
 }
@@ -157,26 +184,42 @@ fn normalize_name_and_description(slug: &str, name: &str, description: &str) -> 
 
 /// Parses a full skill document into `(SkillFrontmatter, body_markdown)`, falling back
 /// to `slug` and `"Custom skill"` when frontmatter is absent or fields are blank.
+///
+/// If a `--- ... ---` block is present with invalid YAML syntax, logs a warning and still
+/// strips the broken frontmatter header so malformed metadata is not injected into prompts.
 #[must_use]
 pub fn parse_skill_document(slug: &str, content: &str) -> (SkillFrontmatter, String) {
-    if let Some((mut fm, body)) = parse_frontmatter_block(content) {
+    if let Some((frontmatter_str, body)) = split_frontmatter(content) {
+        let fm_opt = if frontmatter_str.trim().is_empty() {
+            Some(SkillFrontmatter::default())
+        } else {
+            match serde_yml::from_str::<SkillFrontmatter>(frontmatter_str) {
+                Ok(parsed) => Some(parsed),
+                Err(err) => {
+                    log::warn!("Failed to parse YAML frontmatter for skill '{slug}': {err}");
+                    None
+                }
+            }
+        };
+
+        let mut fm = fm_opt.unwrap_or_default();
         let (name, description) = normalize_name_and_description(slug, &fm.name, &fm.description);
         fm.name = name;
         fm.description = description;
-        (fm, body.trim_start().to_string())
-    } else {
-        let (name, description) = normalize_name_and_description(slug, "", "");
-        let stripped = content.strip_prefix('\u{feff}').unwrap_or(content);
-        (
-            SkillFrontmatter {
-                name,
-                description,
-                triggers: Vec::new(),
-                pinned: false,
-            },
-            stripped.to_string(),
-        )
+        return (fm, body.trim_start().to_string());
     }
+
+    let (name, description) = normalize_name_and_description(slug, "", "");
+    let stripped = content.strip_prefix('\u{feff}').unwrap_or(content);
+    (
+        SkillFrontmatter {
+            name,
+            description,
+            triggers: Vec::new(),
+            pinned: false,
+        },
+        stripped.to_string(),
+    )
 }
 
 /// Reads at most `buf.len()` bytes from `file`, retrying on `ErrorKind::Interrupted`.
@@ -247,9 +290,7 @@ pub fn discover_skill_summaries_in(skills_dir: &Path) -> Vec<SkillSummary> {
     let mut by_slug: HashMap<String, (bool, SkillSummary)> = HashMap::new();
 
     for entry in entries.flatten() {
-        let path = entry.path();
-        let is_dir = path.is_dir();
-        if let Some((slug, md_path)) = resolve_skill_entry(&path) {
+        if let Some((slug, md_path, is_dir)) = resolve_skill_dir_entry(&entry) {
             if let Some((existing_is_dir, _)) = by_slug.get(&slug)
                 && (*existing_is_dir || !is_dir)
             {
@@ -262,9 +303,8 @@ pub fn discover_skill_summaries_in(skills_dir: &Path) -> Vec<SkillSummary> {
     }
 
     let mut summaries: Vec<SkillSummary> = by_slug.into_values().map(|(_, s)| s).collect();
-    summaries.sort_by(|a, b| {
-        cmp_case_insensitive(&a.name, &b.name).then_with(|| a.slug.cmp(&b.slug))
-    });
+    summaries
+        .sort_by(|a, b| cmp_case_insensitive(&a.name, &b.name).then_with(|| a.slug.cmp(&b.slug)));
     summaries
 }
 
@@ -273,7 +313,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn discover_summaries_reads_folder_and_file_skills_without_loading_body() {
+    fn discover_summaries_reads_folder_and_file_skills_and_deduplicates_slugs() {
         let dir = tempfile::tempdir().unwrap();
         let skills_dir = dir.path();
 
@@ -285,14 +325,25 @@ mod tests {
         )
         .unwrap();
 
+        // Colliding legacy flat file `<slug>.md` loses deterministically to `<slug>/SKILL.md`
         std::fs::write(
-            skills_dir.join("alpha-note.md"),
+            skills_dir.join("rust-helper.md"),
+            "---\nname: Legacy Flat Rust\ndescription: Old\n---\n",
+        )
+        .unwrap();
+
+        std::fs::write(
+            skills_dir.join("alpha-note.MD"),
             "# Plain Markdown Skill\nNo YAML frontmatter here.",
         )
         .unwrap();
 
         // Hidden files/folders must be ignored
-        std::fs::write(skills_dir.join(".hidden-swap.md"), "---\nname: Hidden\n---\n").unwrap();
+        std::fs::write(
+            skills_dir.join(".hidden-swap.md"),
+            "---\nname: Hidden\n---\n",
+        )
+        .unwrap();
 
         let summaries = discover_skill_summaries_in(skills_dir);
         assert_eq!(summaries.len(), 2);
@@ -307,7 +358,7 @@ mod tests {
     }
 
     #[test]
-    fn frontmatter_parser_handles_bom_empty_block_and_embedded_triple_dashes() {
+    fn frontmatter_parser_handles_bom_empty_malformed_and_embedded_triple_dashes() {
         // 1. UTF-8 BOM + embedded `---flag` line inside YAML description must NOT terminate early
         let doc = "\u{feff}---\nname: \"  CLI Flag Guide  \"\ndescription: |\n  Explains flags like:\n  ---verbose\n---\n# Actual Body\n";
         let (fm, body) = parse_skill_document("cli-guide", doc);
@@ -321,14 +372,20 @@ mod tests {
         assert_eq!(empty_fm.description, "Custom skill");
         assert_eq!(empty_body, "# Heading");
 
-        // 3. Truncated mid-UTF8 codepoint at byte 4096 in `read_skill_summary` still succeeds
+        // 3. Malformed YAML inside `--- ... ---` strips the broken header instead of leaking YAML into body
+        let malformed = "---\nname: Broken\ndescription: unquoted: colon: error\n---\n# Clean Body";
+        let (bad_fm, bad_body) = parse_skill_document("broken-slug", malformed);
+        assert_eq!(bad_fm.name, "broken-slug");
+        assert_eq!(bad_fm.description, "Custom skill");
+        assert_eq!(bad_body, "# Clean Body");
+
+        // 4. Truncated mid-UTF8 codepoint at byte 4096 in `read_skill_summary` still succeeds
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("unicode-boundary.md");
         let mut payload = String::from("---\nunclosed_frontmatter: |\n  ");
         while payload.len() < MAX_FRONTMATTER_SCAN_BYTES - 1 {
             payload.push('a');
         }
-        // Push a 3-byte UTF-8 character (`•` = E2 80 A2) straddling byte 4096
         payload.push('•');
         std::fs::write(&path, payload).unwrap();
 
@@ -339,7 +396,7 @@ mod tests {
 
     #[test]
     fn is_skill_disabled_matches_slug_or_trimmed_name() {
-        let disabled = vec!["rust-helper".to_string(), "Docker Admin".to_string()];
+        let disabled = vec!["  rust-helper  ".to_string(), "Docker Admin".to_string()];
         assert!(is_skill_disabled(&disabled, "rust-helper", "Rust Helper"));
         assert!(is_skill_disabled(
             &disabled,

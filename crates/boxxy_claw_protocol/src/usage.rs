@@ -1,9 +1,10 @@
 //! Turn-level and session-level LLM token & USD cost accounting and display formatting.
 
+#[cfg(feature = "rig")]
 use rig::completion::Usage;
 use serde::{Deserialize, Serialize};
 
-/// Serializable DTO wrapper for [`rig::completion::Usage`] enriched with Boxxy's
+/// Serializable DTO wrapper for LLM completion usage enriched with Boxxy's
 /// per-turn context-window footprint (`context_tokens` and `context_window`).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct UsageWrapper {
@@ -23,35 +24,34 @@ pub struct UsageWrapper {
     pub context_window: Option<u64>,
 }
 
-impl From<&Usage> for UsageWrapper {
-    fn from(u: &Usage) -> Self {
-        let input = u.input_tokens.unwrap_or(0);
-        let output = u.output_tokens.unwrap_or(0);
+impl UsageWrapper {
+    /// Constructs a normalized `UsageWrapper` from raw provider token/cost counters.
+    #[must_use]
+    pub fn from_raw(
+        input_tokens: Option<u64>,
+        output_tokens: Option<u64>,
+        total_tokens: Option<u64>,
+        reasoning_tokens: Option<u64>,
+        cached_input_tokens: Option<u64>,
+        total_cost_usd: Option<f64>,
+    ) -> Self {
+        let input = input_tokens.unwrap_or(0);
+        let output = output_tokens.unwrap_or(0);
         let summed = input.saturating_add(output);
-        let total = u.total_tokens.unwrap_or(summed);
-        let cost_usd = u
-            .cost
-            .and_then(|c| (c.total.is_finite() && c.total >= 0.0).then_some(c.total));
+        let total = total_tokens.unwrap_or(summed);
+        let cost_usd = total_cost_usd.filter(|&c| c.is_finite() && c >= 0.0);
 
         Self {
             input_tokens: input,
             output_tokens: output,
-            reasoning_tokens: u.reasoning_tokens.filter(|&r| r > 0),
-            cached_input_tokens: u.cached_input_tokens.filter(|&c| c > 0),
+            reasoning_tokens: reasoning_tokens.filter(|&r| r > 0),
+            cached_input_tokens: cached_input_tokens.filter(|&c| c > 0),
             cost_usd,
             context_tokens: (total > 0).then_some(total),
             context_window: None,
         }
     }
-}
 
-impl From<Usage> for UsageWrapper {
-    fn from(u: Usage) -> Self {
-        Self::from(&u)
-    }
-}
-
-impl UsageWrapper {
     /// Total tokens across this turn (`input_tokens + output_tokens`), saturated on overflow.
     #[must_use]
     pub const fn total_tokens(&self) -> u64 {
@@ -65,6 +65,27 @@ impl UsageWrapper {
             Some(ctx) => ctx,
             None => self.total_tokens(),
         }
+    }
+}
+
+#[cfg(feature = "rig")]
+impl From<&Usage> for UsageWrapper {
+    fn from(u: &Usage) -> Self {
+        Self::from_raw(
+            u.input_tokens,
+            u.output_tokens,
+            u.total_tokens,
+            u.reasoning_tokens,
+            u.cached_input_tokens,
+            u.cost.map(|c| c.total),
+        )
+    }
+}
+
+#[cfg(feature = "rig")]
+impl From<Usage> for UsageWrapper {
+    fn from(u: Usage) -> Self {
+        Self::from(&u)
     }
 }
 
@@ -123,8 +144,11 @@ impl SessionUsage {
         if ctx > 0 {
             self.context_tokens = ctx;
         }
-        if let Some(window) = usage.context_window {
+        if let Some(window) = usage.context_window.filter(|&w| w > 0) {
             self.context_window = Some(window);
+        }
+        if !self.cost_usd.is_finite() || self.cost_usd < 0.0 {
+            self.cost_usd = 0.0;
         }
         if let Some(cost) = usage.cost_usd
             && cost.is_finite()
@@ -161,9 +185,7 @@ pub fn format_number_with_commas(mut n: u64) -> String {
     }
 
     // All written bytes are guaranteed ASCII digits and commas (`0x2C..=0x39`).
-    std::str::from_utf8(&buf[pos..])
-        .unwrap_or("0")
-        .to_string()
+    std::str::from_utf8(&buf[pos..]).unwrap_or("0").to_string()
 }
 
 /// Formats a USD amount like `OpenCode`'s `Intl.NumberFormat("en-US", { style: "currency", currency: "USD" })`
@@ -183,6 +205,27 @@ mod tests {
     use super::*;
 
     #[test]
+    fn usage_wrapper_from_raw_normalizes_zeros_and_non_finite_costs() {
+        let wrapper = UsageWrapper::from_raw(Some(150), Some(50), None, Some(20), Some(100), None);
+        assert_eq!(wrapper.input_tokens, 150);
+        assert_eq!(wrapper.output_tokens, 50);
+        assert_eq!(wrapper.reasoning_tokens, Some(20));
+        assert_eq!(wrapper.cached_input_tokens, Some(100));
+        assert_eq!(wrapper.cost_usd, None);
+        assert_eq!(wrapper.context_tokens, Some(200));
+        assert_eq!(wrapper.context_window, None);
+
+        let empty = UsageWrapper::from_raw(None, None, None, Some(0), Some(0), Some(f64::NAN));
+        assert_eq!(empty.input_tokens, 0);
+        assert_eq!(empty.output_tokens, 0);
+        assert_eq!(empty.reasoning_tokens, None);
+        assert_eq!(empty.cached_input_tokens, None);
+        assert_eq!(empty.cost_usd, None);
+        assert_eq!(empty.context_tokens, None);
+    }
+
+    #[cfg(feature = "rig")]
+    #[test]
     fn usage_wrapper_from_rig_usage_handles_values_and_defaults() {
         let usage = Usage::default()
             .input_tokens(150)
@@ -195,21 +238,12 @@ mod tests {
         assert_eq!(wrapper.output_tokens, 50);
         assert_eq!(wrapper.reasoning_tokens, Some(20));
         assert_eq!(wrapper.cached_input_tokens, Some(100));
-        assert_eq!(wrapper.cost_usd, None);
         assert_eq!(wrapper.context_tokens, Some(200));
-        assert_eq!(wrapper.context_window, None);
         assert_eq!(wrapper, UsageWrapper::from(usage));
-
-        let empty_wrapper = UsageWrapper::from(Usage::default());
-        assert_eq!(empty_wrapper.input_tokens, 0);
-        assert_eq!(empty_wrapper.output_tokens, 0);
-        assert_eq!(empty_wrapper.reasoning_tokens, None);
-        assert_eq!(empty_wrapper.cached_input_tokens, None);
-        assert_eq!(empty_wrapper.context_tokens, None);
     }
 
     #[test]
-    fn session_usage_and_formatting_handle_boundaries() {
+    fn session_usage_and_formatting_handle_boundaries_and_corrupted_floats() {
         assert_eq!(format_number_with_commas(0), "0");
         assert_eq!(format_number_with_commas(999), "999");
         assert_eq!(format_number_with_commas(1_000), "1,000");
@@ -227,7 +261,10 @@ mod tests {
         assert_eq!(format_usd(0.0512), "$0.05");
         assert_eq!(format_usd(1.2), "$1.20");
 
-        let mut su = SessionUsage::default();
+        let mut su = SessionUsage {
+            cost_usd: f64::NAN,
+            ..SessionUsage::default()
+        };
         assert_eq!(su.context_percent(), None);
 
         su.record_turn(&UsageWrapper {
@@ -246,7 +283,7 @@ mod tests {
         assert_eq!(su.context_percent(), Some(2));
         assert!((su.cost_usd - 0.05).abs() < 1e-9);
 
-        // Switching to an unpriced local model preserves accumulated session USD cost
+        // Zero context_window or unpriced local model preserves valid window & accumulated cost
         su.record_turn(&UsageWrapper {
             input_tokens: 1_000,
             output_tokens: 500,
@@ -254,10 +291,10 @@ mod tests {
             cached_input_tokens: None,
             cost_usd: None,
             context_tokens: Some(26_736),
-            context_window: Some(128_000),
+            context_window: Some(0),
         });
         assert_eq!(su.total_tokens, 26_736);
-        assert_eq!(su.context_window, Some(128_000));
+        assert_eq!(su.context_window, Some(1_048_576));
         assert!((su.cost_usd - 0.05).abs() < 1e-9);
     }
 }

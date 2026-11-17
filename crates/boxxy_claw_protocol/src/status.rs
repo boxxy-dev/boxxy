@@ -19,6 +19,20 @@ pub enum AgentStatus {
     Faulted { reason: String },
 }
 
+impl AgentStatus {
+    /// Returns `true` when Claw is enabled for the pane (anything other than `Off`).
+    #[must_use]
+    pub const fn is_enabled(&self) -> bool {
+        !matches!(self, Self::Off)
+    }
+
+    /// Returns `true` when the agent is actively executing a turn or holding a lock.
+    #[must_use]
+    pub const fn is_busy(&self) -> bool {
+        matches!(self, Self::Working | Self::Locking { .. })
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum TriggerSource {
     User,
@@ -56,4 +70,31 @@ pub enum ClawEvent {
         name: String,
         payload: String,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn agent_status_predicates_and_event_roundtrip() {
+        assert!(!AgentStatus::Off.is_enabled());
+        assert!(AgentStatus::Sleep.is_enabled());
+        assert!(!AgentStatus::Waiting.is_busy());
+        assert!(AgentStatus::Working.is_busy());
+        assert!(
+            AgentStatus::Locking {
+                resource: "src/lib.rs".to_string()
+            }
+            .is_busy()
+        );
+
+        let event = ClawEvent::ProcessExited {
+            pane_id: "pane-2".to_string(),
+            exit_code: 0,
+        };
+        let encoded = serde_json::to_string(&event).unwrap();
+        let decoded: ClawEvent = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(decoded, event);
+    }
 }

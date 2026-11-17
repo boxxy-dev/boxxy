@@ -47,3 +47,26 @@ pub trait ClawEnvironment: Send + Sync + 'static {
         Ok(Vec::new())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn process_sample_omits_absent_gpu_fields_and_roundtrips() {
+        let sample = ProcessSample {
+            pid: 1001,
+            name: "cargo".to_string(),
+            cpu_usage: 12.5,
+            memory_bytes: 64 * 1024 * 1024,
+            read_bytes: 4096,
+            written_bytes: 8192,
+            gpu_usage: None,
+            gpu_memory_bytes: None,
+        };
+        let json = serde_json::to_string(&sample).unwrap();
+        assert!(!json.contains("gpu_usage"));
+        let decoded: ProcessSample = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded, sample);
+    }
+}

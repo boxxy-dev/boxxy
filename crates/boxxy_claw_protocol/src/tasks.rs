@@ -1,6 +1,6 @@
 //! Session-scoped scheduled tasks, reminders, and multi-round interval schedules.
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, TimeDelta, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -77,7 +77,8 @@ impl ScheduledTask {
 
         if let Some(rem_ms) = self.paused_remaining_ms.take() {
             let clamped_ms = rem_ms.max(0);
-            self.due_at = now + chrono::Duration::milliseconds(clamped_ms);
+            let rem_delta = TimeDelta::try_milliseconds(clamped_ms).unwrap_or(TimeDelta::MAX);
+            self.due_at = now.checked_add_signed(rem_delta).unwrap_or(self.due_at);
             if let Some(ref mut iv) = self.interval {
                 let phase_secs = match iv.phase {
                     IntervalPhase::Work => iv.work_secs,
@@ -86,7 +87,11 @@ impl ScheduledTask {
                 .max(1);
                 let total_ms = i64::from(phase_secs).saturating_mul(1_000);
                 let elapsed_ms = total_ms.saturating_sub(clamped_ms).clamp(0, total_ms);
-                iv.phase_started_at = now - chrono::Duration::milliseconds(elapsed_ms);
+                if let Some(elapsed_delta) = TimeDelta::try_milliseconds(elapsed_ms)
+                    && let Some(adjusted_start) = now.checked_sub_signed(elapsed_delta)
+                {
+                    iv.phase_started_at = adjusted_start;
+                }
             }
         } else {
             let rem_ms = self
@@ -150,13 +155,13 @@ mod tests {
     }
 
     #[test]
-    fn scheduled_task_pause_and_resume_preserves_interval_progress() {
+    fn scheduled_task_pause_and_resume_preserves_interval_progress_and_bounds_extremes() {
         let t0 = Utc.with_ymd_and_hms(2026, 6, 1, 12, 0, 0).unwrap();
         let mut task = ScheduledTask {
             id: Uuid::new_v4(),
             task_type: TaskType::Notification,
             payload: "Pomodoro".to_string(),
-            due_at: t0 + chrono::Duration::seconds(60),
+            due_at: t0 + TimeDelta::seconds(60),
             status: TaskStatus::Pending,
             interval: Some(IntervalSchedule {
                 total_rounds: 4,
@@ -171,20 +176,30 @@ mod tests {
         };
 
         // Pause 20s into the 60s work phase -> 40,000 ms remaining
-        let t_pause = t0 + chrono::Duration::seconds(20);
+        let t_pause = t0 + TimeDelta::seconds(20);
         task.toggle_pause_at(t_pause);
         assert!(task.is_paused());
         assert_eq!(task.paused_remaining_ms, Some(40_000));
 
         // Resume 5 minutes later -> due_at shifts to t_resume + 40s, phase_started_at shifts to t_resume - 20s
-        let t_resume = t_pause + chrono::Duration::minutes(5);
+        let t_resume = t_pause + TimeDelta::minutes(5);
         task.toggle_pause_at(t_resume);
         assert!(!task.is_paused());
-        assert_eq!(task.due_at, t_resume + chrono::Duration::seconds(40));
+        assert_eq!(task.due_at, t_resume + TimeDelta::seconds(40));
         assert_eq!(
             task.interval.as_ref().unwrap().phase_started_at,
-            t_resume - chrono::Duration::seconds(20)
+            t_resume - TimeDelta::seconds(20)
         );
+
+        // Extreme deserialized `paused_remaining_ms` values never panic
+        task.paused_remaining_ms = Some(i64::MAX);
+        task.toggle_pause_at(t_resume);
+        assert!(!task.is_paused());
+
+        task.paused_remaining_ms = Some(i64::MIN);
+        task.toggle_pause_at(t_resume);
+        assert!(!task.is_paused());
+        assert_eq!(task.due_at, t_resume);
 
         // Completed tasks ignore pause requests
         task.status = TaskStatus::Completed;

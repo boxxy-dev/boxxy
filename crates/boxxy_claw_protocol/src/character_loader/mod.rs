@@ -1,69 +1,29 @@
 //! Disk I/O, atomic TOML updates, and bundled-default extraction for the Character catalog.
 
-use crate::characters::{CharacterConfig, CharacterInfo};
-use anyhow::{Context, Result, bail};
-use serde::{Deserialize, Serialize};
+mod bundled;
+mod toml_patch;
+
+pub use bundled::{bundled_default_avatar, bundled_default_color, incognito_avatar_bytes};
+
+use crate::characters::{
+    CharacterConfig, CharacterInfo, INCOGNITO_CHARACTER_ID, INCOGNITO_CHARACTER_SLUG,
+};
+use anyhow::{Context, Result};
+use bundled::{BUNDLED_CHARACTERS, BUNDLED_JSON};
 use std::collections::{HashMap, HashSet};
-use std::fs;
+use std::fs::{self, DirEntry, File};
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+use toml_patch::{CharacterToml, patch_top_level_string_key};
 
 static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
-/// Intermediate struct for TOML parsing — `id` is optional so we can detect
-/// first-time loads and auto-generate a UUID. `name` is intentionally absent
-/// since we always derive it from the directory name.
-#[derive(Deserialize, Serialize)]
-struct CharacterToml {
-    id: Option<String>,
-    display_name: String,
-    color: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    default_color: Option<String>,
-    duties: String,
-    personality: String,
-}
+const FALLBACK_DEFAULT_COLOR: &str = "#8035D4";
 
-struct BundledCharacter {
-    slug: &'static str,
-    default_color: &'static str,
-    toml_bytes: &'static [u8],
-    avatar_bytes: &'static [u8],
-}
-
-const BUNDLED_JSON: &[u8] = include_bytes!("../../../resources/characters/characters.json");
-
-const INCOGNITO_AVATAR: &[u8] =
-    include_bytes!("../../../resources/characters/inco-gnito/AVATAR.png");
-
-const BUNDLED_CHARACTERS: &[BundledCharacter] = &[
-    BundledCharacter {
-        slug: "niko-una",
-        default_color: "#8035D4",
-        toml_bytes: include_bytes!("../../../resources/characters/niko-una/CHARACTER.toml"),
-        avatar_bytes: include_bytes!("../../../resources/characters/niko-una/AVATAR.png"),
-    },
-    BundledCharacter {
-        slug: "levi-kujo",
-        default_color: "#204A87",
-        toml_bytes: include_bytes!("../../../resources/characters/levi-kujo/CHARACTER.toml"),
-        avatar_bytes: include_bytes!("../../../resources/characters/levi-kujo/AVATAR.png"),
-    },
-    BundledCharacter {
-        slug: "kuro",
-        default_color: "#B31825",
-        toml_bytes: include_bytes!("../../../resources/characters/kuro/CHARACTER.toml"),
-        avatar_bytes: include_bytes!("../../../resources/characters/kuro/AVATAR.png"),
-    },
-];
-
-fn find_bundled(slug: &str) -> Option<&'static BundledCharacter> {
-    BUNDLED_CHARACTERS.iter().find(|b| b.slug == slug)
-}
-
-/// Writes `contents` to a hidden `.tmp` sibling in the same directory and atomically
-/// renames it over `path` so concurrent readers and `CharacterWatcher` never observe
-/// truncated files.
+/// Writes `contents` to a hidden `.tmp` sibling in the same directory, flushes file data,
+/// and atomically renames it over `path` so concurrent readers and `CharacterWatcher` never
+/// observe partial or 0-byte files.
 fn atomic_write(path: &Path, contents: impl AsRef<[u8]>) -> Result<()> {
     let parent = path
         .parent()
@@ -76,13 +36,20 @@ fn atomic_write(path: &Path, contents: impl AsRef<[u8]>) -> Result<()> {
         .and_then(|n| n.to_str())
         .unwrap_or("character_file");
     let seq = TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
-    let tmp_path = parent.join(format!(
-        ".{file_name}.{}.{seq}.tmp",
-        std::process::id()
-    ));
+    let tmp_path = parent.join(format!(".{file_name}.{}.{seq}.tmp", std::process::id()));
 
-    fs::write(&tmp_path, contents.as_ref())
-        .with_context(|| format!("Failed to write temporary file {}", tmp_path.display()))?;
+    let write_res = (|| -> std::io::Result<()> {
+        let mut file = File::create(&tmp_path)?;
+        file.write_all(contents.as_ref())?;
+        file.sync_data()
+    })();
+
+    if let Err(err) = write_res {
+        let _ = fs::remove_file(&tmp_path);
+        return Err(err)
+            .with_context(|| format!("Failed to write temporary file {}", tmp_path.display()));
+    }
+
     if let Err(err) = fs::rename(&tmp_path, path) {
         let _ = fs::remove_file(&tmp_path);
         return Err(err).with_context(|| {
@@ -105,26 +72,6 @@ pub fn get_characters_dir() -> Result<PathBuf> {
     Ok(config_dir.join("boxxyclaw").join("characters"))
 }
 
-/// Returns the bundled 256×256 PNG avatar bytes for the `/incognito` persona (`Inco Gnito`).
-#[must_use]
-pub const fn incognito_avatar_bytes() -> &'static [u8] {
-    INCOGNITO_AVATAR
-}
-
-/// Returns the bundled default PNG avatar bytes for the three built-in characters
-/// (`niko-una`, `levi-kujo`, `kuro`), or `None` for user-created characters.
-#[must_use]
-pub fn bundled_default_avatar(slug: &str) -> Option<&'static [u8]> {
-    find_bundled(slug).map(|b| b.avatar_bytes)
-}
-
-/// Returns the bundled default hex color for the three built-in characters
-/// (`niko-una`, `levi-kujo`, `kuro`), or `None` for user-created characters.
-#[must_use]
-pub fn bundled_default_color(slug: &str) -> Option<&'static str> {
-    find_bundled(slug).map(|b| b.default_color)
-}
-
 /// Returns the original/default hex color for a character:
 /// - For the three built-in characters (`niko-una`, `levi-kujo`, `kuro`), returns their bundled color.
 /// - For custom characters, returns `default_color` from `CHARACTER.toml` if present, otherwise their current `color`.
@@ -136,195 +83,6 @@ pub fn character_default_color(slug: &str, char_dir: &Path) -> Option<String> {
     let toml_str = fs::read_to_string(char_dir.join("CHARACTER.toml")).ok()?;
     let parsed = toml::from_str::<CharacterToml>(&toml_str).ok()?;
     Some(parsed.default_color.unwrap_or(parsed.color))
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum TomlScanState {
-    Normal,
-    MultiBasic,
-    MultiLiteral,
-}
-
-/// Advances the multi-line TOML string lexer across a single line so top-level key matching
-/// never mistakes lines inside `"""..."""` or `'''...'''` blocks for top-level keys.
-fn advance_toml_scan_state(line: &str, mut state: TomlScanState) -> TomlScanState {
-    let bytes = line.as_bytes();
-    let mut i = 0;
-
-    while i < bytes.len() {
-        match state {
-            TomlScanState::Normal => match bytes[i] {
-                b'#' => break,
-                b'"' => {
-                    if bytes[i..].starts_with(b"\"\"\"") {
-                        state = TomlScanState::MultiBasic;
-                        i += 3;
-                    } else {
-                        i += 1;
-                        while i < bytes.len() {
-                            if bytes[i] == b'\\' {
-                                i += 2;
-                            } else if bytes[i] == b'"' {
-                                i += 1;
-                                break;
-                            } else {
-                                i += 1;
-                            }
-                        }
-                    }
-                }
-                b'\'' => {
-                    if bytes[i..].starts_with(b"'''") {
-                        state = TomlScanState::MultiLiteral;
-                        i += 3;
-                    } else {
-                        i += 1;
-                        while i < bytes.len() {
-                            if bytes[i] == b'\'' {
-                                i += 1;
-                                break;
-                            }
-                            i += 1;
-                        }
-                    }
-                }
-                _ => i += 1,
-            },
-            TomlScanState::MultiBasic => {
-                if bytes[i] == b'\\' {
-                    i += 2;
-                } else if bytes[i..].starts_with(b"\"\"\"") {
-                    i += 3;
-                    // Consume up to 2 extra quotes in 4- or 5-quote closing sequences (`""""` / `"""""`).
-                    let mut extra = 0;
-                    while extra < 2 && i < bytes.len() && bytes[i] == b'"' {
-                        i += 1;
-                        extra += 1;
-                    }
-                    state = TomlScanState::Normal;
-                } else {
-                    i += 1;
-                }
-            }
-            TomlScanState::MultiLiteral => {
-                if bytes[i..].starts_with(b"'''") {
-                    i += 3;
-                    let mut extra = 0;
-                    while extra < 2 && i < bytes.len() && bytes[i] == b'\'' {
-                        i += 1;
-                        extra += 1;
-                    }
-                    state = TomlScanState::Normal;
-                } else {
-                    i += 1;
-                }
-            }
-        }
-    }
-
-    state
-}
-
-/// Checks if `trimmed_line` (known to be in `TomlScanState::Normal` outside any `[table]`)
-/// assigns a single-line value to `target_key`.
-fn matches_top_level_single_line_key(trimmed_line: &str, target_key: &str) -> bool {
-    let Some(after_key) = trimmed_line.strip_prefix(target_key) else {
-        return false;
-    };
-    let after_ws = after_key.trim_start_matches([' ', '\t']);
-    let Some(after_eq) = after_ws.strip_prefix('=') else {
-        return false;
-    };
-    let rhs = after_eq.trim_start_matches([' ', '\t']);
-    !rhs.starts_with("\"\"\"") && !rhs.starts_with("'''")
-}
-
-fn format_toml_string_assignment(key: &str, value: &str) -> String {
-    let encoded = toml::Value::String(value.to_string()).to_string();
-    format!("{key} = {encoded}")
-}
-
-/// Safely updates or inserts a top-level string key in `CHARACTER.toml` while preserving
-/// comments, key order, and multi-line `"""..."""` prompts, and validates that the patched
-/// document still parses as a valid [`CharacterToml`].
-fn patch_top_level_string_key(
-    content: &str,
-    key: &str,
-    new_value: &str,
-    extra_insert_after: Option<(&str, &str)>,
-    prepend_comment_if_inserted: Option<&str>,
-) -> Result<String> {
-    let mut state = TomlScanState::Normal;
-    let mut in_subtable = false;
-    let mut replaced = false;
-    let mut out_lines: Vec<String> = Vec::new();
-
-    for line in content.lines() {
-        let trimmed = line.trim_start();
-        if state == TomlScanState::Normal && trimmed.starts_with('[') {
-            in_subtable = true;
-        }
-
-        if !replaced
-            && state == TomlScanState::Normal
-            && !in_subtable
-            && matches_top_level_single_line_key(trimmed, key)
-        {
-            replaced = true;
-            out_lines.push(format_toml_string_assignment(key, new_value));
-            if let Some((extra_k, extra_v)) = extra_insert_after {
-                out_lines.push(format_toml_string_assignment(extra_k, extra_v));
-            }
-            // Matched line is guaranteed single-line, so `state` stays `Normal`.
-            continue;
-        }
-
-        state = advance_toml_scan_state(line, state);
-        out_lines.push(line.to_string());
-    }
-
-    let mut out = if replaced {
-        let mut joined = out_lines.join("\n");
-        if content.ends_with('\n') || joined.is_empty() {
-            joined.push('\n');
-        }
-        joined
-    } else {
-        let mut prefix = String::new();
-        if let Some(comment) = prepend_comment_if_inserted {
-            prefix.push_str(comment);
-            prefix.push('\n');
-        }
-        prefix.push_str(&format_toml_string_assignment(key, new_value));
-        if let Some((extra_k, extra_v)) = extra_insert_after {
-            prefix.push('\n');
-            prefix.push_str(&format_toml_string_assignment(extra_k, extra_v));
-        }
-        prefix.push_str("\n\n");
-        prefix.push_str(content);
-        if !prefix.ends_with('\n') {
-            prefix.push('\n');
-        }
-        prefix
-    };
-
-    // Fallback safety net: if an exotic TOML construct ever prevented clean line-patching,
-    // serialize via `toml::to_string_pretty` rather than writing invalid TOML to disk.
-    if toml::from_str::<CharacterToml>(&out).is_err() {
-        let mut parsed: CharacterToml =
-            toml::from_str(content).context("Original CHARACTER.toml is invalid")?;
-        match key {
-            "id" => parsed.id = Some(new_value.to_string()),
-            "color" => parsed.color = new_value.to_string(),
-            _ => bail!("Unsupported fallback key: {key}"),
-        }
-        if let Some(("default_color", extra_v)) = extra_insert_after {
-            parsed.default_color = Some(extra_v.to_string());
-        }
-        out = toml::to_string_pretty(&parsed).context("Failed to serialize fallback TOML")?;
-    }
-
-    Ok(out)
 }
 
 /// Updates `color = "..."` inside `char_dir/CHARACTER.toml` in-place while preserving formatting.
@@ -472,14 +230,23 @@ pub fn reset_to_defaults() -> Result<()> {
 
 /// Directory-parameterized variant of [`reset_to_defaults`].
 ///
+/// Unlinks symlinks directly (`fs::remove_file`) rather than calling `fs::remove_dir_all`
+/// so symlinked character folders neither fail with `ENOTDIR` nor delete external targets.
+///
 /// # Errors
-/// Returns an error if removing existing directories or writing bundled defaults fails.
+/// Returns an error if removing existing entries or writing bundled defaults fails.
 pub fn reset_to_defaults_in(base_dir: &Path) -> Result<()> {
     if base_dir.exists() {
         for entry in fs::read_dir(base_dir).context("Failed to read characters directory")? {
             let entry = entry?;
             let path = entry.path();
-            if path.is_dir() {
+            let file_type = entry
+                .file_type()
+                .with_context(|| format!("Failed to inspect {}", path.display()))?;
+            if file_type.is_symlink() {
+                fs::remove_file(&path)
+                    .with_context(|| format!("Failed to remove symlink {}", path.display()))?;
+            } else if file_type.is_dir() {
                 fs::remove_dir_all(&path)
                     .with_context(|| format!("Failed to remove {}", path.display()))?;
             }
@@ -490,23 +257,44 @@ pub fn reset_to_defaults_in(base_dir: &Path) -> Result<()> {
     extract_bundled_defaults(base_dir)
 }
 
-fn is_candidate_character_dir(path: &Path) -> bool {
-    path.is_dir()
-        && path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .is_some_and(|name| !name.is_empty() && !name.starts_with('.'))
+enum CandidateEntry {
+    ValidDir(PathBuf),
+    ReservedIncognito(String),
+    Ignore,
+}
+
+fn classify_character_entry(entry: &DirEntry) -> CandidateEntry {
+    let file_name = entry.file_name();
+    let Some(name) = file_name.to_str() else {
+        return CandidateEntry::Ignore;
+    };
+    if name.is_empty() || name.starts_with('.') {
+        return CandidateEntry::Ignore;
+    }
+
+    let path = entry.path();
+    let is_dir = match entry.file_type() {
+        Ok(ft) if ft.is_symlink() => path.is_dir(),
+        Ok(ft) => ft.is_dir(),
+        Err(_) => path.is_dir(),
+    };
+    if !is_dir {
+        return CandidateEntry::Ignore;
+    }
+    if name.eq_ignore_ascii_case(INCOGNITO_CHARACTER_SLUG) {
+        return CandidateEntry::ReservedIncognito(name.to_string());
+    }
+    CandidateEntry::ValidDir(path)
 }
 
 fn has_any_valid_character(base_dir: &Path) -> bool {
     fs::read_dir(base_dir).is_ok_and(|entries| {
         entries.filter_map(Result::ok).any(|entry| {
-            let path = entry.path();
-            is_candidate_character_dir(&path)
-                && fs::read_to_string(path.join("CHARACTER.toml"))
+            matches!(classify_character_entry(&entry), CandidateEntry::ValidDir(path)
+                if fs::read_to_string(path.join("CHARACTER.toml"))
                     .ok()
                     .and_then(|s| toml::from_str::<CharacterToml>(&s).ok())
-                    .is_some()
+                    .is_some())
         })
     })
 }
@@ -620,20 +408,25 @@ fn scan_character_dirs(base_dir: &Path, warn_on_invalid: bool) -> Result<Vec<Cha
     let mut characters = Vec::new();
     for entry in fs::read_dir(base_dir)? {
         let entry = entry?;
-        let path = entry.path();
-        if !is_candidate_character_dir(&path) {
-            continue;
-        }
-        match load_character_from_dir(&path) {
-            Ok(info) => characters.push(info),
-            Err(e) => {
+        match classify_character_entry(&entry) {
+            CandidateEntry::Ignore => {}
+            CandidateEntry::ReservedIncognito(name) => {
                 if warn_on_invalid {
-                    let name = path
-                        .file_name()
-                        .map_or_else(|| path.display().to_string(), |n| n.to_string_lossy().into_owned());
-                    log::warn!("Skipping character at {name}: {e}");
+                    log::warn!("Skipping reserved incognito slug '{name}' in characters directory");
                 }
             }
+            CandidateEntry::ValidDir(path) => match load_character_from_dir(&path) {
+                Ok(info) => characters.push(info),
+                Err(e) => {
+                    if warn_on_invalid {
+                        let name = path.file_name().map_or_else(
+                            || path.display().to_string(),
+                            |n| n.to_string_lossy().into_owned(),
+                        );
+                        log::warn!("Skipping character at {name}: {e}");
+                    }
+                }
+            },
         }
     }
     Ok(characters)
@@ -665,7 +458,8 @@ pub fn save_character_order_in(base_dir: &Path, order: &[String]) -> Result<()> 
 /// Loads a single character from a directory.
 ///
 /// Expects a `CHARACTER.toml` and optionally an `AVATAR.png`.
-/// Auto-generates a UUID and writes it back to the TOML if absent or empty.
+/// Auto-generates a UUID and writes it back to the TOML if absent, empty, or colliding
+/// with the reserved `__incognito__` ID.
 fn load_character_from_dir(dir: &Path) -> Result<CharacterInfo> {
     let dir_name = dir
         .file_name()
@@ -686,7 +480,7 @@ fn load_character_from_dir(dir: &Path) -> Result<CharacterInfo> {
     let id = if let Some(existing_id) = raw
         .id
         .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
+        .filter(|s| !s.is_empty() && s != INCOGNITO_CHARACTER_ID)
     {
         existing_id
     } else {
@@ -698,8 +492,12 @@ fn load_character_from_dir(dir: &Path) -> Result<CharacterInfo> {
             None,
             Some("# Stable identity — do not change this value"),
         )?;
-        atomic_write(&toml_path, patched)
-            .with_context(|| format!("Failed to write UUID to CHARACTER.toml in {}", dir.display()))?;
+        atomic_write(&toml_path, patched).with_context(|| {
+            format!(
+                "Failed to write UUID to CHARACTER.toml in {}",
+                dir.display()
+            )
+        })?;
         new_id
     };
 
@@ -713,11 +511,25 @@ fn load_character_from_dir(dir: &Path) -> Result<CharacterInfo> {
         has_avatar = true;
     }
 
+    let display_name = if raw.display_name.trim().is_empty() {
+        dir_name.clone()
+    } else {
+        raw.display_name
+    };
+    let color = {
+        let trimmed = raw.color.trim();
+        if trimmed.is_empty() {
+            FALLBACK_DEFAULT_COLOR.to_string()
+        } else {
+            trimmed.to_string()
+        }
+    };
+
     let config = CharacterConfig {
         id,
         name: dir_name,
-        display_name: raw.display_name,
-        color: raw.color,
+        display_name,
+        color,
         duties: raw.duties,
         personality: raw.personality,
     };
@@ -728,6 +540,7 @@ fn load_character_from_dir(dir: &Path) -> Result<CharacterInfo> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bundled::find_bundled;
 
     #[test]
     fn bundled_characters_table_matches_embedded_toml_colors() {
@@ -787,10 +600,16 @@ mod tests {
             Some("#8035D4")
         );
 
-        let custom_toml = "id = \"00000004-0000-4000-8000-000000000004\"\ndisplay_name = \"custom\"\ncolor = \"#abcdef\"\nduties = \"Helper\"\npersonality = \"Friendly\"\n";
+        // Single-line triple-quoted color preserves comments when patched in-place
+        let custom_toml = "# Custom comment\nid = \"00000004-0000-4000-8000-000000000004\"\ndisplay_name = \"custom\"\ncolor = \"\"\"#abcdef\"\"\"\nduties = \"Helper\"\npersonality = \"Friendly\"\n";
         fs::write(custom_dir.join("CHARACTER.toml"), custom_toml).unwrap();
         assert!(!has_custom_character_avatar("my-custom-agent", &custom_dir));
         save_character_color(&custom_dir, "#fedcba").unwrap();
+        assert!(
+            fs::read_to_string(custom_dir.join("CHARACTER.toml"))
+                .unwrap()
+                .contains("# Custom comment")
+        );
         assert!(has_custom_character_avatar("my-custom-agent", &custom_dir));
         assert_eq!(
             character_default_color("my-custom-agent", &custom_dir).as_deref(),
@@ -801,42 +620,50 @@ mod tests {
     }
 
     #[test]
-    fn empty_id_and_duplicate_compact_id_repair_without_corrupting_multiline_prompts() {
+    fn empty_id_reserved_incognito_and_symlinks_are_handled_safely() {
         let tmp = tempfile::tempdir().unwrap();
-        let base_dir = tmp.path();
+        let base_dir = tmp.path().join("chars");
+        let external_dir = tmp.path().join("external-char");
+        fs::create_dir_all(&base_dir).unwrap();
+        fs::create_dir_all(&external_dir).unwrap();
+        fs::write(
+            external_dir.join("CHARACTER.toml"),
+            "id = \"ext-1\"\ndisplay_name = \"Ext\"\ncolor = \"#111111\"\nduties = \"Ops\"\npersonality = \"Calm\"\n",
+        )
+        .unwrap();
 
-        // Character 1: `id = ""` and a multi-line personality containing `id =` and `color =` lines
+        // Character 1: reserved `__incognito__` ID + blank display_name + multi-line prompt
         let alpha_dir = base_dir.join("alpha");
         fs::create_dir_all(&alpha_dir).unwrap();
         fs::write(
             alpha_dir.join("CHARACTER.toml"),
-            "id = \"\"\ndisplay_name = \"Alpha\"\ncolor = \"#112233\"\nduties = \"Ops\"\npersonality = \"\"\"\nNever rewrite lines like:\nid = \"keep-me\"\ncolor = \"#999999\"\n\"\"\"\n",
+            "id = \"__incognito__\"\ndisplay_name = \"   \"\ncolor = \"#112233\"\nduties = \"Ops\"\npersonality = \"\"\"\nNever rewrite lines like:\nid = \"keep-me\"\ncolor = \"#999999\"\n\"\"\"\n",
         )
         .unwrap();
 
-        // First load repairs `id = ""` in-place -> second load must STILL succeed (no duplicate `id` key!)
-        let loaded_first = load_characters_in(base_dir).unwrap();
+        // Reserved `inco-gnito` directory must be ignored
+        let inco_dir = base_dir.join("inco-gnito");
+        fs::create_dir_all(&inco_dir).unwrap();
+        fs::write(
+            inco_dir.join("CHARACTER.toml"),
+            "id = \"bad\"\ndisplay_name = \"Fake\"\ncolor = \"#000000\"\nduties = \"x\"\npersonality = \"y\"\n",
+        )
+        .unwrap();
+
+        let loaded_first = load_characters_in(&base_dir).unwrap();
         assert_eq!(loaded_first.len(), 1);
         let assigned_id = loaded_first[0].config.id.clone();
         assert_ne!(assigned_id, "");
+        assert_ne!(assigned_id, INCOGNITO_CHARACTER_ID);
+        assert_eq!(loaded_first[0].config.display_name, "alpha");
         assert!(
             loaded_first[0]
                 .config
                 .personality
                 .contains("id = \"keep-me\"")
         );
-        assert!(
-            loaded_first[0]
-                .config
-                .personality
-                .contains("color = \"#999999\"")
-        );
 
-        let loaded_second = load_characters_in(base_dir).unwrap();
-        assert_eq!(loaded_second.len(), 1);
-        assert_eq!(loaded_second[0].config.id, assigned_id);
-
-        // Character 2: copied directory with compact `id="..."` (no spaces around `=`)
+        // Duplicate compact `id="..."` gets deduplicated and persisted
         let beta_dir = base_dir.join("beta");
         fs::create_dir_all(&beta_dir).unwrap();
         fs::write(
@@ -847,32 +674,25 @@ mod tests {
         )
         .unwrap();
 
-        let deduped_first = load_characters_in(base_dir).unwrap();
-        assert_eq!(deduped_first.len(), 2);
-        assert_ne!(deduped_first[0].config.id, deduped_first[1].config.id);
+        let deduped = load_characters_in(&base_dir).unwrap();
+        assert_eq!(deduped.len(), 2);
+        assert_ne!(deduped[0].config.id, deduped[1].config.id);
 
-        // Reloading again preserves the persisted deduplicated UUID on disk
-        let beta_id = deduped_first
-            .iter()
-            .find(|c| c.config.name == "beta")
-            .unwrap()
-            .config
-            .id
-            .clone();
-        let deduped_second = load_characters_in(base_dir).unwrap();
-        let beta_id_after = deduped_second
-            .iter()
-            .find(|c| c.config.name == "beta")
-            .unwrap()
-            .config
-            .id
-            .clone();
-        assert_eq!(beta_id, beta_id_after);
-
-        // Custom order via `save_character_order_in`
-        save_character_order_in(base_dir, &["beta".to_string(), "alpha".to_string()]).unwrap();
-        let ordered = load_characters_in(base_dir).unwrap();
+        save_character_order_in(&base_dir, &["beta".to_string(), "alpha".to_string()]).unwrap();
+        let ordered = load_characters_in(&base_dir).unwrap();
         assert_eq!(ordered[0].config.name, "beta");
         assert_eq!(ordered[1].config.name, "alpha");
+
+        // Symlinked character directory is unlinked cleanly by `reset_to_defaults_in` without
+        // failing with ENOTDIR or deleting the external target's contents.
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(&external_dir, base_dir.join("linked-char")).unwrap();
+            reset_to_defaults_in(&base_dir).unwrap();
+            assert!(external_dir.join("CHARACTER.toml").is_file());
+            assert!(!base_dir.join("linked-char").exists());
+            let defaults = load_characters_in(&base_dir).unwrap();
+            assert_eq!(defaults.len(), 3);
+        }
     }
 }
