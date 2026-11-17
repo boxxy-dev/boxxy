@@ -2,8 +2,8 @@
 //! environment variables.
 //!
 //! Centralizing every environment variable here guarantees:
-//! 1. One consistent truthy/falsy parser across every crate.
-//! 2. Zero undocumented `BOXXY_*` flags (`boxxy-terminal +env` renders directly from [`ENV_SPECS`]).
+//! 1. One consistent zero-allocation truthy/falsy parser across every crate.
+//! 2. Zero undocumented `BOXXY_*` or `*_API_KEY` flags (`boxxy-terminal +env` renders directly from [`ENV_SPECS`]).
 //! 3. Data-driven Flatpak/native daemon environment propagation (`daemon_spawn_env`).
 //! 4. Data-driven child-PTY environment scrubbing (`scrub_child_pty_env`).
 
@@ -19,7 +19,7 @@ pub enum EnvCategory {
     Shell,
     /// Logging, context inspection, and QA simulation variables.
     Diagnostics,
-    /// Built-in LLM provider API key environment variables.
+    /// Built-in LLM and web-search provider API key environment variables.
     ProviderKey,
     /// Internal session/PTY markers managed by Boxxy itself (hidden unless `--internal`).
     Internal,
@@ -273,6 +273,16 @@ pub const ENV_SPECS: &[EnvVarSpec] = &[
         propagate_raw_to_daemon: false,
         scrub_from_child_pty: false,
     },
+    EnvVarSpec {
+        name: "TAVILY_API_KEY",
+        category: EnvCategory::ProviderKey,
+        cli_flag: None,
+        value_hint: "<KEY>",
+        summary: "API key override for Tavily Web Search.",
+        secret: true,
+        propagate_raw_to_daemon: false,
+        scrub_from_child_pty: false,
+    },
     // --- Internal PTY Plumbing ---
     EnvVarSpec {
         name: "BOXXY_WINDOW_ID",
@@ -326,7 +336,7 @@ pub const ENV_SPECS: &[EnvVarSpec] = &[
     },
 ];
 
-/// Canonical `(ENV_VAR_NAME, ProviderName)` mapping for built-in AI providers.
+/// Canonical `(ENV_VAR_NAME, ProviderName)` mapping for built-in AI and search providers.
 pub const PROVIDER_ENV_KEY_MAP: &[(&str, &str)] = &[
     ("GEMINI_API_KEY", "Gemini"),
     ("ANTHROPIC_API_KEY", "Anthropic"),
@@ -341,15 +351,28 @@ pub const PROVIDER_ENV_KEY_MAP: &[(&str, &str)] = &[
     ("GROQ_API_KEY", "Groq"),
     ("OPENCODE_API_KEY", "OpenCode Zen"),
     ("OPENCODE_API_KEY", "OpenCode Go"),
+    ("TAVILY_API_KEY", "Tavily"),
 ];
 
-/// Parses a standard boolean environment variable string (`1/true/yes/on` vs `0/false/no/off`).
+/// Parses a standard boolean environment variable string (`1/true/yes/on` vs `0/false/no/off`)
+/// without heap allocation.
 #[must_use]
 pub fn parse_bool_str(raw: &str) -> Option<bool> {
-    match raw.trim().to_ascii_lowercase().as_str() {
-        "1" | "true" | "yes" | "on" => Some(true),
-        "0" | "false" | "no" | "off" => Some(false),
-        _ => None,
+    let trimmed = raw.trim();
+    if trimmed.eq_ignore_ascii_case("1")
+        || trimmed.eq_ignore_ascii_case("true")
+        || trimmed.eq_ignore_ascii_case("yes")
+        || trimmed.eq_ignore_ascii_case("on")
+    {
+        Some(true)
+    } else if trimmed.eq_ignore_ascii_case("0")
+        || trimmed.eq_ignore_ascii_case("false")
+        || trimmed.eq_ignore_ascii_case("no")
+        || trimmed.eq_ignore_ascii_case("off")
+    {
+        Some(false)
+    } else {
+        None
     }
 }
 
@@ -389,36 +412,59 @@ pub fn shell_integration_enabled() -> bool {
     !env_falsy("BOXXY_SHELL_INTEGRATION")
 }
 
+fn non_empty_trimmed_env(var_name: &str) -> Option<String> {
+    let val = std::env::var(var_name).ok()?;
+    let trimmed = val.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
 /// Returns the raw `BOXXY_SIMULATE_UPDATE` string if set and non-empty.
 #[must_use]
 pub fn simulate_update_raw() -> Option<String> {
-    std::env::var("BOXXY_SIMULATE_UPDATE")
-        .ok()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
+    non_empty_trimmed_env("BOXXY_SIMULATE_UPDATE")
 }
 
 /// Returns the custom `BOXXY_TELEMETRY_ENDPOINT` URL if set and non-empty.
 #[must_use]
 pub fn telemetry_endpoint() -> Option<String> {
-    std::env::var("BOXXY_TELEMETRY_ENDPOINT")
-        .ok()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
+    non_empty_trimmed_env("BOXXY_TELEMETRY_ENDPOINT")
 }
 
-/// Masks a secret value for safe CLI display (`"sk-abc...xyz"` -> `"sk-a••••••••"`).
+/// Masks a secret value for safe CLI display (`"sk-abc...xyz"` -> `"sk-a•••••••• (32 chars)"`).
+///
+/// Only reveals a 4-character prefix when the secret has at least 12 characters
+/// and contains no control characters; shorter values are fully masked so half of
+/// a short password or token is never exposed.
 #[must_use]
 pub fn mask_secret(val: &str) -> String {
+    const MIN_LEN_FOR_PREFIX: usize = 12;
+
     let trimmed = val.trim();
     if trimmed.is_empty() {
         return String::new();
     }
-    let char_count = trimmed.chars().count();
-    if char_count <= 6 {
+
+    let mut prefix = String::with_capacity(4);
+    let mut char_count = 0usize;
+    let mut has_control = false;
+    for ch in trimmed.chars() {
+        if char_count < 4 {
+            if ch.is_control() {
+                has_control = true;
+            } else {
+                prefix.push(ch);
+            }
+        }
+        char_count += 1;
+    }
+
+    if char_count < MIN_LEN_FOR_PREFIX || has_control {
         "••••••••".to_string()
     } else {
-        let prefix: String = trimmed.chars().take(4).collect();
         format!("{prefix}•••••••• ({char_count} chars)")
     }
 }
@@ -435,10 +481,18 @@ pub fn scrubbed_pty_var_names() -> impl Iterator<Item = &'static str> {
 /// preserving explicit `BOXXY_SHELL_INTEGRATION=0` (`false`/`off`) opt-outs.
 pub fn scrub_child_pty_env(env: &mut Vec<(String, String)>) {
     env.retain_mut(|(k, v)| {
+        // Fast path: every scrubbed marker in `ENV_SPECS` uses the `BOXXY_` namespace
+        // (enforced by `test_env_specs_invariants`).
+        if !k.starts_with("BOXXY_") {
+            return true;
+        }
         if k == "BOXXY_SHELL_INTEGRATION" {
             if is_shell_integration_disabled_value(v) {
-                // Normalize falsy spellings ("false", "off") to "0" for shell_integration.rs
-                *v = "0".to_string();
+                // Normalize falsy spellings ("false", "off") to "0" in-place for shell_integration.rs
+                if v != "0" {
+                    v.clear();
+                    v.push('0');
+                }
                 return true;
             }
             return false;
@@ -457,18 +511,16 @@ pub fn daemon_spawn_env(expected_config_dir: &Path) -> Vec<(&'static str, String
     if debug_context() {
         out.push(("BOXXY_DEBUG_CONTEXT", "1".to_string()));
     }
-    if let Some(slug) = crate::instance_id() {
+    let (slug, ephemeral) = crate::dev_mode::resolve_instance_and_ephemeral();
+    if let Some(slug) = slug {
         out.push(("BOXXY_INSTANCE", slug));
     }
-    if crate::is_ephemeral_mode() {
+    if ephemeral {
         out.push(("BOXXY_EPHEMERAL", "1".to_string()));
     }
     for spec in ENV_SPECS.iter().filter(|s| s.propagate_raw_to_daemon) {
-        if let Ok(val) = std::env::var(spec.name) {
-            let trimmed = val.trim();
-            if !trimmed.is_empty() {
-                out.push((spec.name, trimmed.to_string()));
-            }
+        if let Some(trimmed) = non_empty_trimmed_env(spec.name) {
+            out.push((spec.name, trimmed));
         }
     }
     out.push((
@@ -476,4 +528,144 @@ pub fn daemon_spawn_env(expected_config_dir: &Path) -> Vec<(&'static str, String
         expected_config_dir.to_string_lossy().into_owned(),
     ));
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support::EnvStateGuard;
+    use crate::{CliDevOverrides, configure_dev_options, get_config_dir};
+    use serial_test::serial;
+    use std::collections::HashSet;
+
+    #[test]
+    fn test_env_specs_and_provider_map_invariants() {
+        let mut seen = HashSet::with_capacity(ENV_SPECS.len());
+        for spec in ENV_SPECS {
+            assert_ne!(spec.name, "");
+            assert_ne!(spec.value_hint, "");
+            assert_ne!(spec.summary, "");
+            assert!(
+                seen.insert(spec.name),
+                "Duplicate ENV_SPECS entry: {}",
+                spec.name
+            );
+            if spec.scrub_from_child_pty {
+                assert!(
+                    spec.name.starts_with("BOXXY_"),
+                    "scrub_child_pty_env fast-path requires scrubbed vars to start with BOXXY_: {}",
+                    spec.name
+                );
+            }
+            if spec.category == EnvCategory::ProviderKey {
+                assert!(
+                    spec.secret,
+                    "ProviderKey {} must be marked secret",
+                    spec.name
+                );
+                assert!(
+                    !spec.scrub_from_child_pty,
+                    "ProviderKey {} must not be scrubbed from user PTYs",
+                    spec.name
+                );
+            }
+            if spec.category == EnvCategory::Internal {
+                assert!(
+                    spec.scrub_from_child_pty,
+                    "Internal marker {} must be scrubbed from child PTYs",
+                    spec.name
+                );
+                assert!(spec.cli_flag.is_none());
+            }
+        }
+
+        // Every PROVIDER_ENV_KEY_MAP variable must exist in ENV_SPECS as a secret ProviderKey
+        for &(env_var, provider_name) in PROVIDER_ENV_KEY_MAP {
+            assert_ne!(provider_name, "");
+            let spec = ENV_SPECS
+                .iter()
+                .find(|s| s.name == env_var)
+                .unwrap_or_else(|| {
+                    panic!("PROVIDER_ENV_KEY_MAP entry {env_var} missing from ENV_SPECS")
+                });
+            assert_eq!(spec.category, EnvCategory::ProviderKey);
+            assert!(spec.secret);
+        }
+    }
+
+    #[test]
+    fn test_parse_bool_str_and_mask_secret() {
+        for truthy in ["1", "true", "TRUE", " Yes ", "on", "ON"] {
+            assert_eq!(parse_bool_str(truthy), Some(true));
+        }
+        for falsy in ["0", "false", "FALSE", " no ", "Off"] {
+            assert_eq!(parse_bool_str(falsy), Some(false));
+        }
+        assert_eq!(parse_bool_str(""), None);
+        assert_eq!(parse_bool_str("maybe"), None);
+
+        assert_eq!(mask_secret(""), "");
+        assert_eq!(mask_secret("   "), "");
+        // Short secrets (< 12 chars) must never leak their first 4 characters
+        assert_eq!(mask_secret("short77"), "••••••••");
+        assert_eq!(mask_secret("12345678901"), "••••••••");
+        // Control characters in prefix must never be emitted raw
+        assert_eq!(mask_secret("sk-\n1234567890123"), "••••••••");
+        // Standard-length API keys show safe 4-char prefix + character count
+        assert_eq!(
+            mask_secret("sk-test-0123456789abcdef"),
+            "sk-t•••••••• (24 chars)"
+        );
+    }
+
+    #[test]
+    #[serial(config_dir)]
+    fn test_env_registry_daemon_propagation_and_pty_scrubbing() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let cfg = tmp.path().join("custom-cfg");
+        let mut guard = EnvStateGuard::new(None);
+
+        configure_dev_options(CliDevOverrides {
+            dev: true,
+            ephemeral: true,
+            debug_context: true,
+            config_dir: Some(cfg.clone()),
+            ..Default::default()
+        });
+        assert_eq!(get_config_dir(), cfg);
+        assert!(debug_context());
+
+        guard.set_extra_var(
+            "BOXXY_TELEMETRY_ENDPOINT",
+            "https://collector.example.com/v1/metrics",
+        );
+
+        let spawned = daemon_spawn_env(&cfg);
+        assert!(spawned.contains(&("BOXXY_DEBUG_CONTEXT", "1".to_string())));
+        assert!(spawned.contains(&("BOXXY_INSTANCE", "dev".to_string())));
+        assert!(spawned.contains(&("BOXXY_EPHEMERAL", "1".to_string())));
+        assert!(spawned.contains(&(
+            "BOXXY_TELEMETRY_ENDPOINT",
+            "https://collector.example.com/v1/metrics".to_string()
+        )));
+        assert!(spawned.contains(&("BOXXY_CONFIG_DIR", cfg.to_string_lossy().into_owned())));
+
+        let mut pty_env = vec![
+            ("PATH".to_string(), "/usr/bin".to_string()),
+            ("BOXXY_DEV".to_string(), "1".to_string()),
+            ("BOXXY_DEBUG_CONTEXT".to_string(), "1".to_string()),
+            ("BOXXY_ORIG_ZDOTDIR".to_string(), "/tmp/zdot".to_string()),
+            ("BOXXY_SHELL_INTEGRATION".to_string(), "false".to_string()),
+            ("TAVILY_API_KEY".to_string(), "tvly-synthetic".to_string()),
+        ];
+        scrub_child_pty_env(&mut pty_env);
+        assert_eq!(
+            pty_env,
+            vec![
+                ("PATH".to_string(), "/usr/bin".to_string()),
+                ("BOXXY_SHELL_INTEGRATION".to_string(), "0".to_string()),
+                ("TAVILY_API_KEY".to_string(), "tvly-synthetic".to_string()),
+            ]
+        );
+    }
 }

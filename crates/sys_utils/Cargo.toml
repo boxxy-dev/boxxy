@@ -12,15 +12,20 @@ self-update = []
 disable-self-update = []
 
 [dependencies]
-ashpd         = { workspace = true }
-tokio         = { workspace = true, features = ["full"] }
-reqwest       = { workspace = true }
-serde         = { workspace = true }
-log           = { workspace = true }
-parking_lot   = { workspace = true }
-directories   = { workspace = true }
-home          = { workspace = true }
+directories = { workspace = true }
+log = { workspace = true }
+parking_lot = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+libc = { workspace = true }
 
 [dev-dependencies]
-serial_test   = { workspace = true }
-tempfile      = { workspace = true }
+serial_test = { workspace = true }
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

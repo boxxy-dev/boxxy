@@ -1124,13 +1124,13 @@ dependencies = [
 name = "boxxy-sys-utils"
 version = "0.1.0"
 dependencies = [
- "ashpd",
  "directories",
- "home",
+ "libc",
  "log",
  "parking_lot 0.13.0",
  "reqwest 0.13.5",
  "serde",
+ "serde_json",
  "serial_test",
  "tempfile",
  "tokio",

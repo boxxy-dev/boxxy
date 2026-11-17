@@ -495,10 +495,7 @@ const fn default_max_roundtable_turns() -> u32 {
 fn atomic_write_file(path: &Path, content: &str) -> std::io::Result<()> {
     let generation = FILE_GENERATION.fetch_add(1, Ordering::Relaxed) + 1;
     let pid = std::process::id();
-    let ext = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("json");
+    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("json");
     let tmp_path = path.with_extension(format!("{ext}.{pid}.{generation}.tmp"));
     fs::write(&tmp_path, content)?;
     if let Err(err) = fs::rename(&tmp_path, path) {
@@ -524,7 +521,10 @@ impl Settings {
         if !boxxyclaw_dir.exists()
             && let Err(e) = fs::create_dir_all(&boxxyclaw_dir)
         {
-            log::warn!("Failed to create boxxyclaw directory '{}': {e}", boxxyclaw_dir.display());
+            log::warn!(
+                "Failed to create boxxyclaw directory '{}': {e}",
+                boxxyclaw_dir.display()
+            );
         }
 
         let blacklist_md = boxxyclaw_dir.join("BLACKLIST.md");
@@ -562,7 +562,10 @@ You can add your own sensitive paths here. One path per line. Lines starting wit
             let is_new_skill = !skill_file.exists();
             let _ = fs::create_dir_all(&bundled_dir);
             if let Err(e) = fs::write(&skill_file, content) {
-                log::warn!("Failed to write bundled skill '{}': {e}", skill_file.display());
+                log::warn!(
+                    "Failed to write bundled skill '{}': {e}",
+                    skill_file.display()
+                );
             }
             if is_new_skill {
                 newly_seeded_slugs.push(slug);
@@ -618,12 +621,18 @@ You can add your own sensitive paths here. One path per line. Lines starting wit
             let needs_write = fs::read_to_string(&ext_path)
                 .map_or(true, |existing| existing != NAUTILUS_EXTENSION_SCRIPT);
             if needs_write && let Err(e) = fs::write(&ext_path, NAUTILUS_EXTENSION_SCRIPT) {
-                log::warn!("Failed to write Nautilus extension '{}': {e}", ext_path.display());
+                log::warn!(
+                    "Failed to write Nautilus extension '{}': {e}",
+                    ext_path.display()
+                );
             }
         } else if ext_path.exists()
             && let Err(e) = fs::remove_file(&ext_path)
         {
-            log::warn!("Failed to remove Nautilus extension '{}': {e}", ext_path.display());
+            log::warn!(
+                "Failed to remove Nautilus extension '{}': {e}",
+                ext_path.display()
+            );
         }
     }
 
@@ -688,13 +697,13 @@ You can add your own sensitive paths here. One path per line. Lines starting wit
 
         // Generate install_id if missing, but NEVER overwrite an existing settings.json
         // that failed to parse due to a syntax error.
-        let needs_initial_save =
-            if !had_unrecoverable_parse_error && settings.install_id.is_none() {
-                settings.install_id = Some(uuid::Uuid::new_v4().to_string());
-                true
-            } else {
-                false
-            };
+        let needs_initial_save = if !had_unrecoverable_parse_error && settings.install_id.is_none()
+        {
+            settings.install_id = Some(uuid::Uuid::new_v4().to_string());
+            true
+        } else {
+            false
+        };
 
         settings.sanitize_unconfigured_models();
         SETTINGS_CACHE.store(Arc::new(settings));
@@ -760,7 +769,10 @@ You can add your own sensitive paths here. One path per line. Lines starting wit
             Ok(_) => return,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return,
             Err(e) => {
-                log::warn!("Failed to read settings file '{}' during reload: {e}", path.display());
+                log::warn!(
+                    "Failed to read settings file '{}' during reload: {e}",
+                    path.display()
+                );
                 return;
             }
         };
@@ -774,7 +786,9 @@ You can add your own sensitive paths here. One path per line. Lines starting wit
         };
 
         if fresh.install_id.is_none() {
-            fresh.install_id.clone_from(&SETTINGS_CACHE.load().install_id);
+            fresh
+                .install_id
+                .clone_from(&SETTINGS_CACHE.load().install_id);
         }
         fresh.sanitize_unconfigured_models();
         SETTINGS_CACHE.store(Arc::new(fresh));
@@ -808,10 +822,7 @@ You can add your own sensitive paths here. One path per line. Lines starting wit
                 match serde_json::to_string_pretty(&snapshot) {
                     Ok(content) => {
                         if let Err(e) = atomic_write_file(&path, &content) {
-                            log::warn!(
-                                "Failed to persist settings to '{}': {e}",
-                                path.display()
-                            );
+                            log::warn!("Failed to persist settings to '{}': {e}", path.display());
                         }
                     }
                     Err(e) => {
@@ -853,7 +864,7 @@ You can add your own sensitive paths here. One path per line. Lines starting wit
             return env_key;
         }
 
-        // Check canonical built-in provider environment variables (e.g. GEMINI_API_KEY, OPENCODE_API_KEY).
+        // Check canonical built-in provider environment variables (e.g. GEMINI_API_KEY, OPENCODE_API_KEY, TAVILY_API_KEY).
         for &(env_var, mapped_provider) in boxxy_sys_utils::env::PROVIDER_ENV_KEY_MAP {
             if mapped_provider == provider {
                 if let Some(k) = Self::get_env_api_key(env_var).filter(|k| !k.trim().is_empty()) {
@@ -864,19 +875,6 @@ You can add your own sensitive paths here. One path per line. Lines starting wit
                 {
                     return k;
                 }
-            }
-        }
-
-        if provider == "Tavily" {
-            if let Some(k) =
-                Self::get_env_api_key("TAVILY_API_KEY").filter(|k| !k.trim().is_empty())
-            {
-                return k;
-            }
-            if let Ok(k) = std::env::var("TAVILY_API_KEY")
-                && !k.trim().is_empty()
-            {
-                return k;
             }
         }
 
@@ -908,8 +906,7 @@ You can add your own sensitive paths here. One path per line. Lines starting wit
         {
             let env_keys = ENV_API_KEYS.read();
             for (provider, key) in env_keys.iter() {
-                if !key.trim().is_empty()
-                    && keys.get(provider).is_none_or(|k| k.trim().is_empty())
+                if !key.trim().is_empty() && keys.get(provider).is_none_or(|k| k.trim().is_empty())
                 {
                     keys.insert(provider.clone(), key.clone());
                 }
@@ -922,13 +919,6 @@ You can add your own sensitive paths here. One path per line. Lines starting wit
                 if !resolved.is_empty() {
                     keys.insert(provider_name.to_string(), resolved);
                 }
-            }
-        }
-
-        if keys.get("Tavily").is_none_or(|k| k.trim().is_empty()) {
-            let resolved = self.get_effective_api_key("Tavily");
-            if !resolved.is_empty() {
-                keys.insert("Tavily".to_string(), resolved);
             }
         }
 
@@ -974,7 +964,9 @@ You can add your own sensitive paths here. One path per line. Lines starting wit
     /// back to the mandatory global `claw_model` when `None`).
     #[must_use]
     pub fn effective_memory_model(&self) -> Option<ModelProvider> {
-        self.memory_model.clone().or_else(|| self.claw_model.clone())
+        self.memory_model
+            .clone()
+            .or_else(|| self.claw_model.clone())
     }
 
     /// Reverts non-default model overrides (`character_models` and `memory_model`) that are
@@ -1092,11 +1084,10 @@ You can add your own sensitive paths here. One path per line. Lines starting wit
         }
 
         let provider_name = m.provider_name();
-        let requires_key = boxxy_model_selection::get_providers_with_custom(
-            &self.openai_compatible_endpoints,
-        )
-        .iter()
-        .any(|p| p.name() == provider_name && p.requires_api_key());
+        let requires_key =
+            boxxy_model_selection::get_providers_with_custom(&self.openai_compatible_endpoints)
+                .iter()
+                .any(|p| p.name() == provider_name && p.requires_api_key());
 
         if !requires_key || !self.get_effective_api_key(provider_name).is_empty() {
             ModelConfigState::Ready(m.clone())
@@ -1122,9 +1113,9 @@ You can add your own sensitive paths here. One path per line. Lines starting wit
                     Some("No default model is set (required for all characters).".to_string())
                 }
             }
-            ModelConfigState::MissingApiKey { provider_name } => {
-                Some(format!("{provider_name} API key was removed or is missing."))
-            }
+            ModelConfigState::MissingApiKey { provider_name } => Some(format!(
+                "{provider_name} API key was removed or is missing."
+            )),
             ModelConfigState::ProviderUnavailable { provider_name } => {
                 Some(format!("{provider_name} provider was removed or disabled."))
             }
@@ -1630,10 +1621,7 @@ mod tests {
         );
         assert_eq!(parsed.claw_model, None);
         assert_eq!(parsed.cursor_shape, CursorShape::Block);
-        assert_eq!(
-            parsed.install_id.as_deref(),
-            Some("preserved-install-uuid")
-        );
+        assert_eq!(parsed.install_id.as_deref(), Some("preserved-install-uuid"));
     }
 
     #[test]
@@ -1737,7 +1725,8 @@ mod tests {
             "Synthetic Default Gateway".to_string(),
             "sk-default-ok".to_string(),
         );
-        s.openai_compatible_endpoints.retain(|e| e.name != "Synthetic Override Gateway");
+        s.openai_compatible_endpoints
+            .retain(|e| e.name != "Synthetic Override Gateway");
         let reverted_override = s.revert_non_default_invalid_models();
         assert_eq!(reverted_override, 1);
         assert!(!s.has_custom_character_model("char-alpha-uuid"));

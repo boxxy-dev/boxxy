@@ -92,14 +92,25 @@ fn main() -> ExitCode {
 
             let mut found_any = false;
             for (env_var, provider) in keys_to_check {
-                let key_opt = if is_flatpak {
-                    agent.proxy().get_environment_variable(env_var).await.ok()
+                let local_opt = if is_flatpak {
+                    None
                 } else {
-                    std::env::var(&env_var).ok()
+                    std::env::var(&env_var)
+                        .ok()
+                        .map(|v| v.trim().to_string())
+                        .filter(|v| !v.is_empty())
                 };
-                if let Some(key) = key_opt
-                    && !key.is_empty()
-                {
+                let key_opt = match local_opt {
+                    Some(val) => Some(val),
+                    None => agent
+                        .proxy()
+                        .get_environment_variable(env_var)
+                        .await
+                        .ok()
+                        .map(|v| v.trim().to_string())
+                        .filter(|v| !v.is_empty()),
+                };
+                if let Some(key) = key_opt {
                     boxxy_preferences::Settings::set_env_api_key(&provider, key);
                     found_any = true;
                 }

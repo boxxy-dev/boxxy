@@ -191,7 +191,11 @@ pub(crate) fn setup_apis_page(builder: &gtk::Builder) -> PageHooks {
                 }
 
                 let prov_name = prov.name().to_string();
-                let direct_key = current.api_keys.get(&prov_name).cloned().unwrap_or_default();
+                let direct_key = current
+                    .api_keys
+                    .get(&prov_name)
+                    .cloned()
+                    .unwrap_or_default();
                 let effective_key = current.get_effective_api_key(&prov_name);
 
                 if effective_key.is_empty() {
@@ -401,8 +405,8 @@ pub(crate) fn setup_apis_page(builder: &gtk::Builder) -> PageHooks {
                     cost_badge
                 );
                 let model_ids: Vec<&str> = ep.models.iter().map(|m| m.id.as_str()).collect();
-                let haystack = format!("{} {} {}", ep.name, ep.base_url, model_ids.join(" "))
-                    .to_lowercase();
+                let haystack =
+                    format!("{} {} {}", ep.name, ep.base_url, model_ids.join(" ")).to_lowercase();
 
                 let row = adw::ActionRow::new();
                 row.set_use_markup(false);
@@ -597,8 +601,11 @@ pub(crate) fn setup_apis_page(builder: &gtk::Builder) -> PageHooks {
 
             editor_page_add.open_editor(None, "", move |mut new_ep, key| {
                 let updated = Settings::update(|s| {
-                    new_ep.name =
-                        make_unique_endpoint_name(&s.openai_compatible_endpoints, &new_ep.name, None);
+                    new_ep.name = make_unique_endpoint_name(
+                        &s.openai_compatible_endpoints,
+                        &new_ep.name,
+                        None,
+                    );
                     if !key.trim().is_empty() {
                         s.api_keys.insert(new_ep.name.clone(), key.clone());
                     }
@@ -615,7 +622,25 @@ pub(crate) fn setup_apis_page(builder: &gtk::Builder) -> PageHooks {
         });
     }
 
-    tavily_api_key_entry.set_text(&initial.api_keys.get("Tavily").cloned().unwrap_or_default());
+    let update_tavily_title = |entry: &adw::PasswordEntryRow, s: &Settings, direct_text: &str| {
+        let has_env_fallback = {
+            let mut probe = s.clone();
+            probe.api_keys.remove("Tavily");
+            !probe.get_effective_api_key("Tavily").trim().is_empty()
+        };
+        let desired = if direct_text.trim().is_empty() && has_env_fallback {
+            "Tavily API Key (Set from environment)"
+        } else {
+            "Tavily API Key"
+        };
+        if entry.title().as_str() != desired {
+            entry.set_title(desired);
+        }
+    };
+
+    let initial_tavily = initial.api_keys.get("Tavily").cloned().unwrap_or_default();
+    tavily_api_key_entry.set_text(&initial_tavily);
+    update_tavily_title(&tavily_api_key_entry, &initial, &initial_tavily);
     let tavily_debouncer = Debouncer::new();
     tavily_debouncer.bind_flush_lifecycle(&tavily_api_key_entry);
     {
@@ -626,6 +651,8 @@ pub(crate) fn setup_apis_page(builder: &gtk::Builder) -> PageHooks {
                 return;
             }
             let new_val = entry.text().to_string();
+            let snap = Settings::load();
+            update_tavily_title(entry, &snap, &new_val);
             debouncer.schedule(Duration::from_millis(250), move || {
                 Settings::update(|s| {
                     s.api_keys.insert("Tavily".to_string(), new_val.clone());
@@ -711,11 +738,11 @@ pub(crate) fn setup_apis_page(builder: &gtk::Builder) -> PageHooks {
         }
 
         let tavily_val = s.api_keys.get("Tavily").map_or("", String::as_str);
-        if !tavily_sync.has_focus()
-            && tavily_sync.focus_child().is_none()
-            && tavily_sync.text().as_str() != tavily_val
-        {
-            tavily_sync.set_text(tavily_val);
+        if !tavily_sync.has_focus() && tavily_sync.focus_child().is_none() {
+            if tavily_sync.text().as_str() != tavily_val {
+                tavily_sync.set_text(tavily_val);
+            }
+            update_tavily_title(&tavily_sync, s, tavily_val);
         }
 
         if native_sync.is_active() != s.use_native_search {
