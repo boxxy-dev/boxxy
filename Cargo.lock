@@ -796,14 +796,11 @@ dependencies = [
 name = "boxxy-ai-core"
 version = "0.1.0"
 dependencies = [
- "anyhow",
- "async-trait",
  "boxxy-model-selection",
  "boxxy-sys-utils",
  "futures-util",
  "log",
  "rig",
- "serde",
  "serde_json",
  "tokio",
 ]

@@ -7,13 +7,15 @@ license.workspace = true
 name = "boxxy-ai-core"
 
 [dependencies]
-async-trait.workspace = true
 futures-util.workspace = true
-serde.workspace = true
 serde_json.workspace = true
-anyhow.workspace = true
 log.workspace = true
-tokio = { workspace = true, features = ["full"] }
 rig.workspace = true
 boxxy-model-selection = { path = "../model_selection" }
 boxxy-sys-utils.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt", "net", "io-util"] }
+
+[lints]
+workspace = true

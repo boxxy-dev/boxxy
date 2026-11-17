@@ -1,6 +1,6 @@
 ---
 name: Boxxy Self-Dev & Bug Reporter
-description: Investigate Boxxy bugs in source, file high-signal GitHub bug reports, or install GTK4/Rust dependencies, run isolated --dev builds, and open pull requests directly from Boxxy.
+description: Investigate Boxxy bugs, file maintainer-grade GitHub issues, build isolated --dev instances, and open Boxxy pull requests.
 triggers:
   - boxxy bug
   - report bug

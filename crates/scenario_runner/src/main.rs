@@ -6,6 +6,9 @@ use std::path::PathBuf;
 async fn main() -> Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
         .filter_module("zbus", log::LevelFilter::Warn)
+        .filter_module("rig", log::LevelFilter::Warn)
+        .filter_module("rig_core", log::LevelFilter::Warn)
+        .filter_module("rig_core::driver", log::LevelFilter::Error)
         .init();
 
     // Initialize settings (loads API keys and model config)

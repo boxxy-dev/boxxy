@@ -1,24 +1,15 @@
 # boxxy-ai-core Agents & Architecture
 
 ## Responsibilities
-This crate provides the primary interface for AI interactions using the `rig-core` (`0.46`) framework. It abstracts away the differences between Gemini, Anthropic, OpenAI, DeepSeek, Moonshot, xAI, Z.ai, Mistral, MiniMax, Groq, OpenCode Zen (`opencode`), OpenCode Go (`opencode-go`), OpenRouter, Ollama, and custom `OpenAiCompatible` endpoints (LiteLLM, vLLM, llama.cpp), offering a unified agent interface for the rest of the application.
+Provides Boxxy's unified AI provider abstraction, catalog/cost resolution, native server-side web search helpers, and `BoxxyAgent` runtime on top of `rig-core` (`0.46`). Abstracts Gemini, Anthropic, OpenAI, DeepSeek, Moonshot, xAI, Z.ai, Mistral, MiniMax, Groq, OpenCode Zen (`opencode`), OpenCode Go (`opencode-go`), OpenRouter, Ollama, and custom `OpenAiCompatible` endpoints (LiteLLM, vLLM, llama.cpp) behind a single cohesive API.
 
-## Debugging & Observability
-This crate provides a specialized `ModelContextHook` using the `rig::agent::AgentHook` trait. It intercepts and logs all model interactions:
-- **`BOXXY_DEBUG_CONTEXT=1`**: A dedicated environment variable that activates detailed logging of the full context (Preamble, History, User Prompt), tool calls, and final model responses.
-- **Targeted Logs**: All interactions are logged using the `model-context` target at the `info!` level, ensuring they remain available in release builds for production troubleshooting without interfering with standard logs.
+## Architecture & Modules
+Organized into focused submodules re-exported from `src/lib.rs`:
 
-### `AiCredentials`
-A unified payload struct that carries API keys, the Ollama base URL, and configured `OpenAiCompatibleEndpoint` entries (`with_custom_endpoints`).
-- Uses a `HashMap<String, String>` for API keys to allow dynamic scaling without changing function signatures.
-
-### `build_provider_model` & `create_agent`
-`build_provider_model` is the shared factory that resolves a `ModelProvider` and `AiCredentials` into a type-erased `rig::DynModel<rig::operation::Completion>` along with portable `rig::completion::Reasoning` options (`Effort` / `Budget` / `Off`). For `ModelProvider::OpenAiCompatible`, it configures `rig::providers::openai::OpenAIConfig` with `done_without_finish_reason = true` and selects either `client.chat(model_id)` (`/chat/completions`) or `client.responses(model_id)` (`/responses`).
-`create_agent` and `create_agent_with_options` instantiate a `BoxxyAgent` with portable `GenerationOptions` (`.reasoning(..)`, `.cache(CacheRetention::Short)`, `.on_unsupported(OnUnsupported::Ignore)`, and `.accept_unknown_finish_reasons(true)`), ensuring consistent prompt caching and thinking configurations across both the AI Chat sidebar and the Claw reasoning engine.
-`model_context_window_with_endpoints`, `model_input_limit_with_endpoints` (using `ModelSpec::input_limit()` in `rig 0.46`), and `enrich_usage_with_endpoints_cost` resolve context/input limits and token pricing in three tiers: (1) user-configured per-model overrides (`context_window`, `input_cost_per_1m`/`output_cost_per_1m`, or `zero_cost` for flat-rate subscriptions/local servers), (2) provider-reported `usage.cost`, and (3) automatic fallback lookup in `rig::catalog::Catalog::builtin()` via `resolve_any_catalog_spec`.
-`attach_native_search` (`native_search_provider_tool` + `native_search_additional_params`) attaches provider-hosted web search (`AgentBuilder::provider_tool` with `web_search` on OpenAI Responses and `web_search_20250305` on Anthropic, plus `googleSearch` in `additional_params` for Gemini), while `append_citations_to_output` and `extract_native_search_summary` normalize URL citations and server-side search telemetry across providers.
-
-## Utilities
-
-### `boxxy_ai_core::utils::runtime()`
-Provides a singleton, multi-threaded Tokio runtime used for all background I/O and AI generation tasks across the entire application.
+- **`credentials.rs` (`AiCredentials`)**: Carries provider API keys, the Ollama base URL, and configured `OpenAiCompatibleEndpoint` entries (`with_custom_endpoints`). Resolves trimmed API keys without heap cloning when present in `api_keys`, falls back to `boxxy_sys_utils::env::PROVIDER_ENV_KEY_MAP` environment variables (or `endpoint.api_key_env`), and preserves `OllamaConfig`'s default `http://localhost:11434` URL when `ollama_url` is blank.
+- **`catalog.rs`**: `resolve_catalog_spec`, `model_context_window` / `model_context_window_with_endpoints`, `model_input_limit` / `model_input_limit_with_endpoints` (`ModelSpec::input_limit()`), `enrich_usage_with_catalog_cost` / `enrich_usage_with_endpoints_cost` (3-tier cost resolution with `NaN`/negative rate sanitization and explicit `$0.00` clearing for local `Ollama`, subscription `OpenCodeGo`, and `zero_cost` custom endpoints), and `extract_response_context_tokens` (scanning `completion_calls.iter().rev()` for the latest non-zero window without mistaking multi-step cumulative totals for single-call context occupancy).
+- **`reasoning.rs`**: `map_thinking_level` and `resolve_model_reasoning` / `resolve_model_reasoning_with_endpoints`. Honors custom endpoint `thinking_levels` overrides and `ModelSpec.reasoning`, clamps stale/cross-model `Effort` levels to the nearest supported tier, scales budget-based thinking across `Minimal..=XHigh`, and suppresses `Reasoning::Off` when `can_disable == Some(false)`.
+- **`providers.rs`**: `build_provider_model` (`BuiltProviderModel`) and `fetch_openai_compatible_models`. Normalizes model slugs and endpoint URLs, connects OpenCode Zen/Go through `Catalog::builtin().connect_with(...)`, and enables `done_without_finish_reason = true` across `/chat/completions` and `/responses` custom endpoints.
+- **`search.rs`**: `native_search_provider_tool`, `native_search_additional_params`, `attach_native_search`, `collect_url_citations`, `append_citations_to_output`, and `extract_native_search_summary`. Enforces `http://`/`https://` scheme validation, escapes CommonMark brackets/parentheses on citation links, and extracts server-side search queries across OpenAI, Anthropic, and Gemini (`GOOGLE_SEARCH_*` `toolCall`s).
+- **`hook.rs` (`ModelContextHook`)**: Zero-overhead `rig::agent::AgentHook` for `--debug-context` / `BOXXY_DEBUG_CONTEXT=1` (`model-context` log target). Formats synchronously from borrowed slices strictly when enabled, incurring **zero** history, prompt, or string clones during standard runs.
+- **`agent.rs` (`BoxxyAgent`, `create_agent`, `create_agent_with_options`)**: `Arc`-backed (`O(1)` clone) agent wrapper attaching `ModelContextHook` once at build time, with trailing-delta flushing and retry buffer reset in `chat_streaming`.

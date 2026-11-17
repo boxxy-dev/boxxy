@@ -17,6 +17,8 @@ fn main() -> ExitCode {
         .filter_module("tracing", log::LevelFilter::Warn)
         .filter_module("sqlx", log::LevelFilter::Warn)
         .filter_module("rig", log::LevelFilter::Warn)
+        .filter_module("rig_core", log::LevelFilter::Warn)
+        .filter_module("rig_core::driver", log::LevelFilter::Error)
         .filter_module("rmcp", log::LevelFilter::Warn)
         .filter_module("h2", log::LevelFilter::Warn)
         .filter_module("hyper", log::LevelFilter::Warn)

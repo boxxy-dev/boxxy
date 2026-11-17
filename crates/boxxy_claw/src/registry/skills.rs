@@ -322,9 +322,14 @@ const SKILL_NOISE_WORDS: &[&str] = &[
     "please",
     "put",
     "read",
+    "repo",
+    "repos",
+    "repositories",
+    "repository",
     "run",
     "say",
     "script",
+    "search",
     "see",
     "set",
     "show",
@@ -386,6 +391,21 @@ fn extract_skill_match_tokens(text: &str) -> Vec<String> {
     tokens
 }
 
+fn words_stem_match(a: &str, b: &str) -> bool {
+    if a == b {
+        return true;
+    }
+    let (shorter, longer) = if a.len() <= b.len() { (a, b) } else { (b, a) };
+    // Allow simple plural (`layer`/`layers`, `theme`/`themes`) or >= 6-char shared stems
+    // (`contain`/`container`), while preventing short false-positive prefix collisions
+    // such as `repo` matching `report`/`reporter` or `port` matching `portable`.
+    (shorter.len() >= 3
+        && longer.len() == shorter.len() + 1
+        && longer.ends_with('s')
+        && longer.starts_with(shorter))
+        || (shorter.len() >= 6 && longer.starts_with(shorter))
+}
+
 fn skill_header_matches_query(
     name: &str,
     description: &str,
@@ -402,13 +422,9 @@ fn skill_header_matches_query(
         })
         .collect();
 
-    query_tokens.iter().any(|qt| {
-        header_words.iter().any(|hw| {
-            *hw == qt.as_str()
-                || (qt.len() >= 4 && hw.starts_with(qt.as_str()))
-                || (hw.len() >= 4 && qt.starts_with(*hw))
-        })
-    })
+    query_tokens
+        .iter()
+        .any(|qt| header_words.iter().any(|hw| words_stem_match(hw, qt)))
 }
 
 #[cfg(test)]
@@ -436,6 +452,33 @@ mod tests {
             "Inspect OCI container layers and registries",
             "oci, podman",
             &domain_tokens,
+        ));
+
+        // Short prefix stems like `repo` must not false-positive against `report` / `reporter`.
+        let generic_repo_tokens = extract_skill_match_tokens("list module entries in the repo");
+        assert!(!skill_header_matches_query(
+            "Issue Reporter",
+            "Triage software bugs and file upstream tickets",
+            "report bug, bug report, ticket",
+            &generic_repo_tokens,
+        ));
+
+        let generic_search_tokens =
+            extract_skill_match_tokens("search online reference documentation");
+        assert!(!skill_header_matches_query(
+            "Issue Reporter",
+            "Triage software bugs and file upstream tickets",
+            "report bug, bug report, ticket",
+            &generic_search_tokens,
+        ));
+
+        // Explicit plural domain words (`bugs` -> `bug`) still match cleanly.
+        let plural_domain_tokens = extract_skill_match_tokens("triage upstream bugs");
+        assert!(skill_header_matches_query(
+            "Issue Reporter",
+            "Triage software bugs and file upstream tickets",
+            "report bug, bug report, ticket",
+            &plural_domain_tokens,
         ));
     }
 
