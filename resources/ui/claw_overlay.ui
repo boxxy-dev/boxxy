@@ -80,17 +80,47 @@
                       </object>
                     </child>
                     <child>
-                      <object class="GtkLabel" id="picker_models_link_lbl">
-                        <property name="label">Models Selection</property>
-                        <property name="tooltip-text">Configure default and character-specific AI models</property>
-                        <property name="halign">center</property>
+                      <object class="GtkBox" id="picker_links_box">
+                        <property name="orientation">horizontal</property>
+                        <property name="spacing">2</property>
+                        <property name="halign">start</property>
                         <property name="valign">center</property>
-                        <style>
-                          <class name="caption"/>
-                          <class name="accent"/>
-                          <class name="boxxy-link"/>
-                          <class name="claw-models-link"/>
-                        </style>
+                        <child>
+                          <object class="GtkLabel" id="picker_models_link_lbl">
+                            <property name="label">Models Selection</property>
+                            <property name="tooltip-text">Configure default and character-specific AI models</property>
+                            <property name="valign">center</property>
+                            <style>
+                              <class name="caption"/>
+                              <class name="accent"/>
+                              <class name="boxxy-link"/>
+                              <class name="claw-models-link"/>
+                            </style>
+                          </object>
+                        </child>
+                        <child>
+                          <object class="GtkLabel">
+                            <property name="label">•</property>
+                            <property name="valign">center</property>
+                            <style>
+                              <class name="caption"/>
+                              <class name="dim-label"/>
+                            </style>
+                          </object>
+                        </child>
+                        <child>
+                          <object class="GtkLabel" id="picker_characters_link_lbl">
+                            <property name="label">Open Characters</property>
+                            <property name="tooltip-text">Open Characters in Preferences</property>
+                            <property name="valign">center</property>
+                            <style>
+                              <class name="caption"/>
+                              <class name="accent"/>
+                              <class name="boxxy-link"/>
+                              <class name="claw-models-link"/>
+                            </style>
+                          </object>
+                        </child>
                       </object>
                     </child>
                   </object>

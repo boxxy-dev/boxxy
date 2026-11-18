@@ -143,6 +143,8 @@ impl CharacterPicker {
         let scroll: gtk::ScrolledWindow = builder.object("character_picker_scroll").unwrap();
         let cards_wrap: adw::WrapBox = builder.object("character_cards_wrap").unwrap();
         let models_link_lbl: gtk::Label = builder.object("picker_models_link_lbl").unwrap();
+        let characters_link_lbl: gtk::Label =
+            builder.object("picker_characters_link_lbl").unwrap();
 
         models_link_lbl.set_cursor_from_name(Some("pointer"));
         let click = gtk::GestureClick::new();
@@ -155,6 +157,23 @@ impl CharacterPicker {
             host_for_models.open_model_selection(target);
         });
         models_link_lbl.add_controller(click);
+
+        characters_link_lbl.set_cursor_from_name(Some("pointer"));
+        let chars_click = gtk::GestureClick::new();
+        let chars_lbl_weak = characters_link_lbl.downgrade();
+        chars_click.connect_released(move |_, _, x, y| {
+            if let Some(w) = chars_lbl_weak.upgrade()
+                && w.contains(x, y)
+                && let Some(root) = w.root()
+            {
+                let _ = gtk::prelude::WidgetExt::activate_action(
+                    &root,
+                    "win.open-preferences-page",
+                    Some(&"characters".to_variant()),
+                );
+            }
+        });
+        characters_link_lbl.add_controller(chars_click);
 
         Self {
             scroll,

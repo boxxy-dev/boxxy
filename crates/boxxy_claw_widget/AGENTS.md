@@ -11,7 +11,7 @@ The crate is **surface-agnostic**. It talks to its host — the thing that owns 
 boxxy_claw_widget/
 ├── overlay.rs          drawer UI (TerminalOverlay) — loaded from
 │                       /dev/boxxy/BoxxyTerminal/ui/claw_overlay.ui
-├── character_picker.rs centered empty-state character banner cards (model + thinking pills) + discreet Models Selection link
+├── character_picker.rs centered empty-state character banner cards (model + thinking pills) + left-aligned Models Selection • Open Characters links
 ├── claw_indicator.rs   floating status pill / badge (ClawIndicator)
 ├── msgbar/             merged input bar (formerly a crate)
 │   ├── mod.rs          MsgBarComponent constructor + status / update_ui + TextTag highlighting
@@ -43,7 +43,7 @@ Defines `TerminalOverlay` and `OverlayMode { Claw, Bookmark }`. Constructed via 
 - `reset_for_exit()` — sets `pending_exit_reset` and initiates the 220 ms crossfade hide first while keeping the conversation view intact so `CharacterPicker` never flashes during fade-out, wiping session state once `child-revealed` settles to `false` (or immediately on early reopen).
 - **Split-safe click-to-focus (`handle_pane_click_release`)**: a single pane-level click release hook inspects `root.focus()` after native GTK4 click dispatch — if focus did not land inside `revealer` (or landed on a selectable `GtkLabel` with no active selection), it focuses `msg_bar.entry` when sensitive or `indicator.grab_cancel_focus()` / `main_drawer` while `Thinking`, preserving native caret placement, popovers, and drag/double-click text selections. Programmatic background hides/updates check `pane_owns_focus()` so inactive split panes never steal focus.
 
-The character selector (`character_picker.rs`) renders centered wide banner cards (`PortraitBanner` `ConstantSize` wrapper around `GtkPicture` + `AdwWrapBox`, displaying each character's resolved model and thinking level pills) and a discreet `"Models Selection"` link wired to `ClawHost::open_model_selection` when no session or history is active yet. It reads coherently from `load_coherent_registry()` and live-refreshes via `RegistrySnapshot` push signals and `SETTINGS_EVENT_BUS` updates without polling, updating selection state in-place on click.
+The character selector (`character_picker.rs`) renders centered wide banner cards (`PortraitBanner` `ConstantSize` wrapper around `GtkPicture` + `AdwWrapBox`, displaying each character's resolved model and thinking level pills) and a left-aligned `"Models Selection • Open Characters"` links row (wired to `ClawHost::open_model_selection` and `win.open-preferences-page` with `"characters"`) when no session or history is active yet. It reads coherently from `load_coherent_registry()` and live-refreshes via `RegistrySnapshot` push signals and `SETTINGS_EVENT_BUS` updates without polling, updating selection state in-place on click.
 
 ### History list + sticky-bottom auto-scroll
 The drawer's scrollable history is a `gtk::ListView` over a `gio::ListStore` (`history_store`, synced from `full_history_store` via a `clear_offset` tail slice so temporary `/clear` preserves session history). Virtualization means `adj.upper()` grows asynchronously as rows realize and Markdown/diff blocks measure.
