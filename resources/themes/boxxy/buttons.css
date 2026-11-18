@@ -144,6 +144,11 @@ statuspage button:not(.flat):not(.circular):checked {
     box-shadow: 1px 1px 0px @boxxy_shadow;
 }
 
+dialog button:not(.flat):not(.circular):not(.color-dot-btn):checked label,
+dialog button:not(.flat):not(.circular):not(.color-dot-btn):checked image {
+    color: @accent_fg_color;
+}
+
 /* 3. Semantic Action Modifiers (`.suggested-action` & `.destructive-action`)
    Ordered after Base Tactile and matching its `:not(...)` qualifiers so they
    strictly beat Base Tactile specificity across dialogs, preferences, popovers,
@@ -163,6 +168,30 @@ statuspage button.suggested-action:not(.flat):not(.circular) {
     outline: var(--boxxy-border-width) solid @boxxy_ink;
     outline-offset: -2px;
     box-shadow: 2px 3px 0px @boxxy_shadow;
+    font-weight: 700;
+}
+
+button.suggested-action:not(.flat):not(.circular) label,
+button.suggested-action:not(.flat):not(.circular) image,
+headerbar button.suggested-action:not(.flat):not(.circular) label,
+headerbar button.suggested-action:not(.flat):not(.circular) image,
+dialog button.suggested-action:not(.flat):not(.circular):not(.color-dot-btn) label,
+dialog button.suggested-action:not(.flat):not(.circular):not(.color-dot-btn) image,
+preferencespage button.suggested-action:not(.flat):not(.circular):not(.color-dot-btn) label,
+preferencespage button.suggested-action:not(.flat):not(.circular):not(.color-dot-btn) image,
+popover button.suggested-action:not(.flat):not(.model):not(.circular) label,
+popover button.suggested-action:not(.flat):not(.model):not(.circular) image,
+.claw-drawer button.suggested-action:not(.flat):not(.circular):not(.character-btn) label,
+.claw-drawer button.suggested-action:not(.flat):not(.circular):not(.character-btn) image,
+.bookmarks-gallery button.suggested-action:not(.flat):not(.circular) label,
+.bookmarks-gallery button.suggested-action:not(.flat):not(.circular) image,
+statuspage button.suggested-action:not(.flat):not(.circular) label,
+statuspage button.suggested-action:not(.flat):not(.circular) image,
+button.suggested-action:not(.flat):not(.circular):hover label,
+button.suggested-action:not(.flat):not(.circular):hover image,
+popover button.suggested-action:not(.flat):not(.model):not(.circular):hover label,
+popover button.suggested-action:not(.flat):not(.model):not(.circular):hover image {
+    color: @accent_fg_color;
     font-weight: 700;
 }
 
@@ -222,6 +251,8 @@ statuspage button.secondary-action:not(.flat):not(.circular):hover {
     color: @boxxy_secondary_fg_color;
 }
 
+popover button.secondary-action:not(.flat):not(.model):not(.circular) label,
+popover button.secondary-action:not(.flat):not(.model):not(.circular) image,
 button.secondary-action:not(.flat):not(.circular):hover label,
 button.secondary-action:not(.flat):not(.circular):hover image,
 headerbar button.secondary-action:not(.flat):not(.circular):hover label,
@@ -285,6 +316,8 @@ statuspage button.destructive-action:not(.flat):not(.circular):hover {
     color: @destructive_fg_color;
 }
 
+popover button.destructive-action:not(.flat):not(.model):not(.circular) label,
+popover button.destructive-action:not(.flat):not(.model):not(.circular) image,
 button.destructive-action:not(.flat):not(.circular):hover label,
 button.destructive-action:not(.flat):not(.circular):hover image,
 headerbar button.destructive-action:not(.flat):not(.circular):hover label,
@@ -438,14 +471,17 @@ dialog preferencesgroup button.image-button:not(.flat):not(.circular):not(.color
 button.pill:not(.flat):not(.circular),
 dialog button.pill:not(.flat):not(.circular):not(.color-dot-btn),
 preferencespage button.pill:not(.flat):not(.circular):not(.color-dot-btn),
+popover button.pill:not(.flat):not(.model):not(.circular),
 statuspage button.pill:not(.flat):not(.circular),
 button.suggested-action.pill:not(.flat):not(.circular),
 dialog button.suggested-action.pill:not(.flat):not(.circular):not(.color-dot-btn),
 preferencespage button.suggested-action.pill:not(.flat):not(.circular):not(.color-dot-btn),
+popover button.suggested-action.pill:not(.flat):not(.model):not(.circular),
 statuspage button.suggested-action.pill:not(.flat):not(.circular),
 button.destructive-action.pill:not(.flat):not(.circular),
 dialog button.destructive-action.pill:not(.flat):not(.circular):not(.color-dot-btn),
-preferencespage button.destructive-action.pill:not(.flat):not(.circular):not(.color-dot-btn) {
+preferencespage button.destructive-action.pill:not(.flat):not(.circular):not(.color-dot-btn),
+popover button.destructive-action.pill:not(.flat):not(.model):not(.circular) {
     min-height: var(--boxxy-pill-min-height);
     min-width: var(--boxxy-pill-min-width);
     padding: var(--boxxy-pill-padding);
@@ -462,6 +498,7 @@ preferencespage button.destructive-action.pill:not(.flat):not(.circular):not(.co
 button.pill > label,
 dialog button.pill > label,
 preferencespage button.pill > label,
+popover button.pill > label,
 statuspage button.pill > label {
     margin-left: 0;
     margin-right: 0;
@@ -472,14 +509,17 @@ statuspage button.pill > label {
 button.pill:not(.flat):not(.circular):hover:not(:disabled),
 dialog button.pill:not(.flat):not(.circular):not(.color-dot-btn):hover:not(:disabled),
 preferencespage button.pill:not(.flat):not(.circular):not(.color-dot-btn):hover:not(:disabled),
+popover button.pill:not(.flat):not(.model):not(.circular):hover:not(:disabled),
 statuspage button.pill:not(.flat):not(.circular):hover:not(:disabled),
 button.suggested-action.pill:not(.flat):not(.circular):hover:not(:disabled),
 dialog button.suggested-action.pill:not(.flat):not(.circular):not(.color-dot-btn):hover:not(:disabled),
 preferencespage button.suggested-action.pill:not(.flat):not(.circular):not(.color-dot-btn):hover:not(:disabled),
+popover button.suggested-action.pill:not(.flat):not(.model):not(.circular):hover:not(:disabled),
 statuspage button.suggested-action.pill:not(.flat):not(.circular):hover:not(:disabled),
 button.destructive-action.pill:not(.flat):not(.circular):hover:not(:disabled),
 dialog button.destructive-action.pill:not(.flat):not(.circular):not(.color-dot-btn):hover:not(:disabled),
-preferencespage button.destructive-action.pill:not(.flat):not(.circular):not(.color-dot-btn):hover:not(:disabled) {
+preferencespage button.destructive-action.pill:not(.flat):not(.circular):not(.color-dot-btn):hover:not(:disabled),
+popover button.destructive-action.pill:not(.flat):not(.model):not(.circular):hover:not(:disabled) {
     transform: var(--boxxy-lift-translate);
     box-shadow: 4px 5px 0px @boxxy_shadow;
 }
@@ -487,14 +527,17 @@ preferencespage button.destructive-action.pill:not(.flat):not(.circular):not(.co
 button.pill:not(.flat):not(.circular):active:not(:disabled),
 dialog button.pill:not(.flat):not(.circular):not(.color-dot-btn):active:not(:disabled),
 preferencespage button.pill:not(.flat):not(.circular):not(.color-dot-btn):active:not(:disabled),
+popover button.pill:not(.flat):not(.model):not(.circular):active:not(:disabled),
 statuspage button.pill:not(.flat):not(.circular):active:not(:disabled),
 button.suggested-action.pill:not(.flat):not(.circular):active:not(:disabled),
 dialog button.suggested-action.pill:not(.flat):not(.circular):not(.color-dot-btn):active:not(:disabled),
 preferencespage button.suggested-action.pill:not(.flat):not(.circular):not(.color-dot-btn):active:not(:disabled),
+popover button.suggested-action.pill:not(.flat):not(.model):not(.circular):active:not(:disabled),
 statuspage button.suggested-action.pill:not(.flat):not(.circular):active:not(:disabled),
 button.destructive-action.pill:not(.flat):not(.circular):active:not(:disabled),
 dialog button.destructive-action.pill:not(.flat):not(.circular):not(.color-dot-btn):active:not(:disabled),
-preferencespage button.destructive-action.pill:not(.flat):not(.circular):not(.color-dot-btn):active:not(:disabled) {
+preferencespage button.destructive-action.pill:not(.flat):not(.circular):not(.color-dot-btn):active:not(:disabled),
+popover button.destructive-action.pill:not(.flat):not(.model):not(.circular):active:not(:disabled) {
     transform: var(--boxxy-pill-press-translate);
     box-shadow: 1px 1px 0px @boxxy_shadow;
 }

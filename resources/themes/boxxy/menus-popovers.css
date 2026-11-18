@@ -48,12 +48,17 @@ popover > contents image {
     font-weight: normal;
 }
 
+popover > contents label.heading {
+    font-weight: 700;
+}
+
 .navigation-sidebar > row:hover:not(:selected) popover > contents button.error:not(:hover) label,
 .navigation-sidebar > row:hover:not(:selected) popover > contents button.error:not(:hover) image,
 .navigation-sidebar > row.menu-open:not(:selected) popover > contents button.error:not(:hover) label,
 .navigation-sidebar > row.menu-open:not(:selected) popover > contents button.error:not(:hover) image,
 .navigation-sidebar > row:selected popover > contents button.error:not(:hover) label,
 .navigation-sidebar > row:selected popover > contents button.error:not(:hover) image,
+popover > contents label.error,
 popover > contents button.error:not(:hover) label,
 popover > contents button.error:not(:hover) image {
     color: @error_color;

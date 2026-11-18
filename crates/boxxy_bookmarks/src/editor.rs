@@ -40,7 +40,7 @@ impl BookmarkEditor {
         let lang_badge: gtk::Label = builder
             .object("lang_badge")
             .expect("lang_badge in bookmark_editor.ui");
-        let ai_btn: gtk::Button = builder
+        let ai_btn: gtk::MenuButton = builder
             .object("ai_btn")
             .expect("ai_btn in bookmark_editor.ui");
         let editor_scroll: gtk::ScrolledWindow = builder
@@ -264,7 +264,7 @@ impl BookmarkEditor {
     }
 
     fn setup_ai_popover(
-        ai_btn: &gtk::Button,
+        ai_btn: &gtk::MenuButton,
         buffer: &sourceview5::Buffer,
         name_entry: &gtk::Entry,
     ) {
@@ -272,7 +272,6 @@ impl BookmarkEditor {
             .autohide(true)
             .position(gtk::PositionType::Bottom)
             .build();
-        ai_popover.set_parent(ai_btn);
 
         let ai_box = gtk::Box::new(gtk::Orientation::Vertical, 10);
         ai_box.set_margin_top(14);
@@ -325,7 +324,9 @@ impl BookmarkEditor {
         ai_box.append(&ai_error_label);
 
         let ai_generate_btn = gtk::Button::builder()
-            .css_classes(["suggested-action"])
+            .css_classes(["suggested-action", "pill"])
+            .halign(gtk::Align::Center)
+            .margin_top(4)
             .build();
 
         let btn_content = gtk::Box::new(gtk::Orientation::Horizontal, 8);
@@ -360,11 +361,10 @@ impl BookmarkEditor {
         ai_box.append(&ai_generate_btn);
 
         ai_popover.set_child(Some(&ai_box));
+        ai_btn.set_popover(Some(&ai_popover));
 
-        let ai_pop_clone = ai_popover.clone();
         let ai_tv_focus = ai_text_view.clone();
-        ai_btn.connect_clicked(move |_| {
-            ai_pop_clone.popup();
+        ai_popover.connect_show(move |_| {
             ai_tv_focus.grab_focus();
         });
 

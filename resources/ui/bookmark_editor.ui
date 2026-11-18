@@ -59,13 +59,14 @@
               </object>
             </child>
             <child>
-              <object class="GtkButton" id="ai_btn">
+              <object class="GtkMenuButton" id="ai_btn">
                 <property name="valign">center</property>
+                <property name="direction">down</property>
                 <property name="tooltip-text">Generate script using AI</property>
                 <style>
                   <class name="bookmark-ai-btn"/>
                 </style>
-                <child>
+                <property name="child">
                   <object class="GtkBox">
                     <property name="orientation">horizontal</property>
                     <property name="spacing">6</property>
@@ -80,7 +81,7 @@
                       </object>
                     </child>
                   </object>
-                </child>
+                </property>
               </object>
             </child>
           </object>
