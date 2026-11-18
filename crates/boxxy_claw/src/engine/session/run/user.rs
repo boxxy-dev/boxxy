@@ -9,6 +9,25 @@ use super::context::RunContext;
 
 const ATTACHMENT_SQUARE_THUMB_PX: u32 = 128;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum UserTurnAction {
+    /// Handled locally with a `SystemMessage` row and no LLM turn (e.g. `/drama` toggle).
+    LocalNotice { system_message: String },
+    /// Stops an active roundtable or running turn (`is_slash == true` for `/stop` omits the user bubble).
+    Stop {
+        is_slash: bool,
+        was_roundtable_active: bool,
+        user_bubble: Option<String>,
+    },
+    /// Proceeds to an LLM turn (with optional `SystemMessage` banner and optional `UserMessage` bubble).
+    RunTurn {
+        user_bubble: Option<String>,
+        system_message: Option<String>,
+        effective_query: String,
+        allow_steering: bool,
+    },
+}
+
 /// Resizes base64-encoded PNG attachments into square thumbnails via `boxxy-assets`
 /// (`SquareCrop` + `Resize`) and persists them under `<config_dir>/cache/attachments/<sha256>_sq.png`,
 /// returning the list of cached file paths to display as square thumbnails before the user text.
@@ -103,7 +122,7 @@ impl ClawSession {
 
         if snapshots.is_empty() {
             return Some(
-                "Nothing to undo — no file edits have been recorded in the recent turn."
+                "↩️ Nothing to undo — no file edits have been recorded in the recent turn."
                     .to_string(),
             );
         }
@@ -153,9 +172,10 @@ impl ClawSession {
                     }
                 }
             }
-            state_lock
-                .history
-                .push(rig::message::Message::user("/undo".to_string()));
+            state_lock.history.push(rig::message::Message::user(
+                "[System: The user ran /undo to revert file changes from the last turn.]"
+                    .to_string(),
+            ));
             state_lock
                 .history
                 .push(rig::message::Message::assistant(summary.clone()));
@@ -164,12 +184,74 @@ impl ClawSession {
         Some(summary)
     }
 
+    /// Cancels any awaiting tool proposals and aborts any in-flight LLM turn cleanly,
+    /// returning `true` if either an active turn or a pending proposal was cancelled.
+    async fn cancel_active_turn_and_proposals(&self, ctx: &mut RunContext) -> bool {
+        let mut had_active = false;
+
+        if let Some(handle) = ctx.current_turn.take() {
+            handle.abort();
+            had_active = true;
+            let (thinking_name, thinking_cid) = self.state.lock().await.effective_speaker();
+            let _ = self
+                .tx_ui
+                .send(ClawEngineEvent::AgentThinking {
+                    agent_name: thinking_name,
+                    character_id: thinking_cid,
+                    is_thinking: false,
+                })
+                .await;
+        }
+        if !ctx.backlog.is_empty() {
+            ctx.backlog.clear();
+            had_active = true;
+        }
+
+        let local_cancelled = {
+            let mut state_lock = self.state.lock().await;
+            state_lock.drain_pending_cancel()
+        };
+        let remote_cancelled = ctx
+            .workspace
+            .drain_pending_commands_for_source(&self.pane_id, "[USER_EXPLICIT_REJECT]".to_string())
+            .await;
+        let proposal_cancelled = local_cancelled || remote_cancelled;
+
+        if proposal_cancelled {
+            had_active = true;
+            let _ = self
+                .tx_ui
+                .send(ClawEngineEvent::ProposalResolved {
+                    agent_name: self.name.clone(),
+                    character_id: self.character_id.clone(),
+                    approved: false,
+                })
+                .await;
+        }
+
+        had_active
+    }
+
     /// Evaluates the user's message for `/stop`, `/drama`, `/debate`, `@character` mentions, or
-    /// participation in an active roundtable. Returns `Err(status_msg)` if the command was handled
-    /// locally (like `/stop` or `/drama` toggle) without needing an immediate LLM turn.
-    async fn prepare_user_roundtable_turn(&self, raw_input: &str) -> Result<String, String> {
+    /// participation in an active roundtable, returning a structured `UserTurnAction` so slash
+    /// commands emit `SystemMessage` rows rather than echoing raw `/command` text or character replies.
+    #[allow(clippy::too_many_lines)]
+    async fn prepare_user_roundtable_turn(
+        &self,
+        raw_input: &str,
+        attachments_tail: &str,
+    ) -> UserTurnAction {
         use crate::engine::session::roundtable::{
-            SpeakerIdentity, UserRoundtableIntent, get_active_catalog, parse_user_roundtable_intent,
+            SpeakerIdentity, UserRoundtableIntent, format_participants_banner, get_active_catalog,
+            parse_user_roundtable_intent,
+        };
+
+        let append_tail = |base: String| -> String {
+            if attachments_tail.is_empty() {
+                base
+            } else {
+                format!("{base}{attachments_tail}")
+            }
         };
 
         let catalog = get_active_catalog();
@@ -196,28 +278,48 @@ impl ClawSession {
             || state_lock.active_speaker.is_some();
 
         match parse_user_roundtable_intent(raw_input, &host, was_active, &catalog) {
-            UserRoundtableIntent::Stop => {
+            UserRoundtableIntent::Stop { is_slash } => {
                 state_lock.roundtable.clear();
                 state_lock.active_speaker = None;
-                Err("*Multi-character conversation paused. Let me know what you'd like to do next!*".to_string())
+                UserTurnAction::Stop {
+                    is_slash,
+                    was_roundtable_active: was_active,
+                    user_bubble: (!is_slash).then(|| raw_input.to_string()),
+                }
             }
             UserRoundtableIntent::ToggleDrama => {
                 let next = !state_lock.roundtable.drama_mode;
                 state_lock.roundtable.drama_mode = next;
-                if next {
-                    Err("🎭 **Drama Mode enabled!** Characters will now speak in short, casual 1-sentence Visual Novel lines with a typewriter effect.".to_string())
+                let notice = if next {
+                    "🎭 **Drama Mode enabled!** Characters will now speak in short, casual 1-sentence Visual Novel lines with a typewriter effect."
                 } else {
-                    Err("🎭 **Drama Mode disabled.** Characters will return to full technical responses.".to_string())
+                    "🎭 **Drama Mode disabled.** Characters will return to full technical responses."
+                };
+                UserTurnAction::LocalNotice {
+                    system_message: notice.to_string(),
                 }
             }
-            UserRoundtableIntent::Drama { guests, topic } => {
+            UserRoundtableIntent::Drama {
+                guests,
+                topic,
+                custom_topic,
+            } => {
                 if guests.is_empty() {
                     // Single-character Drama Mode: chat 1-on-1 with the Host character in
                     // Visual Novel style (1-2 sentences + typewriter) and wait for the user!
+                    let was_drama = state_lock.roundtable.drama_mode;
                     state_lock.roundtable.clear();
                     state_lock.roundtable.drama_mode = true;
                     state_lock.active_speaker = None;
-                    return Ok(topic);
+                    let system_message = (!was_drama).then(|| {
+                        "🎭 **Drama Mode enabled!** Characters will now speak in short, casual 1-sentence Visual Novel lines with a typewriter effect.".to_string()
+                    });
+                    return UserTurnAction::RunTurn {
+                        user_bubble: Some(topic.clone()),
+                        system_message,
+                        effective_query: append_tail(topic),
+                        allow_steering: false,
+                    };
                 }
 
                 let resolved_guests: Vec<SpeakerIdentity> = guests
@@ -239,12 +341,29 @@ impl ClawSession {
                     .start_debate(host, resolved_guests, topic.clone());
                 state_lock.roundtable.drama_mode = true;
                 state_lock.active_speaker = state_lock.roundtable.speaker_queue.pop_front();
-                Ok(format!(
-                    "[VISUAL NOVEL DRAMA MODE STARTED]\nTopic: {topic}\n\
-                    Reply in ONLY 1 to 2 short, expressive spoken sentences (NO bullet points, NO lists, NO headers) and directly address the other participant(s)!"
-                ))
+
+                let roster = format_participants_banner(&state_lock.roundtable.participants);
+                drop(state_lock);
+                let banner = custom_topic.map_or_else(
+                    || format!("🎭 **Drama Mode** • {roster}"),
+                    |ct| format!("🎭 **Drama Mode** • {roster} — {ct}"),
+                );
+
+                UserTurnAction::RunTurn {
+                    user_bubble: None,
+                    system_message: Some(banner),
+                    effective_query: append_tail(format!(
+                        "[VISUAL NOVEL DRAMA MODE STARTED]\nTopic: {topic}\n\
+                        Reply in ONLY 1 to 2 short, expressive spoken sentences (NO bullet points, NO lists, NO headers) and directly address the other participant(s)!"
+                    )),
+                    allow_steering: false,
+                }
             }
-            UserRoundtableIntent::Debate { guests, topic } => {
+            UserRoundtableIntent::Debate {
+                guests,
+                topic,
+                custom_topic,
+            } => {
                 // Re-resolve guests with `self.pane_id` so active swarm peers get their `home_pane_id` populated
                 let resolved_guests: Vec<SpeakerIdentity> = guests
                     .into_iter()
@@ -264,10 +383,23 @@ impl ClawSession {
                     .roundtable
                     .start_debate(host, resolved_guests, topic.clone());
                 state_lock.active_speaker = state_lock.roundtable.speaker_queue.pop_front();
-                Ok(format!(
-                    "[ROUNDTABLE DEBATE STARTED]\nTopic: {topic}\n\
-                    Kick off the discussion in your character's voice and directly engage the other participant(s) and the user!"
-                ))
+
+                let roster = format_participants_banner(&state_lock.roundtable.participants);
+                drop(state_lock);
+                let banner = custom_topic.map_or_else(
+                    || format!("🎙️ **Debate started** • {roster}"),
+                    |ct| format!("🎙️ **Debate started** • {roster} — {ct}"),
+                );
+
+                UserTurnAction::RunTurn {
+                    user_bubble: None,
+                    system_message: Some(banner),
+                    effective_query: append_tail(format!(
+                        "[ROUNDTABLE DEBATE STARTED]\nTopic: {topic}\n\
+                        Kick off the discussion in your character's voice and directly engage the other participant(s) and the user!"
+                    )),
+                    allow_steering: false,
+                }
             }
             UserRoundtableIntent::Mention {
                 mentioned,
@@ -295,7 +427,13 @@ impl ClawSession {
                     prompt.clone(),
                 );
                 state_lock.active_speaker = state_lock.roundtable.speaker_queue.pop_front();
-                Ok(prompt)
+                drop(state_lock);
+                UserTurnAction::RunTurn {
+                    user_bubble: Some(raw_input.to_string()),
+                    system_message: None,
+                    effective_query: append_tail(prompt),
+                    allow_steering: !multi_turn,
+                }
             }
             UserRoundtableIntent::None => {
                 if state_lock.roundtable.participants.len() >= 2 {
@@ -308,7 +446,187 @@ impl ClawSession {
                 } else {
                     state_lock.active_speaker = None;
                 }
-                Ok(raw_input.to_string())
+                drop(state_lock);
+                UserTurnAction::RunTurn {
+                    user_bubble: Some(raw_input.to_string()),
+                    system_message: None,
+                    effective_query: append_tail(raw_input.to_string()),
+                    allow_steering: true,
+                }
+            }
+        }
+    }
+
+    #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+    async fn process_user_submission(
+        &self,
+        ctx: &mut RunContext,
+        session_ctx: &str,
+        raw_query: String,
+        display_query: String,
+        is_whats_new: bool,
+        snapshot: String,
+        cwd: String,
+        image_attachments: Vec<String>,
+    ) {
+        ctx.current_dir.clone_from(&cwd);
+
+        // 1. `/undo` cancels any active turn/proposal and reverts file snapshots locally
+        //    via a SystemMessage without echoing `/undo` as a user bubble.
+        if !is_whats_new && display_query.trim().eq_ignore_ascii_case("/undo") {
+            let _ = self.cancel_active_turn_and_proposals(ctx).await;
+            if let Some(undo_msg) = self.try_handle_undo(&display_query, &ctx.env).await {
+                self.send_ui(ClawEngineEvent::SystemMessage { text: undo_msg })
+                    .await;
+            }
+            let _ = self.tx_self.send(ClawMessage::TurnFinished).await;
+            return;
+        }
+
+        let action = if is_whats_new {
+            UserTurnAction::RunTurn {
+                user_bubble: Some(display_query),
+                system_message: None,
+                effective_query: raw_query,
+                allow_steering: true,
+            }
+        } else {
+            let attachments_tail = raw_query
+                .find(crate::engine::turn::ATTACHMENTS_CONTEXT_MARKER)
+                .map_or_default(|idx| &raw_query[idx..]);
+            self.prepare_user_roundtable_turn(&display_query, attachments_tail)
+                .await
+        };
+
+        match action {
+            UserTurnAction::LocalNotice { system_message } => {
+                self.send_ui(ClawEngineEvent::SystemMessage {
+                    text: system_message,
+                })
+                .await;
+                let _ = self.tx_self.send(ClawMessage::TurnFinished).await;
+            }
+            UserTurnAction::Stop {
+                is_slash,
+                was_roundtable_active,
+                user_bubble,
+            } => {
+                let had_active = self.cancel_active_turn_and_proposals(ctx).await;
+                if let Some(bubble) = user_bubble {
+                    let thumb_paths = cache_user_attachment_thumbnails(&image_attachments).await;
+                    self.send_ui(ClawEngineEvent::UserMessage {
+                        content: bubble,
+                        images: thumb_paths,
+                    })
+                    .await;
+                }
+                let notice = if !is_slash {
+                    Some("⏹️ **Multi-character conversation paused.**")
+                } else if was_roundtable_active {
+                    Some("⏹️ **Multi-character conversation stopped.**")
+                } else if had_active {
+                    Some("⏹️ **Stopped.**")
+                } else {
+                    None
+                };
+                if let Some(text) = notice {
+                    self.send_ui(ClawEngineEvent::SystemMessage {
+                        text: text.to_string(),
+                    })
+                    .await;
+                }
+                let _ = self.tx_self.send(ClawMessage::TurnFinished).await;
+            }
+            UserTurnAction::RunTurn {
+                user_bubble,
+                system_message,
+                effective_query,
+                allow_steering,
+            } => {
+                self.ensure_session_persisted(&cwd).await;
+
+                if let Some(sys_msg) = system_message {
+                    self.send_ui(ClawEngineEvent::SystemMessage { text: sys_msg })
+                        .await;
+                }
+
+                let thumb_paths = cache_user_attachment_thumbnails(&image_attachments).await;
+                if user_bubble.is_some() || !thumb_paths.is_empty() {
+                    self.send_ui(ClawEngineEvent::UserMessage {
+                        content: user_bubble.unwrap_or_default(),
+                        images: thumb_paths,
+                    })
+                    .await;
+                }
+
+                if allow_steering {
+                    let mut fulfilled = {
+                        let mut state_lock = self.state.lock().await;
+                        state_lock.drain_pending_with_interruption(&effective_query)
+                    };
+                    let outcome =
+                        boxxy_core_toolbox::ApprovalOutcome::Interrupted(effective_query.clone());
+                    if ctx
+                        .workspace
+                        .drain_pending_commands_for_source(&self.pane_id, outcome.rejection_message())
+                        .await
+                    {
+                        fulfilled = true;
+                    }
+
+                    if fulfilled {
+                        debug!(
+                            "Pane {} ({}): Fulfilled pending tool approval with user query: {effective_query}.",
+                            self.pane_id, self.name
+                        );
+                        ctx.workspace
+                            .update_pane_state(
+                                self.pane_id.clone(),
+                                Some(self.session_id.clone()),
+                                Some(self.name.clone()),
+                                ctx.current_dir.clone(),
+                                Some(effective_query),
+                                Some(snapshot),
+                            )
+                            .await;
+                        return;
+                    }
+                }
+
+                let _ = self.cancel_active_turn_and_proposals(ctx).await;
+
+                ctx.workspace
+                    .update_pane_state(
+                        self.pane_id.clone(),
+                        Some(self.session_id.clone()),
+                        Some(self.name.clone()),
+                        ctx.current_dir.clone(),
+                        Some(effective_query.clone()),
+                        Some(snapshot.clone()),
+                    )
+                    .await;
+
+                debug!(
+                    "Pane {} ({}): Direct Claw query: {effective_query}. Starting analysis.",
+                    self.pane_id, self.name
+                );
+                ctx.current_turn = Some(spawn_turn(
+                    self.pane_id.clone(),
+                    self.session_id.clone(),
+                    self.name.clone(),
+                    &effective_query,
+                    &snapshot,
+                    session_ctx,
+                    cwd,
+                    false,
+                    ctx.env.clone(),
+                    self.db.clone(),
+                    self.state.clone(),
+                    self.tx_ui.clone(),
+                    self.tx_self.clone(),
+                    None,
+                    image_attachments,
+                ));
             }
         }
     }
@@ -323,6 +641,40 @@ impl ClawSession {
         image_attachments: Vec<String>,
     ) {
         if self.incognito {
+            if let Some((cmd, _)) = boxxy_claw_protocol::SlashCommand::parse(&query) {
+                match cmd {
+                    boxxy_claw_protocol::SlashCommand::Stop => {
+                        if let Some(handle) = ctx.current_turn.take() {
+                            handle.abort();
+                            let _ = self
+                                .tx_ui
+                                .send(ClawEngineEvent::AgentThinking {
+                                    agent_name: self.name.clone(),
+                                    character_id: self.character_id.clone(),
+                                    is_thinking: false,
+                                })
+                                .await;
+                        }
+                        ctx.backlog.clear();
+                        let _ = self.tx_self.send(ClawMessage::TurnFinished).await;
+                        return;
+                    }
+                    boxxy_claw_protocol::SlashCommand::Drama
+                    | boxxy_claw_protocol::SlashCommand::Debate
+                    | boxxy_claw_protocol::SlashCommand::Undo => {
+                        let _ = self
+                            .tx_ui
+                            .send(ClawEngineEvent::SystemMessage {
+                                text: "🕵️ Session commands (/drama, /debate, /undo) are unavailable in Incognito Mode.".to_string(),
+                            })
+                            .await;
+                        let _ = self.tx_self.send(ClawMessage::TurnFinished).await;
+                        return;
+                    }
+                    _ => {}
+                }
+            }
+
             if let Some(handle) = ctx.current_turn.take() {
                 handle.abort();
                 let _ = self
@@ -363,9 +715,6 @@ impl ClawSession {
         }
 
         let mut image_attachments = image_attachments;
-        ctx.current_dir = cwd.clone();
-        self.ensure_session_persisted(&cwd).await;
-
         let is_whats_new = crate::engine::turn::is_whats_new_prompt(&query);
         let display_query = crate::engine::turn::extract_user_authored_prompt(&query).to_string();
 
@@ -382,137 +731,17 @@ impl ClawSession {
             }
         }
 
-        let thumb_paths = cache_user_attachment_thumbnails(&image_attachments).await;
-        self.send_ui(ClawEngineEvent::UserMessage {
-            content: display_query.clone(),
-            images: thumb_paths,
-        })
-        .await;
-
-        // Resolve any waiting tool approval channel with the user's new instruction
-        // so an in-flight turn can immediately steer without tearing down and restarting.
-        let mut fulfilled = {
-            let mut state_lock = self.state.lock().await;
-            state_lock.drain_pending_with_interruption(&query)
-        };
-        let outcome = boxxy_core_toolbox::ApprovalOutcome::Interrupted(query.clone());
-        if ctx
-            .workspace
-            .drain_pending_commands_for_source(&self.pane_id, outcome.rejection_message())
-            .await
-        {
-            fulfilled = true;
-        }
-
-        if fulfilled {
-            debug!(
-                "Pane {} ({}): Fulfilled pending tool approval with user query: {query}.",
-                self.pane_id, self.name
-            );
-            ctx.workspace
-                .update_pane_state(
-                    self.pane_id.clone(),
-                    Some(self.session_id.clone()),
-                    Some(self.name.clone()),
-                    ctx.current_dir.clone(),
-                    Some(query),
-                    Some(snapshot),
-                )
-                .await;
-            return;
-        }
-
-        if let Some(handle) = ctx.current_turn.take() {
-            handle.abort();
-            let (thinking_name, thinking_cid) = self.state.lock().await.effective_speaker();
-            let _ = self
-                .tx_ui
-                .send(ClawEngineEvent::AgentThinking {
-                    agent_name: thinking_name,
-                    character_id: thinking_cid,
-                    is_thinking: false,
-                })
-                .await;
-        }
-        ctx.backlog.clear();
-
-        if let Some(undo_msg) = self.try_handle_undo(&query, &ctx.env).await {
-            self.send_ui(ClawEngineEvent::DiagnosisComplete {
-                agent_name: self.name.clone(),
-                character_id: self.character_id.clone(),
-                diagnosis: undo_msg,
-                trace: Vec::new(),
-                usage: None,
-                typewriter: false,
-            })
-            .await;
-            let _ = self.tx_self.send(ClawMessage::TurnFinished).await;
-            return;
-        }
-
-        let effective_query = if is_whats_new {
-            query
-        } else {
-            let attachments_tail = query
-                .find(crate::engine::turn::ATTACHMENTS_CONTEXT_MARKER)
-                .map(|idx| &query[idx..])
-                .unwrap_or_default();
-            match self.prepare_user_roundtable_turn(&display_query).await {
-                Ok(q) => {
-                    if attachments_tail.is_empty() {
-                        q
-                    } else {
-                        format!("{q}{attachments_tail}")
-                    }
-                }
-                Err(status_msg) => {
-                    self.send_ui(ClawEngineEvent::DiagnosisComplete {
-                        agent_name: self.name.clone(),
-                        character_id: self.character_id.clone(),
-                        diagnosis: status_msg,
-                        trace: Vec::new(),
-                        usage: None,
-                        typewriter: false,
-                    })
-                    .await;
-                    let _ = self.tx_self.send(ClawMessage::TurnFinished).await;
-                    return;
-                }
-            }
-        };
-
-        ctx.workspace
-            .update_pane_state(
-                self.pane_id.clone(),
-                Some(self.session_id.clone()),
-                Some(self.name.clone()),
-                ctx.current_dir.clone(),
-                Some(effective_query.clone()),
-                Some(snapshot.clone()),
-            )
-            .await;
-
-        debug!(
-            "Pane {} ({}): Direct Claw query: {effective_query}. Starting analysis.",
-            self.pane_id, self.name
-        );
-        ctx.current_turn = Some(spawn_turn(
-            self.pane_id.clone(),
-            self.session_id.clone(),
-            self.name.clone(),
-            &effective_query,
-            &snapshot,
+        self.process_user_submission(
+            ctx,
             session_ctx,
+            query,
+            display_query,
+            is_whats_new,
+            snapshot,
             cwd,
-            false,
-            ctx.env.clone(),
-            self.db.clone(),
-            self.state.clone(),
-            self.tx_ui.clone(),
-            self.tx_self.clone(),
-            None,
             image_attachments,
-        ));
+        )
+        .await;
     }
 
     pub(super) async fn handle_user_message(
@@ -524,112 +753,18 @@ impl ClawSession {
         cwd: String,
         image_attachments: Vec<String>,
     ) {
-        ctx.current_dir = cwd.clone();
-        self.ensure_session_persisted(&cwd).await;
-        let thumb_paths = cache_user_attachment_thumbnails(&image_attachments).await;
-        self.send_ui(ClawEngineEvent::UserMessage {
-            content: message.clone(),
-            images: thumb_paths,
-        })
+        let display_query = message.clone();
+        self.process_user_submission(
+            ctx,
+            session_ctx,
+            message,
+            display_query,
+            false,
+            snapshot,
+            cwd,
+            image_attachments,
+        )
         .await;
-
-        debug!(
-            "Pane {} ({}): User reply: {message}. Checking for pending tools.",
-            self.pane_id, self.name
-        );
-
-        ctx.workspace
-            .update_pane_state(
-                self.pane_id.clone(),
-                Some(self.session_id.clone()),
-                Some(self.name.clone()),
-                ctx.current_dir.clone(),
-                None,
-                Some(snapshot.clone()),
-            )
-            .await;
-
-        let mut state_lock = self.state.lock().await;
-        let mut fulfilled = state_lock.drain_pending_with_interruption(&message);
-        drop(state_lock);
-        let outcome = boxxy_core_toolbox::ApprovalOutcome::Interrupted(message.clone());
-        if ctx
-            .workspace
-            .drain_pending_commands_for_source(&self.pane_id, outcome.rejection_message())
-            .await
-        {
-            fulfilled = true;
-        }
-
-        if fulfilled {
-            debug!(
-                "Pane {} ({}): Fulfilled pending tool with user feedback.",
-                self.pane_id, self.name
-            );
-        } else {
-            if let Some(handle) = ctx.current_turn.take() {
-                handle.abort();
-                let (thinking_name, thinking_cid) = self.state.lock().await.effective_speaker();
-                let _ = self
-                    .tx_ui
-                    .send(ClawEngineEvent::AgentThinking {
-                        agent_name: thinking_name,
-                        character_id: thinking_cid,
-                        is_thinking: false,
-                    })
-                    .await;
-            }
-            ctx.backlog.clear();
-
-            if let Some(undo_msg) = self.try_handle_undo(&message, &ctx.env).await {
-                self.send_ui(ClawEngineEvent::DiagnosisComplete {
-                    agent_name: self.name.clone(),
-                    character_id: self.character_id.clone(),
-                    diagnosis: undo_msg,
-                    trace: Vec::new(),
-                    usage: None,
-                    typewriter: false,
-                })
-                .await;
-                let _ = self.tx_self.send(ClawMessage::TurnFinished).await;
-                return;
-            }
-
-            let effective_message = match self.prepare_user_roundtable_turn(&message).await {
-                Ok(m) => m,
-                Err(status_msg) => {
-                    self.send_ui(ClawEngineEvent::DiagnosisComplete {
-                        agent_name: self.name.clone(),
-                        character_id: self.character_id.clone(),
-                        diagnosis: status_msg,
-                        trace: Vec::new(),
-                        usage: None,
-                        typewriter: false,
-                    })
-                    .await;
-                    let _ = self.tx_self.send(ClawMessage::TurnFinished).await;
-                    return;
-                }
-            };
-
-            ctx.current_turn = Some(spawn_turn(
-                self.pane_id.clone(),
-                self.session_id.clone(),
-                self.name.clone(),
-                &effective_message,
-                &snapshot,
-                session_ctx,
-                cwd,
-                false,
-                ctx.env.clone(),
-                self.db.clone(),
-                self.state.clone(),
-                self.tx_ui.clone(),
-                self.tx_self.clone(),
-                None,
-                image_attachments,
-            ));
-        }
     }
 
     pub(super) async fn handle_delegated_task(
@@ -717,6 +852,40 @@ impl ClawSession {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
+
+    struct NoopEnv;
+
+    #[async_trait::async_trait]
+    impl crate::engine::ClawEnvironment for NoopEnv {
+        async fn exec_shell(&self, _: String) -> anyhow::Result<(i32, String, String)> {
+            Ok((0, String::new(), String::new()))
+        }
+        async fn spawn_detached(&self, _: String, _: String) -> anyhow::Result<u32> {
+            Ok(1)
+        }
+        async fn read_file(&self, _: String, _: u32, _: u32) -> anyhow::Result<String> {
+            Ok(String::new())
+        }
+        async fn write_file(&self, _: String, _: String) -> anyhow::Result<()> {
+            Ok(())
+        }
+        async fn list_directory(&self, _: String) -> anyhow::Result<Vec<(String, bool, u64)>> {
+            Ok(vec![])
+        }
+        async fn delete_file(&self, _: String) -> anyhow::Result<()> {
+            Ok(())
+        }
+        async fn kill_process(&self, _: u32, _: i32) -> anyhow::Result<()> {
+            Ok(())
+        }
+        async fn get_clipboard(&self) -> anyhow::Result<String> {
+            Ok(String::new())
+        }
+        async fn set_clipboard(&self, _: String) -> anyhow::Result<()> {
+            Ok(())
+        }
+    }
 
     #[tokio::test]
     async fn cache_user_attachment_thumbnails_creates_square_pngs() {
@@ -729,5 +898,107 @@ mod tests {
         assert_eq!(paths.len(), 1);
         assert!(paths[0].ends_with("_sq.png"));
         assert!(std::path::Path::new(&paths[0]).exists());
+    }
+
+    #[tokio::test]
+    async fn slash_commands_emit_system_messages_without_raw_command_user_bubbles() {
+        let (session, _tx, rx_ui) = ClawSession::new("pane-slash-test".to_string());
+        let session = session.with_identity(
+            "char-host".to_string(),
+            "Host Agent".to_string(),
+            "sess-slash-test".to_string(),
+        );
+        let workspace = Arc::new(crate::registry::workspace::WorkspaceRegistry::new());
+        let mut ctx = RunContext::new(Arc::new(NoopEnv), workspace);
+
+        // 1. `/drama` toggle emits ONLY a `SystemMessage` (never `UserMessage("/drama")` or `DiagnosisComplete`).
+        session
+            .handle_claw_query(
+                &mut ctx,
+                "",
+                "/drama".to_string(),
+                String::new(),
+                String::new(),
+                Vec::new(),
+            )
+            .await;
+
+        let mut events = Vec::new();
+        while let Ok(ev) = rx_ui.try_recv() {
+            events.push(ev);
+        }
+        assert_eq!(events.len(), 1);
+        assert!(matches!(
+            &events[0],
+            ClawEngineEvent::SystemMessage { text } if text.contains("Drama Mode enabled")
+        ));
+        assert!(session.state.lock().await.roundtable.drama_mode);
+
+        // 2. `/undo` while a tool approval is pending cancels the proposal and emits a `SystemMessage`
+        //    rather than feeding `"/undo"` into the awaiting tool channel.
+        let (file_tx, file_rx) = tokio::sync::oneshot::channel();
+        session.state.lock().await.pending_file_reply = Some(file_tx);
+
+        session
+            .handle_claw_query(
+                &mut ctx,
+                "",
+                "/undo".to_string(),
+                String::new(),
+                String::new(),
+                Vec::new(),
+            )
+            .await;
+
+        assert_eq!(
+            file_rx.await.unwrap(),
+            boxxy_core_toolbox::ApprovalOutcome::Rejected
+        );
+
+        let mut undo_events = Vec::new();
+        while let Ok(ev) = rx_ui.try_recv() {
+            undo_events.push(ev);
+        }
+        assert!(
+            !undo_events
+                .iter()
+                .any(|e| matches!(e, ClawEngineEvent::UserMessage { .. })),
+            "Expected no UserMessage row for /undo"
+        );
+        assert!(
+            undo_events.iter().any(|e| matches!(
+                e,
+                ClawEngineEvent::SystemMessage { text } if text.contains("Nothing to undo")
+            )),
+            "Expected SystemMessage for /undo"
+        );
+
+        // 3. `/stop` when completely idle emits neither a `/stop` UserMessage nor noise.
+        session
+            .handle_claw_query(
+                &mut ctx,
+                "",
+                "/stop".to_string(),
+                String::new(),
+                String::new(),
+                Vec::new(),
+            )
+            .await;
+        assert!(rx_ui.try_recv().is_err());
+
+        // 4. `/drama <message>` strips `/drama ` from the user bubble!
+        let solo_action = session
+            .prepare_user_roundtable_turn("/drama Explain src/module.rs", "")
+            .await;
+        assert_eq!(
+            solo_action,
+            UserTurnAction::RunTurn {
+                user_bubble: Some("Explain src/module.rs".to_string()),
+                // Already enabled in step 1 above, so no duplicate enable banner is emitted
+                system_message: None,
+                effective_query: "Explain src/module.rs".to_string(),
+                allow_steering: false,
+            }
+        );
     }
 }

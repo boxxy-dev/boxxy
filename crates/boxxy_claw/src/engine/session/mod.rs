@@ -311,7 +311,11 @@ impl ClawSession {
         }
         matches!(
             msg,
-            ClawMessage::CancelPending
+            ClawMessage::Initialize
+                | ClawMessage::ToggleVibe(_)
+                | ClawMessage::ToggleWebSearch(_)
+                | ClawMessage::TogglePin(_)
+                | ClawMessage::CancelPending
                 | ClawMessage::Deactivate
                 | ClawMessage::Evict
                 | ClawMessage::SleepToggle(_)

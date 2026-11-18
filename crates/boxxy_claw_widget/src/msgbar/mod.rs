@@ -501,6 +501,16 @@ impl MsgBarComponent {
                     return;
                 }
 
+                if (trimmed_input.eq_ignore_ascii_case("/stop")
+                    || trimmed_input.eq_ignore_ascii_case("/undo"))
+                    && no_attachments
+                    && !claw_state.get()
+                {
+                    history.borrow_mut().push(original_text, Vec::new());
+                    buf.set_text("");
+                    return;
+                }
+
                 let (text, images) = attachment_mgr.build_payload(&original_text);
 
                 if !text.trim().is_empty() || !images.is_empty() {
@@ -570,26 +580,7 @@ impl MsgBarComponent {
                     file_index::record_file_frecency(&cwd, &replacement);
                     return;
                 }
-                let is_resume_session = replacement
-                    .strip_prefix("/resume ")
-                    .is_some_and(|s| !s.trim().is_empty());
-                if is_resume_session
-                    || matches!(
-                        replacement.as_str(),
-                        "/incognito"
-                            | "/models"
-                            | "/vibe"
-                            | "/sleep"
-                            | "/pin"
-                            | "/web"
-                            | "/code"
-                            | "/clear"
-                            | "/exit"
-                            | "/stop"
-                            | "/drama"
-                            | "/undo"
-                    )
-                {
+                if boxxy_claw_protocol::SlashCommand::auto_submits_on_complete(&replacement) {
                     autocomplete_submit();
                 }
             })),

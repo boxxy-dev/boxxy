@@ -664,23 +664,21 @@ impl TerminalOverlay {
         });
         revealer.add_controller(esc_controller);
 
-        // Immediately collapse any active proposal controls into the Thinking state
-        // when the user submits a message in the msgbar (unless it's a slash command like /resume).
+        // Immediately transition overlay state when the user submits in the msgbar:
+        // LLM-starting prompts enter Thinking, cancel/undo commands settle to Idle,
+        // and instant control commands (/drama toggle, /incognito, /resume) stay Idle.
         let overlay_for_submit = s.clone();
         s.msg_bar.set_on_submit_hook(move |text| {
-            let trimmed = text.trim();
-            let is_resume = trimmed
-                .get(..8)
-                .is_some_and(|p| p.eq_ignore_ascii_case("/resume "));
-            let is_btw = trimmed
-                .get(..5)
-                .is_some_and(|p| p.eq_ignore_ascii_case("/btw "));
-            if !is_resume
-                && !is_btw
-                && !trimmed.eq_ignore_ascii_case("/incognito")
-                && !trimmed.eq_ignore_ascii_case("/code")
-            {
-                overlay_for_submit.enter_waiting_state();
+            match boxxy_claw_protocol::classify_submit_effect(text) {
+                boxxy_claw_protocol::SlashSubmitEffect::StartsTurn => {
+                    overlay_for_submit.enter_waiting_state();
+                }
+                boxxy_claw_protocol::SlashSubmitEffect::CancelAndSettle => {
+                    overlay_for_submit.set_state(OverlayState::Idle);
+                    overlay_for_submit.grab_input_focus();
+                }
+                boxxy_claw_protocol::SlashSubmitEffect::FrontendOnly
+                | boxxy_claw_protocol::SlashSubmitEffect::InstantControl => {}
             }
         });
 

@@ -46,34 +46,45 @@ impl SessionState {
 
     /// Reject all waiting tool channels and record a synthetic assistant summary of the
     /// rejected proposal so the next turn retains context without making an extra LLM call.
-    pub fn drain_pending_cancel(&mut self) {
+    /// Returns `true` if any pending tool approval channel was active and rejected.
+    pub fn drain_pending_cancel(&mut self) -> bool {
         self.pending_inject_command = false;
+        let mut cancelled = false;
         if let Some(summary) = self.pending_proposal_summary.take() {
             self.history.push(rig::message::Message::assistant(format!(
                 "[Proposed {summary} — rejected by the user]"
             )));
+            cancelled = true;
         }
         if let Some(reply) = self.pending_terminal_reply.take() {
             let _ = reply.send(Err("[USER_EXPLICIT_REJECT]".to_string()));
+            cancelled = true;
         }
         if let Some(reply) = self.pending_file_reply.take() {
             let _ = reply.send(ApprovalOutcome::Rejected);
+            cancelled = true;
         }
         if let Some(reply) = self.pending_file_delete_reply.take() {
             let _ = reply.send(ApprovalOutcome::Rejected);
+            cancelled = true;
         }
         if let Some(reply) = self.pending_kill_process_reply.take() {
             let _ = reply.send(ApprovalOutcome::Rejected);
+            cancelled = true;
         }
         if let Some(reply) = self.pending_background_reply.take() {
             let _ = reply.send(ApprovalOutcome::Rejected);
+            cancelled = true;
         }
         if let Some(reply) = self.pending_get_clipboard_reply.take() {
             let _ = reply.send(ApprovalOutcome::Rejected);
+            cancelled = true;
         }
         if let Some(reply) = self.pending_set_clipboard_reply.take() {
             let _ = reply.send(ApprovalOutcome::Rejected);
+            cancelled = true;
         }
+        cancelled
     }
 }
 

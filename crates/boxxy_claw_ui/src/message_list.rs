@@ -824,14 +824,22 @@ pub fn format_exchange_for_copy(store: &gio::ListStore, pos: u32) -> String {
         return String::new();
     }
 
-    let is_user_at = |idx: u32| -> Option<bool> {
-        store
-            .item(idx)
-            .and_downcast::<ClawRowObject>()
-            .map(|o| o.with_row(|r| matches!(r, PersistentClawRow::User { .. })))
+    let classify_at = |idx: u32| -> Option<(bool, bool, bool)> {
+        store.item(idx).and_downcast::<ClawRowObject>().map(|o| {
+            o.with_row(|r| {
+                (
+                    matches!(r, PersistentClawRow::User { .. }),
+                    matches!(r, PersistentClawRow::SystemMessage { .. }),
+                    matches!(
+                        r,
+                        PersistentClawRow::Diagnosis { .. } | PersistentClawRow::Suggested { .. }
+                    ),
+                )
+            })
+        })
     };
 
-    let Some(clicked_is_user) = is_user_at(pos) else {
+    let Some((clicked_is_user, _, _)) = classify_at(pos) else {
         return String::new();
     };
 
@@ -840,7 +848,16 @@ pub fn format_exchange_for_copy(store: &gio::ListStore, pos: u32) -> String {
         let mut cursor = pos;
         while cursor > 0 {
             cursor -= 1;
-            if is_user_at(cursor) == Some(true) {
+            let Some((is_user, is_system, _)) = classify_at(cursor) else {
+                continue;
+            };
+            if is_user {
+                start_idx = cursor;
+                break;
+            }
+            // A SystemMessage (e.g. `/debate` or `/drama` scene banner) that follows an
+            // already-completed assistant reply marks a new userless exchange boundary.
+            if is_system && cursor > 0 && classify_at(cursor - 1).is_some_and(|(_, _, a)| a) {
                 start_idx = cursor;
                 break;
             }
@@ -848,16 +865,30 @@ pub fn format_exchange_for_copy(store: &gio::ListStore, pos: u32) -> String {
     }
 
     let mut sections = Vec::new();
+    let mut has_assistant_section = false;
     for idx in start_idx..n {
         let Some(obj) = store.item(idx).and_downcast::<ClawRowObject>() else {
             continue;
         };
-        if idx > start_idx && obj.with_row(|r| matches!(r, PersistentClawRow::User { .. })) {
+        let (is_user, is_system, is_assistant) = obj.with_row(|r| {
+            (
+                matches!(r, PersistentClawRow::User { .. }),
+                matches!(r, PersistentClawRow::SystemMessage { .. }),
+                matches!(
+                    r,
+                    PersistentClawRow::Diagnosis { .. } | PersistentClawRow::Suggested { .. }
+                ),
+            )
+        });
+        if idx > start_idx && (is_user || (is_system && has_assistant_section)) {
             break;
         }
         if let Some((speaker, body)) = obj.with_row(format_row_speaker_and_body)
             && !body.trim().is_empty()
         {
+            if is_assistant {
+                has_assistant_section = true;
+            }
             sections.push(format!("{speaker}:\n{}", body.trim()));
         }
     }
@@ -1084,5 +1115,33 @@ mod tests {
         );
         assert_eq!(format_exchange_for_copy(&store, 3), expected_second);
         assert_eq!(format_exchange_for_copy(&store, 4), expected_second);
+
+        // Userless slash-command scene (e.g. `/debate`) separated by a SystemMessage
+        add_system_message_row(
+            &store,
+            "pane-1".to_string(),
+            "🎙️ **Debate started** • Niko Una & Levi Kujo — async vs threads",
+        );
+        add_diagnosis_row(
+            &store,
+            "pane-1".to_string(),
+            Some("Niko Una".to_string()),
+            None,
+            "Async tasks multiplex I/O cleanly.",
+        );
+        add_diagnosis_row(
+            &store,
+            "pane-1".to_string(),
+            Some("Levi Kujo".to_string()),
+            None,
+            "OS threads simplify blocking syscalls.",
+        );
+
+        // Prior exchange must stop before the debate SystemMessage, and debate rows copy together
+        assert_eq!(format_exchange_for_copy(&store, 4), expected_second);
+        assert_eq!(
+            format_exchange_for_copy(&store, 7),
+            "Niko Una:\nAsync tasks multiplex I/O cleanly.\n\nLevi Kujo:\nOS threads simplify blocking syscalls."
+        );
     }
 }

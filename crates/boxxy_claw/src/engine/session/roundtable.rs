@@ -56,18 +56,24 @@ pub struct SpeakerIdentity {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UserRoundtableIntent {
     /// User explicitly asked to stop the ongoing multi-character conversation/debate.
-    Stop,
+    /// `is_slash` is `true` for `/stop` (never echoed as a user chat bubble) and `false`
+    /// for natural conversational stop phrases (`"stop"`, `"enough"`, etc.).
+    Stop { is_slash: bool },
     /// User invoked `/drama` with no arguments to toggle Visual Novel Drama Mode ON/OFF.
     ToggleDrama,
     /// User invoked `/drama [@char1] [@char2] [topic]` to start a Visual Novel Drama Mode chat.
     Drama {
         guests: Vec<SpeakerIdentity>,
         topic: String,
+        /// Explicit user-authored topic/message text (`None` when only `/drama :char` was given).
+        custom_topic: Option<String>,
     },
     /// User invoked `/debate` (with optional `@character` mentions and a topic).
     Debate {
         guests: Vec<SpeakerIdentity>,
         topic: String,
+        /// Explicit user-authored topic text (`None` when `/debate` or `/debate :char` was given).
+        custom_topic: Option<String>,
     },
     /// User mentioned one or more `@character`s in a regular message.
     Mention {
@@ -79,6 +85,25 @@ pub enum UserRoundtableIntent {
     },
     /// Standard message with no new `@character` mentions or `/debate` command.
     None,
+}
+
+/// Formats participant display names into a concise human-readable roster
+/// (e.g. `"Niko Una & Levi Kujo"` or `"Niko Una, Levi Kujo & Kuro"`).
+#[must_use]
+pub fn format_participants_banner(participants: &[SpeakerIdentity]) -> String {
+    match participants {
+        [] => String::new(),
+        [single] => single.display_name.clone(),
+        [first, second] => format!("{} & {}", first.display_name, second.display_name),
+        many => {
+            let last = &many[many.len() - 1].display_name;
+            let init: Vec<&str> = many[..many.len() - 1]
+                .iter()
+                .map(|p| p.display_name.as_str())
+                .collect();
+            format!("{} & {last}", init.join(", "))
+        }
+    }
 }
 
 /// Per-session state tracking active multi-character roundtable / debate turns.
@@ -685,20 +710,22 @@ pub fn parse_user_roundtable_intent(
     let lower = trimmed.to_ascii_lowercase();
 
     // 1. Explicit `/stop` command or natural stop command while a roundtable is active
-    if lower == "/stop"
-        || (roundtable_active
-            && matches!(
-                lower.trim_end_matches(['!', '.']),
-                "stop"
-                    | "stop debate"
-                    | "stop chatting"
-                    | "stop talking"
-                    | "enough"
-                    | "pause"
-                    | "quiet"
-            ))
+    if lower == "/stop" {
+        return UserRoundtableIntent::Stop { is_slash: true };
+    }
+    if roundtable_active
+        && matches!(
+            lower.trim_end_matches(['!', '.']),
+            "stop"
+                | "stop debate"
+                | "stop chatting"
+                | "stop talking"
+                | "enough"
+                | "pause"
+                | "quiet"
+        )
     {
-        return UserRoundtableIntent::Stop;
+        return UserRoundtableIntent::Stop { is_slash: false };
     }
 
     // 2. `/drama` command: `/drama` (toggle) or `/drama [@char1] [@char2] [topic]`
@@ -728,13 +755,16 @@ pub fn parse_user_roundtable_intent(
             topic_words.push(word);
         }
 
-        let topic = if topic_words.is_empty() {
+        let custom_topic = (!topic_words.is_empty()).then(|| topic_words.join(" "));
+        let topic = custom_topic.clone().unwrap_or_else(|| {
             "Start a lively, dramatic in-character visual-novel banter scene together!".to_string()
-        } else {
-            topic_words.join(" ")
-        };
+        });
 
-        return UserRoundtableIntent::Drama { guests, topic };
+        return UserRoundtableIntent::Drama {
+            guests,
+            topic,
+            custom_topic,
+        };
     }
 
     // 3. `/debate` command: `/debate [@char1] [@char2] <topic>`
@@ -780,14 +810,17 @@ pub fn parse_user_roundtable_intent(
             guests.push(speaker_from_info(other, &host.character_id, ""));
         }
 
-        let topic = if topic_words.is_empty() {
+        let custom_topic = (!topic_words.is_empty()).then(|| topic_words.join(" "));
+        let topic = custom_topic.clone().unwrap_or_else(|| {
             "Have a lively in-character conversation and debate about the current terminal workspace and your favorite engineering approaches.".to_string()
-        } else {
-            topic_words.join(" ")
-        };
+        });
 
         if !guests.is_empty() {
-            return UserRoundtableIntent::Debate { guests, topic };
+            return UserRoundtableIntent::Debate {
+                guests,
+                topic,
+                custom_topic,
+            };
         }
     }
 
@@ -929,16 +962,31 @@ mod tests {
                     home_pane_id: None,
                 }],
                 topic: "Rust vs C++".to_string(),
+                custom_topic: Some("Rust vs C++".to_string()),
             }
         );
 
         // `/debate <topic>` without explicit @mention picks first non-host character
         let auto_intent =
             parse_user_roundtable_intent("/debate async vs threads", &host, false, &cat);
-        if let UserRoundtableIntent::Debate { guests, topic } = auto_intent {
+        if let UserRoundtableIntent::Debate {
+            guests,
+            topic,
+            custom_topic,
+        } = auto_intent
+        {
             assert_eq!(guests.len(), 1);
             assert_eq!(guests[0].character_id, "id-levi");
             assert_eq!(topic, "async vs threads");
+            assert_eq!(custom_topic.as_deref(), Some("async vs threads"));
+        } else {
+            panic!("Expected Debate intent");
+        }
+
+        // `/debate` with no custom topic keeps `custom_topic: None`
+        let default_debate = parse_user_roundtable_intent("/debate :levi-kujo", &host, false, &cat);
+        if let UserRoundtableIntent::Debate { custom_topic, .. } = default_debate {
+            assert_eq!(custom_topic, None);
         } else {
             panic!("Expected Debate intent");
         }
@@ -959,9 +1007,11 @@ mod tests {
             panic!("Expected Mention intent");
         }
 
-        // Stop detection when active
+        // Stop detection: natural vs `/stop` slash command
         let stop = parse_user_roundtable_intent("stop", &host, true, &cat);
-        assert_eq!(stop, UserRoundtableIntent::Stop);
+        assert_eq!(stop, UserRoundtableIntent::Stop { is_slash: false });
+        let slash_stop = parse_user_roundtable_intent("/stop", &host, false, &cat);
+        assert_eq!(slash_stop, UserRoundtableIntent::Stop { is_slash: true });
 
         // `/drama` with no arguments toggles drama mode
         let toggle = parse_user_roundtable_intent("/drama", &host, false, &cat);
@@ -970,19 +1020,31 @@ mod tests {
         // `/drama @levi-kujo` starts Drama mode with Levi
         let drama =
             parse_user_roundtable_intent("/drama @levi-kujo cursed kernel", &host, false, &cat);
-        if let UserRoundtableIntent::Drama { guests, topic } = drama {
+        if let UserRoundtableIntent::Drama {
+            guests,
+            topic,
+            custom_topic,
+        } = drama
+        {
             assert_eq!(guests.len(), 1);
             assert_eq!(guests[0].character_id, "id-levi");
             assert_eq!(topic, "cursed kernel");
+            assert_eq!(custom_topic.as_deref(), Some("cursed kernel"));
         } else {
             panic!("Expected Drama intent");
         }
 
         // `/drama <prompt>` without `@character` stays single-character (no auto-picked guest)
         let solo_drama = parse_user_roundtable_intent("/drama hello Rikka!", &host, false, &cat);
-        if let UserRoundtableIntent::Drama { guests, topic } = solo_drama {
+        if let UserRoundtableIntent::Drama {
+            guests,
+            topic,
+            custom_topic,
+        } = solo_drama
+        {
             assert!(guests.is_empty());
             assert_eq!(topic, "hello Rikka!");
+            assert_eq!(custom_topic.as_deref(), Some("hello Rikka!"));
         } else {
             panic!("Expected single-character Drama intent");
         }

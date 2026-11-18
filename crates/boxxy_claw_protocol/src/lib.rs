@@ -7,6 +7,7 @@ pub mod environment;
 pub mod messages;
 pub mod rows;
 pub mod skill_loader;
+pub mod slash;
 pub mod status;
 mod str_utils;
 pub mod tasks;
@@ -20,6 +21,7 @@ pub use diff::{
 pub use environment::{ClawEnvironment, ProcessSample};
 pub use messages::{ClawEngineEvent, ClawMessage};
 pub use rows::PersistentClawRow;
+pub use slash::{SlashCommand, SlashSubmitEffect, classify_submit_effect};
 pub use status::{
     AgentStatus, ClawEvent, ContextQuality, SpawnLocation, TransitionRequest, TriggerSource,
 };

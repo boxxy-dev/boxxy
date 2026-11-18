@@ -609,15 +609,12 @@ impl ClawSession {
                     status: crate::engine::AgentStatus::Waiting,
                 })
                 .await;
-            let tx_ui = self.tx_ui.clone();
-            tokio::spawn(async move {
-                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-                let _ = tx_ui
-                    .send(ClawEngineEvent::SystemMessage {
-                        text: "🕵️ Incognito Mode • No context sent • Nothing saved".to_string(),
-                    })
-                    .await;
-            });
+            let _ = self
+                .tx_ui
+                .send(ClawEngineEvent::SystemMessage {
+                    text: "🕵️ Incognito Mode • No context sent • Nothing saved".to_string(),
+                })
+                .await;
             return;
         }
 
@@ -704,10 +701,6 @@ impl ClawSession {
             &event,
         );
 
-        let tx_ui = self.tx_ui.clone();
-        tokio::spawn(async move {
-            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-            let _ = tx_ui.send(event).await;
-        });
+        let _ = self.tx_ui.send(event).await;
     }
 }

@@ -739,11 +739,9 @@ pub fn spawn_dispatch(
                     indicator.hide();
                     overlay.set_indicator_slot_visible(false);
                     overlay.hide();
-                    boxxy_claw_ui::add_diagnosis_row(
+                    boxxy_claw_ui::add_system_message_row(
                         &overlay_store,
                         id.clone(),
-                        None,
-                        None,
                         "Agent was EVICTED because the session was resumed in another pane.",
                     );
                 }

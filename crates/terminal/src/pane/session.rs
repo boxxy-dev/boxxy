@@ -116,7 +116,12 @@ pub(super) fn build_msg_bar(
                 .strip_prefix("/resume ")
                 .map(str::trim)
                 .is_some_and(|s| !s.is_empty());
-            if is_resume_cmd || incognito_inline_opt.as_ref().is_some_and(String::is_empty) {
+            if is_resume_cmd
+                || !matches!(
+                    boxxy_claw_protocol::classify_submit_effect(trimmed_query),
+                    boxxy_claw_protocol::SlashSubmitEffect::StartsTurn
+                )
+            {
                 inner_arc.borrow().msg_bar.entry.grab_focus();
             }
 
