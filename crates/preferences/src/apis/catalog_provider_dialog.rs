@@ -1,3 +1,4 @@
+use crate::ui_utils::SubpageHeader;
 use adw::prelude::*;
 use gtk4 as gtk;
 use libadwaita as adw;
@@ -9,8 +10,7 @@ type AddProviderCallback = Rc<dyn Fn(String, String)>;
 #[derive(Clone)]
 pub(super) struct CatalogProviderEditorPage {
     apis_stack: gtk::Stack,
-    back_btn: gtk::Button,
-    content_title: adw::WindowTitle,
+    header: SubpageHeader,
     group: adw::PreferencesGroup,
     added_rows: Rc<RefCell<Vec<adw::PasswordEntryRow>>>,
 }
@@ -19,8 +19,7 @@ impl CatalogProviderEditorPage {
     pub(super) fn new(
         page: &adw::PreferencesPage,
         apis_stack: &gtk::Stack,
-        back_btn: &gtk::Button,
-        content_title: &adw::WindowTitle,
+        header: &SubpageHeader,
     ) -> Self {
         let group = adw::PreferencesGroup::builder()
             .title("Enter an API key and click Add to enable a provider.")
@@ -30,8 +29,7 @@ impl CatalogProviderEditorPage {
 
         Self {
             apis_stack: apis_stack.clone(),
-            back_btn: back_btn.clone(),
-            content_title: content_title.clone(),
+            header: header.clone(),
             group,
             added_rows: Rc::new(RefCell::new(Vec::new())),
         }
@@ -82,8 +80,7 @@ impl CatalogProviderEditorPage {
                 let group = self.group.clone();
                 let rows_rc = self.added_rows.clone();
                 let apis_stack = self.apis_stack.clone();
-                let back_btn = self.back_btn.clone();
-                let content_title = self.content_title.clone();
+                let header = self.header.clone();
                 let on_add = on_add_rc.clone();
                 Rc::new(move || {
                     let Some(row) = row_weak.upgrade() else {
@@ -105,8 +102,7 @@ impl CatalogProviderEditorPage {
 
                     if remaining == 0 {
                         apis_stack.set_visible_child_name("list");
-                        back_btn.set_visible(false);
-                        content_title.set_title("APIs");
+                        header.leave("APIs");
                     }
                 })
             };
@@ -129,8 +125,7 @@ impl CatalogProviderEditorPage {
 
         *self.added_rows.borrow_mut() = new_rows;
 
-        self.content_title.set_title("Add AI Provider");
-        self.back_btn.set_visible(true);
+        self.header.enter("APIs", "Back to APIs", "Add AI Provider");
         self.apis_stack.set_visible_child_name("catalog_editor");
     }
 }

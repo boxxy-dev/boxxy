@@ -1,4 +1,4 @@
-use crate::ui_utils::show_toast;
+use crate::ui_utils::{SubpageHeader, show_toast};
 use adw::prelude::*;
 use boxxy_model_selection::{
     CustomModelConfig, OpenAiApiRoute, OpenAiCompatibleEndpoint, ThinkingLevel,
@@ -15,8 +15,7 @@ type SaveCallback = Box<dyn Fn(OpenAiCompatibleEndpoint, String)>;
 #[derive(Clone)]
 pub(super) struct OpenAiCompatEditorPage {
     apis_stack: gtk::Stack,
-    back_btn: gtk::Button,
-    content_title: adw::WindowTitle,
+    header: SubpageHeader,
     name_entry: adw::EntryRow,
     url_entry: adw::EntryRow,
     requires_key_switch: adw::SwitchRow,
@@ -35,12 +34,20 @@ impl OpenAiCompatEditorPage {
     pub(super) fn new(
         page: &adw::PreferencesPage,
         apis_stack: &gtk::Stack,
-        back_btn: &gtk::Button,
-        content_title: &adw::WindowTitle,
+        header: &SubpageHeader,
     ) -> Self {
         let on_save_slot: Rc<RefCell<Option<SaveCallback>>> = Rc::new(RefCell::new(None));
         let preserved_enabled = Rc::new(Cell::new(true));
         let session_gen = Rc::new(Cell::new(0_u64));
+
+        // Invalidate any in-flight /models fetch whenever leaving the subpage
+        // (via header Back, Cancel, Escape, sidebar category switch, or dialog close).
+        {
+            let session_gen = session_gen.clone();
+            page.connect_unmap(move |_| {
+                session_gen.set(session_gen.get().wrapping_add(1));
+            });
+        }
 
         // --- 1. Connection & Authentication ---
         let conn_group = adw::PreferencesGroup::builder()
@@ -475,23 +482,14 @@ impl OpenAiCompatEditorPage {
 
         let go_back = {
             let apis_stack = apis_stack.clone();
-            let back_btn = back_btn.clone();
-            let content_title = content_title.clone();
+            let header = header.clone();
             let session_gen = session_gen.clone();
             Rc::new(move || {
                 session_gen.set(session_gen.get().wrapping_add(1));
                 apis_stack.set_visible_child_name("list");
-                back_btn.set_visible(false);
-                content_title.set_title("APIs");
+                header.leave("APIs");
             })
         };
-
-        back_btn.connect_clicked({
-            let go_back = go_back.clone();
-            move |_| {
-                go_back();
-            }
-        });
 
         cancel_btn.connect_clicked({
             let go_back = go_back.clone();
@@ -556,8 +554,7 @@ impl OpenAiCompatEditorPage {
 
         Self {
             apis_stack: apis_stack.clone(),
-            back_btn: back_btn.clone(),
-            content_title: content_title.clone(),
+            header: header.clone(),
             name_entry,
             url_entry,
             requires_key_switch,
@@ -613,12 +610,12 @@ impl OpenAiCompatEditorPage {
 
         *self.on_save_slot.borrow_mut() = Some(Box::new(on_save));
 
-        self.content_title.set_title(if is_edit {
+        let title = if is_edit {
             "Edit OpenAI-Compatible Endpoint"
         } else {
             "Add OpenAI-Compatible Endpoint"
-        });
-        self.back_btn.set_visible(true);
+        };
+        self.header.enter("APIs", "Back to APIs", title);
         self.apis_stack.set_visible_child_name("editor");
     }
 }

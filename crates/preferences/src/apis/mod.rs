@@ -1,5 +1,7 @@
 use crate::config::{ModelConfigState, Settings};
-use crate::ui_utils::{Debouncer, PageHooks, SearchRow, VoidCallbackSlot, show_toast};
+use crate::ui_utils::{
+    Debouncer, PageHooks, SearchRow, SubpageHeader, VoidCallbackSlot, show_toast,
+};
 use adw::prelude::*;
 use gtk4 as gtk;
 use gtk4::glib;
@@ -55,8 +57,7 @@ fn make_unique_endpoint_name(
 #[allow(clippy::too_many_lines)]
 pub(crate) fn setup_apis_page(builder: &gtk::Builder) -> PageHooks {
     let apis_stack: gtk::Stack = builder.object("apis_stack").unwrap();
-    let apis_back_btn: gtk::Button = builder.object("apis_back_btn").unwrap();
-    let content_title: adw::WindowTitle = builder.object("content_title").unwrap();
+    let subpage_header = SubpageHeader::from_builder(builder);
     let page_openai_compat_editor: adw::PreferencesPage =
         builder.object("page_openai_compat_editor").unwrap();
     let page_catalog_provider_editor: adw::PreferencesPage =
@@ -73,14 +74,12 @@ pub(crate) fn setup_apis_page(builder: &gtk::Builder) -> PageHooks {
     let editor_page = openai_compat_dialog::OpenAiCompatEditorPage::new(
         &page_openai_compat_editor,
         &apis_stack,
-        &apis_back_btn,
-        &content_title,
+        &subpage_header,
     );
     let catalog_editor_page = catalog_provider_dialog::CatalogProviderEditorPage::new(
         &page_catalog_provider_editor,
         &apis_stack,
-        &apis_back_btn,
-        &content_title,
+        &subpage_header,
     );
     let tavily_api_key_entry: adw::PasswordEntryRow =
         builder.object("tavily_api_key_entry").unwrap();

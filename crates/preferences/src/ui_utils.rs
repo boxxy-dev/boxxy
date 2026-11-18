@@ -19,6 +19,37 @@ pub(super) type ColorUpdater = Rc<dyn Fn(&str)>;
 pub(super) type VoidCallbackSlot = Rc<RefCell<Option<Rc<dyn Fn()>>>>;
 type PendingAction = Rc<RefCell<Option<Box<dyn FnOnce()>>>>;
 
+/// Shared handle to the content header bar's back button and `AdwWindowTitle`,
+/// used by category subpages (`APIs`, `MCP`) to enter and leave secondary editor pages.
+#[derive(Clone)]
+pub(super) struct SubpageHeader {
+    back_btn: gtk::Button,
+    back_content: adw::ButtonContent,
+    content_title: adw::WindowTitle,
+}
+
+impl SubpageHeader {
+    pub(super) fn from_builder(builder: &gtk::Builder) -> Self {
+        Self {
+            back_btn: builder.object("subpage_back_btn").unwrap(),
+            back_content: builder.object("subpage_back_content").unwrap(),
+            content_title: builder.object("content_title").unwrap(),
+        }
+    }
+
+    pub(super) fn enter(&self, parent_label: &str, back_tooltip: &str, subpage_title: &str) {
+        self.back_content.set_label(parent_label);
+        self.back_btn.set_tooltip_text(Some(back_tooltip));
+        self.back_btn.set_visible(true);
+        self.content_title.set_title(subpage_title);
+    }
+
+    pub(super) fn leave(&self, parent_title: &str) {
+        self.back_btn.set_visible(false);
+        self.content_title.set_title(parent_title);
+    }
+}
+
 /// Displays an in-dialog toast by walking up to the nearest `AdwToastOverlay`.
 pub(super) fn show_toast(widget: &impl IsA<gtk::Widget>, message: &str) {
     if let Some(overlay) = widget

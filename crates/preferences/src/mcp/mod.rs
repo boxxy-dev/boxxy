@@ -1,5 +1,5 @@
 use crate::config::Settings;
-use crate::ui_utils::{PageHooks, SearchRow, VoidCallbackSlot};
+use crate::ui_utils::{PageHooks, SearchRow, SubpageHeader, VoidCallbackSlot};
 use adw::prelude::*;
 use gtk4 as gtk;
 use libadwaita as adw;
@@ -30,8 +30,13 @@ fn make_unique_mcp_name(
 
 #[allow(clippy::too_many_lines)]
 pub(crate) fn setup_mcp_page(builder: &gtk::Builder) -> PageHooks {
+    let mcp_stack: gtk::Stack = builder.object("mcp_stack").unwrap();
+    let subpage_header = SubpageHeader::from_builder(builder);
+    let page_mcp_editor: adw::PreferencesPage = builder.object("page_mcp_editor").unwrap();
     let mcp_servers_group: adw::PreferencesGroup = builder.object("mcp_servers_group").unwrap();
     let mcp_add_server_row: adw::ActionRow = builder.object("mcp_add_server_row").unwrap();
+
+    let editor_page = mcp_dialog::McpEditorPage::new(&page_mcp_editor, &mcp_stack, &subpage_header);
 
     let added_rows: Rc<RefCell<Vec<(String, adw::ActionRow)>>> = Rc::new(RefCell::new(Vec::new()));
     let last_servers: Rc<RefCell<Vec<boxxy_mcp::config::McpServerConfig>>> =
@@ -43,6 +48,7 @@ pub(crate) fn setup_mcp_page(builder: &gtk::Builder) -> PageHooks {
         let added_rows_inner = added_rows.clone();
         let last_servers_inner = last_servers.clone();
         let render_ref = render_server_list.clone();
+        let editor_page = editor_page.clone();
 
         Rc::new(move || {
             let mut rows_vec = added_rows_inner.borrow_mut();
@@ -100,32 +106,28 @@ pub(crate) fn setup_mcp_page(builder: &gtk::Builder) -> PageHooks {
                     .css_classes(["flat"])
                     .build();
                 {
-                    let server_clone = server.clone();
                     let render_ref_inner = render_ref.clone();
-                    edit_btn.connect_clicked(move |btn| {
+                    let editor_page_edit = editor_page.clone();
+                    edit_btn.connect_clicked(move |_| {
                         let render_ref_inner2 = render_ref_inner.clone();
-                        let dialog = mcp_dialog::build_add_mcp_dialog(
-                            Some(&server_clone),
-                            move |mut new_config| {
-                                Settings::update(|s| {
-                                    if idx < s.mcp_servers.len() {
-                                        new_config.name = make_unique_mcp_name(
-                                            &s.mcp_servers,
-                                            &new_config.name,
-                                            Some(idx),
-                                        );
-                                        s.mcp_servers[idx] = new_config.clone();
-                                    }
-                                });
-                                let render_ref_idle = render_ref_inner2.clone();
-                                gtk::glib::idle_add_local_once(move || {
-                                    if let Some(render) = render_ref_idle.borrow().as_ref() {
-                                        render();
-                                    }
-                                });
-                            },
-                        );
-                        dialog.present(Some(btn));
+                        editor_page_edit.open_editor(Some(&server), move |mut new_config| {
+                            Settings::update(|s| {
+                                if idx < s.mcp_servers.len() {
+                                    new_config.name = make_unique_mcp_name(
+                                        &s.mcp_servers,
+                                        &new_config.name,
+                                        Some(idx),
+                                    );
+                                    s.mcp_servers[idx] = new_config.clone();
+                                }
+                            });
+                            let render_ref_idle = render_ref_inner2.clone();
+                            gtk::glib::idle_add_local_once(move || {
+                                if let Some(render) = render_ref_idle.borrow().as_ref() {
+                                    render();
+                                }
+                            });
+                        });
                     });
                 }
                 row.add_suffix(&edit_btn);
@@ -165,9 +167,10 @@ pub(crate) fn setup_mcp_page(builder: &gtk::Builder) -> PageHooks {
 
     {
         let render_ref = render_server_list;
-        mcp_add_server_row.connect_activated(move |row| {
+        let editor_page_add = editor_page;
+        mcp_add_server_row.connect_activated(move |_| {
             let render_ref_inner = render_ref.clone();
-            let dialog = mcp_dialog::build_add_mcp_dialog(None, move |mut new_config| {
+            editor_page_add.open_editor(None, move |mut new_config| {
                 Settings::update(|s| {
                     new_config.name = make_unique_mcp_name(&s.mcp_servers, &new_config.name, None);
                     s.mcp_servers.push(new_config.clone());
@@ -179,7 +182,6 @@ pub(crate) fn setup_mcp_page(builder: &gtk::Builder) -> PageHooks {
                     }
                 });
             });
-            dialog.present(Some(row));
         });
     }
 
@@ -211,4 +213,33 @@ pub(crate) fn setup_mcp_page(builder: &gtk::Builder) -> PageHooks {
     });
 
     (sync, filter)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use boxxy_mcp::config::{BackoffConfig, McpServerConfig, McpTransport};
+
+    fn sample_server(name: &str) -> McpServerConfig {
+        McpServerConfig {
+            name: name.to_string(),
+            transport: McpTransport::Http {
+                url: "https://example.com/mcp".to_string(),
+                headers: std::collections::HashMap::new(),
+                streamable: true,
+            },
+            enabled: true,
+            timeout_ms: 60_000,
+            max_retries: 3,
+            backoff: BackoffConfig::default(),
+        }
+    }
+
+    #[test]
+    fn unique_mcp_name_disambiguates_duplicates_and_respects_skip_index() {
+        let servers = vec![sample_server("docs"), sample_server("docs (1)")];
+        assert_eq!(make_unique_mcp_name(&servers, "docs", None), "docs (2)");
+        assert_eq!(make_unique_mcp_name(&servers, "docs", Some(0)), "docs");
+        assert_eq!(make_unique_mcp_name(&servers, "   ", None), "MCP Server");
+    }
 }

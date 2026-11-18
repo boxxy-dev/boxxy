@@ -1,5 +1,5 @@
 use crate::config::Settings;
-use crate::ui_utils::{PageFilter, PageSync};
+use crate::ui_utils::{PageFilter, PageSync, SubpageHeader};
 use adw::prelude::*;
 use gtk4 as gtk;
 use libadwaita as adw;
@@ -34,10 +34,11 @@ pub struct PreferencesComponent {
     dialog: adw::Dialog,
     split_view: adw::NavigationSplitView,
     stack: adw::ViewStack,
+    content_title: adw::WindowTitle,
     category_list: gtk::ListBox,
     categories: Rc<Vec<NavCategory>>,
     search_entry: gtk::SearchEntry,
-    reset_apis_subpage: Rc<dyn Fn()>,
+    reset_subpages: Rc<dyn Fn()>,
     sync_hooks: Vec<PageSync>,
     handle_escape: Rc<dyn Fn()>,
     bound_parent_ptr: Cell<usize>,
@@ -67,33 +68,58 @@ impl PreferencesComponent {
         let stack: adw::ViewStack = builder.object("stack").unwrap();
         let content_title: adw::WindowTitle = builder.object("content_title").unwrap();
         let apis_stack: gtk::Stack = builder.object("apis_stack").unwrap();
-        let apis_back_btn: gtk::Button = builder.object("apis_back_btn").unwrap();
+        let mcp_stack: gtk::Stack = builder.object("mcp_stack").unwrap();
+        let subpage_back_btn: gtk::Button = builder.object("subpage_back_btn").unwrap();
+        let subpage_header = SubpageHeader::from_builder(&builder);
         let category_list: gtk::ListBox = builder.object("category_list").unwrap();
         let search_entry: gtk::SearchEntry = builder.object("search_entry").unwrap();
         let page_shortcuts: adw::PreferencesPage = builder.object("page_shortcuts").unwrap();
         let page_about: adw::PreferencesPage = builder.object("page_about").unwrap();
         let toast_overlay: adw::ToastOverlay = builder.object("toast_overlay").unwrap();
 
-        let reset_apis_subpage: Rc<dyn Fn()> = {
+        let reset_subpages: Rc<dyn Fn()> = {
             let apis_stack = apis_stack.clone();
+            let mcp_stack = mcp_stack.clone();
+            let back_btn = subpage_back_btn.clone();
             Rc::new(move || {
                 apis_stack.set_visible_child_name("list");
-                apis_back_btn.set_visible(false);
+                mcp_stack.set_visible_child_name("list");
+                back_btn.set_visible(false);
             })
         };
 
-        let handle_escape: Rc<dyn Fn()> = {
-            let dialog = dialog.clone();
+        let pop_active_subpage: Rc<dyn Fn() -> bool> = {
             let stack = stack.clone();
             let apis_stack = apis_stack;
-            let reset_apis = reset_apis_subpage.clone();
-            let title = content_title.clone();
+            let mcp_stack = mcp_stack;
+            let header = subpage_header;
+            Rc::new(move || match stack.visible_child_name().as_deref() {
+                Some("apis") if apis_stack.visible_child_name().as_deref() != Some("list") => {
+                    apis_stack.set_visible_child_name("list");
+                    header.leave("APIs");
+                    true
+                }
+                Some("mcp") if mcp_stack.visible_child_name().as_deref() != Some("list") => {
+                    mcp_stack.set_visible_child_name("list");
+                    header.leave("MCP");
+                    true
+                }
+                _ => false,
+            })
+        };
+
+        {
+            let pop_subpage = pop_active_subpage.clone();
+            subpage_back_btn.connect_clicked(move |_| {
+                let _ = pop_subpage();
+            });
+        }
+
+        let handle_escape: Rc<dyn Fn()> = {
+            let dialog = dialog.clone();
+            let pop_subpage = pop_active_subpage;
             Rc::new(move || {
-                if stack.visible_child_name().as_deref() == Some("apis")
-                    && apis_stack.visible_child_name().as_deref() != Some("list")
-                {
-                    reset_apis();
-                    title.set_title("APIs");
+                if pop_subpage() {
                     return;
                 }
                 dialog.close();
@@ -204,12 +230,12 @@ impl PreferencesComponent {
 
         {
             let stack = stack.clone();
-            let title = content_title;
-            let reset_apis = reset_apis_subpage.clone();
+            let title = content_title.clone();
+            let reset_subpages = reset_subpages.clone();
             let cats = categories.clone();
             category_list.connect_row_selected(move |_, selected| {
                 let Some(row) = selected else { return };
-                reset_apis();
+                reset_subpages();
                 let row_name = row.widget_name();
                 if let Some(cat) = cats.iter().find(|c| c.widget_id == row_name.as_str()) {
                     title.set_title(cat.header_title);
@@ -247,10 +273,11 @@ impl PreferencesComponent {
             dialog,
             split_view,
             stack,
+            content_title,
             category_list,
             categories,
             search_entry,
-            reset_apis_subpage,
+            reset_subpages,
             sync_hooks,
             handle_escape,
             bound_parent_ptr: Cell::new(0),
@@ -303,11 +330,18 @@ impl PreferencesComponent {
             parent_win.add_controller(win_esc);
         }
 
-        (self.reset_apis_subpage)();
+        (self.reset_subpages)();
         self.search_entry.set_text("");
-        if self.category_list.selected_row().is_none()
-            && let Some(first) = self.categories.first()
-        {
+        if let Some(selected) = self.category_list.selected_row() {
+            let row_name = selected.widget_name();
+            if let Some(cat) = self
+                .categories
+                .iter()
+                .find(|c| c.widget_id == row_name.as_str())
+            {
+                self.content_title.set_title(cat.header_title);
+            }
+        } else if let Some(first) = self.categories.first() {
             self.category_list.select_row(Some(&first.row));
         }
 
@@ -326,9 +360,10 @@ impl PreferencesComponent {
     }
 
     pub fn show_page(&self, page_name: &str) {
-        (self.reset_apis_subpage)();
+        (self.reset_subpages)();
         self.search_entry.set_text("");
         if let Some(cat) = self.categories.iter().find(|c| c.page_name == page_name) {
+            self.content_title.set_title(cat.header_title);
             self.category_list.select_row(Some(&cat.row));
         } else {
             self.stack.set_visible_child_name(page_name);
