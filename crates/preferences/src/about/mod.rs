@@ -40,12 +40,15 @@ pub(crate) fn populate_about_page(
 
     // Metadata
     let group = adw::PreferencesGroup::builder().build();
-    let version_str = env!("GIT_HASH").to_string();
+    let full_version = concat!(env!("CARGO_PKG_VERSION"), "+", env!("GIT_HASH"));
+    let channel = boxxy_sys_utils::detect_package_type();
+    let version_display = format_about_version(full_version, channel);
 
     let copy_icon = gtk::Image::from_icon_name("boxxy-edit-copy-symbolic");
     let version_row = adw::ActionRow::builder()
+        .use_markup(false)
         .title("Version")
-        .subtitle(&version_str)
+        .subtitle(&version_display)
         .activatable(true)
         .build();
     version_row.add_suffix(&copy_icon);
@@ -53,7 +56,7 @@ pub(crate) fn populate_about_page(
     {
         let toast_overlay = toast_overlay.clone();
         version_row.connect_activated(move |row| {
-            row.display().clipboard().set_text(&version_str);
+            row.display().clipboard().set_text(full_version);
             toast_overlay.add_toast(adw::Toast::new("Version copied to clipboard"));
         });
     }
@@ -160,4 +163,24 @@ pub(crate) fn populate_about_page(
     });
 
     (sync, filter)
+}
+
+fn format_about_version(full_version: &str, channel: &str) -> String {
+    format!("{full_version} ({channel})")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn about_version_includes_channel_while_keeping_raw_version_separate() {
+        let raw = "0.1.0+abc1234";
+        assert_eq!(format_about_version(raw, "native"), "0.1.0+abc1234 (native)");
+        assert_eq!(
+            format_about_version(raw, "flatpak"),
+            "0.1.0+abc1234 (flatpak)"
+        );
+        assert_eq!(format_about_version(raw, "distro"), "0.1.0+abc1234 (distro)");
+    }
 }
