@@ -88,10 +88,11 @@
 
 /* ── ViewSwitcher & StackSwitcher Mode Toggle Buttons ──────────────────────
    `AdwViewSwitcher` places `.flat.toggle` on its child buttons. Selectors here
-   match `headerbar.sidebar-header viewswitcher > button.toggle` across `:focus`,
-   `:hover`, `:checked`, and `:active` (`>= (0, 3, 3)`) so `button.flat:*` rules
-   in `buttons.css` (`(0, 3, 1)`) never strip the ink outline or tactile shadow
-   when a switcher button receives initial dialog focus or click focus. */
+   match `headerbar.sidebar-header viewswitcher > button.flat.toggle` (`(0, 3, 3)`
+   at rest, `(0, 4, 3)` across `:focus-visible` -> `:hover` -> `:checked`, and
+   `(0, 5, 3)` on `:active:not(:disabled)`) so `button.flat:*` rules in
+   `buttons.css` (`<= (0, 3, 1)`) never strip the ink outline or tactile shadow,
+   and pressing any switcher button cleanly translates and compresses its shadow. */
 
 viewswitcher > button,
 headerbar viewswitcher > button,
@@ -101,7 +102,7 @@ dialog stackswitcher > button {
 }
 
 headerbar.sidebar-header viewswitcher > button.toggle,
-headerbar.sidebar-header viewswitcher > button.toggle:focus:not(:focus-visible) {
+headerbar.sidebar-header viewswitcher > button.flat.toggle {
     background-color: @card_bg_color;
     background-image: none;
     color: @card_fg_color;
@@ -111,13 +112,15 @@ headerbar.sidebar-header viewswitcher > button.toggle:focus:not(:focus-visible) 
     box-shadow: 2px 3px 0px @boxxy_shadow;
 }
 
-headerbar.sidebar-header viewswitcher > button.toggle:focus-visible {
+headerbar.sidebar-header viewswitcher > button.toggle:focus-visible,
+headerbar.sidebar-header viewswitcher > button.flat.toggle:focus-visible {
     outline: var(--boxxy-border-width) solid @accent_color;
     outline-offset: -2px;
     box-shadow: 2px 3px 0px @boxxy_shadow;
 }
 
-headerbar.sidebar-header viewswitcher > button.toggle:hover:not(:checked) {
+headerbar.sidebar-header viewswitcher > button.toggle:hover,
+headerbar.sidebar-header viewswitcher > button.flat.toggle:hover {
     background-color: @boxxy_surface_hover;
     background-image: none;
     color: @accent_fg_color;
@@ -126,8 +129,10 @@ headerbar.sidebar-header viewswitcher > button.toggle:hover:not(:checked) {
     box-shadow: 2px 3px 0px @boxxy_shadow;
 }
 
-headerbar.sidebar-header viewswitcher > button.toggle:hover:not(:checked) label,
-headerbar.sidebar-header viewswitcher > button.toggle:hover:not(:checked) image {
+headerbar.sidebar-header viewswitcher > button.toggle:hover label,
+headerbar.sidebar-header viewswitcher > button.toggle:hover image,
+headerbar.sidebar-header viewswitcher > button.flat.toggle:hover label,
+headerbar.sidebar-header viewswitcher > button.flat.toggle:hover image {
     color: @accent_fg_color;
 }
 
@@ -148,14 +153,11 @@ dialog stackswitcher > button + button {
 }
 
 viewswitcher > button:checked,
+viewswitcher > button.flat.toggle:checked,
 headerbar viewswitcher > button:checked,
+headerbar viewswitcher > button.flat.toggle:checked,
 headerbar.sidebar-header viewswitcher > button.toggle:checked,
-headerbar.sidebar-header viewswitcher > button.toggle:checked:focus:not(:focus-visible),
-headerbar.sidebar-header viewswitcher > button.toggle:checked:focus-visible,
-headerbar.sidebar-header viewswitcher > button.toggle:checked:hover,
-viewswitcher > button:active,
-headerbar viewswitcher > button:active,
-headerbar.sidebar-header viewswitcher > button.toggle:active,
+headerbar.sidebar-header viewswitcher > button.flat.toggle:checked,
 stackswitcher > button:checked,
 dialog stackswitcher > button:checked {
     background-color: @accent_bg_color;
@@ -167,16 +169,48 @@ dialog stackswitcher > button:checked {
     transform: none;
 }
 
+viewswitcher > button:active:not(:disabled),
+viewswitcher > button.flat.toggle:active:not(:disabled),
+headerbar viewswitcher > button:active:not(:disabled),
+headerbar viewswitcher > button.flat.toggle:active:not(:disabled),
+headerbar.sidebar-header viewswitcher > button.toggle:active:not(:disabled),
+headerbar.sidebar-header viewswitcher > button.flat.toggle:active:not(:disabled),
+stackswitcher > button:active:not(:disabled),
+dialog stackswitcher > button:active:not(:disabled) {
+    background-color: @accent_bg_color;
+    background-image: none;
+    color: @accent_fg_color;
+    outline: var(--boxxy-border-width) solid @boxxy_ink;
+    outline-offset: -2px;
+    transform: var(--boxxy-press-translate);
+    box-shadow: 1px 1px 0px @boxxy_shadow;
+}
+
 viewswitcher > button:checked label,
 viewswitcher > button:checked image,
 headerbar viewswitcher > button:checked label,
 headerbar viewswitcher > button:checked image,
 headerbar.sidebar-header viewswitcher > button.toggle:checked label,
 headerbar.sidebar-header viewswitcher > button.toggle:checked image,
+headerbar.sidebar-header viewswitcher > button.flat.toggle:checked label,
+headerbar.sidebar-header viewswitcher > button.flat.toggle:checked image,
 stackswitcher > button:checked label,
 dialog stackswitcher > button:checked label {
     color: @accent_fg_color;
     font-weight: 700;
+}
+
+viewswitcher > button:active:not(:disabled) label,
+viewswitcher > button:active:not(:disabled) image,
+headerbar viewswitcher > button:active:not(:disabled) label,
+headerbar viewswitcher > button:active:not(:disabled) image,
+headerbar.sidebar-header viewswitcher > button.toggle:active:not(:disabled) label,
+headerbar.sidebar-header viewswitcher > button.toggle:active:not(:disabled) image,
+headerbar.sidebar-header viewswitcher > button.flat.toggle:active:not(:disabled) label,
+headerbar.sidebar-header viewswitcher > button.flat.toggle:active:not(:disabled) image,
+stackswitcher > button:active:not(:disabled) label,
+dialog stackswitcher > button:active:not(:disabled) label {
+    color: @accent_fg_color;
 }
 
 /* ── Claw Sidebar: Pending Tasks Cards & Empty State (Tab-Style Ink Border, Zero Shadow) ── */

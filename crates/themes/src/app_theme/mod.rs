@@ -309,4 +309,36 @@ highlight = "#fcbf49"
             collected.join("\n")
         );
     }
+
+    #[test]
+    fn test_adw_viewswitcher_buttons_match_flat_toggle_contract() {
+        if libadwaita::init().is_err() {
+            return;
+        }
+
+        let stack = libadwaita::ViewStack::new();
+        stack.add_titled(&gtk::Box::new(gtk::Orientation::Vertical, 0), Some("first"), "First");
+        stack.add_titled(&gtk::Box::new(gtk::Orientation::Vertical, 0), Some("second"), "Second");
+
+        let switcher = libadwaita::ViewSwitcher::builder()
+            .stack(&stack)
+            .policy(libadwaita::ViewSwitcherPolicy::Narrow)
+            .build();
+
+        assert_eq!(switcher.css_name().as_str(), "viewswitcher");
+
+        let mut button_count = 0;
+        let mut child = switcher.first_child();
+        while let Some(widget) = child {
+            if widget.css_name().as_str() == "button" {
+                button_count += 1;
+                assert!(
+                    widget.has_css_class("flat") && widget.has_css_class("toggle"),
+                    "AdwViewSwitcher child button must carry .flat.toggle for sidebar.css specificity"
+                );
+            }
+            child = widget.next_sibling();
+        }
+        assert_eq!(button_count, 2, "expected 2 direct child buttons in ViewSwitcher");
+    }
 }
