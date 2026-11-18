@@ -236,6 +236,10 @@ To enforce clarity and predictability, Boxxy strictly adheres to the following U
 
 ## Development Protocol
 - **Git (CRITICAL):** NEVER COMMIT. The AI must NEVER automatically commit changes or push to any branch. Commits and Git operations will be performed manually by the user ONLY.
+- **Commit Message Style (When Requested):** Because commit titles and bodies are surfaced directly to end users in Boxxy's **What's New** dialog and fed into **Read What's New** LLM summaries, always draft commit messages using:
+  1. **Conventional Title Tags:** `<type>(<scope>): <concise summary>` (e.g., `ui(preferences): ...`, `fix(claw): ...`, `feat(vte): ...`, `refactor(mcp): ...`, `docs(agents): ...`).
+  2. **User-Friendly & Proportional Length:** Write clear, human-friendly prose focused on what changed for the user rather than internal struct or variable names. Keep length proportional to the change — do not supersize commit messages (use a single short sentence or title-only for small fixes, and at most 1–2 brief paragraphs for larger features).
+  3. **Full-Width Unwrapped Paragraphs:** Never hard-wrap paragraph lines at 72/80 columns; write each paragraph as a single unwrapped line separated by a blank line so GTK dialogs, GitHub, and mobile screens wrap text naturally without mid-sentence ragged breaks.
 - **MCP:** Use Context7 MCP for all library documentation and code generation.
 - **GTK UI Files**: When modifying `.ui` files (XML), avoid using the ampersand character (`&`) in text labels (like `title` or `subtitle` properties) if possible. GTK's Pango markup parser will often fail to render the text if the string contains a raw ampersand after XML parsing. Prefer using the word "and".
 - **Documentation:** Keep this file and crate-level `AGENTS.md` files updated with all architectural changes.
