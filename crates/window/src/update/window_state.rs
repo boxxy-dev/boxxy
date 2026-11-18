@@ -297,12 +297,16 @@ pub fn settings_changed(inner: &mut AppWindowInner, settings: Settings) {
         }
     }
 
+    let fallback_bg = if is_dark {
+        gtk4::gdk::RGBA::new(0.08, 0.08, 0.1, 1.0)
+    } else {
+        gtk4::gdk::RGBA::new(0.98, 0.98, 0.99, 1.0)
+    };
     let bg_rgba = if let Some(ref p) = parsed {
         let v = if is_dark { &p.dark } else { &p.light };
-        gtk4::gdk::RGBA::parse(v.background)
-            .unwrap_or_else(|_| gtk4::gdk::RGBA::new(0.08, 0.08, 0.1, 1.0))
+        gtk4::gdk::RGBA::parse(v.background).unwrap_or(fallback_bg)
     } else {
-        gtk4::gdk::RGBA::new(0.08, 0.08, 0.1, 1.0)
+        fallback_bg
     };
     inner.frosted_container.set_tint_color(bg_rgba);
     inner.frosted_container.set_opacity(settings.opacity);

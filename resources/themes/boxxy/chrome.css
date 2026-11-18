@@ -2,7 +2,7 @@
  * Boxxy Theme System — Module 03: Window & HeaderBar Chrome (`boxxy/chrome.css`)
  *
  * Owns split-view sidebar panes, headerbar surfaces (.terminal-header,
- * .content-header, dialog headerbar), and frosted-glass header exclusions.
+ * .content-header, dialog headerbar), and headerbar status pills.
  * ============================================================================ */
 
 .sidebar-toolbar,
@@ -50,28 +50,15 @@ overlay-split-view > .sidebar-pane .top-bar.raised,
     box-shadow: none;
 }
 
-window:not(.frosted-glass-active) .terminal-header,
-window:not(.frosted-glass-active) .content-header {
+/* In Boxxy theme mode, the main headerbar and sidebar always remain solid so
+   Frosted Glass blurs only the terminal viewport underneath. */
+.terminal-header,
+.content-header {
     background-color: @headerbar_bg_color;
     color: @headerbar_fg_color;
     background-image: none;
     border-bottom: var(--boxxy-border-width) solid @boxxy_ink;
     box-shadow: none;
-}
-
-window.frosted-glass-active .terminal-header,
-window.frosted-glass-active .content-header {
-    background-color: transparent;
-    color: @headerbar_fg_color;
-    background-image: none;
-    border-bottom: var(--boxxy-border-thin) solid alpha(@boxxy_ink, 0.45);
-    box-shadow: none;
-}
-
-window.frosted-glass-active .sidebar-toolbar,
-window.frosted-glass-active .sidebar-toolbar > contents,
-window.frosted-glass-active .main-split-view > .sidebar-pane {
-    background-color: alpha(@sidebar_bg_color, 0.90);
 }
 
 adw-dialog headerbar,

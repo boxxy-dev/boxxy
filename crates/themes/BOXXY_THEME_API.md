@@ -38,7 +38,7 @@ Boxxy ships with two official built-in themes in `builtin_app_themes()` (`crates
 | `sidebar_fg` | `#f2f4f2` | `#111418` | Text and icon foreground on `sidebar_bg`. |
 | `card_bg` | `#26262a` (Card Surface) | `#ffffff` (Crisp White) | Tactile buttons, unselected tabs, preference `boxed-list` cards, search/text entries, and linked button strips inside menus. |
 | `card_fg` | `#f2f4f2` | `#111418` | Text and icon foreground on `card_bg`. |
-| `headerbar_bg` | `#1d1d20` | `#ffffff` | Main `.content-header`, dialog headerbars, and non-frosted `.terminal-header`. |
+| `headerbar_bg` | `#1d1d20` | `#ffffff` | Main `.content-header`, `.terminal-header`, and dialog headerbars. |
 | `headerbar_fg` | `#f2f4f2` | `#111418` | Text and icon foreground on `headerbar_bg`. |
 | `popover_bg` | `#2e2e32` *(matches `sidebar_bg`)* | `#ffffff` *(matches `sidebar_bg`)* | Right-click terminal menu (`popover.terminal-menu`), hamburger menu (`popover.menu`), command palette, search popover, autocomplete popover, and standalone modal dialogs (`@dialog_bg_color`). |
 | `popover_fg` | `#f2f4f2` | `#111418` | Text and icon foreground on `popover_bg` and `@dialog_fg_color`. |

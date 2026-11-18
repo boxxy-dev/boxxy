@@ -754,11 +754,6 @@ window.main-window > contents,
 .main-split-view scrolledwindow,
 .terminal-toolbar,
 .terminal-toolbar > contents,
-.terminal-toolbar > .top-bar,
-.terminal-toolbar > .top-bar.raised,
-.terminal-toolbar > .top-bar headerbar,
-.terminal-header,
-.content-header,
 .terminal-tab-view,
 .terminal-tab-view > contents,
 .terminal-pane,
@@ -773,6 +768,13 @@ boxxyterminalwidget {
     box-shadow: none;
 }
 
+/* Keep the terminal headerbar solid when Frosted Glass is off (including when the
+   "System" terminal palette is active and `headerbar.flat` would otherwise be transparent). */
+window:not(.frosted-glass-active) .terminal-header {
+    background-color: @headerbar_bg_color;
+    color: @headerbar_fg_color;
+}
+
 .terminal-split-container paned > separator,
 .terminal-split-container paned > handle {
     background-color: @window_bg_color;
@@ -785,9 +787,10 @@ boxxyterminalwidget {
 }
 
 
-/* Sidebar: use the native Adwaita sidebar colour instead of @window_bg_color */
+/* Sidebar: always keep solid @sidebar_bg_color across opacity and frosted glass */
 .sidebar-toolbar,
-.sidebar-toolbar > contents {
+.sidebar-toolbar > contents,
+.main-split-view > .sidebar-pane {
     background-color: @sidebar_bg_color;
 }
 
@@ -1245,9 +1248,16 @@ window.frosted-glass-active .terminal-split-container paned > handle {
     background-color: alpha(currentColor, 0.15);
 }
 
-window.frosted-glass-active .sidebar-toolbar,
-window.frosted-glass-active .sidebar-toolbar > contents {
-    background-color: alpha(@sidebar_bg_color, 0.92);
+/* Keep non-terminal tabs (Bookmarks gallery) opaque even when Frosted Glass is active */
+window.frosted-glass-active .terminal-toolbar.non-terminal-toolbar,
+window.frosted-glass-active .terminal-toolbar.non-terminal-toolbar > contents {
+    background-color: @window_bg_color;
+}
+
+window.frosted-glass-active .terminal-toolbar.non-terminal-toolbar > .top-bar,
+window.frosted-glass-active .terminal-toolbar.non-terminal-toolbar > .top-bar.raised,
+window.frosted-glass-active .terminal-toolbar.non-terminal-toolbar .content-header {
+    background-color: @headerbar_bg_color;
 }
 
 /* --- Smart Viewer: Media Gallery & Image Cards --- */

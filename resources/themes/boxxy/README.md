@@ -8,7 +8,7 @@ This directory contains the modular GTK 4.24 stylesheets imported by `resources/
 | :--- | :--- | :--- |
 | `01` | `tokens.css` | Shared GTK 4.24 CSS custom properties (`--boxxy-border-*`, `--boxxy-radius-*`, `--boxxy-control-*`, `--boxxy-pill-*`, motion transforms). |
 | `02` | `reset.css` | Global `transition: none` rule across interactive controls so GTK 4 never interpolates `background-color` through dark grey. |
-| `03` | `chrome.css` | `.sidebar-pane`, `.sidebar-toolbar`, `.terminal-header`, `.content-header`, `dialog headerbar`, and frosted-glass header exclusions. |
+| `03` | `chrome.css` | `.sidebar-pane`, `.sidebar-toolbar`, `.terminal-header`, `.content-header`, `dialog headerbar`, and headerbar status pills. |
 | `04` | `tabs.css` | `AdwTabBar` (`tabbar tab`) rest/hover/selected states and embedded circular tab close buttons (`×`). |
 | `05` | `sidebar.css` | `.navigation-sidebar > row` capsule pills, embedded `.past-session-options-btn` (`⋮`), and `viewswitcher` / `stackswitcher` header toggles. |
 | `06` | `buttons.css` | Canonical button hierarchy: windowcontrol icon reset (`16×16`), standard tactile buttons (`24px` / `5px 12px`), `.suggested-action`, `.destructive-action`, `.compact-btn`, square headerbar/group `.image-button`s (`32×32px`), `.pill` CTAs (`26px` / `6px 22px`), and `.color-dot-btn` swatches. |

@@ -258,12 +258,16 @@ impl AppWindow {
         frosted_container.set_frosted_glass(current_settings.frosted_glass);
         frosted_container.set_opacity(current_settings.opacity);
 
+        let fallback_bg = if is_dark {
+            gtk4::gdk::RGBA::new(0.08, 0.08, 0.1, 1.0)
+        } else {
+            gtk4::gdk::RGBA::new(0.98, 0.98, 0.99, 1.0)
+        };
         let bg_rgba = if let Some(ref p) = palette {
             let variant = if is_dark { &p.dark } else { &p.light };
-            gtk4::gdk::RGBA::parse(variant.background)
-                .unwrap_or_else(|_| gtk4::gdk::RGBA::new(0.08, 0.08, 0.1, 1.0))
+            gtk4::gdk::RGBA::parse(variant.background).unwrap_or(fallback_bg)
         } else {
-            gtk4::gdk::RGBA::new(0.08, 0.08, 0.1, 1.0)
+            fallback_bg
         };
         frosted_container.set_tint_color(bg_rgba);
 
