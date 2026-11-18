@@ -436,7 +436,7 @@ popover button.compact-btn:not(.flat):not(.model):not(.circular),
 }
 
 /* Unified sizing and padding for all square icon buttons in HeaderBars
-   (Main window `.content-header` Sidebar Toggle, Hamburger Menu, Minimize/Maximize/Close,
+   (Main window `.content-header` Sidebar Toggle, Minimize/Maximize/Close,
    as well as Dialog / Preferences HeaderBar close buttons).
    `min-height: 24px; padding: 4px 8px;` produces an exact 32x32px square. */
 headerbar button.image-button:not(.flat):not(.circular):not(.color-dot-btn):not(.pill),

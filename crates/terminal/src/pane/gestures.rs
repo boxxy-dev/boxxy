@@ -1,4 +1,4 @@
-use super::app_menu::{AppMenuComponent, AppMenuContext};
+use super::app_menu::{AppMenuComponent, AppMenuContext, TerminalEditContext};
 use crate::PaneOutput;
 use crate::search_bar::SearchBarComponent;
 use boxxy_vte::terminal::TerminalWidget;
@@ -175,9 +175,9 @@ pub(super) fn setup_gestures(
     let app_menu = AppMenuComponent::new();
     app_menu.widget().set_parent(terminal);
 
-    let app_menu_widget = app_menu.widget().clone();
+    let app_menu_destroy = app_menu.clone();
     terminal.connect_destroy(move |_| {
-        app_menu_widget.unparent();
+        app_menu_destroy.unparent();
     });
 
     let middle_gesture = gtk::GestureClick::new();
@@ -254,8 +254,10 @@ pub(super) fn setup_gestures(
         let rect = gdk::Rectangle::new(x as i32, y as i32, 1, 1);
         let ctx = AppMenuContext {
             is_maximized,
-            path_to_copy,
-            has_selection: term_for_menu.has_selection(),
+            terminal_edit: Some(TerminalEditContext {
+                path_to_copy,
+                has_selection: term_for_menu.has_selection(),
+            }),
         };
 
         app_menu_clone.show(rect, ctx);

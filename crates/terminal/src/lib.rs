@@ -15,6 +15,7 @@ pub use boxxy_agent::ipc::pty::DetachedSessionInfo;
 pub use boxxy_claw_widget::{ClawHost, Proposal};
 pub use component::{Direction, ExtractedPane, TerminalComponent};
 pub use events::*;
+pub use pane::app_menu::{AppMenuComponent, AppMenuContext, TerminalEditContext};
 pub use pane::gestures::PaneDragPayload;
 
 use crate::agent_manager::AgentManager;

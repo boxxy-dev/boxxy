@@ -14,10 +14,10 @@ use boxxy_preferences::{AppState, Settings};
 use boxxy_themes::ThemeSelectorComponent;
 
 use crate::actions::setup_actions;
-use crate::app_menu::AppMenuComponent;
 use crate::init::AppInit;
 use crate::state::{AppInput, AppWindowInner};
 use crate::tab_menu::{TabContextCallbacks, TabContextMenu};
+use boxxy_terminal::AppMenuComponent;
 
 async fn sync_bookmarks_to_palette(cp: &CommandPaletteComponent) {
     let loaded = boxxy_sys_utils::runtime()
@@ -281,7 +281,6 @@ impl AppWindow {
             content_toolbar,
             content_header,
             bell_indicator,
-            menu_btn,
             detached_btn,
             detached_count_lbl,
             tab_bar,
@@ -368,7 +367,6 @@ impl AppWindow {
             split_view,
             sidebar_overlay,
             sidebar_toolbar,
-            menu_btn,
             detached_btn,
             detached_count_lbl,
             view_stack,
@@ -472,6 +470,7 @@ impl AppWindow {
                 if let Some(inner_rc) = inner_weak_destroy.upgrade()
                     && let Ok(mut inner) = inner_rc.try_borrow_mut()
                 {
+                    inner.command_palette.unparent();
                     inner.app_menu.unparent();
                     if let Some(tm) = inner.tab_menu.take() {
                         tm.unparent();
@@ -835,7 +834,6 @@ impl AppWindow {
         adw::HeaderBar,
         gtk::Image,
         gtk::Button,
-        gtk::Button,
         gtk::Label,
         adw::TabBar,
     ) {
@@ -891,22 +889,9 @@ impl AppWindow {
         let toggle_sidebar_btn = gtk::Button::builder()
             .icon_name("boxxy-dock-left-symbolic")
             .tooltip_text("Toggle Sidebar")
+            .action_name("win.toggle-sidebar")
             .build();
-        let tx_toggle = tx.clone();
-        toggle_sidebar_btn.connect_clicked(move |_| {
-            let _ = tx_toggle.send_blocking(AppInput::ToggleSidebar);
-        });
         content_header.pack_start(&toggle_sidebar_btn);
-
-        let menu_btn = gtk::Button::builder()
-            .icon_name("boxxy-open-menu-symbolic")
-            .tooltip_text("Menu")
-            .build();
-        let tx_menu_btn = tx.clone();
-        menu_btn.connect_clicked(move |_| {
-            let _ = tx_menu_btn.send_blocking(AppInput::ShowCommandPaletteMenu);
-        });
-        content_header.pack_end(&menu_btn);
 
         // Slim status indicator pill for detached Background Shells
         let badge_content = gtk::Box::new(gtk::Orientation::Horizontal, 4);
@@ -931,13 +916,10 @@ impl AppWindow {
             .focus_on_click(false)
             .margin_end(4)
             .tooltip_text("Background Shells")
+            .action_name("win.detached-sessions")
             .visible(false)
             .build();
         detached_btn.set_cursor_from_name(Some("pointer"));
-        let tx_detached_btn = tx.clone();
-        detached_btn.connect_clicked(move |_| {
-            let _ = tx_detached_btn.send_blocking(AppInput::ShowDetachedSessions);
-        });
         content_header.pack_end(&detached_btn);
 
         if let Some(tag_text) = boxxy_sys_utils::dev_header_tag() {
@@ -988,7 +970,6 @@ impl AppWindow {
             content_toolbar,
             content_header,
             bell_indicator,
-            menu_btn,
             detached_btn,
             detached_count_lbl,
             tab_bar,

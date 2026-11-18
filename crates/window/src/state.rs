@@ -1,4 +1,3 @@
-use crate::app_menu::AppMenuComponent;
 use crate::init::{TabLaunchSpec, TerminalController};
 use crate::tab_menu::TabContextMenu;
 use crate::widgets::notification::Notification;
@@ -6,7 +5,7 @@ use boxxy_bookmarks::{sidebar::BookmarksSidebarComponent, tab::BookmarksTabCompo
 use boxxy_claw_ui::ClawSidebarComponent;
 use boxxy_command_palette::CommandPaletteComponent;
 use boxxy_preferences::{AppState, PreferencesComponent, Settings};
-use boxxy_terminal::TerminalEvent;
+use boxxy_terminal::{AppMenuComponent, TerminalEvent};
 use gtk4 as gtk;
 use gtk4::prelude::*;
 use libadwaita as adw;
@@ -104,7 +103,6 @@ pub enum AppInput {
     OpenAbout,
     OpenInFiles,
     ShowAppMenu(f64, f64),
-    ShowCommandPaletteMenu,
     SettingsChanged(Box<Settings>),
     ShowThemesSidebar,
     ShowClawSidebar,
@@ -188,7 +186,6 @@ pub struct AppWindowInner {
     pub split_view: adw::OverlaySplitView,
     pub sidebar_overlay: gtk::Overlay,
     pub sidebar_toolbar: adw::ToolbarView,
-    pub menu_btn: gtk::Button,
     pub detached_btn: gtk::Button,
     pub detached_count_lbl: gtk::Label,
     pub view_stack: adw::ViewStack,
@@ -280,6 +277,8 @@ impl AppWindowInner {
     }
 
     pub fn has_modal_or_popover_open(&self) -> bool {
-        self.claw.is_options_popover_open() || Self::is_dialog_or_popover_open(&self.window)
+        self.command_palette.widget().is_visible()
+            || self.claw.is_options_popover_open()
+            || Self::is_dialog_or_popover_open(&self.window)
     }
 }

@@ -1,7 +1,7 @@
 # Command Palette Crate (`boxxy-command-palette`)
 
 ## Role
-Provides `CommandPaletteComponent`, a searchable `Ctrl+Shift+P` (and HeaderBar menu button) command launcher over application actions, the 12 top-level Preferences categories, and dynamic user script bookmarks.
+Provides `CommandPaletteComponent`, a searchable `Ctrl+Shift+P` (and right-click context menu) command launcher over application actions, the 12 top-level Preferences categories, and dynamic user script bookmarks.
 
 ## Architecture
 - **`src/lib.rs`**: Public API surface (`CommandPaletteComponent`, `CommandItem`, `CommandKind`, `PREFERENCES_CATEGORIES`, `PreferencesCategorySpec`, `OPEN_PREFERENCES_PAGE_ACTION`).

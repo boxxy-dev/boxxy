@@ -132,10 +132,13 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
             let is_maximized = inner
                 .active_tab()
                 .is_some_and(|tc| tc.controller.is_maximized());
-            let ctx = crate::app_menu::AppMenuContext { is_maximized };
+            let ctx = boxxy_terminal::AppMenuContext {
+                is_maximized,
+                terminal_edit: None,
+            };
             inner.app_menu.show(rect, ctx);
         }
-        AppInput::ShowCommandPaletteMenu | AppInput::CommandPalette => {
+        AppInput::CommandPalette => {
             inner.command_palette.show(&inner.window);
         }
         AppInput::SettingsChanged(settings) => {
