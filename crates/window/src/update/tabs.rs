@@ -15,24 +15,6 @@ use crate::ui::AppWindow;
 
 type SplitSessionEntry = (usize, bool, boxxy_terminal::DetachedSessionInfo);
 
-fn connect_page_icon_listeners(page: &libadwaita::TabPage, tx: &async_channel::Sender<AppInput>) {
-    let tx_icon = tx.clone();
-    page.connect_notify_local(Some("icon"), move |_, _| {
-        let _ = tx_icon.send_blocking(AppInput::SyncTabColors);
-    });
-    let tx_ind = tx.clone();
-    page.connect_notify_local(Some("indicator-icon"), move |_, _| {
-        let _ = tx_ind.send_blocking(AppInput::SyncTabColors);
-    });
-}
-
-fn schedule_tab_colors_sync(tx: &async_channel::Sender<AppInput>) {
-    let tx_c = tx.clone();
-    gtk4::glib::timeout_add_local_once(std::time::Duration::from_millis(50), move || {
-        let _ = tx_c.send_blocking(AppInput::SyncTabColors);
-    });
-}
-
 pub fn new_tab(inner: &mut AppWindowInner) {
     new_tab_with_intent(inner, None);
 }
@@ -170,7 +152,6 @@ fn new_tab_internal(
     let widget = controller.widget();
     let page = inner.tab_view.append(widget);
     page.set_title("Terminal");
-    connect_page_icon_listeners(&page, &inner.tx);
 
     // Auto-coloring
     let mut tab_color = TabColor::Default;
@@ -205,6 +186,11 @@ fn new_tab_internal(
         foreground_process: None,
         has_running_app: false,
         unread_bell: false,
+        bell_ringing: Rc::new(std::cell::Cell::new(false)),
+        bell_svg: Rc::new(RefCell::new(None)),
+        bell_timer_source: Rc::new(RefCell::new(None)),
+        command_started_at: None,
+        command_used_alt_screen: false,
         app_state: crate::application_detector::TerminalAppState::default(),
         category_svg: Rc::new(RefCell::new(None)),
         indicator_svg: Rc::new(RefCell::new(None)),
@@ -216,7 +202,6 @@ fn new_tab_internal(
     sync_tab_titles(inner);
 
     inner.tab_view.set_selected_page(&page);
-    schedule_tab_colors_sync(&inner.tx);
 
     controller
 }
@@ -451,11 +436,7 @@ pub fn move_tab_to_new_window_request(inner: &mut AppWindowInner, key: usize) {
     }
 }
 
-fn attach_transferred_controller(
-    inner: &mut AppWindowInner,
-    page: &libadwaita::TabPage,
-    tc: TerminalController,
-) {
+fn attach_transferred_controller(inner: &mut AppWindowInner, tc: TerminalController) {
     let parsed = load_palette(inner.current_settings.theme.as_str());
     let is_dark = libadwaita::StyleManager::default().is_dark();
     let palette = parsed
@@ -464,7 +445,6 @@ fn attach_transferred_controller(
     tc.controller
         .update_settings(inner.current_settings.clone(), palette);
 
-    connect_page_icon_listeners(page, &inner.tx);
     tc.controller.grab_focus();
     inner.tabs.push(tc);
 }
@@ -475,11 +455,10 @@ pub fn adopt_orphan_tabs(inner: &mut AppWindowInner) {
         let page = inner.tab_view.nth_page(i);
         let key = page.child().as_ptr() as usize;
         if let Some(tc) = ORPHAN_TABS.with(|pool| pool.borrow_mut().remove(&key)) {
-            attach_transferred_controller(inner, &page, tc);
+            attach_transferred_controller(inner, tc);
         }
     }
     sync_tab_titles(inner);
-    schedule_tab_colors_sync(&inner.tx);
 }
 
 pub fn tab_page_detached(inner: &mut AppWindowInner, key: usize) {
@@ -497,19 +476,18 @@ pub fn tab_page_detached(inner: &mut AppWindowInner, key: usize) {
 
 pub fn tab_page_attached(inner: &mut AppWindowInner, key: usize) {
     if let Some(tc) = ORPHAN_TABS.with(|pool| pool.borrow_mut().remove(&key)) {
-        let page = inner.tab_view.page(tc.controller.widget());
-        attach_transferred_controller(inner, &page, tc);
+        attach_transferred_controller(inner, tc);
         sync_tab_titles(inner);
     }
-    schedule_tab_colors_sync(&inner.tx);
 }
 
 pub fn focus_active_terminal(inner: &mut AppWindowInner) {
-    inner.bell_indicator.set_visible(false);
     if inner.tab_view.selected_page().is_some() {
         let active_pos = inner.active_tab_pos();
-        if let Some(pos) = active_pos {
-            inner.tabs[pos].unread_bell = false;
+        if let Some(pos) = active_pos
+            && inner.tabs[pos].unread_bell
+        {
+            inner.tabs[pos].clear_bell();
         }
         let is_terminal = active_pos.is_some();
 

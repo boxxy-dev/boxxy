@@ -19,6 +19,11 @@ pub struct TerminalController {
     pub foreground_process: Option<String>,
     pub has_running_app: bool,
     pub unread_bell: bool,
+    pub bell_ringing: std::rc::Rc<std::cell::Cell<bool>>,
+    pub bell_svg: std::rc::Rc<std::cell::RefCell<Option<gtk4::Svg>>>,
+    pub bell_timer_source: std::rc::Rc<std::cell::RefCell<Option<gtk4::glib::SourceId>>>,
+    pub command_started_at: Option<std::time::Instant>,
+    pub command_used_alt_screen: bool,
     pub app_state: crate::application_detector::TerminalAppState,
     pub category_svg: std::rc::Rc<
         std::cell::RefCell<Option<(crate::application_detector::ApplicationCategory, gtk4::Svg)>>,
@@ -32,14 +37,32 @@ pub struct TerminalController {
 }
 
 impl TerminalController {
+    pub fn clear_bell(&mut self) {
+        self.unread_bell = false;
+        self.bell_ringing.set(false);
+        if let Some(source) = self.bell_timer_source.borrow_mut().take() {
+            source.remove();
+        }
+        if let Some(svg) = self.bell_svg.borrow_mut().take() {
+            svg.pause();
+        }
+    }
+
     pub fn stop_working_anim(&self) {
         if let Some(source) = self.working_anim_source.borrow_mut().take() {
             source.remove();
         }
+        if let Some(source) = self.bell_timer_source.borrow_mut().take() {
+            source.remove();
+        }
+        self.bell_ringing.set(false);
         if let Some((_, svg)) = self.category_svg.borrow_mut().take() {
             svg.pause();
         }
         if let Some((_, svg)) = self.indicator_svg.borrow_mut().take() {
+            svg.pause();
+        }
+        if let Some(svg) = self.bell_svg.borrow_mut().take() {
             svg.pause();
         }
     }

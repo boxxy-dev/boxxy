@@ -16,28 +16,14 @@
 @define-color boxxy_search_match_bg alpha(@warning_bg_color, 0.30);
 @define-color boxxy_search_match_fg currentColor;
 
-/* TODO: Investigate custom non-expanded tab width sizing in AdwTabBar / AdwTabBox */
-tab > box {
-    /* Make the inner box fill the available space */
-    min-width: 100px;
-}
-
-tab image.icon {
-    /* Push everything else to the right */
-}
-
 tabbar tab .tab-title label,
 tabbar tab label,
 tab label.title {
-    /* Try to keep the title centered or just left-aligned after the auto margin */
-    margin-left: 0;
-    padding-left: 5px;
+    margin: 0;
+    padding: 0;
     min-height: 20px;
     font-size: 0.9em;
     font-weight: normal;
-    background-size: 18px 18px;
-    background-position: 0px center;
-    background-repeat: no-repeat;
 }
 
 headerbar {
@@ -70,9 +56,10 @@ tabbar {
 
 /* Target the tabs themselves */
 tab {
-	min-height: 28px;
+	min-height: 30px;
 	padding: 2px 4px 2px 4px;
-	margin: 0px 0px 0px 0px;
+	margin: 2px 0px 0px 0px;
+	border-radius: 6px;
 	transition: background-color 150ms ease-in-out;
 }
 
@@ -80,20 +67,60 @@ tabbar tab:hover:not(:selected) {
 	background-color: color-mix(in srgb, currentColor 8%, transparent);
 }
 
+tabbar tab:selected {
+	background-color: color-mix(in srgb, currentColor 13%, transparent);
+}
+
+tabbar tab button.tab-close-btn {
+	min-width: 20px;
+	min-height: 20px;
+	padding: 2px;
+	margin: 0 2px 0 0;
+	border-radius: 9999px;
+	opacity: 0;
+	transition: opacity 150ms ease-in-out, background-color 150ms ease-in-out;
+}
+
+tabbar tab:selected button.tab-close-btn,
+tabbar tab:hover button.tab-close-btn,
+tabbar tab button.tab-close-btn:hover,
+tabbar tab button.tab-close-btn:active,
+tabbar tab button.tab-close-btn:focus-visible {
+	opacity: 1;
+}
+
+tabbar button.new-tab-btn {
+	min-width: 22px;
+	min-height: 22px;
+	padding: 4px;
+	margin: 0;
+}
+
 tab > separator {
 	background: none;
 	opacity: 0;
 }
 
-tabbar tab.tab-blue label { background-image: radial-gradient(circle, alpha(#3584e4, 0.85) 62%, transparent 70%); }
-tabbar tab.tab-teal label { background-image: radial-gradient(circle, alpha(#2190a4, 0.85) 62%, transparent 70%); }
-tabbar tab.tab-green label { background-image: radial-gradient(circle, alpha(#3a944a, 0.85) 62%, transparent 70%); }
-tabbar tab.tab-yellow label { background-image: radial-gradient(circle, alpha(#c88800, 0.85) 62%, transparent 70%); }
-tabbar tab.tab-orange label { background-image: radial-gradient(circle, alpha(#ed5b00, 0.85) 62%, transparent 70%); }
-tabbar tab.tab-red label { background-image: radial-gradient(circle, alpha(#e62d42, 0.85) 62%, transparent 70%); }
-tabbar tab.tab-pink label { background-image: radial-gradient(circle, alpha(#d56199, 0.85) 62%, transparent 70%); }
-tabbar tab.tab-purple label { background-image: radial-gradient(circle, alpha(#9141ac, 0.85) 62%, transparent 70%); }
-tabbar tab.tab-slate label { background-image: radial-gradient(circle, alpha(#6f8396, 0.85) 62%, transparent 70%); }
+tabbar tab .tab-color-dot {
+	min-width: 8px;
+	min-height: 8px;
+	border-radius: 9999px;
+	border: 1.5px solid rgba(0, 0, 0, 0.38);
+}
+
+tabbar tab.tab-blue .tab-color-dot { background-color: #3584e4; }
+tabbar tab.tab-teal .tab-color-dot { background-color: #2190a4; }
+tabbar tab.tab-green .tab-color-dot { background-color: #3a944a; }
+tabbar tab.tab-yellow .tab-color-dot { background-color: #c88800; }
+tabbar tab.tab-orange .tab-color-dot { background-color: #ed5b00; }
+tabbar tab.tab-red .tab-color-dot { background-color: #e62d42; }
+tabbar tab.tab-pink .tab-color-dot { background-color: #d56199; }
+tabbar tab.tab-purple .tab-color-dot { background-color: #9141ac; }
+tabbar tab.tab-slate .tab-color-dot { background-color: #6f8396; }
+
+tabbar tab image.tab-bell-icon {
+	color: @warning_color;
+}
 
 /* Start and End elements in headerbar */
 

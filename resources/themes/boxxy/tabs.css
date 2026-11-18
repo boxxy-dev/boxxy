@@ -11,6 +11,10 @@
     box-shadow: none;
 }
 
+tabbar tab .tab-color-dot {
+    border: 1.5px solid @boxxy_ink;
+}
+
 window:not(.frosted-glass-active) .terminal-header tabbar tab,
 window:not(.frosted-glass-active) tabbar tab {
     background-color: @card_bg_color;

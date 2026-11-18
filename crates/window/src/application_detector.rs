@@ -78,7 +78,10 @@ pub struct TerminalAppState {
     pub alternate_screen_active: bool,
 }
 
-/// Tab indicator badge states (`AdwTab`'s `.tab-indicator` slot).
+/// GResource path of the animated `.gpa` bell notification icon (`state 0` = resting, `state 1` = ringing).
+pub const BELL_GPA_RESOURCE_PATH: &str = "/dev/boxxy/BoxxyTerminal/icons/boxxy-bell.gpa";
+
+/// Claw / timer session indicator states on `BoxxyTab`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TabIndicatorKind {
     #[default]
@@ -87,8 +90,6 @@ pub enum TabIndicatorKind {
     Timer,
     /// Active Claw session (`icons/boxxy-boxxyclaw.gpa`)
     Claw,
-    /// Unread notification / visual bell (`icons/boxxy-bell.gpa`)
-    Bell,
 }
 
 impl TabIndicatorKind {
@@ -101,7 +102,6 @@ impl TabIndicatorKind {
             Self::None => None,
             Self::Timer => Some("/dev/boxxy/BoxxyTerminal/icons/boxxy-clock.gpa"),
             Self::Claw => Some("/dev/boxxy/BoxxyTerminal/icons/boxxy-boxxyclaw.gpa"),
-            Self::Bell => Some("/dev/boxxy/BoxxyTerminal/icons/boxxy-bell.gpa"),
         }
     }
 
@@ -109,7 +109,6 @@ impl TabIndicatorKind {
         match self {
             Self::None | Self::Claw => "boxxy-boxxyclaw-symbolic",
             Self::Timer => "boxxy-timer-symbolic",
-            Self::Bell => "boxxy-visual-bell-symbolic",
         }
     }
 }

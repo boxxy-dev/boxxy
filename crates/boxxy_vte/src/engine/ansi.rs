@@ -1565,7 +1565,7 @@ where
                 unhandled(params);
             }
 
-            // Progress Bar (OSC 9;4)
+            // Progress Bar (OSC 9;4) & iTerm2/Ghostty Notification (OSC 9;<msg>)
             b"9" => {
                 // ESC ] 9 ; 4 ; <state> ; <progress> ST
                 if params.len() >= 3 && params[1] == b"4" {
@@ -1582,6 +1582,71 @@ where
                         0
                     };
                     self.handler.set_progress(state, progress);
+                    return;
+                }
+                // ConEmu `OSC 9;5` explicitly signals "Waiting for user input".
+                if params.len() == 2 && params[1] == b"5" {
+                    self.handler.bell();
+                    return;
+                }
+                // Ignore other ConEmu numeric subcommands (`9;1`, `9;2`, `9;3`, `9;6`..`9;12`)
+                // when accompanied by subcommand arguments so they don't misfire as notifications.
+                if params.len() >= 3
+                    && matches!(
+                        params[1],
+                        b"1" | b"2" | b"3" | b"6" | b"7" | b"8" | b"9" | b"10" | b"11" | b"12"
+                    )
+                {
+                    unhandled(params);
+                    return;
+                }
+                if params.len() >= 2 {
+                    let has_text = params[1..]
+                        .iter()
+                        .filter_map(|p| str::from_utf8(p).ok())
+                        .any(|s| !s.trim().is_empty());
+                    if has_text {
+                        self.handler.bell();
+                    }
+                    return;
+                }
+                unhandled(params);
+            }
+
+            // Kitty Notification Protocol (OSC 99 ; <k=v:...> ; <payload> ST)
+            b"99" => {
+                if params.len() >= 3 {
+                    let meta = str::from_utf8(params[1]).unwrap_or_default();
+                    let mut done = true;
+                    let mut payload_kind = "";
+                    for kv in meta.split(':').filter(|s| !s.is_empty()) {
+                        if let Some((k, v)) = kv.split_once('=') {
+                            match k {
+                                "d" => done = v != "0",
+                                "p" => payload_kind = v,
+                                _ => {}
+                            }
+                        }
+                    }
+                    // Ignore capability queries (`p=?`), close/alive requests, and partial chunks (`d=0`).
+                    if done && matches!(payload_kind, "" | "title" | "body") {
+                        let has_payload = params[2..]
+                            .iter()
+                            .filter_map(|p| str::from_utf8(p).ok())
+                            .any(|s| !s.trim().is_empty());
+                        if has_payload || payload_kind == "body" {
+                            self.handler.bell();
+                        }
+                    }
+                    return;
+                }
+                unhandled(params);
+            }
+
+            // VTE / rxvt / Foot Desktop Notification (OSC 777 ; notify ; <title> [; <body>] ST)
+            b"777" => {
+                if params.len() >= 3 && params[1] == b"notify" {
+                    self.handler.bell();
                     return;
                 }
                 unhandled(params);
@@ -2891,5 +2956,47 @@ mod tests {
             b: 0xBA,
         };
         assert!((rgb1.contrast(rgb2) - 9.786_558_997_257_74).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn osc_9_99_and_777_notifications_ring_bell_without_false_positives() {
+        #[derive(Default)]
+        struct BellCapture {
+            bells: usize,
+            progress_updates: usize,
+        }
+        impl Handler for BellCapture {
+            fn bell(&mut self) {
+                self.bells += 1;
+            }
+            fn set_progress(&mut self, _state: u8, _progress: u8) {
+                self.progress_updates += 1;
+            }
+        }
+
+        let mut processor: Processor = Processor::new();
+        let mut handler = BellCapture::default();
+
+        // 1. OSC 9;4 progress bar updates progress, NOT bell
+        processor.advance(&mut handler, b"\x1b]9;4;1;50\x07");
+        assert_eq!(handler.progress_updates, 1);
+        assert_eq!(handler.bells, 0);
+
+        // 2. OSC 9;<message> (Ghostty / iTerm2 / TUI agent waiting) rings bell
+        processor.advance(&mut handler, b"\x1b]9;Waiting for user input\x07");
+        assert_eq!(handler.bells, 1);
+
+        // 3. OSC 777;notify;<title>;<body> rings bell
+        processor.advance(&mut handler, b"\x1b]777;notify;Build;Finished\x1b\\");
+        assert_eq!(handler.bells, 2);
+
+        // 4. OSC 99 capability query (`p=?`) and incomplete chunk (`d=0`) do NOT ring bell
+        processor.advance(&mut handler, b"\x1b]99;i=1:p=?;1\x1b\\");
+        processor.advance(&mut handler, b"\x1b]99;i=2:d=0:p=title;Agent\x1b\\");
+        assert_eq!(handler.bells, 2);
+
+        // 5. Final OSC 99 notification chunk (`d=1`) rings bell
+        processor.advance(&mut handler, b"\x1b]99;i=2:d=1:p=body;Ready\x1b\\");
+        assert_eq!(handler.bells, 3);
     }
 }

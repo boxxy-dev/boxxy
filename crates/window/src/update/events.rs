@@ -74,6 +74,68 @@ fn resolve_pane_id_from_caches(raw_target: &str) -> String {
     resolve_pane_id_in(raw_target, &claims, &catalog)
 }
 
+const BG_COMMAND_BELL_THRESHOLD: std::time::Duration = std::time::Duration::from_secs(5);
+
+#[inline]
+fn should_ring_for_completed_command(
+    elapsed: std::time::Duration,
+    used_alt_screen: bool,
+    tab_selected: bool,
+) -> bool {
+    !tab_selected && !used_alt_screen && elapsed >= BG_COMMAND_BELL_THRESHOLD
+}
+
+fn trigger_background_tab_bell(inner: &mut AppWindowInner, pos: usize) {
+    if is_tab_selected(inner, pos) {
+        return;
+    }
+    let tc = &mut inner.tabs[pos];
+    if let Some(prev) = tc.bell_timer_source.borrow_mut().take() {
+        prev.remove();
+    }
+    tc.unread_bell = true;
+    tc.bell_ringing.set(true);
+
+    let bell_ringing = tc.bell_ringing.clone();
+    let bell_svg = tc.bell_svg.clone();
+    let bell_timer_rc = tc.bell_timer_source.clone();
+
+    let src = gtk4::glib::timeout_add_local_once(
+        std::time::Duration::from_millis(1800),
+        move || {
+            let _ = bell_timer_rc.borrow_mut().take();
+            // Settle the ringing bell down to static state 0 (`200ms` transition),
+            // then pause the frame clock so idle unread tabs consume 0% CPU.
+            bell_ringing.set(false);
+            if let Some(svg) = bell_svg.borrow().clone() {
+                svg.set_state(0);
+                let ringing_check = bell_ringing;
+                gtk4::glib::timeout_add_local_once(
+                    std::time::Duration::from_millis(240),
+                    move || {
+                        if !ringing_check.get() {
+                            svg.pause();
+                        }
+                    },
+                );
+            }
+        },
+    );
+    *tc.bell_timer_source.borrow_mut() = Some(src);
+    super::tab_bar_sync::sync_tab_running_icons(inner);
+}
+
+fn maybe_ring_on_command_finished(inner: &mut AppWindowInner, pos: usize) {
+    let used_alt = inner.tabs[pos].command_used_alt_screen;
+    inner.tabs[pos].command_used_alt_screen = false;
+    if let Some(started_at) = inner.tabs[pos].command_started_at.take() {
+        let selected = is_tab_selected(inner, pos);
+        if should_ring_for_completed_command(started_at.elapsed(), used_alt, selected) {
+            trigger_background_tab_bell(inner, pos);
+        }
+    }
+}
+
 fn is_tab_selected(inner: &AppWindowInner, pos: usize) -> bool {
     inner
         .tab_view
@@ -210,9 +272,6 @@ pub fn handle_terminal_event(inner: &mut AppWindowInner, event: TerminalEvent) {
                 return;
             }
             inner.tabs[pos].raw_title = Some(title);
-            if inner.tabs[pos].custom_title.is_none() && !is_tab_selected(inner, pos) {
-                inner.tabs[pos].unread_bell = true;
-            }
             super::tab_bar_sync::sync_tab_titles(inner);
         }
         TerminalEventKind::DirectoryChanged(path) => {
@@ -226,12 +285,7 @@ pub fn handle_terminal_event(inner: &mut AppWindowInner, event: TerminalEvent) {
             super::tabs::close_tab(inner, event.id);
         }
         TerminalEventKind::BellRung => {
-            if !is_tab_selected(inner, pos) {
-                inner.tabs[pos].unread_bell = true;
-                super::tab_bar_sync::sync_tab_running_icons(inner);
-            } else {
-                inner.bell_indicator.set_visible(true);
-            }
+            trigger_background_tab_bell(inner, pos);
         }
         TerminalEventKind::ForegroundProcessChanged(proc_name) => {
             let new_fg = (!proc_name.is_empty()).then_some(proc_name);
@@ -240,9 +294,25 @@ pub fn handle_terminal_event(inner: &mut AppWindowInner, event: TerminalEvent) {
             }
             inner.tabs[pos].foreground_process = new_fg;
             super::tab_bar_sync::sync_tab_titles(inner);
+
+            let cat = inner.tabs[pos].app_state.application_category;
+            if cat == crate::application_detector::ApplicationCategory::RunningCommand
+                && !inner.tabs[pos].app_state.alternate_screen_active
+            {
+                if inner.tabs[pos].command_started_at.is_none() {
+                    inner.tabs[pos].command_started_at = Some(std::time::Instant::now());
+                    inner.tabs[pos].command_used_alt_screen = false;
+                }
+            } else if cat != crate::application_detector::ApplicationCategory::Idle {
+                inner.tabs[pos].command_used_alt_screen = true;
+            } else {
+                maybe_ring_on_command_finished(inner, pos);
+            }
         }
         TerminalEventKind::AltScreenChanged(is_alt) => {
-            if !is_alt {
+            if is_alt {
+                inner.tabs[pos].command_used_alt_screen = true;
+            } else {
                 inner.tabs[pos].raw_title = inner.tabs[pos].controller.last_title();
             }
             super::tab_bar_sync::sync_tab_titles(inner);
@@ -251,8 +321,16 @@ pub fn handle_terminal_event(inner: &mut AppWindowInner, event: TerminalEvent) {
             inner.tabs[pos].foreground_process = inner.tabs[pos].controller.foreground_process();
             inner.tabs[pos].raw_title = inner.tabs[pos].controller.last_title();
             super::tab_bar_sync::sync_tab_titles(inner);
+            maybe_ring_on_command_finished(inner, pos);
         }
-        TerminalEventKind::Osc133B | TerminalEventKind::Osc133C => {}
+        TerminalEventKind::Osc133B => {}
+        TerminalEventKind::Osc133C => {
+            if inner.tabs[pos].command_started_at.is_none() {
+                inner.tabs[pos].command_started_at = Some(std::time::Instant::now());
+                inner.tabs[pos].command_used_alt_screen =
+                    inner.tabs[pos].controller.is_alt_screen();
+            }
+        }
         TerminalEventKind::Notification(message) => {
             super::notifications::push_global_notification(inner, Notification::new_info(message));
         }
@@ -345,13 +423,28 @@ pub fn handle_terminal_event(inner: &mut AppWindowInner, event: TerminalEvent) {
                         vibe,
                     );
                 }
-                ClawEngineEvent::DismissDrawer
-                | ClawEngineEvent::DiagnosisComplete { .. }
-                | ClawEngineEvent::InjectCommand { .. }
-                | ClawEngineEvent::ProposeFileWrite { .. }
-                | ClawEngineEvent::RestoreHistory(..)
-                | ClawEngineEvent::ProposeTerminalCommand { .. } => {
+                ClawEngineEvent::DismissDrawer | ClawEngineEvent::RestoreHistory(..) => {
                     inner.claw.refresh_visibility();
+                }
+                ClawEngineEvent::DiagnosisComplete { .. } => {
+                    inner.claw.refresh_visibility();
+                    trigger_background_tab_bell(inner, pos);
+                }
+                ClawEngineEvent::InjectCommand { auto_approve, .. }
+                | ClawEngineEvent::ProposeFileWrite { auto_approve, .. }
+                | ClawEngineEvent::ProposeTerminalCommand { auto_approve, .. } => {
+                    inner.claw.refresh_visibility();
+                    if !auto_approve {
+                        trigger_background_tab_bell(inner, pos);
+                    }
+                }
+                ClawEngineEvent::ProposeFileDelete { .. }
+                | ClawEngineEvent::ProposeKillProcess { .. }
+                | ClawEngineEvent::ProposeBackgroundCommand { .. }
+                | ClawEngineEvent::ProposeGetClipboard { .. }
+                | ClawEngineEvent::ProposeSetClipboard { .. } => {
+                    inner.claw.refresh_visibility();
+                    trigger_background_tab_bell(inner, pos);
                 }
                 ClawEngineEvent::FocusPane => {
                     inner.window.present();
@@ -458,6 +551,7 @@ pub fn handle_terminal_event(inner: &mut AppWindowInner, event: TerminalEvent) {
                     message,
                     ..
                 } => {
+                    trigger_background_tab_bell(inner, pos);
                     if boxxy_preferences::Settings::load().enable_timer_sounds {
                         crate::sound::play_timer_completion_sound();
                     }
@@ -493,6 +587,7 @@ pub fn handle_terminal_event(inner: &mut AppWindowInner, event: TerminalEvent) {
                     message,
                     ..
                 } => {
+                    trigger_background_tab_bell(inner, pos);
                     if boxxy_preferences::Settings::load().enable_task_sounds {
                         crate::sound::play_task_completion_sound();
                     }
@@ -616,5 +711,39 @@ mod tests {
             resolve_pane_id_in("unclaimed-pane-id", &claims, &catalog),
             "unclaimed-pane-id"
         );
+    }
+
+    #[test]
+    fn background_command_completion_bell_requires_unselected_non_tui_and_5s_threshold() {
+        use std::time::Duration;
+
+        assert!(should_ring_for_completed_command(
+            Duration::from_secs(5),
+            false,
+            false
+        ));
+        assert!(should_ring_for_completed_command(
+            Duration::from_secs(20),
+            false,
+            false
+        ));
+        // Active tab never rings tab bell
+        assert!(!should_ring_for_completed_command(
+            Duration::from_secs(20),
+            false,
+            true
+        ));
+        // Alternate-screen TUIs (`vim`, `btop`, `less`) never ring command-completion bell
+        assert!(!should_ring_for_completed_command(
+            Duration::from_secs(20),
+            true,
+            false
+        ));
+        // Quick commands (`< 5s`) do not spam bell
+        assert!(!should_ring_for_completed_command(
+            Duration::from_secs(4),
+            false,
+            false
+        ));
     }
 }

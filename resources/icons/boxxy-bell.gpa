@@ -1,23 +1,100 @@
-<svg gpa:rendering="symbolic" xmlns="http://www.w3.org/2000/svg" xmlns:cc="http://creativecommons.org/ns#" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:gpa="https://www.gtk.org/grappa" xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" width="16" height="16" gpa:version="1" gpa:state="1" gpa:state-names="outline empty">
-  <defs id="defs1" class="" gpa:states="none" gpa:animation-repeat="0" gpa:animation-segment="0">
-    </defs>
-  <path id="bell" fill="none" stroke="url(&quot;#gpa:foreground&quot;) rgb(0,0,0)" stroke-opacity="1" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="none" d="M 10 13 C 10 13.7145309, 9.61880207 14.3747854, 9 14.7320509 C 8.38119793 15.0893164, 7.61880207 15.0893164, 7 14.7320509 C 6.38119793 14.3747854, 6 13.7145309, 6 13 M 8 3 L 8 1 M 2 12 L 14 12 M 2 12 C 3.02507615 12, 4 11.1057377, 4 10 L 4 7 C 4 4.79086113, 5.79086113 3, 8 3 C 10.2091389 3, 12 4.79086113, 12 7 L 12 10 C 12 11.0847864, 12.9393396 12, 14 12" class="transparent-fill foreground-stroke" gpa:stroke="foreground" gpa:fill="none" gpa:states="outline" gpa:stroke-minwidth="25%" gpa:stroke-maxwidth="150%"  gpa:transition-type='animate' gpa:transition-duration='400ms' gpa:transition-easing='ease-in-out'>
-    </path>
+<svg
+        gpa:rendering='symbolic'
+        xmlns='http://www.w3.org/2000/svg'
+        xmlns:svg='http://www.w3.org/2000/svg'
+        xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'
+        xmlns:cc='http://creativecommons.org/ns#'
+        xmlns:dc='http://purl.org/dc/elements/1.1/'
+        xmlns:gpa='https://www.gtk.org/grappa'
+        gpa:version='1'
+        gpa:state='0'
+        width='16'
+        height='16'>
   <metadata>
     <rdf:RDF>
       <cc:Work>
-        <cc:license rdf:resource="https://creativecommons.org/publicdomain/zero/1.0/"></cc:license>
         <dc:subject>
           <rdf:Bag>
-            <rdf:li>bell sound alarm noise ring preferences-system-notifications adw widget-toast libadwaita</rdf:li>
+            <rdf:li>bell ringinging ring alarm</rdf:li>
           </rdf:Bag>
         </dc:subject>
-        <dc:creator>
-          <cc:Agent>
-            <dc:title>Jakub Steiner</dc:title>
-          </cc:Agent>
-        </dc:creator>
       </cc:Work>
     </rdf:RDF>
   </metadata>
+  <path
+          id='path0'
+          class='transparent-fill'
+          fill='none'
+          stroke='none'
+          d='M 7.6266 2 Q 8 2.03941, 8.3734 2'
+          gpa:states='0 1'
+          gpa:animation-type='automatic'
+          gpa:animation-direction='alternate'
+          gpa:animation-easing='ease-in-out'
+          gpa:animation-duration='200ms'
+          gpa:origin='1'>
+  </path>
+  <path
+          id='path1'
+          class='transparent-fill'
+          fill='none'
+          stroke='none'
+          d='M 7.00144 13.1985 Q 8 13.2479, 8.99856 13.1985'
+          gpa:states='0 1'
+          gpa:animation-type='automatic'
+          gpa:animation-direction='alternate'
+          gpa:animation-easing='ease-in-out'
+          gpa:animation-duration='300ms'
+          gpa:animation-segment='1'
+          gpa:origin='1'>
+  </path>
+  <path
+          id='path2'
+          class='foreground-stroke transparent-fill'
+          visibility='hidden'
+          fill='none'
+          stroke='rgb(0,0,0)'
+          stroke-width='2'
+          stroke-linecap='butt'
+          stroke-linejoin='round'
+          d='M 9.25503 13 C 9.25503 13.4698, 9.0044 13.9039, 8.59755 14.1388 C 8.1907 14.3737, 7.68943 14.3737, 7.28258 14.1388 C 6.87573 13.9039, 6.6251 13.4698, 6.6251 13'
+          gpa:stroke='foreground'
+          gpa:states='1'
+          gpa:transition-duration='200ms'
+          gpa:origin='0.5'
+          gpa:attach-to='path1'>
+  </path>
+  <path
+          id='path3'
+          class='foreground-stroke transparent-fill'
+          visibility='hidden'
+          fill='none'
+          stroke='rgb(0,0,0)'
+          stroke-width='2'
+          stroke-linecap='round'
+          stroke-linejoin='round'
+          d='M 3 13 L 13 13 L 12 13 L 12 7 C 12 4.79086, 10.2091 3, 8 3 C 5.79086 3, 4 4.79086, 4 7 L 4 13 Z'
+          gpa:stroke='foreground'
+          gpa:states='1'
+          gpa:transition-duration='200ms'
+          gpa:animation-duration='200ms'
+          gpa:animation-segment='1'
+          gpa:origin='0.631649'
+          gpa:attach-to='path0'>
+  </path>
+  <path
+          id='path4'
+          class='foreground-stroke transparent-fill'
+          fill='none'
+          stroke='rgb(0,0,0)'
+          stroke-width='2'
+          stroke-linecap='round'
+          stroke-linejoin='round'
+          d='M 9.25503 12 C 9.25503 12.4698, 9.0044 12.9039, 8.59755 13.1388 C 8.1907 13.3737, 7.68943 13.3737, 7.28258 13.1388 C 6.87573 12.9039, 6.6251 12.4698, 6.6251 12 M 3 12 L 13 12 L 12 12 L 12 6 C 12 3.79086, 10.2091 2, 8 2 C 5.79086 2, 4 3.79086, 4 6 L 4 12 Z'
+          gpa:stroke='foreground'
+          gpa:states='0'
+          gpa:animation-duration='200ms'
+          gpa:animation-segment='1'
+          gpa:origin='0.631649'>
+  </path>
 </svg>

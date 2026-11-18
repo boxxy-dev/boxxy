@@ -1,8 +1,10 @@
-use gtk4::gio;
+use gtk4::gdk;
 use gtk4::prelude::*;
 
-use crate::application_detector::{ApplicationCategory, TabIndicatorKind};
-use crate::state::{AppWindowInner, TabColor};
+use crate::application_detector::{
+    ApplicationCategory, BELL_GPA_RESOURCE_PATH, TabIndicatorKind,
+};
+use crate::state::AppWindowInner;
 
 pub fn sync_header_title(inner: &AppWindowInner) {
     let unpinned_pages = inner.tab_view.n_pages() - inner.tab_view.n_pinned_pages();
@@ -47,59 +49,8 @@ pub fn sync_tab_titles(inner: &mut AppWindowInner) {
         }
     }
 
-    sync_tab_running_icons(inner);
+    sync_tab_colors(inner);
     sync_header_title(inner);
-}
-
-fn find_tab_icon_image(widget: &gtk4::Widget) -> Option<gtk4::Image> {
-    if let Some(img) = widget.downcast_ref::<gtk4::Image>() {
-        return Some(img.clone());
-    }
-    let mut child = widget.first_child();
-    while let Some(c) = child {
-        // Skip indicator and close buttons, which have their own GtkImage children
-        if c.downcast_ref::<gtk4::Button>().is_none()
-            && let Some(found) = find_tab_icon_image(&c)
-        {
-            return Some(found);
-        }
-        child = c.next_sibling();
-    }
-    None
-}
-
-fn find_tab_indicator_image(widget: &gtk4::Widget) -> Option<gtk4::Image> {
-    if widget.has_css_class("tab-indicator") {
-        let mut child = widget.first_child();
-        while let Some(c) = child {
-            if let Some(img) = c.downcast_ref::<gtk4::Image>() {
-                return Some(img.clone());
-            }
-            child = c.next_sibling();
-        }
-    }
-    let mut child = widget.first_child();
-    while let Some(c) = child {
-        if let Some(found) = find_tab_indicator_image(&c) {
-            return Some(found);
-        }
-        child = c.next_sibling();
-    }
-    None
-}
-
-fn sync_tab_title_centering(tab_widget: &gtk4::Widget, icon_visible: bool) {
-    let mut child = tab_widget.first_child();
-    while let Some(c) = child {
-        if c.has_css_class("tab-title") {
-            let target_margin_end = if icon_visible { 26 } else { 4 };
-            if c.margin_end() != target_margin_end {
-                c.set_margin_end(target_margin_end);
-            }
-            break;
-        }
-        child = c.next_sibling();
-    }
 }
 
 /// Finds the index of the `"empty"` or `"hidden"` state in a GPA `gtk4::Svg`
@@ -116,341 +67,343 @@ fn empty_state_index(svg: &gtk4::Svg) -> u32 {
     }
 }
 
-pub fn sync_tab_running_icons(inner: &AppWindowInner) {
-    let mut tab_nodes = Vec::new();
-    find_tab_nodes(inner.tab_bar.upcast_ref(), &mut tab_nodes);
-    sync_tab_running_icons_with_nodes(inner, &tab_nodes);
-}
-
-fn sync_tab_running_icons_with_nodes(inner: &AppWindowInner, tab_nodes: &[gtk4::Widget]) {
+pub fn sync_tab_colors(inner: &mut AppWindowInner) {
     for tc in &inner.tabs {
         let page = inner.tab_view.page(tc.controller.widget());
-        let category = tc.app_state.application_category;
-
-        if let Some(gpa_path) = category.gpa_resource_path() {
-            let needs_load = tc
-                .category_svg
-                .borrow()
-                .as_ref()
-                .is_none_or(|(active_cat, _)| *active_cat != category);
-            if needs_load {
-                if let Some(source) = tc.working_anim_source.borrow_mut().take() {
-                    source.remove();
-                }
-                if let Some((_, old_svg)) = tc.category_svg.borrow_mut().take() {
-                    old_svg.pause();
-                }
-                let svg = gtk4::Svg::from_resource(gpa_path);
-                if let Some(clock) = inner.tab_bar.frame_clock() {
-                    svg.set_frame_clock(&clock);
-                }
-                svg.play();
-                *tc.category_svg.borrow_mut() = Some((category, svg));
-            }
-            if page.icon().is_none() {
-                page.set_icon(Some(&gio::ThemedIcon::new("utilities-terminal-symbolic")));
-            }
-        } else {
-            if let Some(source) = tc.working_anim_source.borrow_mut().take() {
-                source.remove();
-            }
-            let existing = tc.category_svg.borrow().clone();
-            if let Some((_, svg)) = existing {
-                let empty_idx = empty_state_index(&svg);
-                *tc.category_svg.borrow_mut() = Some((ApplicationCategory::Idle, svg.clone()));
-                if svg.state() != empty_idx {
-                    // Play the un-draw / disappear animation (`active` -> `empty/hidden`) before hiding the icon slot
-                    svg.play();
-                    svg.set_state(empty_idx);
-                    let category_svg_rc = tc.category_svg.clone();
-                    let svg_fade = svg.clone();
-                    let page_weak = page.downgrade();
-                    gtk4::glib::timeout_add_local_once(
-                        std::time::Duration::from_millis(520),
-                        move || {
-                            let should_clear = category_svg_rc.borrow().as_ref().is_some_and(
-                                |(cur_cat, current_svg)| {
-                                    *cur_cat == ApplicationCategory::Idle
-                                        && current_svg == &svg_fade
-                                        && svg_fade.state() == empty_idx
-                                },
-                            );
-                            if should_clear {
-                                svg_fade.pause();
-                                *category_svg_rc.borrow_mut() = None;
-                                if let Some(p) = page_weak.upgrade() {
-                                    p.set_icon(None::<&gio::Icon>);
-                                }
-                            }
-                        },
-                    );
-                }
-            } else if page.icon().is_some() {
-                page.set_icon(None::<&gio::Icon>);
-            }
-        }
-
-        // Sync tab indicator GPA (`boxxy-clock.gpa` / `boxxy-boxxyclaw.gpa` / `boxxy-bell.gpa`)
-        let ind_kind = if tc.has_pending_tasks() {
-            TabIndicatorKind::Timer
-        } else if tc.controller.is_claw_active() {
-            TabIndicatorKind::Claw
-        } else if tc.unread_bell {
-            TabIndicatorKind::Bell
-        } else {
-            TabIndicatorKind::None
-        };
-
-        if let Some(ind_gpa_path) = ind_kind.gpa_resource_path() {
-            let needs_load = tc
-                .indicator_svg
-                .borrow()
-                .as_ref()
-                .is_none_or(|(active_kind, _)| *active_kind != ind_kind);
-            if needs_load {
-                if let Some((_, old_svg)) = tc.indicator_svg.borrow_mut().take() {
-                    old_svg.pause();
-                }
-                let svg = gtk4::Svg::from_resource(ind_gpa_path);
-                if let Some(clock) = inner.tab_bar.frame_clock() {
-                    svg.set_frame_clock(&clock);
-                }
-                svg.play();
-                *tc.indicator_svg.borrow_mut() = Some((ind_kind, svg));
-            }
-            if page.indicator_icon().is_none() {
-                page.set_indicator_icon(Some(&gio::ThemedIcon::new(ind_kind.fallback_icon_name())));
-                page.set_indicator_activatable(false);
-            }
-        } else {
-            let existing = tc.indicator_svg.borrow().clone();
-            if let Some((_, svg)) = existing {
-                let empty_idx = empty_state_index(&svg);
-                *tc.indicator_svg.borrow_mut() = Some((TabIndicatorKind::None, svg.clone()));
-                if svg.state() != empty_idx {
-                    svg.play();
-                    svg.set_state(empty_idx);
-                    let indicator_svg_rc = tc.indicator_svg.clone();
-                    let svg_fade = svg.clone();
-                    let page_weak = page.downgrade();
-                    gtk4::glib::timeout_add_local_once(
-                        std::time::Duration::from_millis(540),
-                        move || {
-                            let should_clear = indicator_svg_rc.borrow().as_ref().is_some_and(
-                                |(cur_kind, current_svg)| {
-                                    *cur_kind == TabIndicatorKind::None
-                                        && current_svg == &svg_fade
-                                        && svg_fade.state() == empty_idx
-                                },
-                            );
-                            if should_clear {
-                                svg_fade.pause();
-                                *indicator_svg_rc.borrow_mut() = None;
-                                if let Some(p) = page_weak.upgrade() {
-                                    p.set_indicator_icon(None::<&gio::Icon>);
-                                }
-                            }
-                        },
-                    );
-                }
-            } else if page.indicator_icon().is_some() {
-                page.set_indicator_icon(None::<&gio::Icon>);
-            }
+        if let Some(tab) = inner.tab_bar.tab_for_page(&page) {
+            tab.set_tab_color(tc.tab_color);
         }
     }
+    sync_tab_running_icons(inner);
+}
 
-    let n_pages = inner.tab_view.n_pages();
-    for i in 0..n_pages {
-        let page = inner.tab_view.nth_page(i);
-        let child = page.child();
-        let Some(tc) = inner.tabs.iter().find(|t| t.controller.widget() == &child) else {
+pub fn sync_tab_running_icons(inner: &AppWindowInner) {
+    for tc in &inner.tabs {
+        let page = inner.tab_view.page(tc.controller.widget());
+        let Some(tab_widget) = inner.tab_bar.tab_for_page(&page) else {
             continue;
         };
 
-        let category = tc.app_state.application_category;
-
-        if let Some(tab_widget) = tab_nodes.get(i as usize) {
-            sync_tab_title_centering(tab_widget, page.icon().is_some());
-            if let Some(icon_img) = find_tab_icon_image(tab_widget) {
-                let current_svg_opt = tc.category_svg.borrow().as_ref().map(|(_, s)| s.clone());
-                if let Some(svg) = current_svg_opt {
-                    let paintable: &gtk4::gdk::Paintable = svg.upcast_ref();
-                    if icon_img.paintable().as_ref() != Some(paintable) {
-                        icon_img.set_paintable(Some(&svg));
-                    }
-                    if let Some(clock) = icon_img
-                        .frame_clock()
-                        .or_else(|| inner.tab_bar.frame_clock())
-                    {
-                        svg.set_frame_clock(&clock);
-                    }
-                    svg.play();
-                    let empty_idx = empty_state_index(&svg);
-                    if category.is_active() && svg.state() == empty_idx {
-                        // Defer state transition `empty/hidden -> 0` by one idle tick
-                        // so `GtkImage` is mapped and has rendered the initial `empty` state
-                        // on the frame clock before starting the appear animation.
-                        let svg_enter = svg.clone();
-                        let img_weak = icon_img.downgrade();
-                        let is_celestial_loader = category == ApplicationCategory::RunningCommand;
-                        let anim_source_rc = tc.working_anim_source.clone();
-                        let category_svg_rc = tc.category_svg.clone();
-                        gtk4::glib::idle_add_local_once(move || {
-                            if let Some(img) = img_weak.upgrade()
-                                && let Some(clock) = img.frame_clock()
-                            {
-                                svg_enter.set_frame_clock(&clock);
-                            }
-                            svg_enter.play();
-                            svg_enter.set_state(0);
-
-                            // For `celestial-loader.gpa` (8 compass working states + state 8 `hidden`),
-                            // let the 500ms appear animation complete, then cycle through the 8
-                            // compass working states (`0..8`) in sync with the 1400ms comet orbit.
-                            if is_celestial_loader && empty_idx >= 8 {
-                                let svg_cycle = svg_enter.clone();
-                                let anim_source_inner = anim_source_rc.clone();
-                                let category_svg_inner = category_svg_rc.clone();
-                                gtk4::glib::timeout_add_local_once(
-                                    std::time::Duration::from_millis(500),
-                                    move || {
-                                        let still_active = category_svg_inner
-                                            .borrow()
-                                            .as_ref()
-                                            .is_some_and(|(cat, cur)| {
-                                                *cat == ApplicationCategory::RunningCommand
-                                                    && cur == &svg_cycle
-                                                    && svg_cycle.state() < empty_idx
-                                            });
-                                        if still_active && anim_source_inner.borrow().is_none() {
-                                            let anim_source_for_tick = anim_source_inner.clone();
-                                            let source = gtk4::glib::timeout_add_local(
-                                                std::time::Duration::from_millis(175),
-                                                move || {
-                                                    if svg_cycle.state() >= empty_idx {
-                                                        // Clear the stored SourceId before returning Break so
-                                                        // `stop_working_anim()` never removes an expired source.
-                                                        *anim_source_for_tick.borrow_mut() = None;
-                                                        return gtk4::glib::ControlFlow::Break;
-                                                    }
-                                                    let next_state =
-                                                        (svg_cycle.state() + 1) % empty_idx;
-                                                    svg_cycle.set_state(next_state);
-                                                    gtk4::glib::ControlFlow::Continue
-                                                },
-                                            );
-                                            *anim_source_inner.borrow_mut() = Some(source);
-                                        }
-                                    },
-                                );
-                            }
-                        });
-                    }
-                } else if !category.is_active() && page.icon().is_some() {
-                    page.set_icon(None::<&gio::Icon>);
-                    sync_tab_title_centering(tab_widget, false);
-                }
-            }
-
-            if let Some(ind_img) = find_tab_indicator_image(tab_widget) {
-                let current_ind_opt = tc
-                    .indicator_svg
-                    .borrow()
-                    .as_ref()
-                    .map(|(k, s)| (*k, s.clone()));
-                if let Some((ind_kind, ind_svg)) = current_ind_opt {
-                    let paintable: &gtk4::gdk::Paintable = ind_svg.upcast_ref();
-                    if ind_img.paintable().as_ref() != Some(paintable) {
-                        ind_img.set_paintable(Some(&ind_svg));
-                    }
-                    if let Some(clock) = ind_img
-                        .frame_clock()
-                        .or_else(|| inner.tab_bar.frame_clock())
-                    {
-                        ind_svg.set_frame_clock(&clock);
-                    }
-                    ind_svg.play();
-                    let empty_idx = empty_state_index(&ind_svg);
-                    if ind_kind.is_active() && ind_svg.state() == empty_idx {
-                        let svg_enter = ind_svg.clone();
-                        let img_weak = ind_img.downgrade();
-                        gtk4::glib::idle_add_local_once(move || {
-                            if let Some(img) = img_weak.upgrade()
-                                && let Some(clock) = img.frame_clock()
-                            {
-                                svg_enter.set_frame_clock(&clock);
-                            }
-                            svg_enter.play();
-                            svg_enter.set_state(0);
-                        });
-                    }
-                } else if page.indicator_icon().is_some() {
-                    page.set_indicator_icon(None::<&gio::Icon>);
-                }
-            }
-        }
+        sync_category_gpa(inner, tc, &tab_widget);
+        sync_indicator_gpa(inner, tc, &tab_widget);
+        sync_bell_gpa(inner, tc, &tab_widget);
     }
 }
 
-pub fn find_tab_nodes(widget: &gtk4::Widget, tabs: &mut Vec<gtk4::Widget>) {
-    // Only collect widgets with CSS name "tab" that are actually visible and managed by the tab bar
-    if widget.css_name() == "tab" && widget.is_visible() {
-        tabs.push(widget.clone());
-    }
-    let mut child = widget.first_child();
-    while let Some(c) = child {
-        find_tab_nodes(&c, tabs);
-        child = c.next_sibling();
-    }
-}
+fn sync_category_gpa(
+    inner: &AppWindowInner,
+    tc: &crate::init::TerminalController,
+    tab_widget: &crate::widgets::tab_bar::BoxxyTab,
+) {
+    let category = tc.app_state.application_category;
+    let icon_img = tab_widget.category_image();
 
-fn ensure_tab_label_halign(widget: &gtk4::Widget) {
-    if let Some(label) = widget.downcast_ref::<gtk4::Label>()
-        && label.halign() != gtk4::Align::Center
-    {
-        label.set_halign(gtk4::Align::Center);
-    }
-    let mut child = widget.first_child();
-    while let Some(c) = child {
-        ensure_tab_label_halign(&c);
-        child = c.next_sibling();
-    }
-}
-
-pub fn sync_tab_colors(inner: &mut AppWindowInner) {
-    let mut tab_nodes = Vec::new();
-    find_tab_nodes(inner.tab_bar.upcast_ref(), &mut tab_nodes);
-
-    let n_pages = inner.tab_view.n_pages();
-
-    for i in 0..n_pages {
-        let page = inner.tab_view.nth_page(i);
-        if let Some(tab_widget) = tab_nodes.get(i as usize) {
-            ensure_tab_label_halign(tab_widget);
-
-            let child = page.child();
-            let target_cls = inner
-                .tabs
-                .iter()
-                .find(|t| t.controller.widget() == &child)
-                .and_then(|tc| tc.tab_color.as_css_class());
-
-            // Diff-only CSS class mutations avoid dirtying GTK style nodes on no-op focus events.
-            for c in TabColor::all() {
-                if let Some(cls) = c.as_css_class()
-                    && Some(cls) != target_cls
-                    && tab_widget.has_css_class(cls)
-                {
-                    tab_widget.remove_css_class(cls);
-                }
+    if let Some(gpa_path) = category.gpa_resource_path() {
+        let needs_load = tc
+            .category_svg
+            .borrow()
+            .as_ref()
+            .is_none_or(|(active_cat, _)| *active_cat != category);
+        if needs_load {
+            if let Some(source) = tc.working_anim_source.borrow_mut().take() {
+                source.remove();
             }
-            if let Some(cls) = target_cls
-                && !tab_widget.has_css_class(cls)
+            if let Some((_, old_svg)) = tc.category_svg.borrow_mut().take() {
+                old_svg.pause();
+            }
+            let svg = gtk4::Svg::from_resource(gpa_path);
+            if let Some(clock) = icon_img
+                .frame_clock()
+                .or_else(|| inner.tab_bar.frame_clock())
             {
-                tab_widget.add_css_class(cls);
+                svg.set_frame_clock(&clock);
+            }
+            svg.play();
+            *tc.category_svg.borrow_mut() = Some((category, svg));
+        }
+
+        let current_svg = tc.category_svg.borrow().as_ref().map(|(_, s)| s.clone());
+        if let Some(svg) = current_svg {
+            let paintable: &gdk::Paintable = svg.upcast_ref();
+            if icon_img.paintable().as_ref() != Some(paintable) {
+                icon_img.set_paintable(Some(&svg));
+            }
+            if let Some(clock) = icon_img
+                .frame_clock()
+                .or_else(|| inner.tab_bar.frame_clock())
+            {
+                svg.set_frame_clock(&clock);
+            }
+            svg.play();
+
+            let empty_idx = empty_state_index(&svg);
+            if category.is_active() && svg.state() == empty_idx {
+                let svg_enter = svg;
+                let img_weak = icon_img.downgrade();
+                let is_celestial_loader = category == ApplicationCategory::RunningCommand;
+                let anim_source_rc = tc.working_anim_source.clone();
+                let category_svg_rc = tc.category_svg.clone();
+                gtk4::glib::idle_add_local_once(move || {
+                    if let Some(img) = img_weak.upgrade()
+                        && let Some(clock) = img.frame_clock()
+                    {
+                        svg_enter.set_frame_clock(&clock);
+                    }
+                    svg_enter.play();
+                    svg_enter.set_state(0);
+
+                    if is_celestial_loader && empty_idx >= 8 {
+                        let svg_cycle = svg_enter;
+                        let anim_source_inner = anim_source_rc;
+                        let category_svg_inner = category_svg_rc;
+                        gtk4::glib::timeout_add_local_once(
+                            std::time::Duration::from_millis(500),
+                            move || {
+                                let still_active = category_svg_inner
+                                    .borrow()
+                                    .as_ref()
+                                    .is_some_and(|(cat, cur)| {
+                                        *cat == ApplicationCategory::RunningCommand
+                                            && cur == &svg_cycle
+                                            && svg_cycle.state() < empty_idx
+                                    });
+                                if still_active && anim_source_inner.borrow().is_none() {
+                                    let anim_source_for_tick = anim_source_inner.clone();
+                                    let source = gtk4::glib::timeout_add_local(
+                                        std::time::Duration::from_millis(175),
+                                        move || {
+                                            if svg_cycle.state() >= empty_idx {
+                                                *anim_source_for_tick.borrow_mut() = None;
+                                                return gtk4::glib::ControlFlow::Break;
+                                            }
+                                            let next_state = (svg_cycle.state() + 1) % empty_idx;
+                                            svg_cycle.set_state(next_state);
+                                            gtk4::glib::ControlFlow::Continue
+                                        },
+                                    );
+                                    *anim_source_inner.borrow_mut() = Some(source);
+                                }
+                            },
+                        );
+                    }
+                });
             }
         }
+    } else {
+        if let Some(source) = tc.working_anim_source.borrow_mut().take() {
+            source.remove();
+        }
+        let existing = tc.category_svg.borrow().clone();
+        if let Some((_, svg)) = existing {
+            let empty_idx = empty_state_index(&svg);
+            *tc.category_svg.borrow_mut() = Some((ApplicationCategory::Idle, svg.clone()));
+            if svg.state() != empty_idx {
+                svg.play();
+                svg.set_state(empty_idx);
+                let category_svg_rc = tc.category_svg.clone();
+                let svg_fade = svg;
+                let img_weak = icon_img.downgrade();
+                gtk4::glib::timeout_add_local_once(
+                    std::time::Duration::from_millis(520),
+                    move || {
+                        let should_clear = category_svg_rc.borrow().as_ref().is_some_and(
+                            |(cur_cat, current_svg)| {
+                                *cur_cat == ApplicationCategory::Idle
+                                    && current_svg == &svg_fade
+                                    && svg_fade.state() == empty_idx
+                            },
+                        );
+                        if should_clear {
+                            svg_fade.pause();
+                            *category_svg_rc.borrow_mut() = None;
+                            if let Some(img) = img_weak.upgrade() {
+                                // Keep `category_image` visible so its 16px slot before the
+                                // centered title stays reserved without shifting any widgets.
+                                img.set_paintable(None::<&gdk::Paintable>);
+                            }
+                        }
+                    },
+                );
+            }
+        } else if icon_img.paintable().is_some() {
+            icon_img.set_paintable(None::<&gdk::Paintable>);
+        }
     }
+}
 
-    sync_tab_running_icons_with_nodes(inner, &tab_nodes);
+fn sync_indicator_gpa(
+    inner: &AppWindowInner,
+    tc: &crate::init::TerminalController,
+    tab_widget: &crate::widgets::tab_bar::BoxxyTab,
+) {
+    let ind_kind = if tc.has_pending_tasks() {
+        TabIndicatorKind::Timer
+    } else if tc.controller.is_claw_active() {
+        TabIndicatorKind::Claw
+    } else {
+        TabIndicatorKind::None
+    };
+
+    let ind_img = tab_widget.indicator_image();
+
+    if let Some(ind_gpa_path) = ind_kind.gpa_resource_path() {
+        let needs_load = tc
+            .indicator_svg
+            .borrow()
+            .as_ref()
+            .is_none_or(|(active_kind, _)| *active_kind != ind_kind);
+        if needs_load {
+            if let Some((_, old_svg)) = tc.indicator_svg.borrow_mut().take() {
+                old_svg.pause();
+            }
+            let svg = gtk4::Svg::from_resource(ind_gpa_path);
+            if let Some(clock) = ind_img
+                .frame_clock()
+                .or_else(|| inner.tab_bar.frame_clock())
+            {
+                svg.set_frame_clock(&clock);
+            }
+            svg.play();
+            *tc.indicator_svg.borrow_mut() = Some((ind_kind, svg));
+        }
+
+        let current_svg = tc.indicator_svg.borrow().as_ref().map(|(_, s)| s.clone());
+        if let Some(ind_svg) = current_svg {
+            let paintable: &gdk::Paintable = ind_svg.upcast_ref();
+            if ind_img.paintable().as_ref() != Some(paintable) {
+                ind_img.set_paintable(Some(&ind_svg));
+            }
+            if !ind_img.is_visible() {
+                ind_img.set_visible(true);
+            }
+            if let Some(clock) = ind_img
+                .frame_clock()
+                .or_else(|| inner.tab_bar.frame_clock())
+            {
+                ind_svg.set_frame_clock(&clock);
+            }
+            ind_svg.play();
+
+            let empty_idx = empty_state_index(&ind_svg);
+            if ind_kind.is_active() && ind_svg.state() == empty_idx {
+                let svg_enter = ind_svg;
+                let img_weak = ind_img.downgrade();
+                gtk4::glib::idle_add_local_once(move || {
+                    if let Some(img) = img_weak.upgrade()
+                        && let Some(clock) = img.frame_clock()
+                    {
+                        svg_enter.set_frame_clock(&clock);
+                    }
+                    svg_enter.play();
+                    svg_enter.set_state(0);
+                });
+            }
+        }
+    } else {
+        let existing = tc.indicator_svg.borrow().clone();
+        if let Some((_, svg)) = existing {
+            let empty_idx = empty_state_index(&svg);
+            *tc.indicator_svg.borrow_mut() = Some((TabIndicatorKind::None, svg.clone()));
+            if svg.state() != empty_idx {
+                svg.play();
+                svg.set_state(empty_idx);
+                let indicator_svg_rc = tc.indicator_svg.clone();
+                let svg_fade = svg;
+                let img_weak = ind_img.downgrade();
+                gtk4::glib::timeout_add_local_once(
+                    std::time::Duration::from_millis(540),
+                    move || {
+                        let should_clear = indicator_svg_rc.borrow().as_ref().is_some_and(
+                            |(cur_kind, current_svg)| {
+                                *cur_kind == TabIndicatorKind::None
+                                    && current_svg == &svg_fade
+                                    && svg_fade.state() == empty_idx
+                            },
+                        );
+                        if should_clear {
+                            svg_fade.pause();
+                            *indicator_svg_rc.borrow_mut() = None;
+                            if let Some(img) = img_weak.upgrade() {
+                                img.set_visible(false);
+                                img.set_paintable(None::<&gdk::Paintable>);
+                            }
+                        }
+                    },
+                );
+            }
+        } else if ind_img.is_visible() {
+            ind_img.set_visible(false);
+            ind_img.set_paintable(None::<&gdk::Paintable>);
+        }
+    }
+}
+
+fn sync_bell_gpa(
+    inner: &AppWindowInner,
+    tc: &crate::init::TerminalController,
+    tab_widget: &crate::widgets::tab_bar::BoxxyTab,
+) {
+    let bell_img = tab_widget.bell_image();
+
+    if tc.unread_bell {
+        if tc.bell_svg.borrow().is_none() {
+            let svg = gtk4::Svg::from_resource(BELL_GPA_RESOURCE_PATH);
+            if let Some(clock) = bell_img
+                .frame_clock()
+                .or_else(|| inner.tab_bar.frame_clock())
+            {
+                svg.set_frame_clock(&clock);
+            }
+            *tc.bell_svg.borrow_mut() = Some(svg);
+        }
+
+        let current_svg = tc.bell_svg.borrow().clone();
+        if let Some(bell_svg) = current_svg {
+            let paintable: &gdk::Paintable = bell_svg.upcast_ref();
+            if bell_img.paintable().as_ref() != Some(paintable) {
+                bell_img.set_paintable(Some(&bell_svg));
+            }
+            if !bell_img.is_visible() {
+                bell_img.set_visible(true);
+            }
+
+            if tc.bell_ringing.get() {
+                if let Some(clock) = bell_img
+                    .frame_clock()
+                    .or_else(|| inner.tab_bar.frame_clock())
+                {
+                    bell_svg.set_frame_clock(&clock);
+                }
+                bell_svg.play();
+                if bell_svg.state() != 1 {
+                    bell_svg.set_state(1);
+                }
+                let svg_ring = bell_svg;
+                let img_weak = bell_img.downgrade();
+                let ringing_flag = tc.bell_ringing.clone();
+                gtk4::glib::idle_add_local_once(move || {
+                    if !ringing_flag.get() {
+                        return;
+                    }
+                    if let Some(img) = img_weak.upgrade()
+                        && let Some(clock) = img.frame_clock()
+                    {
+                        svg_ring.set_frame_clock(&clock);
+                    }
+                    svg_ring.play();
+                    svg_ring.set_state(1);
+                });
+            } else if bell_svg.state() != 0 {
+                bell_svg.set_state(0);
+            }
+        }
+    } else {
+        if let Some(svg) = tc.bell_svg.borrow_mut().take() {
+            svg.pause();
+        }
+        if bell_img.is_visible() {
+            bell_img.set_visible(false);
+            bell_img.set_paintable(None::<&gdk::Paintable>);
+        }
+    }
 }

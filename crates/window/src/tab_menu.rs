@@ -7,7 +7,7 @@ use gtk4::gio;
 use gtk4::prelude::*;
 
 use crate::state::TabColor;
-use crate::update::tab_bar_sync::find_tab_nodes;
+use crate::widgets::tab_bar::BoxxyTabBar;
 
 const SWATCH_COLORS: [(TabColor, &str); 10] = [
     (TabColor::Default, "rgba(255,255,255,0.1)"),
@@ -60,12 +60,11 @@ pub struct TabContextCallbacks {
 
 pub struct TabContextMenu {
     popover: gtk4::Popover,
-    current_page: Rc<RefCell<Option<libadwaita::TabPage>>>,
 }
 
 impl TabContextMenu {
     pub fn new(
-        tab_bar: &libadwaita::TabBar,
+        tab_bar: &BoxxyTabBar,
         tab_view: &libadwaita::TabView,
         callbacks: TabContextCallbacks,
     ) -> Self {
@@ -83,7 +82,6 @@ impl TabContextMenu {
 
         let current_page: Rc<RefCell<Option<libadwaita::TabPage>>> = Rc::new(RefCell::new(None));
 
-        // Disable native AdwTabView menu so our custom popover handles right-clicks cleanly.
         tab_view.set_menu_model(None::<&gio::MenuModel>);
 
         let popover = gtk4::Popover::builder()
@@ -133,7 +131,6 @@ impl TabContextMenu {
         let on_set_title = Rc::new(on_set_title);
         let pop_clone_title = popover.clone();
 
-        // Apply custom title on Enter
         let on_set_title_activate = on_set_title.clone();
         title_entry.connect_activate(move |entry| {
             if let Some(page) = cp_title.borrow().clone() {
@@ -144,9 +141,8 @@ impl TabContextMenu {
             pop_clone_title.popdown();
         });
 
-        // Clear custom title on secondary icon press
         let cp_title_clear = current_page.clone();
-        let on_set_title_clear = on_set_title.clone();
+        let on_set_title_clear = on_set_title;
         title_entry.connect_icon_press(move |entry, pos| {
             if pos == gtk4::EntryIconPosition::Secondary {
                 entry.set_text("");
@@ -206,7 +202,7 @@ impl TabContextMenu {
             pop_clone.popdown();
         });
 
-        let cp_move = cp.clone();
+        let cp_move = cp;
         let pop_clone2 = popover.clone();
         move_btn.connect_clicked(move |_| {
             if let Some(page) = cp_move.borrow().clone() {
@@ -215,86 +211,53 @@ impl TabContextMenu {
             pop_clone2.popdown();
         });
 
-        let gesture = gtk4::GestureClick::new();
-        gesture.set_button(gtk4::gdk::BUTTON_SECONDARY);
-        // Capture phase intercepts right-clicks before AdwTabBar handles them natively.
-        gesture.set_propagation_phase(gtk4::PropagationPhase::Capture);
+        let pop_for_ctx = popover.clone();
+        let tb_weak = tab_bar.downgrade();
+        let tv_weak = tab_view.downgrade();
+        tab_bar.set_on_context_menu(move |tab_widget, page| {
+            let (Some(tb), Some(tv)) = (tb_weak.upgrade(), tv_weak.upgrade()) else {
+                return;
+            };
+            *current_page.borrow_mut() = Some(page.clone());
 
-        let pop_clone3 = popover.clone();
-        let tv_clone = tab_view.clone();
-        let tb_clone = tab_bar.clone();
-        let cp_gesture = current_page.clone();
+            let is_pinned = page.is_pinned();
+            let is_terminal =
+                !page.child().has_css_class("non-terminal-tab") && page.title() != "Bookmarks";
+            let can_move = !is_pinned && (tv.n_pages() - tv.n_pinned_pages()) > 1;
 
-        gesture.connect_pressed(move |gesture, _, x, y| {
-            let mut tabs = Vec::new();
-            find_tab_nodes(tb_clone.upcast_ref(), &mut tabs);
+            close_btn.set_sensitive(true);
+            move_btn.set_sensitive(can_move);
+            title_entry.set_sensitive(is_terminal);
+            color_box.set_sensitive(is_terminal);
 
-            let click_pt = gtk4::graphene::Point::new(x as f32, y as f32);
-            let mut clicked_index = None;
-            for (i, tab) in tabs.iter().enumerate() {
-                if let Some(pt) = tb_clone.compute_point(tab, &click_pt)
-                    && pt.x() >= 0.0
-                    && pt.x() < tab.width() as f32
-                    && pt.y() >= 0.0
-                    && pt.y() < tab.height() as f32
-                {
-                    clicked_index = Some(i);
-                    break;
-                }
+            if let Some(custom) = get_custom_title(page) {
+                title_entry.set_text(&custom);
+            } else {
+                title_entry.set_text("");
             }
+            let cwd = get_cwd(page);
+            title_entry.set_tooltip_text(cwd.as_deref());
 
-            let idx = clicked_index.unwrap_or_else(|| {
-                (0..tv_clone.n_pages())
-                    .find(|&i| Some(tv_clone.nth_page(i)) == tv_clone.selected_page())
-                    .unwrap_or(0) as usize
-            });
-
-            if idx < tv_clone.n_pages() as usize {
-                let page = tv_clone.nth_page(idx as i32);
-                *cp_gesture.borrow_mut() = Some(page.clone());
-
-                let is_pinned = page.is_pinned();
-                let is_terminal =
-                    !page.child().has_css_class("non-terminal-tab") && page.title() != "Bookmarks";
-
-                let can_move = !is_pinned && tv_clone.n_pages() > 1;
-
-                close_btn.set_sensitive(true);
-                move_btn.set_sensitive(can_move);
-                title_entry.set_sensitive(is_terminal);
-                color_box.set_sensitive(is_terminal);
-
-                if let Some(custom) = get_custom_title(&page) {
-                    title_entry.set_text(&custom);
-                } else {
-                    title_entry.set_text("");
-                }
-                let cwd = get_cwd(&page);
-                title_entry.set_tooltip_text(cwd.as_deref());
-
-                let rect = gtk4::gdk::Rectangle::new(x as i32, y as i32, 1, 1);
-                pop_clone3.set_pointing_to(Some(&rect));
-                pop_clone3.popup();
-
-                gesture.set_state(gtk4::EventSequenceState::Claimed);
-            }
+            let rect = if let Some(bounds) = tab_widget.compute_bounds(&tb) {
+                gtk4::gdk::Rectangle::new(
+                    (bounds.x() + bounds.width() * 0.5) as i32,
+                    (bounds.y() + bounds.height()) as i32,
+                    1,
+                    1,
+                )
+            } else {
+                gtk4::gdk::Rectangle::new(0, tb.height(), 1, 1)
+            };
+            pop_for_ctx.set_pointing_to(Some(&rect));
+            pop_for_ctx.popup();
         });
 
-        tab_bar.add_controller(gesture);
-
-        Self {
-            popover,
-            current_page,
-        }
+        Self { popover }
     }
 
     pub fn unparent(&self) {
         if self.popover.parent().is_some() {
             self.popover.unparent();
         }
-    }
-
-    pub fn current_page(&self) -> Option<libadwaita::TabPage> {
-        self.current_page.borrow().clone()
     }
 }

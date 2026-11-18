@@ -22,7 +22,6 @@ fn finalize_window_close(inner_ref: &Rc<RefCell<AppWindowInner>>) {
         let inner = inner_ref.borrow();
         inner.force_close.set(true);
         inner.command_palette.unparent();
-        inner.app_menu.unparent();
         inner.window.clone()
     };
     window.close();

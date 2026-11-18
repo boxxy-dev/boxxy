@@ -71,9 +71,6 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
         AppInput::SetTabTitle(key, title) => {
             tabs::set_tab_title(&mut inner, key, title);
         }
-        AppInput::SyncTabColors => {
-            tab_bar_sync::sync_tab_colors(&mut inner);
-        }
         AppInput::AdoptOrphanTabs => {
             tabs::adopt_orphan_tabs(&mut inner);
         }
@@ -126,17 +123,6 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
             if let Some(tc) = inner.active_tab() {
                 tc.controller.open_in_files();
             }
-        }
-        AppInput::ShowAppMenu(x, y) => {
-            let rect = gtk4::gdk::Rectangle::new(x as i32, y as i32, 0, 0);
-            let is_maximized = inner
-                .active_tab()
-                .is_some_and(|tc| tc.controller.is_maximized());
-            let ctx = boxxy_terminal::AppMenuContext {
-                is_maximized,
-                terminal_edit: None,
-            };
-            inner.app_menu.show(rect, ctx);
         }
         AppInput::CommandPalette => {
             inner.command_palette.show(&inner.window);

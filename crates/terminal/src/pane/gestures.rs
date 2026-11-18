@@ -1,4 +1,4 @@
-use super::app_menu::{AppMenuComponent, AppMenuContext, TerminalEditContext};
+use super::app_menu::{AppMenuComponent, AppMenuContext};
 use crate::PaneOutput;
 use crate::search_bar::SearchBarComponent;
 use boxxy_vte::terminal::TerminalWidget;
@@ -254,10 +254,8 @@ pub(super) fn setup_gestures(
         let rect = gdk::Rectangle::new(x as i32, y as i32, 1, 1);
         let ctx = AppMenuContext {
             is_maximized,
-            terminal_edit: Some(TerminalEditContext {
-                path_to_copy,
-                has_selection: term_for_menu.has_selection(),
-            }),
+            path_to_copy,
+            has_selection: term_for_menu.has_selection(),
         };
 
         app_menu_clone.show(rect, ctx);

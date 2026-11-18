@@ -17,7 +17,7 @@ use boxxy_claw_protocol::*;
 use boxxy_claw_widget::ClawIndicator;
 use boxxy_claw_widget::{OverlayMode, TerminalOverlay};
 
-pub mod app_menu;
+mod app_menu;
 mod claw;
 mod claw_host;
 mod events;

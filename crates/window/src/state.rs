@@ -5,7 +5,7 @@ use boxxy_bookmarks::{sidebar::BookmarksSidebarComponent, tab::BookmarksTabCompo
 use boxxy_claw_ui::ClawSidebarComponent;
 use boxxy_command_palette::CommandPaletteComponent;
 use boxxy_preferences::{AppState, PreferencesComponent, Settings};
-use boxxy_terminal::{AppMenuComponent, TerminalEvent};
+use boxxy_terminal::TerminalEvent;
 use gtk4 as gtk;
 use gtk4::prelude::*;
 use libadwaita as adw;
@@ -84,7 +84,6 @@ pub enum AppInput {
     MoveTabToNewWindowRequest(usize),
     SetTabColor(usize, TabColor),
     SetTabTitle(usize, Option<String>),
-    SyncTabColors,
     CloseTab(String),
     CloseActiveTab,
     HandleTerminalEvent(Box<TerminalEvent>),
@@ -102,7 +101,6 @@ pub enum AppInput {
     OpenWhatsNew,
     OpenAbout,
     OpenInFiles,
-    ShowAppMenu(f64, f64),
     SettingsChanged(Box<Settings>),
     ShowThemesSidebar,
     ShowClawSidebar,
@@ -181,7 +179,7 @@ pub struct AppWindowInner {
     pub window: adw::ApplicationWindow,
     pub tabs: Vec<TerminalController>,
     pub tab_view: adw::TabView,
-    pub tab_bar: adw::TabBar,
+    pub tab_bar: crate::widgets::tab_bar::BoxxyTabBar,
     pub content_header: adw::HeaderBar,
     pub split_view: adw::OverlaySplitView,
     pub sidebar_overlay: gtk::Overlay,
@@ -191,7 +189,6 @@ pub struct AppWindowInner {
     pub view_stack: adw::ViewStack,
     pub sidebar_visible: bool,
     pub preferences: Option<PreferencesComponent>,
-    pub app_menu: AppMenuComponent,
     pub tab_menu: Option<TabContextMenu>,
     pub claw: ClawSidebarComponent,
     pub bookmarks_sidebar: BookmarksSidebarComponent,
@@ -201,7 +198,6 @@ pub struct AppWindowInner {
     pub command_palette: CommandPaletteComponent,
     pub current_settings: Settings,
     pub app_state: AppState,
-    pub bell_indicator: gtk::Image,
     pub claw_active: bool,
     pub toast_overlay: adw::ToastOverlay,
     pub frosted_container: crate::widgets::frosted_glass::FrostedGlassContainer,
