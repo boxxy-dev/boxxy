@@ -316,8 +316,8 @@ impl ClawIndicator {
         });
     }
 
-    pub fn grab_cancel_focus(&self) {
-        self.cancel_btn.grab_focus();
+    pub fn grab_cancel_focus(&self) -> bool {
+        self.cancel_btn.grab_focus()
     }
 
     pub fn set_visible(&self, visible: bool) {
@@ -430,6 +430,7 @@ impl ClawIndicator {
     pub fn show_thinking(&self, agent_name: &str, tool_name: Option<&str>) {
         self.dismiss_alert();
         self.is_active.set(true);
+        self.container.set_visible(true);
 
         let host_disp = self.host_display_name.borrow();
         let host_slug = self.host_slug.borrow();

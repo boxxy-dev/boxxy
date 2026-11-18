@@ -746,6 +746,11 @@ impl MsgBarComponent {
         }
     }
 
+    #[must_use]
+    pub fn is_status_popover_open(&self) -> bool {
+        self.status_popover.is_visible()
+    }
+
     /// Dismisses any open popup (autocomplete or session options popover) owned
     /// by the input bar. Returns `true` if a popup was open and was dismissed.
     #[must_use]

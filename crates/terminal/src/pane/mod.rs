@@ -483,6 +483,7 @@ impl TerminalPaneComponent {
         crate::register_live_pane(id.clone(), Rc::downgrade(&inner));
 
         gestures::setup_gestures(
+            &widget,
             &terminal,
             &inner,
             &search_bar_rc,

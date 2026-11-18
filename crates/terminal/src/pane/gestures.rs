@@ -43,18 +43,22 @@ pub(crate) fn export_and_open_scrollback(terminal: &TerminalWidget) {
 }
 
 pub(super) fn setup_gestures(
+    pane_overlay: &gtk::Overlay,
     terminal: &TerminalWidget,
     inner: &Rc<RefCell<super::PaneInner>>,
     search_bar: &Rc<SearchBarComponent>,
     callback: std::sync::Arc<dyn Fn(PaneOutput) + Send + Sync + 'static>,
     id: String,
 ) {
+    // Track focus across the entire pane (`gtk::Overlay`) rather than only `TerminalWidget`
+    // so focusing the Claw overlay drawer, input bar, cancel button, or search bar updates
+    // `active_pane_id`, inactive-pane dimming, and sidebar state across splits.
     let focus_ctrl = gtk::EventControllerFocus::new();
     let cb_clone = callback.clone();
     focus_ctrl.connect_enter(move |_| {
         cb_clone(PaneOutput::Focused(id.clone()));
     });
-    terminal.add_controller(focus_ctrl);
+    pane_overlay.add_controller(focus_ctrl);
 
     let action_group = gio::SimpleActionGroup::new();
     let copy_action = gio::SimpleAction::new("copy", None);
@@ -419,6 +423,18 @@ pub(super) fn setup_split_drag_and_drop(
         });
     }
     pane_overlay.add_controller(hover_motion);
+
+    // Clicking anywhere on a pane whose Claw drawer is open (conversation area, picker,
+    // disabled input while working, or the exposed bottom terminal margin) ensures focus
+    // lands inside this pane's Claw overlay rather than staying stranded in another split.
+    let overlay_click = gtk::GestureClick::new();
+    overlay_click.set_button(gdk::BUTTON_PRIMARY);
+    overlay_click.set_propagation_phase(gtk::PropagationPhase::Capture);
+    let claw_popover_click = claw_popover.clone();
+    overlay_click.connect_released(move |_, _, _, _| {
+        claw_popover_click.handle_pane_click_release();
+    });
+    pane_overlay.add_controller(overlay_click);
 
     // DragSource is attached strictly to the centered three-dots handle,
     // never to the full horizontal line.

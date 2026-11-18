@@ -363,9 +363,12 @@ pub fn spawn_dispatch(
                                 crate::Proposal::None,
                             );
                         } else {
+                            let had_focus = overlay.pane_owns_focus();
                             host.inject_line(command.clone());
                             overlay.hide();
-                            host.grab_focus();
+                            if had_focus {
+                                host.grab_focus();
+                            }
                         }
                     } else {
                         overlay.show(
@@ -627,12 +630,15 @@ pub fn spawn_dispatch(
                                 });
                                 overlay.enter_waiting_state();
                             } else {
+                                let had_focus = overlay.pane_owns_focus();
                                 host.inject_line(command.clone());
                                 host.send_claw(ClawMessage::TerminalCommandAccepted {
                                     target_pane_id: None,
                                 });
                                 overlay.hide();
-                                host.grab_focus();
+                                if had_focus {
+                                    host.grab_focus();
+                                }
                             }
                         } else {
                             row.set_working(false);
@@ -694,7 +700,7 @@ pub fn spawn_dispatch(
                         cost_usd: *total_cost_usd,
                         tools_used: prev_tools,
                     });
-                    if overlay.is_visible() {
+                    if overlay.is_visible() && overlay.pane_owns_focus() {
                         overlay.grab_input_focus();
                     }
                 }
@@ -868,7 +874,7 @@ pub fn spawn_dispatch(
                     su.tools_used = restored_tools;
                     session_usage.set(su);
                     overlay_store.splice(0, overlay_store.n_items(), &overlay_items);
-                    if !rows.is_empty() && overlay.is_visible() {
+                    if !rows.is_empty() && overlay.is_visible() && overlay.pane_owns_focus() {
                         overlay.grab_input_focus();
                     }
                 }

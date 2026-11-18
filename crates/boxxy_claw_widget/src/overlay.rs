@@ -27,6 +27,7 @@ type TurnSubmittedHook = Rc<RefCell<Option<Rc<dyn Fn()>>>>;
 #[derive(Clone)]
 pub struct TerminalOverlay {
     revealer: gtk::Revealer,
+    main_drawer: gtk::Box,
     bottom_area: gtk::Box,
     indicator: ClawIndicator,
     indicator_slot: gtk::Box,
@@ -64,6 +65,8 @@ pub struct TerminalOverlay {
     esc_interrupt_label: gtk::Label,
     esc_interrupt_armed: Rc<Cell<bool>>,
     esc_interrupt_timer: Rc<RefCell<Option<gtk::glib::SourceId>>>,
+    pending_exit_reset: Rc<Cell<bool>>,
+    skip_next_click_refocus: Rc<Cell<bool>>,
     on_turn_submitted: TurnSubmittedHook,
     /// Character name pre-selected in the picker before any session starts.
     selected_character: Rc<RefCell<String>>,
@@ -86,6 +89,7 @@ impl TerminalOverlay {
 
         let revealer: gtk::Revealer = builder.object("root_revealer").unwrap();
         let main_drawer: gtk::Box = builder.object("main_drawer").unwrap();
+        main_drawer.set_focusable(true);
         let bottom_area: gtk::Box = builder.object("bottom_area").unwrap();
         let initial_settings = Settings::load();
         boxxy_viewer::set_always_expand_code_blocks(initial_settings.always_show_code_blocks);
@@ -336,7 +340,11 @@ impl TerminalOverlay {
         revealer.connect_reveal_child_notify(move |rev| {
             let is_open = rev.reveals_child();
             host_vis.set_focusable(!is_open);
-            if !is_open {
+            // Only hand focus back to this pane's terminal on programmatic close if the
+            // drawer itself held focus — preventing background panes from stealing focus
+            // away from another split. Explicit user dismiss actions (`dismiss_and_refocus`)
+            // focus `host` directly.
+            if !is_open && rev.focus_child().is_some() {
                 host_vis.grab_focus();
             }
             revealer_for_target.set_can_target(is_open);
@@ -350,6 +358,7 @@ impl TerminalOverlay {
 
         let s = Self {
             revealer: revealer.clone(),
+            main_drawer: main_drawer.clone(),
             bottom_area,
             indicator: indicator.clone(),
             indicator_slot,
@@ -383,6 +392,8 @@ impl TerminalOverlay {
             esc_interrupt_label: esc_interrupt_label.clone(),
             esc_interrupt_armed: esc_interrupt_armed.clone(),
             esc_interrupt_timer: esc_interrupt_timer.clone(),
+            pending_exit_reset: Rc::new(Cell::new(false)),
+            skip_next_click_refocus: Rc::new(Cell::new(false)),
             on_turn_submitted: Rc::new(RefCell::new(None)),
             selected_character: pending_character,
             history_list,
@@ -392,22 +403,30 @@ impl TerminalOverlay {
             host: host.clone(),
         };
 
+        let overlay_for_revealed = s.clone();
+        revealer.connect_child_revealed_notify(move |rev| {
+            if !rev.is_child_revealed() && !rev.reveals_child() {
+                overlay_for_revealed.flush_pending_exit_reset();
+            }
+        });
+
         // Common "dismiss the drawer + return focus to the host" tail,
-        // used by Reject, Ok, and the two file-action buttons. The
-        // 50ms delay mirrors the pre-refactor behavior — it lets the
-        // Revealer's fade-out start before focus grabs, so GTK doesn't
-        // steal focus from the still-animating widget.
+        // used by Reject, Ok, Escape, and command/bookmark Accept buttons.
         let dismiss_and_refocus = {
             let host = host.clone();
             let overlay_for_dismiss = s.clone();
 
             Rc::new(move || {
                 overlay_for_dismiss.hide();
+                host.set_focusable(true);
+                host.grab_focus();
 
                 let host = host.clone();
-                gtk4::glib::timeout_add_local(std::time::Duration::from_millis(50), move || {
-                    host.grab_focus();
-                    gtk4::glib::ControlFlow::Break
+                let overlay_check = overlay_for_dismiss.clone();
+                gtk4::glib::timeout_add_local_once(std::time::Duration::from_millis(50), move || {
+                    if overlay_check.pane_owns_focus() {
+                        host.grab_focus();
+                    }
                 });
             })
         };
@@ -490,9 +509,11 @@ impl TerminalOverlay {
             overlay_for_reject_file.grab_input_focus();
         });
 
-        // Inspect — route the user to the sidebar-side log.
+        // Inspect — route the user to the sidebar-side log without pulling focus back.
         let host_inspect = host.clone();
+        let skip_for_inspect = s.skip_next_click_refocus.clone();
         inspect_btn.connect_clicked(move |_| {
+            skip_for_inspect.set(true);
             host_inspect.focus_sidebar();
         });
 
@@ -800,16 +821,41 @@ impl TerminalOverlay {
         self.diagnosis_viewer.park_for_recycle();
     }
 
-    /// Resets the overlay when the active character is withdrawn via `/exit`,
-    /// clearing the session history and active agent identity so the character
-    /// selector reappears the next time the drawer is opened.
-    pub fn reset_for_exit(&self) {
+    fn flush_pending_exit_reset(&self) {
+        if !self.pending_exit_reset.replace(false) {
+            return;
+        }
         *self.active_agent.borrow_mut() = String::new();
         self.clear_offset.set(0);
         self.full_history_store.remove_all();
         self.history_store.remove_all();
         self.diagnosis_viewer.park_for_recycle();
+    }
+
+    /// Resets the overlay when the active character is withdrawn via `/exit`.
+    /// Starts the crossfade hide animation first while keeping the conversation view
+    /// intact so the character picker never flashes during fade-out, wiping session
+    /// rows once hidden (or immediately if reopened mid-fade).
+    pub fn reset_for_exit(&self) {
+        self.pending_exit_reset.set(true);
         self.hide();
+        if !self.revealer.is_child_revealed() {
+            self.flush_pending_exit_reset();
+        }
+    }
+
+    /// True when keyboard focus currently resides anywhere inside this overlay's pane.
+    #[must_use]
+    pub fn pane_owns_focus(&self) -> bool {
+        self.revealer.parent().map_or_else(
+            || self.revealer.focus_child().is_some(),
+            |p| p.focus_child().is_some(),
+        )
+    }
+
+    #[must_use]
+    fn revealer_contains_focus(&self) -> bool {
+        self.revealer.focus_child().is_some()
     }
 
     /// Called whenever the parent pane is resized. Caps the scroll window height
@@ -942,6 +988,7 @@ impl TerminalOverlay {
         diagnosis: &str,
         proposal: Proposal,
     ) {
+        self.flush_pending_exit_reset();
         self.msg_bar.set_working_dir(self.host.working_dir());
         self.refresh_character_selector(title);
 
@@ -1004,11 +1051,7 @@ impl TerminalOverlay {
         // Only move keyboard focus into the drawer if this pane currently owns window focus
         // (or in Bookmark mode, which is always triggered by a direct user action), preventing
         // background split panes from stealing focus mid-keystroke.
-        let pane_owns_focus = mode == OverlayMode::Bookmark
-            || self.revealer.parent().map_or_else(
-                || self.revealer.focus_child().is_some(),
-                |p| p.focus_child().is_some(),
-            );
+        let pane_owns_focus = mode == OverlayMode::Bookmark || self.pane_owns_focus();
 
         if pane_owns_focus {
             let accept_btn = self.accept_btn.clone();
@@ -1031,6 +1074,7 @@ impl TerminalOverlay {
     }
 
     pub fn show_chat_only(&self, agent_name: &str) {
+        self.flush_pending_exit_reset();
         self.msg_bar.set_working_dir(self.host.working_dir());
         self.refresh_character_selector(agent_name);
 
@@ -1045,6 +1089,7 @@ impl TerminalOverlay {
     }
 
     pub fn show_input_only(&self, agent_name: &str) {
+        self.flush_pending_exit_reset();
         self.msg_bar.set_working_dir(self.host.working_dir());
         if self.revealer.reveals_child() {
             self.refresh_character_selector(agent_name);
@@ -1132,7 +1177,9 @@ impl TerminalOverlay {
         }
         match &*self.state.borrow() {
             OverlayState::Thinking => {
-                self.indicator.grab_cancel_focus();
+                if !self.indicator.grab_cancel_focus() {
+                    self.main_drawer.grab_focus();
+                }
             }
             OverlayState::Action(_) => {
                 if self.template_box.is_visible() {
@@ -1143,11 +1190,17 @@ impl TerminalOverlay {
                     self.approve_file_btn.grab_focus();
                 } else if self.msg_bar.entry.is_sensitive() {
                     self.msg_bar.entry.grab_focus();
+                } else {
+                    self.main_drawer.grab_focus();
                 }
             }
             OverlayState::Idle | OverlayState::Pending => {
                 if *self.current_mode.borrow() == OverlayMode::Claw {
-                    self.msg_bar.entry.grab_focus();
+                    if !self.msg_bar.entry.grab_focus() {
+                        self.main_drawer.grab_focus();
+                    }
+                } else {
+                    self.main_drawer.grab_focus();
                 }
             }
         }
@@ -1178,10 +1231,18 @@ impl TerminalOverlay {
         self.template_box.set_visible(false);
 
         // 2. Base components & centered Character Picker vs Conversation History
+        //    Keep `show_picker` false while `pending_exit_reset` is fading out `/exit` so
+        //    character cards never flash during the 220ms crossfade transition.
         let is_claw = mode == OverlayMode::Claw;
         let is_working = matches!(state, OverlayState::Thinking | OverlayState::Pending);
         let has_history = self.full_history_store.n_items() > 0;
-        let show_picker = is_claw && !is_working && !has_active_agent && !has_history;
+        let show_picker = should_show_character_picker(
+            mode,
+            is_working,
+            has_active_agent,
+            has_history,
+            self.pending_exit_reset.get(),
+        );
 
         self.single_scroll.set_visible(!is_claw);
         self.character_picker.set_visible(show_picker);
@@ -1216,8 +1277,11 @@ impl TerminalOverlay {
             OverlayState::Thinking => {
                 self.msg_bar.set_input_sensitive(false);
                 self.indicator_slot.set_visible(true);
-                if overlay_had_focus && self.revealer.reveals_child() {
-                    self.indicator.grab_cancel_focus();
+                if overlay_had_focus
+                    && self.revealer.reveals_child()
+                    && !self.indicator.grab_cancel_focus()
+                {
+                    self.main_drawer.grab_focus();
                 }
                 let should_tip = self.tips_cycle.is_enabled()
                     && self.revealer.reveals_child()
@@ -1419,6 +1483,48 @@ impl TerminalOverlay {
         });
         drawer.add_controller(scroll_ctrl);
     }
+
+    /// Ensures clicking anywhere on an open Claw pane (including empty history space,
+    /// message bubbles, headers, disabled inputs while `Thinking`, or the exposed bottom
+    /// terminal margin) gives keyboard focus to this overlay while preserving native
+    /// caret placement, popovers, and highlighted `GtkLabel` text selections.
+    pub fn handle_pane_click_release(&self) {
+        if !self.is_visible() {
+            return;
+        }
+        let ov = self.clone();
+        gtk::glib::idle_add_local_once(move || {
+            if ov.skip_next_click_refocus.replace(false)
+                || !ov.is_visible()
+                || ov.msg_bar.is_status_popover_open()
+            {
+                return;
+            }
+            let focused_inside = ov.revealer_contains_focus();
+            let clicked_unselected_label = focused_inside
+                && ov
+                    .revealer
+                    .root()
+                    .and_then(|r| r.focus())
+                    .and_then(|w| w.downcast::<gtk::Label>().ok())
+                    .is_some_and(|lbl| {
+                        lbl.selection_bounds().is_none() && lbl.current_uri().is_none()
+                    });
+
+            if !focused_inside || clicked_unselected_label {
+                if *ov.current_mode.borrow() == OverlayMode::Claw
+                    && ov.msg_bar.entry.is_visible()
+                    && ov.msg_bar.entry.is_sensitive()
+                {
+                    if !ov.msg_bar.entry.grab_focus() {
+                        ov.main_drawer.grab_focus();
+                    }
+                } else {
+                    ov.grab_input_focus();
+                }
+            }
+        });
+    }
 }
 
 const OVERLAY_ZOOM_DEFAULT_PCT: u32 = 100;
@@ -1525,6 +1631,20 @@ fn compute_visible_slice_delta(
     }
 }
 
+const fn should_show_character_picker(
+    mode: OverlayMode,
+    is_working: bool,
+    has_active_agent: bool,
+    has_history: bool,
+    pending_exit_reset: bool,
+) -> bool {
+    matches!(mode, OverlayMode::Claw)
+        && !is_working
+        && !has_active_agent
+        && !has_history
+        && !pending_exit_reset
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1539,5 +1659,41 @@ mod tests {
         assert_eq!(compute_visible_slice_delta(5, 6, 1, 1), (5, 1, 1, 6..7));
         // 4. Removal strictly inside hidden `/clear` prefix (`pos = 2, removed = 1, added = 0`)
         assert_eq!(compute_visible_slice_delta(5, 2, 1, 0), (4, 0, 0, 0..0));
+    }
+
+    #[test]
+    fn character_picker_stays_hidden_during_exit_fadeout_until_flushed() {
+        // Fresh empty Claw drawer shows the character picker
+        assert!(should_show_character_picker(
+            OverlayMode::Claw,
+            false,
+            false,
+            false,
+            false
+        ));
+        // During `/exit` crossfade (`pending_exit_reset = true`), picker never flashes
+        // even if agent identity or rows were cleared
+        assert!(!should_show_character_picker(
+            OverlayMode::Claw,
+            false,
+            false,
+            false,
+            true
+        ));
+        // Active conversation or working state keeps picker hidden
+        assert!(!should_show_character_picker(
+            OverlayMode::Claw,
+            false,
+            false,
+            true,
+            false
+        ));
+        assert!(!should_show_character_picker(
+            OverlayMode::Claw,
+            true,
+            false,
+            false,
+            false
+        ));
     }
 }
