@@ -208,6 +208,27 @@ impl AppWindow {
             }
         });
 
+        {
+            let tx_map = tx.clone();
+            window.connect_map(move |_| {
+                let _ = tx_map.send_blocking(AppInput::WindowAnimationStateChanged);
+            });
+            let tx_unmap = tx.clone();
+            window.connect_unmap(move |_| {
+                let _ = tx_unmap.send_blocking(AppInput::WindowAnimationStateChanged);
+            });
+        }
+
+        let tx_suspended = tx.clone();
+        window.connect_suspended_notify(move |win| {
+            if win.is_suspended() {
+                win.add_css_class("window-suspended");
+            } else {
+                win.remove_css_class("window-suspended");
+            }
+            let _ = tx_suspended.send_blocking(AppInput::WindowAnimationStateChanged);
+        });
+
         // Centralized focus restoration whenever any `AdwDialog` / `AdwAlertDialog`
         // finishes closing on this window.
         let tx_dialog_focus = tx.clone();
@@ -491,6 +512,7 @@ impl AppWindow {
         if !is_drag_window {
             let tx_startup = tx.clone();
             let window_weak = window.downgrade();
+            let detached_btn_weak = inner_ref.borrow().detached_btn.downgrade();
             gtk::glib::spawn_future_local(async move {
                 let agent = boxxy_terminal::get_agent().await;
 
@@ -575,15 +597,26 @@ impl AppWindow {
                         .await;
                 }
 
+                // Session creation/removal arrives immediately via `DetachedSessionsChanged`
+                // on D-Bus; only refresh `waiting_for_input` when at least one detached
+                // background shell exists and this window is visible (`!is_suspended()`).
                 loop {
                     gtk::glib::timeout_future(std::time::Duration::from_secs(3)).await;
-                    if window_weak.upgrade().is_none() || tx_startup.is_closed() {
+                    let Some(win) = window_weak.upgrade() else {
+                        break;
+                    };
+                    if tx_startup.is_closed() {
                         break;
                     }
-                    if tx_startup
-                        .send(AppInput::RefreshDetachedSessions)
-                        .await
-                        .is_err()
+                    let has_detached = detached_btn_weak
+                        .upgrade()
+                        .is_some_and(|btn| btn.is_visible());
+                    if has_detached
+                        && !win.is_suspended()
+                        && tx_startup
+                            .send(AppInput::RefreshDetachedSessions)
+                            .await
+                            .is_err()
                     {
                         break;
                     }

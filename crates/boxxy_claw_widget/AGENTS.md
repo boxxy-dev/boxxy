@@ -61,7 +61,7 @@ Formerly the `boxxy-msgbar` crate — folded in during phase 2. The `MsgBarCompo
 ### The `ClawIndicator` (`claw_indicator.rs`)
 Two surfaces:
 1. **Floating top-right terminal overlay (`badge()`)**: hosts both the passive character badge (pass-through `can_target: false`) and the interactive `alert_revealer` pill (`"Error Detected · Diagnose"` / `"Diagnosis Ready · View"`, temporarily enabling `can_target: true` only while an alert is visible over a closed drawer).
-2. **In-drawer thinking pill (`widget()`)**: embedded inside `indicator_slot` in the drawer's bottom action row, displaying the animated `gtk::Svg` spinner (paused automatically when unmapped/hidden), real-time tool names, and the Cancel (`×`) button.
+2. **In-drawer thinking pill (`widget()`)**: embedded inside `indicator_slot` in the drawer's bottom action row, displaying the animated `gtk::Svg` spinner (paused automatically when unmapped, hidden, or Wayland-suspended), real-time tool names, and the Cancel (`×`) button.
 
 Badge and spinner colors use `boxxy_claw_ui`'s shared `DynamicColorRegistry` (`is_safe_hex_color`-validated classes) so tool calls never reload display-wide `GtkCssProvider`s.
 

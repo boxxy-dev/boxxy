@@ -503,6 +503,14 @@ impl PtyRegistry {
             .map(|s| s.original_pane_id.clone())
     }
 
+    pub async fn is_viewed(&self, pid: u32) -> bool {
+        self.inner
+            .read()
+            .await
+            .get(&pid)
+            .is_some_and(|s| matches!(s.state, ProcessState::Running) && s.viewer_count > 0)
+    }
+
     pub async fn find_pid_by_pane_id(&self, pane_id: &str) -> Option<(u32, bool)> {
         let map = self.inner.read().await;
         for s in map.values() {
@@ -1118,15 +1126,20 @@ mod tests {
         let reg = PtyRegistry::new();
         reg.register(43210, "pane-cloexec".into(), Some(master_owned))
             .await;
+        assert!(reg.is_viewed(43210).await);
         reg.set_persistence(43210, true).await;
         assert_eq!(reg.detach(43210).await, DetachOutcome::Detached);
+        assert!(!reg.is_viewed(43210).await);
 
         let (_buf, reattached_fd) = reg.reattach(43210).await.expect("reattach");
+        assert!(reg.is_viewed(43210).await);
         let fd_flags = unsafe { libc::fcntl(reattached_fd.as_raw_fd(), libc::F_GETFD) };
         assert!(
             fd_flags >= 0 && (fd_flags & libc::FD_CLOEXEC) != 0,
             "reattached PTY master FD must carry FD_CLOEXEC"
         );
+        reg.mark_exited(43210, 0).await;
+        assert!(!reg.is_viewed(43210).await);
         reg.remove(43210).await;
     }
 

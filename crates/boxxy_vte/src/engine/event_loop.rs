@@ -235,10 +235,10 @@ where
                 };
 
                 let read_fut = async {
-                    if !pty_closed {
-                        async_pty_reader.readable().await
-                    } else {
+                    if pty_closed {
                         std::future::pending().await
+                    } else {
+                        async_pty_reader.readable().await
                     }
                 };
 

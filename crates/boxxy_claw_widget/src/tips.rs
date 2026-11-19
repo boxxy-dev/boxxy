@@ -200,7 +200,11 @@ impl TipsCycle {
         let cycle_last_shown = self.last_shown_at.clone();
 
         let source_id = gtk::glib::timeout_add_local(Duration::from_secs(15), move || {
-            if !cycle_revealer.reveals_child() {
+            let is_suspended = cycle_revealer
+                .root()
+                .and_then(|r| r.downcast::<gtk::Window>().ok())
+                .is_some_and(|w| w.is_suspended());
+            if !cycle_revealer.reveals_child() || !cycle_revealer.is_mapped() || is_suspended {
                 return gtk::glib::ControlFlow::Continue;
             }
             let next = next_index(cycle_index.get(), tips.len());

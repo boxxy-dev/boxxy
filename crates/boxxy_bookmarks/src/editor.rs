@@ -5,7 +5,7 @@ use adw::prelude::*;
 use gtk4 as gtk;
 use libadwaita as adw;
 use sourceview5::prelude::*;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 pub struct BookmarkEditor;
@@ -336,19 +336,30 @@ impl BookmarkEditor {
         btn_content.append(&btn_label);
 
         let svg = gtk::Svg::from_resource("/dev/boxxy/BoxxyTerminal/icons/boxxy-spinner.gpa");
-        svg.play();
+        svg.pause();
+        let ai_generating = Rc::new(Cell::new(false));
 
         let ai_spinner = gtk::Image::builder().paintable(&svg).pixel_size(16).build();
         ai_spinner.set_visible(false);
 
         ai_spinner.connect_map({
             let svg = svg.clone();
+            let generating = ai_generating.clone();
             move |widget| {
-                if let Some(native) = widget.native()
-                    && let Some(surface) = native.surface()
-                {
-                    svg.set_frame_clock(&surface.frame_clock());
+                if let Some(clock) = widget.frame_clock() {
+                    svg.set_frame_clock(&clock);
                 }
+                if generating.get() {
+                    svg.play();
+                } else {
+                    svg.pause();
+                }
+            }
+        });
+        ai_spinner.connect_unmap({
+            let svg = svg.clone();
+            move |_| {
+                svg.pause();
             }
         });
 
@@ -373,6 +384,8 @@ impl BookmarkEditor {
         let ai_pop_gen = ai_popover;
         let ai_text_view_gen = ai_text_view;
         let ai_spinner_gen = ai_spinner;
+        let ai_svg_gen = svg;
+        let ai_generating_gen = ai_generating;
         let ai_btn_gen = ai_generate_btn.clone();
         let ai_err_gen = ai_error_label;
 
@@ -387,7 +400,11 @@ impl BookmarkEditor {
             }
 
             ai_err_gen.set_visible(false);
+            ai_generating_gen.set(true);
             ai_spinner_gen.set_visible(true);
+            if ai_spinner_gen.is_mapped() {
+                ai_svg_gen.play();
+            }
             ai_btn_gen.set_sensitive(false);
             ai_text_view_gen.set_sensitive(false);
 
@@ -411,6 +428,8 @@ impl BookmarkEditor {
             let name_entry_inner = name_entry_ai.clone();
             let ai_pop_inner = ai_pop_gen.clone();
             let ai_spinner_inner = ai_spinner_gen.clone();
+            let ai_svg_inner = ai_svg_gen.clone();
+            let ai_generating_inner = ai_generating_gen.clone();
             let ai_btn_inner = ai_btn_gen.clone();
             let ai_text_view_inner = ai_text_view_gen.clone();
             let ai_err_inner = ai_err_gen.clone();
@@ -445,6 +464,8 @@ impl BookmarkEditor {
                         }
                     }
                 }
+                ai_generating_inner.set(false);
+                ai_svg_inner.pause();
                 ai_spinner_inner.set_visible(false);
                 ai_btn_inner.set_sensitive(true);
                 ai_text_view_inner.set_sensitive(true);

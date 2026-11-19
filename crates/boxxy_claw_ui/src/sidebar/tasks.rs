@@ -403,8 +403,11 @@ fn build_task_icon(
     let image = if let Some(gpa_path) = gpa_resource_path
         && gio::resources_get_info(gpa_path, gio::ResourceLookupFlags::NONE).is_ok()
     {
-        let svg = gtk::Svg::from_resource(gpa_path);
+        let svg = gtk::Svg::new();
+        svg.set_features(svg.features() - gtk::SvgFeatures::ANIMATIONS);
+        svg.load_from_resource(gpa_path);
         svg.set_state(0);
+        svg.pause();
         gtk::Image::builder().paintable(&svg).pixel_size(17).build()
     } else {
         gtk::Image::builder()
@@ -935,7 +938,13 @@ fn sync_ticker(
             let _ = source_slot.borrow_mut().take();
             return glib::ControlFlow::Break;
         }
-        refresh_live_cards(&cards_borrow, Utc::now());
+        let is_suspended = root_box
+            .root()
+            .and_then(|r| r.downcast::<gtk::Window>().ok())
+            .is_some_and(|w| w.is_suspended());
+        if !is_suspended {
+            refresh_live_cards(&cards_borrow, Utc::now());
+        }
         glib::ControlFlow::Continue
     });
     *ticker_source.borrow_mut() = Some(source_id);

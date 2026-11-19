@@ -23,6 +23,7 @@ pub(crate) fn on_startup() {
 
     register_resources();
     gtk4::Window::set_default_icon_name(boxxy_sys_utils::STABLE_GTK_APP_ID);
+    crate::wayland_guard::install_for_default_display();
 
     boxxy_preferences::Settings::init();
     boxxy_preferences::AppState::init();

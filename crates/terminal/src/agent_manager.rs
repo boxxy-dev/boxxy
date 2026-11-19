@@ -401,6 +401,43 @@ impl AgentConnection {
             });
         }
 
+        // 2d. Detached PTY Sessions Supervisor (eliminates idle D-Bus polling in AppWindow)
+        {
+            let proxy = agent_proxy.clone();
+            let pty_for_reconcile = pty_proxy.clone();
+            tokio::spawn(async move {
+                loop {
+                    if let Ok(mut stream) = proxy.receive_detached_sessions_changed().await {
+                        while let Some(msg) = stream.next().await {
+                            if let Ok(args) = msg.args()
+                                && let Ok(sessions) = serde_json::from_str::<
+                                    Vec<crate::DetachedSessionInfo>,
+                                >(
+                                    &args.sessions_json
+                                )
+                            {
+                                let _ = crate::TERMINAL_EVENT_BUS.send(crate::TerminalEvent {
+                                    id: String::new(),
+                                    kind: crate::TerminalEventKind::DetachedSessionsChanged(
+                                        sessions,
+                                    ),
+                                });
+                            }
+                        }
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+                    let reconciled = pty_for_reconcile
+                        .list_detached_sessions_detailed()
+                        .await
+                        .unwrap_or_default();
+                    let _ = crate::TERMINAL_EVENT_BUS.send(crate::TerminalEvent {
+                        id: String::new(),
+                        kind: crate::TerminalEventKind::DetachedSessionsChanged(reconciled),
+                    });
+                }
+            });
+        }
+
         // 3. Claw Session Event Multiplexer
         {
             let proxy = agent_proxy;

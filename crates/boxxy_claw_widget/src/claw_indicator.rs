@@ -53,6 +53,19 @@ impl Default for ClawIndicator {
     }
 }
 
+fn is_spinner_surface_animating(widget: &gtk::Image) -> bool {
+    if !widget.is_mapped() {
+        return false;
+    }
+    if let Some(win) = widget
+        .root()
+        .and_then(|r| r.downcast::<gtk::Window>().ok())
+    {
+        return !win.is_suspended();
+    }
+    true
+}
+
 impl ClawIndicator {
     #[must_use]
     #[allow(clippy::too_many_lines)]
@@ -93,16 +106,57 @@ impl ClawIndicator {
             .build();
         spinner.add_css_class("claw-spinner");
 
+        let win_suspended_handler: Rc<RefCell<Option<(gtk::Window, gtk::glib::SignalHandlerId)>>> =
+            Rc::new(RefCell::new(None));
+
+        spinner.connect_realize({
+            let svg = spinner_svg.clone();
+            let playing = spinner_playing.clone();
+            let win_slot = win_suspended_handler.clone();
+            move |widget| {
+                if let Some((old_win, id)) = win_slot.borrow_mut().take() {
+                    old_win.disconnect(id);
+                }
+                if let Some(clock) = widget.frame_clock() {
+                    svg.set_frame_clock(&clock);
+                }
+                if let Some(win) = widget
+                    .root()
+                    .and_then(|r| r.downcast::<gtk::Window>().ok())
+                {
+                    let img_weak = widget.downgrade();
+                    let svg_w = svg.clone();
+                    let playing_w = playing.clone();
+                    let id = win.connect_suspended_notify(move |_| {
+                        if let Some(img) = img_weak.upgrade() {
+                            if playing_w.get() && is_spinner_surface_animating(&img) {
+                                svg_w.play();
+                            } else {
+                                svg_w.pause();
+                            }
+                        }
+                    });
+                    *win_slot.borrow_mut() = Some((win, id));
+                }
+            }
+        });
+        spinner.connect_unrealize({
+            let svg = spinner_svg.clone();
+            move |_| {
+                svg.pause();
+                if let Some((win, id)) = win_suspended_handler.borrow_mut().take() {
+                    win.disconnect(id);
+                }
+            }
+        });
         spinner.connect_map({
             let svg = spinner_svg.clone();
             let playing = spinner_playing.clone();
             move |widget| {
-                if let Some(native) = widget.native()
-                    && let Some(surface) = native.surface()
-                {
-                    svg.set_frame_clock(&surface.frame_clock());
+                if let Some(clock) = widget.frame_clock() {
+                    svg.set_frame_clock(&clock);
                 }
-                if playing.get() {
+                if playing.get() && is_spinner_surface_animating(widget) {
                     svg.play();
                 } else {
                     svg.pause();
@@ -450,8 +504,10 @@ impl ClawIndicator {
         self.revealer.set_reveal_child(true);
         self.spinner.set_visible(true);
         self.spinner_playing.set(true);
-        if self.spinner.is_mapped() {
+        if is_spinner_surface_animating(&self.spinner) {
             self.spinner_svg.play();
+        } else {
+            self.spinner_svg.pause();
         }
 
         let registry = boxxy_claw_protocol::characters::CHARACTER_CACHE.load();

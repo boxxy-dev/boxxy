@@ -44,6 +44,7 @@ pub enum TerminalEventKind {
     AltScreenChanged(bool),
     Notification(String),
     RestoreDetached(u32, String),
+    DetachedSessionsChanged(Vec<crate::DetachedSessionInfo>),
     SpawnCharacter(String, String),
     ClawStateChanged(bool, bool),
     MovePaneToSplit {

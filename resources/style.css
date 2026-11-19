@@ -332,6 +332,16 @@ button.claw-row-copy-btn:hover {
     animation-delay: 400ms;
 }
 
+/* Pause continuous keyframe animations when the compositor marks the window
+ * suspended (minimized, inactive workspace, screen blanked, or occluded) while
+ * keeping them live when unfocused side-by-side or on a second monitor.
+ * `animation-play-state: paused` marks the GTK CSS animation static (releasing
+ * the frame clock) while preserving keyframe phase across workspace switches. */
+window.window-suspended .claw-avatar-frame.claw-avatar-typing,
+window.window-suspended .claw-working-dots .claw-working-dot {
+    animation-play-state: paused;
+}
+
 /* OpenCode-style collapsible turn activity trace (+ commands, edits, thoughts, reads, tools) */
 .claw-trace-container {
     margin-top: 1px;

@@ -172,6 +172,7 @@ pub enum AppInput {
     SpawnCharacterTab(String, Option<String>),
     RefreshMaintenanceStatus(String, bool),
     RefreshMcpStatuses(Vec<(String, bool)>),
+    WindowAnimationStateChanged,
     PrewarmDeferredUi,
 }
 

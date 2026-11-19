@@ -163,7 +163,9 @@ impl TerminalWidget {
         } else {
             self.stop_cursor_blink();
             imp.cursor_visible.set(true);
-            self.queue_draw();
+            if imp.is_effectively_visible(self) {
+                self.queue_draw();
+            }
         }
     }
 
@@ -173,9 +175,12 @@ impl TerminalWidget {
 
         // Immediately make the cursor visible when starting/resetting the blink timer
         imp.cursor_visible.set(true);
+        if !imp.is_effectively_visible(self) {
+            return;
+        }
         self.queue_draw();
 
-        if imp.cursor_blinking.get() {
+        if imp.cursor_blinking.get() && self.has_focus() {
             let obj_weak = self.downgrade();
             let source_id =
                 glib::timeout_add_local(std::time::Duration::from_millis(600), move || {
@@ -183,6 +188,11 @@ impl TerminalWidget {
                         return glib::ControlFlow::Break;
                     };
                     let imp = obj.imp();
+                    if !obj.has_focus() || !imp.is_effectively_visible(&obj) {
+                        imp.cursor_visible.set(true);
+                        let _ = imp.cursor_blink_id.borrow_mut().take();
+                        return glib::ControlFlow::Break;
+                    }
                     imp.cursor_visible.set(!imp.cursor_visible.get());
 
                     // Only queue a redraw if the cursor is actually visible and blinking

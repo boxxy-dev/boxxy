@@ -263,7 +263,40 @@ impl TerminalPaneComponent {
                             &is_claw_active_cell,
                         );
 
-                        let _ = agent.set_foreground_tracking(pid, true).await;
+                        let (_, fg_res) = tokio::join!(
+                            agent.set_foreground_tracking(pid, true),
+                            agent.get_foreground_process(pid),
+                        );
+                        if let Ok(proc_name) = fg_res
+                            && !proc_name.is_empty()
+                        {
+                            let cb = {
+                                let mut inner = inner_rc.borrow_mut();
+                                inner.foreground_process = Some(proc_name.clone());
+                                inner.callback.clone()
+                            };
+                            cb(PaneOutput::ForegroundProcessChanged(
+                                id.clone(),
+                                proc_name.clone(),
+                            ));
+                            if is_claw_active_cell.get() {
+                                let _ = claw_sender
+                                    .send(ClawMessage::ForegroundProcessChanged {
+                                        process_name: proc_name,
+                                    })
+                                    .await;
+                            } else {
+                                let _ = agent
+                                    .update_workspace_pane(
+                                        id,
+                                        String::new(),
+                                        String::new(),
+                                        String::new(),
+                                        format!("Running: {proc_name}"),
+                                    )
+                                    .await;
+                            }
+                        }
                         return;
                     }
                     Err(e) => {

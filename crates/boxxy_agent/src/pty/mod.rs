@@ -431,6 +431,7 @@ impl PtySubsystem {
             let mut interval = tokio::time::interval(std::time::Duration::from_millis(150));
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
             let mut last_process_name = String::new();
+            let mut force_emit = false;
 
             loop {
                 // Register notification interest *before* checking `tracked_pids` so
@@ -442,14 +443,20 @@ impl PtySubsystem {
                 if !is_tracked {
                     if !last_process_name.is_empty() {
                         last_process_name.clear();
-                        if let Some(orig_pane_id) = pty_registry.get_original_pane_id(pid).await {
-                            let workspace =
-                                boxxy_claw::registry::workspace::global_workspace().await;
-                            workspace.set_pane_status(orig_pane_id, None).await;
+                        if pty_registry.is_viewed(pid).await {
+                            if let Some(orig_pane_id) = pty_registry.get_original_pane_id(pid).await
+                            {
+                                let workspace =
+                                    boxxy_claw::registry::workspace::global_workspace().await;
+                                workspace.set_pane_status(orig_pane_id, None).await;
+                            }
+                            let _ = PtySubsystem::foreground_process_changed(
+                                &emitter,
+                                pid,
+                                String::new(),
+                            )
+                            .await;
                         }
-                        let _ =
-                            PtySubsystem::foreground_process_changed(&emitter, pid, String::new())
-                                .await;
                     }
 
                     // Sleep with zero periodic wakeups until either the child exits or
@@ -466,6 +473,7 @@ impl PtySubsystem {
                             break;
                         }
                         _ = &mut notified => {
+                            force_emit = true;
                             interval.reset();
                             continue;
                         }
@@ -487,9 +495,14 @@ impl PtySubsystem {
                         break;
                     }
                     _ = interval.tick() => {
+                        if !pty_registry.is_viewed(pid).await {
+                            tracked_pids.write().await.remove(&pid);
+                            continue;
+                        }
                         if let Ok(current_process) = procfs::get_foreground_process(pid)
-                            && current_process != last_process_name
+                            && (force_emit || current_process != last_process_name)
                         {
+                            force_emit = false;
                             if let Some(orig_pane_id) = pty_registry.get_original_pane_id(pid).await {
                                 let status_opt = (!current_process.is_empty())
                                     .then(|| format!("Running: {current_process}"));
@@ -526,6 +539,9 @@ impl PtySubsystem {
     /// for "successfully detached and alive".
     async fn detach(&self, pid: u32) -> fdo::Result<u32> {
         let outcome = self.state.pty_registry.detach(pid).await;
+        if outcome != registry::DetachOutcome::StillViewed {
+            self.state.tracked_pids.write().await.remove(&pid);
+        }
         Ok(match outcome {
             registry::DetachOutcome::Detached => 1,
             registry::DetachOutcome::Terminated => 0,
@@ -541,6 +557,9 @@ impl PtySubsystem {
             .pty_registry
             .detach_with_snapshot(pid, initial_snapshot)
             .await;
+        if outcome != registry::DetachOutcome::StillViewed {
+            self.state.tracked_pids.write().await.remove(&pid);
+        }
         Ok(match outcome {
             registry::DetachOutcome::Detached => 1,
             registry::DetachOutcome::Terminated => 0,

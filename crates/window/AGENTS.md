@@ -14,7 +14,7 @@ This crate follows a modular **Model-View-Update (MVU)** architecture:
 - **`update/` Module**: Modular MVU state transition logic:
     - **`update/mod.rs`**: Primary message dispatcher.
     - **`update/tabs.rs`**: Tab lifecycle (open, close, adopt, transfer, grouped session reattach).
-    - **`update/tab_bar_sync.rs`**: Direct `BoxxyTab` synchronization for diff-only tab color dot + CSS classes and GPA `.gpa` animated category, Claw/timer indicator, and bell icons.
+    - **`update/tab_bar_sync.rs`**: Direct `BoxxyTab` synchronization for diff-only tab color dot + CSS classes and GPA `.gpa` animated category, Claw/timer indicator, and bell icons. Gates `.gpa` playback and the `RunningCommand` celestial phase timer on `window.is_mapped() && !window.is_suspended()` (`WindowAnimationStateChanged`) so tiled/dual-monitor visible windows stay animated while minimized, workspace-hidden, screen-locked, or occluded Wayland windows schedule zero background frames.
     - **`update/close_dialog.rs`**: Shared 3-button close protection dialog (`Cancel`, `Terminate` / `Terminate All`, `Run in Background`) used by both tab close and window close.
     - **`update/split.rs`**: Split management, layout control, and cross-tab/intra-tab pane drag-and-drop (`move_pane_to_split`, `drop_pane_on_tab`).
     - **`update/events.rs`**: Terminal signal routing, peer pane lookup via `CLAIMS_CACHE`/`CHARACTER_CACHE`, and agent event handling.

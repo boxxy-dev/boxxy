@@ -465,7 +465,7 @@ impl TerminalWidget {
                             {
                                 f(is_alt);
                             }
-                            if widget.is_mapped() {
+                            if widget.imp().is_effectively_visible(&widget) {
                                 widget.queue_draw();
                                 widget.update_scroll_adjustment();
                             }

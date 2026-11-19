@@ -345,6 +345,9 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
         AppInput::RefreshMcpStatuses(statuses) => {
             inner.claw.set_mcp_statuses(statuses);
         }
+        AppInput::WindowAnimationStateChanged => {
+            tab_bar_sync::sync_tab_running_icons(&inner);
+        }
         AppInput::PrewarmDeferredUi => {
             let _ = inner.ensure_preferences();
             inner.theme_selector.ensure_populated();

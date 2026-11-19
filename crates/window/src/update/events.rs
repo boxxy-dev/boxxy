@@ -257,6 +257,9 @@ pub fn handle_terminal_event(inner: &mut AppWindowInner, event: TerminalEvent) {
                 let cwd_opt = (!cwd.is_empty()).then_some(cwd);
                 let _ = super::tabs::new_tab_with_character(inner, character_id, cwd_opt);
             }
+            TerminalEventKind::DetachedSessionsChanged(sessions) => {
+                super::detached_sessions::update_badge(inner, &sessions);
+            }
             _ => {}
         }
         return;
@@ -656,7 +659,9 @@ pub fn handle_terminal_event(inner: &mut AppWindowInner, event: TerminalEvent) {
         } => {
             super::split::move_pane_to_split(inner, source_pane_id, target_pane_id, direction);
         }
-        TerminalEventKind::RestoreDetached(_, _) | TerminalEventKind::SpawnCharacter(_, _) => {}
+        TerminalEventKind::RestoreDetached(_, _)
+        | TerminalEventKind::SpawnCharacter(_, _)
+        | TerminalEventKind::DetachedSessionsChanged(_) => {}
     }
 }
 

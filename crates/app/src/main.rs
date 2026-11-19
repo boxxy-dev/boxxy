@@ -4,6 +4,7 @@ mod launch;
 mod logging;
 mod restart_guard;
 mod startup;
+mod wayland_guard;
 
 use boxxy_cli::ParseOutcome;
 use boxxy_window::{AppInit, AppWindow};
@@ -52,6 +53,7 @@ fn main() -> ExitCode {
     });
 
     app.connect_shutdown(|_| {
+        wayland_guard::mark_shutting_down();
         boxxy_bookmarks::manager::BookmarksManager::clean_runs_dir();
     });
 
