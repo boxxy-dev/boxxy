@@ -370,7 +370,7 @@ pub struct Settings {
     pub enable_timer_sounds: bool,
     pub enable_task_sounds: bool,
     pub colored_tabs: bool,
-    #[serde(default = "default_overlay_bottom_gap")]
+    #[serde(default)]
     pub overlay_bottom_gap: bool,
     #[serde(default)]
     pub always_show_code_blocks: bool,
@@ -450,7 +450,7 @@ impl Default for Settings {
             enable_timer_sounds: true,
             enable_task_sounds: true,
             colored_tabs: false,
-            overlay_bottom_gap: default_overlay_bottom_gap(),
+            overlay_bottom_gap: false,
             always_show_code_blocks: false,
             enable_tips: true,
             overlay_font_scale: default_overlay_font_scale(),
@@ -463,10 +463,6 @@ impl Default for Settings {
             openai_compatible_endpoints: vec![],
         }
     }
-}
-
-const fn default_overlay_bottom_gap() -> bool {
-    true
 }
 
 fn default_app_theme_id() -> String {
