@@ -41,7 +41,6 @@ pub(crate) fn setup_appearance_page(
     let smart_tab_naming_switch: adw::SwitchRow =
         builder.object("smart_tab_naming_switch").unwrap();
     let colored_tabs_switch: adw::SwitchRow = builder.object("colored_tabs_switch").unwrap();
-    let chat_width_spin: adw::SpinRow = builder.object("chat_width_spin").unwrap();
 
     let group_appearance: adw::PreferencesGroup = builder.object("group_appearance").unwrap();
     let group_terminal: adw::PreferencesGroup = builder.object("group_terminal").unwrap();
@@ -303,24 +302,6 @@ pub(crate) fn setup_appearance_page(
         });
     }
 
-    let chat_width_adj =
-        gtk::Adjustment::new(f64::from(initial.ai_chat_width), 200.0, 800.0, 10.0, 50.0, 0.0);
-    chat_width_spin.set_adjustment(Some(&chat_width_adj));
-    chat_width_spin.set_value(f64::from(initial.ai_chat_width));
-    {
-        let is_syncing = is_syncing.clone();
-        chat_width_spin.connect_value_notify(move |row| {
-            if is_syncing.get() {
-                return;
-            }
-            #[allow(clippy::cast_possible_truncation)]
-            let v = row.value().round() as i32;
-            Settings::update(|s| {
-                s.ai_chat_width = v;
-            });
-        });
-    }
-
     // 3. Theme ActionRow
     theme_row.set_subtitle(&glib::markup_escape_text(&initial.theme));
     theme_row.connect_activated(move |_| {
@@ -435,7 +416,6 @@ pub(crate) fn setup_appearance_page(
     let s_dim = SearchRow::new(&dim_inactive_switch, "dim inactive panes splits");
     let s_fixed_tabs = SearchRow::new(&fixed_width_tabs_switch, "fixed width tabs");
     let s_smart_tabs = SearchRow::new(&smart_tab_naming_switch, "smart tab naming basename");
-    let s_cwidth = SearchRow::new(&chat_width_spin, "sidebar width px split view");
 
     let sync = Box::new(move |s: &Settings| {
         is_syncing.set(true);
@@ -464,9 +444,6 @@ pub(crate) fn setup_appearance_page(
         }
         if (col_spacing_spin.value() - s.cell_width_scale).abs() > 1e-6 {
             col_spacing_spin.set_value(s.cell_width_scale);
-        }
-        if (chat_width_spin.value() - f64::from(s.ai_chat_width)).abs() > 1e-6 {
-            chat_width_spin.set_value(f64::from(s.ai_chat_width));
         }
 
         preserve_cwd_switch.set_active(s.preserve_working_dir);
@@ -511,8 +488,7 @@ pub(crate) fn setup_appearance_page(
             | s_inv.apply(query)
             | s_dim.apply(query)
             | s_fixed_tabs.apply(query)
-            | s_smart_tabs.apply(query)
-            | s_cwidth.apply(query);
+            | s_smart_tabs.apply(query);
 
         group_appearance.set_visible(a);
         group_terminal.set_visible(t);

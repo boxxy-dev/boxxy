@@ -425,12 +425,6 @@
                                     <property name="subtitle" translatable="yes">Show concise directory or command names in tabs and the full path on hover</property>
                                   </object>
                                 </child>
-                                <child>
-                                  <object class="AdwSpinRow" id="chat_width_spin">
-                                    <property name="title" translatable="yes">Sidebar Width (px)</property>
-                                    <property name="subtitle" translatable="yes">Hacky mouse resize for OverlaySplitView</property>
-                                  </object>
-                                </child>
                               </object>
                             </child>
                             <child>
