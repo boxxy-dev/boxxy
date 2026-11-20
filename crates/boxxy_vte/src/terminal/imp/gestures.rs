@@ -8,6 +8,45 @@ use gtk4::subclass::prelude::*;
 const AUTOSCROLL_INTERVAL_MS: u64 = 25;
 const AUTOSCROLL_MAX_LINES_PER_TICK: i32 = 12;
 
+/// When `Ctrl`, `Alt`, or `Super` is held on a non-Latin keyboard layout (e.g. Greek or Russian),
+/// resolves the hardware `keycode` back to an ASCII keyval from the user's Latin XKB group so
+/// terminal control signals (`Ctrl+C`, `Ctrl+D`, `Ctrl+Z`, `Alt+B`, `Alt+F`) continue to work.
+fn resolve_latin_modified_key(
+    display: &gtk4::gdk::Display,
+    key: gtk4::gdk::Key,
+    keycode: u32,
+    modifier: gtk4::gdk::ModifierType,
+) -> gtk4::gdk::Key {
+    if !modifier.intersects(
+        gtk4::gdk::ModifierType::CONTROL_MASK
+            | gtk4::gdk::ModifierType::ALT_MASK
+            | gtk4::gdk::ModifierType::SUPER_MASK,
+    ) {
+        return key;
+    }
+    if !key.to_unicode().is_some_and(|c| !c.is_ascii()) {
+        return key;
+    }
+    let Some(entries) = display.map_keycode(keycode) else {
+        return key;
+    };
+
+    let want_level = i32::from(modifier.contains(gtk4::gdk::ModifierType::SHIFT_MASK));
+    if let Some((_, ascii_key)) = entries
+        .iter()
+        .find(|(km, kv)| km.level() == want_level && kv.to_unicode().is_some_and(|c| c.is_ascii_graphic()))
+    {
+        return *ascii_key;
+    }
+    if let Some((_, ascii_key)) = entries
+        .iter()
+        .find(|(km, kv)| km.level() == 0 && kv.to_unicode().is_some_and(|c| c.is_ascii_graphic()))
+    {
+        return *ascii_key;
+    }
+    key
+}
+
 impl super::TerminalWidget {
     /// Update the hover state (OSC 8 hyperlink, Ctrl+hover regex match, and pointer cursor)
     /// at widget pixel coordinates `(x, y)` with `modifiers`.
@@ -351,34 +390,10 @@ impl super::TerminalWidget {
             obj,
             #[upgrade_or]
             glib::Propagation::Proceed,
-            move |ctrl, key, _keycode, modifier| {
+            move |ctrl, key, keycode, modifier| {
                 let imp = obj.imp();
                 obj.start_cursor_blink();
 
-                if (key == gtk4::gdk::Key::V || key == gtk4::gdk::Key::v)
-                    && modifier.contains(
-                        gtk4::gdk::ModifierType::CONTROL_MASK | gtk4::gdk::ModifierType::SHIFT_MASK,
-                    )
-                {
-                    obj.paste_clipboard();
-                    return glib::Propagation::Stop;
-                }
-                if (key == gtk4::gdk::Key::C || key == gtk4::gdk::Key::c)
-                    && modifier.contains(
-                        gtk4::gdk::ModifierType::CONTROL_MASK | gtk4::gdk::ModifierType::SHIFT_MASK,
-                    )
-                {
-                    obj.copy_clipboard();
-                    return glib::Propagation::Stop;
-                }
-                if (key == gtk4::gdk::Key::A || key == gtk4::gdk::Key::a)
-                    && modifier.contains(
-                        gtk4::gdk::ModifierType::CONTROL_MASK | gtk4::gdk::ModifierType::SHIFT_MASK,
-                    )
-                {
-                    obj.select_all();
-                    return glib::Propagation::Stop;
-                }
                 if key == gtk4::gdk::Key::Escape
                     && !modifier.intersects(
                         gtk4::gdk::ModifierType::CONTROL_MASK
@@ -546,9 +561,13 @@ impl super::TerminalWidget {
                     return glib::Propagation::Stop;
                 }
 
+                let effective_key = resolve_latin_modified_key(&obj.display(), key, keycode, modifier);
+
                 if let Some(backend) = imp.backend.borrow().as_ref()
                     && let Some(bytes) = crate::terminal::input::translate_key_with_mode(
-                        key, modifier, term_mode,
+                        effective_key,
+                        modifier,
+                        term_mode,
                     )
                 {
                     // Special key handled (Ctrl+C, Up, Tab, Shift+Tab, CSI u, etc.)
@@ -584,7 +603,7 @@ impl super::TerminalWidget {
         key_ctrl.connect_key_released(glib::clone!(
             #[weak]
             obj,
-            move |ctrl, key, _keycode, modifier| {
+            move |ctrl, key, keycode, modifier| {
                 let imp = obj.imp();
                 let term_mode = imp
                     .backend
@@ -593,10 +612,12 @@ impl super::TerminalWidget {
                     .map(|b| b.render_state.load().mode)
                     .unwrap_or(crate::engine::term::TermMode::NONE);
 
+                let effective_key = resolve_latin_modified_key(&obj.display(), key, keycode, modifier);
+
                 if term_mode.contains(crate::engine::term::TermMode::REPORT_EVENT_TYPES)
                     && let Some(backend) = imp.backend.borrow().as_ref()
                     && let Some(bytes) = crate::terminal::input::translate_key_event(
-                        key,
+                        effective_key,
                         modifier,
                         term_mode,
                         crate::terminal::input::KeyEventType::Release,
@@ -861,24 +882,6 @@ impl super::TerminalWidget {
                             return;
                         }
 
-                        if n_press == 1
-                            && !modifiers.intersects(
-                                gtk4::gdk::ModifierType::CONTROL_MASK
-                                    | gtk4::gdk::ModifierType::ALT_MASK
-                                    | gtk4::gdk::ModifierType::SUPER_MASK,
-                            )
-                            && let Some(seq) = state.calculate_navigation_sequence(point)
-                        {
-                            backend.set_selection(None);
-                            backend
-                                .notifier
-                                .0
-                                .send(crate::engine::event_loop::Msg::Input(
-                                    std::borrow::Cow::Owned(seq.into_bytes()),
-                                ))
-                                .ok();
-                            return;
-                        }
                         imp.mouse_pressed.set(true);
                         imp.selection_dragged.set(n_press >= 2);
                         let is_alt = modifiers.contains(gtk4::gdk::ModifierType::ALT_MASK);
@@ -899,7 +902,7 @@ impl super::TerminalWidget {
         click_gesture.connect_released(glib::clone!(
             #[weak]
             obj,
-            move |gesture, _, x, y| {
+            move |gesture, n_press, x, y| {
                 let imp = obj.imp();
                 if let Some(backend) = imp.backend.borrow().as_ref() {
                     let state = backend.render_state.load();
@@ -949,7 +952,48 @@ impl super::TerminalWidget {
                         }
                         return;
                     }
+                    let was_pressed = imp.mouse_pressed.get();
+                    let was_dragged = imp.selection_dragged.get();
                     imp.finish_selection_drag();
+
+                    // Defer OSC 133 `cl=line` prompt click-to-move-cursor until button release
+                    // when no drag occurred, so pressing and dragging on the active prompt line
+                    // selects text smoothly instead of aborting the drag on mouse-down.
+                    if was_pressed
+                        && !was_dragged
+                        && n_press == 1
+                        && gesture.current_button() == 1
+                        && x >= 0.0
+                        && y >= 0.0
+                        && x < f64::from(obj.width())
+                        && y < f64::from(obj.height())
+                        && !modifiers.intersects(
+                            gtk4::gdk::ModifierType::CONTROL_MASK
+                                | gtk4::gdk::ModifierType::ALT_MASK
+                                | gtk4::gdk::ModifierType::SUPER_MASK
+                                | gtk4::gdk::ModifierType::SHIFT_MASK,
+                        )
+                    {
+                        let (sel_row, sel_col, _) = imp.pixel_to_selection_point(
+                            &obj,
+                            x,
+                            y,
+                            state.columns,
+                            state.screen_lines,
+                        );
+                        let point =
+                            Point::new(Line(sel_row as i32 - state.display_offset), sel_col);
+                        if let Some(seq) = state.calculate_navigation_sequence(point) {
+                            backend.set_selection(None);
+                            backend
+                                .notifier
+                                .0
+                                .send(crate::engine::event_loop::Msg::Input(
+                                    std::borrow::Cow::Owned(seq.into_bytes()),
+                                ))
+                                .ok();
+                        }
+                    }
                 } else {
                     imp.finish_selection_drag();
                 }

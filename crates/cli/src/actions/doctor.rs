@@ -79,7 +79,10 @@ pub fn run(ctx: &ActionContext, args: &DoctorArgs) -> Result<ExitCode> {
     // Merge host environment API keys into our local copy so model readiness matches GUI launch
     apply_local_env_keys(&mut settings);
 
-    // 3. Community themes (.toml) validation
+    // 3. Custom keybindings (keybindings.toml) validation
+    checks.push(check_keybindings_file(&config_dir.join("keybindings.toml")));
+
+    // 4. Community themes (.toml) validation
     checks.push(check_community_themes(&config_dir.join("themes")));
 
     // 4. Characters catalog (CHARACTER.toml) validation
@@ -220,6 +223,49 @@ fn check_settings_file(config_dir: &Path) -> (DiagnosticCheck, Option<Settings>)
             },
             None,
         ),
+    }
+}
+
+fn check_keybindings_file(path: &Path) -> DiagnosticCheck {
+    if !path.exists() {
+        return DiagnosticCheck {
+            id: "keybindings",
+            label: "Custom Keybindings",
+            level: CheckLevel::Ok,
+            summary: "Using built-in default shortcuts (no keybindings.toml)".to_string(),
+            details: Vec::new(),
+        };
+    }
+
+    let loaded = boxxy_keybindings::store::load_overrides_from_path(path);
+    if loaded.warnings.is_empty() {
+        DiagnosticCheck {
+            id: "keybindings",
+            label: "Custom Keybindings",
+            level: CheckLevel::Ok,
+            summary: format!(
+                "Valid TOML ({} customized shortcut(s))",
+                loaded.overrides.len()
+            ),
+            details: Vec::new(),
+        }
+    } else {
+        let details = loaded
+            .warnings
+            .iter()
+            .map(|w| format!("{}: {}", w.key, w.message))
+            .collect();
+        DiagnosticCheck {
+            id: "keybindings",
+            label: "Custom Keybindings",
+            level: CheckLevel::Warn,
+            summary: format!(
+                "{} warning(s) in {}",
+                loaded.warnings.len(),
+                path.display()
+            ),
+            details,
+        }
     }
 }
 

@@ -496,7 +496,11 @@ impl BookmarkEditor {
     ) {
         let zoom_controller = gtk::ShortcutController::new();
 
+        let km = boxxy_keybindings::keymap();
+
         // Zoom In
+        if let Some(trig_str) = km.gtk_trigger_string(boxxy_keybindings::ShortcutId::ZoomIn)
+            && let Some(trigger) = gtk::ShortcutTrigger::parse_string(&trig_str)
         {
             let update_font = update_font.clone();
             let current_font_size = current_font_size.clone();
@@ -505,19 +509,17 @@ impl BookmarkEditor {
                 update_font();
                 gtk::glib::Propagation::Stop
             });
-            let shortcut = gtk::Shortcut::builder()
-                .trigger(
-                    &gtk::ShortcutTrigger::parse_string(
-                        "<Control>plus|<Control>equal|<Control>KP_Add|<Control><Shift>plus|<Control><Shift>equal",
-                    )
-                    .unwrap(),
-                )
-                .action(&action)
-                .build();
-            zoom_controller.add_shortcut(shortcut);
+            zoom_controller.add_shortcut(
+                gtk::Shortcut::builder()
+                    .trigger(&trigger)
+                    .action(&action)
+                    .build(),
+            );
         }
 
         // Zoom Out
+        if let Some(trig_str) = km.gtk_trigger_string(boxxy_keybindings::ShortcutId::ZoomOut)
+            && let Some(trigger) = gtk::ShortcutTrigger::parse_string(&trig_str)
         {
             let update_font = update_font.clone();
             let current_font_size = current_font_size.clone();
@@ -530,19 +532,17 @@ impl BookmarkEditor {
                 update_font();
                 gtk::glib::Propagation::Stop
             });
-            let shortcut = gtk::Shortcut::builder()
-                .trigger(
-                    &gtk::ShortcutTrigger::parse_string(
-                        "<Control>minus|<Control>KP_Subtract|<Control>underscore|<Control><Shift>minus",
-                    )
-                    .unwrap(),
-                )
-                .action(&action)
-                .build();
-            zoom_controller.add_shortcut(shortcut);
+            zoom_controller.add_shortcut(
+                gtk::Shortcut::builder()
+                    .trigger(&trigger)
+                    .action(&action)
+                    .build(),
+            );
         }
 
         // Reset Zoom
+        if let Some(trig_str) = km.gtk_trigger_string(boxxy_keybindings::ShortcutId::ResetZoom)
+            && let Some(trigger) = gtk::ShortcutTrigger::parse_string(&trig_str)
         {
             let update_font = update_font.clone();
             let current_font_size = current_font_size.clone();
@@ -551,11 +551,12 @@ impl BookmarkEditor {
                 update_font();
                 gtk::glib::Propagation::Stop
             });
-            let shortcut = gtk::Shortcut::builder()
-                .trigger(&gtk::ShortcutTrigger::parse_string("<Control>0|<Control>KP_0").unwrap())
-                .action(&action)
-                .build();
-            zoom_controller.add_shortcut(shortcut);
+            zoom_controller.add_shortcut(
+                gtk::Shortcut::builder()
+                    .trigger(&trigger)
+                    .action(&action)
+                    .build(),
+            );
         }
 
         source_view.add_controller(zoom_controller);

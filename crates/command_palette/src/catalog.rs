@@ -329,33 +329,36 @@ fn slugify_id(input: &str) -> Option<String> {
     (!slug.is_empty()).then_some(slug)
 }
 
+fn cmd_for_id(
+    km: &boxxy_keybindings::CompiledKeymap,
+    id: boxxy_keybindings::ShortcutId,
+    title_override: Option<&str>,
+) -> CommandItem {
+    let spec = boxxy_keybindings::spec_for(id);
+    let mut item = CommandItem::action(title_override.unwrap_or(spec.title), spec.action_name)
+        .with_keywords(spec.keywords.iter().copied());
+    if let Some(accel) = km.primary_gtk_accel(id) {
+        item = item.with_shortcut(accel);
+    }
+    item
+}
+
 /// Builds the complete static command catalog (core actions + 12 Preferences categories).
 #[must_use]
 #[allow(clippy::too_many_lines)]
 pub(super) fn builtin_commands() -> Vec<CommandItem> {
-    use boxxy_keybindings as kb;
+    use boxxy_keybindings::ShortcutId as Id;
 
-    let mut items = Vec::with_capacity(44);
+    let km = boxxy_keybindings::keymap();
+    let mut items = Vec::with_capacity(50);
 
     // ── Window & Tabs ────────────────────────────────────────────────────────
-    items.push(
-        CommandItem::action("New Window", kb::NEW_WINDOW.action_name)
-            .with_shortcut(kb::NEW_WINDOW.trigger),
-    );
-    items.push(
-        CommandItem::action("New Tab", kb::NEW_TAB.action_name).with_shortcut(kb::NEW_TAB.trigger),
-    );
-    items.push(
-        CommandItem::action("Close Tab", kb::CLOSE_TAB.action_name)
-            .with_shortcut(kb::CLOSE_TAB.trigger),
-    );
-    items.push(
-        CommandItem::action("Detached Shells", "win.detached-sessions").with_keywords([
-            "background shells",
-            "reattach",
-            "sessions",
-        ]),
-    );
+    items.push(cmd_for_id(&km, Id::NewWindow, None));
+    items.push(cmd_for_id(&km, Id::NewTab, None));
+    items.push(cmd_for_id(&km, Id::CloseTab, None));
+    items.push(cmd_for_id(&km, Id::NextTab, None));
+    items.push(cmd_for_id(&km, Id::PrevTab, None));
+    items.push(cmd_for_id(&km, Id::DetachedSessions, Some("Detached Shells")));
     items.push(
         CommandItem::action("Open in Files", "win.open-in-files").with_keywords([
             "file manager",
@@ -366,124 +369,46 @@ pub(super) fn builtin_commands() -> Vec<CommandItem> {
     );
 
     // ── Terminal, Clipboard & Zoom ───────────────────────────────────────────
-    items.push(CommandItem::action("Copy", kb::COPY.action_name).with_shortcut(kb::COPY.trigger));
-    items
-        .push(CommandItem::action("Paste", kb::PASTE.action_name).with_shortcut(kb::PASTE.trigger));
-    items.push(
-        CommandItem::action("Select All", kb::SELECT_ALL.action_name)
-            .with_shortcut(kb::SELECT_ALL.trigger),
-    );
-    items.push(
-        CommandItem::action("Copy Last Command Output", "win.copy-last-output")
-            .with_keywords(["clipboard", "output"]),
-    );
-    items.push(
-        CommandItem::action("Search in Terminal", kb::SEARCH.action_name)
-            .with_shortcut(kb::SEARCH.trigger)
-            .with_keywords(["find", "search"]),
-    );
-    items.push(
-        CommandItem::action("Open Scrollback in Editor", kb::OPEN_SCROLLBACK.action_name)
-            .with_shortcut(kb::OPEN_SCROLLBACK.trigger)
-            .with_keywords(["buffer", "history", "editor"]),
-    );
-    items.push(CommandItem::action(
-        "Clear Scrollback",
-        "win.clear-scrollback",
-    ));
-    items.push(CommandItem::action("Reset Terminal", "win.reset-terminal"));
-    items.push(
-        CommandItem::action("Zoom In", kb::ZOOM_IN.action_name).with_shortcut(kb::ZOOM_IN.trigger),
-    );
-    items.push(
-        CommandItem::action("Zoom Out", kb::ZOOM_OUT.action_name)
-            .with_shortcut(kb::ZOOM_OUT.trigger),
-    );
-    items.push(
-        CommandItem::action("Reset Zoom", kb::RESET_ZOOM.action_name)
-            .with_shortcut(kb::RESET_ZOOM.trigger),
-    );
+    items.push(cmd_for_id(&km, Id::Copy, None));
+    items.push(cmd_for_id(&km, Id::Paste, None));
+    items.push(cmd_for_id(&km, Id::SelectAll, None));
+    items.push(cmd_for_id(&km, Id::CopyLastOutput, None));
+    items.push(cmd_for_id(&km, Id::Search, Some("Search in Terminal")));
+    items.push(cmd_for_id(&km, Id::PrevPrompt, None));
+    items.push(cmd_for_id(&km, Id::NextPrompt, None));
+    items.push(cmd_for_id(&km, Id::OpenScrollback, None));
+    items.push(cmd_for_id(&km, Id::ClearScrollback, None));
+    items.push(cmd_for_id(&km, Id::ResetTerminal, None));
+    items.push(cmd_for_id(&km, Id::ZoomIn, None));
+    items.push(cmd_for_id(&km, Id::ZoomOut, None));
+    items.push(cmd_for_id(&km, Id::ResetZoom, None));
 
     // ── Split Panes ──────────────────────────────────────────────────────────
-    items.push(
-        CommandItem::action("Split Right", kb::SPLIT_RIGHT.action_name)
-            .with_shortcut(kb::SPLIT_RIGHT.trigger)
-            .with_keywords(["split vertical", "pane"]),
-    );
-    items.push(
-        CommandItem::action("Split Down", kb::SPLIT_DOWN.action_name)
-            .with_shortcut(kb::SPLIT_DOWN.trigger)
-            .with_keywords(["split horizontal", "pane"]),
-    );
-    items.push(
-        CommandItem::action("Close Pane", kb::CLOSE_PANE.action_name)
-            .with_shortcut(kb::CLOSE_PANE.trigger)
-            .with_keywords(["close split", "pane"]),
-    );
-    items.push(
-        CommandItem::action("Toggle Maximize Pane", "win.toggle-maximize").with_keywords([
-            "zoom pane",
-            "unmaximize",
-            "fullscreen pane",
-        ]),
-    );
-    items.push(
-        CommandItem::action("Focus Pane Left", kb::FOCUS_LEFT.action_name)
-            .with_shortcut(kb::FOCUS_LEFT.trigger),
-    );
-    items.push(
-        CommandItem::action("Focus Pane Right", kb::FOCUS_RIGHT.action_name)
-            .with_shortcut(kb::FOCUS_RIGHT.trigger),
-    );
-    items.push(
-        CommandItem::action("Focus Pane Up", kb::FOCUS_UP.action_name)
-            .with_shortcut(kb::FOCUS_UP.trigger),
-    );
-    items.push(
-        CommandItem::action("Focus Pane Down", kb::FOCUS_DOWN.action_name)
-            .with_shortcut(kb::FOCUS_DOWN.trigger),
-    );
-    items.push(
-        CommandItem::action("Swap Pane Left", kb::SWAP_LEFT.action_name)
-            .with_shortcut(kb::SWAP_LEFT.trigger),
-    );
-    items.push(
-        CommandItem::action("Swap Pane Right", kb::SWAP_RIGHT.action_name)
-            .with_shortcut(kb::SWAP_RIGHT.trigger),
-    );
-    items.push(
-        CommandItem::action("Swap Pane Up", kb::SWAP_UP.action_name)
-            .with_shortcut(kb::SWAP_UP.trigger),
-    );
-    items.push(
-        CommandItem::action("Swap Pane Down", kb::SWAP_DOWN.action_name)
-            .with_shortcut(kb::SWAP_DOWN.trigger),
-    );
+    items.push(cmd_for_id(&km, Id::SplitRight, None));
+    items.push(cmd_for_id(&km, Id::SplitDown, None));
+    items.push(cmd_for_id(&km, Id::ClosePane, None));
+    items.push(cmd_for_id(&km, Id::ToggleMaximizePane, None));
+    items.push(cmd_for_id(&km, Id::EqualizeSplits, None));
+    items.push(cmd_for_id(&km, Id::FocusLeft, Some("Focus Pane Left")));
+    items.push(cmd_for_id(&km, Id::FocusRight, Some("Focus Pane Right")));
+    items.push(cmd_for_id(&km, Id::FocusUp, Some("Focus Pane Up")));
+    items.push(cmd_for_id(&km, Id::FocusDown, Some("Focus Pane Down")));
+    items.push(cmd_for_id(&km, Id::SwapLeft, Some("Swap Pane Left")));
+    items.push(cmd_for_id(&km, Id::SwapRight, Some("Swap Pane Right")));
+    items.push(cmd_for_id(&km, Id::SwapUp, Some("Swap Pane Up")));
+    items.push(cmd_for_id(&km, Id::SwapDown, Some("Swap Pane Down")));
 
     // ── Sidebar, Claw, Bookmarks & Models ────────────────────────────────────
-    items.push(
-        CommandItem::action("Toggle Sidebar", kb::TOGGLE_SIDEBAR.action_name)
-            .with_shortcut(kb::TOGGLE_SIDEBAR.trigger),
-    );
+    items.push(cmd_for_id(&km, Id::ToggleSidebar, None));
+    items.push(cmd_for_id(&km, Id::AskClaw, None));
     items.push(CommandItem::action("Claw Sidebar", "win.claw").with_keywords(["agent", "logs"]));
-    items.push(
-        CommandItem::action(
-            "Toggle Claw Code & Diff Blocks",
-            kb::TOGGLE_CLAW_CODE_BLOCKS.action_name,
-        )
-        .with_shortcut(kb::TOGGLE_CLAW_CODE_BLOCKS.trigger)
-        .with_keywords(["xray", "diffs", "code blocks"]),
-    );
-    items.push(CommandItem::action("Bookmarks", "win.bookmarks").with_keywords(["scripts"]));
-    items.push(
-        CommandItem::action("Models Selection", "win.model-selection").with_keywords([
-            "llm",
-            "ai model",
-            "provider",
-            "dreams model",
-            "character model",
-        ]),
-    );
+    items.push(cmd_for_id(
+        &km,
+        Id::ToggleClawCodeBlocks,
+        Some("Toggle Claw Code & Diff Blocks"),
+    ));
+    items.push(cmd_for_id(&km, Id::Bookmarks, None));
+    items.push(cmd_for_id(&km, Id::ModelSelection, None));
     items.push(
         CommandItem::action("Terminal Colors", "win.terminal-colors").with_keywords([
             "palette",
@@ -493,11 +418,7 @@ pub(super) fn builtin_commands() -> Vec<CommandItem> {
     );
 
     // ── Preferences & All 12 Main Preferences Categories ─────────────────────
-    items.push(
-        CommandItem::action("Preferences", kb::PREFERENCES.action_name)
-            .with_shortcut(kb::PREFERENCES.trigger)
-            .with_keywords(["settings", "options", "configuration"]),
-    );
+    items.push(cmd_for_id(&km, Id::Preferences, None));
     for spec in PREFERENCES_CATEGORIES {
         items.push(CommandItem::preferences_category(spec));
     }
@@ -553,11 +474,11 @@ mod tests {
 
     #[test]
     fn builtin_commands_have_unique_targets_and_registered_shortcuts() {
-        let mut known_triggers: HashSet<&str> = boxxy_keybindings::get_shortcuts_by_category()
+        let km = boxxy_keybindings::keymap();
+        let known_triggers: HashSet<String> = boxxy_keybindings::ShortcutId::ALL
             .into_iter()
-            .flat_map(|cat| cat.items.into_iter().map(|(_, kb)| kb.trigger))
+            .filter_map(|id| km.primary_gtk_accel(id))
             .collect();
-        known_triggers.insert(boxxy_keybindings::RESET_ZOOM.trigger);
 
         let cmds = builtin_commands();
         let mut seen_targets = HashSet::new();

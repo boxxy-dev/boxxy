@@ -130,8 +130,18 @@ impl PreferencesComponent {
         esc_handler.set_propagation_phase(gtk::PropagationPhase::Capture);
         {
             let handle_escape_dialog = handle_escape.clone();
+            let dialog_weak = dialog.downgrade();
             esc_handler.connect_key_pressed(move |_, keyval, _, _| {
                 if keyval == gtk::gdk::Key::Escape {
+                    if dialog_weak
+                        .upgrade()
+                        .and_then(|d| d.root())
+                        .and_then(|r| r.focus())
+                        .and_then(|w| w.ancestor(gtk::Popover::static_type()))
+                        .is_some()
+                    {
+                        return gtk::glib::Propagation::Proceed;
+                    }
                     handle_escape_dialog();
                     gtk::glib::Propagation::Stop
                 } else {

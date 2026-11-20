@@ -228,6 +228,14 @@ impl TerminalComponent {
             .any(|p| p.controller.has_selection())
     }
 
+    pub fn active_pane_has_selection(&self) -> bool {
+        let inner = self.inner.borrow();
+        inner
+            .panes
+            .get(&inner.active_pane_id)
+            .is_some_and(|p| p.controller.has_selection())
+    }
+
     pub fn show_bookmark_proposal(
         &self,
         name: &str,
@@ -568,6 +576,27 @@ impl TerminalComponent {
         let inner = self.inner.borrow();
         if let Some(pane_data) = inner.panes.get(&inner.active_pane_id) {
             pane_data.controller.reset_terminal();
+        }
+    }
+
+    pub fn scroll_to_prev_prompt(&self) {
+        let inner = self.inner.borrow();
+        if let Some(pane_data) = inner.panes.get(&inner.active_pane_id) {
+            pane_data.controller.scroll_to_prev_prompt();
+        }
+    }
+
+    pub fn scroll_to_next_prompt(&self) {
+        let inner = self.inner.borrow();
+        if let Some(pane_data) = inner.panes.get(&inner.active_pane_id) {
+            pane_data.controller.scroll_to_next_prompt();
+        }
+    }
+
+    pub fn open_claw_msgbar(&self) {
+        let inner = self.inner.borrow();
+        if let Some(pane_data) = inner.panes.get(&inner.active_pane_id) {
+            pane_data.controller.open_claw_msgbar();
         }
     }
 

@@ -40,6 +40,32 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
         AppInput::NewTab => {
             tabs::new_tab(&mut inner);
         }
+        AppInput::NextTab => {
+            let n = inner.tab_view.n_pages();
+            if n > 1
+                && let Some(cur) = inner.tab_view.selected_page()
+            {
+                let pos = inner.tab_view.page_position(&cur);
+                let next = inner.tab_view.nth_page((pos + 1) % n);
+                inner.tab_view.set_selected_page(&next);
+            }
+        }
+        AppInput::PrevTab => {
+            let n = inner.tab_view.n_pages();
+            if n > 1
+                && let Some(cur) = inner.tab_view.selected_page()
+            {
+                let pos = inner.tab_view.page_position(&cur);
+                let prev = inner.tab_view.nth_page((pos + n - 1) % n);
+                inner.tab_view.set_selected_page(&prev);
+            }
+        }
+        AppInput::SelectTabIndex(idx) => {
+            if idx >= 0 && idx < inner.tab_view.n_pages() {
+                let page = inner.tab_view.nth_page(idx);
+                inner.tab_view.set_selected_page(&page);
+            }
+        }
         AppInput::EnsureInitialTab => {
             if inner.tabs.is_empty() {
                 tabs::new_tab(&mut inner);

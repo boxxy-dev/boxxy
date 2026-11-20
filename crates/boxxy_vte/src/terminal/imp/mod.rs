@@ -233,6 +233,10 @@ impl ObjectSubclass for TerminalWidget {
     type Type = super::TerminalWidget;
     type ParentType = gtk4::Widget;
     type Interfaces = (gtk4::Scrollable,);
+
+    fn class_init(klass: &mut Self::Class) {
+        klass.set_css_name("boxxyterminalwidget");
+    }
 }
 
 impl ScrollableImpl for TerminalWidget {}

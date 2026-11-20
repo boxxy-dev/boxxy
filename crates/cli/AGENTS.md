@@ -18,6 +18,7 @@ Designed to stay **100% free of GTK / Libadwaita / GResource initialization** so
   - **`actions/version.rs` (`+version`)**: Version, git commit hash, build channel (`native`, `flatpak`, `system-package`), OS/arch, and self-update availability.
   - **`actions/doctor.rs` (`+doctor`)**: Non-destructive health check covering resolved paths/SQLite DB, strict `settings.json` JSON validation, community `.toml` theme validation, `CHARACTER.toml` validation, MCP server `stdio` binary / `http(s)` URL sanity checks, AI model key readiness, shell integration status, and live `boxxy-agent` D-Bus status & version/config-dir match.
   - **`actions/env_cmd.rs` (`+env`)**: Renders the canonical `boxxy_sys_utils::env::ENV_SPECS` registry (plus custom endpoint `api_key_env` vars), showing live values with secrets masked (`--internal` includes child-PTY plumbing vars).
+  - **`actions/keybinds.rs` (`+keybinds` / `+list-keybinds`)**: Prints active, factory-default (`--default`), or customized (`--custom`) shortcuts from `boxxy-keybindings` along with override diagnostics (`--json` supported).
   - **`actions/agent.rs` (`+agent`)**: User-facing D-Bus control plane (`status`, `sessions`, `stop`, `restart`) backed by `boxxy_agent::cli_ops`, working identically across Native, Nix, and Flatpak.
   - **`actions/completions.rs` (`+completions`)**: Generates shell completions (including `+action` completion hooks) for `bash`, `zsh`, `fish`, and `nushell`.
 

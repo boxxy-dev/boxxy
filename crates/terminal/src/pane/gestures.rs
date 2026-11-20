@@ -138,32 +138,10 @@ pub(super) fn setup_gestures(
     terminal.insert_action_group("term", Some(&action_group));
 
     let search_bar_clone_ev = search_bar.clone();
-    let term_for_sb_ev = terminal.downgrade();
     let ev_ctrl_search = gtk::EventControllerKey::new();
     ev_ctrl_search.set_propagation_phase(gtk::PropagationPhase::Capture);
-    ev_ctrl_search.connect_key_pressed(move |_, keyval, _, state| {
-        if (keyval == gtk::gdk::Key::f || keyval == gtk::gdk::Key::F)
-            && state.contains(gtk::gdk::ModifierType::CONTROL_MASK)
-            && state.contains(gtk::gdk::ModifierType::SHIFT_MASK)
-        {
-            if !search_bar_clone_ev.is_visible() {
-                search_bar_clone_ev.reveal();
-            } else {
-                search_bar_clone_ev.hide();
-            }
-            gtk::glib::Propagation::Stop
-        } else if (keyval == gtk::gdk::Key::j || keyval == gtk::gdk::Key::J)
-            && state.contains(
-                gtk::gdk::ModifierType::CONTROL_MASK
-                    | gtk::gdk::ModifierType::ALT_MASK
-                    | gtk::gdk::ModifierType::SHIFT_MASK,
-            )
-        {
-            if let Some(term) = term_for_sb_ev.upgrade() {
-                export_and_open_scrollback(&term);
-            }
-            gtk::glib::Propagation::Stop
-        } else if keyval == gtk::gdk::Key::Escape && search_bar_clone_ev.is_visible() {
+    ev_ctrl_search.connect_key_pressed(move |_, keyval, _, _| {
+        if keyval == gtk::gdk::Key::Escape && search_bar_clone_ev.is_visible() {
             search_bar_clone_ev.hide();
             gtk::glib::Propagation::Stop
         } else {

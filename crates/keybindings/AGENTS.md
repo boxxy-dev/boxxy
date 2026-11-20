@@ -1,40 +1,26 @@
-# boxxy-keybindings Agents & Architecture
+# `boxxy-keybindings` Agents & Architecture
 
 ## Responsibilities
-This crate centralizes the definition and registration of keyboard shortcuts (accelerators) for the application.
+Centralizes keyboard shortcut definitions, custom `keybindings.toml` persistence, conflict and override diagnostics, and GTK4 `PropagationPhase::Capture` key dispatch across all windows, panes, and overlays.
 
-## Public API
+## Architecture & Modules
 
-### `bind_shortcuts(app: &libadwaita::Application)`
-Registers all defined keybindings with the application instance.
-
-### `Keybinding` Struct
-Defines a shortcut:
-- `trigger`: Accelerator string (e.g., `"<Ctrl><Shift>t"`).
-- `action_name`: The generic action name (e.g., `"win.new-tab"`).
-
-### Constants
-Predefined `Keybinding` instances:
-- `NEW_TAB`
-- `CLOSE_TAB`
-- `PREFERENCES`
-- `ZOOM_IN`
-- `ZOOM_OUT`
-- `COPY`
-- `PASTE`
-- `SELECT_ALL`
-- `OPEN_SCROLLBACK`
-- `TOGGLE_CLAW_CODE_BLOCKS` (`<Ctrl><Shift>d` -> `"win.toggle-claw-code-blocks"`)
-
-## International Keyboard Layouts
-To ensure shortcuts (like Zoom In/Out) work across diverse keyboard layouts (e.g., AZERTY, QWERTZ, Brazilian ABNT2) without manual scancode sniffing, we rely on GTK's native layout-aware accelerator parsing. 
-
-When binding shortcuts via `set_accels_for_action` or `ShortcutTrigger::parse_string` (using `|`), we provide an array/list of **logical fallback keysyms**. 
-
-For example, `Zoom In` is bound to:
-- `<Ctrl>plus` (The semantic intent)
-- `<Ctrl>equal` (US QWERTY fallback, as `+` requires `Shift`)
-- `<Ctrl>KP_Add` (Universal Numpad)
-- `<Ctrl><Shift>plus` (AZERTY fallback where `+` requires `Shift`)
-
-This casts a wider net, allowing GTK to resolve the intended action based on the user's active keyboard map.
+- **`src/action.rs` (`ShortcutId`, `ShortcutCategory`, `ActionScope`, `TerminalInputMode`):**
+  - Defines all 49 user-bindable actions across `General`, `Terminal`, `Split Panes`, and `Tabs` (including `Alt+1`..`Alt+0` tab switching).
+  - Declares explicit `ActionScope` tiers (`GlobalWindow` -> `PaneOrOverlay` -> `TerminalFocused`) so terminal-specific shortcuts (`Copy`, `Paste`, `Select All`, `PrevPrompt`, `NextPrompt`) never hijack standard GTK text editing inside `MsgBar` or `Preferences` entries even when customized.
+  - Includes `TerminalInputMode` (`Normal`, `Search`, `ViNormal`, `ViVisual`) hooks prepared for Stage 2 Vi/Copy Mode.
+- **`src/defaults.rs` (`ACTION_SPECS`, `spec_for`):**
+  - Canonical static catalog of titles, `win.*` action targets, default chords, search keywords, and automatic numpad/layout fallback aliases (`KP_Add`, `equal`, `KP_Subtract`, `KP_0`, `Ctrl+Insert`).
+- **`src/trigger.rs` (`Chord`):**
+  - Headless parser and formatter built on `gdk::Key::from_name` (requiring zero `gtk::init()`, safe in `boxxy-cli` and `spawn_blocking`).
+  - Accepts both human-readable strings (`"Ctrl+Shift+V"`, `"Ctrl+/"`, `"Ctrl++"`, `"performable:Ctrl+C"`) and GTK accelerator strings (`"<Control><Shift>v"`, `"<Ctrl>slash"`).
+  - Supports Ghostty-style `performable:` conditional pass-through (only consuming the key event when `WindowShortcutHost::can_perform` is `true`, enabling Smart Copy on `performable:Ctrl+C`).
+- **`src/conflicts.rs` (`analyze_diagnostics`, `ChordStatus`, `OutgoingOverride`):**
+  - Deterministic override and conflict analyzer computing both action-vs-action shadowing (such as `Swap Up` `Ctrl+Shift+Up` overriding `Jump to Previous Command Block` while `Ctrl+Shift+PageUp` remains active) and terminal built-in signal shadows (`SIGINT` `^C`, `EOF` `^D`, bare `F1`–`F12` TUI keys, scrollback/selection keys).
+- **`src/store.rs` (`keybindings.toml`):**
+  - Sparse override persistence in `<config_dir>/keybindings.toml` (only customized or `"none"` unbound entries are written so untouched actions automatically track future defaults).
+  - Atomic `0600` `.tmp` + `sync_data` + `rename` writes, mtime/size stamp hot-reloading, non-destructive syntax warning reporting, and one-time migration of legacy `settings.claw_msgbar_shortcut`.
+- **`src/controller.rs` (`attach_window_controller`, `WindowShortcutHost`):**
+  - Unified `PropagationPhase::Capture` dispatcher using GTK4's `gdk::KeyEvent::matches()`, supporting both Latin layouts (QWERTY, Dvorak, Colemak, AZERTY, QWERTZ via `KeyMatch::Exact`) and non-Latin layouts (Greek, Cyrillic, Arabic, Hebrew via XKB cross-group `KeyMatch::Partial`) before Kitty `CSI u` or terminal handlers can swallow modified keys.
+- **`src/lib.rs` (`KEYBINDINGS`, `KEYBINDINGS_EVENT_BUS`):**
+  - Lock-free `ArcSwap<CompiledKeymap>` read directly on key press with zero controller rebuilds, paired with `KEYBINDINGS_EVENT_BUS` for live UI synchronization in `Preferences` and `CommandPalette`.

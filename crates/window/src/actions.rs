@@ -47,6 +47,12 @@ pub fn setup_actions(
     add_action!("toggle-claw-code-blocks", AppInput::ToggleClawCodeBlocks);
     add_action!("new-window", AppInput::NewWindow);
     add_action!("new-tab", AppInput::NewTab);
+    add_action!("next-tab", AppInput::NextTab);
+    add_action!("prev-tab", AppInput::PrevTab);
+    for idx in 0..10i32 {
+        let name = format!("select-tab-{}", idx + 1);
+        add_action!(&name, AppInput::SelectTabIndex(idx));
+    }
 
     let new_tab_launch =
         gio::SimpleAction::new("new-tab-launch", Some(gtk4::glib::VariantTy::STRING));
@@ -95,6 +101,9 @@ pub fn setup_actions(
     add_active_tab_action!("paste", paste);
     add_active_tab_action!("select-all", select_all);
     add_active_tab_action!("search", toggle_search);
+    add_active_tab_action!("prev-prompt", scroll_to_prev_prompt);
+    add_active_tab_action!("next-prompt", scroll_to_next_prompt);
+    add_active_tab_action!("ask-claw", open_claw_msgbar);
     add_active_tab_action!("copy-last-output", copy_last_command_output);
     add_active_tab_action!("open-scrollback", open_scrollback_in_editor);
     add_active_tab_action!("clear-scrollback", clear_scrollback);
@@ -118,6 +127,7 @@ pub fn setup_actions(
     add_action!("split-horizontal", AppInput::SplitHorizontal);
     add_action!("close-split", AppInput::CloseSplit);
     add_action!("toggle-maximize", AppInput::ToggleMaximize);
+    add_active_tab_action!("equalize-splits", equalize_splits);
     add_action!("focus-left", AppInput::FocusLeft);
     add_action!("focus-right", AppInput::FocusRight);
     add_action!("focus-up", AppInput::FocusUp);

@@ -841,6 +841,7 @@ version = "0.1.0"
 dependencies = [
  "boxxy-ai-core",
  "boxxy-core-widgets",
+ "boxxy-keybindings",
  "boxxy-preferences",
  "boxxy-sys-utils",
  "boxxy-themes",
@@ -970,6 +971,7 @@ dependencies = [
  "anyhow",
  "boxxy-agent",
  "boxxy-claw-protocol",
+ "boxxy-keybindings",
  "boxxy-mcp",
  "boxxy-preferences",
  "boxxy-sys-utils",
@@ -1050,9 +1052,16 @@ dependencies = [
 name = "boxxy-keybindings"
 version = "0.1.0"
 dependencies = [
- "anyhow",
+ "arc-swap",
+ "boxxy-sys-utils",
  "gtk4",
  "libadwaita",
+ "log",
+ "parking_lot 0.13.0",
+ "serde",
+ "tempfile",
+ "tokio",
+ "toml",
 ]
 
 [[package]]

@@ -32,53 +32,6 @@ pub(crate) use claw_host::PaneClawHost;
 pub type PendingDiagnosis = Rc<RefCell<Option<(String, crate::TerminalProposal)>>>;
 type PaneCallback = std::sync::Arc<dyn Fn(PaneOutput) + Send + Sync + 'static>;
 
-/// GTK key names for characters that users commonly type literally in accelerator
-/// strings (e.g. "/" instead of "slash"). `gtk_accelerator_parse` only accepts
-/// symbolic names, so bare characters are normalized before parsing.
-fn normalize_accel(accel: &str) -> String {
-    let key_start = accel.rfind('>').map_or(0, |i| i + 1);
-    let key = match &accel[key_start..] {
-        "/" => "slash",
-        "?" => "question",
-        "=" => "equal",
-        "+" => "plus",
-        "-" => "minus",
-        "_" => "underscore",
-        "." => "period",
-        "," => "comma",
-        ";" => "semicolon",
-        ":" => "colon",
-        "'" => "apostrophe",
-        "\"" => "quotedbl",
-        "!" => "exclam",
-        "@" => "at",
-        "#" => "numbersign",
-        "$" => "dollar",
-        "%" => "percent",
-        "^" => "asciicircum",
-        "&" => "ampersand",
-        "*" => "asterisk",
-        "(" => "parenleft",
-        ")" => "parenright",
-        "[" => "bracketleft",
-        "]" => "bracketright",
-        "{" => "braceleft",
-        "}" => "braceright",
-        "|" => "bar",
-        "\\" => "backslash",
-        "`" => "grave",
-        "~" => "asciitilde",
-        other => other,
-    };
-    format!("{}{}", &accel[..key_start], key)
-}
-
-fn parse_accel_trigger(accel: &str) -> gtk::ShortcutTrigger {
-    let normalised = normalize_accel(accel);
-    gtk::ShortcutTrigger::parse_string(&normalised)
-        .unwrap_or_else(|| gtk::ShortcutTrigger::parse_string("<Ctrl>slash").unwrap())
-}
-
 const fn is_actionable_claw_msg(msg: &ClawMessage) -> bool {
     matches!(
         msg,
@@ -110,7 +63,6 @@ pub struct TerminalPaneComponent {
     pub(super) msg_bar: Rc<MsgBarComponent>,
     pub session_usage: Rc<Cell<SessionUsage>>,
     pending_tasks: Rc<RefCell<Vec<ScheduledTask>>>,
-    msgbar_shortcut: gtk::Shortcut,
 }
 
 impl Drop for PaneInner {
@@ -606,49 +558,6 @@ impl TerminalPaneComponent {
         });
         widget.add_overlay(&resize_detector);
 
-        // Ctrl+/ opens the claw drawer (if closed) and focuses the merged msgbar entry.
-        let shortcut_controller = gtk::ShortcutController::new();
-        shortcut_controller.set_propagation_phase(gtk::PropagationPhase::Capture);
-
-        let inner_weak_sc = Rc::downgrade(&inner);
-        let session_status_sc = session_status.clone();
-        let is_pinned_sc = is_pinned.clone();
-        let is_web_search_sc = is_web_search.clone();
-        let is_vibe_sc = is_vibe.clone();
-        let agent_name_sc = agent_name.clone();
-        let action = gtk::CallbackAction::new(move |_, _| {
-            if let Some(inner_rc) = inner_weak_sc.upgrade() {
-                let (term, mb, pop_opt) = {
-                    let b = inner_rc.borrow();
-                    (
-                        b.terminal.clone(),
-                        b.msg_bar.clone(),
-                        b.claw_popover.clone(),
-                    )
-                };
-                term.set_focusable(false);
-                mb.update_ui(
-                    session_status_sc.borrow().clone(),
-                    is_pinned_sc.get(),
-                    is_web_search_sc.get(),
-                    is_vibe_sc.get(),
-                );
-                if let Some(pop) = pop_opt {
-                    let aname = agent_name_sc.borrow().clone();
-                    pop.show_input_only(&aname);
-                }
-            }
-            gtk::glib::Propagation::Stop
-        });
-
-        let initial_trigger = parse_accel_trigger(&settings.claw_msgbar_shortcut);
-        let msgbar_shortcut = gtk::Shortcut::builder()
-            .trigger(&initial_trigger)
-            .action(&action)
-            .build();
-        shortcut_controller.add_shortcut(msgbar_shortcut.clone());
-        widget.add_controller(shortcut_controller);
-
         Self {
             widget,
             inner,
@@ -666,7 +575,6 @@ impl TerminalPaneComponent {
             msg_bar,
             session_usage,
             pending_tasks,
-            msgbar_shortcut,
         }
     }
 
@@ -896,6 +804,28 @@ impl TerminalPaneComponent {
         self.inner.borrow().terminal.reset_terminal();
     }
 
+    pub fn scroll_to_prev_prompt(&self) {
+        self.inner.borrow().terminal.scroll_to_prev_prompt();
+    }
+
+    pub fn scroll_to_next_prompt(&self) {
+        self.inner.borrow().terminal.scroll_to_next_prompt();
+    }
+
+    /// Reveals the Claw drawer (never hides it) and focuses the merged message input bar.
+    pub fn open_claw_msgbar(&self) {
+        let term = self.inner.borrow().terminal.clone();
+        term.set_focusable(false);
+        self.msg_bar.update_ui(
+            self.session_status.borrow().clone(),
+            self.is_pinned.get(),
+            self.is_web_search.get(),
+            self.is_vibe.get(),
+        );
+        let aname = self.agent_name.borrow().clone();
+        self.claw_popover.show_input_only(&aname);
+    }
+
     pub fn inject_keystrokes(&self, keys: &str) {
         log::debug!(
             "Injecting keystrokes into pane {}: {:?}",
@@ -1058,8 +988,6 @@ impl TerminalPaneComponent {
 
         self.claw_popover
             .set_bottom_gap(settings.overlay_bottom_gap);
-        self.msgbar_shortcut
-            .set_trigger(Some(parse_accel_trigger(&settings.claw_msgbar_shortcut)));
 
         inner.hide_scrollbars = settings.hide_scrollbars;
         inner
@@ -1162,17 +1090,5 @@ impl TerminalPaneComponent {
         let mut inner = self.inner.borrow_mut();
         inner.is_dimmed = dimmed;
         inner.terminal.set_dimmed(dimmed);
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::normalize_accel;
-
-    #[test]
-    fn normalize_accel_translates_literal_punctuation() {
-        assert_eq!(normalize_accel("<Ctrl>/"), "<Ctrl>slash");
-        assert_eq!(normalize_accel("<Ctrl><Shift>?"), "<Ctrl><Shift>question");
-        assert_eq!(normalize_accel("<Alt>Return"), "<Alt>Return");
     }
 }

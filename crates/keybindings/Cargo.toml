@@ -2,11 +2,23 @@
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
-description.workspace = true
+description = "Centralized keyboard shortcut registry, custom keybindings.toml store, conflict analyzer, and GTK4 capture dispatcher."
 license.workspace = true
 name = "boxxy-keybindings"
 
 [dependencies]
+arc-swap.workspace = true
+boxxy-sys-utils.workspace = true
 gtk4.workspace = true
 libadwaita.workspace = true
-anyhow.workspace = true
+log.workspace = true
+parking_lot.workspace = true
+serde.workspace = true
+tokio.workspace = true
+toml.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

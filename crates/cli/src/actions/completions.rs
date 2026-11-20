@@ -33,6 +33,10 @@ pub const PUBLIC_PLUS_ACTIONS: &[(&str, &str)] = &[
         "Inspect supported BOXXY_* and provider API-key environment variables",
     ),
     (
+        "+keybinds",
+        "Inspect active, default, or customized keyboard shortcuts",
+    ),
+    (
         "+agent",
         "Inspect or control the host-side boxxy-agent D-Bus daemon",
     ),

@@ -4,6 +4,7 @@ use crate::actions::agent::AgentArgs;
 use crate::actions::completions::{CompletionsArgs, PUBLIC_PLUS_ACTIONS};
 use crate::actions::doctor::DoctorArgs;
 use crate::actions::env_cmd::EnvArgs;
+use crate::actions::keybinds::KeybindsArgs;
 use crate::actions::version::{VersionArgs, full_version_str};
 use crate::actions::{ActionContext, finish_action};
 use crate::output::TermStyle;
@@ -205,6 +206,9 @@ pub enum ActionSubcommand {
     /// Inspect supported BOXXY_* and provider API-key environment variables.
     #[command(name = "+env")]
     Env(EnvArgs),
+    /// Inspect active, default, or customized keyboard shortcuts.
+    #[command(name = "+keybinds", visible_alias = "+list-keybinds")]
+    Keybinds(KeybindsArgs),
     /// Inspect or control the host-side boxxy-agent D-Bus daemon.
     #[command(name = "+agent")]
     Agent(AgentArgs),
@@ -213,7 +217,15 @@ pub enum ActionSubcommand {
     Completions(CompletionsArgs),
 }
 
-const KNOWN_HEADLESS_ACTIONS: &[&str] = &["version", "doctor", "env", "agent", "completions"];
+const KNOWN_HEADLESS_ACTIONS: &[&str] = &[
+    "version",
+    "doctor",
+    "env",
+    "keybinds",
+    "list-keybinds",
+    "agent",
+    "completions",
+];
 
 /// Builds a unified `clap::Command` used by `clap_complete` for shell completion generation.
 #[must_use]
@@ -534,6 +546,7 @@ fn dispatch_headless_action(
         ActionSubcommand::Version(args) => crate::actions::version::run(&ctx, args),
         ActionSubcommand::Doctor(args) => crate::actions::doctor::run(&ctx, args),
         ActionSubcommand::Env(args) => crate::actions::env_cmd::run(&ctx, args),
+        ActionSubcommand::Keybinds(args) => crate::actions::keybinds::run(&ctx, args),
         ActionSubcommand::Agent(args) => crate::actions::agent::run(&ctx, args),
         ActionSubcommand::Completions(args) => crate::actions::completions::run(&ctx, args),
     };

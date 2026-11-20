@@ -9,6 +9,7 @@ pub mod agent;
 pub mod completions;
 pub mod doctor;
 pub mod env_cmd;
+pub mod keybinds;
 pub mod version;
 
 use crate::output::{OutputFormat, TermStyle};

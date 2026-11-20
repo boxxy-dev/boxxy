@@ -1393,79 +1393,10 @@ impl TerminalOverlay {
         }
     }
 
-    fn attach_zoom_controllers(drawer: &gtk::Box, host: &Rc<dyn ClawHost>) {
-        let zoom_controller = gtk::ShortcutController::new();
-        zoom_controller.set_propagation_phase(gtk::PropagationPhase::Capture);
-
-        if let Some(trigger) =
-            gtk::ShortcutTrigger::parse_string("<Control><Shift>d|<Control><Shift>D")
-        {
-            let host_for_toggle = host.clone();
-            let action = gtk::CallbackAction::new(move |_, _| {
-                let settings = Settings::update(|s| {
-                    s.always_show_code_blocks = !s.always_show_code_blocks;
-                });
-                let msg = if settings.always_show_code_blocks {
-                    "Claw Code & Diff Blocks: Always Expanded"
-                } else {
-                    "Claw Code & Diff Blocks: Collapsed in Trace"
-                };
-                host_for_toggle.notify(msg.to_string());
-                gtk::glib::Propagation::Stop
-            });
-            zoom_controller.add_shortcut(
-                gtk::Shortcut::builder()
-                    .trigger(&trigger)
-                    .action(&action)
-                    .build(),
-            );
-        }
-
-        if let Some(trigger) = gtk::ShortcutTrigger::parse_string(
-            "<Control>plus|<Control>equal|<Control>KP_Add|<Control><Shift>plus|<Control><Shift>equal",
-        ) {
-            let action = gtk::CallbackAction::new(|_, _| {
-                zoom_in_overlay();
-                gtk::glib::Propagation::Stop
-            });
-            zoom_controller.add_shortcut(
-                gtk::Shortcut::builder()
-                    .trigger(&trigger)
-                    .action(&action)
-                    .build(),
-            );
-        }
-
-        if let Some(trigger) = gtk::ShortcutTrigger::parse_string(
-            "<Control>minus|<Control>KP_Subtract|<Control>underscore|<Control><Shift>minus",
-        ) {
-            let action = gtk::CallbackAction::new(|_, _| {
-                zoom_out_overlay();
-                gtk::glib::Propagation::Stop
-            });
-            zoom_controller.add_shortcut(
-                gtk::Shortcut::builder()
-                    .trigger(&trigger)
-                    .action(&action)
-                    .build(),
-            );
-        }
-
-        if let Some(trigger) = gtk::ShortcutTrigger::parse_string("<Control>0|<Control>KP_0") {
-            let action = gtk::CallbackAction::new(|_, _| {
-                reset_overlay_zoom();
-                gtk::glib::Propagation::Stop
-            });
-            zoom_controller.add_shortcut(
-                gtk::Shortcut::builder()
-                    .trigger(&trigger)
-                    .action(&action)
-                    .build(),
-            );
-        }
-
-        drawer.add_controller(zoom_controller);
-
+    fn attach_zoom_controllers(drawer: &gtk::Box, _host: &Rc<dyn ClawHost>) {
+        // Keyboard shortcuts (`ZoomIn`, `ZoomOut`, `ResetZoom`, `ToggleClawCodeBlocks`) are
+        // dispatched centrally by `boxxy-keybindings` in `Capture` phase so user customizations
+        // and non-Latin keyboard layouts work identically inside `.claw-drawer`.
         let scroll_ctrl =
             gtk::EventControllerScroll::new(gtk::EventControllerScrollFlags::VERTICAL);
         scroll_ctrl.set_propagation_phase(gtk::PropagationPhase::Capture);

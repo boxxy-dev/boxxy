@@ -49,8 +49,44 @@ pub struct AppWindow {
     _window: adw::ApplicationWindow,
 }
 
+struct AppWindowShortcutHost {
+    inner_weak: std::rc::Weak<RefCell<AppWindowInner>>,
+}
+
+impl boxxy_keybindings::WindowShortcutHost for AppWindowShortcutHost {
+    fn can_perform(&self, id: boxxy_keybindings::ShortcutId) -> bool {
+        let Some(rc) = self.inner_weak.upgrade() else {
+            return false;
+        };
+        let Ok(inner) = rc.try_borrow() else {
+            return false;
+        };
+        let Some(tab) = inner.active_tab() else {
+            return false;
+        };
+        match id {
+            boxxy_keybindings::ShortcutId::Copy => tab.controller.active_pane_has_selection(),
+            boxxy_keybindings::ShortcutId::ClosePane
+            | boxxy_keybindings::ShortcutId::ToggleMaximizePane
+            | boxxy_keybindings::ShortcutId::EqualizeSplits => tab.controller.pane_count() > 1,
+            _ => true,
+        }
+    }
+
+    fn activate(
+        &self,
+        window: &adw::ApplicationWindow,
+        id: boxxy_keybindings::ShortcutId,
+        _focus: boxxy_keybindings::FocusContext,
+    ) {
+        let spec = boxxy_keybindings::spec_for(id);
+        let _ = gtk::prelude::WidgetExt::activate_action(window, spec.action_name, None);
+    }
+}
+
 impl AppWindow {
     pub fn new(app: &adw::Application, init: AppInit) -> Self {
+        let current_settings = (*Settings::load()).clone();
         static APP_UI_INIT: OnceLock<()> = OnceLock::new();
         APP_UI_INIT.get_or_init(|| {
             let provider = gtk::CssProvider::new();
@@ -64,10 +100,10 @@ impl AppWindow {
                 gtk::IconTheme::for_display(&display)
                     .add_resource_path("/dev/boxxy/BoxxyTerminal/icons");
             }
-            boxxy_keybindings::bind_shortcuts(app);
+            boxxy_keybindings::init_with_legacy_claw_shortcut(
+                &current_settings.claw_msgbar_shortcut,
+            );
         });
-
-        let current_settings = (*Settings::load()).clone();
         let app_state = AppState::load();
 
         let style_manager = adw::StyleManager::default();
@@ -393,6 +429,22 @@ impl AppWindow {
 
         let inner_ref = Rc::new(RefCell::new(inner));
         setup_actions(&window, &inner_ref, tx.clone());
+        boxxy_keybindings::attach_window_controller(
+            &window,
+            Rc::new(AppWindowShortcutHost {
+                inner_weak: Rc::downgrade(&inner_ref),
+            }),
+        );
+
+        // Hot-reload `keybindings.toml` off the GTK main thread when the window regains focus
+        // after external editor modifications.
+        window.connect_is_active_notify(|win| {
+            if win.is_active() {
+                boxxy_sys_utils::runtime().spawn_blocking(|| {
+                    let _ = boxxy_keybindings::reload_if_changed_on_disk();
+                });
+            }
+        });
 
         let tv_weak = inner_ref.borrow().tab_view.downgrade();
         let tx_move = tx.clone();
@@ -834,6 +886,9 @@ impl AppWindow {
         BoxxyTabBar,
     ) {
         tab_view.add_css_class("terminal-tab-view");
+        // Disable Libadwaita's implicit shortcuts (`Alt+1..9`, `Ctrl+Shift+PageUp/Down`, etc.)
+        // so `boxxy-keybindings` is the single source of truth and never steals shell/TUI keys.
+        tab_view.remove_shortcuts(adw::TabViewShortcuts::ALL_SHORTCUTS);
 
         let content_toolbar = adw::ToolbarView::new();
         content_toolbar.add_css_class("terminal-toolbar");

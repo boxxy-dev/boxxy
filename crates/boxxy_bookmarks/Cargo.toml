@@ -20,6 +20,7 @@ boxxy-preferences = { path = "../preferences" }
 boxxy-themes = { path = "../themes" }
 boxxy-ai-core = { path = "../ai_core" }
 boxxy-core-widgets.workspace = true
+boxxy-keybindings.workspace = true
 boxxy-sys-utils.workspace = true
 parking_lot.workspace = true
 

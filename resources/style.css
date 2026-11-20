@@ -2316,3 +2316,99 @@ button.claw-task-dismiss-btn:active {
     padding: 5px 8px;
     margin-top: 2px;
 }
+
+/* ── Preferences -> Shortcuts & Graphical Override Indicators ────────────── */
+
+preferencespage button.shortcut-override-badge,
+dialog button.shortcut-override-badge,
+button.shortcut-override-badge {
+    min-width: 24px;
+    min-height: 24px;
+    padding: 2px 6px;
+    border-radius: 9999px;
+    background-color: alpha(@boxxy_highlight_bg_color, 0.22);
+    color: @boxxy_highlight_color;
+    border: 1px solid alpha(@boxxy_highlight_bg_color, 0.55);
+}
+
+preferencespage button.shortcut-override-badge:hover,
+dialog button.shortcut-override-badge:hover,
+button.shortcut-override-badge:hover {
+    background-color: @boxxy_highlight_bg_color;
+    color: @boxxy_highlight_fg_color;
+}
+
+preferencespage button.shortcut-chip-shadowed,
+dialog button.shortcut-chip-shadowed,
+button.shortcut-chip-shadowed {
+    min-width: 0;
+    min-height: 0;
+    padding: 2px 5px;
+    border-radius: 7px;
+    background-color: transparent;
+    border: 1px dashed alpha(currentColor, 0.28);
+    opacity: 0.44;
+}
+
+preferencespage button.shortcut-chip-shadowed:hover,
+dialog button.shortcut-chip-shadowed:hover,
+button.shortcut-chip-shadowed:hover {
+    opacity: 0.78;
+    background-color: alpha(currentColor, 0.06);
+}
+
+.shortcut-unbound-pill {
+    background-color: alpha(currentColor, 0.07);
+    border-radius: 9999px;
+    padding: 2px 9px;
+    font-size: 0.76em;
+    opacity: 0.58;
+}
+
+.shortcut-smart-pill {
+    background-color: alpha(@boxxy_secondary_bg_color, 0.20);
+    color: @boxxy_secondary_color;
+    border-radius: 9999px;
+    padding: 1px 7px;
+    font-size: 0.70em;
+    font-weight: 700;
+}
+
+.shortcut-capture-card {
+    padding: 18px 14px;
+    min-height: 78px;
+}
+
+.shortcut-existing-chip {
+    background-color: alpha(currentColor, 0.06);
+    border: 1px solid alpha(currentColor, 0.14);
+    border-radius: 8px;
+    padding: 3px 6px 3px 8px;
+}
+
+.shortcut-conflict-banner {
+    background-color: alpha(@warning_bg_color, 0.15);
+    color: @warning_color;
+    border: 1px solid alpha(@warning_bg_color, 0.40);
+    border-radius: 8px;
+    padding: 8px 10px;
+}
+
+.shortcut-override-node-active {
+    background-color: alpha(@accent_bg_color, 0.12);
+    border: 1px solid alpha(@accent_bg_color, 0.45);
+    border-radius: 8px;
+    padding: 7px 10px;
+}
+
+.shortcut-override-node-shadowed {
+    background-color: alpha(currentColor, 0.05);
+    border: 1px dashed alpha(currentColor, 0.25);
+    border-radius: 8px;
+    padding: 7px 10px;
+}
+
+row.shortcut-row-pulse {
+    background-color: alpha(@boxxy_highlight_bg_color, 0.26);
+    transition: background-color 280ms ease;
+}

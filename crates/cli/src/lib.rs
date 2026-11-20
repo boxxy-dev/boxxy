@@ -164,10 +164,13 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tempdir");
         for argv in [
             &["boxxy-terminal", "+version", "--json"][..],
+            &["boxxy-terminal", "+keybinds", "--default", "--json"][..],
+            &["boxxy-terminal", "+list-keybinds", "--default"][..],
             &["boxxy-terminal", "--version"][..],
             &["boxxy-terminal", "-h"][..],
             &["boxxy-terminal", "--help"][..],
             &["boxxy-terminal", "+help", "doctor"][..],
+            &["boxxy-terminal", "+help", "keybinds"][..],
         ] {
             match parse_and_dispatch(argv, Some(tmp.path())) {
                 ParseOutcome::Exit(code) => assert_eq!(code, ExitCode::SUCCESS),

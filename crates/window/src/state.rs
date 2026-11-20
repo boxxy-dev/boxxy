@@ -78,6 +78,9 @@ impl TabColor {
 pub enum AppInput {
     NewWindow,
     NewTab,
+    NextTab,
+    PrevTab,
+    SelectTabIndex(i32),
     EnsureInitialTab,
     NewTabLaunch(TabLaunchSpec),
     CloseTabRequest(usize),

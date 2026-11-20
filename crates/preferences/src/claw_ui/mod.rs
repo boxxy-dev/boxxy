@@ -1,41 +1,13 @@
 use crate::config::{Currency, Settings};
-use crate::ui_utils::{PageHooks, SearchRow, show_toast};
+use crate::shortcuts::capture_dialog::present_capture_dialog;
+use crate::ui_utils::{PageHooks, SearchRow};
 use adw::prelude::*;
+use boxxy_keybindings::ShortcutId;
 use gtk4 as gtk;
-use gtk4::gdk;
+use gtk4::glib;
 use libadwaita as adw;
 use std::cell::Cell;
 use std::rc::Rc;
-
-fn is_valid_accelerator(raw: &str) -> bool {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return false;
-    }
-    let Some((key, mods)) = gtk::accelerator_parse(trimmed) else {
-        return false;
-    };
-    if !gtk::accelerator_valid(key, mods) {
-        return false;
-    }
-    let has_non_shift_mod = !mods.difference(gdk::ModifierType::SHIFT_MASK).is_empty();
-    let is_function_key = matches!(
-        key,
-        gdk::Key::F1
-            | gdk::Key::F2
-            | gdk::Key::F3
-            | gdk::Key::F4
-            | gdk::Key::F5
-            | gdk::Key::F6
-            | gdk::Key::F7
-            | gdk::Key::F8
-            | gdk::Key::F9
-            | gdk::Key::F10
-            | gdk::Key::F11
-            | gdk::Key::F12
-    );
-    has_non_shift_mod || is_function_key
-}
 
 #[allow(clippy::too_many_lines)]
 pub(crate) fn setup_claw_ui_page(builder: &gtk::Builder) -> PageHooks {
@@ -54,11 +26,6 @@ pub(crate) fn setup_claw_ui_page(builder: &gtk::Builder) -> PageHooks {
     let hide_character_badge_switch: adw::SwitchRow =
         builder.object("hide_character_badge_switch").unwrap();
     let row_claw_shortcut: adw::ActionRow = builder.object("row_claw_shortcut").unwrap();
-    let row_reset_claw_shortcut: adw::ActionRow =
-        builder.object("row_reset_claw_shortcut").unwrap();
-    let claw_msgbar_shortcut_entry: gtk::Entry =
-        builder.object("claw_msgbar_shortcut_entry").unwrap();
-    let reset_claw_shortcut_btn: gtk::Button = builder.object("reset_claw_shortcut_btn").unwrap();
     let group_claw_sounds: adw::PreferencesGroup = builder.object("group_claw_sounds").unwrap();
     let group_claw_identity: adw::PreferencesGroup = builder.object("group_claw_identity").unwrap();
     let group_claw_ui_behavior: adw::PreferencesGroup =
@@ -86,14 +53,12 @@ pub(crate) fn setup_claw_ui_page(builder: &gtk::Builder) -> PageHooks {
         u32::try_from(Currency::all().iter().position(|&item| item == c).unwrap_or(0)).unwrap_or(0)
     };
 
-    // Initial sync
     {
         let scale_val = f64::from(initial.overlay_font_scale.clamp(60, 220));
         let scale_adj = gtk::Adjustment::new(scale_val, 60.0, 220.0, 10.0, 20.0, 0.0);
         overlay_font_scale_spin.set_adjustment(Some(&scale_adj));
         overlay_font_scale_spin.set_value(scale_val);
         currency_combo.set_selected(currency_to_idx(initial.currency));
-        claw_msgbar_shortcut_entry.set_text(&initial.claw_msgbar_shortcut);
     }
 
     {
@@ -149,80 +114,87 @@ pub(crate) fn setup_claw_ui_page(builder: &gtk::Builder) -> PageHooks {
     bind_bool_switch!(enable_task_sounds_switch, enable_task_sounds);
     bind_bool_switch!(hide_character_badge_switch, hide_character_badge);
 
-    // Live syntax validation on accelerator entry
-    claw_msgbar_shortcut_entry.connect_changed(|entry| {
-        if is_valid_accelerator(&entry.text()) {
-            entry.remove_css_class("error");
-            entry.set_tooltip_text(None);
-        } else {
-            entry.add_css_class("error");
-            entry.set_tooltip_text(Some(
-                "Invalid GTK accelerator (examples: <Ctrl>slash, <Alt>space, F12)",
-            ));
-        }
+    // Live Ask Boxxy-Claw shortcut row synced with `boxxy-keybindings`
+    let suffix = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    suffix.set_valign(gtk::Align::Center);
+    let custom_pill = gtk::Label::builder()
+        .label("Custom")
+        .valign(gtk::Align::Center)
+        .css_classes(["model-badge-custom", "caption"])
+        .visible(false)
+        .build();
+    let chords_box = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    chords_box.set_valign(gtk::Align::Center);
+    let reset_btn = gtk::Button::builder()
+        .icon_name("edit-undo-symbolic")
+        .valign(gtk::Align::Center)
+        .tooltip_text("Reset to default (Ctrl+/)")
+        .css_classes(["flat", "circular"])
+        .visible(false)
+        .build();
+    suffix.append(&custom_pill);
+    suffix.append(&chords_box);
+    suffix.append(&reset_btn);
+    row_claw_shortcut.add_suffix(&suffix);
+
+    {
+        let row_weak = row_claw_shortcut.downgrade();
+        row_claw_shortcut.connect_activated(move |_| {
+            if let Some(r) = row_weak.upgrade() {
+                present_capture_dialog(&r, ShortcutId::AskClaw);
+            }
+        });
+    }
+    reset_btn.connect_clicked(|_| {
+        boxxy_keybindings::reset_action(ShortcutId::AskClaw);
     });
 
-    let save_shortcut = {
-        let is_syncing = is_syncing.clone();
-        Rc::new(move |entry: &gtk::Entry, explicit_activate: bool| {
-            if is_syncing.get() {
-                return;
+    let refresh_claw_shortcut = {
+        let custom_pill = custom_pill;
+        let chords_box = chords_box;
+        let reset_btn = reset_btn;
+        Rc::new(move || {
+            let km = boxxy_keybindings::keymap();
+            let is_custom = km.is_customized(ShortcutId::AskClaw);
+            custom_pill.set_visible(is_custom);
+            reset_btn.set_visible(is_custom);
+
+            while let Some(child) = chords_box.first_child() {
+                chords_box.remove(&child);
             }
-            let val = entry.text().trim().to_string();
-            if !is_valid_accelerator(&val) {
-                if explicit_activate {
-                    entry.add_css_class("error");
-                    show_toast(
-                        entry,
-                        "Invalid shortcut format. Try e.g. <Ctrl>slash or <Alt>space.",
-                    );
-                } else {
-                    // Revert unsaved invalid input on focus-out / unmap so UI matches persisted state
-                    is_syncing.set(true);
-                    entry.set_text(&Settings::load().claw_msgbar_shortcut);
-                    entry.remove_css_class("error");
-                    entry.set_tooltip_text(None);
-                    is_syncing.set(false);
+            let chords = km.chords_for(ShortcutId::AskClaw);
+            if chords.is_empty() {
+                chords_box.append(
+                    &gtk::Label::builder()
+                        .label("Unbound")
+                        .valign(gtk::Align::Center)
+                        .css_classes(["shortcut-unbound-pill"])
+                        .build(),
+                );
+            } else {
+                for ch in chords {
+                    chords_box.append(&adw::ShortcutLabel::new(&ch.to_gtk_accel()));
                 }
-                return;
             }
-            entry.remove_css_class("error");
-            Settings::update(|s| {
-                s.claw_msgbar_shortcut.clone_from(&val);
-            });
         })
     };
+    refresh_claw_shortcut();
 
     {
-        let save_sc = save_shortcut.clone();
-        claw_msgbar_shortcut_entry.connect_activate(move |entry| save_sc(entry, true));
-    }
-    {
-        let focus_out = gtk::EventControllerFocus::new();
-        let save_sc = save_shortcut.clone();
-        let entry_fo = claw_msgbar_shortcut_entry.clone();
-        focus_out.connect_leave(move |_| save_sc(&entry_fo, false));
-        claw_msgbar_shortcut_entry.add_controller(focus_out);
-    }
-    {
-        let save_sc = save_shortcut;
-        claw_msgbar_shortcut_entry.connect_unmap(move |entry| save_sc(entry, false));
-    }
-
-    {
-        let s_entry = claw_msgbar_shortcut_entry.clone();
-        let is_syncing = is_syncing.clone();
-        reset_claw_shortcut_btn.connect_clicked(move |_| {
-            let default_shortcut = "<Ctrl>slash";
-            is_syncing.set(true);
-            s_entry.set_text(default_shortcut);
-            s_entry.remove_css_class("error");
-            s_entry.set_tooltip_text(None);
-            is_syncing.set(false);
-
-            Settings::update(|s| {
-                default_shortcut.clone_into(&mut s.claw_msgbar_shortcut);
-            });
+        let refresh = refresh_claw_shortcut;
+        let row_weak = row_claw_shortcut.downgrade();
+        let mut rx = boxxy_keybindings::KEYBINDINGS_EVENT_BUS.subscribe();
+        glib::spawn_future_local(async move {
+            loop {
+                match rx.recv().await {
+                    Ok(()) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                }
+                if row_weak.upgrade().is_none() {
+                    break;
+                }
+                refresh();
+            }
         });
     }
 
@@ -240,8 +212,10 @@ pub(crate) fn setup_claw_ui_page(builder: &gtk::Builder) -> PageHooks {
         &currency_combo,
         "cost currency spend usd eur cny inr brl dollar euro yuan rupee real",
     );
-    let s_accel = SearchRow::new(&row_claw_shortcut, "shortcut accelerator message bar keybinding");
-    let s_reset = SearchRow::new(&row_reset_claw_shortcut, "reset default claw shortcut");
+    let s_accel = SearchRow::new(
+        &row_claw_shortcut,
+        "shortcut accelerator ask claw message bar keybinding ctrl slash",
+    );
 
     let sync = Box::new(move |s: &Settings| {
         is_syncing.set(true);
@@ -264,14 +238,6 @@ pub(crate) fn setup_claw_ui_page(builder: &gtk::Builder) -> PageHooks {
         enable_task_sounds_switch.set_active(s.enable_task_sounds);
         hide_character_badge_switch.set_active(s.hide_character_badge);
 
-        if !claw_msgbar_shortcut_entry.has_focus()
-            && claw_msgbar_shortcut_entry.text() != s.claw_msgbar_shortcut
-        {
-            claw_msgbar_shortcut_entry.set_text(&s.claw_msgbar_shortcut);
-            claw_msgbar_shortcut_entry.remove_css_class("error");
-            claw_msgbar_shortcut_entry.set_tooltip_text(None);
-        }
-
         is_syncing.set(false);
     });
 
@@ -283,7 +249,7 @@ pub(crate) fn setup_claw_ui_page(builder: &gtk::Builder) -> PageHooks {
             | s_curr.apply(query);
         let sounds = s_timer.apply(query) | s_task.apply(query);
         let identity = s_badge.apply(query);
-        let shortcuts = s_accel.apply(query) | s_reset.apply(query);
+        let shortcuts = s_accel.apply(query);
 
         group_claw_ui_behavior.set_visible(behavior);
         group_claw_sounds.set_visible(sounds);

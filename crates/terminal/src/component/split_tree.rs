@@ -385,6 +385,67 @@ impl TerminalComponent {
         }
     }
 
+    /// Recursively resets every `GtkPaned` split divider proportional to leaf counts along
+    /// its axis so all split panes share equal proportions.
+    pub fn equalize_splits(&self) {
+        let inner = self.inner.borrow();
+        if inner.panes.len() <= 1 || inner.is_maximized {
+            return;
+        }
+        if let Some(root) = inner.split_container.first_child() {
+            Self::equalize_node(&root);
+        }
+    }
+
+    fn count_leaves_along(node: &gtk::Widget, orientation: gtk::Orientation) -> usize {
+        if let Some(paned) = node.downcast_ref::<gtk::Paned>() {
+            let s = paned
+                .start_child()
+                .map_or(0, |c| Self::count_leaves_along(&c, orientation));
+            let e = paned
+                .end_child()
+                .map_or(0, |c| Self::count_leaves_along(&c, orientation));
+            if paned.orientation() == orientation {
+                (s + e).max(1)
+            } else {
+                s.max(e).max(1)
+            }
+        } else {
+            1
+        }
+    }
+
+    fn equalize_node(node: &gtk::Widget) {
+        let Some(paned) = node.downcast_ref::<gtk::Paned>() else {
+            return;
+        };
+        let orient = paned.orientation();
+        let start_leaves = paned
+            .start_child()
+            .map_or(1, |c| Self::count_leaves_along(&c, orient));
+        let end_leaves = paned
+            .end_child()
+            .map_or(1, |c| Self::count_leaves_along(&c, orient));
+        let total_leaves = (start_leaves + end_leaves).max(1);
+        let span = if orient == gtk::Orientation::Horizontal {
+            paned.width()
+        } else {
+            paned.height()
+        };
+        if span > 0 {
+            let target_pos =
+                (i64::from(span) * i64::try_from(start_leaves).unwrap_or(1)
+                    / i64::try_from(total_leaves).unwrap_or(2)) as i32;
+            paned.set_position(target_pos);
+        }
+        if let Some(s) = paned.start_child() {
+            Self::equalize_node(&s);
+        }
+        if let Some(e) = paned.end_child() {
+            Self::equalize_node(&e);
+        }
+    }
+
     fn detach_wrapper_from_tree(wrapper: &gtk::Box) {
         let Some(parent) = wrapper.parent() else {
             return;

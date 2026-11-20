@@ -183,7 +183,8 @@ impl CommandPaletteComponent {
 
     #[allow(clippy::too_many_lines)]
     fn setup_signals(&self) {
-        // Capture-phase Escape dismissal using a weak Popover reference to avoid GObject cycles.
+        // Capture-phase dismissal on Escape or the active Command Palette shortcut
+        // (GtkPopover is its own GtkNative surface, so window-level controllers don't see keys while open).
         let esc_ctrl = gtk4::EventControllerKey::new();
         esc_ctrl.set_propagation_phase(gtk4::PropagationPhase::Capture);
         esc_ctrl.connect_key_pressed(glib::clone!(
@@ -191,13 +192,26 @@ impl CommandPaletteComponent {
             self.popover,
             #[upgrade_or]
             glib::Propagation::Proceed,
-            move |_, keyval, _, _| {
+            move |ctrl, keyval, _, _| {
                 if keyval == gtk4::gdk::Key::Escape {
                     popover.popdown();
-                    glib::Propagation::Stop
-                } else {
-                    glib::Propagation::Proceed
+                    return glib::Propagation::Stop;
                 }
+                if let Some(ev) = ctrl.current_event()
+                    && let Ok(key_ev) = ev.downcast::<gtk4::gdk::KeyEvent>()
+                {
+                    let km = boxxy_keybindings::keymap();
+                    for chord in km.chords_for(boxxy_keybindings::ShortcutId::CommandPalette) {
+                        if !matches!(
+                            key_ev.matches(chord.keyval, chord.modifiers),
+                            gtk4::gdk::KeyMatch::None
+                        ) {
+                            popover.popdown();
+                            return glib::Propagation::Stop;
+                        }
+                    }
+                }
+                glib::Propagation::Proceed
             }
         ));
         self.popover.add_controller(esc_ctrl);
@@ -417,9 +431,44 @@ impl CommandPaletteComponent {
         }
     }
 
+    /// Synchronizes static command shortcut badges with the active `boxxy_keybindings::keymap()`.
+    pub fn sync_shortcuts(&self) {
+        let fresh = builtin_commands();
+        let mut changed_indices = Vec::new();
+        {
+            let mut state = self.state.borrow_mut();
+            if fresh.len() != state.static_count {
+                return;
+            }
+            for (idx, item) in fresh.into_iter().enumerate() {
+                if state.entries[idx].item.shortcut != item.shortcut {
+                    state.entries[idx] = IndexedEntry::new(item);
+                    changed_indices.push(idx);
+                }
+            }
+        }
+
+        if changed_indices.is_empty() {
+            return;
+        }
+
+        let state = self.state.borrow();
+        let mut child_opt = self.listbox.first_child();
+        while let Some(child) = child_opt {
+            if let Ok(row) = child.clone().downcast::<gtk4::ListBoxRow>()
+                && let Some(idx) = state.entry_index_for_row(&row)
+                && changed_indices.contains(&idx)
+            {
+                update_row_shortcut(&row, state.entries[idx].item.shortcut.as_deref());
+            }
+            child_opt = child.next_sibling();
+        }
+    }
+
     /// Opens (or toggles closed if already open on `parent`) the Command Palette centered near
     /// the top of `parent`.
     pub fn show(&self, parent: &impl IsA<gtk4::Widget>) {
+        self.sync_shortcuts();
         let parent_widget = parent.upcast_ref();
         if self.popover.is_visible() && self.popover.parent().as_ref() == Some(parent_widget) {
             self.popover.popdown();
@@ -521,6 +570,23 @@ fn build_row(cmd: &CommandItem) -> gtk4::ListBoxRow {
 
     row.set_child(Some(&hbox));
     row
+}
+
+fn update_row_shortcut(row: &gtk4::ListBoxRow, shortcut: Option<&str>) {
+    let Some(hbox) = row.child().and_then(|c| c.downcast::<gtk4::Box>().ok()) else {
+        return;
+    };
+    if let Some(last) = hbox.last_child()
+        && last.has_css_class("palette-shortcut")
+    {
+        hbox.remove(&last);
+    }
+    if let Some(sc) = shortcut {
+        let shortcut_label = libadwaita::ShortcutLabel::new(sc);
+        shortcut_label.set_valign(gtk4::Align::Center);
+        shortcut_label.add_css_class("palette-shortcut");
+        hbox.append(&shortcut_label);
+    }
 }
 
 fn collect_visible_rows(listbox: &gtk4::ListBox, state: &PaletteState) -> Vec<gtk4::ListBoxRow> {

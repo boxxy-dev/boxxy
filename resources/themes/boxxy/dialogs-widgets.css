@@ -430,3 +430,70 @@ headerbar.model-assignment-header viewswitcher > button.toggle + button.toggle {
     box-shadow: 1px 1.5px 0px @boxxy_shadow;
 }
 
+/* ── Preferences -> Shortcuts & Graphical Override Indicators (Layer 2) ──── */
+
+preferencespage button.shortcut-override-badge,
+dialog button.shortcut-override-badge,
+button.shortcut-override-badge {
+    min-width: 24px;
+    min-height: 24px;
+    padding: 2px 6px;
+    border-radius: var(--boxxy-radius-pill);
+    background-color: @boxxy_highlight_bg_color;
+    background-image: none;
+    color: @boxxy_highlight_fg_color;
+    border: var(--boxxy-border-thin) solid @boxxy_ink;
+    outline: none;
+    box-shadow: 1px 1.5px 0px @boxxy_shadow;
+}
+
+preferencespage button.shortcut-override-badge image,
+dialog button.shortcut-override-badge image,
+button.shortcut-override-badge image {
+    color: @boxxy_highlight_fg_color;
+}
+
+preferencespage button.shortcut-override-badge:hover,
+dialog button.shortcut-override-badge:hover,
+button.shortcut-override-badge:hover {
+    background-color: color-mix(in srgb, @boxxy_highlight_bg_color 85%, white 15%);
+    color: @boxxy_highlight_fg_color;
+}
+
+preferencespage button.shortcut-chip-shadowed,
+dialog button.shortcut-chip-shadowed,
+button.shortcut-chip-shadowed {
+    min-width: 0;
+    min-height: 0;
+    padding: 2px 5px;
+    border-radius: var(--boxxy-radius-sm);
+    background-color: transparent;
+    background-image: none;
+    border: 1px dashed alpha(@boxxy_ink, 0.55);
+    outline: none;
+    box-shadow: none;
+    opacity: 0.46;
+}
+
+.shortcut-capture-card {
+    background-color: @window_bg_color;
+    color: @dialog_fg_color;
+    border: var(--boxxy-border-thin) solid @boxxy_ink;
+    border-radius: var(--boxxy-radius-lg);
+    box-shadow: none;
+}
+
+.shortcut-override-node-active {
+    background-color: @window_bg_color;
+    border: var(--boxxy-border-thin) solid @boxxy_ink;
+    border-radius: var(--boxxy-radius-md);
+    box-shadow: 1.5px 2px 0px @boxxy_shadow;
+}
+
+.shortcut-override-node-shadowed {
+    background-color: alpha(@window_bg_color, 0.65);
+    border: 1px dashed alpha(@boxxy_ink, 0.65);
+    border-radius: var(--boxxy-radius-md);
+}
+
+

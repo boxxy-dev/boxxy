@@ -296,7 +296,7 @@ pub fn seed_config_tree_from(src_config: &Path, dst_config: &Path) -> io::Result
 
     fs::create_dir_all(dst_config)?;
 
-    for single_file in ["settings.json", "state.json"] {
+    for single_file in ["settings.json", "state.json", "keybindings.toml"] {
         let src = src_config.join(single_file);
         if src.is_file() {
             atomic_copy_writable_file(&src, &dst_config.join(single_file))?;
