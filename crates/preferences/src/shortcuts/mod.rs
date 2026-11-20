@@ -4,10 +4,11 @@ mod override_popover;
 use crate::ui_utils::{PageFilter, bind_mapped_poller, show_toast};
 use adw::prelude::*;
 use boxxy_keybindings::{
-    ChordStatus, CompiledKeymap, ShortcutCategory, ShortcutId, spec_for,
+    Chord, ChordStatus, CompiledKeymap, ShortcutCategory, ShortcutId, spec_for,
 };
 use capture_dialog::present_capture_dialog;
 use gtk4 as gtk;
+use gtk4::gdk;
 use gtk4::glib;
 use libadwaita as adw;
 use override_popover::{
@@ -346,9 +347,7 @@ fn render_row_state(
         for &(chord, status) in &diag.chord_statuses {
             match status {
                 ChordStatus::Active => {
-                    entry
-                        .chords_box
-                        .append(&adw::ShortcutLabel::new(&chord.to_gtk_accel()));
+                    entry.chords_box.append(&build_chord_pill(chord, &[]));
                     if chord.performable {
                         entry.chords_box.append(
                             &gtk::Label::builder()
@@ -360,6 +359,18 @@ fn render_row_state(
                     }
                 }
                 ChordStatus::ShadowedBy(blocker_id) => {
+                    let content = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+                    content.set_valign(gtk::Align::Center);
+                    let icon = gtk::Image::from_icon_name("boxxy-vibe-symbolic");
+                    icon.set_pixel_size(12);
+                    let lbl = gtk::Label::builder()
+                        .use_markup(true)
+                        .label(format!("<s>{}</s>", chord_markup(chord)))
+                        .valign(gtk::Align::Center)
+                        .build();
+                    content.append(&icon);
+                    content.append(&lbl);
+
                     let shadowed_btn = gtk::Button::builder()
                         .valign(gtk::Align::Center)
                         .tooltip_text(format!(
@@ -367,8 +378,8 @@ fn render_row_state(
                             spec_for(blocker_id).title
                         ))
                         .css_classes(["flat", "shortcut-chip-shadowed"])
+                        .child(&content)
                         .build();
-                    shadowed_btn.set_child(Some(&adw::ShortcutLabel::new(&chord.to_gtk_accel())));
 
                     let owner_id = entry.id;
                     let on_jump_chip = on_jump.clone();
@@ -507,4 +518,74 @@ fn scroll_to_and_pulse_row(page: &adw::PreferencesPage, row: &adw::ActionRow) {
             r.remove_css_class("shortcut-row-pulse");
         }
     });
+}
+
+/// Builds a single compact pill label for a shortcut chord (e.g. `Ctrl + Shift + N`).
+pub(crate) fn build_chord_pill(chord: Chord, extra_classes: &[&str]) -> gtk::Label {
+    let lbl = gtk::Label::builder()
+        .use_markup(true)
+        .label(chord_markup(chord))
+        .valign(gtk::Align::Center)
+        .css_classes(["shortcut-pill"])
+        .build();
+    for cls in extra_classes {
+        lbl.add_css_class(cls);
+    }
+    lbl
+}
+
+/// Formats a chord as escaped Pango markup with subtle `+` separators.
+pub(crate) fn chord_markup(chord: Chord) -> String {
+    let mut parts: Vec<String> = Vec::with_capacity(5);
+    if chord.modifiers.contains(gdk::ModifierType::CONTROL_MASK) {
+        parts.push("Ctrl".to_string());
+    }
+    if chord.modifiers.contains(gdk::ModifierType::ALT_MASK) {
+        parts.push("Alt".to_string());
+    }
+    if chord.modifiers.contains(gdk::ModifierType::SHIFT_MASK) {
+        parts.push("Shift".to_string());
+    }
+    if chord.modifiers.contains(gdk::ModifierType::SUPER_MASK) {
+        parts.push("Super".to_string());
+    }
+    parts.push(compact_key_label(chord.keyval));
+
+    parts
+        .iter()
+        .map(|p| glib::markup_escape_text(p).to_string())
+        .collect::<Vec<_>>()
+        .join("<span alpha=\"48%\"> + </span>")
+}
+
+fn compact_key_label(key: gdk::Key) -> String {
+    match key {
+        gdk::Key::Up => "↑".to_string(),
+        gdk::Key::Down => "↓".to_string(),
+        gdk::Key::Left => "←".to_string(),
+        gdk::Key::Right => "→".to_string(),
+        gdk::Key::Page_Up => "PgUp".to_string(),
+        gdk::Key::Page_Down => "PgDn".to_string(),
+        gdk::Key::Return => "Enter".to_string(),
+        gdk::Key::Escape => "Esc".to_string(),
+        gdk::Key::BackSpace => "Backspace".to_string(),
+        gdk::Key::Delete => "Del".to_string(),
+        gdk::Key::Insert => "Ins".to_string(),
+        gdk::Key::Tab | gdk::Key::ISO_Left_Tab => "Tab".to_string(),
+        gdk::Key::space => "Space".to_string(),
+        gdk::Key::plus => "+".to_string(),
+        gdk::Key::minus => "-".to_string(),
+        gdk::Key::equal => "=".to_string(),
+        gdk::Key::slash => "/".to_string(),
+        gdk::Key::comma => ",".to_string(),
+        gdk::Key::period => ".".to_string(),
+        other => {
+            if let Some(ch) = other.to_unicode()
+                && ch.is_ascii_graphic()
+            {
+                return ch.to_ascii_uppercase().to_string();
+            }
+            other.name().map_or_else(|| "?".to_string(), |n| n.to_string())
+        }
+    }
 }

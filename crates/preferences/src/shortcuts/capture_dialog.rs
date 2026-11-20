@@ -1,5 +1,6 @@
 #![allow(clippy::redundant_pub_crate)]
 
+use super::{build_chord_pill, chord_markup};
 use crate::ui_utils::VoidCallbackSlot;
 use adw::prelude::*;
 use boxxy_keybindings::{
@@ -22,6 +23,7 @@ pub(crate) fn present_capture_dialog(parent: &impl IsA<gtk::Widget>, target_id: 
     let dialog: adw::Dialog = builder.object("capture_dialog").unwrap();
     let action_title_label: gtk::Label = builder.object("action_title_label").unwrap();
     let default_hint_label: gtk::Label = builder.object("default_hint_label").unwrap();
+    let capture_zone: gtk::Box = builder.object("capture_zone").unwrap();
     let preview_slot: gtk::Box = builder.object("preview_slot").unwrap();
     let prompt_label: gtk::Label = builder.object("prompt_label").unwrap();
     let existing_section: gtk::Box = builder.object("existing_section").unwrap();
@@ -32,6 +34,7 @@ pub(crate) fn present_capture_dialog(parent: &impl IsA<gtk::Widget>, target_id: 
     let conflict_label: gtk::Label = builder.object("conflict_label").unwrap();
     let disable_btn: gtk::Button = builder.object("disable_btn").unwrap();
     let reset_default_btn: gtk::Button = builder.object("reset_default_btn").unwrap();
+    let cancel_btn: gtk::Button = builder.object("cancel_btn").unwrap();
     let add_secondary_btn: gtk::Button = builder.object("add_secondary_btn").unwrap();
     let save_btn: gtk::Button = builder.object("save_btn").unwrap();
 
@@ -41,7 +44,7 @@ pub(crate) fn present_capture_dialog(parent: &impl IsA<gtk::Widget>, target_id: 
     let default_text = if spec.default_triggers.is_empty() {
         "Default: Unbound".to_string()
     } else {
-        format!("Default: {}", spec.default_triggers.join(" / "))
+        format!("Default: {}", spec.default_triggers.join(" · "))
     };
     default_hint_label.set_label(&default_text);
     performable_row.set_visible(target_id.supports_performable());
@@ -51,6 +54,7 @@ pub(crate) fn present_capture_dialog(parent: &impl IsA<gtk::Widget>, target_id: 
         Rc::new(RefCell::new(boxxy_keybindings::keymap().chords_for(target_id).to_vec()));
 
     let refresh_ui: Rc<dyn Fn()> = {
+        let capture_zone = capture_zone.clone();
         let performable_switch = performable_switch.clone();
         let reset_default_btn = reset_default_btn.clone();
         let disable_btn = disable_btn.clone();
@@ -74,22 +78,27 @@ pub(crate) fn present_capture_dialog(parent: &impl IsA<gtk::Widget>, target_id: 
             let current_list = working_chords.borrow().clone();
             let candidate = *pending_chord.borrow();
 
-            reset_default_btn.set_sensitive(
-                km.is_customized(target_id)
-                    || current_list != boxxy_keybindings::store::default_chords_for(target_id)
-                    || candidate.is_some(),
-            );
-            disable_btn.set_sensitive(!current_list.is_empty() || candidate.is_some());
+            let is_modified = km.is_customized(target_id)
+                || current_list != boxxy_keybindings::store::default_chords_for(target_id);
+            reset_default_btn.set_visible(is_modified);
+            disable_btn.set_visible(!current_list.is_empty() || candidate.is_some());
 
-            // Render assigned shortcut chips when multiple or existing shortcuts exist
+            // Render currently assigned shortcuts as compact single-pill chips
             if current_list.is_empty() {
                 existing_section.set_visible(false);
             } else {
                 existing_section.set_visible(true);
                 for (idx, ch) in current_list.iter().copied().enumerate() {
-                    let chip = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+                    let chip = gtk::Box::new(gtk::Orientation::Horizontal, 4);
                     chip.add_css_class("shortcut-existing-chip");
-                    chip.append(&adw::ShortcutLabel::new(&ch.to_gtk_accel()));
+                    chip.append(
+                        &gtk::Label::builder()
+                            .use_markup(true)
+                            .label(chord_markup(ch))
+                            .valign(gtk::Align::Center)
+                            .css_classes(["shortcut-existing-label"])
+                            .build(),
+                    );
                     if ch.performable {
                         chip.append(
                             &gtk::Label::builder()
@@ -102,7 +111,8 @@ pub(crate) fn present_capture_dialog(parent: &impl IsA<gtk::Widget>, target_id: 
                     let rm_btn = gtk::Button::builder()
                         .icon_name("boxxy-cross-small-symbolic")
                         .tooltip_text("Remove this shortcut")
-                        .css_classes(["flat", "circular"])
+                        .focusable(false)
+                        .css_classes(["flat", "circular", "shortcut-chip-remove"])
                         .valign(gtk::Align::Center)
                         .build();
                     let wc_rm = working_chords.clone();
@@ -130,8 +140,11 @@ pub(crate) fn present_capture_dialog(parent: &impl IsA<gtk::Widget>, target_id: 
 
             if let Some(mut cand) = candidate {
                 cand.performable = target_id.supports_performable() && performable_switch.is_active();
-                preview_slot.append(&adw::ShortcutLabel::new(&cand.to_gtk_accel()));
-                prompt_label.set_label("Press another combination to change, or click Set Shortcut");
+                capture_zone.remove_css_class("listening");
+                capture_zone.add_css_class("captured");
+                preview_slot.append(&build_chord_pill(cand, &["shortcut-pill-hero"]));
+                prompt_label.set_label("Press another combination to change");
+                prompt_label.set_visible(true);
 
                 let already_in_list = current_list
                     .iter()
@@ -148,7 +161,7 @@ pub(crate) fn present_capture_dialog(parent: &impl IsA<gtk::Widget>, target_id: 
                     ));
                     conflict_card.set_visible(true);
                 } else {
-                    save_btn.set_label("Set Shortcut");
+                    save_btn.set_label("Save");
                     if let Some(shadow_msg) = preview_terminal_shadow(target_id, cand) {
                         conflict_label.set_label(&shadow_msg);
                         conflict_card.set_visible(true);
@@ -157,21 +170,17 @@ pub(crate) fn present_capture_dialog(parent: &impl IsA<gtk::Widget>, target_id: 
                     }
                 }
             } else {
-                if let Some(first) = current_list.first() {
-                    preview_slot.append(&adw::ShortcutLabel::new(&first.to_gtk_accel()));
-                } else {
-                    preview_slot.append(
-                        &gtk::Label::builder()
-                            .label("Listening for keys…")
-                            .css_classes(["dim-label"])
-                            .build(),
-                    );
-                }
-                prompt_label.set_label(
-                    "Press a key combination, Backspace to disable, or Esc to cancel",
+                capture_zone.remove_css_class("captured");
+                capture_zone.add_css_class("listening");
+                preview_slot.append(
+                    &gtk::Label::builder()
+                        .label("Press a key combination…")
+                        .css_classes(["dim-label"])
+                        .build(),
                 );
+                prompt_label.set_visible(false);
                 add_secondary_btn.set_visible(false);
-                save_btn.set_label("Set Shortcut");
+                save_btn.set_label("Save");
                 save_btn.set_sensitive(false);
                 conflict_card.set_visible(false);
             }
@@ -250,6 +259,15 @@ pub(crate) fn present_capture_dialog(parent: &impl IsA<gtk::Widget>, target_id: 
         });
     }
     dialog.add_controller(key_ctrl);
+
+    {
+        let dlg_weak = dialog.downgrade();
+        cancel_btn.connect_clicked(move |_| {
+            if let Some(d) = dlg_weak.upgrade() {
+                d.close();
+            }
+        });
+    }
 
     {
         let dlg_weak = dialog.downgrade();

@@ -172,8 +172,8 @@ pub(crate) fn setup_claw_ui_page(builder: &gtk::Builder) -> PageHooks {
                         .build(),
                 );
             } else {
-                for ch in chords {
-                    chords_box.append(&adw::ShortcutLabel::new(&ch.to_gtk_accel()));
+                for &ch in chords {
+                    chords_box.append(&crate::shortcuts::build_chord_pill(ch, &[]));
                 }
             }
         })

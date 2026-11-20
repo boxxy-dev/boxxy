@@ -77,6 +77,9 @@ impl PreferencesComponent {
         let page_about: adw::PreferencesPage = builder.object("page_about").unwrap();
         let toast_overlay: adw::ToastOverlay = builder.object("toast_overlay").unwrap();
 
+        // Give Preferences rows ~30% less side gutter than Libadwaita's 600px default clamp.
+        widen_preferences_clamps(stack.upcast_ref());
+
         let reset_subpages: Rc<dyn Fn()> = {
             let apis_stack = apis_stack.clone();
             let mcp_stack = mcp_stack.clone();
@@ -389,5 +392,19 @@ impl PreferencesComponent {
 
     pub fn hide(&self) {
         self.dialog.close();
+    }
+}
+
+/// Widens internal `AdwClamp` widgets inside `AdwPreferencesPage`s from Libadwaita's
+/// 600 px default to 640 px so rows gain horizontal breathing room.
+fn widen_preferences_clamps(root: &gtk::Widget) {
+    if let Some(clamp) = root.downcast_ref::<adw::Clamp>() {
+        clamp.set_maximum_size(640);
+        clamp.set_tightening_threshold(520);
+    }
+    let mut child = root.first_child();
+    while let Some(w) = child {
+        widen_preferences_clamps(&w);
+        child = w.next_sibling();
     }
 }

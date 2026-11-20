@@ -2319,6 +2319,24 @@ button.claw-task-dismiss-btn:active {
 
 /* ── Preferences -> Shortcuts & Graphical Override Indicators ────────────── */
 
+.shortcut-pill {
+    font-size: 0.82em;
+    font-weight: 600;
+    font-feature-settings: "tnum";
+    padding: 3px 9px;
+    border-radius: 7px;
+    background-color: alpha(currentColor, 0.09);
+    border: 1px solid alpha(currentColor, 0.14);
+}
+
+.shortcut-pill.shortcut-pill-hero {
+    font-size: 1.05em;
+    padding: 6px 14px;
+    border-radius: 9px;
+    background-color: alpha(@accent_bg_color, 0.14);
+    border: 1px solid alpha(@accent_bg_color, 0.45);
+}
+
 preferencespage button.shortcut-override-badge,
 dialog button.shortcut-override-badge,
 button.shortcut-override-badge {
@@ -2338,31 +2356,41 @@ button.shortcut-override-badge:hover {
     color: @boxxy_highlight_fg_color;
 }
 
-preferencespage button.shortcut-chip-shadowed,
-dialog button.shortcut-chip-shadowed,
-button.shortcut-chip-shadowed {
+preferencespage button.flat.shortcut-chip-shadowed,
+dialog button.flat.shortcut-chip-shadowed,
+button.flat.shortcut-chip-shadowed {
     min-width: 0;
     min-height: 0;
-    padding: 2px 5px;
+    padding: 3px 8px;
     border-radius: 7px;
-    background-color: transparent;
-    border: 1px dashed alpha(currentColor, 0.28);
-    opacity: 0.44;
+    background-color: alpha(@boxxy_highlight_bg_color, 0.16);
+    color: @boxxy_highlight_color;
+    border: 1px dashed alpha(@boxxy_highlight_bg_color, 0.60);
+    opacity: 0.90;
 }
 
-preferencespage button.shortcut-chip-shadowed:hover,
-dialog button.shortcut-chip-shadowed:hover,
-button.shortcut-chip-shadowed:hover {
-    opacity: 0.78;
-    background-color: alpha(currentColor, 0.06);
+preferencespage button.flat.shortcut-chip-shadowed > box > label,
+dialog button.flat.shortcut-chip-shadowed > box > label,
+button.flat.shortcut-chip-shadowed > box > label {
+    font-size: 0.82em;
+    font-weight: 500;
+    font-feature-settings: "tnum";
+}
+
+preferencespage button.flat.shortcut-chip-shadowed:hover:not(:disabled),
+dialog button.flat.shortcut-chip-shadowed:hover:not(:disabled),
+button.flat.shortcut-chip-shadowed:hover:not(:disabled) {
+    opacity: 1;
+    background-color: alpha(@boxxy_highlight_bg_color, 0.30);
+    border-style: solid;
 }
 
 .shortcut-unbound-pill {
-    background-color: alpha(currentColor, 0.07);
-    border-radius: 9999px;
-    padding: 2px 9px;
-    font-size: 0.76em;
-    opacity: 0.58;
+    background-color: alpha(currentColor, 0.06);
+    border-radius: 7px;
+    padding: 3px 9px;
+    font-size: 0.78em;
+    opacity: 0.52;
 }
 
 .shortcut-smart-pill {
@@ -2375,15 +2403,75 @@ button.shortcut-chip-shadowed:hover {
 }
 
 .shortcut-capture-card {
-    padding: 18px 14px;
-    min-height: 78px;
+    padding: 22px 16px;
+    min-height: 76px;
+    border-radius: 12px;
+    background-color: alpha(currentColor, 0.04);
+    border: 1.5px dashed alpha(currentColor, 0.22);
+    transition: border-color 140ms ease, background-color 140ms ease;
+}
+
+.shortcut-capture-card.listening {
+    border-color: alpha(@accent_bg_color, 0.48);
+    background-color: alpha(@accent_bg_color, 0.05);
+}
+
+.shortcut-capture-card.captured {
+    border-style: solid;
+    border-color: alpha(@accent_bg_color, 0.65);
+    background-color: alpha(@accent_bg_color, 0.08);
 }
 
 .shortcut-existing-chip {
-    background-color: alpha(currentColor, 0.06);
+    background-color: alpha(currentColor, 0.08);
     border: 1px solid alpha(currentColor, 0.14);
-    border-radius: 8px;
-    padding: 3px 6px 3px 8px;
+    border-radius: 7px;
+    padding: 2px 4px 2px 9px;
+}
+
+.shortcut-existing-label {
+    font-size: 0.82em;
+    font-weight: 600;
+    font-feature-settings: "tnum";
+}
+
+button.shortcut-chip-remove {
+    min-width: 20px;
+    min-height: 20px;
+    padding: 0;
+    opacity: 0.65;
+}
+
+button.shortcut-chip-remove:hover {
+    opacity: 1;
+}
+
+button.flat.shortcut-footer-flat {
+    padding-left: 8px;
+    padding-right: 8px;
+    margin-left: -8px;
+}
+
+popover.shortcut-override-popover > contents,
+popover.shortcut-override-popover > contents label {
+    color: @popover_fg_color;
+}
+
+popover button.shortcut-popover-link,
+button.shortcut-popover-link {
+    min-height: 0;
+    padding: 4px 8px;
+    border-radius: 6px;
+    color: @accent_color;
+    font-weight: 600;
+    background-color: transparent;
+    border: none;
+    box-shadow: none;
+}
+
+popover button.shortcut-popover-link:hover,
+button.shortcut-popover-link:hover {
+    background-color: alpha(@accent_bg_color, 0.14);
 }
 
 .shortcut-conflict-banner {
@@ -2392,20 +2480,6 @@ button.shortcut-chip-shadowed:hover {
     border: 1px solid alpha(@warning_bg_color, 0.40);
     border-radius: 8px;
     padding: 8px 10px;
-}
-
-.shortcut-override-node-active {
-    background-color: alpha(@accent_bg_color, 0.12);
-    border: 1px solid alpha(@accent_bg_color, 0.45);
-    border-radius: 8px;
-    padding: 7px 10px;
-}
-
-.shortcut-override-node-shadowed {
-    background-color: alpha(currentColor, 0.05);
-    border: 1px dashed alpha(currentColor, 0.25);
-    border-radius: 8px;
-    padding: 7px 10px;
 }
 
 row.shortcut-row-pulse {

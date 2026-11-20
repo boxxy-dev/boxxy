@@ -74,6 +74,8 @@ navigation-split-view > .content-pane headerbar {
 /* HeaderBar Detached Background Shells Status Pill:
    Styled as a compact, shadowless status indicator capsule (matching Pending Tasks /
    Phase pills) rather than a 32x32 3D window-chrome button. */
+headerbar button.flat.detached-shells-pill,
+headerbar.content-header button.flat.detached-shells-pill,
 headerbar button.detached-shells-pill,
 headerbar.content-header button.detached-shells-pill,
 button.detached-shells-pill {
@@ -82,6 +84,7 @@ button.detached-shells-pill {
     padding: 2px 9px;
     margin: 0 4px 0 2px;
     border-radius: var(--boxxy-radius-pill);
+    background: @boxxy_secondary_bg_color;
     background-color: @boxxy_secondary_bg_color;
     background-image: none;
     color: @boxxy_secondary_fg_color;
@@ -90,6 +93,8 @@ button.detached-shells-pill {
     box-shadow: none;
 }
 
+headerbar button.flat.detached-shells-pill > box > label,
+headerbar button.flat.detached-shells-pill > box > image,
 headerbar button.detached-shells-pill label,
 headerbar button.detached-shells-pill image,
 button.detached-shells-pill label,
@@ -97,22 +102,30 @@ button.detached-shells-pill image {
     color: @boxxy_secondary_fg_color;
 }
 
-headerbar button.detached-shells-pill:hover,
-button.detached-shells-pill:hover {
-    background-color: mix(@boxxy_secondary_bg_color, white, 0.16);
+headerbar button.flat.detached-shells-pill:hover:not(:disabled),
+headerbar.content-header button.flat.detached-shells-pill:hover:not(:disabled),
+headerbar button.detached-shells-pill:hover:not(:disabled),
+button.detached-shells-pill:hover:not(:disabled) {
+    background: color-mix(in srgb, @boxxy_secondary_bg_color 84%, white 16%);
+    background-color: color-mix(in srgb, @boxxy_secondary_bg_color 84%, white 16%);
     background-image: none;
     color: @boxxy_secondary_fg_color;
-    border-color: @boxxy_ink;
+    border: var(--boxxy-border-thin) solid @boxxy_ink;
+    outline: none;
     box-shadow: none;
 }
 
+headerbar button.flat.detached-shells-pill.warning,
 headerbar button.detached-shells-pill.warning,
 button.detached-shells-pill.warning {
+    background: @boxxy_highlight_bg_color;
     background-color: @boxxy_highlight_bg_color;
     color: @boxxy_highlight_fg_color;
     border-color: @boxxy_ink;
 }
 
+headerbar button.flat.detached-shells-pill.warning > box > label,
+headerbar button.flat.detached-shells-pill.warning > box > image,
 headerbar button.detached-shells-pill.warning label,
 headerbar button.detached-shells-pill.warning image,
 button.detached-shells-pill.warning label,
@@ -120,10 +133,16 @@ button.detached-shells-pill.warning image {
     color: @boxxy_highlight_fg_color;
 }
 
-headerbar button.detached-shells-pill.warning:hover,
-button.detached-shells-pill.warning:hover {
-    background-color: mix(@boxxy_highlight_bg_color, white, 0.16);
+headerbar button.flat.detached-shells-pill.warning:hover:not(:disabled),
+headerbar.content-header button.flat.detached-shells-pill.warning:hover:not(:disabled),
+headerbar button.detached-shells-pill.warning:hover:not(:disabled),
+button.detached-shells-pill.warning:hover:not(:disabled) {
+    background: color-mix(in srgb, @boxxy_highlight_bg_color 84%, white 16%);
+    background-color: color-mix(in srgb, @boxxy_highlight_bg_color 84%, white 16%);
     color: @boxxy_highlight_fg_color;
+    border: var(--boxxy-border-thin) solid @boxxy_ink;
+    outline: none;
+    box-shadow: none;
 }
 
 /* HeaderBar Isolated Development Instance Tag (`dev`) */

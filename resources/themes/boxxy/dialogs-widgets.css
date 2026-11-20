@@ -432,13 +432,28 @@ headerbar.model-assignment-header viewswitcher > button.toggle + button.toggle {
 
 /* ── Preferences -> Shortcuts & Graphical Override Indicators (Layer 2) ──── */
 
-preferencespage button.shortcut-override-badge,
-dialog button.shortcut-override-badge,
-button.shortcut-override-badge {
+.shortcut-pill {
+    background-color: @window_bg_color;
+    color: @card_fg_color;
+    border: var(--boxxy-border-thin) solid alpha(@boxxy_ink, 0.72);
+    border-radius: var(--boxxy-radius-sm);
+}
+
+.shortcut-pill.shortcut-pill-hero {
+    background-color: alpha(@accent_bg_color, 0.16);
+    color: @dialog_fg_color;
+    border: var(--boxxy-border-thin) solid @accent_bg_color;
+    border-radius: var(--boxxy-radius-md);
+}
+
+preferencespage button.flat.shortcut-override-badge,
+dialog button.flat.shortcut-override-badge,
+button.flat.shortcut-override-badge {
     min-width: 24px;
     min-height: 24px;
     padding: 2px 6px;
     border-radius: var(--boxxy-radius-pill);
+    background: @boxxy_highlight_bg_color;
     background-color: @boxxy_highlight_bg_color;
     background-image: none;
     color: @boxxy_highlight_fg_color;
@@ -447,53 +462,132 @@ button.shortcut-override-badge {
     box-shadow: 1px 1.5px 0px @boxxy_shadow;
 }
 
-preferencespage button.shortcut-override-badge image,
-dialog button.shortcut-override-badge image,
-button.shortcut-override-badge image {
+preferencespage button.flat.shortcut-override-badge image,
+dialog button.flat.shortcut-override-badge image,
+button.flat.shortcut-override-badge image {
     color: @boxxy_highlight_fg_color;
 }
 
-preferencespage button.shortcut-override-badge:hover,
-dialog button.shortcut-override-badge:hover,
-button.shortcut-override-badge:hover {
-    background-color: color-mix(in srgb, @boxxy_highlight_bg_color 85%, white 15%);
+preferencespage button.flat.shortcut-override-badge:hover:not(:disabled),
+dialog button.flat.shortcut-override-badge:hover:not(:disabled),
+button.flat.shortcut-override-badge:hover:not(:disabled) {
+    background: color-mix(in srgb, @boxxy_highlight_bg_color 84%, white 16%);
+    background-color: color-mix(in srgb, @boxxy_highlight_bg_color 84%, white 16%);
     color: @boxxy_highlight_fg_color;
+    border: var(--boxxy-border-thin) solid @boxxy_ink;
+    outline: none;
+    box-shadow: 1px 1.5px 0px @boxxy_shadow;
 }
 
-preferencespage button.shortcut-chip-shadowed,
-dialog button.shortcut-chip-shadowed,
-button.shortcut-chip-shadowed {
-    min-width: 0;
-    min-height: 0;
-    padding: 2px 5px;
-    border-radius: var(--boxxy-radius-sm);
-    background-color: transparent;
-    background-image: none;
-    border: 1px dashed alpha(@boxxy_ink, 0.55);
+preferencespage button.flat.shortcut-override-badge:active:not(:disabled),
+dialog button.flat.shortcut-override-badge:active:not(:disabled),
+button.flat.shortcut-override-badge:active:not(:disabled) {
+    background: color-mix(in srgb, @boxxy_highlight_bg_color 82%, @boxxy_ink 18%);
+    background-color: color-mix(in srgb, @boxxy_highlight_bg_color 82%, @boxxy_ink 18%);
+    color: @boxxy_highlight_fg_color;
+    border: var(--boxxy-border-thin) solid @boxxy_ink;
     outline: none;
     box-shadow: none;
-    opacity: 0.46;
+}
+
+preferencespage button.flat.shortcut-chip-shadowed,
+dialog button.flat.shortcut-chip-shadowed,
+button.flat.shortcut-chip-shadowed {
+    min-width: 0;
+    min-height: 0;
+    padding: 3px 8px;
+    border-radius: var(--boxxy-radius-sm);
+    background: alpha(@boxxy_highlight_bg_color, 0.20);
+    background-color: alpha(@boxxy_highlight_bg_color, 0.20);
+    background-image: none;
+    color: @boxxy_highlight_color;
+    border: 1px dashed @boxxy_highlight_bg_color;
+    outline: none;
+    box-shadow: none;
+    opacity: 0.95;
+}
+
+preferencespage button.flat.shortcut-chip-shadowed > box > image,
+preferencespage button.flat.shortcut-chip-shadowed > box > label,
+button.flat.shortcut-chip-shadowed > box > image,
+button.flat.shortcut-chip-shadowed > box > label {
+    color: @boxxy_highlight_color;
+}
+
+preferencespage button.flat.shortcut-chip-shadowed:hover:not(:disabled),
+dialog button.flat.shortcut-chip-shadowed:hover:not(:disabled),
+button.flat.shortcut-chip-shadowed:hover:not(:disabled) {
+    opacity: 1;
+    background: @boxxy_highlight_bg_color;
+    background-color: @boxxy_highlight_bg_color;
+    color: @boxxy_highlight_fg_color;
+    border: var(--boxxy-border-thin) solid @boxxy_ink;
+    outline: none;
+    box-shadow: 1px 1.5px 0px @boxxy_shadow;
+}
+
+preferencespage button.flat.shortcut-chip-shadowed:hover:not(:disabled) > box > image,
+preferencespage button.flat.shortcut-chip-shadowed:hover:not(:disabled) > box > label,
+button.flat.shortcut-chip-shadowed:hover:not(:disabled) > box > image,
+button.flat.shortcut-chip-shadowed:hover:not(:disabled) > box > label {
+    color: @boxxy_highlight_fg_color;
+}
+
+/* Keep popover foreground isolated from parent shadowed/override button colors */
+popover.shortcut-override-popover > contents,
+popover.shortcut-override-popover > contents label {
+    color: @popover_fg_color;
+}
+
+popover.shortcut-override-popover > contents label.shortcut-pill {
+    color: @card_fg_color;
+}
+
+.shortcut-existing-chip {
+    background-color: @window_bg_color;
+    border: var(--boxxy-border-thin) solid alpha(@boxxy_ink, 0.72);
+    border-radius: var(--boxxy-radius-sm);
 }
 
 .shortcut-capture-card {
     background-color: @window_bg_color;
     color: @dialog_fg_color;
-    border: var(--boxxy-border-thin) solid @boxxy_ink;
+    border: 1.5px dashed alpha(@boxxy_ink, 0.65);
     border-radius: var(--boxxy-radius-lg);
     box-shadow: none;
 }
 
-.shortcut-override-node-active {
-    background-color: @window_bg_color;
-    border: var(--boxxy-border-thin) solid @boxxy_ink;
-    border-radius: var(--boxxy-radius-md);
-    box-shadow: 1.5px 2px 0px @boxxy_shadow;
+.shortcut-capture-card.listening {
+    border-color: alpha(@accent_bg_color, 0.70);
+    background-color: alpha(@accent_bg_color, 0.06);
 }
 
-.shortcut-override-node-shadowed {
-    background-color: alpha(@window_bg_color, 0.65);
-    border: 1px dashed alpha(@boxxy_ink, 0.65);
-    border-radius: var(--boxxy-radius-md);
+.shortcut-capture-card.captured {
+    border-style: solid;
+    border-color: @accent_bg_color;
+    background-color: alpha(@accent_bg_color, 0.10);
+}
+
+popover button.flat.shortcut-popover-link,
+popover button.flat.shortcut-popover-link:focus-visible {
+    background: transparent;
+    background-color: transparent;
+    border: none;
+    box-shadow: none;
+    outline: none;
+}
+
+popover button.flat.shortcut-popover-link:hover:not(:disabled) {
+    background: alpha(@accent_bg_color, 0.16);
+    background-color: alpha(@accent_bg_color, 0.16);
+    border: none;
+    box-shadow: none;
+    outline: none;
+}
+
+popover.shortcut-override-popover > contents button.flat.shortcut-popover-link label,
+popover button.flat.shortcut-popover-link label {
+    color: @accent_color;
 }
 
 
