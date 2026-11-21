@@ -80,7 +80,7 @@ futures-channel = "0.3.34"
 futures-util = "0.3.34"
 log = { version = "0.4.35", features = ["std", "serde", "release_max_level_info"] }
 env_logger = "0.11.11"
-rig = { version = "0.46.0", default-features = true }
+rig = { version = "0.47.0", default-features = false, features = ["reqwest", "agent", "rustls"] }
 nix = { version = "0.31.3", features = ["process", "term", "fs", "signal", "ioctl", "user"] }
 zbus = { version = "6.3.0", features = ["tokio", "p2p"] }
 libc = "0.2"

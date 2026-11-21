@@ -3,12 +3,12 @@
 use crate::catalog::enrich_usage_with_endpoints_cost;
 use crate::credentials::AiCredentials;
 use crate::hook::ModelContextHook;
-use crate::providers::build_provider_model;
+use crate::providers::{build_provider_model_with_options, configure_agent_builder};
 use crate::search::{append_citations_to_output, attach_native_search};
 use boxxy_model_selection::{ModelProvider, OpenAiCompatibleEndpoint};
 use futures_util::StreamExt as _;
 use rig::agent::{Agent, AgentBuilder, MultiTurnStreamItem, PromptResponse};
-use rig::completion::{CacheRetention, OnUnsupported, PromptError, Usage};
+use rig::completion::{PromptError, Usage};
 use rig::message::{AssistantContent, Message};
 use rig::streaming::{Item, PartKind, StreamEvent};
 use std::collections::HashMap;
@@ -235,6 +235,14 @@ fn log_debug_error(err: &PromptError) {
     }
 }
 
+/// Configuration options for [`create_agent_with_config`].
+#[derive(Debug, Clone, Default)]
+pub struct AgentOptions {
+    pub enable_native_search: bool,
+    pub stateless: bool,
+    pub session_cache_key: Option<String>,
+}
+
 /// Instantiates a [`BoxxyAgent`] with portable caching and reasoning options (native search disabled).
 #[must_use]
 pub fn create_agent(
@@ -254,6 +262,27 @@ pub fn create_agent_with_options(
     system_prompt: &str,
     enable_native_search: bool,
 ) -> BoxxyAgent {
+    create_agent_with_config(
+        provider,
+        creds,
+        system_prompt,
+        &AgentOptions {
+            enable_native_search,
+            stateless: false,
+            session_cache_key: None,
+        },
+    )
+}
+
+/// Instantiates a [`BoxxyAgent`] with full control over native search, stateless `/incognito`
+/// wire configuration (`"store": false` and cache suppression), and session cache routing.
+#[must_use]
+pub fn create_agent_with_config(
+    provider: &Option<ModelProvider>,
+    creds: &AiCredentials,
+    system_prompt: &str,
+    options: &AgentOptions,
+) -> BoxxyAgent {
     let Some(p) = provider.as_ref() else {
         return BoxxyAgent {
             state: Arc::new(BoxxyAgentState {
@@ -267,20 +296,23 @@ pub fn create_agent_with_options(
         };
     };
 
-    let (model, _provider_name, _model_name, reasoning) = build_provider_model(p, creds);
+    let (model, _provider_name, _model_name, reasoning) =
+        build_provider_model_with_options(p, creds, options.stateless);
 
     let mut builder = AgentBuilder::new(model)
         .preamble(system_prompt)
-        .cache(CacheRetention::Short)
-        .on_unsupported(OnUnsupported::Ignore)
-        .accept_unknown_finish_reasons(true)
         .add_hook(ModelContextHook::new(system_prompt));
 
-    if let Some(reasoning) = reasoning {
-        builder = builder.reasoning(reasoning);
-    }
+    builder = configure_agent_builder(
+        builder,
+        p,
+        reasoning,
+        &creds.openai_compatible_endpoints,
+        options.session_cache_key.as_deref(),
+        options.stateless,
+    );
 
-    if enable_native_search {
+    if options.enable_native_search {
         builder = attach_native_search(builder, p);
     }
 
@@ -384,5 +416,94 @@ mod tests {
         // 1,000 * $2/1M ($0.002) + 500 * $4/1M ($0.002) = $0.004
         let total_cost = usage.cost.expect("custom pricing applied").total;
         assert!((total_cost - 0.004).abs() < 1e-9);
+    }
+
+    #[tokio::test]
+    async fn stateless_responses_agent_sends_store_false_and_scopes_finish_reasons() {
+        use crate::providers::needs_relaxed_finish_reasons;
+        use boxxy_model_selection::{AnthropicModel, GeminiModel, OpenAiModel};
+
+        assert!(!needs_relaxed_finish_reasons(&ModelProvider::Gemini(
+            GeminiModel::Flash3_8,
+            None
+        )));
+        assert!(!needs_relaxed_finish_reasons(&ModelProvider::Anthropic(
+            AnthropicModel::ClaudeSonnet5,
+            None
+        )));
+        assert!(!needs_relaxed_finish_reasons(&ModelProvider::OpenAi(
+            OpenAiModel::Gpt6Astra,
+            None
+        )));
+        assert!(needs_relaxed_finish_reasons(&ModelProvider::Ollama(
+            "qwen3:8b".to_string()
+        )));
+        assert!(needs_relaxed_finish_reasons(&ModelProvider::OpenRouter(
+            "anthropic/claude-sonnet-5".to_string()
+        )));
+        assert!(needs_relaxed_finish_reasons(
+            &ModelProvider::OpenAiCompatible {
+                provider_name: "Local".to_string(),
+                model_id: "m".to_string(),
+                thinking: None,
+            }
+        ));
+
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind ephemeral port");
+        let addr = listener.local_addr().expect("local addr");
+
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.expect("accept client");
+            let mut req_buf = vec![0_u8; 8192];
+            let n = socket.read(&mut req_buf).await.expect("read request");
+            let raw_req = String::from_utf8_lossy(&req_buf[..n]).into_owned();
+
+            let json_body = "{\"id\":\"resp_1\",\"object\":\"response\",\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"id\":\"msg_1\",\"status\":\"completed\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"ephemeral ok\",\"annotations\":[]}]}],\"usage\":{\"input_tokens\":10,\"output_tokens\":2,\"total_tokens\":12}}";
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                json_body.len(),
+                json_body
+            );
+            socket
+                .write_all(response.as_bytes())
+                .await
+                .expect("write response");
+            raw_req
+        });
+
+        let mut ep = OpenAiCompatibleEndpoint::preset_local_server();
+        ep.name = "MockResponses".to_string();
+        ep.base_url = format!("http://{addr}/v1");
+        ep.models
+            .push(CustomModelConfig::new("gpt-6.2-sol").with_route(OpenAiApiRoute::Responses));
+
+        let creds = AiCredentials::default().with_custom_endpoints(vec![ep]);
+        let provider = Some(ModelProvider::OpenAiCompatible {
+            provider_name: "MockResponses".to_string(),
+            model_id: "gpt-6.2-sol".to_string(),
+            thinking: None,
+        });
+
+        let agent = create_agent_with_config(
+            &provider,
+            &creds,
+            "Incognito instructions",
+            &AgentOptions {
+                enable_native_search: false,
+                stateless: true,
+                session_cache_key: Some("must-not-be-sent".to_string()),
+            },
+        );
+
+        let (reply, _, _) = agent.prompt("Hello").await.expect("stateless prompt");
+        assert_eq!(reply, "ephemeral ok");
+
+        let raw_req = server.await.expect("server captured request");
+        let (_, body_str) = raw_req.split_once("\r\n\r\n").expect("HTTP body");
+        let parsed: serde_json::Value = serde_json::from_str(body_str).expect("JSON body");
+        assert_eq!(parsed.get("store"), Some(&serde_json::json!(false)));
+        assert!(parsed.get("prompt_cache_key").is_none());
     }
 }

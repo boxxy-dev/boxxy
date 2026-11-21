@@ -8,6 +8,46 @@ use std::sync::Arc;
 use tokio::io::AsyncWriteExt as _;
 use tokio::sync::Mutex;
 
+#[derive(Debug, Default, serde::Deserialize)]
+struct DreamCyclePayload {
+    #[serde(default)]
+    facts: Vec<DreamFact>,
+    #[serde(default)]
+    patterns: Vec<String>,
+    #[serde(default)]
+    conflicts: Vec<DreamConflict>,
+}
+
+const fn default_dream_confidence() -> f64 {
+    0.5
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct DreamFact {
+    #[serde(default)]
+    key: String,
+    #[serde(default)]
+    project_path: Option<String>,
+    #[serde(default)]
+    content: String,
+    #[serde(default = "default_dream_confidence")]
+    confidence_score: f64,
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+struct DreamConflict {
+    #[serde(default)]
+    key: String,
+    #[serde(default)]
+    #[expect(
+        dead_code,
+        reason = "deserialized from the Dream Auditor JSON schema for completeness"
+    )]
+    issue: Option<String>,
+    #[serde(default)]
+    resolved_content: Option<String>,
+}
+
 pub struct DreamOrchestrator {
     db: Arc<Mutex<Option<Db>>>,
     creds: AiCredentials,
@@ -117,8 +157,7 @@ impl DreamOrchestrator {
         interactions: &[boxxy_db::models::Interaction],
         response: &str,
     ) -> anyhow::Result<(Vec<(String, String, i64, f64)>, Vec<String>)> {
-        let cleaned = extract_json_object(response);
-        let json: serde_json::Value = serde_json::from_str(cleaned).map_err(|e| {
+        let payload: DreamCyclePayload = crate::utils::parse_llm_json(response).map_err(|e| {
             log::warn!("Dream Cycle: failed to parse LLM JSON response: {e}");
             anyhow::anyhow!("Dream Cycle JSON parse error: {e}")
         })?;
@@ -133,8 +172,8 @@ impl DreamOrchestrator {
         let db_opt = self.db.lock().await.clone();
         if let Some(db) = db_opt {
             let store = Store::new(db.pool());
-            Self::upsert_dream_facts(&store, &json).await;
-            Self::resolve_dream_conflicts(&store, &json).await;
+            Self::upsert_dream_facts(&store, &payload.facts).await;
+            Self::resolve_dream_conflicts(&store, &payload.conflicts).await;
             promoted_memories = store.promote_threshold_memories(2, 0.8).await?;
             let _ = store.mark_interactions_as_dreamed(&interaction_ids).await;
             for sid in session_ids {
@@ -142,57 +181,43 @@ impl DreamOrchestrator {
             }
         }
 
-        let patterns = json
-            .get("patterns")
-            .and_then(serde_json::Value::as_array)
-            .map(|pats| {
-                pats.iter()
-                    .filter_map(serde_json::Value::as_str)
-                    .map(ToString::to_string)
-                    .collect()
-            })
-            .unwrap_or_default();
-
-        Ok((promoted_memories, patterns))
+        Ok((promoted_memories, payload.patterns))
     }
 
-    async fn upsert_dream_facts(store: &Store<'_>, json: &serde_json::Value) {
-        let Some(facts) = json.get("facts").and_then(serde_json::Value::as_array) else {
-            return;
-        };
+    async fn upsert_dream_facts(store: &Store<'_>, facts: &[DreamFact]) {
         for fact in facts {
-            if let (Some(key), Some(content)) = (
-                fact.get("key").and_then(serde_json::Value::as_str),
-                fact.get("content").and_then(serde_json::Value::as_str),
-            ) {
-                let path = fact
-                    .get("project_path")
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or("global");
-                let path_opt = (path != "global").then_some(path);
-                let confidence = fact
-                    .get("confidence_score")
-                    .and_then(serde_json::Value::as_f64)
-                    .unwrap_or(0.5)
-                    .clamp(0.0, 1.0);
-
-                let _ = crate::engine::context::upsert_candidate_deduped(
-                    store, key, path_opt, content, confidence,
-                )
-                .await;
-                debug!("Dreaming stored Candidate Fact: {key} -> {content}");
+            let key = fact.key.trim();
+            let content = fact.content.trim();
+            if key.is_empty() || content.is_empty() {
+                continue;
             }
+            let path = fact
+                .project_path
+                .as_deref()
+                .map(str::trim)
+                .filter(|p| !p.is_empty())
+                .unwrap_or("global");
+            let path_opt = (path != "global").then_some(path);
+            let confidence = if fact.confidence_score.is_finite() {
+                fact.confidence_score.clamp(0.0, 1.0)
+            } else {
+                0.5
+            };
+
+            let _ = crate::engine::context::upsert_candidate_deduped(
+                store, key, path_opt, content, confidence,
+            )
+            .await;
+            debug!("Dreaming stored Candidate Fact: {key} -> {content}");
         }
     }
 
-    async fn resolve_dream_conflicts(store: &Store<'_>, json: &serde_json::Value) {
-        let Some(conflicts) = json.get("conflicts").and_then(serde_json::Value::as_array) else {
-            return;
-        };
+    async fn resolve_dream_conflicts(store: &Store<'_>, conflicts: &[DreamConflict]) {
         for conflict in conflicts {
-            let Some(key) = conflict.get("key").and_then(serde_json::Value::as_str) else {
+            let key = conflict.key.trim();
+            if key.is_empty() {
                 continue;
-            };
+            }
             let paths = store.get_memory_paths(key).await.unwrap_or_default();
             let mut demoted_any = false;
             for path in &paths {
@@ -208,8 +233,10 @@ impl DreamOrchestrator {
                 );
             }
             if let Some(resolved) = conflict
-                .get("resolved_content")
-                .and_then(serde_json::Value::as_str)
+                .resolved_content
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
             {
                 let target_path = if paths.iter().any(|p| p == "global") {
                     None
@@ -263,21 +290,6 @@ impl DreamOrchestrator {
     }
 }
 
-fn extract_json_object(raw: &str) -> &str {
-    let trimmed = raw
-        .trim()
-        .trim_start_matches("```json")
-        .trim_start_matches("```")
-        .trim_end_matches("```")
-        .trim();
-    if let (Some(start), Some(end)) = (trimmed.find('{'), trimmed.rfind('}'))
-        && end >= start
-    {
-        return &trimmed[start..=end];
-    }
-    trimmed
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -321,7 +333,7 @@ mod tests {
             None,
         );
 
-        let llm_response = r#"Here is the consolidated output:
+        let llm_response = r#"Processed [Session: sess-1]:
 ```json
 {
   "facts": [
@@ -343,7 +355,8 @@ mod tests {
     }
   ]
 }
-```"#;
+```
+Note: {audit_complete}"#;
 
         let (promoted, patterns) = orchestrator
             .apply_dream_response(&interactions, llm_response)

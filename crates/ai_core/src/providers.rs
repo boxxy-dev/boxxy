@@ -1,9 +1,13 @@
 //! Provider model factory mapping [`ModelProvider`] + [`AiCredentials`] into `rig::DynModel`.
 
 use crate::credentials::AiCredentials;
-use crate::reasoning::resolve_model_reasoning_with_endpoints;
+use crate::reasoning::{
+    recommended_max_tokens_for_reasoning, resolve_model_reasoning_with_endpoints,
+};
 pub use boxxy_model_selection::fetch_openai_compatible_models;
-use boxxy_model_selection::{ModelProvider, OpenAiApiRoute, ThinkingLevel};
+use boxxy_model_selection::{
+    ModelProvider, OpenAiApiRoute, OpenAiCompatibleEndpoint, ThinkingLevel,
+};
 use rig::completion::Reasoning;
 
 /// Type-erased completion model paired with its telemetry provider label, model identifier,
@@ -78,6 +82,7 @@ fn build_custom_openai_model(
     model_id: &str,
     thinking: Option<ThinkingLevel>,
     creds: &AiCredentials,
+    stateless: bool,
 ) -> BuiltProviderModel {
     let endpoint = creds.find_custom_endpoint(provider_name);
     let trimmed_model_id = model_id.trim();
@@ -103,7 +108,13 @@ fn build_custom_openai_model(
 
     let dyn_model: rig::DynModel<rig::operation::Completion> = match route {
         OpenAiApiRoute::ChatCompletions => client.chat(trimmed_model_id).into(),
-        OpenAiApiRoute::Responses => client.responses(trimmed_model_id).into(),
+        OpenAiApiRoute::Responses => {
+            let mut model = client.responses(trimmed_model_id);
+            if stateless {
+                model.wire = model.wire.with_store(false);
+            }
+            model.into()
+        }
     };
 
     finish_provider_model(
@@ -116,11 +127,97 @@ fn build_custom_openai_model(
     )
 }
 
+/// Returns `true` when `provider` speaks through a local, custom, or multi-backend gateway
+/// that may emit non-standard `finish_reason` strings on normal completion stops.
+///
+/// Native first-party providers (such as Gemini, where `MALFORMED_FUNCTION_CALL` and
+/// `RECITATION` arrive as `FinishReason::Other`) keep strict finish-reason validation.
+#[must_use]
+pub const fn needs_relaxed_finish_reasons(provider: &ModelProvider) -> bool {
+    matches!(
+        provider,
+        ModelProvider::OpenAiCompatible { .. }
+            | ModelProvider::OpenRouter(_)
+            | ModelProvider::Ollama(_)
+    )
+}
+
+const fn supports_session_cache_key(provider: &ModelProvider) -> bool {
+    matches!(
+        provider,
+        ModelProvider::OpenAi(_, _)
+            | ModelProvider::Xai(_, _)
+            | ModelProvider::Mistral(_, _)
+            | ModelProvider::Moonshot(_, _)
+            | ModelProvider::OpenCodeGo(_, _)
+            | ModelProvider::OpenCodeZen(_, _)
+    )
+}
+
+/// Applies Boxxy's portable caching, finish-reason scoping, budget `max_tokens` headroom,
+/// and `OpenAI` reasoning-summary configuration onto a [`rig::agent::AgentBuilder`].
+#[must_use]
+pub fn configure_agent_builder(
+    mut builder: rig::agent::AgentBuilder,
+    provider: &ModelProvider,
+    reasoning: Option<Reasoning>,
+    endpoints: &[OpenAiCompatibleEndpoint],
+    session_cache_key: Option<&str>,
+    stateless: bool,
+) -> rig::agent::AgentBuilder {
+    let mut gen_options = rig::completion::GenerationOptions::default()
+        .on_unsupported(rig::completion::OnUnsupported::Ignore);
+
+    if !stateless {
+        gen_options = gen_options.cache(rig::completion::CacheRetention::Short);
+        if let Some(key) = session_cache_key.map(str::trim).filter(|k| !k.is_empty())
+            && supports_session_cache_key(provider)
+        {
+            gen_options = gen_options.cache_key(key);
+        }
+    }
+
+    let is_effort = matches!(reasoning, Some(Reasoning::Effort(_)));
+    if let Some(max_tok) = recommended_max_tokens_for_reasoning(provider, reasoning, endpoints) {
+        builder = builder.max_tokens(max_tok);
+    }
+    if let Some(r) = reasoning {
+        gen_options = gen_options.reasoning(r);
+    }
+
+    builder = builder
+        .options(gen_options)
+        .accept_unknown_finish_reasons(needs_relaxed_finish_reasons(provider));
+
+    if is_effort && matches!(provider, ModelProvider::OpenAi(_, _)) {
+        builder = builder.provider_option(
+            rig::providers::openai::extension::OpenAiOptions::new()
+                .reasoning_summary(rig::providers::openai::extension::ReasoningSummary::Auto),
+        );
+    }
+
+    builder
+}
+
 /// Resolves a [`ModelProvider`] and [`AiCredentials`] into a type-erased [`rig::DynModel`].
 ///
 /// Returns `(dyn_model, telemetry_provider_label, api_model_name, resolved_reasoning)`.
 #[must_use]
 pub fn build_provider_model(provider: &ModelProvider, creds: &AiCredentials) -> BuiltProviderModel {
+    build_provider_model_with_options(provider, creds, false)
+}
+
+/// Resolves a [`ModelProvider`] and [`AiCredentials`] into a type-erased [`rig::DynModel`].
+///
+/// When `stateless` is `true` (e.g. `/incognito`), disables server-side response storage
+/// (`"store": false`) on `/responses` wires.
+#[must_use]
+#[allow(clippy::too_many_lines)]
+pub fn build_provider_model_with_options(
+    provider: &ModelProvider,
+    creds: &AiCredentials,
+    stateless: bool,
+) -> BuiltProviderModel {
     match provider {
         ModelProvider::Gemini(m, t) => {
             let id = m.api_name().trim();
@@ -146,7 +243,12 @@ pub fn build_provider_model(provider: &ModelProvider, creds: &AiCredentials) -> 
         ModelProvider::OpenAi(m, t) => {
             let id = m.api_name().trim();
             let key = creds.resolve_api_key("OpenAI");
-            let model = rig::providers::openai::OpenAI::new(key.as_ref()).completion(id);
+            let mut model = rig::providers::openai::OpenAI::new(key.as_ref()).completion(id);
+            if stateless
+                && let rig::providers::openai::wire::OpenAiWire::Responses(ref mut r) = model.wire
+            {
+                r.store = Some(false);
+            }
             finish_provider_model(model.into(), "OpenAI", id, provider, *t, creds)
         }
         ModelProvider::OpenRouter(name) => {
@@ -170,7 +272,12 @@ pub fn build_provider_model(provider: &ModelProvider, creds: &AiCredentials) -> 
         ModelProvider::Xai(m, t) => {
             let id = m.api_name().trim();
             let key = creds.resolve_api_key("xAI");
-            let model = rig::providers::xai::new(key.as_ref()).completion(id);
+            let mut model = rig::providers::xai::new(key.as_ref()).completion(id);
+            if stateless
+                && let rig::providers::openai::wire::OpenAiWire::Responses(ref mut r) = model.wire
+            {
+                r.store = Some(false);
+            }
             finish_provider_model(model.into(), "xAI", id, provider, *t, creds)
         }
         ModelProvider::Zai(m, t) => {
@@ -219,6 +326,13 @@ pub fn build_provider_model(provider: &ModelProvider, creds: &AiCredentials) -> 
             provider_name,
             model_id,
             thinking,
-        } => build_custom_openai_model(provider, provider_name, model_id, *thinking, creds),
+        } => build_custom_openai_model(
+            provider,
+            provider_name,
+            model_id,
+            *thinking,
+            creds,
+            stateless,
+        ),
     }
 }

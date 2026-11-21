@@ -13,14 +13,15 @@ use crate::engine::tools::workspace::{
 use crate::engine::tools::{ClawApprovalHandler, SysShellTool};
 use crate::engine::{ClawEngineEvent, ClawEnvironment};
 use crate::utils::load_prompt_fallback;
-use boxxy_ai_core::{AiCredentials, ModelContextHook, build_provider_model};
+use boxxy_ai_core::{
+    AiCredentials, ModelContextHook, build_provider_model, configure_agent_builder,
+};
 use boxxy_core_toolbox::{
     FileDeleteTool, FileReadTool, FileWriteTool, GetClipboardTool, GetSystemInfoTool,
     GlobSearchTool, GrepSearchTool, HttpFetchTool, KillProcessTool, ListDirectoryTool,
     ListProcessesTool, ReplaceInFileTool, RunBackgroundCommandTool, SetClipboardTool,
 };
 use rig::agent::Agent;
-use rig::completion::{CacheRetention, OnUnsupported};
 use rig::message::Message;
 use rig::tool::server::ToolServer;
 use std::sync::Arc;
@@ -37,7 +38,6 @@ pub struct ClawAgent {
     agent: Agent,
     provider_name: String,
     model_name: String,
-    preamble: String,
     pub(crate) config: AgentConfig,
     mcp_statuses: Vec<(String, bool)>,
 }
@@ -81,11 +81,6 @@ impl ClawAgent {
         use futures_util::StreamExt as _;
 
         let start = std::time::Instant::now();
-
-        let hook = ModelContextHook {
-            preamble: self.preamble.clone(),
-        };
-
         let msg = prompt.into();
 
         let res_result: Result<rig::agent::PromptResponse, rig::completion::PromptError> =
@@ -94,7 +89,9 @@ impl ClawAgent {
                     .agent
                     .prompt(msg)
                     .history(history)
-                    .add_hook(hook)
+                    .tool_concurrency(4)
+                    .ordered_by_footprint(true)
+                    .max_consecutive_malformed_tool_calls(Some(4))
                     .stream();
 
                 let mut reasoning_parts: std::collections::HashMap<
@@ -227,6 +224,22 @@ impl ClawAgent {
                             }
                             _ => {}
                         },
+                        Ok(rig::agent::MultiTurnStreamItem::ToolExecutionStarted { tool_call }) => {
+                            composing_reply = false;
+                            let status_str = boxxy_claw_protocol::busy_tool_label(
+                                tool_call.function.name.as_str(),
+                                true,
+                            );
+                            let _ = sctx
+                                .tx_ui
+                                .send(ClawEngineEvent::TurnTraceProgress {
+                                    agent_name: sctx.agent_name.clone(),
+                                    character_id: sctx.character_id.clone(),
+                                    item: None,
+                                    active_status: Some(status_str),
+                                })
+                                .await;
+                        }
                         Ok(
                             rig::agent::MultiTurnStreamItem::ModelTurnRetried { .. }
                             | rig::agent::MultiTurnStreamItem::ToolCall { .. }
@@ -258,7 +271,13 @@ impl ClawAgent {
                     ))
                 })
             } else {
-                self.agent.prompt(msg).history(history).add_hook(hook).await
+                self.agent
+                    .prompt(msg)
+                    .history(history)
+                    .tool_concurrency(4)
+                    .ordered_by_footprint(true)
+                    .max_consecutive_malformed_tool_calls(Some(4))
+                    .await
             };
 
         let duration = start.elapsed();
@@ -269,7 +288,7 @@ impl ClawAgent {
                 let output =
                     boxxy_ai_core::append_citations_to_output(&res.messages, &raw_output);
                 let context_tokens = boxxy_ai_core::extract_response_context_tokens(&res);
-                let endpoints = &boxxy_preferences::Settings::load().openai_compatible_endpoints;
+                let endpoints = &self.config.openai_compatible_endpoints;
                 let context_window = boxxy_ai_core::model_context_window_with_endpoints(
                     &self.config.model,
                     endpoints,
@@ -672,8 +691,7 @@ pub async fn create_claw_agent(
     // --- Inject Location Context (Static Across Turns for Prefix Caching) ---
     // Exact local time is injected per-turn in `## CURRENT TURN CONTEXT` in the user message,
     // keeping `final_preamble` byte-stable across turns and panes.
-    let settings = boxxy_preferences::Settings::load();
-    if settings.enable_os_context {
+    if settings_snapshot.enable_os_context {
         boxxy_sys_utils::fetch_location_context().await;
 
         if let Some(loc) = boxxy_sys_utils::get_location_context() {
@@ -696,14 +714,17 @@ pub async fn create_claw_agent(
     let mut builder = rig::agent::AgentBuilder::new(model)
         .preamble(&final_preamble)
         .default_max_turns(100)
-        .cache(CacheRetention::Short)
-        .on_unsupported(OnUnsupported::Ignore)
-        .accept_unknown_finish_reasons(true)
+        .add_hook(ModelContextHook::new(&final_preamble))
         .tool_server_handle(tool_handle);
 
-    if let Some(reasoning) = reasoning {
-        builder = builder.reasoning(reasoning);
-    }
+    builder = configure_agent_builder(
+        builder,
+        provider,
+        reasoning,
+        &creds.openai_compatible_endpoints,
+        Some(&session_id),
+        false,
+    );
 
     if use_native_search {
         builder = boxxy_ai_core::attach_native_search(builder, provider);
@@ -715,7 +736,6 @@ pub async fn create_claw_agent(
         agent,
         provider_name,
         model_name,
-        preamble: final_preamble,
         config: config.clone(),
         mcp_statuses,
     })

@@ -10,7 +10,7 @@ fn effort_to_thinking_level(effort: Effort) -> ThinkingLevel {
         Effort::Low => ThinkingLevel::Low,
         Effort::Medium => ThinkingLevel::Medium,
         Effort::High => ThinkingLevel::High,
-        Effort::XHigh => ThinkingLevel::XHigh,
+        Effort::XHigh | Effort::Max => ThinkingLevel::XHigh,
         _ => ThinkingLevel::High,
     }
 }
@@ -470,7 +470,7 @@ impl ThinkingLevel {
             "low" => Some(Self::Low),
             "medium" | "med" => Some(Self::Medium),
             "high" => Some(Self::High),
-            "xhigh" | "extreme" | "extreme high" | "extreme_high" => Some(Self::XHigh),
+            "xhigh" | "max" | "extreme" | "extreme high" | "extreme_high" => Some(Self::XHigh),
             _ => None,
         }
     }
@@ -1098,7 +1098,17 @@ impl OpenAiApiRoute {
             .map_or_else(|| model_id.trim(), |(_, m)| m.trim())
             .to_ascii_lowercase();
         let url_lower = base_url.to_ascii_lowercase();
-        if bare == "gpt-6.1-terra"
+        // Models whose catalog entry declares `ChatTools::Never` (e.g. GPT-6.2 Sol/Astra,
+        // GPT-6.1 Terra) or `ChatTools::ReasoningOff` while reasoning cannot be disabled
+        // (e.g. GPT-6.1 Sol, GPT-6 Astra) cannot call tools on `/chat/completions`.
+        let catalog_requires_responses = resolve_any_catalog_spec(&bare).is_some_and(|spec| {
+            matches!(spec.compat.chat_tools, Some(rig::catalog::ChatTools::Never))
+                || (matches!(
+                    spec.compat.chat_tools,
+                    Some(rig::catalog::ChatTools::ReasoningOff)
+                ) && spec.reasoning.can_disable() == Some(false))
+        });
+        if catalog_requires_responses
             || (url_lower.contains("opencode.ai/zen")
                 && (bare.starts_with("gpt-") || bare.starts_with("grok-")))
         {
@@ -1287,6 +1297,8 @@ impl OpenAiCompatibleEndpoint {
     pub fn preset_opencode_zen() -> Self {
         let base_url = "https://opencode.ai/zen/v1".to_string();
         let default_slugs = [
+            "gpt-6.2-sol",
+            "gpt-6.2-astra",
             "gpt-6.1-terra",
             "gpt-6.1-sol",
             "gpt-6-astra",
@@ -1300,6 +1312,9 @@ impl OpenAiCompatibleEndpoint {
         ];
         let models = default_slugs
             .into_iter()
+            .filter(|slug| {
+                !slug.starts_with("gpt-6.2-") || resolve_any_catalog_spec(slug).is_some()
+            })
             .map(|slug| {
                 let route = OpenAiApiRoute::infer_for_model(&base_url, slug);
                 CustomModelConfig::new(slug).with_route(route)
@@ -1598,9 +1613,22 @@ mod tests {
     #[test]
     fn test_dynamic_catalog_models_and_thinking_levels() {
         let gemini_all = GeminiModel::all();
+        assert!(gemini_all.iter().any(|m| m.api_name() == "gemini-4-carbon"));
+        assert!(gemini_all
+            .iter()
+            .any(|m| m.api_name() == "gemini-4-hydrogen"));
         assert!(gemini_all.iter().any(|m| m.api_name() == "gemini-4-argon"));
         assert!(gemini_all.iter().any(|m| m.api_name() == "gemini-3.8-flash"));
         assert!(gemini_all.iter().any(|m| m.api_name() == "gemini-3.6-flash"));
+
+        let gemini_hydrogen = GeminiModel::new("gemini-4-hydrogen");
+        assert!(
+            gemini_hydrogen
+                .available_thinking_levels()
+                .contains(&ThinkingLevel::XHigh)
+        );
+        let gemini_carbon = GeminiModel::new("gemini-4-carbon");
+        assert!(gemini_carbon.supports_thinking());
 
         let flash_38 = GeminiModel::new("gemini-3.8-flash");
         let levels_3_8 = flash_38.available_thinking_levels();
@@ -1616,8 +1644,10 @@ mod tests {
             .available_thinking_levels()
             .contains(&ThinkingLevel::Minimal));
 
-        // OpenAI catalog includes GPT-6.1 Terra, GPT-6.1 Sol, and GPT-6 Astra
+        // OpenAI catalog includes GPT-6.2 Sol/Astra, GPT-6.1 Terra/Sol, and GPT-6 Astra
         let openai_all = OpenAiModel::all();
+        assert!(openai_all.iter().any(|m| m.api_name() == "gpt-6.2-sol"));
+        assert!(openai_all.iter().any(|m| m.api_name() == "gpt-6.2-astra"));
         assert!(openai_all.iter().any(|m| m.api_name() == "gpt-6.1-terra"));
         assert!(openai_all.iter().any(|m| m.api_name() == "gpt-6.1-sol"));
         assert!(openai_all.iter().any(|m| m.api_name() == "gpt-6-astra"));
@@ -1635,6 +1665,11 @@ mod tests {
             ]
         );
         assert_eq!(terra_61.default_thinking_level(), Some(ThinkingLevel::Medium));
+        let sol_62 = OpenAiModel::new("gpt-6.2-sol");
+        assert_eq!(sol_62.to_string(), "GPT-6.2 Sol");
+        assert!(sol_62.supports_thinking());
+        assert!(!sol_62.available_thinking_levels().contains(&ThinkingLevel::None));
+        assert!(sol_62.available_thinking_levels().contains(&ThinkingLevel::XHigh));
         let sol_61 = OpenAiModel::new("gpt-6.1-sol");
         assert_eq!(sol_61.to_string(), "GPT-6.1 Sol");
         assert!(sol_61.supports_thinking());
@@ -1644,8 +1679,11 @@ mod tests {
         assert!(!gpt_41.supports_thinking());
         assert!(gpt_41.available_thinking_levels().is_empty());
 
-        // Anthropic catalog includes Claude Opus 5.5, Claude Sonnet 5.5, and Claude Fable 5.1
+        // Anthropic catalog includes Claude Fable 5.2, Claude Opus 5.5, Claude Sonnet 5.5, and Claude Fable 5.1
         let anthropic_all = AnthropicModel::all();
+        assert!(anthropic_all
+            .iter()
+            .any(|m| m.api_name() == "claude-fable-5-2"));
         assert!(anthropic_all
             .iter()
             .any(|m| m.api_name() == "claude-opus-5-5"));
@@ -1655,6 +1693,11 @@ mod tests {
         assert!(anthropic_all
             .iter()
             .any(|m| m.api_name() == "claude-fable-5-1"));
+
+        let fable_52 = AnthropicModel::new("claude-fable-5-2");
+        assert!(fable_52.supports_thinking());
+        assert!(!fable_52.available_thinking_levels().contains(&ThinkingLevel::None));
+        assert!(fable_52.available_thinking_levels().contains(&ThinkingLevel::XHigh));
 
         let sonnet_55 = AnthropicModel::new("claude-sonnet-5-5");
         assert!(sonnet_55.supports_thinking());
@@ -1688,7 +1731,11 @@ mod tests {
         assert!(kimi_k3.supports_thinking());
         assert_eq!(
             kimi_k3.available_thinking_levels(),
-            vec![ThinkingLevel::Low, ThinkingLevel::High]
+            vec![
+                ThinkingLevel::Low,
+                ThinkingLevel::High,
+                ThinkingLevel::XHigh,
+            ]
         );
         assert_eq!(kimi_k3.default_thinking_level(), Some(ThinkingLevel::Low));
 
@@ -1707,12 +1754,19 @@ mod tests {
         assert_eq!(glm_53.to_string(), "GLM-5.3");
         assert!(glm_53.supports_thinking());
 
-        // Mistral catalog includes Codestral and Mistral Large
+        // Mistral catalog includes Codestral and Mistral Large (non-disableable reasoning in 0.47)
         let mistral_all = MistralModel::all();
         assert!(mistral_all.iter().any(|m| m.api_name() == "codestral-latest"));
         assert!(mistral_all
             .iter()
             .any(|m| m.api_name() == "mistral-large-latest"));
+        let mistral_large = MistralModel::new("mistral-large-latest");
+        assert!(mistral_large.supports_thinking());
+        assert!(
+            !mistral_large
+                .available_thinking_levels()
+                .contains(&ThinkingLevel::None)
+        );
 
         // MiniMax catalog includes MiniMax-M3.1-Flash and MiniMax-M3
         let minimax_all = MiniMaxModel::all();
@@ -1824,7 +1878,7 @@ mod tests {
 
     #[test]
     fn test_openai_compatible_models_and_presets() {
-        let parsed = ThinkingLevel::parse_comma_separated("off, low, MED, high, xhigh, low");
+        let parsed = ThinkingLevel::parse_comma_separated("off, low, MED, high, max, xhigh, low");
         assert_eq!(
             parsed,
             vec![
@@ -1855,11 +1909,14 @@ mod tests {
         let gpt = go.find_model("gpt-6-luna").expect("gpt-6-luna");
         assert_eq!(gpt.route, OpenAiApiRoute::Responses);
 
-        // GPT-6.1 Terra always infers Responses (tools refused on Chat Completions in rig 0.46)
-        assert_eq!(
-            OpenAiApiRoute::infer_for_model("http://localhost:4000/v1", "gpt-6.1-terra"),
-            OpenAiApiRoute::Responses
-        );
+        // Catalog-driven Responses route inference for models that forbid Chat Completions tools
+        for slug in ["gpt-6.2-sol", "gpt-6.2-astra", "gpt-6.1-terra", "gpt-6.1-sol"] {
+            assert_eq!(
+                OpenAiApiRoute::infer_for_model("http://localhost:4000/v1", slug),
+                OpenAiApiRoute::Responses,
+                "expected Responses route for {slug}"
+            );
+        }
 
         // Verify all preset models resolve metadata in < 1ms without any slow misses
         let start = std::time::Instant::now();
@@ -1878,7 +1935,7 @@ mod tests {
             start.elapsed().as_millis() < 50,
             "Preset metadata resolution should be sub-millisecond after catalog init"
         );
-        // In rig 0.46, `opencode-go` is a native vendor in Catalog::builtin(), so
+        // In rig 0.47, `opencode-go` is a native vendor in Catalog::builtin(), so
         // `opencode-go/deepseek-v4.1-flash` resolves directly to its catalog entry,
         // while an unlisted prefix falls back to the bare alias (`deepseek-flash`).
         let prefixed = resolve_any_catalog_spec("opencode-go/deepseek-v4.1-flash")

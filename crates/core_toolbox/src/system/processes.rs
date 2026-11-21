@@ -43,6 +43,12 @@ impl Tool for ListProcessesTool {
         "List running processes on the system, including PID, name, CPU usage, memory usage, disk I/O, and GPU usage / GPU memory (when active). By default returns the top 30 processes sorted by CPU usage. Pass `filter` to search by process name or `sort_by` ('cpu', 'memory', 'gpu', 'gpu_memory', 'io', 'pid') to rank differently.".to_string()
     }
 
+    fn annotations(&self) -> rig::completion::ToolAnnotations {
+        rig::completion::ToolAnnotations::default()
+            .with_read_only(true)
+            .with_open_world(false)
+    }
+
     fn parameters(&self) -> serde_json::Value {
         serde_json::json!({
             "type": "object",

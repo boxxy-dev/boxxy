@@ -127,6 +127,50 @@ pub fn model_input_limit_with_endpoints(
         .map(u64::from)
 }
 
+#[expect(
+    clippy::redundant_pub_crate,
+    reason = "workspace unreachable_pub = deny forbids pub items in private modules unless re-exported"
+)]
+pub(crate) fn model_output_limit_for_provider(
+    p: &ModelProvider,
+    endpoints: &[OpenAiCompatibleEndpoint],
+) -> Option<u64> {
+    let catalog_limit = resolve_catalog_spec(p)
+        .and_then(ModelSpec::output_limit)
+        .map(u64::from);
+
+    if let ModelProvider::OpenAiCompatible {
+        provider_name,
+        model_id,
+        ..
+    } = p
+        && let Some((_, Some(custom_model))) = find_custom_model(endpoints, provider_name, model_id)
+        && let Some(ctx) = custom_model.context_window.filter(|&w| w > 0)
+    {
+        return catalog_limit.map(|out| out.min(ctx));
+    }
+
+    catalog_limit
+}
+
+/// Returns the model's maximum output token limit (`ModelSpec::output_limit`) from [`rig::catalog::Catalog::builtin`].
+#[must_use]
+pub fn model_output_limit(provider: &Option<ModelProvider>) -> Option<u64> {
+    model_output_limit_with_endpoints(provider, &[])
+}
+
+/// Returns the model's maximum output token limit (`ModelSpec::output_limit`), clamped to any
+/// smaller custom endpoint `context_window` override.
+#[must_use]
+pub fn model_output_limit_with_endpoints(
+    provider: &Option<ModelProvider>,
+    endpoints: &[OpenAiCompatibleEndpoint],
+) -> Option<u64> {
+    provider
+        .as_ref()
+        .and_then(|p| model_output_limit_for_provider(p, endpoints))
+}
+
 /// Populates `usage.cost` when the model's pricing is known in [`rig::catalog::Catalog::builtin`].
 ///
 /// Local `Ollama` and flat-rate subscription models are never priced per token.

@@ -107,7 +107,16 @@ pub(super) async fn run_whats_new_turn(
         .with_custom_endpoints(settings.openai_compatible_endpoints.clone());
 
     let effective_model = settings.resolve_character_model(&character_id);
-    let agent = boxxy_ai_core::create_agent(&effective_model, &creds, &preamble);
+    let agent = boxxy_ai_core::create_agent_with_config(
+        &effective_model,
+        &creds,
+        &preamble,
+        &boxxy_ai_core::AgentOptions {
+            enable_native_search: false,
+            stateless: false,
+            session_cache_key: Some(session_id.clone()),
+        },
+    );
 
     let final_history = history::prepare_query_history_for_speaker(
         history,
@@ -245,7 +254,7 @@ pub(super) async fn run_whats_new_turn(
             let event = ClawEngineEvent::DiagnosisComplete {
                 agent_name,
                 character_id,
-                diagnosis: format!("**Boxxy-Claw encountered an error:**\n```\n{e}\n```"),
+                diagnosis: super::format_turn_error(&e),
                 trace,
                 usage: None,
                 typewriter: false,

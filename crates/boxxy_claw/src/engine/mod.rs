@@ -3,7 +3,6 @@ pub mod agent_config;
 pub mod context;
 pub mod dispatcher;
 pub mod fsm;
-pub mod history_utils;
 pub mod session;
 pub mod summarization;
 pub mod tools;

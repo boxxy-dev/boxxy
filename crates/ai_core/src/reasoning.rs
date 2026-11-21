@@ -1,8 +1,12 @@
 //! Thinking-level to `rig::completion::Reasoning` resolution with catalog & custom-endpoint clamping.
 
-use crate::catalog::{find_custom_model, resolve_catalog_spec};
+use crate::catalog::{find_custom_model, model_output_limit_for_provider, resolve_catalog_spec};
 use boxxy_model_selection::{ModelProvider, OpenAiCompatibleEndpoint, ThinkingLevel};
 use rig::completion::{Effort, Reasoning};
+
+const MIN_THINKING_BUDGET_TOKENS: u32 = 1_024;
+const DEFAULT_BUDGET_HEADROOM_TOKENS: u64 = 8_192;
+const MIN_GATEWAY_MAX_TOKENS_FLOOR: u64 = 4_097;
 
 /// Maps a Boxxy [`ThinkingLevel`] directly to a portable [`Reasoning`] configuration.
 #[must_use]
@@ -22,8 +26,8 @@ const fn effort_rank(effort: Effort) -> i32 {
         Effort::Minimal => 0,
         Effort::Low => 1,
         Effort::Medium => 2,
-        Effort::XHigh => 4,
-        // `Effort` is `#[non_exhaustive]`; `High` and any future high-tier variant share rank 3.
+        Effort::XHigh | Effort::Max => 4,
+        // `Effort` is `#[non_exhaustive]`; `High` and any future tier share rank 3.
         _ => 3,
     }
 }
@@ -113,6 +117,64 @@ fn clamp_budget_range(tokens: u32, range: &std::ops::RangeInclusive<u32>) -> u32
     }
 }
 
+/// Clamps a thinking token budget both to `range` and strictly below `output_limit`
+/// (leaving up to 4,096 reply tokens while preserving Anthropic's `>= 1024` floor).
+fn clamp_budget_with_output_limit(
+    tokens: u32,
+    range: &std::ops::RangeInclusive<u32>,
+    output_limit: Option<u64>,
+) -> Option<u32> {
+    let range_clamped = clamp_budget_range(tokens, range).max(MIN_THINKING_BUDGET_TOKENS);
+    let Some(out_limit) = output_limit else {
+        return Some(range_clamped);
+    };
+
+    let min_allowed = (*range.start()).max(MIN_THINKING_BUDGET_TOKENS);
+    if out_limit <= u64::from(min_allowed) {
+        return None;
+    }
+
+    let reserve = (out_limit / 4).clamp(1, 4_096);
+    let max_budget_u64 = out_limit
+        .saturating_sub(reserve)
+        .max(u64::from(min_allowed))
+        .min(out_limit - 1);
+    let max_budget = u32::try_from(max_budget_u64).unwrap_or(u32::MAX);
+
+    Some(range_clamped.min(max_budget).max(min_allowed))
+}
+
+/// Computes an explicit `max_tokens` cap when `reasoning` is [`Reasoning::Budget`].
+///
+/// Returns `None` for all non-budget reasoning modes (`None`, `Off`, `Effort`) so providers
+/// that strictly cap output length (Gemini, Ollama, `OpenRouter`, Cohere) keep their native
+/// defaults. For budget-thinking models (Anthropic Messages and gateway dialects that default
+/// `max_tokens` to `4096`), ensures `max_tokens > tokens` and `max_tokens <= output_limit`
+/// so Rig never strips `thinking` under `OnUnsupported::Ignore`.
+#[must_use]
+pub fn recommended_max_tokens_for_reasoning(
+    provider: &ModelProvider,
+    reasoning: Option<Reasoning>,
+    endpoints: &[OpenAiCompatibleEndpoint],
+) -> Option<u64> {
+    let Some(Reasoning::Budget { tokens }) = reasoning else {
+        return None;
+    };
+    let budget = u64::from(tokens);
+    let desired = budget
+        .saturating_add(DEFAULT_BUDGET_HEADROOM_TOKENS)
+        .max(MIN_GATEWAY_MAX_TOKENS_FLOOR);
+
+    if let Some(out_limit) = model_output_limit_for_provider(provider, endpoints) {
+        if out_limit <= budget {
+            return None;
+        }
+        Some(desired.min(out_limit))
+    } else {
+        Some(desired)
+    }
+}
+
 /// Resolves the effective [`Reasoning`] option for `provider` and `thinking` against
 /// [`rig::catalog::Catalog::builtin`].
 #[must_use]
@@ -159,8 +221,13 @@ pub fn resolve_model_reasoning_with_endpoints(
             && s.reasoning.levels().is_none_or(<[_]>::is_empty)
             && let Some(range) = s.reasoning.budget()
         {
-            let tokens = clamp_budget_range(budget_tokens_for_level(clamped_level), range);
-            return Some(Reasoning::Budget { tokens });
+            let output_limit = model_output_limit_for_provider(provider, endpoints);
+            return clamp_budget_with_output_limit(
+                budget_tokens_for_level(clamped_level),
+                range,
+                output_limit,
+            )
+            .map(|tokens| Reasoning::Budget { tokens });
         }
         return Some(map_thinking_level(clamped_level));
     }
@@ -183,8 +250,13 @@ pub fn resolve_model_reasoning_with_endpoints(
                 return Some(Reasoning::Effort(clamp_effort(target_effort, spec_levels)));
             }
         } else if let Some(range) = s.reasoning.budget() {
-            let tokens = clamp_budget_range(budget_tokens_for_level(level), range);
-            return Some(Reasoning::Budget { tokens });
+            let output_limit = model_output_limit_for_provider(provider, endpoints);
+            return clamp_budget_with_output_limit(
+                budget_tokens_for_level(level),
+                range,
+                output_limit,
+            )
+            .map(|tokens| Reasoning::Budget { tokens });
         }
     }
 
@@ -194,6 +266,7 @@ pub fn resolve_model_reasoning_with_endpoints(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use boxxy_model_selection::AnthropicModel;
 
     #[test]
     fn clamps_unsupported_effort_to_nearest_supported() {
@@ -201,6 +274,10 @@ mod tests {
         assert_eq!(clamp_effort(Effort::Minimal, &supported), Effort::Low);
         assert_eq!(clamp_effort(Effort::XHigh, &supported), Effort::High);
         assert_eq!(clamp_effort(Effort::Medium, &supported), Effort::Medium);
+
+        // Models listing `Effort::Max` (without `XHigh`) map `ThinkingLevel::XHigh` to `Effort::Max`
+        let max_only = [Effort::Low, Effort::High, Effort::Max];
+        assert_eq!(clamp_effort(Effort::XHigh, &max_only), Effort::Max);
 
         // Tie between Low (1) and High (3) for Medium (2) prefers lower rank Low
         let ends_only = [Effort::Low, Effort::High];
@@ -224,6 +301,49 @@ mod tests {
         assert!(
             budget_tokens_for_level(ThinkingLevel::High)
                 < budget_tokens_for_level(ThinkingLevel::XHigh)
+        );
+    }
+
+    #[test]
+    fn budget_clamps_below_output_limit_and_recommends_safe_max_tokens() {
+        // Claude Haiku 4.5 is budget-only with a 64,000-token output limit.
+        let haiku = ModelProvider::Anthropic(
+            AnthropicModel::new("claude-haiku-4-5"),
+            Some(ThinkingLevel::XHigh),
+        );
+        let reasoning = resolve_model_reasoning(&haiku, Some(ThinkingLevel::XHigh));
+        assert_eq!(reasoning, Some(Reasoning::Budget { tokens: 59_904 }));
+        assert_eq!(
+            recommended_max_tokens_for_reasoning(&haiku, reasoning, &[]),
+            Some(64_000)
+        );
+
+        // High (32k) stays at 32,000 and recommends 40,192 (<= 64,000, > 32,000)
+        let high = resolve_model_reasoning(&haiku, Some(ThinkingLevel::High));
+        assert_eq!(high, Some(Reasoning::Budget { tokens: 32_000 }));
+        assert_eq!(
+            recommended_max_tokens_for_reasoning(&haiku, high, &[]),
+            Some(40_192)
+        );
+
+        // Output limits <= 1024 suppress unsendable budgets instead of failing silently
+        assert_eq!(
+            clamp_budget_with_output_limit(2_000, &(1_024..=64_000), Some(1_024)),
+            None
+        );
+
+        // Non-budget Effort models never receive a synthetic `max_tokens` cap
+        let sonnet = ModelProvider::Anthropic(
+            AnthropicModel::new("claude-sonnet-5-5"),
+            Some(ThinkingLevel::High),
+        );
+        assert_eq!(
+            recommended_max_tokens_for_reasoning(
+                &sonnet,
+                Some(Reasoning::Effort(Effort::High)),
+                &[]
+            ),
+            None
         );
     }
 }

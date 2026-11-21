@@ -35,3 +35,124 @@ pub fn hash_file_content(content: &str) -> u64 {
     }
     hash
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support::{MockApproval, MockEnv};
+    use rig::tool::Tool as _;
+    use serde_json::json;
+    use std::sync::Arc;
+
+    #[test]
+    fn footprint_conflict_matrix_allows_parallel_reads_and_serializes_writes_and_approvals() {
+        let env: Arc<dyn boxxy_claw_protocol::ClawEnvironment> = Arc::new(MockEnv::new());
+        let approval: Arc<dyn ApprovalHandler> =
+            Arc::new(MockApproval::approved(Some("/workspace")));
+
+        let file_read = FileReadTool {
+            env: env.clone(),
+            current_dir: "/workspace".to_string(),
+            approval: approval.clone(),
+        }
+        .footprint(&serde_json::from_value(json!({ "path": "src/lib.rs" })).unwrap());
+
+        let list_dir = ListDirectoryTool {
+            env: env.clone(),
+            current_dir: "/workspace".to_string(),
+            approval: approval.clone(),
+        }
+        .footprint(&serde_json::from_value(json!({})).unwrap());
+
+        let glob_search = GlobSearchTool {
+            current_dir: "/workspace".to_string(),
+            approval: approval.clone(),
+        }
+        .footprint(&serde_json::from_value(json!({ "pattern": "**/*.rs" })).unwrap());
+
+        let grep_search = GrepSearchTool {
+            current_dir: "/workspace".to_string(),
+            approval: approval.clone(),
+        }
+        .footprint(&serde_json::from_value(json!({ "pattern": "fn " })).unwrap());
+
+        let sys_info = GetSystemInfoTool {
+            env: env.clone(),
+            approval: approval.clone(),
+        }
+        .footprint(&serde_json::from_value(json!({})).unwrap());
+
+        let list_procs = ListProcessesTool {
+            env: env.clone(),
+            approval: approval.clone(),
+        }
+        .footprint(&serde_json::from_value(json!({})).unwrap());
+
+        let http_fetch = HttpFetchTool {
+            approval: approval.clone(),
+        }
+        .footprint(&serde_json::from_value(json!({ "url": "https://example.com" })).unwrap());
+
+        let file_write = FileWriteTool {
+            env: env.clone(),
+            current_dir: "/workspace".to_string(),
+            approval: approval.clone(),
+        }
+        .footprint(
+            &serde_json::from_value(json!({ "path": "src/lib.rs", "content": "// demo\n" }))
+                .unwrap(),
+        );
+
+        let replace_in_file = ReplaceInFileTool {
+            env: env.clone(),
+            current_dir: "/workspace".to_string(),
+            approval: approval.clone(),
+        }
+        .footprint(
+            &serde_json::from_value(
+                json!({ "path": "src/lib.rs", "old_string": "a", "new_string": "b" }),
+            )
+            .unwrap(),
+        );
+
+        let file_delete = FileDeleteTool {
+            env: env.clone(),
+            current_dir: "/workspace".to_string(),
+            approval: approval.clone(),
+        }
+        .footprint(&serde_json::from_value(json!({ "path": "src/old.rs" })).unwrap());
+
+        let get_clipboard = GetClipboardTool {
+            env: env.clone(),
+            approval: approval.clone(),
+        }
+        .footprint(&serde_json::from_value(json!({})).unwrap());
+
+        // Pure read-only tools never conflict with each other under `ordered_by_footprint(true)`
+        let reads = [
+            &file_read,
+            &list_dir,
+            &glob_search,
+            &grep_search,
+            &sys_info,
+            &list_procs,
+            &http_fetch,
+        ];
+        for a in &reads {
+            for b in &reads {
+                assert!(
+                    !a.conflicts_with(b),
+                    "expected read-only tools not to conflict: {a:?} vs {b:?}"
+                );
+            }
+        }
+
+        // Mutating and approval-gated tools strictly serialize against reads and each other
+        assert!(file_read.conflicts_with(&replace_in_file));
+        assert!(file_read.conflicts_with(&file_write));
+        assert!(file_read.conflicts_with(&file_delete));
+        assert!(file_read.conflicts_with(&get_clipboard));
+        assert!(file_write.conflicts_with(&get_clipboard));
+        assert!(replace_in_file.conflicts_with(&get_clipboard));
+    }
+}

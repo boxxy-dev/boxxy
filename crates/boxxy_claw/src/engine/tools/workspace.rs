@@ -254,6 +254,12 @@ impl Tool for ReadPaneTool {
         })
     }
 
+    fn annotations(&self) -> rig::completion::ToolAnnotations {
+        rig::completion::ToolAnnotations::default()
+            .with_read_only(true)
+            .with_open_world(false)
+    }
+
     async fn call(
         &self,
         _context: &mut ToolContext,
@@ -360,6 +366,12 @@ impl Tool for ListActiveAgentsTool {
         "Refresh the list of all active agents across the workspace. \
         NOTE: Active peers are ALREADY injected into your `GLOBAL RADAR` every turn — only call this tool if you just spawned a new agent and need to check if it has booted."
             .to_string()
+    }
+
+    fn annotations(&self) -> rig::completion::ToolAnnotations {
+        rig::completion::ToolAnnotations::default()
+            .with_read_only(true)
+            .with_open_world(false)
     }
 
     fn parameters(&self) -> serde_json::Value {

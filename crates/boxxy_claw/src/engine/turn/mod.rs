@@ -860,12 +860,7 @@ pub fn spawn_turn(
                     "Pane {pane_id} ({agent_name}): Boxxy-Claw agent failed: {e}"
                 );
 
-                let error_msg = format!("{e}");
-                let friendly_msg = if error_msg.contains("does not support tools") {
-                    "**Error:** The selected Ollama model does not support tool calling.\n\nBoxxy-Claw requires a highly capable reasoning model with native tool support (like `llama3.2`, `qwen2.5`, or `mistral`) to interact with your system.\n\nPlease select a different model for Boxxy-Claw in the Model Selection menu (Ctrl+Shift+P).".to_string()
-                } else {
-                    format!("**Boxxy-Claw encountered an error:**\n```\n{e}\n```")
-                };
+                let friendly_msg = format_turn_error(&e);
 
                 let event = ClawEngineEvent::DiagnosisComplete {
                     agent_name: agent_name.clone(),
@@ -901,17 +896,94 @@ pub fn spawn_turn(
     })
 }
 
-fn sniff_base64_image_media_type(b64: &str) -> rig::message::ImageMediaType {
-    let trimmed = b64.trim();
-    if trimmed.starts_with("/9j/") {
-        rig::message::ImageMediaType::JPEG
-    } else if trimmed.starts_with("UklGR") {
-        rig::message::ImageMediaType::WEBP
-    } else if trimmed.starts_with("R0lGOD") {
-        rig::message::ImageMediaType::GIF
-    } else {
-        rig::message::ImageMediaType::PNG
+const NO_TOOLS_GUIDANCE: &str = "**Error:** The selected Ollama model does not support tool calling.\n\nBoxxy-Claw requires a highly capable reasoning model with native tool support (like `llama3.2`, `qwen2.5`, or `mistral`) to interact with your system.\n\nPlease select a different model for Boxxy-Claw in the Model Selection menu (Ctrl+Shift+P).";
+
+/// Maps structured [`rig::completion::PromptError`] variants and [`rig::error::ErrorReport`]
+/// metadata into actionable user-facing diagnostics.
+pub(super) fn format_turn_error(err: &rig::completion::PromptError) -> String {
+    match err {
+        rig::completion::PromptError::MaxTurns { max_turns, .. } => format!(
+            "**Turn Limit Reached:** Reached the {max_turns}-step tool limit — reply `\"continue\"` to keep going."
+        ),
+        rig::completion::PromptError::Provider(rig::error::ProviderError::Stalled(idle)) => {
+            format!(
+                "**Stream Timed Out:** No response frames arrived for {}s. Please retry or switch models.",
+                idle.as_secs()
+            )
+        }
+        rig::completion::PromptError::Provider(
+            rig::error::ProviderError::InvalidAuthentication(resp),
+        ) => format!(
+            "**Authentication Failed:** The provider rejected your API key or credentials.\n\nPlease verify your API key in **Preferences -> APIs**.\n```\n{resp}\n```"
+        ),
+        _ => {
+            let report_opt: Option<std::borrow::Cow<'_, rig::error::ErrorReport>> = match err {
+                rig::completion::PromptError::Provider(p) => {
+                    Some(std::borrow::Cow::Owned(p.report()))
+                }
+                rig::completion::PromptError::Report(r) => Some(std::borrow::Cow::Borrowed(r)),
+                _ => None,
+            };
+
+            if let Some(report) = report_opt {
+                if report.message.contains("does not support tools")
+                    || report
+                        .provider_response_body()
+                        .is_some_and(|b| b.contains("does not support tools"))
+                {
+                    return NO_TOOLS_GUIDANCE.to_string();
+                }
+
+                if matches!(report.http_status, Some(401 | 403)) {
+                    let status = report.http_status.unwrap_or(401);
+                    return format!(
+                        "**Authentication Failed (HTTP {status}):** Please verify your API key and permissions in **Preferences -> APIs**.\n```\n{}\n```",
+                        report.message
+                    );
+                }
+
+                if report.is_context_overflow() {
+                    return format!(
+                        "**Context Window Exceeded:** This conversation or prompt exceeds the model's context limit.\n\nRun `/clear` to start a fresh context or switch to a larger-context model.\n```\n{}\n```",
+                        report.message
+                    );
+                }
+
+                if let Some(wait) = report.retry_after(std::time::SystemTime::now()) {
+                    let secs = wait.as_secs().max(1);
+                    return format!(
+                        "**Rate Limited:** Provider asked to retry after {secs}s.\n```\n{}\n```",
+                        report.message
+                    );
+                }
+            }
+
+            let raw = format!("{err}");
+            if raw.contains("does not support tools") {
+                NO_TOOLS_GUIDANCE.to_string()
+            } else {
+                format!("**Boxxy-Claw encountered an error:**\n```\n{raw}\n```")
+            }
+        }
     }
+}
+
+fn sniff_base64_image_media_type(b64: &str) -> rig::message::ImageMediaType {
+    use base64::Engine as _;
+
+    let trimmed = b64.trim();
+    // Decode up to 16 base64 chars (12 raw bytes — covers PNG, JPEG, GIF, and RIFF/WEBP headers)
+    // onto the stack without heap allocation.
+    let take = trimmed.len().min(16) & !3;
+    let mut buf = [0_u8; 12];
+    if take >= 4
+        && let Ok(n) = base64::engine::general_purpose::STANDARD
+            .decode_slice(&trimmed.as_bytes()[..take], &mut buf)
+        && let Some(media) = rig::message::ImageMediaType::sniff(&buf[..n])
+    {
+        return media;
+    }
+    rig::message::ImageMediaType::PNG
 }
 
 fn build_user_message_with_images(prompt: String, images: Vec<String>) -> rig::message::Message {
@@ -998,5 +1070,56 @@ mod tests {
             extract_user_authored_prompt(with_attachments),
             "Explain this snippet"
         );
+    }
+
+    #[test]
+    fn format_turn_error_maps_structured_rig_errors_to_actionable_diagnostics() {
+        use rig::completion::PromptError;
+        use rig::error::{ErrorKind, ErrorReport, ProviderError};
+        use std::time::Duration;
+
+        let max_turns = PromptError::MaxTurns {
+            max_turns: 100,
+            chat_history: Vec::new(),
+            prompt: rig::message::Message::user("go"),
+        };
+        let max_msg = format_turn_error(&max_turns);
+        assert!(max_msg.contains("100-step tool limit"));
+        assert!(max_msg.contains("continue"));
+
+        let stalled = PromptError::Provider(ProviderError::Stalled(Duration::from_secs(300)));
+        let stalled_msg = format_turn_error(&stalled);
+        assert!(stalled_msg.contains("Stream Timed Out"));
+        assert!(stalled_msg.contains("300s"));
+
+        let auth_report = ErrorReport::new(ErrorKind::ProviderResponse, "invalid api key")
+            .with_http_status(401);
+        let auth_msg = format_turn_error(&PromptError::Report(auth_report));
+        assert!(auth_msg.contains("Authentication Failed"));
+        assert!(auth_msg.contains("Preferences -> APIs"));
+
+        let overflow_report = ErrorReport::new(
+            ErrorKind::ProviderResponse,
+            "This model's maximum context length is 128000 tokens",
+        )
+        .with_code("context_length_exceeded");
+        let overflow_msg = format_turn_error(&PromptError::Report(overflow_report));
+        assert!(overflow_msg.contains("Context Window Exceeded"));
+        assert!(overflow_msg.contains("/clear"));
+
+        let rate_report = ErrorReport::new(
+            ErrorKind::ProviderResponse,
+            "Rate limit reached, please try again in 12s",
+        )
+        .with_retryable(true)
+        .with_http_status(429);
+        let rate_msg = format_turn_error(&PromptError::Report(rate_report));
+        assert!(rate_msg.contains("Rate Limited"));
+        assert!(rate_msg.contains("retry after 12s"));
+
+        let no_tools = PromptError::Provider(ProviderError::Provider(
+            "registry.ollama.ai/library/gemma2 does not support tools".to_string(),
+        ));
+        assert!(format_turn_error(&no_tools).contains("does not support tool calling"));
     }
 }

@@ -63,6 +63,10 @@ impl Tool for RunBackgroundCommandTool {
         })
     }
 
+    fn annotations(&self) -> rig::completion::ToolAnnotations {
+        rig::completion::ToolAnnotations::default().with_read_only(false)
+    }
+
     async fn call(
         &self,
         _context: &mut ToolContext,

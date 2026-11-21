@@ -17,22 +17,18 @@ pub fn is_exchange_start(msg: &Message) -> bool {
     let Message::User { content } = msg else {
         return false;
     };
-    let has_tool_result = content
-        .iter()
-        .any(|c| matches!(c, rig::message::UserContent::ToolResult(_)));
-    if has_tool_result {
+    if content.iter().any(|c| c.as_tool_result().is_some()) {
         return false;
     }
-    content.iter().any(|c| {
-        if let rig::message::UserContent::Text(t) = c {
-            let trimmed = t.text.trim_start();
+    content
+        .iter()
+        .filter_map(rig::message::UserContent::as_text)
+        .any(|text| {
+            let trimmed = text.trim_start();
             !trimmed.is_empty()
                 && !trimmed.starts_with(SESSION_CHECKPOINT_PREFIX)
                 && !trimmed.starts_with("[ROUNDTABLE TURN")
-        } else {
-            false
-        }
-    })
+        })
 }
 
 /// Finds a turn-boundary-safe index in `history` to compact older exchanges while
@@ -104,83 +100,78 @@ pub fn build_checkpoint_pair(evicted: &[Message]) -> Option<(Message, Message)> 
     for msg in evicted {
         match msg {
             Message::User { content } => {
-                for item in content {
-                    if let rig::message::UserContent::Text(t) = item {
-                        let trimmed = t.text.trim();
-                        if let Some(rest) = trimmed.strip_prefix(SESSION_CHECKPOINT_PREFIX) {
-                            prior_checkpoint = rest.trim().to_string();
-                            continue;
-                        }
-                        let cleaned =
-                            crate::engine::summarization::history::clean_user_text_for_flush(
-                                trimmed,
-                            )
+                for raw_text in content.iter().filter_map(rig::message::UserContent::as_text) {
+                    let trimmed = raw_text.trim();
+                    if let Some(rest) = trimmed.strip_prefix(SESSION_CHECKPOINT_PREFIX) {
+                        prior_checkpoint = rest.trim().to_string();
+                        continue;
+                    }
+                    let cleaned =
+                        crate::engine::summarization::history::clean_user_text_for_flush(trimmed)
                             .trim();
-                        if !cleaned.is_empty()
-                            && !cleaned.starts_with("[WHILE_YOU_SLEPT]")
-                            && !cleaned.starts_with("[ROUNDTABLE TURN")
-                        {
-                            flush_entry(
-                                &mut entries,
-                                &mut current_user,
-                                &mut current_tools,
-                                &mut current_reply,
-                            );
-                            let one_line = cleaned.split_whitespace().collect::<Vec<_>>().join(" ");
-                            let end = one_line.floor_char_boundary(180);
-                            let snippet = if end < one_line.len() {
-                                format!("{}...", &one_line[..end])
-                            } else {
-                                one_line
-                            };
-                            current_user = Some(snippet);
-                        }
+                    if !cleaned.is_empty()
+                        && !cleaned.starts_with("[WHILE_YOU_SLEPT]")
+                        && !cleaned.starts_with("[ROUNDTABLE TURN")
+                    {
+                        flush_entry(
+                            &mut entries,
+                            &mut current_user,
+                            &mut current_tools,
+                            &mut current_reply,
+                        );
+                        let one_line = cleaned.split_whitespace().collect::<Vec<_>>().join(" ");
+                        let end = one_line.floor_char_boundary(180);
+                        let snippet = if end < one_line.len() {
+                            format!("{}...", &one_line[..end])
+                        } else {
+                            one_line
+                        };
+                        current_user = Some(snippet);
                     }
                 }
             }
             Message::Assistant(turn) => {
                 for item in &turn.content {
-                    match item {
-                        rig::message::AssistantContent::ToolCall(tc) => {
-                            let name = &tc.function.name;
-                            let arg_hint = tc
-                                .function
-                                .arguments
-                                .get("path")
-                                .or_else(|| tc.function.arguments.get("command"))
-                                .or_else(|| tc.function.arguments.get("pattern"))
-                                .and_then(|v| v.as_str()).map_or_else(|| name.to_string(), |s| {
+                    if let Some(tc) = item.as_tool_call() {
+                        let name = &tc.function.name;
+                        let arg_hint = tc
+                            .function
+                            .arguments
+                            .get("path")
+                            .or_else(|| tc.function.arguments.get("command"))
+                            .or_else(|| tc.function.arguments.get("pattern"))
+                            .and_then(|v| v.as_str())
+                            .map_or_else(
+                                || name.to_string(),
+                                |s| {
                                     let end = s.floor_char_boundary(48);
                                     if end < s.len() {
                                         format!("{name}({}...)", &s[..end])
                                     } else {
                                         format!("{name}({s})")
                                     }
-                                });
-                            if current_tools.len() < 8 && !current_tools.contains(&arg_hint) {
-                                current_tools.push(arg_hint);
-                            }
+                                },
+                            );
+                        if current_tools.len() < 8 && !current_tools.contains(&arg_hint) {
+                            current_tools.push(arg_hint);
                         }
-                        rig::message::AssistantContent::Text(t) => {
-                            let body = strip_speaker_tag(&t.text).trim();
-                            if !body.is_empty()
-                                && body != SESSION_CHECKPOINT_ACK
-                                && body != "[SILENT_ACK]"
-                                && body != "[Previous task was interrupted by the user]"
-                                && body != "[Listening to the roundtable conversation]"
-                            {
-                                let one_line =
-                                    body.split_whitespace().collect::<Vec<_>>().join(" ");
-                                let end = one_line.floor_char_boundary(220);
-                                let snippet = if end < one_line.len() {
-                                    format!("{}...", &one_line[..end])
-                                } else {
-                                    one_line
-                                };
-                                current_reply = Some(snippet);
-                            }
+                    } else if let Some(raw_text) = item.as_text() {
+                        let body = strip_speaker_tag(raw_text).trim();
+                        if !body.is_empty()
+                            && body != SESSION_CHECKPOINT_ACK
+                            && body != "[SILENT_ACK]"
+                            && body != "[Previous task was interrupted by the user]"
+                            && body != "[Listening to the roundtable conversation]"
+                        {
+                            let one_line = body.split_whitespace().collect::<Vec<_>>().join(" ");
+                            let end = one_line.floor_char_boundary(220);
+                            let snippet = if end < one_line.len() {
+                                format!("{}...", &one_line[..end])
+                            } else {
+                                one_line
+                            };
+                            current_reply = Some(snippet);
                         }
-                        _ => {}
                     }
                 }
             }
@@ -319,8 +310,10 @@ pub fn prepare_query_history_for_speaker(
     final_history.retain(|m| {
         if let Message::User { content } = m
             && content.len() == 1
-            && let Some(rig::message::UserContent::Text(t)) = content.first()
-            && t.text.trim_start().starts_with("[ROUNDTABLE TURN")
+            && content
+                .first()
+                .and_then(rig::message::UserContent::as_text)
+                .is_some_and(|t| t.trim_start().starts_with("[ROUNDTABLE TURN"))
         {
             return false;
         }
@@ -331,13 +324,10 @@ pub fn prepare_query_history_for_speaker(
     // verbatim snapshots and full tool outputs for the last 4 user turns (regardless
     // of how many tool-call / tool-result messages each turn generated).
     let is_counted_user_turn = |content: &[rig::message::UserContent]| -> bool {
-        content.iter().any(|c| {
-            if let rig::message::UserContent::Text(t) = c {
-                !t.text.trim_start().starts_with(SESSION_CHECKPOINT_PREFIX)
-            } else {
-                false
-            }
-        })
+        content
+            .iter()
+            .filter_map(rig::message::UserContent::as_text)
+            .any(|t| !t.trim_start().starts_with(SESSION_CHECKPOINT_PREFIX))
     };
 
     let total_user_msgs = final_history
@@ -421,10 +411,7 @@ pub fn prepare_query_history_for_speaker(
     for msg in final_history {
         match msg {
             Message::Assistant(mut turn) => {
-                let has_tool_call = turn
-                    .content
-                    .iter()
-                    .any(|c| matches!(c, rig::message::AssistantContent::ToolCall(_)));
+                let has_tool_call = turn.content.iter().any(|c| c.as_tool_call().is_some());
 
                 let mut other_speaker: Option<(String, String)> = None;
                 for item in &mut turn.content {
@@ -475,15 +462,11 @@ pub fn prepare_query_history_for_speaker(
             }) = repaired_history.last_mut()
         {
             let curr_peer_text = if content.len() == 1 {
-                match content.first() {
-                    Some(rig::message::UserContent::Text(t))
-                        if t.text.starts_with("[Character ")
-                            || t.text.starts_with("[ROUNDTABLE TURN") =>
-                    {
-                        Some(t.text.clone())
-                    }
-                    _ => None,
-                }
+                content
+                    .first()
+                    .and_then(rig::message::UserContent::as_text)
+                    .filter(|t| t.starts_with("[Character ") || t.starts_with("[ROUNDTABLE TURN"))
+                    .map(str::to_string)
             } else {
                 None
             };

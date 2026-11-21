@@ -12,6 +12,7 @@ pub struct AgentConfig {
     pub web_search_local_enabled: bool,
     pub use_native_search: bool,
     pub mcp_servers: Vec<boxxy_mcp::config::McpServerConfig>,
+    pub openai_compatible_endpoints: Vec<boxxy_model_selection::OpenAiCompatibleEndpoint>,
     pub preamble: String,
     pub user_name: Option<String>,
 }
@@ -57,6 +58,7 @@ impl AgentConfig {
                 .filter(|s| s.enabled)
                 .cloned()
                 .collect(),
+            openai_compatible_endpoints: settings.openai_compatible_endpoints.clone(),
             preamble,
             user_name,
         }

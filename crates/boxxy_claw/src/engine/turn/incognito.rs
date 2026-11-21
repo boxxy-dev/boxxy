@@ -57,7 +57,16 @@ pub(super) async fn run_incognito_turn(
     let creds = boxxy_ai_core::AiCredentials::new(effective_keys, effective_ollama)
         .with_custom_endpoints(settings.openai_compatible_endpoints.clone());
 
-    let agent = boxxy_ai_core::create_agent(&settings.claw_model, &creds, &preamble);
+    let agent = boxxy_ai_core::create_agent_with_config(
+        &settings.claw_model,
+        &creds,
+        &preamble,
+        &boxxy_ai_core::AgentOptions {
+            enable_native_search: false,
+            stateless: true,
+            session_cache_key: None,
+        },
+    );
 
     let final_history =
         history::prepare_query_history_for_speaker(history, history_len, &character_id, &agent_name);
@@ -162,7 +171,7 @@ pub(super) async fn run_incognito_turn(
                 .send(ClawEngineEvent::DiagnosisComplete {
                     agent_name,
                     character_id,
-                    diagnosis: format!("**Incognito chat encountered an error:**\n```\n{e}\n```"),
+                    diagnosis: super::format_turn_error(&e),
                     trace: incognito_trace,
                     usage: None,
                     typewriter: false,

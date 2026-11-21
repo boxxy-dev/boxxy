@@ -261,6 +261,12 @@ impl Tool for HttpFetchTool {
         })
     }
 
+    fn annotations(&self) -> rig::completion::ToolAnnotations {
+        rig::completion::ToolAnnotations::default()
+            .with_read_only(true)
+            .with_open_world(true)
+    }
+
     async fn call(
         &self,
         _context: &mut ToolContext,

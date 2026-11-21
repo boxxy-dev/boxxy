@@ -1,5 +1,5 @@
 //! Unified AI provider abstraction, catalog/cost resolution, native search, and agent runtime
-//! built on `rig-core` (`0.46`).
+//! built on `rig-core` (`0.47`).
 
 mod agent;
 mod catalog;
@@ -9,17 +9,25 @@ mod providers;
 mod reasoning;
 mod search;
 
-pub use agent::{AgentTurnOutput, BoxxyAgent, create_agent, create_agent_with_options};
+pub use agent::{
+    AgentOptions, AgentTurnOutput, BoxxyAgent, create_agent, create_agent_with_config,
+    create_agent_with_options,
+};
 pub use catalog::{
     enrich_usage_with_catalog_cost, enrich_usage_with_endpoints_cost,
     extract_response_context_tokens, model_context_window, model_context_window_with_endpoints,
-    model_input_limit, model_input_limit_with_endpoints, resolve_catalog_spec,
+    model_input_limit, model_input_limit_with_endpoints, model_output_limit,
+    model_output_limit_with_endpoints, resolve_catalog_spec,
 };
 pub use credentials::AiCredentials;
 pub use hook::ModelContextHook;
-pub use providers::{BuiltProviderModel, build_provider_model, fetch_openai_compatible_models};
+pub use providers::{
+    BuiltProviderModel, build_provider_model, build_provider_model_with_options,
+    configure_agent_builder, fetch_openai_compatible_models, needs_relaxed_finish_reasons,
+};
 pub use reasoning::{
-    map_thinking_level, resolve_model_reasoning, resolve_model_reasoning_with_endpoints,
+    map_thinking_level, recommended_max_tokens_for_reasoning, resolve_model_reasoning,
+    resolve_model_reasoning_with_endpoints,
 };
 pub use search::{
     append_citations_to_output, attach_native_search, collect_url_citations,
@@ -420,7 +428,8 @@ mod tests {
             MistralModel::MistralLargeLatest,
             None,
         ));
-        assert_eq!(model_context_window(&mistral), Some(262_144));
+        assert_eq!(model_context_window(&mistral), Some(1_048_576));
+        assert_eq!(model_output_limit(&mistral), Some(262_144));
 
         let minimax = Some(ModelProvider::MiniMax(MiniMaxModel::MiniMaxM3, None));
         assert_eq!(model_context_window(&minimax), Some(1_000_000));

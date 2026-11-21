@@ -42,6 +42,13 @@ impl Tool for GetClipboardTool {
         })
     }
 
+    fn annotations(&self) -> rig::completion::ToolAnnotations {
+        // Intentionally `read_only = false`: `propose_get_clipboard` stores a single-slot
+        // `oneshot::Sender` in `SessionState.pending_get_clipboard_reply` and enters
+        // `OverlayState::Action`, so it must act as a full serialization barrier.
+        rig::completion::ToolAnnotations::default().with_read_only(false)
+    }
+
     async fn call(
         &self,
         _context: &mut ToolContext,

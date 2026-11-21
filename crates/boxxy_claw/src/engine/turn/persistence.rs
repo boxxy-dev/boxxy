@@ -25,8 +25,8 @@ pub async fn perform_persistence(ctx: PersistenceContext, state: Arc<Mutex<Sessi
     )
     .with_custom_endpoints(ctx.settings.openai_compatible_endpoints.clone());
 
-    // Token-budget & exchange-boundary compaction (OpenCode V2 + rig 0.46 pattern):
-    // Measure against the model's `input_limit` (`limit.input` in rig 0.46, falling back to `context_window`)
+    // Token-budget & exchange-boundary compaction (OpenCode V2 + rig 0.47 pattern):
+    // Measure against the model's `input_limit` (`limit.input` in rig 0.47, falling back to `context_window`)
     // so models with dedicated output reserves (like GPT-6.1's 922k input limit inside its 1.05M window)
     // compact at 75% (or < 16k headroom) before exceeding the API's maximum input limit.
     // Never cut inside a tool-call loop (`find_safe_exchange_cut`), and always retain at least
@@ -95,26 +95,21 @@ pub async fn perform_persistence(ctx: PersistenceContext, state: Arc<Mutex<Sessi
         .history
         .iter()
         .find_map(|m| {
-            if let rig::message::Message::User { content } = m {
-                content.iter().find_map(|c| {
-                    if let rig::message::UserContent::Text(t) = c {
-                        let cleaned =
-                            crate::engine::summarization::history::clean_user_text_for_flush(
-                                &t.text,
-                            );
-                        let trimmed = cleaned.trim();
-                        if !trimmed.is_empty()
-                            && !trimmed.starts_with("[WHILE_YOU_SLEPT]")
-                            && !trimmed.starts_with(super::history::SESSION_CHECKPOINT_PREFIX)
-                        {
-                            return Some(trimmed.to_string());
-                        }
-                    }
-                    None
+            let rig::message::Message::User { content } = m else {
+                return None;
+            };
+            content
+                .iter()
+                .filter_map(rig::message::UserContent::as_text)
+                .map(|raw| {
+                    crate::engine::summarization::history::clean_user_text_for_flush(raw).trim()
                 })
-            } else {
-                None
-            }
+                .find(|trimmed| {
+                    !trimmed.is_empty()
+                        && !trimmed.starts_with("[WHILE_YOU_SLEPT]")
+                        && !trimmed.starts_with(super::history::SESSION_CHECKPOINT_PREFIX)
+                })
+                .map(str::to_string)
         })
         .unwrap_or_else(|| ctx.user_query.clone());
 

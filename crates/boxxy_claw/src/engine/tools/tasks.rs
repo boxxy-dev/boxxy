@@ -212,6 +212,12 @@ impl Tool for ListTasksTool {
         "List all your currently pending scheduled tasks and reminders.".to_string()
     }
 
+    fn annotations(&self) -> rig::completion::ToolAnnotations {
+        rig::completion::ToolAnnotations::default()
+            .with_read_only(true)
+            .with_open_world(false)
+    }
+
     fn parameters(&self) -> serde_json::Value {
         serde_json::json!({
             "type": "object",

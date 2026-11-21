@@ -83,32 +83,32 @@ pub async fn flush_history(
                 let _ = writeln!(text_to_summarize, "SYSTEM: {content}");
             }
             Message::User { content } => {
-                for c in &content {
-                    if let rig::message::UserContent::Text(text) = c {
-                        let cleaned = clean_user_text_for_flush(&text.text).trim();
-                        if !cleaned.is_empty()
-                            && !cleaned.starts_with("[WHILE_YOU_SLEPT]")
-                            && !cleaned.starts_with(
-                                crate::engine::turn::history::SESSION_CHECKPOINT_PREFIX,
-                            )
-                        {
-                            let _ = writeln!(text_to_summarize, "USER: {cleaned}");
-                        }
+                for raw_text in content.iter().filter_map(rig::message::UserContent::as_text) {
+                    let cleaned = clean_user_text_for_flush(raw_text).trim();
+                    if !cleaned.is_empty()
+                        && !cleaned.starts_with("[WHILE_YOU_SLEPT]")
+                        && !cleaned.starts_with(
+                            crate::engine::turn::history::SESSION_CHECKPOINT_PREFIX,
+                        )
+                    {
+                        let _ = writeln!(text_to_summarize, "USER: {cleaned}");
                     }
                 }
             }
             Message::Assistant(turn) => {
-                for c in &turn.content {
-                    if let rig::message::AssistantContent::Text(text) = c {
-                        let trimmed =
-                            crate::engine::turn::history::strip_speaker_tag(&text.text).trim();
-                        if !trimmed.is_empty()
-                            && trimmed != "[SILENT_ACK]"
-                            && trimmed != "[Previous task was interrupted by the user]"
-                            && trimmed != crate::engine::turn::history::SESSION_CHECKPOINT_ACK
-                        {
-                            let _ = writeln!(text_to_summarize, "ASSISTANT: {trimmed}");
-                        }
+                for raw_text in turn
+                    .content
+                    .iter()
+                    .filter_map(rig::message::AssistantContent::as_text)
+                {
+                    let trimmed =
+                        crate::engine::turn::history::strip_speaker_tag(raw_text).trim();
+                    if !trimmed.is_empty()
+                        && trimmed != "[SILENT_ACK]"
+                        && trimmed != "[Previous task was interrupted by the user]"
+                        && trimmed != crate::engine::turn::history::SESSION_CHECKPOINT_ACK
+                    {
+                        let _ = writeln!(text_to_summarize, "ASSISTANT: {trimmed}");
                     }
                 }
             }
@@ -144,55 +144,53 @@ pub async fn flush_history(
     Ok(())
 }
 
+#[derive(Debug, Default, serde::Deserialize)]
+struct FlushedMemoryPayload {
+    #[serde(default)]
+    facts: Vec<FlushedFact>,
+    #[serde(default)]
+    summary: Option<String>,
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+struct FlushedFact {
+    #[serde(default)]
+    key: String,
+    #[serde(default)]
+    content: String,
+}
+
 pub(crate) async fn persist_flushed_json(
     db: &Arc<Mutex<Option<Db>>>,
     session_id: &str,
     project_path: &str,
     raw_response: &str,
 ) -> anyhow::Result<bool> {
-    // Strip optional markdown code fences or surrounding prose if present
-    let trimmed = raw_response
-        .trim()
-        .trim_start_matches("```json")
-        .trim_start_matches("```")
-        .trim_end_matches("```")
-        .trim();
-    let raw_json = if let (Some(start), Some(end)) = (trimmed.find('{'), trimmed.rfind('}'))
-        && end >= start
-    {
-        &trimmed[start..=end]
-    } else {
-        trimmed
-    };
-
-    if let Ok(json) = serde_json::from_str::<serde_json::Value>(raw_json) {
+    if let Ok(payload) = crate::utils::parse_llm_json::<FlushedMemoryPayload>(raw_response) {
         let db_opt = db.lock().await.clone();
         if let Some(db_val) = db_opt {
             let store = Store::new(db_val.pool());
 
             // 1. Save Facts
-            if let Some(facts) = json.get("facts").and_then(serde_json::Value::as_array) {
-                for fact in facts {
-                    if let (Some(key), Some(content)) = (
-                        fact.get("key").and_then(serde_json::Value::as_str),
-                        fact.get("content").and_then(serde_json::Value::as_str),
-                    ) {
-                        // Implicitly extracted facts are candidates and require reinforcement
-                        let _ = crate::engine::context::upsert_candidate_deduped(
-                            &store,
-                            key,
-                            Some(project_path),
-                            content,
-                            0.5,
-                        )
-                        .await;
-                        debug!("Flushed Fact for project {project_path}: {key} -> {content}");
-                    }
+            for fact in &payload.facts {
+                let key = fact.key.trim();
+                let content = fact.content.trim();
+                if !key.is_empty() && !content.is_empty() {
+                    // Implicitly extracted facts are candidates and require reinforcement
+                    let _ = crate::engine::context::upsert_candidate_deduped(
+                        &store,
+                        key,
+                        Some(project_path),
+                        content,
+                        0.5,
+                    )
+                    .await;
+                    debug!("Flushed Fact for project {project_path}: {key} -> {content}");
                 }
             }
 
             // 2. Save Summary as an interaction (with 0-token local Jaccard deduplication)
-            if let Some(summary) = json.get("summary").and_then(serde_json::Value::as_str) {
+            if let Some(summary) = payload.summary.as_deref() {
                 let summary = summary.trim();
                 if !summary.is_empty() && summary != "NO_TECHNICAL_CHANGE" {
                     let mut is_dup = false;
@@ -272,14 +270,16 @@ mod tests {
         let db = Db::new_in_memory().await.unwrap();
         let db_arc = Arc::new(Mutex::new(Some(db.clone())));
 
-        let payload = r#"```json
+        let payload = r#"Extracted from [Session: uncreated-session-id]:
+        ```json
         {
             "facts": [
                 { "key": "pkg_mgr", "content": "Uses bun instead of npm" }
             ],
             "summary": "Configured bun workspace and migrated scripts."
         }
-        ```"#;
+        ```
+        Trailing note {ignored}"#;
 
         persist_flushed_json(&db_arc, "uncreated-session-id", "/tmp/proj", payload)
             .await

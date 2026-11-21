@@ -159,6 +159,10 @@ impl Tool for ReplaceInFileTool {
         "Surgically edit an existing file by replacing exact text segments. Prefer this over `file_write` when modifying existing files. Pass `old_string` and `new_string` for a single change, or pass `edits` to apply multiple non-contiguous changes in one approval prompt.".to_string()
     }
 
+    fn annotations(&self) -> rig::completion::ToolAnnotations {
+        rig::completion::ToolAnnotations::default().with_read_only(false)
+    }
+
     fn parameters(&self) -> serde_json::Value {
         serde_json::json!({
             "type": "object",

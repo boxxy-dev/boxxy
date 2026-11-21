@@ -72,6 +72,12 @@ impl Tool for GrepSearchTool {
         "Search file contents using a regular expression or literal text across a file or directory (default: current directory). Automatically respects `.gitignore` and skips binary files and build/VCS directories (.git, target, node_modules). Returns matching file paths, 1-based line numbers, and line previews (capped at 100 matches). Prefer this tool over running `grep` or `rg` via shell tools.".to_string()
     }
 
+    fn annotations(&self) -> rig::completion::ToolAnnotations {
+        rig::completion::ToolAnnotations::default()
+            .with_read_only(true)
+            .with_open_world(false)
+    }
+
     fn parameters(&self) -> serde_json::Value {
         serde_json::json!({
             "type": "object",

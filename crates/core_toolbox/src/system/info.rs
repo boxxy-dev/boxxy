@@ -137,6 +137,12 @@ impl Tool for GetSystemInfoTool {
         })
     }
 
+    fn annotations(&self) -> rig::completion::ToolAnnotations {
+        rig::completion::ToolAnnotations::default()
+            .with_read_only(true)
+            .with_open_world(false)
+    }
+
     async fn call(
         &self,
         _context: &mut ToolContext,

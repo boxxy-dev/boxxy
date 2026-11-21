@@ -114,12 +114,19 @@ impl AiCredentials {
 
     /// Returns the normalized Ollama base URL if configured and non-empty.
     ///
-    /// Returns `None` when empty so `OllamaConfig::new()` preserves its built-in
+    /// Strips trailing slashes and any optional trailing `/v1` suffix so user-pasted
+    /// OpenAI-style URLs never hit `/v1/api/chat` on native `OllamaConfig`, and returns
+    /// `None` when empty so `OllamaConfig::new()` preserves its built-in
     /// `http://localhost:11434` default.
     #[must_use]
     pub(super) fn effective_ollama_url(&self) -> Option<&str> {
         let trimmed = self.ollama_url.trim().trim_end_matches('/');
-        (!trimmed.is_empty()).then_some(trimmed)
+        let root = trimmed
+            .strip_suffix("/v1")
+            .or_else(|| trimmed.strip_suffix("/V1"))
+            .unwrap_or(trimmed)
+            .trim_end_matches('/');
+        (!root.is_empty()).then_some(root)
     }
 }
 
@@ -145,10 +152,20 @@ mod tests {
         let spaces = AiCredentials::new(HashMap::new(), "   /  ".to_string());
         assert_eq!(spaces.effective_ollama_url(), None);
 
+        let bare_v1 = AiCredentials::new(HashMap::new(), " /v1/ ".to_string());
+        assert_eq!(bare_v1.effective_ollama_url(), None);
+
         let configured =
             AiCredentials::new(HashMap::new(), " http://127.0.0.1:11434/ ".to_string());
         assert_eq!(
             configured.effective_ollama_url(),
+            Some("http://127.0.0.1:11434")
+        );
+
+        let with_v1 =
+            AiCredentials::new(HashMap::new(), " http://127.0.0.1:11434/v1/ ".to_string());
+        assert_eq!(
+            with_v1.effective_ollama_url(),
             Some("http://127.0.0.1:11434")
         );
     }

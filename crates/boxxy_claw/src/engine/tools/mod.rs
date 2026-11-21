@@ -743,4 +743,92 @@ mod tests {
         assert_eq!(lock.current_turn_snapshots[0].0, path);
         assert_eq!(lock.current_turn_snapshots[0].1.as_deref(), Some(v1));
     }
+
+    #[test]
+    fn claw_tool_footprints_parallelize_pane_reads_and_serialize_shell_and_terminal_proposals() {
+        use crate::engine::tools::scrollback::ReadScrollbackTool;
+        use crate::engine::tools::skills::ActivateSkillTool;
+        use crate::engine::tools::tasks::ListTasksTool;
+        use crate::engine::tools::terminal::TerminalCommandTool;
+        use crate::engine::tools::workspace::{ListActiveAgentsTool, ReadPaneTool};
+        use serde_json::json;
+
+        let (session, _tx, _rx_ui) = ClawSession::new("pane_fp".to_string());
+        let state = session.state.clone();
+        let db = Arc::new(Mutex::new(None));
+        let approval = Arc::new(ClawApprovalHandler {
+            tx_ui: session.tx_ui.clone(),
+            state: state.clone(),
+            db: db.clone(),
+            session_id: session.session_id.clone(),
+            pane_id: "pane_fp".to_string(),
+        });
+        let env: Arc<dyn ClawEnvironment> = Arc::new(CaptureCmdEnv {
+            commands: std::sync::Mutex::new(Vec::new()),
+        });
+
+        let read_pane = ReadPaneTool {
+            tx_ui: session.tx_ui.clone(),
+            state: state.clone(),
+            approval: approval.clone(),
+        }
+        .footprint(&serde_json::from_value(json!({ "agent_name": "pane-2" })).unwrap());
+
+        let read_scrollback = ReadScrollbackTool {
+            tx_ui: session.tx_ui.clone(),
+            state: state.clone(),
+            approval: approval.clone(),
+        }
+        .footprint(
+            &serde_json::from_value(json!({ "max_lines": 100, "offset_lines": 100 })).unwrap(),
+        );
+
+        let list_agents = ListActiveAgentsTool {
+            tx_ui: session.tx_ui.clone(),
+            state: state.clone(),
+            approval: approval.clone(),
+        }
+        .footprint(&serde_json::from_value(json!({})).unwrap());
+
+        let list_tasks = ListTasksTool {
+            state: state.clone(),
+            tx_ui: session.tx_ui.clone(),
+            approval: approval.clone(),
+        }
+        .footprint(&serde_json::from_value(json!({})).unwrap());
+
+        let activate_skill = ActivateSkillTool {
+            pane_id: "pane_fp".to_string(),
+            approval: approval.clone(),
+        }
+        .footprint(&serde_json::from_value(json!({ "name": "demo-skill" })).unwrap());
+
+        let terminal_exec = TerminalCommandTool {
+            tx_ui: session.tx_ui.clone(),
+            state,
+            db,
+            session_id: session.session_id,
+            pane_id: "pane_fp".to_string(),
+        }
+        .footprint(
+            &serde_json::from_value(
+                json!({ "command": "cargo check", "explanation": "Verify workspace" }),
+            )
+            .unwrap(),
+        );
+
+        let sys_shell = SysShellTool {
+            env,
+            current_dir: "/workspace".to_string(),
+            approval,
+        }
+        .footprint(&serde_json::from_value(json!({ "command": "uname -a" })).unwrap());
+
+        assert!(!read_pane.conflicts_with(&read_scrollback));
+        assert!(!read_pane.conflicts_with(&list_agents));
+        assert!(!list_tasks.conflicts_with(&activate_skill));
+        assert!(read_pane.conflicts_with(&terminal_exec));
+        assert!(read_scrollback.conflicts_with(&sys_shell));
+        assert!(terminal_exec.conflicts_with(&sys_shell));
+    }
 }
