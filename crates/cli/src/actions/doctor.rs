@@ -259,11 +259,7 @@ fn check_keybindings_file(path: &Path) -> DiagnosticCheck {
             id: "keybindings",
             label: "Custom Keybindings",
             level: CheckLevel::Warn,
-            summary: format!(
-                "{} warning(s) in {}",
-                loaded.warnings.len(),
-                path.display()
-            ),
+            summary: format!("{} warning(s) in {}", loaded.warnings.len(), path.display()),
             details,
         }
     }
@@ -429,9 +425,7 @@ pub(crate) fn check_mcp_servers(servers: &[McpServerConfig]) -> DiagnosticCheck 
                     } else {
                         has_warning = true;
                     }
-                    details.push(format!(
-                        "[{state_tag}] '{name}' (stdio): command is empty"
-                    ));
+                    details.push(format!("[{state_tag}] '{name}' (stdio): command is empty"));
                 } else if resolve_executable_in_path(cmd_trimmed).is_none() {
                     if srv.enabled {
                         has_error = true;
@@ -452,7 +446,11 @@ pub(crate) fn check_mcp_servers(servers: &[McpServerConfig]) -> DiagnosticCheck 
             McpTransport::Http {
                 url, streamable, ..
             } => {
-                let mode = if *streamable { "streamable-http" } else { "http" };
+                let mode = if *streamable {
+                    "streamable-http"
+                } else {
+                    "http"
+                };
                 let trimmed = url.trim();
                 match reqwest::Url::parse(trimmed) {
                     Ok(parsed)
@@ -513,7 +511,11 @@ fn check_models(settings: &Settings) -> DiagnosticCheck {
             ModelConfigState::Unconfigured => (CheckLevel::Ok, format!("{slot}: Not configured")),
             ModelConfigState::MissingApiKey { provider_name } => (
                 CheckLevel::Warn,
-                format!("{slot}: {provider_name} selected, but API key is missing"),
+                if provider_name == "ChatGPT" {
+                    format!("{slot}: ChatGPT selected, but not signed in")
+                } else {
+                    format!("{slot}: {provider_name} selected, but API key is missing")
+                },
             ),
             ModelConfigState::ProviderUnavailable { provider_name } => (
                 CheckLevel::Warn,
@@ -530,14 +532,10 @@ fn check_models(settings: &Settings) -> DiagnosticCheck {
     if matches!(claw_state, ModelConfigState::Unconfigured) && !settings.character_models.is_empty()
     {
         claw_lvl = CheckLevel::Warn;
-        claw_msg =
-            "Default: Missing (required even when character overrides are set)".to_string();
+        claw_msg = "Default: Missing (required even when character overrides are set)".to_string();
     }
     let (mem_lvl, mem_msg) = match mem_state {
-        ModelConfigState::Unconfigured => (
-            CheckLevel::Ok,
-            "Dreams: Inherits Default".to_string(),
-        ),
+        ModelConfigState::Unconfigured => (CheckLevel::Ok, "Dreams: Inherits Default".to_string()),
         ref other => describe("Dreams", other),
     };
 
@@ -563,7 +561,10 @@ fn check_models(settings: &Settings) -> DiagnosticCheck {
     let overrides_note = if settings.character_models.is_empty() {
         String::new()
     } else {
-        format!("; {} character override(s)", settings.character_models.len())
+        format!(
+            "; {} character override(s)",
+            settings.character_models.len()
+        )
     };
 
     DiagnosticCheck {

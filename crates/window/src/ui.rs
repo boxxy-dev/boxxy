@@ -298,13 +298,8 @@ impl AppWindow {
         );
         sidebar_overlay.set_visible(app_state.sidebar_visible);
         split_view.set_sidebar(Some(&sidebar_overlay));
-        let (
-            content_toolbar,
-            content_header,
-            detached_btn,
-            detached_count_lbl,
-            tab_bar,
-        ) = Self::build_content_area(&tx, &tab_view, &current_settings);
+        let (content_toolbar, content_header, detached_btn, detached_count_lbl, tab_bar) =
+            Self::build_content_area(&tx, &tab_view, &current_settings);
 
         let overlay = gtk::Overlay::new();
         overlay.set_child(Some(&content_toolbar));
@@ -403,6 +398,7 @@ impl AppWindow {
             bookmarks_page: None,
             theme_selector,
             command_palette: command_palette.clone(),
+            last_effective_keys: current_settings.get_effective_api_keys(),
             current_settings,
             app_state,
             claw_active: false,

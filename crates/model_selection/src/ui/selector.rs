@@ -250,7 +250,10 @@ impl SingleModelSelector {
             .into_iter()
             .filter(|p| {
                 !p.requires_api_key()
-                    || api_keys.get(p.name()).map(|k| !k.is_empty()).unwrap_or(false)
+                    || api_keys
+                        .get(p.name())
+                        .map(|k| !k.is_empty())
+                        .unwrap_or(false)
             })
             .collect();
 
@@ -754,16 +757,19 @@ impl SingleModelSelector {
         }
 
         let target = match provider {
-            Some(p) if inner.providers.iter().any(|cand| cand.name() == p.provider_name()) => {
+            Some(p)
+                if inner
+                    .providers
+                    .iter()
+                    .any(|cand| cand.name() == p.provider_name()) =>
+            {
                 Some(p)
             }
-            _ if !inner.allow_none => Some(
-                inner.providers[0].create_model_provider(
-                    0,
-                    inner.providers[0].get_models().into_iter().next(),
-                    Some(inner.providers[0].default_thinking_idx(0)),
-                ),
-            ),
+            _ if !inner.allow_none => Some(inner.providers[0].create_model_provider(
+                0,
+                inner.providers[0].get_models().into_iter().next(),
+                Some(inner.providers[0].default_thinking_idx(0)),
+            )),
             _ => None,
         };
 
@@ -857,6 +863,17 @@ impl SingleModelSelector {
 
     pub fn set_sensitive(&self, sensitive: bool) {
         self.widget.set_sensitive(sensitive);
+    }
+
+    /// Re-syncs the model dropdown when live ChatGPT account models finish loading
+    /// while `"ChatGPT"` is the active provider on this selector.
+    pub fn refresh_chatgpt_models_if_selected(&self) {
+        let current = self.get_current_provider();
+        if matches!(current, Some(ModelProvider::ChatGpt(_, _))) {
+            self.updating.set(true);
+            self.set_model_provider_internal(current);
+            self.updating.set(false);
+        }
     }
 
     pub fn widget(&self) -> &gtk::Box {

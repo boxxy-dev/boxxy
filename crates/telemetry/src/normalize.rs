@@ -51,8 +51,9 @@ pub const BUILTIN_BOXXY_TOOLS: &[&str] = &[
     "web_search",
 ];
 
-/// Canonical display names of all 14 built-in Boxxy model providers.
+/// Canonical display names of all 15 built-in Boxxy model providers.
 pub const BUILTIN_PROVIDERS: &[&str] = &[
+    "ChatGPT",
     "Gemini",
     "Ollama",
     "Anthropic",
@@ -95,11 +96,12 @@ pub fn normalize_tool_name(tool_name: &str) -> &'static str {
         .map_or(EXTERNAL_MCP_TOOL_NAME, |idx| BUILTIN_BOXXY_TOOLS[idx])
 }
 
-/// Normalizes a model provider name to one of the 14 built-in providers or `"Custom Endpoints"`,
+/// Normalizes a model provider name to one of the 15 built-in providers or `"Custom Endpoints"`,
 /// ensuring user-defined custom endpoint names never leak into telemetry.
 #[must_use]
 pub fn normalize_provider_name(provider: &str) -> &'static str {
     match provider.trim().to_ascii_lowercase().as_str() {
+        "chatgpt" | "chatgpt (codex)" | "codex" => "ChatGPT",
         "gemini" | "google" => "Gemini",
         "ollama" => "Ollama",
         "anthropic" => "Anthropic",
@@ -215,7 +217,12 @@ pub fn normalize_desktop(raw: &str) -> String {
 /// Normalizes installation package type strictly into `"flatpak"`, `"distro"`, or `"native"`.
 #[must_use]
 pub fn normalize_pkg_type(raw: &str) -> &'static str {
-    match raw.trim().trim_matches(['"', '\'']).to_ascii_lowercase().as_str() {
+    match raw
+        .trim()
+        .trim_matches(['"', '\''])
+        .to_ascii_lowercase()
+        .as_str()
+    {
         "flatpak" => "flatpak",
         "distro" | "distro packaged" | "distro-packaged" | "distro_packaged" | "system"
         | "system-package" | "nix" | "aur" | "rpm" | "deb" => "distro",

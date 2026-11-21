@@ -19,6 +19,7 @@ const BUILTIN_BLACKLIST: &[&str] = &[
     ".ssh/authorized_keys",
     ".gnupg/private-keys-v1.d",
     ".aws/credentials",
+    ".codex/auth.json",
 ];
 
 pub(super) async fn read_file(
@@ -321,9 +322,7 @@ fn resolve_deepest_canonical(path: &std::path::Path) -> Option<std::path::PathBu
     // Fast O(1) bottom-up path when no `..` segments exist (e.g. writing a new file
     // inside an existing directory or nested new subdirectories): find the deepest
     // existing ancestor in a single `canonicalize` call and append the relative tail.
-    let has_parent_dir = path
-        .components()
-        .any(|c| matches!(c, Component::ParentDir));
+    let has_parent_dir = path.components().any(|c| matches!(c, Component::ParentDir));
     if !has_parent_dir {
         for ancestor in path.ancestors().skip(1) {
             if ancestor.as_os_str().is_empty() {
@@ -408,7 +407,8 @@ fn ensure_path_allowed_with_rules(path: &str, blacklisted: &[String]) -> anyhow:
     } else {
         p.to_path_buf()
     };
-    let canonical = resolve_deepest_canonical(&anchored).map(|cp| cp.to_string_lossy().into_owned());
+    let canonical =
+        resolve_deepest_canonical(&anchored).map(|cp| cp.to_string_lossy().into_owned());
 
     for black_path in blacklisted {
         if path_matches_blacklist_entry(path, black_path)
@@ -459,12 +459,14 @@ static BLACKLIST_CACHE: std::sync::OnceLock<parking_lot::Mutex<Option<BlacklistC
     std::sync::OnceLock::new();
 
 fn load_blacklist() -> std::sync::Arc<Vec<String>> {
-    let blacklist_path = boxxy_sys_utils::get_config_dir()
-        .join("boxxyclaw")
-        .join("BLACKLIST.md");
-    let stamp = std::fs::metadata(&blacklist_path)
-        .ok()
-        .map(|m| (m.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH), m.len()));
+    let config_dir = boxxy_sys_utils::get_config_dir();
+    let blacklist_path = config_dir.join("boxxyclaw").join("BLACKLIST.md");
+    let stamp = std::fs::metadata(&blacklist_path).ok().map(|m| {
+        (
+            m.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH),
+            m.len(),
+        )
+    });
 
     let cache = BLACKLIST_CACHE.get_or_init(|| parking_lot::Mutex::new(None));
     {
@@ -481,7 +483,12 @@ fn load_blacklist() -> std::sync::Arc<Vec<String>> {
         .is_some()
         .then(|| std::fs::read_to_string(&blacklist_path).ok())
         .flatten();
-    let rules = std::sync::Arc::new(parse_blacklist_with_defaults(custom.as_deref()));
+    let mut parsed = parse_blacklist_with_defaults(custom.as_deref());
+    let auth_dir_rule = config_dir.join("auth").to_string_lossy().into_owned();
+    if !parsed.iter().any(|r| r == &auth_dir_rule) {
+        parsed.push(auth_dir_rule);
+    }
+    let rules = std::sync::Arc::new(parsed);
     *cache.lock() = Some((blacklist_path, stamp, rules.clone()));
     rules
 }

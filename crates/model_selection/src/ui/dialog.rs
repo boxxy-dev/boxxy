@@ -1,9 +1,7 @@
 use crate::models::{
     CharacterModelTarget, ModelAssignmentConfig, ModelProvider, OpenAiCompatibleEndpoint,
 };
-use crate::ui::selector::{
-    OllamaTagsCache, SelectorLayout, SelectorOptions, SingleModelSelector,
-};
+use crate::ui::selector::{OllamaTagsCache, SelectorLayout, SelectorOptions, SingleModelSelector};
 use gtk4 as gtk;
 use gtk4::gdk;
 use gtk4::gio;
@@ -23,9 +21,8 @@ type AssignmentTuple = (
     HashMap<String, ModelProvider>,
     Option<ModelProvider>,
 );
-type DoneCallback = Rc<
-    dyn Fn(Option<ModelProvider>, HashMap<String, ModelProvider>, Option<ModelProvider>),
->;
+type DoneCallback =
+    Rc<dyn Fn(Option<ModelProvider>, HashMap<String, ModelProvider>, Option<ModelProvider>)>;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum OverrideBadgeState {
@@ -103,6 +100,7 @@ fn load_avatar_async(
 pub struct GlobalModelSelectorDialog {
     dialog: adw::Dialog,
     pub claw_selector: SingleModelSelector,
+    char_selector: SingleModelSelector,
     pub memory_selector: SingleModelSelector,
     on_open_apis: VoidCallbackSlot,
 }
@@ -664,9 +662,17 @@ impl GlobalModelSelectorDialog {
         Self {
             dialog,
             claw_selector,
+            char_selector,
             memory_selector,
             on_open_apis,
         }
+    }
+
+    /// Re-syncs any selector currently displaying `"ChatGPT"` after live account models load.
+    pub fn refresh_chatgpt_models(&self) {
+        self.claw_selector.refresh_chatgpt_models_if_selected();
+        self.char_selector.refresh_chatgpt_models_if_selected();
+        self.memory_selector.refresh_chatgpt_models_if_selected();
     }
 
     pub fn set_on_open_apis<FA: Fn() + 'static>(&self, cb: FA) {

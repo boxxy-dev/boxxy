@@ -32,6 +32,10 @@ pub(crate) fn find_custom_model<'a>(
 #[must_use]
 pub fn resolve_catalog_spec(provider: &ModelProvider) -> Option<&'static ModelSpec> {
     match provider {
+        ModelProvider::ChatGpt(model, _) => {
+            let id = model.api_name().trim();
+            catalog_get_spec("chatgpt", id).or_else(|| resolve_any_catalog_spec(id))
+        }
         ModelProvider::Gemini(model, _) => catalog_get_spec("gcp.gemini", model.api_name().trim()),
         ModelProvider::Anthropic(model, _) => {
             catalog_get_spec("anthropic", model.api_name().trim())
@@ -195,11 +199,11 @@ pub fn enrich_usage_with_endpoints_cost(
         return usage;
     };
 
-    // Local Ollama and flat-rate subscription OpenCode Go models never incur per-token USD charges,
-    // even if an upstream gateway wire includes a synthetic cost field.
+    // Local Ollama and flat-rate subscription models (ChatGPT / OpenCode Go) never incur per-token
+    // USD charges, even if an upstream gateway wire includes a synthetic cost field.
     if matches!(
         p,
-        ModelProvider::Ollama(_) | ModelProvider::OpenCodeGo(_, _)
+        ModelProvider::Ollama(_) | ModelProvider::OpenCodeGo(_, _) | ModelProvider::ChatGpt(_, _)
     ) {
         usage.cost = None;
         return usage;

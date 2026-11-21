@@ -1,7 +1,7 @@
 use crate::models::{
-    AnthropicModel, CustomModelConfig, DeepSeekModel, GeminiModel, GroqModel, MiniMaxModel,
-    MistralModel, ModelProvider, MoonshotModel, OpenAiCompatibleEndpoint, OpenAiModel,
-    OpenCodeGoModel, OpenCodeZenModel, ThinkingLevel, XaiModel, ZaiModel,
+    AnthropicModel, ChatGptModel, CustomModelConfig, DeepSeekModel, GeminiModel, GroqModel,
+    MiniMaxModel, MistralModel, ModelProvider, MoonshotModel, OpenAiCompatibleEndpoint,
+    OpenAiModel, OpenCodeGoModel, OpenCodeZenModel, ThinkingLevel, XaiModel, ZaiModel,
     catalog_thinking_levels_for_any_slug,
 };
 use gtk4 as gtk;
@@ -12,9 +12,14 @@ use gtk4::prelude::*;
 pub trait AiProvider {
     fn name(&self) -> &str;
 
-    /// Returns true if this provider requires an API key in settings.
+    /// Returns true if this provider requires an API key or OAuth sign-in in settings.
     fn requires_api_key(&self) -> bool {
         true
+    }
+
+    /// Returns true if this provider authenticates via OAuth subscription sign-in rather than a static API key.
+    fn uses_oauth(&self) -> bool {
+        false
     }
 
     /// Returns true if this provider uses a free-form text entry instead of a fixed dropdown.
@@ -169,6 +174,94 @@ impl_catalog_provider!(
     OpenAi,
     "gpt-6.1-sol"
 );
+
+struct ChatGptProviderImpl;
+impl AiProvider for ChatGptProviderImpl {
+    fn name(&self) -> &str {
+        "ChatGPT"
+    }
+    fn uses_oauth(&self) -> bool {
+        true
+    }
+    fn get_models(&self) -> Vec<String> {
+        ChatGptModel::all()
+            .into_iter()
+            .map(|m| m.to_string())
+            .collect()
+    }
+    fn supports_thinking(&self, model_idx: u32) -> bool {
+        let am = ChatGptModel::all();
+        am.get(model_idx as usize)
+            .is_some_and(ChatGptModel::supports_thinking)
+    }
+    fn get_thinking_levels(&self, model_idx: u32) -> Vec<String> {
+        let am = ChatGptModel::all();
+        if let Some(m) = am.get(model_idx as usize) {
+            return m
+                .available_thinking_levels()
+                .into_iter()
+                .map(|l| l.to_string())
+                .collect();
+        }
+        vec![]
+    }
+    fn default_thinking_idx(&self, model_idx: u32) -> u32 {
+        let am = ChatGptModel::all();
+        if let Some(m) = am.get(model_idx as usize) {
+            let levels = m.available_thinking_levels();
+            if let Some(def) = m.default_thinking_level()
+                && let Some(pos) = levels.iter().position(|l| *l == def)
+            {
+                return pos as u32;
+            }
+        }
+        0
+    }
+    fn create_model_provider(
+        &self,
+        model_idx: u32,
+        _name: Option<String>,
+        thinking_idx: Option<u32>,
+    ) -> ModelProvider {
+        let am = ChatGptModel::all();
+        let model = am
+            .get(model_idx as usize)
+            .cloned()
+            .unwrap_or_else(|| ChatGptModel::new(rig::providers::chatgpt::DEFAULT_MODEL));
+        let levels = model.available_thinking_levels();
+        let thinking = thinking_idx
+            .and_then(|idx| levels.get(idx as usize))
+            .copied();
+        ModelProvider::ChatGpt(model, thinking)
+    }
+    fn sync_ui(
+        &self,
+        provider: &ModelProvider,
+        model_dropdown: &gtk::DropDown,
+        thinking_dropdown: &gtk::DropDown,
+        _model_list: &gtk::StringList,
+        thinking_list: &gtk::StringList,
+    ) {
+        if let ModelProvider::ChatGpt(m, t) = provider {
+            let am = ChatGptModel::all();
+            if let Some(pos) = am.iter().position(|x| x.api_name() == m.api_name()) {
+                model_dropdown.set_selected(pos as u32);
+                thinking_list.splice(0, thinking_list.n_items(), &[]);
+                let levels = am[pos].available_thinking_levels();
+                for l in &levels {
+                    thinking_list.append(&l.to_string());
+                }
+                if let Some(think) = t
+                    && let Some(t_pos) = levels.iter().position(|l| l == think)
+                {
+                    thinking_dropdown.set_selected(t_pos as u32);
+                } else if !levels.is_empty() {
+                    thinking_dropdown.set_selected(self.default_thinking_idx(pos as u32));
+                }
+            }
+        }
+    }
+}
 impl_catalog_provider!(
     MoonshotProviderImpl,
     "Moonshot",
@@ -462,6 +555,7 @@ pub fn get_providers_with_custom(
     custom_endpoints: &[OpenAiCompatibleEndpoint],
 ) -> Vec<Box<dyn AiProvider>> {
     let mut providers: Vec<Box<dyn AiProvider>> = vec![
+        Box::new(ChatGptProviderImpl),
         Box::new(GeminiProviderImpl),
         Box::new(OllamaProviderImpl),
         Box::new(AnthropicProviderImpl),
@@ -483,7 +577,11 @@ pub fn get_providers_with_custom(
         let collides_with_builtin = providers
             .iter()
             .any(|p| p.name().eq_ignore_ascii_case(trimmed_name));
-        if ep.enabled && !trimmed_name.is_empty() && !ep.base_url.trim().is_empty() && !collides_with_builtin {
+        if ep.enabled
+            && !trimmed_name.is_empty()
+            && !ep.base_url.trim().is_empty()
+            && !collides_with_builtin
+        {
             providers.push(Box::new(OpenAiCompatibleProviderImpl {
                 endpoint: ep.clone(),
             }));

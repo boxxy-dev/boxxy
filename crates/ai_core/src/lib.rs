@@ -3,6 +3,7 @@
 
 mod agent;
 mod catalog;
+mod chatgpt_auth;
 mod credentials;
 mod hook;
 mod providers;
@@ -19,11 +20,18 @@ pub use catalog::{
     model_input_limit, model_input_limit_with_endpoints, model_output_limit,
     model_output_limit_with_endpoints, resolve_catalog_spec,
 };
+pub use chatgpt_auth::{
+    CHATGPT_OAUTH_SENTINEL, ChatGptAuthStatus, ChatGptSignInMode, ChatGptSignInPrompt,
+    build_chatgpt_model_spec, chatgpt_auth_dir_in, chatgpt_auth_status, inspect_chatgpt_auth_in,
+    is_chatgpt_oauth_signed_in, refresh_chatgpt_account_models, refresh_chatgpt_auth_status,
+    shared_chatgpt_authenticator, sign_in_chatgpt_oauth, sign_out_chatgpt_oauth,
+};
 pub use credentials::AiCredentials;
 pub use hook::ModelContextHook;
 pub use providers::{
-    BuiltProviderModel, build_provider_model, build_provider_model_with_options,
-    configure_agent_builder, fetch_openai_compatible_models, needs_relaxed_finish_reasons,
+    BuiltProviderModel, ProviderModelBackend, build_provider_model,
+    build_provider_model_with_options, configure_agent_builder, fetch_openai_compatible_models,
+    needs_relaxed_finish_reasons,
 };
 pub use reasoning::{
     map_thinking_level, recommended_max_tokens_for_reasoning, resolve_model_reasoning,
@@ -38,9 +46,10 @@ pub use search::{
 mod tests {
     use super::*;
     use boxxy_model_selection::{
-        AnthropicModel, CustomModelConfig, DeepSeekModel, GeminiModel, GroqModel, MiniMaxModel,
-        MistralModel, ModelProvider, MoonshotModel, OpenAiApiRoute, OpenAiCompatibleEndpoint,
-        OpenAiModel, OpenCodeGoModel, OpenCodeZenModel, ThinkingLevel, XaiModel, ZaiModel,
+        AnthropicModel, ChatGptModel, CustomModelConfig, DeepSeekModel, GeminiModel, GroqModel,
+        MiniMaxModel, MistralModel, ModelProvider, MoonshotModel, OpenAiApiRoute,
+        OpenAiCompatibleEndpoint, OpenAiModel, OpenCodeGoModel, OpenCodeZenModel, ThinkingLevel,
+        XaiModel, ZaiModel,
     };
     use rig::completion::{Cost, Effort, ProviderToolDefinition, Reasoning, Usage};
     use rig::message::{
@@ -554,5 +563,37 @@ mod tests {
             .await
             .expect_err("unconfigured agent should return error");
         assert!(err.to_string().contains("No AI model selected"));
+    }
+
+    #[test]
+    fn test_chatgpt_subscription_provider_specs_search_and_zero_cost() {
+        let creds = AiCredentials::default();
+        let chatgpt_prov =
+            ModelProvider::ChatGpt(ChatGptModel::new("gpt-6.2-sol"), Some(ThinkingLevel::High));
+
+        let (backend, provider_name, model_name, reasoning) =
+            build_provider_model(&chatgpt_prov, &creds);
+        assert!(matches!(backend, ProviderModelBackend::SignedIn(_)));
+        assert_eq!(provider_name, "ChatGPT");
+        assert_eq!(model_name, "gpt-6.2-sol");
+        assert_eq!(reasoning, Some(Reasoning::Effort(Effort::High)));
+
+        let wrapped = Some(chatgpt_prov.clone());
+        assert_eq!(model_context_window(&wrapped), Some(1_050_000));
+        assert_eq!(model_input_limit(&wrapped), Some(922_000));
+        assert_eq!(model_output_limit(&wrapped), Some(128_000));
+        assert_eq!(
+            native_search_provider_tool(&chatgpt_prov),
+            Some(ProviderToolDefinition::new("web_search"))
+        );
+
+        let mut synthetic_wire_cost = Usage::new().input_tokens(50_000).output_tokens(10_000);
+        synthetic_wire_cost.cost = Some(Cost::from_total(1.25));
+        assert!(
+            enrich_usage_with_catalog_cost(synthetic_wire_cost, &wrapped)
+                .cost
+                .is_none(),
+            "ChatGPT subscription turns must report $0.00 marginal token cost"
+        );
     }
 }

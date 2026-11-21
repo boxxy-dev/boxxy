@@ -676,6 +676,8 @@ You can add your own sensitive paths here. One path per line. Lines starting wit
             return;
         }
 
+        let _ = boxxy_ai_core::refresh_chatgpt_auth_status();
+
         let mut settings = Self::default();
         let mut had_unrecoverable_parse_error = false;
         if let Some(path) = Self::get_path()
@@ -756,6 +758,7 @@ You can add your own sensitive paths here. One path per line. Lines starting wit
     /// take effect on the next turn without restarting the daemon.
     pub fn reload() {
         Self::init();
+        let _ = boxxy_ai_core::refresh_chatgpt_auth_status();
 
         let Some(path) = Self::get_path() else {
             return;
@@ -872,6 +875,10 @@ You can add your own sensitive paths here. One path per line. Lines starting wit
                     return k;
                 }
             }
+        }
+
+        if provider == "ChatGPT" && boxxy_ai_core::is_chatgpt_oauth_signed_in() {
+            return boxxy_ai_core::CHATGPT_OAUTH_SENTINEL.to_string();
         }
 
         if let Some(ep) = self
@@ -1109,9 +1116,15 @@ You can add your own sensitive paths here. One path per line. Lines starting wit
                     Some("No default model is set (required for all characters).".to_string())
                 }
             }
-            ModelConfigState::MissingApiKey { provider_name } => Some(format!(
-                "{provider_name} API key was removed or is missing."
-            )),
+            ModelConfigState::MissingApiKey { provider_name } => {
+                if provider_name == "ChatGPT" {
+                    Some("ChatGPT is signed out. Reconnect under Preferences -> APIs.".to_string())
+                } else {
+                    Some(format!(
+                        "{provider_name} API key was removed or is missing."
+                    ))
+                }
+            }
             ModelConfigState::ProviderUnavailable { provider_name } => {
                 Some(format!("{provider_name} provider was removed or disabled."))
             }
@@ -1128,6 +1141,9 @@ You can add your own sensitive paths here. One path per line. Lines starting wit
         if self.memory_model.is_some() {
             match self.resolve_model_state(&self.memory_model) {
                 ModelConfigState::MissingApiKey { provider_name } => {
+                    if provider_name == "ChatGPT" {
+                        return Some("Dreams model: ChatGPT is signed out.".to_string());
+                    }
                     return Some(format!("Dreams model: {provider_name} API key is missing."));
                 }
                 ModelConfigState::ProviderUnavailable { provider_name } => {
@@ -1144,6 +1160,9 @@ You can add your own sensitive paths here. One path per line. Lines starting wit
         for mp in self.character_models.values() {
             match self.resolve_model_state(&Some(mp.clone())) {
                 ModelConfigState::MissingApiKey { provider_name } => {
+                    if provider_name == "ChatGPT" {
+                        return Some("Character override: ChatGPT is signed out.".to_string());
+                    }
                     return Some(format!(
                         "Character override: {provider_name} API key is missing."
                     ));
@@ -1745,5 +1764,67 @@ mod tests {
             parsed.character_models.get("char-valid"),
             Some(&ModelProvider::Ollama("qwen3:8b".to_string()))
         );
+    }
+
+    #[test]
+    #[serial_test::serial(chatgpt_prefs)]
+    fn chatgpt_oauth_resolves_model_state_and_broken_reason() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        boxxy_sys_utils::configure_dev_options(boxxy_sys_utils::CliDevOverrides {
+            config_dir: Some(tmp.path().to_path_buf()),
+            ..Default::default()
+        });
+        let _ = boxxy_ai_core::refresh_chatgpt_auth_status();
+
+        let chatgpt_model = ModelProvider::ChatGpt(
+            boxxy_model_selection::ChatGptModel::new("gpt-6.2-sol"),
+            Some(ThinkingLevel::Medium),
+        );
+        let s = Settings {
+            claw_model: Some(chatgpt_model.clone()),
+            ..Settings::default()
+        };
+
+        // Signed out -> MissingApiKey with OAuth-specific broken message
+        assert_eq!(
+            s.resolve_model_state(&s.claw_model),
+            ModelConfigState::MissingApiKey {
+                provider_name: "ChatGPT".to_string(),
+            }
+        );
+        assert_eq!(
+            s.default_model_broken_reason().as_deref(),
+            Some("ChatGPT is signed out. Reconnect under Preferences -> APIs.")
+        );
+
+        // Write synthetic OAuth token record -> Ready + sentinel in effective_api_keys
+        let auth_dir = tmp.path().join("auth");
+        std::fs::create_dir_all(&auth_dir).expect("create auth dir");
+        std::fs::write(
+            auth_dir.join("chatgpt.json"),
+            r#"{"refresh_token":"synthetic-refresh-token"}"#,
+        )
+        .expect("write chatgpt.json");
+        let _ = boxxy_ai_core::refresh_chatgpt_auth_status();
+
+        assert_eq!(
+            s.get_effective_api_key("ChatGPT"),
+            boxxy_ai_core::CHATGPT_OAUTH_SENTINEL
+        );
+        assert_eq!(
+            s.get_effective_api_keys()
+                .get("ChatGPT")
+                .map(String::as_str),
+            Some(boxxy_ai_core::CHATGPT_OAUTH_SENTINEL)
+        );
+        assert_eq!(
+            s.resolve_model_state(&s.claw_model),
+            ModelConfigState::Ready(chatgpt_model)
+        );
+        assert_eq!(s.default_model_broken_reason(), None);
+
+        // Reset dev options so sibling tests see default config resolution
+        boxxy_sys_utils::configure_dev_options(boxxy_sys_utils::CliDevOverrides::default());
+        let _ = boxxy_ai_core::refresh_chatgpt_auth_status();
     }
 }

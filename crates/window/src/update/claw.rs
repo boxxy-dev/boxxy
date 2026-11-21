@@ -184,6 +184,17 @@ pub fn open_model_selection(inner: &AppWindowInner, initial_character_id: Option
     dialog.dialog().connect_closed(move |_| {
         let _ = tx_model_close.send_blocking(AppInput::FocusActiveTerminal);
     });
+    if boxxy_preferences::is_chatgpt_oauth_signed_in() {
+        let dialog_refresh = dialog.clone();
+        gtk4::glib::spawn_future_local(async move {
+            let res = boxxy_sys_utils::runtime()
+                .spawn(async { boxxy_preferences::refresh_chatgpt_account_models().await })
+                .await;
+            if matches!(res, Ok(Ok(_))) {
+                dialog_refresh.refresh_chatgpt_models();
+            }
+        });
+    }
     dialog.present(Some(&inner.window));
 }
 

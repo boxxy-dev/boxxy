@@ -9,9 +9,9 @@ mod normalize;
 pub use identity::{rotate_session_id, session_id, set_session_id};
 pub use normalize::{
     BUILTIN_BOXXY_TOOLS, BUILTIN_PROVIDERS, CUSTOM_ENDPOINT_PROVIDER_NAME, EXTERNAL_MCP_TOOL_NAME,
-    REDACTED_MODEL_NAME, normalize_desktop, normalize_model_name, normalize_os,
-    normalize_pkg_type, normalize_provider_name, normalize_shell, normalize_theme,
-    normalize_tool_name, resolve_theme_telemetry,
+    REDACTED_MODEL_NAME, normalize_desktop, normalize_model_name, normalize_os, normalize_pkg_type,
+    normalize_provider_name, normalize_shell, normalize_theme, normalize_tool_name,
+    resolve_theme_telemetry,
 };
 
 use event::{
@@ -256,9 +256,11 @@ pub async fn track_session_resume(session_type: &str) {
         return;
     }
     let clean_type = sanitize_attr_text(session_type);
-    if let Some(rec) =
-        MetricRecord::new(METRIC_SESSION_RESUME, 1.0, [("session_type", clean_type.as_str())])
-    {
+    if let Some(rec) = MetricRecord::new(
+        METRIC_SESSION_RESUME,
+        1.0,
+        [("session_type", clean_type.as_str())],
+    ) {
         journal::record_metrics(&[rec]).await;
     }
 }
@@ -269,9 +271,9 @@ mod tests {
     use crate::identity::TEST_TELEMETRY_OVERRIDE;
     use boxxy_db::Db;
     use boxxy_model_selection::{
-        AnthropicModel, DeepSeekModel, GeminiModel, GroqModel, MiniMaxModel, MistralModel,
-        ModelProvider, MoonshotModel, OpenAiModel, OpenCodeGoModel, OpenCodeZenModel, XaiModel,
-        ZaiModel,
+        AnthropicModel, ChatGptModel, DeepSeekModel, GeminiModel, GroqModel, MiniMaxModel,
+        MistralModel, ModelProvider, MoonshotModel, OpenAiModel, OpenCodeGoModel, OpenCodeZenModel,
+        XaiModel, ZaiModel,
     };
     use serial_test::serial;
     use std::sync::Arc;
@@ -317,6 +319,7 @@ mod tests {
     #[test]
     fn test_all_model_provider_variants_sync_with_telemetry_allowlist() {
         let variants = [
+            ModelProvider::ChatGpt(ChatGptModel::new("gpt-6.2-sol"), None),
             ModelProvider::Gemini(GeminiModel::new("gemini-3.8-flash"), None),
             ModelProvider::Ollama("llama3:8b".to_string()),
             ModelProvider::Anthropic(AnthropicModel::new("claude-sonnet-5-5"), None),
@@ -354,15 +357,15 @@ mod tests {
         }
 
         // Model-name privacy guard: Ollama & Custom Endpoints must redact model names
-        assert_eq!(normalize_model_name("Ollama", "private-local:7b"), REDACTED_MODEL_NAME);
+        assert_eq!(
+            normalize_model_name("Ollama", "private-local:7b"),
+            REDACTED_MODEL_NAME
+        );
         assert_eq!(
             normalize_model_name(CUSTOM_ENDPOINT_PROVIDER_NAME, "company-finetune-v2"),
             REDACTED_MODEL_NAME
         );
-        assert_eq!(
-            normalize_model_name("OpenCode Go", "glm-5.3"),
-            "glm-5.3"
-        );
+        assert_eq!(normalize_model_name("OpenCode Go", "glm-5.3"), "glm-5.3");
         assert_eq!(
             normalize_model_name("Gemini", "gemini-3.8-flash"),
             "gemini-3.8-flash"

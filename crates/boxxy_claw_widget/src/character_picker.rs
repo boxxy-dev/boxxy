@@ -143,8 +143,7 @@ impl CharacterPicker {
         let scroll: gtk::ScrolledWindow = builder.object("character_picker_scroll").unwrap();
         let cards_wrap: adw::WrapBox = builder.object("character_cards_wrap").unwrap();
         let models_link_lbl: gtk::Label = builder.object("picker_models_link_lbl").unwrap();
-        let characters_link_lbl: gtk::Label =
-            builder.object("picker_characters_link_lbl").unwrap();
+        let characters_link_lbl: gtk::Label = builder.object("picker_characters_link_lbl").unwrap();
 
         models_link_lbl.set_cursor_from_name(Some("pointer"));
         let click = gtk::GestureClick::new();
@@ -607,8 +606,12 @@ fn resolve_card_model_summary(settings: &Settings, character_id: &str) -> CardMo
             thinking_level: None,
             is_warn: true,
         },
-        ModelConfigState::MissingApiKey { .. } => CardModelSummary {
-            model_text: "Missing API key".to_string(),
+        ModelConfigState::MissingApiKey { provider_name } => CardModelSummary {
+            model_text: if provider_name == "ChatGPT" {
+                "Not signed in".to_string()
+            } else {
+                "Missing API key".to_string()
+            },
             thinking_level: None,
             is_warn: true,
         },

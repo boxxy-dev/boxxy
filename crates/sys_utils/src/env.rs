@@ -274,6 +274,16 @@ pub const ENV_SPECS: &[EnvVarSpec] = &[
         scrub_from_child_pty: false,
     },
     EnvVarSpec {
+        name: "CHATGPT_ACCESS_TOKEN",
+        category: EnvCategory::ProviderKey,
+        cli_flag: None,
+        value_hint: "<TOKEN>",
+        summary: "Access token override for ChatGPT / Codex subscription.",
+        secret: true,
+        propagate_raw_to_daemon: false,
+        scrub_from_child_pty: false,
+    },
+    EnvVarSpec {
         name: "TAVILY_API_KEY",
         category: EnvCategory::ProviderKey,
         cli_flag: None,
@@ -351,6 +361,7 @@ pub const PROVIDER_ENV_KEY_MAP: &[(&str, &str)] = &[
     ("GROQ_API_KEY", "Groq"),
     ("OPENCODE_API_KEY", "OpenCode Zen"),
     ("OPENCODE_API_KEY", "OpenCode Go"),
+    ("CHATGPT_ACCESS_TOKEN", "ChatGPT"),
     ("TAVILY_API_KEY", "Tavily"),
 ];
 

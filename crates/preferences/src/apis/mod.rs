@@ -11,6 +11,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 mod catalog_provider_dialog;
+mod chatgpt_oauth;
 mod openai_compat_dialog;
 
 fn tag_status_title_label_once(widget: &gtk::Widget, title: &str) -> bool {
@@ -139,6 +140,10 @@ pub(crate) fn setup_apis_page(builder: &gtk::Builder) -> PageHooks {
     };
     update_model_status(&initial);
 
+    // --- OAuth Subscriptions Management (ChatGPT / Codex) ---
+    let (chatgpt_oauth_ctrl, s_chatgpt_oauth) =
+        chatgpt_oauth::ChatGptOAuthController::setup(builder, update_model_status.clone());
+
     // --- Configured Catalog Providers Management ---
     let catalog_added_rows: Rc<RefCell<Vec<(String, String, adw::PasswordEntryRow)>>> =
         Rc::new(RefCell::new(Vec::new()));
@@ -149,7 +154,7 @@ pub(crate) fn setup_apis_page(builder: &gtk::Builder) -> PageHooks {
     let compute_catalog_signature = |s: &Settings| -> Vec<(String, String, bool)> {
         boxxy_model_selection::get_providers()
             .into_iter()
-            .filter(|p| p.requires_api_key())
+            .filter(|p| p.requires_api_key() && !p.uses_oauth())
             .filter_map(|p| {
                 let name = p.name().to_string();
                 let effective = s.get_effective_api_key(&name);
@@ -185,7 +190,7 @@ pub(crate) fn setup_apis_page(builder: &gtk::Builder) -> PageHooks {
             let mut unconfigured_count = 0usize;
 
             for prov in &providers {
-                if !prov.requires_api_key() {
+                if !prov.requires_api_key() || prov.uses_oauth() {
                     continue;
                 }
 
@@ -338,7 +343,9 @@ pub(crate) fn setup_apis_page(builder: &gtk::Builder) -> PageHooks {
                 boxxy_model_selection::get_providers()
                     .into_iter()
                     .filter(|p| {
-                        p.requires_api_key() && s.get_effective_api_key(p.name()).is_empty()
+                        p.requires_api_key()
+                            && !p.uses_oauth()
+                            && s.get_effective_api_key(p.name()).is_empty()
                     })
                     .map(|p| p.name().to_string())
                     .collect()
@@ -701,7 +708,7 @@ pub(crate) fn setup_apis_page(builder: &gtk::Builder) -> PageHooks {
     );
     let s_models = SearchRow::new(
         &model_status_row,
-        "open models selection ai claw memories status openai openrouter opencode",
+        "open models selection ai claw memories status chatgpt codex openai openrouter opencode",
     );
     let s_add_compat = SearchRow::new(
         &add_openai_compat_row,
@@ -711,17 +718,19 @@ pub(crate) fn setup_apis_page(builder: &gtk::Builder) -> PageHooks {
     let s_tavily = SearchRow::new(&tavily_api_key_entry, "tavily api key search engines");
     let s_native = SearchRow::new(
         &native_search_switch,
-        "use native model search engines built in gemini gpt claude anthropic openai",
+        "use native model search engines built in gemini gpt chatgpt claude anthropic openai",
     );
 
     let catalog_rows_sync = catalog_added_rows.clone();
     let tavily_sync = tavily_api_key_entry;
     let native_sync = native_search_switch;
     let ollama_sync = ollama_base_url_entry;
+    let chatgpt_sync = chatgpt_oauth_ctrl.clone();
 
     let sync = Box::new(move |s: &Settings| {
         is_syncing.set(true);
 
+        chatgpt_sync.sync();
         update_model_status(s);
 
         let any_cat_focused = catalog_rows_sync
@@ -760,6 +769,8 @@ pub(crate) fn setup_apis_page(builder: &gtk::Builder) -> PageHooks {
 
     let add_compat_filter = add_openai_compat_row;
     let filter = Box::new(move |query: &str| {
+        let subscriptions_visible = chatgpt_oauth_ctrl.apply_filter(&s_chatgpt_oauth, query);
+
         let mut any_cat_visible = s_add_cat.apply(query);
         for (_, haystack, row) in catalog_added_rows.borrow().iter() {
             let m = query.is_empty() || haystack.contains(query);
@@ -792,7 +803,12 @@ pub(crate) fn setup_apis_page(builder: &gtk::Builder) -> PageHooks {
         let search_visible = s_tavily.apply(query) | s_native.apply(query);
         group_search_engines.set_visible(search_visible);
 
-        any_cat_visible || compat_visible || ollama_visible || models_visible || search_visible
+        subscriptions_visible
+            || any_cat_visible
+            || compat_visible
+            || ollama_visible
+            || models_visible
+            || search_visible
     });
 
     (sync, filter)

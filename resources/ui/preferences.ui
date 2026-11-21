@@ -497,6 +497,81 @@
                                       </object>
                                     </child>
                                     <child>
+                                      <object class="AdwPreferencesGroup" id="group_subscriptions">
+                                        <property name="title" translatable="yes">Subscriptions</property>
+                                        <property name="description" translatable="yes">Connect existing AI subscriptions via OAuth without separate API billing.</property>
+                                        <child>
+                                          <object class="AdwActionRow" id="chatgpt_oauth_row">
+                                            <property name="title" translatable="yes">ChatGPT</property>
+                                            <property name="subtitle" translatable="yes">Use your ChatGPT Plus, Pro, or Team subscription (Codex) via OAuth.</property>
+                                            <child type="suffix">
+                                              <object class="GtkBox" id="chatgpt_oauth_actions_box">
+                                                <property name="orientation">horizontal</property>
+                                                <property name="spacing">8</property>
+                                                <property name="valign">center</property>
+                                                <child>
+                                                  <object class="AdwSpinner" id="chatgpt_oauth_spinner">
+                                                    <property name="visible">False</property>
+                                                    <property name="valign">center</property>
+                                                  </object>
+                                                </child>
+                                                <child>
+                                                  <object class="GtkButton" id="chatgpt_copy_btn">
+                                                    <property name="visible">False</property>
+                                                    <property name="label" translatable="yes">Copy Link</property>
+                                                    <property name="valign">center</property>
+                                                    <style>
+                                                      <class name="flat"/>
+                                                    </style>
+                                                  </object>
+                                                </child>
+                                                <child>
+                                                  <object class="GtkButton" id="chatgpt_device_btn">
+                                                    <property name="label" translatable="yes">Device Code</property>
+                                                    <property name="tooltip-text" translatable="yes">Sign in with a one-time device code instead of a local browser callback</property>
+                                                    <property name="valign">center</property>
+                                                    <style>
+                                                      <class name="flat"/>
+                                                    </style>
+                                                  </object>
+                                                </child>
+                                                <child>
+                                                  <object class="GtkButton" id="chatgpt_signin_btn">
+                                                    <property name="label" translatable="yes">Sign In</property>
+                                                    <property name="valign">center</property>
+                                                    <style>
+                                                      <class name="suggested-action"/>
+                                                    </style>
+                                                  </object>
+                                                </child>
+                                                <child>
+                                                  <object class="GtkButton" id="chatgpt_cancel_btn">
+                                                    <property name="visible">False</property>
+                                                    <property name="label" translatable="yes">Cancel</property>
+                                                    <property name="valign">center</property>
+                                                    <style>
+                                                      <class name="flat"/>
+                                                    </style>
+                                                  </object>
+                                                </child>
+                                                <child>
+                                                  <object class="GtkButton" id="chatgpt_signout_btn">
+                                                    <property name="visible">False</property>
+                                                    <property name="label" translatable="yes">Sign Out</property>
+                                                    <property name="valign">center</property>
+                                                    <style>
+                                                      <class name="flat"/>
+                                                      <class name="destructive-action"/>
+                                                    </style>
+                                                  </object>
+                                                </child>
+                                              </object>
+                                            </child>
+                                          </object>
+                                        </child>
+                                      </object>
+                                    </child>
+                                    <child>
                                       <object class="AdwPreferencesGroup" id="group_openai_compatible">
                                         <property name="title" translatable="yes">Connect custom OpenAI-compatible API endpoints</property>
                                         <child>

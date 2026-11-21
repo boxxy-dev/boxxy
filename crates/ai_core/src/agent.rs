@@ -7,7 +7,7 @@ use crate::providers::{build_provider_model_with_options, configure_agent_builde
 use crate::search::{append_citations_to_output, attach_native_search};
 use boxxy_model_selection::{ModelProvider, OpenAiCompatibleEndpoint};
 use futures_util::StreamExt as _;
-use rig::agent::{Agent, AgentBuilder, MultiTurnStreamItem, PromptResponse};
+use rig::agent::{Agent, MultiTurnStreamItem, PromptResponse};
 use rig::completion::{PromptError, Usage};
 use rig::message::{AssistantContent, Message};
 use rig::streaming::{Item, PartKind, StreamEvent};
@@ -299,7 +299,8 @@ pub fn create_agent_with_config(
     let (model, _provider_name, _model_name, reasoning) =
         build_provider_model_with_options(p, creds, options.stateless);
 
-    let mut builder = AgentBuilder::new(model)
+    let mut builder = model
+        .into_agent_builder()
         .preamble(system_prompt)
         .add_hook(ModelContextHook::new(system_prompt));
 
@@ -505,5 +506,164 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(body_str).expect("JSON body");
         assert_eq!(parsed.get("store"), Some(&serde_json::json!(false)));
         assert!(parsed.get("prompt_cache_key").is_none());
+    }
+
+    async fn spawn_mock_codex_sse_server() -> (std::net::SocketAddr, tokio::task::JoinHandle<String>)
+    {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind ephemeral port");
+        let addr = listener.local_addr().expect("local addr");
+
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.expect("accept client");
+            let mut req_buf = Vec::with_capacity(8192);
+            let mut chunk = [0_u8; 4096];
+            loop {
+                let n = socket.read(&mut chunk).await.expect("read request");
+                if n == 0 {
+                    break;
+                }
+                req_buf.extend_from_slice(&chunk[..n]);
+                if let Some(hdr_end) = req_buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                    let hdr_str = String::from_utf8_lossy(&req_buf[..hdr_end]);
+                    let content_len = hdr_str
+                        .lines()
+                        .find_map(|line| {
+                            let (k, v) = line.split_once(':')?;
+                            k.trim()
+                                .eq_ignore_ascii_case("content-length")
+                                .then(|| v.trim().parse::<usize>().ok())
+                                .flatten()
+                        })
+                        .unwrap_or(0);
+                    if req_buf.len() >= hdr_end + 4 + content_len {
+                        break;
+                    }
+                }
+            }
+            let raw_req = String::from_utf8_lossy(&req_buf).into_owned();
+
+            let sse_body = concat!(
+                "event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_codex_1\",\"object\":\"response\",\"status\":\"in_progress\",\"output\":[]}}\n\n",
+                "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"item_id\":\"msg_1\",\"output_index\":0,\"content_index\":0,\"delta\":\"Codex OAuth ok\"}\n\n",
+                "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_codex_1\",\"object\":\"response\",\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"id\":\"msg_1\",\"status\":\"completed\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"Codex OAuth ok\",\"annotations\":[]}]}],\"usage\":{\"input_tokens\":120,\"output_tokens\":15,\"total_tokens\":135}}}\n\n"
+            );
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                sse_body.len(),
+                sse_body
+            );
+            socket
+                .write_all(response.as_bytes())
+                .await
+                .expect("write codex sse");
+            raw_req
+        });
+
+        (addr, server)
+    }
+
+    #[tokio::test]
+    async fn chatgpt_signed_in_model_streams_codex_sse_with_account_id_and_reasoning() {
+        const CHILD_ENV: &str = "BOXXY_TEST_CHATGPT_SIGNED_IN_CHILD";
+
+        if std::env::var_os(CHILD_ENV).is_none() {
+            let (addr, server) = spawn_mock_codex_sse_server().await;
+
+            let tmp = tempfile::tempdir().expect("tempdir");
+            let auth_dir = tmp.path().join("auth");
+            std::fs::create_dir_all(&auth_dir).expect("create auth dir");
+            let future_exp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("epoch")
+                .as_secs()
+                + 3600;
+            std::fs::write(
+                auth_dir.join("chatgpt.json"),
+                serde_json::json!({
+                    "access_token": "synthetic-oauth-access-token",
+                    "refresh_token": "synthetic-oauth-refresh-token",
+                    "account_id": "acct_codex_test",
+                    "expires_at": future_exp
+                })
+                .to_string(),
+            )
+            .expect("write chatgpt.json");
+
+            let exe = std::env::current_exe().expect("test exe");
+            let out = tokio::process::Command::new(exe)
+                .args([
+                    "--exact",
+                    "agent::tests::chatgpt_signed_in_model_streams_codex_sse_with_account_id_and_reasoning",
+                    "--nocapture",
+                ])
+                .env(CHILD_ENV, "1")
+                .env("BOXXY_CONFIG_DIR", tmp.path())
+                .env("CHATGPT_API_BASE", format!("http://{addr}/backend-api/codex"))
+                .output()
+                .await
+                .expect("run child test");
+
+            assert!(
+                out.status.success(),
+                "child failed:\n{}\n{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            );
+
+            let raw_req = server.await.expect("server request");
+            let (headers_str, body_str) = raw_req.split_once("\r\n\r\n").expect("HTTP split");
+            let headers_lower = headers_str.to_ascii_lowercase();
+            assert!(headers_lower.contains("authorization: bearer synthetic-oauth-access-token"));
+            assert!(headers_lower.contains("chatgpt-account-id: acct_codex_test"));
+            assert!(headers_lower.contains("session-id: sess-codex-42"));
+
+            let parsed: serde_json::Value = serde_json::from_str(body_str).expect("JSON body");
+            assert_eq!(parsed.get("store"), Some(&serde_json::json!(false)));
+            assert_eq!(
+                parsed.get("prompt_cache_key"),
+                Some(&serde_json::json!("sess-codex-42"))
+            );
+            assert_eq!(
+                parsed.get("reasoning"),
+                Some(&serde_json::json!({"effort": "high", "summary": "auto"}))
+            );
+            return;
+        }
+
+        let _ = crate::refresh_chatgpt_auth_status();
+        let provider = Some(ModelProvider::ChatGpt(
+            boxxy_model_selection::ChatGptModel::new("gpt-6.2-sol"),
+            Some(boxxy_model_selection::ThinkingLevel::High),
+        ));
+        let creds = AiCredentials::default();
+        let agent = create_agent_with_config(
+            &provider,
+            &creds,
+            "Codex system instructions",
+            &AgentOptions {
+                enable_native_search: true,
+                stateless: false,
+                session_cache_key: Some("sess-codex-42".to_string()),
+            },
+        );
+
+        let mut streamed = String::new();
+        let (reply, usage_opt, _) = agent
+            .chat_streaming(
+                "Ping Codex",
+                Vec::new(),
+                |_, _| {},
+                |delta| delta.clone_into(&mut streamed),
+            )
+            .await
+            .expect("codex chat_streaming");
+
+        assert_eq!(reply, "Codex OAuth ok");
+        assert_eq!(streamed, "Codex OAuth ok");
+        let usage = usage_opt.expect("usage present");
+        assert_eq!(usage.total_tokens, Some(135));
+        assert!(usage.cost.is_none());
     }
 }

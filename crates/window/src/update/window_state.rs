@@ -226,10 +226,14 @@ pub fn maybe_notify_broken_default_model(inner: &mut AppWindowInner) {
 }
 
 pub fn settings_changed(inner: &mut AppWindowInner, settings: Settings) {
-    if inner.current_settings == settings {
+    let effective_keys = settings.get_effective_api_keys();
+    let creds_changed = inner.last_effective_keys != effective_keys;
+
+    if inner.current_settings == settings && !creds_changed {
         return;
     }
 
+    inner.last_effective_keys = effective_keys;
     let prev = std::mem::replace(&mut inner.current_settings, settings.clone());
     if let Some(ref preferences) = inner.preferences {
         preferences.sync_settings(&settings);
@@ -242,10 +246,12 @@ pub fn settings_changed(inner: &mut AppWindowInner, settings: Settings) {
     }
 
     // Fast path when only the sidebar width changed (e.g. after drag-resizing).
-    let mut width_only_probe = prev.clone();
-    width_only_probe.ai_chat_width = settings.ai_chat_width;
-    if width_only_probe == settings {
-        return;
+    if !creds_changed {
+        let mut width_only_probe = prev.clone();
+        width_only_probe.ai_chat_width = settings.ai_chat_width;
+        if width_only_probe == settings {
+            return;
+        }
     }
 
     if prev.overlay_font_scale != settings.overlay_font_scale {
@@ -284,7 +290,7 @@ pub fn settings_changed(inner: &mut AppWindowInner, settings: Settings) {
         .as_ref()
         .map(|p| if is_dark { p.dark } else { p.light });
 
-    let agent_sync_needed = !only_ui_chrome_changed(&prev, &settings);
+    let agent_sync_needed = creds_changed || !only_ui_chrome_changed(&prev, &settings);
     if agent_sync_needed {
         inner.claw.refresh_mcp_list(&settings);
         maybe_notify_broken_default_model(inner);

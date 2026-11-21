@@ -609,6 +609,142 @@ impl fmt::Display for OpenAiModel {
     }
 }
 
+static CHATGPT_ACCOUNT_MODELS_CACHE: std::sync::LazyLock<arc_swap::ArcSwap<Option<Vec<String>>>> =
+    std::sync::LazyLock::new(|| arc_swap::ArcSwap::from_pointee(None));
+
+fn is_selectable_chatgpt_slug(slug: &str) -> bool {
+    let trimmed = slug.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    if trimmed.contains("-image")
+        || trimmed.contains("-live")
+        || trimmed.contains("-realtime")
+        || trimmed.contains("-tts")
+        || trimmed.contains("deep-research")
+        || trimmed.contains("computer-use")
+    {
+        return false;
+    }
+    if let Some(spec) =
+        catalog_get_spec("chatgpt", trimmed).or_else(|| resolve_any_catalog_spec(trimmed))
+    {
+        return !spec.deprecated && spec.tools && spec.input.text;
+    }
+    true
+}
+
+/// Updates (or clears when `None`) the live ChatGPT subscription model list discovered via
+/// [`rig::client::chatgpt_models::account_models`].
+///
+/// When empty or `None`, [`ChatGptModel::all`] falls back to [`Catalog::builtin`]'s `"chatgpt"` vendor.
+pub fn set_chatgpt_account_models(slugs: Option<Vec<String>>) {
+    let normalized = slugs.and_then(|raw| {
+        let mut seen = std::collections::HashSet::with_capacity(raw.len());
+        let mut out = Vec::with_capacity(raw.len());
+        for s in raw {
+            let trimmed = s.trim();
+            if is_selectable_chatgpt_slug(trimmed) && seen.insert(trimmed.to_owned()) {
+                out.push(trimmed.to_owned());
+            }
+        }
+        (!out.is_empty()).then_some(out)
+    });
+    CHATGPT_ACCOUNT_MODELS_CACHE.store(std::sync::Arc::new(normalized));
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct ChatGptModel(pub String);
+
+#[allow(non_upper_case_globals)]
+impl ChatGptModel {
+    pub const Default: Self = Self(String::new());
+
+    pub fn new(id: impl Into<String>) -> Self {
+        Self(id.into())
+    }
+
+    pub fn all() -> Vec<ChatGptModel> {
+        if let Some(ref account_slugs) = **CHATGPT_ACCOUNT_MODELS_CACHE.load()
+            && !account_slugs.is_empty()
+        {
+            return account_slugs
+                .iter()
+                .map(|slug| ChatGptModel(slug.clone()))
+                .collect();
+        }
+        let models: Vec<ChatGptModel> = catalog_models_for_vendor("chatgpt")
+            .into_iter()
+            .map(|spec| ChatGptModel(spec.id.clone()))
+            .collect();
+        if models.is_empty() {
+            vec![ChatGptModel::new(rig::providers::chatgpt::DEFAULT_MODEL)]
+        } else {
+            models
+        }
+    }
+
+    pub fn api_name(&self) -> &str {
+        if self.0.is_empty() {
+            rig::providers::chatgpt::DEFAULT_MODEL
+        } else {
+            self.0.as_str()
+        }
+    }
+
+    pub fn supports_thinking(&self) -> bool {
+        !self.available_thinking_levels().is_empty()
+    }
+
+    pub fn available_thinking_levels(&self) -> Vec<ThinkingLevel> {
+        let id = self.api_name();
+        if catalog_get_spec("chatgpt", id).is_some() {
+            catalog_thinking_levels("chatgpt", id)
+        } else {
+            catalog_thinking_levels_for_any_slug(id)
+        }
+    }
+
+    pub fn default_thinking_level(&self) -> Option<ThinkingLevel> {
+        let id = self.api_name();
+        if catalog_get_spec("chatgpt", id).is_some() {
+            return catalog_default_thinking_level("chatgpt", id);
+        }
+        let levels = self.available_thinking_levels();
+        if levels.is_empty() {
+            return None;
+        }
+        if let Some(spec) = resolve_any_catalog_spec(id)
+            && let Some(def_effort) = spec.reasoning.default_effort()
+        {
+            let mapped = effort_to_thinking_level(def_effort);
+            if levels.contains(&mapped) {
+                return Some(mapped);
+            }
+        }
+        if levels.contains(&ThinkingLevel::Medium) {
+            Some(ThinkingLevel::Medium)
+        } else if levels.contains(&ThinkingLevel::Low) {
+            Some(ThinkingLevel::Low)
+        } else {
+            levels.first().copied()
+        }
+    }
+}
+
+impl fmt::Display for ChatGptModel {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let id = self.api_name();
+        if let Some(spec) = catalog_get_spec("chatgpt", id).or_else(|| resolve_any_catalog_spec(id))
+        {
+            write!(f, "{}", spec.display_name)
+        } else {
+            write!(f, "{id}")
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct DeepSeekModel(pub String);
@@ -1405,6 +1541,7 @@ pub async fn fetch_openai_compatible_models(
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ModelProvider {
+    ChatGpt(ChatGptModel, Option<ThinkingLevel>),
     Gemini(GeminiModel, Option<ThinkingLevel>),
     Ollama(String),
     Anthropic(AnthropicModel, Option<ThinkingLevel>),
@@ -1429,6 +1566,7 @@ pub enum ModelProvider {
 impl ModelProvider {
     pub fn provider_name(&self) -> &str {
         match self {
+            ModelProvider::ChatGpt(_, _) => "ChatGPT",
             ModelProvider::Gemini(_, _) => "Gemini",
             ModelProvider::Ollama(_) => "Ollama",
             ModelProvider::Anthropic(_, _) => "Anthropic",
@@ -1452,6 +1590,7 @@ impl ModelProvider {
     #[must_use]
     pub fn telemetry_provider_name(&self) -> &'static str {
         match self {
+            ModelProvider::ChatGpt(_, _) => "ChatGPT",
             ModelProvider::Gemini(_, _) => "Gemini",
             ModelProvider::Ollama(_) => "Ollama",
             ModelProvider::Anthropic(_, _) => "Anthropic",
@@ -1472,6 +1611,7 @@ impl ModelProvider {
 
     pub fn api_model_name(&self) -> &str {
         match self {
+            ModelProvider::ChatGpt(model, _) => model.api_name(),
             ModelProvider::Gemini(model, _) => model.api_name(),
             ModelProvider::Ollama(model) => model.as_str(),
             ModelProvider::Anthropic(model, _) => model.api_name(),
@@ -1492,6 +1632,7 @@ impl ModelProvider {
 
     pub fn format_label(&self) -> String {
         match self {
+            ModelProvider::ChatGpt(model, _) => format!("ChatGPT/{model}"),
             ModelProvider::Gemini(model, _) => format!("Google/{}", model),
             ModelProvider::Ollama(model) => format!("Ollama/{}", model),
             ModelProvider::Anthropic(model, _) => format!("Anthropic/{}", model),
@@ -1519,6 +1660,7 @@ impl ModelProvider {
     #[must_use]
     pub fn display_model_name(&self) -> String {
         match self {
+            ModelProvider::ChatGpt(model, _) => model.to_string(),
             ModelProvider::Gemini(model, _) => model.to_string(),
             ModelProvider::Ollama(model) | ModelProvider::OpenRouter(model) => model.clone(),
             ModelProvider::Anthropic(model, _) => model.to_string(),
@@ -1541,6 +1683,7 @@ impl ModelProvider {
     #[must_use]
     pub fn effective_thinking_level(&self) -> Option<ThinkingLevel> {
         match self {
+            ModelProvider::ChatGpt(model, t) => (*t).or_else(|| model.default_thinking_level()),
             ModelProvider::Gemini(model, t) => (*t).or_else(|| model.default_thinking_level()),
             ModelProvider::Anthropic(model, t) => (*t).or_else(|| model.default_thinking_level()),
             ModelProvider::OpenAi(model, t) => (*t).or_else(|| model.default_thinking_level()),
@@ -1559,11 +1702,12 @@ impl ModelProvider {
     }
 
     /// Returns `true` if this provider supports built-in server-side web search
-    /// (Gemini Google Search grounding, OpenAI Responses `web_search`, Anthropic `web_search_20250305`).
+    /// (Gemini Google Search grounding, OpenAI / ChatGPT Responses `web_search`, Anthropic `web_search_20250305`).
     pub fn supports_native_search(&self) -> bool {
         matches!(
             self,
-            ModelProvider::Gemini(_, _)
+            ModelProvider::ChatGpt(_, _)
+                | ModelProvider::Gemini(_, _)
                 | ModelProvider::OpenAi(_, _)
                 | ModelProvider::Anthropic(_, _)
         )
@@ -1614,12 +1758,22 @@ mod tests {
     fn test_dynamic_catalog_models_and_thinking_levels() {
         let gemini_all = GeminiModel::all();
         assert!(gemini_all.iter().any(|m| m.api_name() == "gemini-4-carbon"));
-        assert!(gemini_all
-            .iter()
-            .any(|m| m.api_name() == "gemini-4-hydrogen"));
+        assert!(
+            gemini_all
+                .iter()
+                .any(|m| m.api_name() == "gemini-4-hydrogen")
+        );
         assert!(gemini_all.iter().any(|m| m.api_name() == "gemini-4-argon"));
-        assert!(gemini_all.iter().any(|m| m.api_name() == "gemini-3.8-flash"));
-        assert!(gemini_all.iter().any(|m| m.api_name() == "gemini-3.6-flash"));
+        assert!(
+            gemini_all
+                .iter()
+                .any(|m| m.api_name() == "gemini-3.8-flash")
+        );
+        assert!(
+            gemini_all
+                .iter()
+                .any(|m| m.api_name() == "gemini-3.6-flash")
+        );
 
         let gemini_hydrogen = GeminiModel::new("gemini-4-hydrogen");
         assert!(
@@ -1636,13 +1790,18 @@ mod tests {
         assert!(levels_3_8.contains(&ThinkingLevel::Low));
         assert!(levels_3_8.contains(&ThinkingLevel::Medium));
         assert!(levels_3_8.contains(&ThinkingLevel::High));
-        assert_eq!(flash_38.default_thinking_level(), Some(ThinkingLevel::Medium));
+        assert_eq!(
+            flash_38.default_thinking_level(),
+            Some(ThinkingLevel::Medium)
+        );
 
         // Gemini 3.6 Flash supports Minimal in addition to Low/Medium/High
         let flash_36 = GeminiModel::new("gemini-3.6-flash");
-        assert!(flash_36
-            .available_thinking_levels()
-            .contains(&ThinkingLevel::Minimal));
+        assert!(
+            flash_36
+                .available_thinking_levels()
+                .contains(&ThinkingLevel::Minimal)
+        );
 
         // OpenAI catalog includes GPT-6.2 Sol/Astra, GPT-6.1 Terra/Sol, and GPT-6 Astra
         let openai_all = OpenAiModel::all();
@@ -1664,12 +1823,23 @@ mod tests {
                 ThinkingLevel::XHigh,
             ]
         );
-        assert_eq!(terra_61.default_thinking_level(), Some(ThinkingLevel::Medium));
+        assert_eq!(
+            terra_61.default_thinking_level(),
+            Some(ThinkingLevel::Medium)
+        );
         let sol_62 = OpenAiModel::new("gpt-6.2-sol");
         assert_eq!(sol_62.to_string(), "GPT-6.2 Sol");
         assert!(sol_62.supports_thinking());
-        assert!(!sol_62.available_thinking_levels().contains(&ThinkingLevel::None));
-        assert!(sol_62.available_thinking_levels().contains(&ThinkingLevel::XHigh));
+        assert!(
+            !sol_62
+                .available_thinking_levels()
+                .contains(&ThinkingLevel::None)
+        );
+        assert!(
+            sol_62
+                .available_thinking_levels()
+                .contains(&ThinkingLevel::XHigh)
+        );
         let sol_61 = OpenAiModel::new("gpt-6.1-sol");
         assert_eq!(sol_61.to_string(), "GPT-6.1 Sol");
         assert!(sol_61.supports_thinking());
@@ -1681,39 +1851,61 @@ mod tests {
 
         // Anthropic catalog includes Claude Fable 5.2, Claude Opus 5.5, Claude Sonnet 5.5, and Claude Fable 5.1
         let anthropic_all = AnthropicModel::all();
-        assert!(anthropic_all
-            .iter()
-            .any(|m| m.api_name() == "claude-fable-5-2"));
-        assert!(anthropic_all
-            .iter()
-            .any(|m| m.api_name() == "claude-opus-5-5"));
-        assert!(anthropic_all
-            .iter()
-            .any(|m| m.api_name() == "claude-sonnet-5-5"));
-        assert!(anthropic_all
-            .iter()
-            .any(|m| m.api_name() == "claude-fable-5-1"));
+        assert!(
+            anthropic_all
+                .iter()
+                .any(|m| m.api_name() == "claude-fable-5-2")
+        );
+        assert!(
+            anthropic_all
+                .iter()
+                .any(|m| m.api_name() == "claude-opus-5-5")
+        );
+        assert!(
+            anthropic_all
+                .iter()
+                .any(|m| m.api_name() == "claude-sonnet-5-5")
+        );
+        assert!(
+            anthropic_all
+                .iter()
+                .any(|m| m.api_name() == "claude-fable-5-1")
+        );
 
         let fable_52 = AnthropicModel::new("claude-fable-5-2");
         assert!(fable_52.supports_thinking());
-        assert!(!fable_52.available_thinking_levels().contains(&ThinkingLevel::None));
-        assert!(fable_52.available_thinking_levels().contains(&ThinkingLevel::XHigh));
+        assert!(
+            !fable_52
+                .available_thinking_levels()
+                .contains(&ThinkingLevel::None)
+        );
+        assert!(
+            fable_52
+                .available_thinking_levels()
+                .contains(&ThinkingLevel::XHigh)
+        );
 
         let sonnet_55 = AnthropicModel::new("claude-sonnet-5-5");
         assert!(sonnet_55.supports_thinking());
         assert!(!sonnet_55.supports_extended_thinking());
-        assert!(sonnet_55
-            .available_thinking_levels()
-            .contains(&ThinkingLevel::None));
+        assert!(
+            sonnet_55
+                .available_thinking_levels()
+                .contains(&ThinkingLevel::None)
+        );
 
         // DeepSeek catalog includes both V4.1 Flash and V4 Pro
         let deepseek_all = DeepSeekModel::all();
-        assert!(deepseek_all
-            .iter()
-            .any(|m| m.api_name() == "deepseek-flash"));
-        assert!(deepseek_all
-            .iter()
-            .any(|m| m.api_name() == "deepseek-v4-pro"));
+        assert!(
+            deepseek_all
+                .iter()
+                .any(|m| m.api_name() == "deepseek-flash")
+        );
+        assert!(
+            deepseek_all
+                .iter()
+                .any(|m| m.api_name() == "deepseek-v4-pro")
+        );
 
         // Moonshot catalog orders flagship `kimi-*` models first ahead of legacy `moonshot-v1-*`
         let moonshot_all = MoonshotModel::all();
@@ -1723,9 +1915,11 @@ mod tests {
                 .is_some_and(|m| m.api_name().starts_with("kimi-k3"))
         );
         assert!(moonshot_all.iter().any(|m| m.api_name() == "kimi-k3"));
-        assert!(moonshot_all
-            .iter()
-            .any(|m| m.api_name() == "kimi-k2.7-code"));
+        assert!(
+            moonshot_all
+                .iter()
+                .any(|m| m.api_name() == "kimi-k2.7-code")
+        );
         let kimi_k3 = MoonshotModel::new("kimi-k3");
         assert_eq!(kimi_k3.to_string(), "Kimi K3");
         assert!(kimi_k3.supports_thinking());
@@ -1756,10 +1950,16 @@ mod tests {
 
         // Mistral catalog includes Codestral and Mistral Large (non-disableable reasoning in 0.47)
         let mistral_all = MistralModel::all();
-        assert!(mistral_all.iter().any(|m| m.api_name() == "codestral-latest"));
-        assert!(mistral_all
-            .iter()
-            .any(|m| m.api_name() == "mistral-large-latest"));
+        assert!(
+            mistral_all
+                .iter()
+                .any(|m| m.api_name() == "codestral-latest")
+        );
+        assert!(
+            mistral_all
+                .iter()
+                .any(|m| m.api_name() == "mistral-large-latest")
+        );
         let mistral_large = MistralModel::new("mistral-large-latest");
         assert!(mistral_large.supports_thinking());
         assert!(
@@ -1784,9 +1984,11 @@ mod tests {
 
         // Groq catalog includes GPT OSS 120B and Qwen 3.8 27B
         let groq_all = GroqModel::all();
-        assert!(groq_all
-            .iter()
-            .any(|m| m.api_name() == "openai/gpt-oss-120b"));
+        assert!(
+            groq_all
+                .iter()
+                .any(|m| m.api_name() == "openai/gpt-oss-120b")
+        );
         assert!(groq_all.iter().any(|m| m.api_name() == "qwen/qwen3.8-27b"));
 
         // OpenCode Zen (`opencode`) and OpenCode Go (`opencode-go`) catalog models
@@ -1821,11 +2023,8 @@ mod tests {
             .supports_native_search()
         );
         assert!(
-            ModelProvider::OpenAi(
-                OpenAiModel::new("gpt-6.1-sol"),
-                Some(ThinkingLevel::Medium)
-            )
-            .supports_native_search()
+            ModelProvider::OpenAi(OpenAiModel::new("gpt-6.1-sol"), Some(ThinkingLevel::Medium))
+                .supports_native_search()
         );
         assert!(
             ModelProvider::Anthropic(AnthropicModel::new("claude-opus-5-5"), None)
@@ -1910,7 +2109,12 @@ mod tests {
         assert_eq!(gpt.route, OpenAiApiRoute::Responses);
 
         // Catalog-driven Responses route inference for models that forbid Chat Completions tools
-        for slug in ["gpt-6.2-sol", "gpt-6.2-astra", "gpt-6.1-terra", "gpt-6.1-sol"] {
+        for slug in [
+            "gpt-6.2-sol",
+            "gpt-6.2-astra",
+            "gpt-6.1-terra",
+            "gpt-6.1-sol",
+        ] {
             assert_eq!(
                 OpenAiApiRoute::infer_for_model("http://localhost:4000/v1", slug),
                 OpenAiApiRoute::Responses,
@@ -1945,5 +2149,45 @@ mod tests {
         let fallback = resolve_any_catalog_spec("custom-gateway/deepseek-v4.1-flash")
             .expect("should resolve bare alias for unlisted gateway prefix");
         assert_eq!(fallback.id, "deepseek-flash");
+    }
+
+    #[test]
+    fn test_chatgpt_models_and_account_override_cache() {
+        set_chatgpt_account_models(None);
+        let default_models = ChatGptModel::all();
+        assert!(
+            default_models
+                .iter()
+                .any(|m| m.api_name() == rig::providers::chatgpt::DEFAULT_MODEL)
+        );
+
+        let default_prov = ModelProvider::ChatGpt(ChatGptModel::Default, Some(ThinkingLevel::High));
+        assert_eq!(default_prov.provider_name(), "ChatGPT");
+        assert_eq!(default_prov.telemetry_provider_name(), "ChatGPT");
+        assert!(default_prov.supports_native_search());
+        assert!(default_prov.format_label().starts_with("ChatGPT/"));
+
+        // Account-specific discovery overrides list in backend order while filtering image/deprecated slugs
+        set_chatgpt_account_models(Some(vec![
+            "gpt-6.2-astra".to_string(),
+            "chatgpt-image-latest".to_string(),
+            "gpt-future-codex".to_string(),
+            "gpt-6.2-astra".to_string(),
+        ]));
+        let discovered = ChatGptModel::all();
+        let slugs: Vec<&str> = discovered.iter().map(ChatGptModel::api_name).collect();
+        assert_eq!(slugs, vec!["gpt-6.2-astra", "gpt-future-codex"]);
+
+        // Reset back to builtin catalog
+        set_chatgpt_account_models(None);
+        assert!(ChatGptModel::all().len() >= 5);
+
+        let providers = crate::registry::get_providers();
+        let chatgpt_entry = providers
+            .iter()
+            .find(|p| p.name() == "ChatGPT")
+            .expect("ChatGPT registered");
+        assert!(chatgpt_entry.requires_api_key());
+        assert!(chatgpt_entry.uses_oauth());
     }
 }

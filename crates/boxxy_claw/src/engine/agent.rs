@@ -146,9 +146,7 @@ impl ClawAgent {
                                                 agent_name: sctx.agent_name.clone(),
                                                 character_id: sctx.character_id.clone(),
                                                 item: None,
-                                                active_status: Some(format!(
-                                                    "Thinking: {title}…"
-                                                )),
+                                                active_status: Some(format!("Thinking: {title}…")),
                                             })
                                             .await;
                                     }
@@ -285,8 +283,7 @@ impl ClawAgent {
         match res_result {
             Ok(res) => {
                 let raw_output = res.output();
-                let output =
-                    boxxy_ai_core::append_citations_to_output(&res.messages, &raw_output);
+                let output = boxxy_ai_core::append_citations_to_output(&res.messages, &raw_output);
                 let context_tokens = boxxy_ai_core::extract_response_context_tokens(&res);
                 let endpoints = &self.config.openai_compatible_endpoints;
                 let context_window = boxxy_ai_core::model_context_window_with_endpoints(
@@ -532,25 +529,19 @@ pub async fn create_claw_agent(
             tx_ui: tx_ui.clone(),
             approval: approval_handler.clone(),
         })
-        .tool(
-            crate::engine::tools::orchestration::OrchestrateAgentTool {
-                approval: approval_handler.clone(),
-            },
-        )
-        .tool(
-            crate::engine::tools::orchestration::RequestAssistanceTool {
-                pane_id: pane_id.clone(),
-                state: state.clone(),
-                approval: approval_handler.clone(),
-            },
-        )
-        .tool(
-            crate::engine::tools::orchestration::InviteCharacterTool {
-                pane_id: pane_id.clone(),
-                state: state.clone(),
-                approval: approval_handler.clone(),
-            },
-        );
+        .tool(crate::engine::tools::orchestration::OrchestrateAgentTool {
+            approval: approval_handler.clone(),
+        })
+        .tool(crate::engine::tools::orchestration::RequestAssistanceTool {
+            pane_id: pane_id.clone(),
+            state: state.clone(),
+            approval: approval_handler.clone(),
+        })
+        .tool(crate::engine::tools::orchestration::InviteCharacterTool {
+            pane_id: pane_id.clone(),
+            state: state.clone(),
+            approval: approval_handler.clone(),
+        });
 
     // Conditional Core Toolbox tools
     if config.file_tools_enabled {
@@ -625,10 +616,7 @@ pub async fn create_claw_agent(
         && config.use_native_search
         && provider.supports_native_search();
 
-    if config.web_search_local_enabled
-        && config.web_search_master_enabled
-        && !use_native_search
-    {
+    if config.web_search_local_enabled && config.web_search_master_enabled && !use_native_search {
         let tavily_key = creds.api_keys.get("Tavily").cloned().unwrap_or_default();
         if !tavily_key.is_empty() {
             tool_server = tool_server.tool(boxxy_core_toolbox::WebSearchTool {
@@ -711,7 +699,8 @@ pub async fn create_claw_agent(
 
     let (model, provider_name, model_name, reasoning) = build_provider_model(provider, &creds);
 
-    let mut builder = rig::agent::AgentBuilder::new(model)
+    let mut builder = model
+        .into_agent_builder()
         .preamble(&final_preamble)
         .default_max_turns(100)
         .add_hook(ModelContextHook::new(&final_preamble))

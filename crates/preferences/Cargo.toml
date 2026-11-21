@@ -20,6 +20,7 @@ tokio.workspace = true
 log.workspace = true
 regex.workspace = true
 boxxy-assets = { path = "../boxxy_assets" }
+boxxy-ai-core = { path = "../ai_core" }
 boxxy-core-widgets.workspace = true
 boxxy-keybindings.workspace = true
 boxxy-model-selection.workspace = true
@@ -28,3 +29,7 @@ boxxy-claw-protocol = { path = "../boxxy_claw_protocol" }
 uuid.workspace = true
 arc-swap.workspace = true
 parking_lot.workspace = true
+
+[dev-dependencies]
+serial_test.workspace = true
+tempfile.workspace = true

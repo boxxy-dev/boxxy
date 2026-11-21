@@ -24,6 +24,7 @@ const BUILTIN_BLACKLIST: &[&str] = &[
     ".ssh/authorized_keys",
     ".gnupg/private-keys-v1.d",
     ".aws/credentials",
+    ".codex/auth.json",
 ];
 
 type BlacklistCacheEntry = (PathBuf, Option<(SystemTime, u64)>, Arc<Vec<String>>);
@@ -52,9 +53,8 @@ pub fn parse_blacklist_with_defaults(custom_content: Option<&str>) -> Vec<String
 /// Loads the merged path blacklist from `<config_dir>/boxxyclaw/BLACKLIST.md` with mtime caching.
 #[must_use]
 pub fn load_blacklist() -> Arc<Vec<String>> {
-    let blacklist_path = boxxy_sys_utils::get_config_dir()
-        .join("boxxyclaw")
-        .join("BLACKLIST.md");
+    let config_dir = boxxy_sys_utils::get_config_dir();
+    let blacklist_path = config_dir.join("boxxyclaw").join("BLACKLIST.md");
     let stamp = std::fs::metadata(&blacklist_path)
         .ok()
         .map(|m| (m.modified().unwrap_or(SystemTime::UNIX_EPOCH), m.len()));
@@ -73,7 +73,12 @@ pub fn load_blacklist() -> Arc<Vec<String>> {
         .is_some()
         .then(|| std::fs::read_to_string(&blacklist_path).ok())
         .flatten();
-    let rules = Arc::new(parse_blacklist_with_defaults(custom.as_deref()));
+    let mut parsed = parse_blacklist_with_defaults(custom.as_deref());
+    let auth_dir_rule = config_dir.join("auth").to_string_lossy().into_owned();
+    if !parsed.iter().any(|r| r == &auth_dir_rule) {
+        parsed.push(auth_dir_rule);
+    }
+    let rules = Arc::new(parsed);
     *BLACKLIST_CACHE.lock() = Some((blacklist_path, stamp, rules.clone()));
     rules
 }
@@ -97,9 +102,7 @@ fn resolve_deepest_canonical(path: &Path) -> Option<PathBuf> {
         return Some(c);
     }
 
-    let has_parent_dir = path
-        .components()
-        .any(|c| matches!(c, Component::ParentDir));
+    let has_parent_dir = path.components().any(|c| matches!(c, Component::ParentDir));
     if !has_parent_dir {
         for ancestor in path.ancestors().skip(1) {
             if ancestor.as_os_str().is_empty() {
@@ -226,6 +229,7 @@ mod tests {
         assert!(merged.iter().any(|r| r == "/etc/sudoers"));
         assert!(merged.iter().any(|r| r == ".ssh/authorized_keys"));
         assert!(merged.iter().any(|r| r == ".aws/credentials"));
+        assert!(merged.iter().any(|r| r == ".codex/auth.json"));
         assert!(merged.iter().any(|r| r == ".env"));
         assert!(merged.iter().any(|r| r == "secrets/prod.toml"));
     }
@@ -263,5 +267,17 @@ mod tests {
         std::os::unix::fs::symlink(&secret_dir, &link_path).unwrap();
 
         assert!(is_path_blacklisted(&link_path, &rules));
+
+        // Active config_dir/auth (where ChatGPT OAuth tokens live) is blacklisted without
+        // blocking unrelated `auth/` directories inside a user's workspace.
+        let loaded = load_blacklist();
+        let oauth_record = boxxy_sys_utils::get_config_dir()
+            .join("auth")
+            .join("chatgpt.json");
+        assert!(is_path_blacklisted(&oauth_record, &loaded));
+        assert!(!is_path_blacklisted(
+            Path::new("/workspace/project/src/auth/login.rs"),
+            &loaded
+        ));
     }
 }

@@ -1,5 +1,9 @@
-//! Provider model factory mapping [`ModelProvider`] + [`AiCredentials`] into `rig::DynModel`.
+//! Provider model factory mapping [`ModelProvider`] + [`AiCredentials`] into [`ProviderModelBackend`].
 
+use crate::chatgpt_auth::{
+    CHATGPT_OAUTH_SENTINEL, build_chatgpt_model_spec, explicit_token_chatgpt_authenticator,
+    shared_chatgpt_authenticator,
+};
 use crate::credentials::AiCredentials;
 use crate::reasoning::{
     recommended_max_tokens_for_reasoning, resolve_model_reasoning_with_endpoints,
@@ -10,14 +14,31 @@ use boxxy_model_selection::{
 };
 use rig::completion::Reasoning;
 
-/// Type-erased completion model paired with its telemetry provider label, model identifier,
+/// Type-erased completion model or live signed-in credential handler (`SignedInModel`).
+pub enum ProviderModelBackend {
+    Static(rig::DynModel<rig::operation::Completion>),
+    SignedIn(rig::serve::ErasedHandler),
+}
+
+impl ProviderModelBackend {
+    /// Constructs a [`rig::agent::AgentBuilder`] wired to this model backend.
+    #[must_use]
+    pub fn into_agent_builder(self) -> rig::agent::AgentBuilder {
+        match self {
+            Self::Static(dyn_model) => rig::agent::AgentBuilder::new(dyn_model),
+            Self::SignedIn(handler) => {
+                let handlers = rig::handlers::Handlers::default();
+                let model_key = rig::effect::HandlerKey::from("boxxy/model:default");
+                let _ = handlers.register_erased(model_key.clone(), handler);
+                rig::agent::AgentBuilder::over_handlers(handlers, "boxxy", model_key)
+            }
+        }
+    }
+}
+
+/// Type-erased completion backend paired with its telemetry provider label, model identifier,
 /// and resolved [`Reasoning`] option.
-pub type BuiltProviderModel = (
-    rig::DynModel<rig::operation::Completion>,
-    String,
-    String,
-    Option<Reasoning>,
-);
+pub type BuiltProviderModel = (ProviderModelBackend, String, String, Option<Reasoning>);
 
 const DEFAULT_CUSTOM_BASE_URL: &str = "http://localhost:8000/v1";
 
@@ -35,8 +56,42 @@ fn finish_provider_model(
         &creds.openai_compatible_endpoints,
     );
     (
-        dyn_model,
+        ProviderModelBackend::Static(dyn_model),
         provider_label.to_owned(),
+        model_id.to_owned(),
+        reasoning,
+    )
+}
+
+fn build_chatgpt_model(
+    provider: &ModelProvider,
+    model_id: &str,
+    thinking: Option<ThinkingLevel>,
+    creds: &AiCredentials,
+) -> BuiltProviderModel {
+    let spec = build_chatgpt_model_spec(model_id);
+    let key = creds.resolve_api_key("ChatGPT");
+    let auth = if !key.is_empty() && key.as_ref() != CHATGPT_OAUTH_SENTINEL {
+        explicit_token_chatgpt_authenticator(key.into_owned())
+    } else {
+        shared_chatgpt_authenticator()
+    };
+    let http = rig::rig_reqwest::shared();
+    let backend = rig::client::signed_in::SignedInModel::new(spec, auth, http).map_or_else(
+        |_| {
+            let fallback = rig::providers::chatgpt::new("").completion(model_id);
+            ProviderModelBackend::Static(fallback.into())
+        },
+        |signed_in| ProviderModelBackend::SignedIn(rig::serve::ErasedHandler::new(signed_in)),
+    );
+    let reasoning = resolve_model_reasoning_with_endpoints(
+        provider,
+        thinking,
+        &creds.openai_compatible_endpoints,
+    );
+    (
+        backend,
+        "ChatGPT".to_owned(),
         model_id.to_owned(),
         reasoning,
     )
@@ -145,7 +200,8 @@ pub const fn needs_relaxed_finish_reasons(provider: &ModelProvider) -> bool {
 const fn supports_session_cache_key(provider: &ModelProvider) -> bool {
     matches!(
         provider,
-        ModelProvider::OpenAi(_, _)
+        ModelProvider::ChatGpt(_, _)
+            | ModelProvider::OpenAi(_, _)
             | ModelProvider::Xai(_, _)
             | ModelProvider::Mistral(_, _)
             | ModelProvider::Moonshot(_, _)
@@ -169,7 +225,12 @@ pub fn configure_agent_builder(
         .on_unsupported(rig::completion::OnUnsupported::Ignore);
 
     if !stateless {
-        gen_options = gen_options.cache(rig::completion::CacheRetention::Short);
+        let retention = if matches!(provider, ModelProvider::ChatGpt(_, _)) {
+            rig::completion::CacheRetention::Long
+        } else {
+            rig::completion::CacheRetention::Short
+        };
+        gen_options = gen_options.cache(retention);
         if let Some(key) = session_cache_key.map(str::trim).filter(|k| !k.is_empty())
             && supports_session_cache_key(provider)
         {
@@ -219,6 +280,9 @@ pub fn build_provider_model_with_options(
     stateless: bool,
 ) -> BuiltProviderModel {
     match provider {
+        ModelProvider::ChatGpt(m, t) => {
+            build_chatgpt_model(provider, m.api_name().trim(), *t, creds)
+        }
         ModelProvider::Gemini(m, t) => {
             let id = m.api_name().trim();
             let key = creds.resolve_api_key("Gemini");
@@ -232,7 +296,12 @@ pub fn build_provider_model_with_options(
             }
             let id = name.trim();
             let model = cfg.client().native_completion(id);
-            (model.into(), "Ollama".to_owned(), id.to_owned(), None)
+            (
+                ProviderModelBackend::Static(model.into()),
+                "Ollama".to_owned(),
+                id.to_owned(),
+                None,
+            )
         }
         ModelProvider::Anthropic(m, t) => {
             let id = m.api_name().trim();
@@ -255,13 +324,23 @@ pub fn build_provider_model_with_options(
             let id = name.trim();
             let key = creds.resolve_api_key("OpenRouter");
             let model = rig::providers::openrouter::new(key.as_ref()).chat(id);
-            (model.into(), "OpenRouter".to_owned(), id.to_owned(), None)
+            (
+                ProviderModelBackend::Static(model.into()),
+                "OpenRouter".to_owned(),
+                id.to_owned(),
+                None,
+            )
         }
         ModelProvider::DeepSeek(m) => {
             let id = m.api_name().trim();
             let key = creds.resolve_api_key("DeepSeek");
             let model = rig::providers::deepseek::new(key.as_ref()).chat(id);
-            (model.into(), "DeepSeek".to_owned(), id.to_owned(), None)
+            (
+                ProviderModelBackend::Static(model.into()),
+                "DeepSeek".to_owned(),
+                id.to_owned(),
+                None,
+            )
         }
         ModelProvider::Moonshot(m, t) => {
             let id = m.api_name().trim();

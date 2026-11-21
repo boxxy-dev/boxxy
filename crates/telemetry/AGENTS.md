@@ -9,7 +9,7 @@ Provides a privacy-first, lightweight observability layer for Boxxy Terminal tha
 - **`src/identity.rs`**: Lock-free `session_id` management (`ArcSwap`), `UUID` validation for `install_id` and `session_id`, and `is_telemetry_enabled()` fast-path checks.
 - **`src/normalize.rs`**: Canonical privacy normalizers and allowlists:
   - **`BUILTIN_BOXXY_TOOLS` (46 sorted tools):** Buckets any external user MCP tool under `"external_mcp_tool"`.
-  - **`BUILTIN_PROVIDERS` (14 built-in providers):** `Gemini`, `Ollama`, `Anthropic`, `OpenAI`, `OpenRouter`, `DeepSeek`, `Moonshot`, `xAI`, `Z.ai`, `Mistral`, `MiniMax`, `Groq`, `OpenCode Zen`, `OpenCode Go`; all user-defined `OpenAiCompatible` endpoints map to `"Custom Endpoints"`.
+  - **`BUILTIN_PROVIDERS` (15 built-in providers):** `ChatGPT`, `Gemini`, `Ollama`, `Anthropic`, `OpenAI`, `OpenRouter`, `DeepSeek`, `Moonshot`, `xAI`, `Z.ai`, `Mistral`, `MiniMax`, `Groq`, `OpenCode Zen`, `OpenCode Go`; all user-defined `OpenAiCompatible` endpoints map to `"Custom Endpoints"`.
   - **Model Privacy (`normalize_model_name`):** Redacts `model_name` to `"redacted"` for `"Ollama"` and `"Custom Endpoints"` before writing to SQLite so private local tags or custom fine-tuned model IDs never leave the machine.
   - **Environment & Theme Buckets:** `normalize_os`, `normalize_shell`, `normalize_desktop`, `normalize_pkg_type` (`"flatpak"`, `"distro"`, `"native"`), `resolve_theme_telemetry`, and `normalize_theme` (`"Boxxy Dark"`, `"Boxxy Light"`, `"Boxxy Community"`, `"Adwaita"`).
 - **`src/event.rs`**: Deterministic `BTreeMap`-ordered `MetricRecord` serializer ensuring stable JSON key order for SQLite `UNIQUE` coalescing.

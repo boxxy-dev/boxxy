@@ -14,7 +14,9 @@ use std::fmt::Write as _;
 #[must_use]
 pub fn native_search_provider_tool(provider: &ModelProvider) -> Option<ProviderToolDefinition> {
     match provider {
-        ModelProvider::OpenAi(_, _) => Some(ProviderToolDefinition::new("web_search")),
+        ModelProvider::ChatGpt(_, _) | ModelProvider::OpenAi(_, _) => {
+            Some(ProviderToolDefinition::new("web_search"))
+        }
         ModelProvider::Anthropic(_, _) => Some(
             ProviderToolDefinition::new("web_search_20250305")
                 .with_config("name", serde_json::json!("web_search")),
@@ -48,7 +50,8 @@ pub fn native_search_additional_params(provider: &ModelProvider) -> Option<serde
                 "includeServerSideToolInvocations": true
             }
         })),
-        ModelProvider::OpenAi(_, _)
+        ModelProvider::ChatGpt(_, _)
+        | ModelProvider::OpenAi(_, _)
         | ModelProvider::Anthropic(_, _)
         | ModelProvider::Ollama(_)
         | ModelProvider::OpenRouter(_)
