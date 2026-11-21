@@ -152,6 +152,8 @@ mod pending_drain_tests {
             current_turn_snapshots: Vec::new(),
             last_turn_snapshots: Vec::new(),
             current_turn_trace: Vec::new(),
+            generated_images_this_turn: Vec::new(),
+            current_turn_user_images: Vec::new(),
         }
     }
 

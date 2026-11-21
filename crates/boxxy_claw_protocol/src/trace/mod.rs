@@ -254,6 +254,13 @@ pub fn busy_tool_label(tool_name: &str, streaming_args: bool) -> String {
         "activate_skill" => "Loading skill…".to_string(),
         "list_processes" => "Inspecting processes…".to_string(),
         "get_system_info" => "Checking system info…".to_string(),
+        "generate_image" => {
+            if streaming_args {
+                "Preparing image prompt…".to_string()
+            } else {
+                "Generating image…".to_string()
+            }
+        }
         other => format!("{verb} {}…", other.replace('_', " ")),
     }
 }
@@ -341,5 +348,17 @@ mod tests {
         );
         assert_eq!(live_reasoning_title("***Triple star rejected***"), None);
         assert_eq!(live_reasoning_title("**Incomplete header"), None);
+    }
+
+    #[test]
+    fn busy_tool_label_formats_generate_image_states() {
+        assert_eq!(
+            busy_tool_label("generate_image", true),
+            "Preparing image prompt…"
+        );
+        assert_eq!(
+            busy_tool_label("generate_image", false),
+            "Generating image…"
+        );
     }
 }

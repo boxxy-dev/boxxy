@@ -14,6 +14,7 @@ pub const BUILTIN_BOXXY_TOOLS: &[&str] = &[
     "file_delete",
     "file_read",
     "file_write",
+    "generate_image",
     "get_clipboard",
     "get_system_info",
     "glob_search",

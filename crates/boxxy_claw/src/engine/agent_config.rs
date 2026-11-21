@@ -13,8 +13,56 @@ pub struct AgentConfig {
     pub use_native_search: bool,
     pub mcp_servers: Vec<boxxy_mcp::config::McpServerConfig>,
     pub openai_compatible_endpoints: Vec<boxxy_model_selection::OpenAiCompatibleEndpoint>,
+    /// Peer characters `(display_name, slug, provider_name)` in the active catalog whose
+    /// resolved `ModelProvider` is ready and supports native image generation.
+    pub image_capable_peers: Vec<(String, String, String)>,
     pub preamble: String,
     pub user_name: Option<String>,
+}
+
+/// Returns `(display_name, slug, provider_name)` for every character in `catalog` (excluding
+/// `exclude_character_id` and `/incognito`) whose resolved model is `Ready` and supports image generation.
+#[must_use]
+pub fn find_image_capable_characters_in_catalog(
+    settings: &boxxy_preferences::Settings,
+    exclude_character_id: &str,
+    catalog: &[boxxy_claw_protocol::characters::CharacterInfo],
+) -> Vec<(String, String, String)> {
+    let exclude = exclude_character_id.trim();
+    catalog
+        .iter()
+        .filter(|c| {
+            !c.config.id.is_empty()
+                && c.config.id != exclude
+                && !boxxy_claw_protocol::characters::is_incognito_character(&c.config.id)
+        })
+        .filter_map(|c| {
+            let resolved = settings.resolve_character_model(&c.config.id);
+            match settings.resolve_model_state(&resolved) {
+                boxxy_preferences::config::ModelConfigState::Ready(mp)
+                    if mp.supports_image_generation() =>
+                {
+                    let display = if !c.config.display_name.trim().is_empty() {
+                        c.config.display_name.trim().to_string()
+                    } else {
+                        crate::engine::session::roundtable::format_character_title(&c.config.name)
+                    };
+                    Some((display, c.config.name.clone(), mp.provider_name().to_string()))
+                }
+                _ => None,
+            }
+        })
+        .collect()
+}
+
+/// Returns `(display_name, slug, provider_name)` for all image-capable peer characters in the active catalog.
+#[must_use]
+pub fn find_image_capable_characters(
+    settings: &boxxy_preferences::Settings,
+    exclude_character_id: &str,
+) -> Vec<(String, String, String)> {
+    let catalog = crate::engine::session::roundtable::get_active_catalog();
+    find_image_capable_characters_in_catalog(settings, exclude_character_id, &catalog)
 }
 
 impl AgentConfig {
@@ -41,6 +89,14 @@ impl AgentConfig {
         };
 
         let resolved_model = settings.resolve_character_model(character_id.unwrap_or_default());
+        let self_supports_images = resolved_model
+            .as_ref()
+            .is_some_and(ModelProvider::supports_image_generation);
+        let image_capable_peers = if self_supports_images {
+            Vec::new()
+        } else {
+            find_image_capable_characters(settings, character_id.unwrap_or_default())
+        };
 
         Self {
             model: resolved_model,
@@ -59,6 +115,7 @@ impl AgentConfig {
                 .cloned()
                 .collect(),
             openai_compatible_endpoints: settings.openai_compatible_endpoints.clone(),
+            image_capable_peers,
             preamble,
             user_name,
         }
@@ -208,5 +265,86 @@ mod tests {
             format_session_models_banner_for_character(&settings, "char-unlisted", true),
             "Claw: Ollama/llama3.2 ● Dreams: Google/Gemini 3.8 Flash ● Search: Tavily"
         );
+    }
+
+    #[test]
+    fn find_image_capable_characters_filters_ready_keys_and_excludes_self() {
+        use boxxy_claw_protocol::characters::{CharacterConfig, CharacterInfo, CharacterStatus};
+        use boxxy_model_selection::{AnthropicModel, OpenAiModel};
+
+        let catalog = vec![
+            CharacterInfo {
+                config: CharacterConfig {
+                    id: "char-claude".to_string(),
+                    name: "niko-una".to_string(),
+                    display_name: "Niko Una".to_string(),
+                    color: "#ff6699".to_string(),
+                    duties: "Engineer".to_string(),
+                    personality: "Direct".to_string(),
+                },
+                status: CharacterStatus::Available,
+                has_avatar: false,
+            },
+            CharacterInfo {
+                config: CharacterConfig {
+                    id: "char-gemini".to_string(),
+                    name: "levi-kujo".to_string(),
+                    display_name: "Levi Kujo".to_string(),
+                    color: "#3399ff".to_string(),
+                    duties: "Architect".to_string(),
+                    personality: "Calm".to_string(),
+                },
+                status: CharacterStatus::Available,
+                has_avatar: false,
+            },
+            CharacterInfo {
+                config: CharacterConfig {
+                    id: "char-openai-nokey".to_string(),
+                    name: "kuro".to_string(),
+                    display_name: "Kuro".to_string(),
+                    color: "#9966ff".to_string(),
+                    duties: "Security".to_string(),
+                    personality: "Dry".to_string(),
+                },
+                status: CharacterStatus::Available,
+                has_avatar: false,
+            },
+        ];
+
+        let mut settings = boxxy_preferences::Settings::default();
+        settings.claw_model = Some(ModelProvider::Anthropic(
+            AnthropicModel::ClaudeSonnet5,
+            None,
+        ));
+        settings
+            .api_keys
+            .insert("Anthropic".to_string(), "sk-ant-synthetic".to_string());
+        settings
+            .api_keys
+            .insert("Gemini".to_string(), "gem-synthetic".to_string());
+        settings.character_models.insert(
+            "char-gemini".to_string(),
+            ModelProvider::Gemini(GeminiModel::Flash3_8, Some(ThinkingLevel::Low)),
+        );
+        // Kuro is assigned OpenAI, but no OpenAI API key is configured -> must NOT be advertised as Ready
+        settings.character_models.insert(
+            "char-openai-nokey".to_string(),
+            ModelProvider::OpenAi(OpenAiModel::Gpt6Astra, None),
+        );
+
+        let peers = find_image_capable_characters_in_catalog(&settings, "char-claude", &catalog);
+        assert_eq!(
+            peers,
+            vec![(
+                "Levi Kujo".to_string(),
+                "levi-kujo".to_string(),
+                "Gemini".to_string()
+            )]
+        );
+
+        // Excluded when querying for Levi himself
+        let self_peers =
+            find_image_capable_characters_in_catalog(&settings, "char-gemini", &catalog);
+        assert!(self_peers.is_empty());
     }
 }

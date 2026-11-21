@@ -94,6 +94,60 @@ fn detect_result_failure(trimmed: &str, parsed: Option<&serde_json::Value>) -> b
     trimmed.starts_with("Error:") || trimmed.starts_with("\"Error:")
 }
 
+fn summarize_generate_image_result(
+    unquoted: &str,
+    parsed: Option<&serde_json::Value>,
+) -> (String, Option<String>) {
+    if let Some(v) = parsed.filter(|v| v.is_object()) {
+        if let Some(err) = v
+            .get("error")
+            .and_then(serde_json::Value::as_str)
+            .filter(|s| !s.trim().is_empty())
+        {
+            return ("Image generation failed".to_string(), clip_preview(err));
+        }
+        let detail = v
+            .get("prompt")
+            .and_then(serde_json::Value::as_str)
+            .filter(|s| !s.trim().is_empty())
+            .or_else(|| {
+                v.get("path")
+                    .and_then(serde_json::Value::as_str)
+                    .and_then(|p| p.rsplit('/').next())
+                    .filter(|s| !s.is_empty())
+            });
+        let label = detail.map_or_else(
+            || "Generated image".to_string(),
+            |d| {
+                let first = d.lines().next().unwrap_or(d).trim();
+                format!(
+                    "Generated image: {}",
+                    truncate_chars_with_ellipsis(first, MAX_CMD_LABEL_CHARS)
+                )
+            },
+        );
+        let preview = v
+            .get("path")
+            .and_then(serde_json::Value::as_str)
+            .map_or_else(
+                || clip_preview(unquoted),
+                |p| {
+                    let model = v
+                        .get("model")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("");
+                    if model.is_empty() {
+                        Some(p.to_string())
+                    } else {
+                        Some(format!("{p} ({model})"))
+                    }
+                },
+            );
+        return (label, preview);
+    }
+    ("Generated image".to_string(), clip_preview(unquoted))
+}
+
 fn extract_readable_result_summary(
     tool_name: &str,
     trimmed: &str,
@@ -169,6 +223,7 @@ fn extract_readable_result_summary(
             "Checked system hardware & OS".to_string(),
             clip_preview(unquoted),
         ),
+        "generate_image" => summarize_generate_image_result(unquoted, parsed),
         other => (other.replace('_', " "), clip_preview(unquoted)),
     }
 }
@@ -292,5 +347,34 @@ mod tests {
             }
             other => panic!("expected Tool, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn generate_image_trace_summarizes_prompt_path_and_errors() {
+        let ok_json = r#"{"success":true,"path":"/tmp/synthetic/cube.png","prompt":"A geometric blue cube","model":"gemini-3.1-flash-image","markdown":"![A geometric blue cube](/tmp/synthetic/cube.png)"}"#;
+        let item = tool_result_to_trace_item("generate_image", ok_json).unwrap();
+        assert_eq!(
+            item,
+            TurnTraceItem::Tool {
+                tool_name: "generate_image".to_string(),
+                category: TraceCategory::Other,
+                label: "Generated image: A geometric blue cube".to_string(),
+                preview: Some("/tmp/synthetic/cube.png (gemini-3.1-flash-image)".to_string()),
+                failed: false,
+            }
+        );
+
+        let err_json = r#"{"success":false,"error":"Reference images are not supported by this provider"}"#;
+        let err_item = tool_result_to_trace_item("generate_image", err_json).unwrap();
+        assert_eq!(
+            err_item,
+            TurnTraceItem::Tool {
+                tool_name: "generate_image".to_string(),
+                category: TraceCategory::Other,
+                label: "Image generation failed".to_string(),
+                preview: Some("Reference images are not supported by this provider".to_string()),
+                failed: true,
+            }
+        );
     }
 }

@@ -6,6 +6,7 @@ mod catalog;
 mod chatgpt_auth;
 mod credentials;
 mod hook;
+mod image_gen;
 mod providers;
 mod reasoning;
 mod search;
@@ -28,6 +29,10 @@ pub use chatgpt_auth::{
 };
 pub use credentials::AiCredentials;
 pub use hook::ModelContextHook;
+pub use image_gen::{
+    GeneratedImage, ImageAspectRatio, ImageGenParams, generate_image_with_base_url,
+    generate_image_with_provider, select_openrouter_image_model,
+};
 pub use providers::{
     BuiltProviderModel, ProviderModelBackend, build_provider_model,
     build_provider_model_with_options, configure_agent_builder, fetch_openai_compatible_models,

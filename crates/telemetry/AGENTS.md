@@ -8,7 +8,7 @@ Provides a privacy-first, lightweight observability layer for Boxxy Terminal tha
 - **`src/lib.rs`**: Public constants and high-level tracking & lifecycle API (`init_with_db`, `init_db`, `init`, `flush_journal`, `disable_and_purge`, `track_launch`, `track_ai_turn`, `track_ai_invocation`, `track_ai_tokens`, `track_ai_latency`, `track_tool_use`, `track_session_resume`).
 - **`src/identity.rs`**: Lock-free `session_id` management (`ArcSwap`), `UUID` validation for `install_id` and `session_id`, and `is_telemetry_enabled()` fast-path checks.
 - **`src/normalize.rs`**: Canonical privacy normalizers and allowlists:
-  - **`BUILTIN_BOXXY_TOOLS` (46 sorted tools):** Buckets any external user MCP tool under `"external_mcp_tool"`.
+  - **`BUILTIN_BOXXY_TOOLS` (47 sorted tools):** Buckets any external user MCP tool under `"external_mcp_tool"`.
   - **`BUILTIN_PROVIDERS` (15 built-in providers):** `ChatGPT`, `Gemini`, `Ollama`, `Anthropic`, `OpenAI`, `OpenRouter`, `DeepSeek`, `Moonshot`, `xAI`, `Z.ai`, `Mistral`, `MiniMax`, `Groq`, `OpenCode Zen`, `OpenCode Go`; all user-defined `OpenAiCompatible` endpoints map to `"Custom Endpoints"`.
   - **Model Privacy (`normalize_model_name`):** Redacts `model_name` to `"redacted"` for `"Ollama"` and `"Custom Endpoints"` before writing to SQLite so private local tags or custom fine-tuned model IDs never leave the machine.
   - **Environment & Theme Buckets:** `normalize_os`, `normalize_shell`, `normalize_desktop`, `normalize_pkg_type` (`"flatpak"`, `"distro"`, `"native"`), `resolve_theme_telemetry`, and `normalize_theme` (`"Boxxy Dark"`, `"Boxxy Light"`, `"Boxxy Community"`, `"Adwaita"`).
@@ -29,5 +29,5 @@ Provides a privacy-first, lightweight observability layer for Boxxy Terminal tha
 | `ai.invocations` | `boxxy-claw` (`track_ai_turn`) | `model_provider`, `model_name` (`redacted` for Ollama/Custom), `feature` |
 | `ai.tokens` | `boxxy-claw` (`track_ai_turn`) | `model_provider`, `model_name` (`redacted` for Ollama/Custom), `role` (`input`/`output`), `feature` |
 | `ai.latency` | `boxxy-claw` (`track_ai_turn`) | `model_provider`, `model_name` (`redacted` for Ollama/Custom), `feature` |
-| `tool.use` | `boxxy-claw` & `core-toolbox` | `tool_name` (46 built-ins or `external_mcp_tool`) |
+| `tool.use` | `boxxy-claw` & `core-toolbox` | `tool_name` (47 built-ins or `external_mcp_tool`) |
 | `claw.session_resume` | `boxxy-claw` | `session_type` (`normal`/`pinned`) |

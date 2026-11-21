@@ -11,6 +11,7 @@ arc-swap.workspace = true
 base64.workspace = true
 futures-util.workspace = true
 parking_lot.workspace = true
+reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 log.workspace = true
@@ -19,6 +20,7 @@ boxxy-model-selection = { path = "../model_selection" }
 boxxy-sys-utils.workspace = true
 
 [dev-dependencies]
+image.workspace = true
 serial_test.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "net", "io-util", "process"] }

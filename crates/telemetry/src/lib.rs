@@ -283,7 +283,7 @@ mod tests {
 
     #[test]
     fn test_builtin_boxxy_tools_is_sorted_and_normalizes_all_tools() {
-        assert_eq!(BUILTIN_BOXXY_TOOLS.len(), 46);
+        assert_eq!(BUILTIN_BOXXY_TOOLS.len(), 47);
         for window in BUILTIN_BOXXY_TOOLS.windows(2) {
             assert!(
                 window[0] < window[1],
@@ -294,6 +294,7 @@ mod tests {
         }
 
         assert_eq!(normalize_tool_name("file_read"), "file_read");
+        assert_eq!(normalize_tool_name("generate_image"), "generate_image");
         assert_eq!(normalize_tool_name("sys_shell_exec"), "sys_shell_exec");
         assert_eq!(
             normalize_tool_name("native_web_search"),

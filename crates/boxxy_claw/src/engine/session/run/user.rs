@@ -436,14 +436,17 @@ impl ClawSession {
                 }
             }
             UserRoundtableIntent::None => {
-                if state_lock.roundtable.participants.len() >= 2 {
-                    // User is interjecting / participating in an active roundtable conversation —
-                    // queue Host + Guest(s) and reset the 20-round budget!
+                if state_lock.roundtable.auto_alternate
+                    && state_lock.roundtable.participants.len() >= 2
+                {
+                    // User is interjecting / participating in an active multi-turn roundtable —
+                    // queue Host + Guest(s) and reset the round budget!
                     state_lock
                         .roundtable
                         .resume_after_interjection(host, raw_input.to_string());
                     state_lock.active_speaker = state_lock.roundtable.speaker_queue.pop_front();
                 } else {
+                    state_lock.roundtable.clear();
                     state_lock.active_speaker = None;
                 }
                 drop(state_lock);

@@ -226,7 +226,7 @@ impl ClawAgent {
                             composing_reply = false;
                             let status_str = boxxy_claw_protocol::busy_tool_label(
                                 tool_call.function.name.as_str(),
-                                true,
+                                false,
                             );
                             let _ = sctx
                                 .tx_ui
@@ -541,7 +541,21 @@ pub async fn create_claw_agent(
             pane_id: pane_id.clone(),
             state: state.clone(),
             approval: approval_handler.clone(),
+            self_supports_images: provider.supports_image_generation(),
+            image_capable_peers: config.image_capable_peers.clone(),
         });
+
+    if provider.supports_image_generation() {
+        tool_server = tool_server.tool(crate::engine::tools::image::GenerateImageTool {
+            provider: provider.clone(),
+            creds: creds.clone(),
+            current_dir: current_dir.to_string(),
+            state: state.clone(),
+            approval: approval_handler.clone(),
+            base_url_override: None,
+            generated_dir_override: None,
+        });
+    }
 
     // Conditional Core Toolbox tools
     if config.file_tools_enabled {
@@ -695,6 +709,28 @@ pub async fn create_claw_agent(
         );
         final_preamble.push_str("\n\n");
         final_preamble.push_str(&policy);
+    }
+
+    if !provider.supports_image_generation() {
+        if config.image_capable_peers.is_empty() {
+            final_preamble.push_str(
+                "\n\n[IMAGE GENERATION AVAILABILITY]\n\
+                Neither your current model nor any other character in the catalog is currently assigned an image-capable provider. \
+                If the user asks to generate, draw, or edit an image, clearly explain that they can assign any character to Gemini, OpenAI, xAI, MiniMax, or OpenRouter in **Models Selection -> Character Overrides**, and do NOT substitute unsolicited ASCII art or SVG/script workarounds unless the user specifically asked for SVG or code.",
+            );
+        } else {
+            let peers: Vec<String> = config
+                .image_capable_peers
+                .iter()
+                .map(|(name, slug, prov)| format!("{name} (`@{slug}`, {prov})"))
+                .collect();
+            final_preamble.push_str(&format!(
+                "\n\n[IMAGE GENERATION AVAILABILITY]\n\
+                Your current model cannot generate images directly, but these characters have image generation enabled: {}. \
+                When the user asks to generate, draw, or edit an image, call `invite_character(character=\"...\", topic=\"...\", debate=false)` with a rich visual prompt in `topic` so they can step into the overlay for 1 turn and generate it.",
+                peers.join(", ")
+            ));
+        }
     }
 
     let (model, provider_name, model_name, reasoning) = build_provider_model(provider, &creds);

@@ -15,19 +15,38 @@ pub fn is_whats_new_prompt(prompt: &str) -> bool {
     prompt.contains(WHATS_NEW_CONTEXT_MARKER)
 }
 
-/// Strips synthetic appended payload sections from a prompt.
+/// Strips synthetic appended payload sections and roundtable handoff wrappers from a prompt.
 ///
 /// Ensures skill matching, memory recall, `@file` extraction, and `:character` mention
-/// parsing inspect only the text actually authored by the user.
+/// parsing inspect only the actual user/task topic rather than synthetic boilerplate words.
 #[must_use]
 pub fn extract_user_authored_prompt(prompt: &str) -> &str {
-    prompt
+    let base = prompt
         .split(WHATS_NEW_CONTEXT_MARKER)
         .next()
         .unwrap_or(prompt)
         .split(ATTACHMENTS_CONTEXT_MARKER)
         .next()
-        .unwrap_or(prompt)
+        .unwrap_or(prompt);
+
+    if (base.starts_with("[ROUNDTABLE TURN") || base.starts_with("[COLLABORATIVE HANDOFF"))
+        && let Some(after_topic) = base.split("Original Topic / Context: ").nth(1)
+    {
+        return after_topic
+            .split("\nINSTRUCTIONS FOR YOUR TURN:")
+            .next()
+            .unwrap_or(after_topic)
+            .trim();
+    }
+
+    if (base.starts_with("[ROUNDTABLE DEBATE STARTED]")
+        || base.starts_with("[VISUAL NOVEL DRAMA MODE STARTED]"))
+        && let Some(after_topic) = base.split("\nTopic: ").nth(1)
+    {
+        return after_topic.lines().next().unwrap_or(after_topic).trim();
+    }
+
+    base
 }
 
 use crate::engine::{
@@ -279,6 +298,8 @@ pub fn spawn_turn(
                 state_lock.last_turn_snapshots =
                     std::mem::take(&mut state_lock.current_turn_snapshots);
             }
+            state_lock.generated_images_this_turn.clear();
+            state_lock.current_turn_user_images.clone_from(&images_clone);
             state_lock.current_turn_trace.clear();
             for skill_name in &triggered_skill_names {
                 state_lock
@@ -321,7 +342,11 @@ pub fn spawn_turn(
                 let remaining_rounds = state_lock.roundtable.remaining_rounds;
                 let is_final_round =
                     rounds_taken > 0 && (remaining_rounds == 0 || rounds_taken >= max_rounds);
-                let turn_limit_rule = if is_final_round {
+                let turn_limit_rule = if is_final_round && !state_lock.roundtable.auto_alternate {
+                    format!(
+                        "5. SINGLE-TURN COLLABORATIVE HANDOFF: Complete the requested task or assistance (using your tools such as `generate_image` if applicable), present your result directly to the user in-character, and conclude cleanly — do NOT ask {other_mentions_str} a follow-up question and do NOT call `invite_character`."
+                    )
+                } else if is_final_round {
                     format!(
                         "5. FINAL TURN ({rounds_taken}/{max_rounds} — TURN LIMIT REACHED): You have reached the configured Character Chat Turn Limit ({max_rounds} turns). Deliver your concluding point and address the user directly — do NOT ask {other_mentions_str} another follow-up question and do NOT call `invite_character`."
                     )
@@ -482,6 +507,8 @@ pub fn spawn_turn(
                         .await;
                     {
                         let mut state_lock = state.lock().await;
+                        state_lock.current_turn_user_images.clear();
+                        state_lock.generated_images_this_turn.clear();
                         state_lock.active_speaker = None;
                         state_lock.next_roundtable_turn = None;
                         state_lock.roundtable.clear();
@@ -618,7 +645,7 @@ pub fn spawn_turn(
                         .await;
                 }
 
-                let display_response = history::strip_speaker_tag(&response)
+                let mut display_response = history::strip_speaker_tag(&response)
                     .replace(
                         crate::engine::session::roundtable::YIELD_TO_USER_MARKER,
                         "",
@@ -628,6 +655,11 @@ pub fn spawn_turn(
 
                 {
                     let mut state_lock = state.lock().await;
+                    state_lock.current_turn_user_images.clear();
+                    let generated_images =
+                        std::mem::take(&mut state_lock.generated_images_this_turn);
+                    display_response =
+                        append_missing_generated_images(display_response, &generated_images);
                     if !speaker.is_guest {
                         state_lock.persistent_agent = Some(agent.clone());
                     }
@@ -847,6 +879,8 @@ pub fn spawn_turn(
 
                 let completed_trace = {
                     let mut state_lock = state.lock().await;
+                    state_lock.current_turn_user_images.clear();
+                    state_lock.generated_images_this_turn.clear();
                     if !speaker.is_guest {
                         state_lock.persistent_agent = Some(agent);
                     }
@@ -1020,6 +1054,30 @@ fn summarize_long_task_completion(response: &str) -> String {
     }
 }
 
+/// Ensures every `(caption, img_path)` generated by `generate_image` during the turn
+/// is present in `display_response` so images always render inline in the Claw overlay,
+/// without duplicating Markdown tags the model already included or altering `[SILENT_ACK]`.
+pub(crate) fn append_missing_generated_images(
+    mut display_response: String,
+    generated_images: &[(String, String)],
+) -> String {
+    if generated_images.is_empty() || display_response.trim() == "[SILENT_ACK]" {
+        return display_response;
+    }
+
+    for (caption, img_path) in generated_images {
+        if !img_path.is_empty() && !display_response.contains(img_path.as_str()) {
+            if !display_response.is_empty() {
+                display_response.push_str("\n\n");
+            }
+            display_response
+                .push_str(&crate::engine::tools::image::format_markdown_image(caption, img_path));
+        }
+    }
+
+    display_response
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1069,6 +1127,12 @@ mod tests {
         assert_eq!(
             extract_user_authored_prompt(with_attachments),
             "Explain this snippet"
+        );
+
+        let handoff = "[COLLABORATIVE HANDOFF — 1 Turn]\n**Host** (`@host`) just spoke in the overlay conversation (see their latest message in history).\nOther participants in this conversation: Host (@host).\nOriginal Topic / Context: Generate a geometric blue cube\nINSTRUCTIONS FOR YOUR TURN:\n- Complete the requested task.";
+        assert_eq!(
+            extract_user_authored_prompt(handoff),
+            "Generate a geometric blue cube"
         );
     }
 
@@ -1121,5 +1185,45 @@ mod tests {
             "registry.ollama.ai/library/gemma2 does not support tools".to_string(),
         ));
         assert!(format_turn_error(&no_tools).contains("does not support tool calling"));
+    }
+
+    #[test]
+    fn append_missing_generated_images_appends_only_absent_paths_and_respects_silent_ack() {
+        let images = vec![
+            (
+                "A geometric blue cube".to_string(),
+                "/tmp/synthetic/cube_1.png".to_string(),
+            ),
+            (
+                "A silver sphere".to_string(),
+                "/tmp/synthetic/sphere_2.png".to_string(),
+            ),
+        ];
+
+        // Appends both when model omitted Markdown tags
+        let appended =
+            append_missing_generated_images("Here are both renders!".to_string(), &images);
+        assert_eq!(
+            appended,
+            "Here are both renders!\n\n![A geometric blue cube](/tmp/synthetic/cube_1.png)\n\n![A silver sphere](/tmp/synthetic/sphere_2.png)"
+        );
+
+        // Does NOT duplicate an image already present in prose, while appending the missing second one
+        let partial = append_missing_generated_images(
+            "First one:\n\n![cube](/tmp/synthetic/cube_1.png)".to_string(),
+            &images,
+        );
+        assert_eq!(
+            partial.matches("/tmp/synthetic/cube_1.png").count(),
+            1,
+            "must not duplicate already-embedded image path"
+        );
+        assert!(partial.contains("![A silver sphere](/tmp/synthetic/sphere_2.png)"));
+
+        // Never mutates `[SILENT_ACK]`
+        assert_eq!(
+            append_missing_generated_images("[SILENT_ACK]".to_string(), &images),
+            "[SILENT_ACK]"
+        );
     }
 }

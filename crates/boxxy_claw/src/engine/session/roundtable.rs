@@ -305,15 +305,27 @@ impl RoundtableState {
 
     /// Invites a guest character mid-turn (e.g., via the `invite_character` tool)
     /// so they speak immediately after the current speaker finishes.
+    ///
+    /// When `debate` is `false` and no multi-turn roundtable is active, grants a single
+    /// 1-turn collaborative handoff (`remaining_rounds = 1`) so the guest completes the task
+    /// and yields back to the user without starting a multi-round loop.
     /// Returns `false` if the configured character chat turn limit has already been reached.
     pub fn invite_guest(
         &mut self,
         host: SpeakerIdentity,
         guest: SpeakerIdentity,
         topic_or_prompt: String,
+        debate: bool,
     ) -> bool {
+        if debate {
+            self.auto_alternate = true;
+        }
         if self.rounds_taken == 0 && self.remaining_rounds == 0 {
-            self.max_rounds = resolve_turn_limit_for_prompt(&topic_or_prompt);
+            self.max_rounds = if debate || self.auto_alternate {
+                resolve_turn_limit_for_prompt(&topic_or_prompt)
+            } else {
+                1
+            };
         }
         let max_rounds = self.max_rounds.max(1);
         if self.rounds_taken >= max_rounds {
@@ -336,7 +348,11 @@ impl RoundtableState {
         // Only initialize `remaining_rounds` if no handoff turns have been taken yet;
         // never refill an active or exhausted turn budget mid-conversation!
         if self.remaining_rounds == 0 && self.rounds_taken == 0 {
-            self.remaining_rounds = max_rounds;
+            self.remaining_rounds = if debate || self.auto_alternate {
+                max_rounds
+            } else {
+                1
+            };
         } else {
             let allowed = max_rounds.saturating_sub(self.rounds_taken);
             if self.remaining_rounds > allowed {
@@ -458,30 +474,37 @@ impl RoundtableState {
             .map(|p| format!("{} (@{})", p.display_name, p.slug))
             .collect();
 
-        let style_instructions = match (self.drama_mode, is_final_round) {
-            (true, true) => {
+        let style_instructions = match (self.drama_mode, self.auto_alternate, is_final_round) {
+            (true, _, true) => {
                 "- DRAMA / VISUAL NOVEL MODE IS ACTIVE: Reply in ONLY 1 to 2 short, punchy spoken sentences (under 35 words max)!\n\
                 - STRICTLY FORBIDDEN: NO bullet points, NO numbered lists, NO markdown headers, NO multi-paragraph essays, and NO routine tool calls!\n\
                 - FINAL TURN (TURN LIMIT REACHED): Deliver a punchy closing line that wraps up the scene for the user — do NOT ask another follow-up question to continue the loop!"
             }
-            (true, false) => {
+            (true, _, false) => {
                 "- DRAMA / VISUAL NOVEL MODE IS ACTIVE: Reply in ONLY 1 to 2 short, punchy spoken sentences (under 35 words max)!\n\
                 - STRICTLY FORBIDDEN: NO bullet points, NO numbered lists, NO markdown headers, NO multi-paragraph essays, and NO routine tool calls!\n\
                 - Speak like a live anime / visual novel character reacting directly to what was just said, and end with a quick hook or reaction to the other character (or append `[YIELD_TO_USER]` if the scene has concluded)!"
             }
-            (false, true) => {
+            (false, false, true) => {
+                "- Complete the requested task or assistance in your character's voice using your tools if needed (such as `generate_image`), present the result directly to the user, and conclude without starting a back-and-forth loop.\n\
+                - Do NOT re-run system inspection commands that were already executed in the previous turn unless checking a brand-new fact.\n\
+                - Do NOT ask another character a follow-up question to continue the loop!"
+            }
+            (false, true, true) => {
                 "- Challenge, agree, banter, or build on the previous speaker's specific points from your own technical perspective and personality.\n\
                 - Do NOT re-run system inspection commands that were already executed in the previous turn unless checking a brand-new fact.\n\
                 - FINAL TURN (TURN LIMIT REACHED): Deliver your concluding take and wrap up the discussion for the user — do NOT ask another follow-up question to continue the loop!"
             }
-            (false, false) => {
+            (false, _, false) => {
                 "- Challenge, agree, banter, or build on the previous speaker's specific points from your own technical perspective and personality.\n\
                 - Do NOT re-run system inspection commands that were already executed in the previous turn unless checking a brand-new fact.\n\
                 - End your message by addressing the other character with a sharp counter-point or follow-up question so the conversation continues naturally (or append `[YIELD_TO_USER]` if the discussion has reached a natural conclusion)!"
             }
         };
 
-        let round_badge = if is_final_round {
+        let round_badge = if !self.auto_alternate && max_rounds == 1 {
+            "[COLLABORATIVE HANDOFF — 1 Turn]".to_string()
+        } else if is_final_round {
             format!(
                 "[ROUNDTABLE TURN — Round {}/{} (FINAL TURN — LIMIT REACHED)]",
                 self.rounds_taken, max_rounds
@@ -1150,17 +1173,55 @@ mod tests {
         assert_eq!(rt.remaining_rounds, 0);
         assert!(last_prompt.contains("FINAL TURN — LIMIT REACHED"));
         assert!(
-            !rt.invite_guest(host.clone(), levi.clone(), "Try to keep talking".into()),
+            !rt.invite_guest(host.clone(), levi.clone(), "Try to keep talking".into(), true),
             "invite_guest must be rejected once turn limit is reached"
         );
 
         // Prompt-level turn request ("for 3 turns") is respected and capped by configured max
         rt.start_debate(
-            host,
-            vec![levi],
+            host.clone(),
+            vec![levi.clone()],
             "Debate for 3 turns about allocators".into(),
         );
         assert_eq!(rt.max_rounds, 3);
         assert_eq!(rt.remaining_rounds, 3);
+
+        // One-shot collaborative handoff (`debate: false`) executes exactly 1 guest turn
+        // and finishes cleanly without ping-ponging even if the guest @mentions the host.
+        let mut single_rt = RoundtableState::default();
+        assert!(single_rt.invite_guest(
+            host.clone(),
+            levi,
+            "Generate a geometric blue cube".into(),
+            false,
+        ));
+        assert!(!single_rt.auto_alternate);
+        assert_eq!(single_rt.max_rounds, 1);
+        assert_eq!(single_rt.remaining_rounds, 1);
+
+        let (guest_turn, guest_prompt) = single_rt
+            .on_turn_completed(
+                &host,
+                "Hey @levi-kujo, could you generate that geometric blue cube?",
+                false,
+                "pane-1",
+                &cat,
+            )
+            .expect("invited guest should take 1 turn");
+        assert_eq!(guest_turn.character_id, "id-levi");
+        assert!(guest_prompt.contains("[COLLABORATIVE HANDOFF — 1 Turn]"));
+        assert!(guest_prompt.contains("generate_image"));
+        assert_eq!(single_rt.remaining_rounds, 0);
+        assert_eq!(single_rt.rounds_taken, 1);
+
+        // Even if the guest mentions `@niko-una` in its reply, no further turn is scheduled!
+        let after_guest = single_rt.on_turn_completed(
+            &guest_turn,
+            "Here is the image you asked for, @niko-una!\n\n![cube](/tmp/synthetic/cube.png)",
+            false,
+            "pane-1",
+            &cat,
+        );
+        assert!(after_guest.is_none());
     }
 }

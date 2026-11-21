@@ -86,6 +86,12 @@ pub struct SessionState {
     pub last_turn_snapshots: Vec<(String, Option<String>)>,
     /// Chronological reasoning, tool, skill, and diff items recorded during the active turn.
     pub current_turn_trace: Vec<boxxy_claw_protocol::TurnTraceItem>,
+    /// `(caption, path)` pairs produced by `generate_image` during the active turn,
+    /// used as a safety net so generated images always render in the overlay even if omitted in prose.
+    pub generated_images_this_turn: Vec<(String, String)>,
+    /// Base64-encoded user images attached or `@file`-referenced in the active turn,
+    /// allowing `generate_image` to edit pasted/attached images without a disk path.
+    pub current_turn_user_images: Vec<String>,
 }
 
 impl SessionState {
@@ -223,6 +229,8 @@ impl ClawSession {
                 current_turn_snapshots: Vec::new(),
                 last_turn_snapshots: Vec::new(),
                 current_turn_trace: Vec::new(),
+                generated_images_this_turn: Vec::new(),
+                current_turn_user_images: Vec::new(),
             })),
         };
 

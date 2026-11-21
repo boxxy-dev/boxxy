@@ -638,6 +638,8 @@ pub struct InviteCharacterTool {
     pub pane_id: String,
     pub state: Arc<Mutex<crate::engine::session::SessionState>>,
     pub approval: Arc<ClawApprovalHandler>,
+    pub self_supports_images: bool,
+    pub image_capable_peers: Vec<(String, String, String)>,
 }
 
 impl Tool for InviteCharacterTool {
@@ -648,10 +650,27 @@ impl Tool for InviteCharacterTool {
     type Output = InviteCharacterOutput;
 
     fn description(&self) -> String {
-        "Invite another character (e.g. 'levi-kujo', 'kuro', 'niko-una') into your current overlay conversation so you can chat, collaborate, or debate directly in front of the user. \
+        let mut desc = "Invite another character (e.g. 'levi-kujo', 'kuro', 'niko-una') into your current overlay conversation so you can chat, collaborate, or debate directly in front of the user. \
         If the invited character is active in another terminal pane in the swarm, they will automatically bring their live pane awareness into this conversation. \
-        Set `debate: true` when you want a multi-round back-and-forth exchange with them."
-            .to_string()
+        Set `debate: true` when you want a multi-round back-and-forth exchange with them, or `debate: false` for a single-turn collaborative handoff."
+            .to_string();
+
+        if !self.self_supports_images && !self.image_capable_peers.is_empty() {
+            use std::fmt::Write as _;
+            let peers: Vec<String> = self
+                .image_capable_peers
+                .iter()
+                .map(|(name, slug, prov)| format!("{name} (`@{slug}`, {prov})"))
+                .collect();
+            let _ = write!(
+                desc,
+                " Your current model cannot generate images directly. Characters with image generation available: {}. \
+                 When the user asks to generate, draw, or edit an image, call `invite_character(character=\"...\", topic=\"...\", debate=false)` so they can step in for 1 turn and create it.",
+                peers.join(", ")
+            );
+        }
+
+        desc
     }
 
     fn parameters(&self) -> serde_json::Value {
@@ -664,11 +683,11 @@ impl Tool for InviteCharacterTool {
                 },
                 "topic": {
                     "type": "string",
-                    "description": "The topic, question, or context you are inviting them to discuss or debate."
+                    "description": "The topic, question, or visual task context you are inviting them to handle or debate."
                 },
                 "debate": {
                     "type": "boolean",
-                    "description": "Set to true if you want to engage in a multi-round back-and-forth conversation/debate with this character."
+                    "description": "Set to true for a multi-round back-and-forth conversation/debate, or false (default) for a 1-turn collaborative handoff."
                 }
             },
             "required": ["character", "topic"]
@@ -713,21 +732,30 @@ impl Tool for InviteCharacterTool {
             } else {
                 let guest_name = guest.display_name.clone();
                 let guest_slug = guest.slug.clone();
-                let (invited, max_rounds) = {
+                let (invited, max_rounds, is_debate) = {
                     let mut state = self.state.lock().await;
-                    let ok = state
-                        .roundtable
-                        .invite_guest(host_identity, guest, args.topic.clone());
-                    if ok && args.debate {
-                        state.roundtable.auto_alternate = true;
-                    }
-                    (ok, state.roundtable.max_rounds.max(1))
+                    let ok = state.roundtable.invite_guest(
+                        host_identity,
+                        guest,
+                        args.topic.clone(),
+                        args.debate,
+                    );
+                    (
+                        ok,
+                        state.roundtable.max_rounds.max(1),
+                        state.roundtable.auto_alternate,
+                    )
                 };
                 if invited {
+                    let turn_budget_desc = if !is_debate && max_rounds == 1 {
+                        "1 turn".to_string()
+                    } else {
+                        format!("turn limit: {max_rounds}")
+                    };
                     InviteCharacterOutput {
                         success: true,
                         message: format!(
-                            "Invited {guest_name} (@{guest_slug}) to the overlay conversation (turn limit: {max_rounds}). Conclude your current message addressing {guest_name} so they can immediately take the next turn in the overlay."
+                            "Invited {guest_name} (@{guest_slug}) to the overlay conversation ({turn_budget_desc}). Conclude your current message addressing {guest_name} so they can immediately take the next turn in the overlay."
                         ),
                     }
                 } else {
@@ -1079,5 +1107,45 @@ mod tests {
         assert!(out.success);
         assert_eq!(out.routed_to.as_deref(), Some("Rust_Pane"));
         assert_eq!(out.response, "Lifetime issue fixed.");
+    }
+
+    #[tokio::test]
+    async fn invite_character_description_advertises_image_capable_peers_for_text_only_host() {
+        let (session, _tx, _rx_ui) = ClawSession::new("pane_host".to_string());
+        let approval = Arc::new(ClawApprovalHandler {
+            tx_ui: session.tx_ui.clone(),
+            state: session.state.clone(),
+            db: Arc::new(Mutex::new(None)),
+            session_id: session.session_id.clone(),
+            pane_id: "pane_host".to_string(),
+        });
+
+        let text_only_tool = InviteCharacterTool {
+            pane_id: "pane_host".to_string(),
+            state: session.state.clone(),
+            approval: approval.clone(),
+            self_supports_images: false,
+            image_capable_peers: vec![(
+                "Levi Kujo".to_string(),
+                "levi-kujo".to_string(),
+                "Gemini".to_string(),
+            )],
+        };
+        let desc = text_only_tool.description();
+        assert!(desc.contains("Levi Kujo (`@levi-kujo`, Gemini)"));
+        assert!(desc.contains("debate=false"));
+
+        let image_host_tool = InviteCharacterTool {
+            pane_id: "pane_host".to_string(),
+            state: session.state,
+            approval,
+            self_supports_images: true,
+            image_capable_peers: vec![(
+                "Levi Kujo".to_string(),
+                "levi-kujo".to_string(),
+                "Gemini".to_string(),
+            )],
+        };
+        assert!(!image_host_tool.description().contains("cannot generate images directly"));
     }
 }

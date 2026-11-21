@@ -1712,6 +1712,20 @@ impl ModelProvider {
                 | ModelProvider::Anthropic(_, _)
         )
     }
+
+    /// Returns `true` if this provider supports native image generation using the same credentials
+    /// (Gemini Nano Banana, OpenAI GPT-Image, xAI Grok Imagine, MiniMax image-01, OpenRouter multimodal).
+    #[must_use]
+    pub const fn supports_image_generation(&self) -> bool {
+        matches!(
+            self,
+            ModelProvider::Gemini(_, _)
+                | ModelProvider::OpenAi(_, _)
+                | ModelProvider::Xai(_, _)
+                | ModelProvider::MiniMax(_, _)
+                | ModelProvider::OpenRouter(_)
+        )
+    }
 }
 
 impl Default for ModelProvider {
@@ -2049,6 +2063,78 @@ mod tests {
                 thinking: Some(ThinkingLevel::Medium),
             }
             .supports_native_search()
+        );
+    }
+
+    #[test]
+    fn test_supports_image_generation() {
+        assert!(
+            ModelProvider::Gemini(
+                GeminiModel::new("gemini-3.8-flash"),
+                Some(ThinkingLevel::Low)
+            )
+            .supports_image_generation()
+        );
+        assert!(
+            ModelProvider::OpenAi(OpenAiModel::new("gpt-6.1-sol"), Some(ThinkingLevel::Medium))
+                .supports_image_generation()
+        );
+        assert!(
+            ModelProvider::Xai(XaiModel::new("grok-4.7"), Some(ThinkingLevel::High))
+                .supports_image_generation()
+        );
+        assert!(
+            ModelProvider::MiniMax(MiniMaxModel::new("MiniMax-M3"), None)
+                .supports_image_generation()
+        );
+        assert!(
+            ModelProvider::OpenRouter("anthropic/claude-sonnet-5-5".to_string())
+                .supports_image_generation()
+        );
+
+        assert!(
+            !ModelProvider::ChatGpt(ChatGptModel::new("gpt-5.4"), Some(ThinkingLevel::High))
+                .supports_image_generation()
+        );
+        assert!(
+            !ModelProvider::Anthropic(AnthropicModel::new("claude-sonnet-5-5"), None)
+                .supports_image_generation()
+        );
+        assert!(
+            !ModelProvider::DeepSeek(DeepSeekModel::new("deepseek-flash"))
+                .supports_image_generation()
+        );
+        assert!(
+            !ModelProvider::Moonshot(MoonshotModel::new("kimi-k3"), Some(ThinkingLevel::Low))
+                .supports_image_generation()
+        );
+        assert!(
+            !ModelProvider::Zai(ZaiModel::new("glm-5.3"), None).supports_image_generation()
+        );
+        assert!(
+            !ModelProvider::Mistral(MistralModel::new("mistral-large-latest"), None)
+                .supports_image_generation()
+        );
+        assert!(
+            !ModelProvider::Groq(GroqModel::new("openai/gpt-oss-120b"), None)
+                .supports_image_generation()
+        );
+        assert!(!ModelProvider::Ollama("llama3.2".to_string()).supports_image_generation());
+        assert!(
+            !ModelProvider::OpenCodeZen(OpenCodeZenModel::new("claude-sonnet-5-5"), None)
+                .supports_image_generation()
+        );
+        assert!(
+            !ModelProvider::OpenCodeGo(OpenCodeGoModel::new("glm-5.3"), None)
+                .supports_image_generation()
+        );
+        assert!(
+            !ModelProvider::OpenAiCompatible {
+                provider_name: "Custom Proxy".to_string(),
+                model_id: "custom-model".to_string(),
+                thinking: None,
+            }
+            .supports_image_generation()
         );
     }
 
