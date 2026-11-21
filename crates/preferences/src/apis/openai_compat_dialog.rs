@@ -487,7 +487,7 @@ impl OpenAiCompatEditorPage {
             Rc::new(move || {
                 session_gen.set(session_gen.get().wrapping_add(1));
                 apis_stack.set_visible_child_name("list");
-                header.leave("APIs");
+                header.leave("APIs & Subscriptions");
             })
         };
 
@@ -615,7 +615,8 @@ impl OpenAiCompatEditorPage {
         } else {
             "Add OpenAI-Compatible Endpoint"
         };
-        self.header.enter("APIs", "Back to APIs", title);
+        self.header
+            .enter("APIs & Subscriptions", "Back to APIs & Subscriptions", title);
         self.apis_stack.set_visible_child_name("editor");
     }
 }

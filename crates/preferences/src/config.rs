@@ -1118,7 +1118,10 @@ You can add your own sensitive paths here. One path per line. Lines starting wit
             }
             ModelConfigState::MissingApiKey { provider_name } => {
                 if provider_name == "ChatGPT" {
-                    Some("ChatGPT is signed out. Reconnect under Preferences -> APIs.".to_string())
+                    Some(
+                        "ChatGPT is signed out. Reconnect under Preferences -> APIs & Subscriptions."
+                            .to_string(),
+                    )
                 } else {
                     Some(format!(
                         "{provider_name} API key was removed or is missing."
@@ -1442,9 +1445,10 @@ mod tests {
     use super::*;
 
     #[test]
+    #[serial_test::serial(chatgpt_prefs)]
     fn settings_update_mutates_cache_atomically_and_skips_noop() {
-        let mut rx = SETTINGS_EVENT_BUS.subscribe();
         let initial = Settings::load().font_size;
+        let mut rx = SETTINGS_EVENT_BUS.subscribe();
         let updated = Settings::update(|s| {
             s.font_size = initial + 3;
         });
@@ -1570,6 +1574,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial(chatgpt_prefs)]
     fn vibe_trusted_dir_rejects_root_system_and_home_ancestors() {
         assert!(validate_vibe_trusted_dir("/").is_err());
         assert!(validate_vibe_trusted_dir("/etc/nginx").is_err());
@@ -1794,7 +1799,7 @@ mod tests {
         );
         assert_eq!(
             s.default_model_broken_reason().as_deref(),
-            Some("ChatGPT is signed out. Reconnect under Preferences -> APIs.")
+            Some("ChatGPT is signed out. Reconnect under Preferences -> APIs & Subscriptions.")
         );
 
         // Write synthetic OAuth token record -> Ready + sentinel in effective_api_keys

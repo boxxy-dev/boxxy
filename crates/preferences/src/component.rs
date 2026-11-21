@@ -10,7 +10,7 @@ use std::rc::Rc;
 pub const PREFERENCE_CATEGORIES: [(&str, &str); 12] = [
     ("appearance", "Terminal"),
     ("themes", "Themes"),
-    ("apis", "APIs"),
+    ("apis", "APIs & Subscriptions"),
     ("characters", "Characters"),
     ("integrations", "Desktop Integrations"),
     ("mcp", "MCP"),
@@ -99,7 +99,7 @@ impl PreferencesComponent {
             Rc::new(move || match stack.visible_child_name().as_deref() {
                 Some("apis") if apis_stack.visible_child_name().as_deref() != Some("list") => {
                     apis_stack.set_visible_child_name("list");
-                    header.leave("APIs");
+                    header.leave("APIs & Subscriptions");
                     true
                 }
                 Some("mcp") if mcp_stack.visible_child_name().as_deref() != Some("list") => {
@@ -214,7 +214,7 @@ impl PreferencesComponent {
         let categories = Rc::new(vec![
             make_cat("appearance", "nav_appearance", "Terminal", terminal_filter),
             make_cat("themes", "nav_themes", "Themes", themes_filter),
-            make_cat("apis", "nav_apis", "APIs", apis_filter),
+            make_cat("apis", "nav_apis", "APIs & Subscriptions", apis_filter),
             make_cat(
                 "characters",
                 "nav_characters",

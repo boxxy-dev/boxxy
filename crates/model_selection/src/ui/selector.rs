@@ -271,7 +271,7 @@ impl SingleModelSelector {
 
         if providers.is_empty() {
             let empty_label = gtk::Label::new(Some(
-                "No configured AI providers found. Add an API key in Manage APIs below.",
+                "No configured AI providers found. Add an API key or sign in below.",
             ));
             empty_label.set_justify(gtk::Justification::Center);
             empty_label.set_wrap(true);

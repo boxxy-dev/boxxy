@@ -102,7 +102,7 @@ impl CatalogProviderEditorPage {
 
                     if remaining == 0 {
                         apis_stack.set_visible_child_name("list");
-                        header.leave("APIs");
+                        header.leave("APIs & Subscriptions");
                     }
                 })
             };
@@ -125,7 +125,11 @@ impl CatalogProviderEditorPage {
 
         *self.added_rows.borrow_mut() = new_rows;
 
-        self.header.enter("APIs", "Back to APIs", "Add AI Provider");
+        self.header.enter(
+            "APIs & Subscriptions",
+            "Back to APIs & Subscriptions",
+            "Add AI Provider",
+        );
         self.apis_stack.set_visible_child_name("catalog_editor");
     }
 }

@@ -307,7 +307,10 @@ mod tests {
         let results = ranked_titles(&entries, "API");
         assert_eq!(
             results.first(),
-            Some(&("APIs".to_string(), CommandKind::PreferencesCategory))
+            Some(&(
+                "APIs & Subscriptions".to_string(),
+                CommandKind::PreferencesCategory
+            ))
         );
         assert!(
             !results.iter().any(|(title, _)| title == "Swap Pane Right"),
@@ -335,8 +338,23 @@ mod tests {
         let pref_api = ranked_titles(&entries, "preferences api");
         assert_eq!(
             pref_api.first(),
-            Some(&("APIs".to_string(), CommandKind::PreferencesCategory))
+            Some(&(
+                "APIs & Subscriptions".to_string(),
+                CommandKind::PreferencesCategory
+            ))
         );
+
+        for sub_query in ["subscription", "subscriptions", "chatgpt", "codex", "oauth"] {
+            let hits = ranked_titles(&entries, sub_query);
+            assert_eq!(
+                hits.first(),
+                Some(&(
+                    "APIs & Subscriptions".to_string(),
+                    CommandKind::PreferencesCategory
+                )),
+                "expected '{sub_query}' to rank APIs & Subscriptions first, got: {hits:?}"
+            );
+        }
 
         let copy_out = ranked_titles(&entries, "copy output");
         assert_eq!(
@@ -374,7 +392,10 @@ mod tests {
         let pref_apis = ranked_titles(&entries, "pref.apis");
         assert_eq!(
             pref_apis.first(),
-            Some(&("APIs".to_string(), CommandKind::PreferencesCategory))
+            Some(&(
+                "APIs & Subscriptions".to_string(),
+                CommandKind::PreferencesCategory
+            ))
         );
     }
 

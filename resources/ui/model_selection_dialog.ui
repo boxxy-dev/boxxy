@@ -450,8 +450,8 @@
                   <class name="accent"/>
                   <class name="boxxy-link"/>
                 </style>
-                <property name="label">Manage APIs and Search Engine…</property>
-                <property name="tooltip-text">Open API Keys, Custom Endpoints, and Search Engine in Preferences</property>
+                <property name="label">Manage APIs, Subscriptions and Search…</property>
+                <property name="tooltip-text">Open APIs, OAuth Subscriptions, Custom Endpoints, and Search Engine in Preferences</property>
                 <property name="halign">start</property>
                 <property name="valign">center</property>
                 <property name="hexpand">true</property>

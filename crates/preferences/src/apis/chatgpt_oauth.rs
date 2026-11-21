@@ -57,7 +57,7 @@ impl ChatGptOAuthController {
 
         let search_row = SearchRow::new(
             &row,
-            "chatgpt codex openai oauth subscription sign in login device code plus pro team",
+            "subscription subscriptions apis api key chatgpt codex openai oauth sign in sign out login logout connect disconnect account device code plus pro team enterprise",
         );
 
         let ctrl = Self {
