@@ -260,6 +260,87 @@ pub struct PeerInfo {
     pub petname: String,
 }
 
+/// Schema version assigned to legacy `CHARACTER.toml`-only directories.
+pub const CHARACTER_SCHEMA_VERSION_V1: u32 = 1;
+
+/// Canonical schema version for Characters v2 (`manifest.toml` + `CHARACTER.toml` + `portrait`).
+pub const CHARACTER_SCHEMA_VERSION_V2: u32 = 2;
+
+const fn default_manifest_schema_version() -> u32 {
+    CHARACTER_SCHEMA_VERSION_V2
+}
+
+/// Package-level metadata, credits, asset declarations, and theme defaults loaded from `manifest.toml`.
+///
+/// Optional on disk so v1 directories containing only `CHARACTER.toml` continue loading without changes.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CharacterManifest {
+    #[serde(default = "default_manifest_schema_version")]
+    pub schema_version: u32,
+    #[serde(default)]
+    pub package: CharacterPackageMeta,
+    #[serde(default)]
+    pub assets: CharacterAssetsSpec,
+    #[serde(default)]
+    pub theme: CharacterThemeSpec,
+}
+
+impl Default for CharacterManifest {
+    fn default() -> Self {
+        Self {
+            schema_version: CHARACTER_SCHEMA_VERSION_V2,
+            package: CharacterPackageMeta::default(),
+            assets: CharacterAssetsSpec::default(),
+            theme: CharacterThemeSpec::default(),
+        }
+    }
+}
+
+/// Community attribution, versioning, and compatibility metadata under `[package]` in `manifest.toml`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CharacterPackageMeta {
+    #[serde(default)]
+    pub version: String,
+    #[serde(default)]
+    pub authors: Vec<String>,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub license: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub homepage: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_boxxy_version: Option<String>,
+}
+
+/// Relative asset file references under `[assets]` in `manifest.toml`.
+///
+/// All paths are validated to stay strictly inside the character package directory (`no ..`).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CharacterAssetsSpec {
+    /// Square `1:1` avatar (`256×256` recommended; `.png` or `.webp`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub avatar: Option<String>,
+    /// Landscape `16:9` portrait (`768×432` recommended; `.webp` or `.png`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub portrait: Option<String>,
+    /// Reserved for Characters v3 `Live2D` `.model3.json` rigs (ignored at runtime in v2).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub live2d_model: Option<String>,
+    /// Reserved for Characters v3 expression sprite directories (ignored at runtime in v2).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expressions_dir: Option<String>,
+}
+
+/// Presentation and color defaults under `[theme]` in `manifest.toml`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CharacterThemeSpec {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accent_color: Option<String>,
+}
+
 /// Represents the static configuration of a Character, loaded from a `CHARACTER.toml` file.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CharacterConfig {
@@ -267,6 +348,7 @@ pub struct CharacterConfig {
     /// Written to `CHARACTER.toml` on first load if absent.
     pub id: String,
     /// Directory slug (derived from the subdirectory name, not read from TOML).
+    #[serde(default)]
     pub name: String,
     /// Human-readable name displayed in the UI.
     pub display_name: String,
@@ -276,6 +358,9 @@ pub struct CharacterConfig {
     pub duties: String,
     /// Behavioral guidelines for the character, injected into the system prompt.
     pub personality: String,
+    /// Optional zero-token empty-state welcome lines shown in the character picker.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub greetings: Vec<String>,
 }
 
 /// A group of sessions whose recorded `character_id` no longer matches any character
@@ -310,8 +395,20 @@ pub struct CharacterInfo {
     pub config: CharacterConfig,
     /// The dynamic status managed by the daemon.
     pub status: CharacterStatus,
-    /// Indicates whether an `AVATAR.png` was found in the character's directory.
+    /// Indicates whether a valid square avatar (`avatar.png` / `AVATAR.png` / `custom_avatar.png`) was found.
     pub has_avatar: bool,
+    /// Indicates whether a valid `16:9` landscape portrait (`portrait.webp` / `portrait.png`) was found.
+    #[serde(default)]
+    pub has_portrait: bool,
+    /// Resolved relative path inside `<characters_dir>/<name>/` for the active avatar file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub avatar_rel_path: Option<String>,
+    /// Resolved relative path inside `<characters_dir>/<name>/` for the active portrait file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub portrait_rel_path: Option<String>,
+    /// Optional Characters v2 package manifest (`version`, `authors`, `description`, `[assets]`, `[theme]`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub manifest: Option<CharacterManifest>,
 }
 
 impl CharacterInfo {
@@ -322,6 +419,74 @@ impl CharacterInfo {
             config,
             status: CharacterStatus::Available,
             has_avatar,
+            has_portrait: false,
+            avatar_rel_path: None,
+            portrait_rel_path: None,
+            manifest: None,
+        }
+    }
+
+    /// Selects a deterministic non-empty greeting from `config.greetings` using `seed`
+    /// (e.g. a pane's `host_id`), keeping the displayed quote stable across UI refreshes
+    /// within the same pane while varying naturally across different panes.
+    #[must_use]
+    pub fn deterministic_greeting(&self, seed: &str) -> Option<&str> {
+        let count = self
+            .config
+            .greetings
+            .iter()
+            .filter(|g| !g.trim().is_empty())
+            .count();
+        if count == 0 {
+            return None;
+        }
+        // FNV-1a 64-bit hash so greeting selection is platform- and run-deterministic.
+        let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+        for byte in seed.as_bytes().iter().chain(self.config.id.as_bytes()) {
+            hash ^= u64::from(*byte);
+            hash = hash.wrapping_mul(0x0100_0000_01b3);
+        }
+        let target = usize::try_from(hash % (count as u64)).unwrap_or(0);
+        self.config
+            .greetings
+            .iter()
+            .map(|g| g.trim())
+            .filter(|g| !g.is_empty())
+            .nth(target)
+    }
+
+    /// Formats concise package attribution (e.g. `"v2.0.0 · by Boxxy Team"`) when `manifest.toml`
+    /// provides version or author metadata.
+    #[must_use]
+    pub fn package_attribution(&self) -> Option<String> {
+        let meta = &self.manifest.as_ref()?.package;
+        let ver = meta.version.trim();
+        let authors: Vec<&str> = meta
+            .authors
+            .iter()
+            .map(String::as_str)
+            .map(str::trim)
+            .filter(|a| !a.is_empty())
+            .collect();
+
+        match (!ver.is_empty(), !authors.is_empty()) {
+            (true, true) => {
+                let ver_prefixed = if ver.starts_with('v') || ver.starts_with('V') {
+                    ver.to_string()
+                } else {
+                    format!("v{ver}")
+                };
+                Some(format!("{ver_prefixed} · by {}", authors.join(", ")))
+            }
+            (true, false) => {
+                if ver.starts_with('v') || ver.starts_with('V') {
+                    Some(ver.to_string())
+                } else {
+                    Some(format!("v{ver}"))
+                }
+            }
+            (false, true) => Some(format!("by {}", authors.join(", "))),
+            (false, false) => None,
         }
     }
 }
@@ -340,6 +505,7 @@ mod tests {
                     color: "#204A87".to_string(),
                     duties: "Kernel".to_string(),
                     personality: "Direct".to_string(),
+                    greetings: vec!["State the objective.".to_string()],
                 },
                 false,
             ),
@@ -351,6 +517,7 @@ mod tests {
                     color: "#B31825".to_string(),
                     duties: "Arch".to_string(),
                     personality: "Sardonic".to_string(),
+                    greetings: Vec::new(),
                 },
                 false,
             ),

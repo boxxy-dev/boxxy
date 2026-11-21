@@ -188,12 +188,9 @@ fn resolve_character_attribution(character_id: &str, agent_name: &str) -> Charac
             resolved_name = info.config.name.replace('-', " ");
         }
         color = Some(info.config.color.clone());
-        if info.has_avatar {
-            let mut path = boxxy_sys_utils::get_config_dir();
-            path.push("boxxyclaw");
-            path.push("characters");
-            path.push(&info.config.name);
-            path.push("AVATAR.png");
+        if let Some(path) =
+            boxxy_claw_protocol::character_loader::resolve_character_avatar_path(info)
+        {
             let path_str = path.to_string_lossy().into_owned();
             icon_name.clone_from(&path_str);
             avatar_path = Some(path_str);
@@ -680,6 +677,7 @@ mod tests {
                 color: "#204A87".to_string(),
                 duties: "Systems".to_string(),
                 personality: "Direct".to_string(),
+                greetings: Vec::new(),
             },
             false,
         )];

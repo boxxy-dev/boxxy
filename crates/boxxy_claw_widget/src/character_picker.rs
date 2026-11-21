@@ -10,8 +10,8 @@ use libadwaita as adw;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-const CARD_WIDTH: i32 = 248;
-const PORTRAIT_HEIGHT: i32 = 116;
+const CARD_WIDTH: i32 = 256;
+const PORTRAIT_HEIGHT: i32 = 144;
 
 mod imp {
     #[allow(clippy::wildcard_imports)]
@@ -106,6 +106,11 @@ struct CardStamp {
     duties: String,
     color: String,
     has_avatar: bool,
+    has_portrait: bool,
+    avatar_rel_path: Option<String>,
+    portrait_rel_path: Option<String>,
+    tooltip: Option<String>,
+    greetings: Vec<String>,
     is_in_use: bool,
     has_custom_model: bool,
 }
@@ -129,6 +134,7 @@ struct CardSlot {
 pub(crate) struct CharacterPicker {
     scroll: gtk::ScrolledWindow,
     cards_wrap: adw::WrapBox,
+    greeting_lbl: gtk::Label,
     models_link_lbl: gtk::Label,
     cards: Rc<RefCell<Vec<CardSlot>>>,
     last_stamp: Rc<RefCell<Vec<CardStamp>>>,
@@ -142,6 +148,7 @@ impl CharacterPicker {
     ) -> Self {
         let scroll: gtk::ScrolledWindow = builder.object("character_picker_scroll").unwrap();
         let cards_wrap: adw::WrapBox = builder.object("character_cards_wrap").unwrap();
+        let greeting_lbl: gtk::Label = builder.object("character_greeting_lbl").unwrap();
         let models_link_lbl: gtk::Label = builder.object("picker_models_link_lbl").unwrap();
         let characters_link_lbl: gtk::Label = builder.object("picker_characters_link_lbl").unwrap();
 
@@ -177,6 +184,7 @@ impl CharacterPicker {
         Self {
             scroll,
             cards_wrap,
+            greeting_lbl,
             models_link_lbl,
             cards: Rc::new(RefCell::new(Vec::new())),
             last_stamp: Rc::new(RefCell::new(Vec::new())),
@@ -248,6 +256,11 @@ impl CharacterPicker {
                 duties: first_line_duties(&info.config.duties),
                 color: info.config.color.clone(),
                 has_avatar: info.has_avatar,
+                has_portrait: info.has_portrait,
+                avatar_rel_path: info.avatar_rel_path.clone(),
+                portrait_rel_path: info.portrait_rel_path.clone(),
+                tooltip: build_card_tooltip(info),
+                greetings: info.config.greetings.clone(),
                 is_in_use: is_taken(&info.config.id),
                 has_custom_model: settings.has_custom_character_model(&info.config.id),
             })
@@ -260,6 +273,7 @@ impl CharacterPicker {
             self.rebuild_cards(
                 &registry,
                 &settings,
+                host_id,
                 &pending,
                 is_taken,
                 selected_character,
@@ -270,6 +284,7 @@ impl CharacterPicker {
             self.sync_cards_in_place(&settings, &pending);
         }
 
+        self.sync_selected_greeting(&registry, host_id, &pending);
         self.sync_models_link(&settings, &pending);
     }
 
@@ -278,6 +293,7 @@ impl CharacterPicker {
         &self,
         registry: &[CharacterInfo],
         settings: &Settings,
+        host_id: &str,
         pending: &str,
         is_taken: F,
         selected_character: &Rc<RefCell<String>>,
@@ -320,6 +336,8 @@ impl CharacterPicker {
                 btn.set_sensitive(false);
                 btn.add_css_class("in-use");
                 btn.set_tooltip_text(Some("Active in another terminal pane"));
+            } else if let Some(tip) = build_card_tooltip(info) {
+                btn.set_tooltip_text(Some(&tip));
             }
             if is_current {
                 btn.add_css_class("selected-character");
@@ -328,18 +346,36 @@ impl CharacterPicker {
             let card_vbox = gtk::Box::new(gtk::Orientation::Vertical, 0);
             card_vbox.set_vexpand(true);
 
-            // Wide landscape portrait banner (248x116 ConstantSize so 256x256 avatars never square-inflate)
+            // Wide 16:9 landscape portrait banner (`256 × 144` ConstantSize):
+            // 1. Uses dedicated `portrait.webp`/`.png` edge-to-edge when available.
+            // 2. Otherwise frames the circular `avatar` over a character-tinted stage
+            //    so `1:1` avatars never stretch or crop heads/chins.
             let portrait_overlay = gtk::Overlay::new();
             portrait_overlay.set_overflow(gtk::Overflow::Hidden);
             portrait_overlay.add_css_class("claw-char-portrait");
 
-            if let Some(texture) = boxxy_claw_ui::load_character_avatar_texture(info) {
-                let pic = gtk::Picture::for_paintable(&texture);
+            if let Some(portrait_tex) = boxxy_claw_ui::load_character_portrait_texture(info) {
+                let pic = gtk::Picture::for_paintable(&portrait_tex);
                 pic.set_content_fit(gtk::ContentFit::Cover);
                 pic.set_can_shrink(true);
                 pic.set_hexpand(true);
                 pic.set_vexpand(true);
                 portrait_overlay.set_child(Some(&pic));
+            } else if let Some(avatar_tex) = boxxy_claw_ui::load_character_avatar_texture(info) {
+                let stage_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
+                stage_box.set_hexpand(true);
+                stage_box.set_vexpand(true);
+                stage_box.set_halign(gtk::Align::Fill);
+                stage_box.set_valign(gtk::Align::Fill);
+                stage_box.add_css_class("claw-char-portrait-avatar-stage");
+
+                let av = adw::Avatar::new(72, Some(&full_name), true);
+                av.set_custom_image(Some(&avatar_tex));
+                av.set_halign(gtk::Align::Center);
+                av.set_valign(gtk::Align::Center);
+                av.set_vexpand(true);
+                stage_box.append(&av);
+                portrait_overlay.set_child(Some(&stage_box));
             } else {
                 let fallback_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
                 fallback_box.set_hexpand(true);
@@ -348,7 +384,7 @@ impl CharacterPicker {
                 fallback_box.set_valign(gtk::Align::Fill);
                 fallback_box.add_css_class("claw-char-portrait-fallback");
 
-                let av = adw::Avatar::new(56, Some(&full_name), true);
+                let av = adw::Avatar::new(64, Some(&full_name), true);
                 av.set_halign(gtk::Align::Center);
                 av.set_valign(gtk::Align::Center);
                 av.set_vexpand(true);
@@ -465,11 +501,14 @@ impl CharacterPicker {
             let msg_bar_for_click = msg_bar.clone();
             let focus_cb = on_selected_focus.clone();
             let char_id = info.config.id.clone();
+            let host_id_owned = host_id.to_string();
             btn.connect_clicked(move |_| {
                 selected_rc.borrow_mut().clone_from(&char_id);
                 *msg_bar_for_click.character_id.borrow_mut() = Some(char_id.clone());
                 let live_settings = Settings::load();
+                let (live_reg, _, _) = boxxy_claw_protocol::characters::load_coherent_registry();
                 picker_for_click.sync_cards_in_place(&live_settings, &char_id);
+                picker_for_click.sync_selected_greeting(&live_reg, &host_id_owned, &char_id);
                 picker_for_click.sync_models_link(&live_settings, &char_id);
                 focus_cb();
             });
@@ -500,6 +539,20 @@ impl CharacterPicker {
 
             let summary = resolve_card_model_summary(settings, &slot.id);
             apply_card_model_widgets(&slot.model_lbl, &slot.thinking_lbl, &summary);
+        }
+    }
+
+    fn sync_selected_greeting(&self, registry: &[CharacterInfo], host_id: &str, pending: &str) {
+        let greeting_opt = registry
+            .iter()
+            .find(|c| c.config.id == pending)
+            .and_then(|info| info.deterministic_greeting(host_id));
+
+        if let Some(line) = greeting_opt {
+            self.greeting_lbl.set_label(&format!("“{line}”"));
+            self.greeting_lbl.set_visible(true);
+        } else {
+            self.greeting_lbl.set_visible(false);
         }
     }
 
@@ -593,6 +646,21 @@ fn first_line_duties(raw: &str) -> String {
 }
 
 #[must_use]
+fn build_card_tooltip(info: &CharacterInfo) -> Option<String> {
+    let man = info.manifest.as_ref()?;
+    let desc = man.package.description.trim();
+    let is_bundled =
+        boxxy_claw_protocol::character_loader::bundled_default_avatar(&info.config.name).is_some();
+    let attr = (!is_bundled).then(|| info.package_attribution()).flatten();
+    match (!desc.is_empty(), attr) {
+        (true, Some(a)) => Some(format!("{desc}\n{a}")),
+        (true, None) => Some(desc.to_string()),
+        (false, Some(a)) => Some(a),
+        (false, None) => None,
+    }
+}
+
+#[must_use]
 fn resolve_card_model_summary(settings: &Settings, character_id: &str) -> CardModelSummary {
     let effective = settings.resolve_character_model(character_id);
     match settings.resolve_model_state(&effective) {
@@ -647,6 +715,7 @@ mod tests {
                 color: "#7B61FF".to_string(),
                 duties: duties.to_string(),
                 personality: personality.to_string(),
+                greetings: Vec::new(),
             },
             false,
         )

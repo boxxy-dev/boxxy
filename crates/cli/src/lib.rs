@@ -228,6 +228,44 @@ mod tests {
     }
 
     #[test]
+    fn doctor_character_validator_checks_v2_manifests_and_assets() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let chars_root = tmp.path().join("characters");
+        let valid_dir = chars_root.join("alpha-mentor");
+        std::fs::create_dir_all(&valid_dir).expect("mkdir");
+        std::fs::write(
+            valid_dir.join("manifest.toml"),
+            "schema_version = 2\n[package]\nversion = \"1.0.0\"\nauthors = [\"synthetic\"]\n[assets]\navatar = \"avatar.png\"\nportrait = \"portrait.webp\"\n[theme]\naccent_color = \"#336699\"\n",
+        )
+        .expect("write manifest");
+        std::fs::write(
+            valid_dir.join("CHARACTER.toml"),
+            "display_name = \"Alpha\"\nduties = \"Mentor\"\npersonality = \"Calm\"\ngreetings = [\"Hello\"]\n",
+        )
+        .expect("write char");
+        std::fs::write(valid_dir.join("avatar.png"), b"png").expect("write avatar");
+        std::fs::write(valid_dir.join("portrait.webp"), b"webp").expect("write portrait");
+
+        let ok_res = crate::actions::doctor::check_characters(&chars_root);
+        assert_eq!(ok_res.level, CheckLevel::Ok);
+        assert!(ok_res.summary.contains("1 v2, 1 portrait"));
+
+        // Missing declared portrait surfaces a warning without failing valid CHARACTER.toml
+        std::fs::remove_file(valid_dir.join("portrait.webp")).expect("rm portrait");
+        let warn_res = crate::actions::doctor::check_characters(&chars_root);
+        assert_eq!(warn_res.level, CheckLevel::Warn);
+
+        // Path traversal in manifest [assets] fails validation
+        std::fs::write(
+            valid_dir.join("manifest.toml"),
+            "schema_version = 2\n[assets]\nportrait = \"../escape.webp\"\n",
+        )
+        .expect("write bad manifest");
+        let fail_res = crate::actions::doctor::check_characters(&chars_root);
+        assert_eq!(fail_res.level, CheckLevel::Fail);
+    }
+
+    #[test]
     fn gapplication_args_roundtrip_preserves_embedded_help_and_flags_after_e() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let original = parse_launch(

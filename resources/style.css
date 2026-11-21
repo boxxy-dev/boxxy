@@ -1135,6 +1135,21 @@ spinrow button.down image {
     border-bottom: 1px solid alpha(currentColor, 0.08);
 }
 
+.claw-char-greeting {
+    font-size: 0.86em;
+    font-style: italic;
+    opacity: 0.80;
+    line-height: 1.3;
+    padding: 2px 12px;
+}
+
+.claw-sidebar-portrait {
+    border-radius: 12px;
+    background-color: rgba(0, 0, 0, 0.14);
+    border: 1px solid alpha(currentColor, 0.12);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
+}
+
 .claw-char-check-badge {
     min-width: 24px;
     min-height: 24px;

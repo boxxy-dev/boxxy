@@ -8,7 +8,6 @@
 use boxxy_claw_protocol::characters::CharacterInfo;
 use gtk4 as gtk;
 use gtk4::gdk;
-use gtk4::glib;
 use std::cell::{OnceCell, RefCell};
 use std::collections::HashMap;
 use std::fmt::Write as _;
@@ -100,7 +99,9 @@ impl DynamicColorRegistry {
         self.next_id += 1;
         let _ = writeln!(
             self.stylesheet,
-            ".{class_name} .claw-char-color-dot {{ color: {normalized}; }} .{class_name} .claw-char-portrait-fallback {{ background-color: alpha({normalized}, 0.18); }}"
+            ".{class_name} .claw-char-color-dot {{ color: {normalized}; }} \
+             .{class_name} .claw-char-portrait-fallback {{ background-color: alpha({normalized}, 0.18); }} \
+             .{class_name} .claw-char-portrait-avatar-stage {{ background-image: linear-gradient(135deg, alpha({normalized}, 0.28), alpha({normalized}, 0.08)); }}"
         );
         self.reload_stylesheet();
         self.char_btn_classes.insert(normalized, class_name.clone());
@@ -152,6 +153,7 @@ impl DynamicColorRegistry {
 thread_local! {
     static AVATAR_TEXTURES: RefCell<AvatarTextureCache> = RefCell::new(HashMap::new());
     static INCOGNITO_TEXTURE: OnceCell<Option<gdk::Texture>> = const { OnceCell::new() };
+    static INCOGNITO_PORTRAIT_TEXTURE: OnceCell<Option<gdk::Texture>> = const { OnceCell::new() };
     static COLOR_CSS_REGISTRY: RefCell<DynamicColorRegistry> =
         RefCell::new(DynamicColorRegistry::new());
 }
@@ -268,7 +270,7 @@ pub(crate) fn load_cached_texture(path: &Path) -> Option<gdk::Texture> {
             return entry.texture.clone();
         }
 
-        let texture = mtime.and_then(|_| gdk::Texture::from_filename(path).ok());
+        let texture = mtime.and_then(|_| boxxy_core_widgets::decode_texture_from_file(path));
         if cache.len() >= MAX_TEXTURE_CACHE_ENTRIES
             && let Some(oldest_key) = cache
                 .iter()
@@ -294,24 +296,43 @@ pub(crate) fn load_cached_texture(path: &Path) -> Option<gdk::Texture> {
 pub(crate) fn load_incognito_texture() -> Option<gdk::Texture> {
     INCOGNITO_TEXTURE.with(|cell| {
         cell.get_or_init(|| {
-            let bytes = glib::Bytes::from_static(
+            boxxy_core_widgets::decode_texture_from_bytes(
                 boxxy_claw_protocol::character_loader::incognito_avatar_bytes(),
-            );
-            gdk::Texture::from_bytes(&bytes).ok()
+            )
         })
         .clone()
     })
 }
 
-/// Loads a character's `AVATAR.png` texture (if present) using the mtime-aware cache.
+/// Loads and caches the static bundled `Inco Gnito` `16:9` portrait texture once per UI thread.
+#[must_use]
+pub(crate) fn load_incognito_portrait_texture() -> Option<gdk::Texture> {
+    INCOGNITO_PORTRAIT_TEXTURE.with(|cell| {
+        cell.get_or_init(|| {
+            boxxy_core_widgets::decode_texture_from_bytes(
+                boxxy_claw_protocol::character_loader::incognito_portrait_bytes(),
+            )
+        })
+        .clone()
+    })
+}
+
+/// Loads a character's square avatar texture (`avatar.png` / `AVATAR.png` / `custom_avatar.png`)
+/// using the mtime-aware cache.
 #[must_use]
 pub fn load_character_avatar_texture(info: &CharacterInfo) -> Option<gdk::Texture> {
-    if !info.has_avatar {
-        return None;
-    }
-    let dir = boxxy_claw_protocol::character_loader::get_characters_dir().ok()?;
-    let avatar_path = dir.join(&info.config.name).join("AVATAR.png");
+    let avatar_path =
+        boxxy_claw_protocol::character_loader::resolve_character_avatar_path(info)?;
     load_cached_texture(&avatar_path)
+}
+
+/// Loads a character's `16:9` landscape portrait texture (`portrait.webp` / `portrait.png`)
+/// using the mtime-aware cache.
+#[must_use]
+pub fn load_character_portrait_texture(info: &CharacterInfo) -> Option<gdk::Texture> {
+    let portrait_path =
+        boxxy_claw_protocol::character_loader::resolve_character_portrait_path(info)?;
+    load_cached_texture(&portrait_path)
 }
 
 #[cfg(test)]

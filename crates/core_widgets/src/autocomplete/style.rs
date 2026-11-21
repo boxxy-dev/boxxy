@@ -136,7 +136,7 @@ pub(super) fn load_cached_avatar_texture(path_str: &str) -> Option<gdk::Texture>
             return entry.texture.clone();
         }
 
-        let texture = mtime.and_then(|_| gdk::Texture::from_filename(path).ok());
+        let texture = mtime.and_then(|_| crate::texture::decode_texture_from_file(path));
         if cache.len() >= MAX_AVATAR_CACHE_ENTRIES
             && let Some(oldest_key) = cache
                 .iter()

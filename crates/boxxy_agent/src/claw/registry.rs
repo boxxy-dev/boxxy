@@ -780,6 +780,7 @@ mod tests {
                 color: "#000000".to_string(),
                 duties: String::new(),
                 personality: String::new(),
+                greetings: Vec::new(),
             },
             false,
         )

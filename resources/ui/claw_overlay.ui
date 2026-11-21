@@ -42,8 +42,8 @@
             <child>
               <object class="AdwClamp">
                 <property name="hexpand">true</property>
-                <property name="maximum-size">840</property>
-                <property name="tightening-threshold">600</property>
+                <property name="maximum-size">880</property>
+                <property name="tightening-threshold">860</property>
                 <child>
                   <object class="GtkBox" id="character_picker_container">
                     <property name="orientation">vertical</property>
@@ -54,8 +54,8 @@
                     <property name="spacing">18</property>
                     <property name="margin-top">24</property>
                     <property name="margin-bottom">12</property>
-                    <property name="margin-start">20</property>
-                    <property name="margin-end">20</property>
+                    <property name="margin-start">16</property>
+                    <property name="margin-end">16</property>
                     <child>
                       <object class="GtkLabel" id="character_picker_subtitle">
                         <property name="label">Pick a character to start a new conversation.</property>
@@ -77,6 +77,21 @@
                         <property name="line-spacing">16</property>
                         <property name="halign">fill</property>
                         <property name="hexpand">true</property>
+                      </object>
+                    </child>
+                    <child>
+                      <object class="GtkLabel" id="character_greeting_lbl">
+                        <property name="visible">false</property>
+                        <property name="use-markup">false</property>
+                        <property name="halign">center</property>
+                        <property name="valign">center</property>
+                        <property name="justify">center</property>
+                        <property name="wrap">true</property>
+                        <property name="wrap-mode">word-char</property>
+                        <property name="max-width-chars">68</property>
+                        <style>
+                          <class name="claw-char-greeting"/>
+                        </style>
                       </object>
                     </child>
                     <child>

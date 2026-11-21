@@ -1,5 +1,6 @@
 use crate::AssetError;
 use image::codecs::png::PngEncoder;
+use image::codecs::webp::WebPEncoder;
 use image::metadata::Orientation;
 use image::{DynamicImage, ExtendedColorType, ImageDecoder, ImageEncoder, ImageFormat, Limits};
 use std::io::Cursor;
@@ -165,4 +166,28 @@ pub(super) fn encode_dynamic_png(image: DynamicImage) -> Result<Vec<u8>, AssetEr
         let rgb = image.into_rgb8();
         encode_rgb_slice_png(rgb.as_raw(), w, h)
     }
+}
+
+/// Encodes a `DynamicImage` as lossless WebP (`VP8L`, preserving alpha only when present).
+pub(super) fn encode_dynamic_webp(image: DynamicImage) -> Result<Vec<u8>, AssetError> {
+    let w = image.width();
+    let h = image.height();
+    if w == 0 || h == 0 {
+        return Err(AssetError::ImageEncode(
+            "cannot encode zero-dimension image".to_string(),
+        ));
+    }
+    let mut out = Vec::with_capacity(64 * 1024);
+    if image.color().has_alpha() {
+        let rgba = image.into_rgba8();
+        WebPEncoder::new_lossless(&mut out)
+            .encode(rgba.as_raw(), w, h, ExtendedColorType::Rgba8)
+            .map_err(|e| AssetError::ImageEncode(e.to_string()))?;
+    } else {
+        let rgb = image.into_rgb8();
+        WebPEncoder::new_lossless(&mut out)
+            .encode(rgb.as_raw(), w, h, ExtendedColorType::Rgb8)
+            .map_err(|e| AssetError::ImageEncode(e.to_string()))?;
+    }
+    Ok(out)
 }

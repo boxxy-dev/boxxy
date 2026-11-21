@@ -19,6 +19,7 @@ boxxy-keybindings = { path = "../keybindings" }
 boxxy-themes = { path = "../themes" }
 boxxy-claw-protocol = { path = "../boxxy_claw_protocol" }
 boxxy-claw-ui = { path = "../boxxy_claw_ui" }
+boxxy-core-widgets.workspace = true
 boxxy-bookmarks = { path = "../boxxy_bookmarks" }
 boxxy-model-selection = { path = "../model_selection" }
 boxxy-command-palette = { path = "../command_palette" }

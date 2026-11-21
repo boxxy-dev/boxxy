@@ -1097,6 +1097,7 @@ name = "boxxy-model-selection"
 version = "0.1.0"
 dependencies = [
  "arc-swap",
+ "boxxy-core-widgets",
  "gtk4",
  "libadwaita",
  "reqwest 0.13.5",
@@ -1282,6 +1283,7 @@ dependencies = [
  "boxxy-claw-protocol",
  "boxxy-claw-ui",
  "boxxy-command-palette",
+ "boxxy-core-widgets",
  "boxxy-keybindings",
  "boxxy-model-selection",
  "boxxy-preferences",

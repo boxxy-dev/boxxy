@@ -3,7 +3,7 @@ use crate::actions::version::full_version_str;
 use crate::output::{OutputFormat, print_json};
 use anyhow::Result;
 use boxxy_agent::cli_ops;
-use boxxy_claw_protocol::characters::CharacterConfig;
+use boxxy_claw_protocol::character_loader::validate_character_package_dir;
 use boxxy_mcp::config::{McpServerConfig, McpTransport};
 use boxxy_preferences::Settings;
 use boxxy_preferences::config::ModelConfigState;
@@ -330,7 +330,7 @@ fn check_community_themes(themes_dir: &Path) -> DiagnosticCheck {
     }
 }
 
-fn check_characters(chars_dir: &Path) -> DiagnosticCheck {
+pub(crate) fn check_characters(chars_dir: &Path) -> DiagnosticCheck {
     if !chars_dir.is_dir() {
         return DiagnosticCheck {
             id: "characters",
@@ -342,6 +342,9 @@ fn check_characters(chars_dir: &Path) -> DiagnosticCheck {
     }
 
     let mut valid_count = 0usize;
+    let mut v2_count = 0usize;
+    let mut portrait_count = 0usize;
+    let mut warnings = Vec::new();
     let mut errors = Vec::new();
 
     if let Ok(entries) = std::fs::read_dir(chars_dir) {
@@ -350,38 +353,58 @@ fn check_characters(chars_dir: &Path) -> DiagnosticCheck {
             if !dir.is_dir() {
                 continue;
             }
-            let toml_path = dir.join("CHARACTER.toml");
-            if !toml_path.exists() {
+            if !dir.join("CHARACTER.toml").exists() && !dir.join("manifest.toml").exists() {
                 continue;
             }
-            match std::fs::read_to_string(&toml_path) {
-                Ok(raw) => match toml::from_str::<CharacterConfig>(&raw) {
-                    Ok(_) => valid_count += 1,
-                    Err(e) => errors.push(format!("{}: {e}", toml_path.display())),
-                },
-                Err(e) => errors.push(format!("{}: read error ({e})", toml_path.display())),
+            let diag = validate_character_package_dir(&dir);
+            warnings.extend(diag.warnings);
+            if let Some(err) = diag.error {
+                errors.push(err);
+            } else {
+                valid_count += 1;
+                if diag.schema_version >= 2 {
+                    v2_count += 1;
+                }
+                if diag.has_portrait {
+                    portrait_count += 1;
+                }
             }
         }
     }
 
-    if errors.is_empty() {
-        DiagnosticCheck {
-            id: "characters",
-            label: "Claw Characters",
-            level: CheckLevel::Ok,
-            summary: format!("{valid_count} valid CHARACTER.toml profile(s)"),
-            details: Vec::new(),
-        }
-    } else {
+    if !errors.is_empty() {
+        let mut details = errors;
+        details.extend(warnings);
         DiagnosticCheck {
             id: "characters",
             label: "Claw Characters",
             level: CheckLevel::Fail,
             summary: format!(
-                "{} broken CHARACTER.toml file(s), {valid_count} valid",
-                errors.len()
+                "{} broken character package(s), {valid_count} valid",
+                details.len()
             ),
-            details: errors,
+            details,
+        }
+    } else if !warnings.is_empty() {
+        DiagnosticCheck {
+            id: "characters",
+            label: "Claw Characters",
+            level: CheckLevel::Warn,
+            summary: format!(
+                "{valid_count} valid character(s) ({v2_count} v2, {portrait_count} portrait) with {} warning(s)",
+                warnings.len()
+            ),
+            details: warnings,
+        }
+    } else {
+        DiagnosticCheck {
+            id: "characters",
+            label: "Claw Characters",
+            level: CheckLevel::Ok,
+            summary: format!(
+                "{valid_count} valid character(s) ({v2_count} v2, {portrait_count} portrait)"
+            ),
+            details: Vec::new(),
         }
     }
 }

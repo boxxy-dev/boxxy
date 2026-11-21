@@ -3,18 +3,24 @@
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
-/// Intermediate struct for TOML parsing — `id` is optional so we can detect
-/// first-time loads and auto-generate a UUID. `name` is intentionally absent
-/// since we always derive it from the directory name.
+/// Intermediate struct for TOML parsing — `id` and `color` are optional so we can detect
+/// first-time loads (auto-generating a UUID) and allow v2 packages to declare their default
+/// color exclusively under `[theme].accent_color` in `manifest.toml`.
 #[derive(Deserialize, Serialize)]
 pub(super) struct CharacterToml {
-    pub(super) id: Option<String>,
-    pub(super) display_name: String,
-    pub(super) color: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) name: Option<String>,
+    pub(super) display_name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) color: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) default_color: Option<String>,
     pub(super) duties: String,
     pub(super) personality: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(super) greetings: Vec<String>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -193,7 +199,7 @@ pub(super) fn patch_top_level_string_key(
             toml::from_str(content).context("Original CHARACTER.toml is invalid")?;
         match key {
             "id" => parsed.id = Some(new_value.to_string()),
-            "color" => parsed.color = new_value.to_string(),
+            "color" => parsed.color = Some(new_value.to_string()),
             _ => bail!("Unsupported fallback key: {key}"),
         }
         if let Some(("default_color", extra_v)) = extra_insert_after {

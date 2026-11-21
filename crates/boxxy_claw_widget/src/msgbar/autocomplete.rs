@@ -163,16 +163,10 @@ fn collect_peer_character_completions(
             } else {
                 available_label.to_string()
             };
-            let avatar_path = if info.has_avatar {
-                chars_dir.as_ref().map(|d| {
-                    d.join(&info.config.name)
-                        .join("AVATAR.png")
-                        .to_string_lossy()
-                        .into_owned()
-                })
-            } else {
-                None
-            };
+            let avatar_path = chars_dir.as_ref().and_then(|d| {
+                boxxy_claw_protocol::character_loader::resolve_character_avatar_path_in(d, info)
+                    .map(|p| p.to_string_lossy().into_owned())
+            });
 
             items.push(CompletionItem {
                 display_name: format_character_display(info),
@@ -683,12 +677,12 @@ impl CompletionProvider for ResumeCompletionProvider {
                     "boxxy-boxxyclaw-symbolic".to_string()
                 };
 
-                let avatar_path = char_info.filter(|info| info.has_avatar).and_then(|info| {
-                    chars_dir.as_ref().map(|d| {
-                        d.join(&info.config.name)
-                            .join("AVATAR.png")
-                            .to_string_lossy()
-                            .into_owned()
+                let avatar_path = char_info.and_then(|info| {
+                    chars_dir.as_ref().and_then(|d| {
+                        boxxy_claw_protocol::character_loader::resolve_character_avatar_path_in(
+                            d, info,
+                        )
+                        .map(|p| p.to_string_lossy().into_owned())
                     })
                 });
 

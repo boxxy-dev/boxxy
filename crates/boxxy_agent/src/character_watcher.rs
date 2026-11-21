@@ -11,8 +11,11 @@ fn get_dir_snapshot(dir: &Path) -> DirSnapshot {
     let mut snapshot = BTreeMap::new();
     for entry in WalkDir::new(dir).into_iter().filter_map(|e| e.ok()) {
         let path = entry.path();
-        if let Some(ext) = path.extension()
-            && (ext == "toml" || ext == "png" || ext == "json")
+        if let Some(ext) = path.extension().and_then(|e| e.to_str())
+            && matches!(
+                ext.to_ascii_lowercase().as_str(),
+                "toml" | "png" | "webp" | "jpg" | "jpeg" | "json"
+            )
             && let Ok(metadata) = std::fs::metadata(path)
         {
             let mtime = metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH);

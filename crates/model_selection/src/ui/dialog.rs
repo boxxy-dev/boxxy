@@ -84,13 +84,12 @@ fn load_avatar_async(
     let cache_rc = tex_cache.clone();
     glib::spawn_future_local(async move {
         let file = gio::File::for_path(&path_owned);
-        if let Ok((bytes, _)) = file.load_contents_future().await {
-            let gbytes = glib::Bytes::from_owned(bytes);
-            if let Ok(tex) = gdk::Texture::from_bytes(&gbytes) {
-                cache_rc.borrow_mut().insert(path_owned, tex.clone());
-                if let Some(av) = avatar_weak.upgrade() {
-                    av.set_custom_image(Some(&tex));
-                }
+        if let Ok((bytes, _)) = file.load_contents_future().await
+            && let Some(tex) = boxxy_core_widgets::decode_texture_from_bytes(&bytes)
+        {
+            cache_rc.borrow_mut().insert(path_owned, tex.clone());
+            if let Some(av) = avatar_weak.upgrade() {
+                av.set_custom_image(Some(&tex));
             }
         }
     });

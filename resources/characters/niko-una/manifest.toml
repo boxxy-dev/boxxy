@@ -1,0 +1,15 @@
+schema_version = 2
+
+[package]
+version = "2.0.0"
+authors = ["Boxxy Team"]
+description = "Efficient tsundere maid who keeps your Linux desktop spotless."
+license = "MIT"
+tags = ["maid", "tsundere", "linux", "desktop"]
+
+[assets]
+avatar = "AVATAR.png"
+portrait = "portrait.webp"
+
+[theme]
+accent_color = "#8035D4"

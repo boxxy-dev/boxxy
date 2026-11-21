@@ -8,6 +8,7 @@ Shared, domain-agnostic GTK4/Libadwaita UI primitives and GObject utilities reus
 ```text
 src/
 ├── lib.rs            # Public module declarations & re-exports
+├── texture.rs        # Bounded `decode_texture_from_bytes` / `decode_texture_from_file` (PNG/JPEG + pure-Rust WebP fallback)
 ├── utils.rs          # Sound TypeId + ThreadGuard + RefCell `ObjectExtSafe` & cached Quarks
 ├── autocomplete/
 │   ├── mod.rs        # `AutocompleteController`, `AutocompleteInput`, lifecycle & key/cursor signals

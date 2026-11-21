@@ -121,14 +121,9 @@ pub fn open_model_selection(inner: &AppWindowInner, initial_character_id: Option
         .into_iter()
         .filter(|c| !boxxy_claw_protocol::characters::is_incognito_character(&c.config.id))
         .map(|info| {
-            let avatar_path = info
-                .has_avatar
-                .then(|| {
-                    chars_dir
-                        .as_ref()
-                        .map(|d| d.join(&info.config.name).join("AVATAR.png"))
-                })
-                .flatten();
+            let avatar_path = chars_dir.as_ref().and_then(|d| {
+                boxxy_claw_protocol::character_loader::resolve_character_avatar_path_in(d, &info)
+            });
             let display_name = boxxy_claw_ui::resolve_character_display_name(&info);
             boxxy_model_selection::CharacterModelTarget {
                 id: info.config.id,

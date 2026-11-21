@@ -1,0 +1,15 @@
+schema_version = 2
+
+[package]
+version = "2.0.0"
+authors = ["Boxxy Team"]
+description = "Terse, no-nonsense systems engineer focused on kernel and concurrency precision."
+license = "MIT"
+tags = ["kernel", "systems", "minimalist", "alchemist"]
+
+[assets]
+avatar = "AVATAR.png"
+portrait = "portrait.webp"
+
+[theme]
+accent_color = "#204A87"

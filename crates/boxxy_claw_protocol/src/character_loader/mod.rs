@@ -1,15 +1,33 @@
-//! Disk I/O, atomic TOML updates, and bundled-default extraction for the Character catalog.
+//! Disk I/O, atomic TOML updates, Characters v2 manifest resolution, and bundled-default extraction.
 
 mod bundled;
+mod manifest;
 mod toml_patch;
 
-pub use bundled::{bundled_default_avatar, bundled_default_color, incognito_avatar_bytes};
+pub use bundled::{
+    bundled_default_avatar, bundled_default_color, bundled_default_greetings,
+    bundled_default_manifest, bundled_default_portrait, incognito_avatar_bytes,
+    incognito_portrait_bytes,
+};
+pub use manifest::{
+    CharacterDirDiagnostic, is_valid_hex_color, resolve_character_avatar_path,
+    resolve_character_avatar_path_in, resolve_character_portrait_path,
+    resolve_character_portrait_path_in, validate_character_package_dir,
+    validate_relative_asset_path,
+};
 
 use crate::characters::{
-    CharacterConfig, CharacterInfo, INCOGNITO_CHARACTER_ID, INCOGNITO_CHARACTER_SLUG,
+    CharacterConfig, CharacterInfo, CharacterStatus, INCOGNITO_CHARACTER_ID,
+    INCOGNITO_CHARACTER_SLUG,
 };
 use anyhow::{Context, Result};
 use bundled::{BUNDLED_CHARACTERS, BUNDLED_JSON};
+use manifest::{
+    CUSTOM_AVATAR_PNG, CUSTOM_AVATAR_WEBP, CUSTOM_PORTRAIT_PNG, CUSTOM_PORTRAIT_WEBP,
+    SEEDED_CHARACTERS_README, load_or_seed_manifest, parse_and_sanitize_manifest,
+    read_custom_overrides, resolve_character_assets, resolve_package_base_avatar_rel,
+    sync_characters_readme_once, write_custom_color_override,
+};
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, DirEntry, File};
 use std::io::Write as _;
@@ -24,7 +42,7 @@ const FALLBACK_DEFAULT_COLOR: &str = "#8035D4";
 /// Writes `contents` to a hidden `.tmp` sibling in the same directory, flushes file data,
 /// and atomically renames it over `path` so concurrent readers and `CharacterWatcher` never
 /// observe partial or 0-byte files.
-fn atomic_write(path: &Path, contents: impl AsRef<[u8]>) -> Result<()> {
+pub(super) fn atomic_write(path: &Path, contents: impl AsRef<[u8]>) -> Result<()> {
     let parent = path
         .parent()
         .with_context(|| format!("Target path has no parent directory: {}", path.display()))?;
@@ -72,45 +90,118 @@ pub fn get_characters_dir() -> Result<PathBuf> {
     Ok(config_dir.join("boxxyclaw").join("characters"))
 }
 
+fn read_manifest_strict(slug: &str, char_dir: &Path) -> Option<crate::characters::CharacterManifest> {
+    let raw = fs::read_to_string(char_dir.join("manifest.toml")).ok()?;
+    parse_and_sanitize_manifest(&raw, slug).ok()
+}
+
 /// Returns the original/default hex color for a character:
 /// - For the three built-in characters (`niko-una`, `levi-kujo`, `kuro`), returns their bundled color.
-/// - For custom characters, returns `default_color` from `CHARACTER.toml` if present, otherwise their current `color`.
+/// - For community/custom characters, matches `load_character_from_dir` non-override priority:
+///   `CHARACTER.toml` `default_color` -> `CHARACTER.toml` `color` -> `manifest.toml` `[theme].accent_color` -> fallback.
 #[must_use]
 pub fn character_default_color(slug: &str, char_dir: &Path) -> Option<String> {
     if let Some(bundled) = bundled_default_color(slug) {
         return Some(bundled.to_string());
     }
-    let toml_str = fs::read_to_string(char_dir.join("CHARACTER.toml")).ok()?;
-    let parsed = toml::from_str::<CharacterToml>(&toml_str).ok()?;
-    Some(parsed.default_color.unwrap_or(parsed.color))
+    let parsed_toml = fs::read_to_string(char_dir.join("CHARACTER.toml"))
+        .ok()
+        .and_then(|s| toml::from_str::<CharacterToml>(&s).ok());
+
+    if let Some(ref parsed) = parsed_toml {
+        if let Some(ref def) = parsed.default_color
+            && is_valid_hex_color(def.trim())
+        {
+            return Some(def.trim().to_string());
+        }
+        if let Some(ref col) = parsed.color
+            && is_valid_hex_color(col.trim())
+        {
+            return Some(col.trim().to_string());
+        }
+    }
+
+    if let Some(man) = read_manifest_strict(slug, char_dir)
+        && let Some(accent) = man.theme.accent_color
+    {
+        return Some(accent);
+    }
+
+    parsed_toml.map(|_| FALLBACK_DEFAULT_COLOR.to_string())
 }
 
-/// Updates `color = "..."` inside `char_dir/CHARACTER.toml` in-place while preserving formatting.
-///
-/// For custom characters, records `default_color = "<original>"` on first edit so
-/// [`reset_character_avatar`] can restore the original color.
+/// Saves a user-cropped custom avatar for `char_dir`:
+/// - For v2 packages (`manifest.toml` present) or characters with a non-`AVATAR.png` package
+///   avatar (`avatar.png` / `avatar.webp`), writes non-destructively to `custom_avatar.png`
+///   so updating the character package never overwrites user customizations and Reset can
+///   restore the package's original artwork.
+/// - For legacy v1 folders without `manifest.toml`, writes to `AVATAR.png`.
 ///
 /// # Errors
-/// Returns an error if `CHARACTER.toml` cannot be read, parsed, or atomically written.
-pub fn save_character_color(char_dir: &Path, new_color: &str) -> Result<()> {
-    let toml_path = char_dir.join("CHARACTER.toml");
-    let content = fs::read_to_string(&toml_path)
-        .with_context(|| format!("Failed to read CHARACTER.toml at {}", toml_path.display()))?;
-
+/// Returns an error if the image bytes cannot be atomically written to disk.
+pub fn save_custom_character_avatar(char_dir: &Path, png_bytes: &[u8]) -> Result<PathBuf> {
     let slug = char_dir
         .file_name()
         .and_then(|s| s.to_str())
         .unwrap_or_default();
+    let has_v2_manifest = char_dir.join("manifest.toml").is_file();
+    let has_lowercase_pkg_avatar =
+        char_dir.join("avatar.png").is_file() || char_dir.join("avatar.webp").is_file();
+
+    let target = if has_v2_manifest || has_lowercase_pkg_avatar || bundled_default_avatar(slug).is_some() {
+        // Remove any stale `.webp` custom override so `custom_avatar.png` wins deterministically.
+        let _ = fs::remove_file(char_dir.join(CUSTOM_AVATAR_WEBP));
+        char_dir.join(CUSTOM_AVATAR_PNG)
+    } else {
+        char_dir.join("AVATAR.png")
+    };
+
+    atomic_write(&target, png_bytes)
+        .with_context(|| format!("Failed to save custom avatar at {}", target.display()))?;
+    Ok(target)
+}
+
+/// Saves a user-selected color override for `char_dir`:
+/// - When `manifest.toml` is present (Characters v2 package), stores `color` in `custom.toml`
+///   so neither `manifest.toml` nor `CHARACTER.toml` is mutated during package updates.
+/// - When `manifest.toml` is absent (legacy v1 character), patches `color = "..."` in-place
+///   inside `CHARACTER.toml` (recording `default_color` on first edit).
+///
+/// # Errors
+/// Returns an error if reading, parsing, or atomically writing the configuration fails.
+pub fn save_character_color(char_dir: &Path, new_color: &str) -> Result<()> {
+    let slug = char_dir
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or_default();
+
+    if char_dir.join("manifest.toml").is_file() {
+        let pkg_default = character_default_color(slug, char_dir);
+        let override_val = match pkg_default.as_deref() {
+            Some(def) if def.eq_ignore_ascii_case(new_color) => None,
+            _ => Some(new_color),
+        };
+        return write_custom_color_override(char_dir, override_val);
+    }
+
+    let toml_path = char_dir.join("CHARACTER.toml");
+    let content = fs::read_to_string(&toml_path)
+        .with_context(|| format!("Failed to read CHARACTER.toml at {}", toml_path.display()))?;
+
     let is_bundled = bundled_default_color(slug).is_some();
     let parsed_existing: CharacterToml = toml::from_str(&content)
         .with_context(|| format!("Failed to parse CHARACTER.toml at {}", toml_path.display()))?;
 
-    if parsed_existing.color == new_color {
+    let current_color = parsed_existing
+        .color
+        .as_deref()
+        .unwrap_or(FALLBACK_DEFAULT_COLOR);
+    if current_color.eq_ignore_ascii_case(new_color) {
         return Ok(());
     }
 
     let extra_default = if !is_bundled && parsed_existing.default_color.is_none() {
-        Some(("default_color", parsed_existing.color.as_str()))
+        Some(("default_color", current_color))
     } else {
         None
     };
@@ -120,12 +211,86 @@ pub fn save_character_color(char_dir: &Path, new_color: &str) -> Result<()> {
         .with_context(|| format!("Failed to write CHARACTER.toml at {}", toml_path.display()))
 }
 
-/// Returns `true` if the character at `char_dir` has a user-customised avatar or color.
+/// Returns `true` if the character at `char_dir` has a user-customised color override
+/// (`custom.toml` on v2 packages, or a modified `CHARACTER.toml` `color` on legacy/bundled dirs).
+#[must_use]
+pub fn has_custom_character_color(slug: &str, char_dir: &Path) -> bool {
+    if let Some(custom_color) = read_custom_overrides(char_dir).color {
+        let default_col = character_default_color(slug, char_dir);
+        if default_col
+            .as_deref()
+            .is_none_or(|d| !d.eq_ignore_ascii_case(&custom_color))
+        {
+            return true;
+        }
+    }
+
+    if let Ok(toml_str) = fs::read_to_string(char_dir.join("CHARACTER.toml"))
+        && let Ok(parsed) = toml::from_str::<CharacterToml>(&toml_str)
+        && let Some(ref toml_color) = parsed.color
+    {
+        if let Some(default_color) = bundled_default_color(slug) {
+            return !toml_color.eq_ignore_ascii_case(default_color);
+        }
+        if let Some(default_color) = parsed.default_color {
+            return !toml_color.eq_ignore_ascii_case(&default_color);
+        }
+    }
+    false
+}
+
+/// Resets only a character's color override back to its package/bundled default without
+/// touching `avatar` or `portrait` files, returning the restored hex color if known.
+///
+/// # Errors
+/// Returns an error if removing `custom.toml` or restoring `CHARACTER.toml` fails.
+pub fn reset_character_color(slug: &str, char_dir: &Path) -> Result<Option<String>> {
+    write_custom_color_override(char_dir, None)?;
+    let restored = character_default_color(slug, char_dir);
+
+    let has_v2_manifest = char_dir.join("manifest.toml").is_file();
+    if let Some(ref default_color) = restored
+        && !has_v2_manifest
+        && char_dir.join("CHARACTER.toml").is_file()
+    {
+        save_character_color(char_dir, default_color)?;
+    } else if let Some(bundled_col) = bundled_default_color(slug)
+        && char_dir.join("CHARACTER.toml").is_file()
+    {
+        // Also repair direct legacy edits to CHARACTER.toml on bundled characters.
+        let toml_path = char_dir.join("CHARACTER.toml");
+        if let Ok(content) = fs::read_to_string(&toml_path)
+            && let Ok(parsed) = toml::from_str::<CharacterToml>(&content)
+            && parsed
+                .color
+                .as_deref()
+                .is_some_and(|c| !c.eq_ignore_ascii_case(bundled_col))
+            && let Ok(patched) = patch_top_level_string_key(&content, "color", bundled_col, None, None)
+        {
+            atomic_write(&toml_path, patched)?;
+        }
+    }
+
+    Ok(restored)
+}
+
+/// Returns `true` if the character at `char_dir` has a user-customised avatar, portrait, or color.
 #[must_use]
 pub fn has_custom_character_avatar(slug: &str, char_dir: &Path) -> bool {
+    if char_dir.join(CUSTOM_AVATAR_PNG).is_file()
+        || char_dir.join(CUSTOM_AVATAR_WEBP).is_file()
+        || char_dir.join(CUSTOM_PORTRAIT_WEBP).is_file()
+        || char_dir.join(CUSTOM_PORTRAIT_PNG).is_file()
+    {
+        return true;
+    }
+
+    let has_v2_manifest = char_dir.join("manifest.toml").is_file();
     let avatar_path = char_dir.join("AVATAR.png");
     let avatar_custom = bundled_default_avatar(slug).map_or_else(
-        || avatar_path.is_file(),
+        // For v2 community packs (`manifest.toml` present), `AVATAR.png` / `avatar.png` is
+        // part of the author's package rather than a user override (`custom_avatar.png` is used).
+        || !has_v2_manifest && avatar_path.is_file(),
         |default_bytes| match fs::metadata(&avatar_path) {
             Ok(meta) if meta.is_file() => {
                 if meta.len() == default_bytes.len() as u64 {
@@ -139,39 +304,38 @@ pub fn has_custom_character_avatar(slug: &str, char_dir: &Path) -> bool {
         },
     );
 
-    if avatar_custom {
-        return true;
-    }
-
-    if let Ok(toml_str) = fs::read_to_string(char_dir.join("CHARACTER.toml"))
-        && let Ok(parsed) = toml::from_str::<CharacterToml>(&toml_str)
-    {
-        if let Some(default_color) = bundled_default_color(slug) {
-            return !parsed.color.eq_ignore_ascii_case(default_color);
-        }
-        if let Some(default_color) = parsed.default_color {
-            return !parsed.color.eq_ignore_ascii_case(&default_color);
-        }
-    }
-    false
+    avatar_custom || has_custom_character_color(slug, char_dir)
 }
 
-/// Resets a character's avatar and color to their default state:
-/// - For the three bundled characters (`niko-una`, `levi-kujo`, `kuro`), restores the
-///   bundled default `AVATAR.png` and default `color` in `CHARACTER.toml`, returning `Ok(Some(default_bytes))`.
-/// - For custom characters (4th+), removes `AVATAR.png` so the UI falls back to standard
-///   Adwaita initials, restores `default_color` if one was saved, and returns `Ok(None)`.
+/// Resets a character's local user customizations (`custom_*`, color, and avatar) to package defaults:
+/// - Removes `custom_avatar.*`, `custom_portrait.*`, and `custom.toml`.
+/// - For the three bundled characters (`niko-una`, `levi-kujo`, `kuro`), restores bundled
+///   `AVATAR.png` and default color, returning `Ok(Some(Vec<u8>))`.
+/// - For v2 community packages (`manifest.toml` present), preserves the package's own
+///   `avatar.png` / `AVATAR.png` and returns its bytes if present (`Ok(Some(Vec<u8>))`).
+/// - For legacy v1 custom characters (no `manifest.toml`), removes `AVATAR.png` so the UI
+///   falls back to Adwaita initials and restores `default_color`, returning `Ok(None)`.
 ///
 /// # Errors
-/// Returns an error if restoring or removing `AVATAR.png` or updating `CHARACTER.toml` fails.
-pub fn reset_character_avatar(slug: &str, char_dir: &Path) -> Result<Option<&'static [u8]>> {
-    let avatar_path = char_dir.join("AVATAR.png");
-    if let Some(default_color) = character_default_color(slug, char_dir)
-        && char_dir.join("CHARACTER.toml").is_file()
-    {
-        save_character_color(char_dir, &default_color)?;
+/// Returns an error if removing overrides or restoring default files fails.
+pub fn reset_character_avatar(slug: &str, char_dir: &Path) -> Result<Option<Vec<u8>>> {
+    for rel in [
+        CUSTOM_AVATAR_PNG,
+        CUSTOM_AVATAR_WEBP,
+        CUSTOM_PORTRAIT_WEBP,
+        CUSTOM_PORTRAIT_PNG,
+    ] {
+        let p = char_dir.join(rel);
+        if let Err(e) = fs::remove_file(&p)
+            && e.kind() != std::io::ErrorKind::NotFound
+        {
+            return Err(e).with_context(|| format!("Failed to remove {}", p.display()));
+        }
     }
+    let _ = reset_character_color(slug, char_dir)?;
 
+    let has_v2_manifest = char_dir.join("manifest.toml").is_file();
+    let avatar_path = char_dir.join("AVATAR.png");
     if let Some(default_bytes) = bundled_default_avatar(slug) {
         atomic_write(&avatar_path, default_bytes).with_context(|| {
             format!(
@@ -179,16 +343,28 @@ pub fn reset_character_avatar(slug: &str, char_dir: &Path) -> Result<Option<&'st
                 avatar_path.display()
             )
         })?;
-        Ok(Some(default_bytes))
-    } else {
-        if let Err(e) = fs::remove_file(&avatar_path)
-            && e.kind() != std::io::ErrorKind::NotFound
-        {
-            return Err(e)
-                .with_context(|| format!("Failed to remove avatar at {}", avatar_path.display()));
+        if let Some(default_portrait) = bundled_default_portrait(slug) {
+            let _ = atomic_write(&char_dir.join("portrait.webp"), default_portrait);
         }
-        Ok(None)
+        return Ok(Some(default_bytes.to_vec()));
     }
+
+    if has_v2_manifest {
+        let man = read_manifest_strict(slug, char_dir);
+        if let Some(pkg_rel) = resolve_package_base_avatar_rel(char_dir, man.as_ref())
+            && let Ok(pkg_bytes) = fs::read(char_dir.join(pkg_rel))
+        {
+            return Ok(Some(pkg_bytes));
+        }
+        return Ok(None);
+    }
+
+    if let Err(e) = fs::remove_file(&avatar_path)
+        && e.kind() != std::io::ErrorKind::NotFound
+    {
+        return Err(e).with_context(|| format!("Failed to remove avatar at {}", avatar_path.display()));
+    }
+    Ok(None)
 }
 
 /// Ensures the characters directory exists and has at least one valid character.
@@ -303,15 +479,20 @@ fn extract_bundled_defaults(base_dir: &Path) -> Result<()> {
     fs::create_dir_all(base_dir).context("Failed to create characters directory")?;
     atomic_write(&base_dir.join("characters.json"), BUNDLED_JSON)
         .context("Failed to write bundled characters.json")?;
+    let _ = atomic_write(&base_dir.join("README.md"), SEEDED_CHARACTERS_README);
 
     for bundled in BUNDLED_CHARACTERS {
         let dir = base_dir.join(bundled.slug);
         fs::create_dir_all(&dir)
             .with_context(|| format!("Failed to create {} directory", bundled.slug))?;
+        atomic_write(&dir.join("manifest.toml"), bundled.manifest_bytes)
+            .with_context(|| format!("Failed to write {} manifest.toml", bundled.slug))?;
         atomic_write(&dir.join("CHARACTER.toml"), bundled.toml_bytes)
             .with_context(|| format!("Failed to write {} CHARACTER.toml", bundled.slug))?;
         atomic_write(&dir.join("AVATAR.png"), bundled.avatar_bytes)
             .with_context(|| format!("Failed to write {} AVATAR.png", bundled.slug))?;
+        atomic_write(&dir.join("portrait.webp"), bundled.portrait_bytes)
+            .with_context(|| format!("Failed to write {} portrait.webp", bundled.slug))?;
     }
 
     Ok(())
@@ -323,7 +504,9 @@ fn extract_bundled_defaults(base_dir: &Path) -> Result<()> {
 /// Returns an error if the characters directory cannot be created or read.
 pub fn load_characters() -> Result<Vec<CharacterInfo>> {
     let base_dir = get_characters_dir()?;
-    load_characters_in(&base_dir)
+    let chars = load_characters_in(&base_dir)?;
+    sync_characters_readme_once(&base_dir);
+    Ok(chars)
 }
 
 /// Loads all character configurations from `base_dir` in a single directory pass.
@@ -455,11 +638,7 @@ pub fn save_character_order_in(base_dir: &Path, order: &[String]) -> Result<()> 
     atomic_write(&json_path, content).context("Failed to write character order")
 }
 
-/// Loads a single character from a directory.
-///
-/// Expects a `CHARACTER.toml` and optionally an `AVATAR.png`.
-/// Auto-generates a UUID and writes it back to the TOML if absent, empty, or colliding
-/// with the reserved `__incognito__` ID.
+/// Loads a single character (v1 or v2) from `dir`.
 fn load_character_from_dir(dir: &Path) -> Result<CharacterInfo> {
     let dir_name = dir
         .file_name()
@@ -469,8 +648,6 @@ fn load_character_from_dir(dir: &Path) -> Result<CharacterInfo> {
         .to_string();
 
     let toml_path = dir.join("CHARACTER.toml");
-    let avatar_path = dir.join("AVATAR.png");
-
     let toml_content = fs::read_to_string(&toml_path)
         .with_context(|| format!("Failed to read CHARACTER.toml in {}", dir.display()))?;
 
@@ -501,28 +678,44 @@ fn load_character_from_dir(dir: &Path) -> Result<CharacterInfo> {
         new_id
     };
 
-    // Ensure the three bundled characters always fall back to their bundled avatar image
-    // if AVATAR.png was removed from disk.
-    let mut has_avatar = avatar_path.is_file();
-    if !has_avatar
-        && let Some(default_bytes) = bundled_default_avatar(&dir_name)
-        && atomic_write(&avatar_path, default_bytes).is_ok()
-    {
-        has_avatar = true;
-    }
+    let manifest = load_or_seed_manifest(dir, &dir_name);
+    let assets = resolve_character_assets(dir, &dir_name, manifest.as_ref());
+    let custom_overrides = read_custom_overrides(dir);
 
     let display_name = if raw.display_name.trim().is_empty() {
         dir_name.clone()
     } else {
         raw.display_name
     };
-    let color = {
-        let trimmed = raw.color.trim();
-        if trimmed.is_empty() {
-            FALLBACK_DEFAULT_COLOR.to_string()
-        } else {
-            trimmed.to_string()
-        }
+
+    // Color priority: `custom.toml` user override -> `CHARACTER.toml` (if customized on v1
+    // or explicitly differing from bundled default) -> `manifest.toml` `[theme].accent_color` -> fallback.
+    let color = custom_overrides
+        .color
+        .as_deref()
+        .map(str::trim)
+        .filter(|c| is_valid_hex_color(c))
+        .map(str::to_string)
+        .or_else(|| {
+            raw.color
+                .as_deref()
+                .map(str::trim)
+                .filter(|c| is_valid_hex_color(c))
+                .map(str::to_string)
+        })
+        .or_else(|| {
+            manifest
+                .as_ref()
+                .and_then(|m| m.theme.accent_color.clone())
+        })
+        .unwrap_or_else(|| FALLBACK_DEFAULT_COLOR.to_string());
+
+    let greetings = if raw.greetings.is_empty() {
+        bundled_default_greetings(&dir_name).map_or_else(Vec::new, |defaults| {
+            defaults.iter().map(|s| (*s).to_string()).collect()
+        })
+    } else {
+        raw.greetings
     };
 
     let config = CharacterConfig {
@@ -532,9 +725,18 @@ fn load_character_from_dir(dir: &Path) -> Result<CharacterInfo> {
         color,
         duties: raw.duties,
         personality: raw.personality,
+        greetings,
     };
 
-    Ok(CharacterInfo::new(config, has_avatar))
+    Ok(CharacterInfo {
+        config,
+        status: CharacterStatus::Available,
+        has_avatar: assets.avatar_rel_path.is_some(),
+        has_portrait: assets.portrait_rel_path.is_some(),
+        avatar_rel_path: assets.avatar_rel_path,
+        portrait_rel_path: assets.portrait_rel_path,
+        manifest,
+    })
 }
 
 #[cfg(test)]
@@ -543,14 +745,23 @@ mod tests {
     use bundled::find_bundled;
 
     #[test]
-    fn bundled_characters_table_matches_embedded_toml_colors() {
+    fn bundled_characters_table_matches_embedded_toml_and_manifests() {
         for b in BUNDLED_CHARACTERS {
             let toml_str = std::str::from_utf8(b.toml_bytes).unwrap();
             let parsed: CharacterToml = toml::from_str(toml_str).unwrap();
-            assert_eq!(parsed.color, b.default_color);
+            assert_eq!(parsed.color.as_deref(), Some(b.default_color));
+            assert_ne!(parsed.greetings.len(), 0);
             assert_ne!(b.avatar_bytes, b"" as &[u8]);
+            assert_ne!(b.portrait_bytes, b"" as &[u8]);
+
+            let man_str = std::str::from_utf8(b.manifest_bytes).unwrap();
+            let man = parse_and_sanitize_manifest(man_str, b.slug).unwrap();
+            assert_eq!(man.schema_version, 2);
+            assert_eq!(man.assets.portrait.as_deref(), Some("portrait.webp"));
+            assert_eq!(man.theme.accent_color.as_deref(), Some(b.default_color));
         }
         assert_ne!(incognito_avatar_bytes(), b"" as &[u8]);
+        assert_ne!(incognito_portrait_bytes(), b"" as &[u8]);
     }
 
     #[test]
@@ -570,10 +781,10 @@ mod tests {
 
         // Resetting restores the bundled default avatar and clears custom state
         let restored = reset_character_avatar("niko-una", &niko_dir).unwrap();
-        assert_eq!(restored, Some(default_bytes));
+        assert_eq!(restored.as_deref(), Some(default_bytes));
         assert!(!has_custom_character_avatar("niko-una", &niko_dir));
 
-        // 2. 4th custom character ("my-custom-agent") has no bundled avatar
+        // 2. Legacy v1 4th custom character ("my-custom-agent", no manifest.toml)
         let custom_dir = tmp.path().join("my-custom-agent");
         fs::create_dir_all(&custom_dir).unwrap();
         assert!(!has_custom_character_avatar("my-custom-agent", &custom_dir));
@@ -581,13 +792,13 @@ mod tests {
         fs::write(custom_dir.join("AVATAR.png"), b"custom-png-bytes").unwrap();
         assert!(has_custom_character_avatar("my-custom-agent", &custom_dir));
 
-        // Resetting removes AVATAR.png so it falls back to standard Adwaita initials
+        // Resetting removes AVATAR.png so v1 falls back to standard Adwaita initials
         let restored_custom = reset_character_avatar("my-custom-agent", &custom_dir).unwrap();
         assert!(restored_custom.is_none());
         assert!(!custom_dir.join("AVATAR.png").exists());
         assert!(!has_custom_character_avatar("my-custom-agent", &custom_dir));
 
-        // 3. Color customization and reset on bundled and custom characters
+        // 3. Color customization and reset on bundled and v1 custom characters
         let niko_toml = find_bundled("niko-una").unwrap().toml_bytes;
         fs::write(niko_dir.join("CHARACTER.toml"), niko_toml).unwrap();
         assert!(!has_custom_character_avatar("niko-una", &niko_dir));
@@ -600,7 +811,7 @@ mod tests {
             Some("#8035D4")
         );
 
-        // Single-line triple-quoted color preserves comments when patched in-place
+        // Single-line triple-quoted color preserves comments when patched in-place on v1
         let custom_toml = "# Custom comment\nid = \"00000004-0000-4000-8000-000000000004\"\ndisplay_name = \"custom\"\ncolor = \"\"\"#abcdef\"\"\"\nduties = \"Helper\"\npersonality = \"Friendly\"\n";
         fs::write(custom_dir.join("CHARACTER.toml"), custom_toml).unwrap();
         assert!(!has_custom_character_avatar("my-custom-agent", &custom_dir));
@@ -617,6 +828,111 @@ mod tests {
         );
         reset_character_avatar("my-custom-agent", &custom_dir).unwrap();
         assert!(!has_custom_character_avatar("my-custom-agent", &custom_dir));
+    }
+
+    #[test]
+    fn v2_community_package_preserves_user_overrides_across_updates_and_resets_cleanly() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base_dir = tmp.path().join("chars");
+        let pkg_dir = base_dir.join("sora-dev");
+        fs::create_dir_all(&pkg_dir).unwrap();
+
+        let manifest_v1 = r##"
+schema_version = 2
+
+[package]
+version = "1.0.0"
+authors = ["community-author"]
+description = "Calm systems mentor"
+
+[assets]
+avatar = "avatar.png"
+portrait = "portrait.webp"
+
+[theme]
+accent_color = "#4E9A06"
+"##;
+        let char_v1 = r#"
+id = "00000010-0000-4000-8000-000000000010"
+display_name = "Sora"
+duties = "Kernel Mentor"
+personality = "Calm and thorough."
+greetings = ["Ready to inspect the trace."]
+"#;
+        fs::write(pkg_dir.join("manifest.toml"), manifest_v1).unwrap();
+        fs::write(pkg_dir.join("CHARACTER.toml"), char_v1).unwrap();
+        fs::write(pkg_dir.join("avatar.png"), b"pkg-avatar-v1").unwrap();
+        fs::write(pkg_dir.join("portrait.webp"), b"pkg-portrait-v1").unwrap();
+
+        let loaded = load_characters_in(&base_dir).unwrap();
+        assert_eq!(loaded.len(), 1);
+        let sora = &loaded[0];
+        assert!(sora.has_avatar);
+        assert!(sora.has_portrait);
+        assert_eq!(sora.avatar_rel_path.as_deref(), Some("avatar.png"));
+        assert_eq!(sora.portrait_rel_path.as_deref(), Some("portrait.webp"));
+        assert_eq!(sora.config.color, "#4E9A06");
+        assert_eq!(
+            sora.package_attribution().as_deref(),
+            Some("v1.0.0 · by community-author")
+        );
+        assert_eq!(
+            sora.deterministic_greeting("pane-1"),
+            Some("Ready to inspect the trace.")
+        );
+        assert!(!has_custom_character_avatar("sora-dev", &pkg_dir));
+        assert!(!has_custom_character_color("sora-dev", &pkg_dir));
+
+        // User customizes color in Preferences (plus optional custom_avatar.png on disk) -> stored non-destructively!
+        save_custom_character_avatar(&pkg_dir, b"user-cropped-avatar").unwrap();
+        save_character_color(&pkg_dir, "#FF5500").unwrap();
+        assert!(has_custom_character_color("sora-dev", &pkg_dir));
+        assert!(has_custom_character_avatar("sora-dev", &pkg_dir));
+        assert_eq!(fs::read(pkg_dir.join("avatar.png")).unwrap(), b"pkg-avatar-v1");
+
+        // Simulate community author shipping v1.1.0 (overwriting manifest, CHARACTER.toml, avatar, portrait)
+        let manifest_v2 = manifest_v1.replace("1.0.0", "1.1.0");
+        fs::write(pkg_dir.join("manifest.toml"), manifest_v2).unwrap();
+        fs::write(pkg_dir.join("avatar.png"), b"pkg-avatar-v2").unwrap();
+
+        let after_update = load_characters_in(&base_dir).unwrap();
+        let sora_updated = &after_update[0];
+        assert_eq!(sora_updated.config.color, "#FF5500");
+        assert_eq!(
+            sora_updated.avatar_rel_path.as_deref(),
+            Some("custom_avatar.png")
+        );
+        assert_eq!(
+            sora_updated.package_attribution().as_deref(),
+            Some("v1.1.0 · by community-author")
+        );
+
+        // Resetting only color restores package accent_color while preserving custom_avatar.png
+        let restored_col = reset_character_color("sora-dev", &pkg_dir).unwrap();
+        assert_eq!(restored_col.as_deref(), Some("#4E9A06"));
+        assert!(!has_custom_character_color("sora-dev", &pkg_dir));
+        assert!(pkg_dir.join("custom_avatar.png").is_file());
+
+        // Full reset restores the updated v1.1.0 package avatar & theme color!
+        let restored_bytes = reset_character_avatar("sora-dev", &pkg_dir).unwrap();
+        assert_eq!(restored_bytes.as_deref(), Some(b"pkg-avatar-v2" as &[u8]));
+        assert!(!has_custom_character_avatar("sora-dev", &pkg_dir));
+
+        let after_reset = load_characters_in(&base_dir).unwrap();
+        assert_eq!(after_reset[0].config.color, "#4E9A06");
+        assert_eq!(after_reset[0].avatar_rel_path.as_deref(), Some("avatar.png"));
+    }
+
+    #[test]
+    fn manifest_rejects_path_traversal_and_absolute_asset_paths() {
+        assert!(validate_relative_asset_path("../secret.png", true).is_err());
+        assert!(validate_relative_asset_path("sub/../../secret.png", true).is_err());
+        assert!(validate_relative_asset_path("/etc/passwd", false).is_err());
+        assert!(validate_relative_asset_path("avatar.exe", true).is_err());
+        assert_eq!(
+            validate_relative_asset_path("assets/portrait.webp", true).unwrap(),
+            "assets/portrait.webp"
+        );
     }
 
     #[test]

@@ -900,46 +900,46 @@ fn strip_code_blocks(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use boxxy_claw_protocol::characters::{CharacterConfig, CharacterStatus};
+    use boxxy_claw_protocol::characters::CharacterConfig;
 
     fn sample_catalog() -> Vec<CharacterInfo> {
         vec![
-            CharacterInfo {
-                config: CharacterConfig {
+            CharacterInfo::new(
+                CharacterConfig {
                     id: "id-niko".to_string(),
                     name: "niko-una".to_string(),
                     display_name: "Niko Una".to_string(),
                     color: "#ff6699".to_string(),
                     duties: "Rust engineer".to_string(),
                     personality: "Energetic".to_string(),
+                    greetings: Vec::new(),
                 },
-                status: CharacterStatus::Available,
-                has_avatar: true,
-            },
-            CharacterInfo {
-                config: CharacterConfig {
+                true,
+            ),
+            CharacterInfo::new(
+                CharacterConfig {
                     id: "id-levi".to_string(),
                     name: "levi-kujo".to_string(),
                     display_name: "Levi Kujo".to_string(),
                     color: "#3399ff".to_string(),
                     duties: "Systems architect".to_string(),
                     personality: "Calm and analytical".to_string(),
+                    greetings: Vec::new(),
                 },
-                status: CharacterStatus::Available,
-                has_avatar: true,
-            },
-            CharacterInfo {
-                config: CharacterConfig {
+                true,
+            ),
+            CharacterInfo::new(
+                CharacterConfig {
                     id: "id-kuro".to_string(),
                     name: "kuro".to_string(),
                     display_name: "Kuro".to_string(),
                     color: "#9966ff".to_string(),
                     duties: "Security specialist".to_string(),
                     personality: "Dry wit".to_string(),
+                    greetings: Vec::new(),
                 },
-                status: CharacterStatus::Available,
-                has_avatar: true,
-            },
+                true,
+            ),
         ]
     }
 

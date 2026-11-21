@@ -269,46 +269,46 @@ mod tests {
 
     #[test]
     fn find_image_capable_characters_filters_ready_keys_and_excludes_self() {
-        use boxxy_claw_protocol::characters::{CharacterConfig, CharacterInfo, CharacterStatus};
+        use boxxy_claw_protocol::characters::{CharacterConfig, CharacterInfo};
         use boxxy_model_selection::{AnthropicModel, OpenAiModel};
 
         let catalog = vec![
-            CharacterInfo {
-                config: CharacterConfig {
+            CharacterInfo::new(
+                CharacterConfig {
                     id: "char-claude".to_string(),
                     name: "niko-una".to_string(),
                     display_name: "Niko Una".to_string(),
                     color: "#ff6699".to_string(),
                     duties: "Engineer".to_string(),
                     personality: "Direct".to_string(),
+                    greetings: Vec::new(),
                 },
-                status: CharacterStatus::Available,
-                has_avatar: false,
-            },
-            CharacterInfo {
-                config: CharacterConfig {
+                false,
+            ),
+            CharacterInfo::new(
+                CharacterConfig {
                     id: "char-gemini".to_string(),
                     name: "levi-kujo".to_string(),
                     display_name: "Levi Kujo".to_string(),
                     color: "#3399ff".to_string(),
                     duties: "Architect".to_string(),
                     personality: "Calm".to_string(),
+                    greetings: Vec::new(),
                 },
-                status: CharacterStatus::Available,
-                has_avatar: false,
-            },
-            CharacterInfo {
-                config: CharacterConfig {
+                false,
+            ),
+            CharacterInfo::new(
+                CharacterConfig {
                     id: "char-openai-nokey".to_string(),
                     name: "kuro".to_string(),
                     display_name: "Kuro".to_string(),
                     color: "#9966ff".to_string(),
                     duties: "Security".to_string(),
                     personality: "Dry".to_string(),
+                    greetings: Vec::new(),
                 },
-                status: CharacterStatus::Available,
-                has_avatar: false,
-            },
+                false,
+            ),
         ];
 
         let mut settings = boxxy_preferences::Settings::default();

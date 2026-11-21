@@ -256,13 +256,14 @@ pub(super) fn populate_past_sessions(ctx: PastSessionsCtx, force: bool) {
             let avatar = adw::Avatar::new(28, Some(&char_display), true);
             avatar.set_valign(gtk::Align::Center);
             if let Some(info) = char_info
-                && info.has_avatar
                 && let Some(ref dir) = chars_dir
+                && let Some(avatar_path) =
+                    boxxy_claw_protocol::character_loader::resolve_character_avatar_path_in(
+                        dir, info,
+                    )
+                && let Some(texture) = load_cached_texture(&avatar_path)
             {
-                let avatar_path = dir.join(&info.config.name).join("AVATAR.png");
-                if let Some(texture) = load_cached_texture(&avatar_path) {
-                    avatar.set_custom_image(Some(&texture));
-                }
+                avatar.set_custom_image(Some(&texture));
             }
             resume_btn_content.append(&avatar);
 
@@ -518,13 +519,14 @@ pub(super) fn populate_past_sessions(ctx: PastSessionsCtx, force: bool) {
                         let alt_hbox = gtk::Box::new(gtk::Orientation::Horizontal, 8);
                         let alt_avatar = adw::Avatar::new(18, Some(&alt_display), true);
                         alt_avatar.set_valign(gtk::Align::Center);
-                        if alt_char.has_avatar
-                            && let Some(ref dir) = chars_dir
+                        if let Some(ref dir) = chars_dir
+                            && let Some(avatar_path) =
+                                boxxy_claw_protocol::character_loader::resolve_character_avatar_path_in(
+                                    dir, alt_char,
+                                )
+                            && let Some(texture) = load_cached_texture(&avatar_path)
                         {
-                            let avatar_path = dir.join(&alt_char.config.name).join("AVATAR.png");
-                            if let Some(texture) = load_cached_texture(&avatar_path) {
-                                alt_avatar.set_custom_image(Some(&texture));
-                            }
+                            alt_avatar.set_custom_image(Some(&texture));
                         }
                         alt_hbox.append(&alt_avatar);
                         alt_hbox.append(

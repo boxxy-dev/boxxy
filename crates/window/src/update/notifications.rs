@@ -281,11 +281,9 @@ fn build_character_reminder_toast_widget(notif: &Notification) -> Option<gtk4::W
                 .flatten();
             if let Some(bytes) = bytes_opt
                 && let Some(av) = avatar_weak.upgrade()
+                && let Some(texture) = boxxy_core_widgets::decode_texture_from_bytes(&bytes)
             {
-                let gbytes = gtk4::glib::Bytes::from_owned(bytes);
-                if let Ok(texture) = gtk4::gdk::Texture::from_bytes(&gbytes) {
-                    av.set_custom_image(Some(&texture));
-                }
+                av.set_custom_image(Some(&texture));
             }
         });
     }

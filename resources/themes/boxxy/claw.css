@@ -106,6 +106,12 @@
     border: var(--boxxy-border-thin) solid @boxxy_ink;
 }
 
+.claw-sidebar-portrait {
+    border-radius: var(--boxxy-radius-lg);
+    border: var(--boxxy-border-width) solid @boxxy_ink;
+    box-shadow: 2px 3px 0px @boxxy_shadow;
+}
+
 /* Claw Thinking / Tool Activity Status Pill ("Drinking Water..") */
 .claw-status-pill {
     background-color: @card_bg_color;

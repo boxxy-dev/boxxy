@@ -34,6 +34,36 @@ impl RegionCrop {
         }
     }
 
+    /// Computes the largest centered crop matching `aspect_w : aspect_h` inside `(img_w, img_h)`.
+    #[must_use]
+    pub fn center_aspect(img_w: u32, img_h: u32, aspect_w: u32, aspect_h: u32) -> Self {
+        let w = u64::from(img_w.max(1));
+        let h = u64::from(img_h.max(1));
+        let aw = u64::from(aspect_w.max(1));
+        let ah = u64::from(aspect_h.max(1));
+
+        let (crop_w, crop_h) = if w * ah >= h * aw {
+            // Source is wider than target aspect: pillarbox horizontally.
+            let cw = ((h * aw) / ah).clamp(1, w);
+            (cw, h)
+        } else {
+            // Source is taller than target aspect: letterbox vertically.
+            let ch = ((w * ah) / aw).clamp(1, h);
+            (w, ch)
+        };
+
+        let width_px = u32::try_from(crop_w).unwrap_or(1);
+        let height_px = u32::try_from(crop_h).unwrap_or(1);
+        let bound_w = img_w.max(1);
+        let bound_h = img_h.max(1);
+        Self {
+            x: (bound_w - width_px) / 2,
+            y: (bound_h - height_px) / 2,
+            width: width_px,
+            height: height_px,
+        }
+    }
+
     /// Clamps a rectangular crop region to fit within `(img_w, img_h)`.
     #[must_use]
     pub fn clamp_to_bounds(self, img_w: u32, img_h: u32) -> Self {
@@ -111,6 +141,40 @@ pub(crate) fn crop_and_resize_dynamic_square(
     }
 }
 
+/// Crops `image` to `crop` (clamped to bounds) and resizes to `target_w × target_h`
+/// while preserving whether the source has an alpha channel.
+#[must_use]
+pub(crate) fn crop_and_resize_dynamic_rect(
+    image: DynamicImage,
+    crop: RegionCrop,
+    target_w: u32,
+    target_h: u32,
+) -> DynamicImage {
+    let tw = target_w.max(1);
+    let th = target_h.max(1);
+    let rect = crop.clamp_to_bounds(image.width(), image.height());
+
+    if rect.x == 0
+        && rect.y == 0
+        && rect.width == image.width()
+        && rect.height == image.height()
+        && image.width() == tw
+        && image.height() == th
+    {
+        return image;
+    }
+
+    if image.color().has_alpha() {
+        let rgba = image.into_rgba8();
+        let view = imageops::crop_imm(&rgba, rect.x, rect.y, rect.width, rect.height);
+        DynamicImage::ImageRgba8(resize_view_two_stage(&*view, tw, th))
+    } else {
+        let rgb = image.into_rgb8();
+        let view = imageops::crop_imm(&rgb, rect.x, rect.y, rect.width, rect.height);
+        DynamicImage::ImageRgb8(resize_view_two_stage(&*view, tw, th))
+    }
+}
+
 /// Downscales `image` to `(target_w, target_h)` using a fast two-stage pipeline:
 /// - For large reductions (`> 2x` on both axes, e.g. 4K/8K -> preview), first box-averages to
 ///   `2 * target` in integer math (visiting each input pixel once), then finishes with `Lanczos3`.
@@ -184,6 +248,18 @@ mod tests {
         assert_eq!(
             crop.clamp_to_bounds(200, 150),
             RegionCrop::new(150, 120, 50, 30)
+        );
+    }
+
+    #[test]
+    fn center_aspect_computes_16_by_9_letterbox_and_pillarbox() {
+        assert_eq!(
+            RegionCrop::center_aspect(1920, 1200, 16, 9),
+            RegionCrop::new(0, 60, 1920, 1080)
+        );
+        assert_eq!(
+            RegionCrop::center_aspect(2400, 900, 16, 9),
+            RegionCrop::new(400, 0, 1600, 900)
         );
     }
 }

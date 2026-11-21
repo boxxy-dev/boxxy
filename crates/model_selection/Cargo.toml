@@ -8,6 +8,7 @@ name = "boxxy-model-selection"
 
 [dependencies]
 arc-swap = { workspace = true }
+boxxy-core-widgets.workspace = true
 gtk4 = { workspace = true }
 libadwaita = { workspace = true }
 serde = { workspace = true }

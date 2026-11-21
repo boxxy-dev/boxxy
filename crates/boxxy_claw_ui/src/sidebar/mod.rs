@@ -7,12 +7,14 @@ mod past_sessions;
 mod tasks;
 
 use crate::character_style::{
-    is_safe_hex_color, load_character_avatar_texture, load_incognito_texture,
-    prettify_character_name, resolve_character_display_name,
+    is_safe_hex_color, load_character_avatar_texture, load_character_portrait_texture,
+    load_incognito_portrait_texture, load_incognito_texture, prettify_character_name,
+    resolve_character_display_name,
 };
 use boxxy_claw_protocol::{ScheduledTask, SessionUsage, format_number_with_commas};
 use boxxy_core_widgets::ObjectExtSafe;
 use gtk4 as gtk;
+use gtk4::gdk;
 use gtk4::glib;
 use gtk4::prelude::*;
 use libadwaita as adw;
@@ -26,11 +28,104 @@ use std::time::{Duration, Instant};
 use tasks::TasksSection;
 
 const MEMORIES_COUNT_TTL: Duration = Duration::from_secs(1);
+mod portrait_frame {
+    use gtk4 as gtk;
+    use gtk4::glib;
+    use gtk4::prelude::*;
+    use gtk4::subclass::prelude::*;
+
+    const SIDEBAR_PORTRAIT_W: i32 = 240;
+    const SIDEBAR_PORTRAIT_H: i32 = 135;
+
+    mod imp {
+        #[allow(clippy::wildcard_imports)]
+        use super::*;
+
+        #[derive(Default)]
+        pub struct SidebarPortraitFrame;
+
+        #[glib::object_subclass]
+        impl ObjectSubclass for SidebarPortraitFrame {
+            const NAME: &'static str = "BoxxyClawSidebarPortraitFrame";
+            type Type = super::SidebarPortraitFrame;
+            type ParentType = gtk::Widget;
+        }
+
+        impl ObjectImpl for SidebarPortraitFrame {
+            fn dispose(&self) {
+                while let Some(child) = self.obj().first_child() {
+                    child.unparent();
+                }
+            }
+        }
+
+        impl WidgetImpl for SidebarPortraitFrame {
+            fn request_mode(&self) -> gtk::SizeRequestMode {
+                // ConstantSize prevents GtkPicture from propagating 768x432 intrinsic dimensions
+                // up to the sidebar container.
+                gtk::SizeRequestMode::ConstantSize
+            }
+
+            fn measure(
+                &self,
+                orientation: gtk::Orientation,
+                _for_size: i32,
+            ) -> (i32, i32, i32, i32) {
+                if let Some(child) = self.obj().first_child() {
+                    match orientation {
+                        gtk::Orientation::Horizontal => {
+                            let _ = child.measure(gtk::Orientation::Horizontal, -1);
+                        }
+                        gtk::Orientation::Vertical => {
+                            let _ = child.measure(gtk::Orientation::Vertical, SIDEBAR_PORTRAIT_W);
+                        }
+                        _ => {}
+                    }
+                }
+                match orientation {
+                    gtk::Orientation::Vertical => (SIDEBAR_PORTRAIT_H, SIDEBAR_PORTRAIT_H, -1, -1),
+                    _ => (SIDEBAR_PORTRAIT_W, SIDEBAR_PORTRAIT_W, -1, -1),
+                }
+            }
+
+            fn size_allocate(&self, width: i32, height: i32, baseline: i32) {
+                if let Some(child) = self.obj().first_child() {
+                    let _ = child.measure(gtk::Orientation::Vertical, width);
+                    child.allocate(width, height, baseline, None);
+                }
+            }
+        }
+    }
+
+    glib::wrapper! {
+        pub struct SidebarPortraitFrame(ObjectSubclass<imp::SidebarPortraitFrame>)
+            @extends gtk::Widget,
+            @implements gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget;
+    }
+
+    impl SidebarPortraitFrame {
+        pub(super) fn new(child: &impl IsA<gtk::Widget>) -> Self {
+            let obj: Self = glib::Object::new();
+            obj.set_halign(gtk::Align::Center);
+            obj.set_valign(gtk::Align::Center);
+            obj.set_overflow(gtk::Overflow::Hidden);
+            obj.add_css_class("claw-sidebar-portrait");
+            child.set_parent(&obj);
+            obj
+        }
+    }
+}
+
+use portrait_frame::SidebarPortraitFrame;
 
 pub struct ClawSidebarComponent {
     widget: gtk::Box,
     hero_box: gtk::Box,
     hero_icon: gtk::Image,
+    hero_portrait_frame: SidebarPortraitFrame,
+    hero_portrait_pic: gtk::Picture,
+    hero_portrait_sleep_badge: gtk::Box,
+    hero_portrait_vibe_badge: gtk::Box,
     hero_avatar_overlay: gtk::Overlay,
     hero_avatar: adw::Avatar,
     hero_sleep_badge: gtk::Box,
@@ -42,6 +137,7 @@ pub struct ClawSidebarComponent {
     sessions_box: gtk::Box,
     sessions_list: gtk::ListBox,
     is_new_session: Rc<Cell<bool>>,
+    last_pane_agent: Rc<RefCell<(String, bool, bool)>>,
     past_sessions_seq: Rc<Cell<u64>>,
     rendered_sessions_sig: Rc<RefCell<RenderedSessionSig>>,
     active_options_popover: Rc<RefCell<Option<gtk::Popover>>>,
@@ -93,6 +189,63 @@ impl ClawSidebarComponent {
             .halign(gtk::Align::Center)
             .build();
         hero_box.append(&hero_icon);
+
+        // 16:9 landscape portrait hero (`240 × 135`) shown when the active character provides `portrait.*`
+        let hero_portrait_pic = gtk::Picture::builder()
+            .content_fit(gtk::ContentFit::Cover)
+            .can_shrink(true)
+            .hexpand(true)
+            .vexpand(true)
+            .build();
+
+        let portrait_sleep_icon = gtk::Image::builder()
+            .icon_name("boxxy-bedtime-symbolic")
+            .pixel_size(14)
+            .hexpand(true)
+            .vexpand(true)
+            .halign(gtk::Align::Center)
+            .valign(gtk::Align::Center)
+            .build();
+        let hero_portrait_sleep_badge = gtk::Box::builder()
+            .halign(gtk::Align::End)
+            .valign(gtk::Align::End)
+            .margin_bottom(8)
+            .margin_end(8)
+            .css_classes(["avatar-sleep-badge", "avatar-sleep-badge-large"])
+            .visible(false)
+            .build();
+        hero_portrait_sleep_badge.append(&portrait_sleep_icon);
+
+        let portrait_vibe_icon = gtk::Image::builder()
+            .icon_name("boxxy-vibe-symbolic")
+            .pixel_size(14)
+            .hexpand(true)
+            .vexpand(true)
+            .halign(gtk::Align::Center)
+            .valign(gtk::Align::Center)
+            .build();
+        let hero_portrait_vibe_badge = gtk::Box::builder()
+            .halign(gtk::Align::End)
+            .valign(gtk::Align::End)
+            .margin_bottom(8)
+            .margin_end(8)
+            .css_classes(["avatar-vibe-badge", "avatar-sleep-badge-large"])
+            .visible(false)
+            .build();
+        hero_portrait_vibe_badge.append(&portrait_vibe_icon);
+
+        let hero_portrait_overlay = gtk::Overlay::builder()
+            .hexpand(true)
+            .vexpand(true)
+            .overflow(gtk::Overflow::Hidden)
+            .child(&hero_portrait_pic)
+            .build();
+        hero_portrait_overlay.add_overlay(&hero_portrait_vibe_badge);
+        hero_portrait_overlay.add_overlay(&hero_portrait_sleep_badge);
+
+        let hero_portrait_frame = SidebarPortraitFrame::new(&hero_portrait_overlay);
+        hero_portrait_frame.set_visible(false);
+        hero_box.append(&hero_portrait_frame);
 
         let hero_avatar = adw::Avatar::new(84, None, true);
         hero_avatar.set_halign(gtk::Align::Center);
@@ -423,6 +576,10 @@ impl ClawSidebarComponent {
             widget,
             hero_box,
             hero_icon,
+            hero_portrait_frame,
+            hero_portrait_pic,
+            hero_portrait_sleep_badge,
+            hero_portrait_vibe_badge,
             hero_avatar_overlay,
             hero_avatar,
             hero_sleep_badge,
@@ -434,6 +591,7 @@ impl ClawSidebarComponent {
             sessions_box,
             sessions_list,
             is_new_session: Rc::new(Cell::new(true)),
+            last_pane_agent: Rc::new(RefCell::new((String::new(), false, false))),
             past_sessions_seq: Rc::new(Cell::new(0)),
             rendered_sessions_sig: Rc::new(RefCell::new((Vec::new(), Vec::new()))),
             active_options_popover: Rc::new(RefCell::new(None)),
@@ -556,11 +714,23 @@ impl ClawSidebarComponent {
             }
         });
 
-        // Subscribe to CharacterRegistry claim updates for Past Conversations state (weakly held).
+        // Subscribe to CharacterRegistry updates for Past Conversations & live active hero refreshes (weakly held).
         let sessions_box_weak = comp.sessions_box.downgrade();
         let sessions_list_weak = comp.sessions_list.downgrade();
         let hero_box_weak = comp.hero_box.downgrade();
         let hero_icon_weak = comp.hero_icon.downgrade();
+        let hero_portrait_frame_weak = comp.hero_portrait_frame.downgrade();
+        let hero_portrait_pic_weak = comp.hero_portrait_pic.downgrade();
+        let hero_portrait_sleep_weak = comp.hero_portrait_sleep_badge.downgrade();
+        let hero_portrait_vibe_weak = comp.hero_portrait_vibe_badge.downgrade();
+        let hero_avatar_overlay_weak = comp.hero_avatar_overlay.downgrade();
+        let hero_avatar_weak = comp.hero_avatar.downgrade();
+        let hero_sleep_weak = comp.hero_sleep_badge.downgrade();
+        let hero_vibe_weak = comp.hero_vibe_badge.downgrade();
+        let hero_title_weak = comp.hero_title.downgrade();
+        let hero_subtitle_weak = comp.hero_subtitle.downgrade();
+        let last_pane_reg = comp.last_pane_agent.clone();
+        let active_char_reg = comp.active_character_id.clone();
         let is_new_reg = comp.is_new_session.clone();
         let seq_reg = comp.past_sessions_seq.clone();
         let sig_reg = comp.rendered_sessions_sig.clone();
@@ -603,6 +773,60 @@ impl ClawSidebarComponent {
                         },
                         true,
                     );
+                } else if let (
+                    Some(portrait_frame),
+                    Some(portrait_pic),
+                    Some(portrait_sleep),
+                    Some(portrait_vibe),
+                    Some(avatar_overlay),
+                    Some(avatar),
+                    Some(avatar_sleep),
+                    Some(avatar_vibe),
+                    Some(hero_title),
+                    Some(hero_subtitle),
+                ) = (
+                    hero_portrait_frame_weak.upgrade(),
+                    hero_portrait_pic_weak.upgrade(),
+                    hero_portrait_sleep_weak.upgrade(),
+                    hero_portrait_vibe_weak.upgrade(),
+                    hero_avatar_overlay_weak.upgrade(),
+                    hero_avatar_weak.upgrade(),
+                    hero_sleep_weak.upgrade(),
+                    hero_vibe_weak.upgrade(),
+                    hero_title_weak.upgrade(),
+                    hero_subtitle_weak.upgrade(),
+                ) {
+                    let (agent_name, sleep, vibe_enabled) = last_pane_reg.borrow().clone();
+                    if !agent_name.is_empty()
+                        && !boxxy_claw_protocol::characters::is_incognito_character(&agent_name)
+                    {
+                        let cache = boxxy_claw_protocol::characters::CHARACTER_CACHE.load();
+                        let current_id = active_char_reg.borrow().clone().unwrap_or_default();
+                        let fallback_names = [agent_name.as_str()];
+                        if let Some(info) = boxxy_claw_protocol::characters::find_character_exact(
+                            &cache,
+                            &current_id,
+                            &fallback_names,
+                        ) {
+                            let formatted_name = resolve_character_display_name(info);
+                            apply_colored_title(&hero_title, &formatted_name, &info.config.color);
+                            hero_subtitle.set_label(&info.config.duties);
+                            apply_character_hero_media(
+                                info,
+                                &formatted_name,
+                                sleep,
+                                vibe_enabled,
+                                &portrait_frame,
+                                &portrait_pic,
+                                &portrait_sleep,
+                                &portrait_vibe,
+                                &avatar_overlay,
+                                &avatar,
+                                &avatar_sleep,
+                                &avatar_vibe,
+                            );
+                        }
+                    }
                 }
             }
         });
@@ -664,6 +888,8 @@ impl ClawSidebarComponent {
         web_search_enabled: bool,
         vibe_enabled: bool,
     ) {
+        *self.last_pane_agent.borrow_mut() = (agent_name.to_string(), sleep, vibe_enabled);
+
         while let Some(child) = self.badges_box.first_child() {
             self.badges_box.remove(&child);
         }
@@ -683,10 +909,20 @@ impl ClawSidebarComponent {
                 self.hero_subtitle
                     .set_label(boxxy_claw_protocol::characters::INCOGNITO_DUTIES);
 
-                self.hero_avatar.set_text(Some(disp));
-                let tex = load_incognito_texture();
-                self.hero_avatar.set_custom_image(tex.as_ref());
-                self.hero_avatar_overlay.set_visible(true);
+                if let Some(portrait_tex) = load_incognito_portrait_texture() {
+                    self.hero_portrait_pic.set_paintable(Some(&portrait_tex));
+                    self.hero_portrait_frame.set_visible(true);
+                    self.hero_portrait_sleep_badge.set_visible(false);
+                    self.hero_portrait_vibe_badge.set_visible(false);
+                    self.hero_avatar_overlay.set_visible(false);
+                } else {
+                    self.hero_portrait_pic.set_paintable(None::<&gdk::Paintable>);
+                    self.hero_portrait_frame.set_visible(false);
+                    self.hero_avatar.set_text(Some(disp));
+                    let tex = load_incognito_texture();
+                    self.hero_avatar.set_custom_image(tex.as_ref());
+                    self.hero_avatar_overlay.set_visible(true);
+                }
                 self.hero_sleep_badge.set_visible(false);
                 self.hero_vibe_badge.set_visible(false);
                 self.hero_icon.set_visible(false);
@@ -699,12 +935,20 @@ impl ClawSidebarComponent {
                 self.set_hero_title_colored(&formatted_name, &info.config.color);
                 self.hero_subtitle.set_label(&info.config.duties);
 
-                self.hero_avatar.set_text(Some(&formatted_name));
-                let tex = load_character_avatar_texture(info);
-                self.hero_avatar.set_custom_image(tex.as_ref());
-                self.hero_avatar_overlay.set_visible(true);
-                self.hero_sleep_badge.set_visible(sleep);
-                self.hero_vibe_badge.set_visible(vibe_enabled && !sleep);
+                apply_character_hero_media(
+                    info,
+                    &formatted_name,
+                    sleep,
+                    vibe_enabled,
+                    &self.hero_portrait_frame,
+                    &self.hero_portrait_pic,
+                    &self.hero_portrait_sleep_badge,
+                    &self.hero_portrait_vibe_badge,
+                    &self.hero_avatar_overlay,
+                    &self.hero_avatar,
+                    &self.hero_sleep_badge,
+                    &self.hero_vibe_badge,
+                );
                 self.hero_icon.set_visible(false);
             } else {
                 *self.active_character_id.borrow_mut() = None;
@@ -712,6 +956,8 @@ impl ClawSidebarComponent {
                 self.hero_title.set_label(&resolved_char_display);
                 self.hero_subtitle
                     .set_label("System-eccentric agentic control.");
+                self.hero_portrait_pic.set_paintable(None::<&gdk::Paintable>);
+                self.hero_portrait_frame.set_visible(false);
                 self.hero_avatar_overlay.set_visible(false);
                 self.hero_sleep_badge.set_visible(false);
                 self.hero_vibe_badge.set_visible(false);
@@ -771,6 +1017,8 @@ impl ClawSidebarComponent {
             self.hero_title.set_visible(false);
             self.hero_subtitle
                 .set_label("Conversations will appear here");
+            self.hero_portrait_pic.set_paintable(None::<&gdk::Paintable>);
+            self.hero_portrait_frame.set_visible(false);
             self.hero_avatar_overlay.set_visible(false);
             self.hero_sleep_badge.set_visible(false);
             self.hero_vibe_badge.set_visible(false);
@@ -797,14 +1045,7 @@ impl ClawSidebarComponent {
     }
 
     fn set_hero_title_colored(&self, name: &str, raw_color: &str) {
-        let escaped = glib::markup_escape_text(name);
-        if is_safe_hex_color(raw_color) {
-            self.hero_title.set_markup(&format!(
-                "<span foreground=\"{raw_color}\"><b>{escaped}</b></span>"
-            ));
-        } else {
-            self.hero_title.set_markup(&format!("<b>{escaped}</b>"));
-        }
+        apply_colored_title(&self.hero_title, name, raw_color);
     }
 
     pub fn set_on_resume_session<FR: Fn(String, Option<String>) + 'static>(&self, cb: FR) {
@@ -965,6 +1206,56 @@ impl ClawSidebarComponent {
 impl Default for ClawSidebarComponent {
     fn default() -> Self {
         Self::new(|_| {}, || {})
+    }
+}
+
+fn apply_colored_title(hero_title: &gtk::Label, name: &str, raw_color: &str) {
+    let escaped = glib::markup_escape_text(name);
+    if is_safe_hex_color(raw_color) {
+        hero_title.set_markup(&format!(
+            "<span foreground=\"{raw_color}\"><b>{escaped}</b></span>"
+        ));
+    } else {
+        hero_title.set_markup(&format!("<b>{escaped}</b>"));
+    }
+}
+
+#[allow(clippy::too_many_arguments, clippy::fn_params_excessive_bools)]
+fn apply_character_hero_media(
+    info: &boxxy_claw_protocol::characters::CharacterInfo,
+    formatted_name: &str,
+    sleep: bool,
+    vibe_enabled: bool,
+    portrait_frame: &SidebarPortraitFrame,
+    portrait_pic: &gtk::Picture,
+    portrait_sleep_badge: &gtk::Box,
+    portrait_vibe_badge: &gtk::Box,
+    avatar_overlay: &gtk::Overlay,
+    avatar: &adw::Avatar,
+    avatar_sleep_badge: &gtk::Box,
+    avatar_vibe_badge: &gtk::Box,
+) {
+    if let Some(portrait_tex) = load_character_portrait_texture(info) {
+        portrait_pic.set_paintable(Some(&portrait_tex));
+        portrait_frame.set_visible(true);
+        portrait_sleep_badge.set_visible(sleep);
+        portrait_vibe_badge.set_visible(vibe_enabled && !sleep);
+
+        avatar_overlay.set_visible(false);
+        avatar_sleep_badge.set_visible(false);
+        avatar_vibe_badge.set_visible(false);
+    } else {
+        portrait_pic.set_paintable(None::<&gdk::Paintable>);
+        portrait_frame.set_visible(false);
+        portrait_sleep_badge.set_visible(false);
+        portrait_vibe_badge.set_visible(false);
+
+        avatar.set_text(Some(formatted_name));
+        let tex = load_character_avatar_texture(info);
+        avatar.set_custom_image(tex.as_ref());
+        avatar_overlay.set_visible(true);
+        avatar_sleep_badge.set_visible(sleep);
+        avatar_vibe_badge.set_visible(vibe_enabled && !sleep);
     }
 }
 
