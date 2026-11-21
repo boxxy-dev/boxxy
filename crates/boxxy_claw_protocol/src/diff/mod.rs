@@ -156,6 +156,10 @@ pub struct FileDiff {
     pub kind: DiffKind,
     pub stats: DiffStats,
     pub hunks: Vec<DiffHunk>,
+    /// Optional `(caption, local_file_path)` image previews rendered inside `DiffKind::Binary`
+    /// approval cards (e.g. `prepare_character_assets` and `generate_image` `output_path`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub preview_images: Vec<(String, String)>,
 }
 
 impl FileDiff {
@@ -169,12 +173,19 @@ impl FileDiff {
     /// Creates a `FileDiff` representing a binary or non-text file.
     #[must_use]
     pub fn binary(path: &str) -> Self {
+        Self::binary_with_previews(path, Vec::new())
+    }
+
+    /// Creates a `FileDiff` representing a binary image write with live `(caption, local_path)` previews.
+    #[must_use]
+    pub fn binary_with_previews(path: &str, preview_images: Vec<(String, String)>) -> Self {
         Self {
             path: path.to_string(),
             language: compute::infer_language(path),
             kind: DiffKind::Binary,
             stats: DiffStats::default(),
             hunks: Vec::new(),
+            preview_images,
         }
     }
 

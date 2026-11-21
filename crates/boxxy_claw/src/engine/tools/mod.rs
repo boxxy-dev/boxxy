@@ -1,3 +1,4 @@
+pub mod character_creator;
 pub mod image;
 pub mod orchestration;
 pub mod scrollback;
@@ -806,7 +807,7 @@ mod tests {
 
         let terminal_exec = TerminalCommandTool {
             tx_ui: session.tx_ui.clone(),
-            state,
+            state: state.clone(),
             db,
             session_id: session.session_id,
             pane_id: "pane_fp".to_string(),
@@ -817,6 +818,14 @@ mod tests {
             )
             .unwrap(),
         );
+
+        let prepare_char = crate::engine::tools::character_creator::PrepareCharacterAssetsTool {
+            current_dir: "/workspace".to_string(),
+            state,
+            approval: approval.clone(),
+            characters_dir_override: None,
+        }
+        .footprint(&serde_json::from_value(json!({ "slug": "sora-dev" })).unwrap());
 
         let sys_shell = SysShellTool {
             env,
@@ -831,5 +840,6 @@ mod tests {
         assert!(read_pane.conflicts_with(&terminal_exec));
         assert!(read_scrollback.conflicts_with(&sys_shell));
         assert!(terminal_exec.conflicts_with(&sys_shell));
+        assert!(read_pane.conflicts_with(&prepare_char));
     }
 }

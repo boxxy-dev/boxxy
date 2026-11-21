@@ -375,10 +375,10 @@ window.window-suspended .claw-working-dots .claw-working-dot {
     opacity: 0.85;
 }
 
-.claw-trace-skill-line {
-    padding-left: 4px;
-    font-size: 0.82em;
-    opacity: 0.62;
+.claw-trace-container label.claw-trace-skill-line {
+    padding: 1px 6px 1px 2px;
+    font-size: 0.86em;
+    opacity: 0.65;
 }
 
 .claw-trace-rail {

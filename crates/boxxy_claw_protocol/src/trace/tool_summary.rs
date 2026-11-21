@@ -148,6 +148,41 @@ fn summarize_generate_image_result(
     ("Generated image".to_string(), clip_preview(unquoted))
 }
 
+fn summarize_prepare_character_assets_result(
+    unquoted: &str,
+    parsed: Option<&serde_json::Value>,
+) -> (String, Option<String>) {
+    if let Some(v) = parsed.filter(|v| v.is_object()) {
+        if let Some(err) = v
+            .get("error")
+            .and_then(serde_json::Value::as_str)
+            .filter(|s| !s.trim().is_empty())
+        {
+            return (
+                "Character asset preparation failed".to_string(),
+                clip_preview(err),
+            );
+        }
+        let slug = v
+            .get("slug")
+            .and_then(serde_json::Value::as_str)
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or("character");
+        let dir = v
+            .get("character_dir")
+            .and_then(serde_json::Value::as_str)
+            .filter(|s| !s.trim().is_empty());
+        return (
+            format!("Prepared character assets: {slug}"),
+            dir.map_or_else(|| clip_preview(unquoted), |d| Some(d.to_string())),
+        );
+    }
+    (
+        "Prepared character assets".to_string(),
+        clip_preview(unquoted),
+    )
+}
+
 fn extract_readable_result_summary(
     tool_name: &str,
     trimmed: &str,
@@ -224,6 +259,9 @@ fn extract_readable_result_summary(
             clip_preview(unquoted),
         ),
         "generate_image" => summarize_generate_image_result(unquoted, parsed),
+        "prepare_character_assets" => {
+            summarize_prepare_character_assets_result(unquoted, parsed)
+        }
         other => (other.replace('_', " "), clip_preview(unquoted)),
     }
 }
@@ -256,11 +294,19 @@ pub fn tool_result_to_trace_item(tool_name: &str, result_json: &str) -> Option<T
     if tool_name == "activate_skill" && !failed {
         let text = parsed
             .as_ref()
-            .and_then(serde_json::Value::as_str)
+            .and_then(|v| {
+                v.as_str()
+                    .or_else(|| v.get("content").and_then(serde_json::Value::as_str))
+            })
             .unwrap_or(trimmed);
         let name = text
             .lines()
             .find_map(|l| {
+                if let Some(rest) = l.strip_prefix("Skill '")
+                    && let Some((quoted, _)) = rest.split_once("' activated")
+                {
+                    return Some(quoted);
+                }
                 l.strip_prefix("# Skill: ")
                     .or_else(|| l.strip_prefix("Skill: "))
             })
@@ -375,6 +421,27 @@ mod tests {
                 preview: Some("Reference images are not supported by this provider".to_string()),
                 failed: true,
             }
+        );
+
+        let char_ok = r#"{"success":true,"slug":"sora-dev","character_dir":"/tmp/synthetic/sora-dev"}"#;
+        let char_item = tool_result_to_trace_item("prepare_character_assets", char_ok).unwrap();
+        assert_eq!(
+            char_item,
+            TurnTraceItem::Tool {
+                tool_name: "prepare_character_assets".to_string(),
+                category: TraceCategory::Other,
+                label: "Prepared character assets: sora-dev".to_string(),
+                preview: Some("/tmp/synthetic/sora-dev".to_string()),
+                failed: false,
+            }
+        );
+
+        let skill_json = r#"{"success":true,"content":"Skill 'Boxxy Character Creator' activated. FULL INSTRUCTIONS:\n\n# Boxxy Character Creator Instructions"}"#;
+        assert_eq!(
+            tool_result_to_trace_item("activate_skill", skill_json),
+            Some(TurnTraceItem::Skill {
+                name: "Boxxy Character Creator".to_string()
+            })
         );
     }
 }

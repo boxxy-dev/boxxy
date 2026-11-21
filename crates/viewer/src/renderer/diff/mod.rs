@@ -339,10 +339,31 @@ fn mount_diff_body_into_revealer(
 ) {
     match prepared.kind {
         DiffPayloadKind::Binary => {
-            let notice = build_info_banner(
-                "Binary or non-text file detected — line-by-line text diff skipped.",
-            );
-            body_revealer.set_child(Some(&notice));
+            if !prepared.payload.preview_images.is_empty() {
+                let items: Vec<crate::parser::blocks::GalleryItem> = prepared
+                    .payload
+                    .preview_images
+                    .iter()
+                    .map(|(label, path)| crate::parser::blocks::GalleryItem {
+                        url: path.clone(),
+                        title: label.clone(),
+                        alt: label.clone(),
+                        caption: Some(crate::parser::markdown::escape_pango(label)),
+                    })
+                    .collect();
+                let preview_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
+                preview_box.set_margin_top(10);
+                preview_box.set_margin_bottom(10);
+                preview_box.set_margin_start(12);
+                preview_box.set_margin_end(12);
+                preview_box.append(&crate::renderer::image::render_preview_gallery(&items));
+                body_revealer.set_child(Some(&preview_box));
+            } else {
+                let notice = build_info_banner(
+                    "Binary or non-text file detected — line-by-line text diff skipped.",
+                );
+                body_revealer.set_child(Some(&notice));
+            }
         }
         DiffPayloadKind::Unchanged => {
             let notice = build_info_banner("No textual changes between original and new file.");

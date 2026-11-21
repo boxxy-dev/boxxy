@@ -11,9 +11,9 @@ src/
   image/
     mod.rs        — re-exports public types and entry points
     decode.rs     — internal DecodePolicy + single-pass decode_bounded() + direct PngEncoder helpers
-    ops.rs        — RegionCrop (`center_square`, `center_aspect`) + zero-copy SubImage crop-and-resize + two-stage downscale
+    ops.rs        — RegionCrop (`center_square`, `center_aspect`, `focused_aspect`) + zero-copy SubImage crop-and-resize + two-stage downscale
     avatar.rs     — process_avatar(), load_avatar_source(), crop_avatar_source(), process_avatar_cropped() + AvatarSource / AvatarOutput
-    portrait.rs   — process_portrait() (`768×432` `16:9` lossless WebP), process_portrait_cropped_png(), decode_character_asset_rgba()
+    portrait.rs   — process_portrait() / process_portrait_focused() (`768×432` `16:9` lossless WebP), process_character_avatar_focused() (`256×256` PNG), process_portrait_cropped_png(), decode_character_asset_rgba()
     thumbnail.rs  — generate_thumbnail(), generate_square_thumbnail_png(), encode_rgba_to_png(), decode_rgba_from_png() + ThumbnailSpec / ThumbnailOutput
   user.rs         — pure, zero-I/O get_user_dir() / get_user_avatar_path() path resolvers
 ```

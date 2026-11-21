@@ -261,6 +261,13 @@ pub fn busy_tool_label(tool_name: &str, streaming_args: bool) -> String {
                 "Generating image…".to_string()
             }
         }
+        "prepare_character_assets" => {
+            if streaming_args {
+                "Preparing character assets…".to_string()
+            } else {
+                "Cropping character assets…".to_string()
+            }
+        }
         other => format!("{verb} {}…", other.replace('_', " ")),
     }
 }

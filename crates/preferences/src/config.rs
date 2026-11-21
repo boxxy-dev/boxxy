@@ -219,12 +219,17 @@ pub const BOXXY_THEME_CREATOR_SLUG: &str = "boxxy-theme-creator";
 pub const BOXXY_THEME_CREATOR_SKILL: &str =
     include_str!("../../../resources/skills/boxxy-theme-creator/SKILL.md");
 
+pub const BOXXY_CHARACTER_CREATOR_SLUG: &str = "boxxy-character-creator";
+pub const BOXXY_CHARACTER_CREATOR_SKILL: &str =
+    include_str!("../../../resources/skills/boxxy-character-creator/SKILL.md");
+
 pub const BOXXY_SELF_DEV_SLUG: &str = "boxxy-self-dev";
 pub const BOXXY_SELF_DEV_SKILL: &str =
     include_str!("../../../resources/skills/boxxy-self-dev/SKILL.md");
 
 const BUNDLED_DEFAULT_OFF_SKILLS: &[(&str, &str)] = &[
     (BOXXY_THEME_CREATOR_SLUG, BOXXY_THEME_CREATOR_SKILL),
+    (BOXXY_CHARACTER_CREATOR_SLUG, BOXXY_CHARACTER_CREATOR_SKILL),
     (BOXXY_SELF_DEV_SLUG, BOXXY_SELF_DEV_SKILL),
 ];
 
@@ -472,6 +477,7 @@ fn default_app_theme_id() -> String {
 fn default_disabled_skills() -> Vec<String> {
     vec![
         BOXXY_THEME_CREATOR_SLUG.to_string(),
+        BOXXY_CHARACTER_CREATOR_SLUG.to_string(),
         BOXXY_SELF_DEV_SLUG.to_string(),
     ]
 }
@@ -1477,7 +1483,11 @@ mod tests {
         assert!(legacy.smart_tab_naming);
         assert_eq!(
             legacy.disabled_skills,
-            vec!["boxxy-theme-creator", "boxxy-self-dev"]
+            vec![
+                "boxxy-theme-creator",
+                "boxxy-character-creator",
+                "boxxy-self-dev"
+            ]
         );
         assert_eq!(legacy.app_theme_mode, AppThemeMode::Boxxy);
         assert_eq!(legacy.app_theme_id, "boxxy-dark");

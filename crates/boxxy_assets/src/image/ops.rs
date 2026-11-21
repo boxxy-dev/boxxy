@@ -64,6 +64,76 @@ impl RegionCrop {
         }
     }
 
+    /// Computes a distortion-free crop matching `aspect_w : aspect_h` inside `(img_w, img_h)`,
+    /// zoomed by `zoom` (`1.0..=4.0`, where `1.0` = full largest fit) and positioned around
+    /// normalized focal coordinates `(focus_x, focus_y)` in `0.0..=1.0` (clamped inside image bounds).
+    #[must_use]
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    pub fn focused_aspect(
+        img_w: u32,
+        img_h: u32,
+        aspect_w: u32,
+        aspect_h: u32,
+        focus_x: f32,
+        focus_y: f32,
+        zoom: f32,
+    ) -> Self {
+        let fx = if focus_x.is_finite() {
+            f64::from(focus_x.clamp(0.0, 1.0))
+        } else {
+            0.5
+        };
+        let fy = if focus_y.is_finite() {
+            f64::from(focus_y.clamp(0.0, 1.0))
+        } else {
+            0.5
+        };
+        let z = if zoom.is_finite() {
+            f64::from(zoom.clamp(1.0, 4.0))
+        } else {
+            1.0
+        };
+
+        let base = Self::center_aspect(img_w, img_h, aspect_w, aspect_h);
+        let bound_w = img_w.max(1);
+        let bound_h = img_h.max(1);
+        let aw = aspect_w.max(1);
+        let ah = aspect_h.max(1);
+
+        let (crop_w, crop_h) = if (z - 1.0).abs() <= 1e-6 {
+            (base.width, base.height)
+        } else if aw == ah {
+            let side = (f64::from(base.width) / z)
+                .round()
+                .clamp(1.0, f64::from(base.width)) as u32;
+            (side, side)
+        } else {
+            let scaled_h = (f64::from(base.height) / z)
+                .round()
+                .clamp(1.0, f64::from(base.height)) as u32;
+            let scaled_w_u64 = (u64::from(scaled_h) * u64::from(aw) + u64::from(ah) / 2)
+                / u64::from(ah);
+            let scaled_w = u32::try_from(scaled_w_u64.clamp(1, u64::from(base.width))).unwrap_or(1);
+            (scaled_w, scaled_h)
+        };
+
+        let max_x = bound_w.saturating_sub(crop_w);
+        let max_y = bound_h.saturating_sub(crop_h);
+        let x = f64::mul_add(f64::from(crop_w), -0.5, fx * f64::from(bound_w))
+            .round()
+            .clamp(0.0, f64::from(max_x)) as u32;
+        let y = f64::mul_add(f64::from(crop_h), -0.5, fy * f64::from(bound_h))
+            .round()
+            .clamp(0.0, f64::from(max_y)) as u32;
+
+        Self {
+            x,
+            y,
+            width: crop_w,
+            height: crop_h,
+        }
+    }
+
     /// Clamps a rectangular crop region to fit within `(img_w, img_h)`.
     #[must_use]
     pub fn clamp_to_bounds(self, img_w: u32, img_h: u32) -> Self {
@@ -260,6 +330,28 @@ mod tests {
         assert_eq!(
             RegionCrop::center_aspect(2400, 900, 16, 9),
             RegionCrop::new(400, 0, 1600, 900)
+        );
+    }
+
+    #[test]
+    fn focused_aspect_zooms_and_clamps_near_edges_and_nan() {
+        // Default 0.5, 0.5, 1.0 matches center_aspect
+        assert_eq!(
+            RegionCrop::focused_aspect(1536, 1024, 16, 9, 0.5, 0.5, 1.0),
+            RegionCrop::center_aspect(1536, 1024, 16, 9)
+        );
+
+        // Headshot square crop zoomed 1.6x near upper center (focus_y = 0.25) on 1344x768
+        let face_crop = RegionCrop::focused_aspect(1344, 768, 1, 1, 0.5, 0.25, 1.6);
+        assert_eq!(face_crop.width, 480);
+        assert_eq!(face_crop.height, 480);
+        assert_eq!(face_crop.x, (1344 - 480) / 2);
+        assert_eq!(face_crop.y, 0); // 0.25 * 768 - 240 = -48 -> clamped cleanly to 0
+
+        // Non-finite inputs fall back safely to centered unzoomed crop
+        assert_eq!(
+            RegionCrop::focused_aspect(800, 600, 1, 1, f32::NAN, f32::INFINITY, f32::NAN),
+            RegionCrop::center_square(800, 600)
         );
     }
 }

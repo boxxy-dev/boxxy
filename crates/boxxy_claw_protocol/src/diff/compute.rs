@@ -66,6 +66,7 @@ pub(super) fn compute_file_diff(
             kind: DiffKind::Binary,
             stats: DiffStats::default(),
             hunks: Vec::new(),
+            preview_images: Vec::new(),
         };
     }
 
@@ -94,6 +95,7 @@ pub(super) fn compute_file_diff(
                 ..DiffStats::default()
             },
             hunks: Vec::new(),
+            preview_images: Vec::new(),
         };
     }
 
@@ -121,6 +123,7 @@ fn compute_oversized(path: &str, language: String, old_raw: &str, new_content: &
                 ..DiffStats::default()
             },
             hunks: Vec::new(),
+            preview_images: Vec::new(),
         };
     }
     FileDiff {
@@ -137,6 +140,7 @@ fn compute_oversized(path: &str, language: String, old_raw: &str, new_content: &
             omitted_lines: new_total_lines.max(old_total_lines),
         },
         hunks: Vec::new(),
+        preview_images: Vec::new(),
     }
 }
 
@@ -201,6 +205,7 @@ fn compute_modified(
             omitted_lines: budget.omitted_lines,
         },
         hunks,
+        preview_images: Vec::new(),
     }
 }
 
@@ -221,6 +226,7 @@ fn compute_created(path: &str, language: String, new_content: &str) -> FileDiff 
                 omitted_lines: total,
             },
             hunks: Vec::new(),
+            preview_images: Vec::new(),
         };
     }
 
@@ -273,6 +279,7 @@ fn compute_created(path: &str, language: String, new_content: &str) -> FileDiff 
             omitted_lines,
         },
         hunks,
+        preview_images: Vec::new(),
     }
 }
 

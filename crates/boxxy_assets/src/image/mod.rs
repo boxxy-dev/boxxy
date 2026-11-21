@@ -12,7 +12,8 @@ pub use ops::RegionCrop;
 pub use portrait::{
     DecodedRgbaAsset, MAX_PORTRAIT_DIMENSION, MIN_PORTRAIT_HEIGHT, MIN_PORTRAIT_WIDTH,
     PORTRAIT_ASPECT_H, PORTRAIT_ASPECT_W, PORTRAIT_HEIGHT, PORTRAIT_WIDTH, PortraitOutput,
-    decode_character_asset_rgba, process_portrait, process_portrait_cropped_png,
+    decode_character_asset_rgba, process_character_avatar_focused, process_portrait,
+    process_portrait_cropped_png, process_portrait_focused,
 };
 pub use thumbnail::{
     MAX_SOURCE_DIMENSION, MAX_SOURCE_PIXELS, MAX_THUMBNAIL_INPUT_BYTES, ThumbnailOutput,

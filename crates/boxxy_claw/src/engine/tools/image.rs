@@ -456,7 +456,13 @@ impl Tool for GenerateImageTool {
 
         // 2. Optional explicit workspace `output_path` (approval-gated via `propose_file_write`)
         let final_path = if let Some(target_path) = resolved_output_path {
-            let diff = FileDiff::binary(&target_path);
+            let diff = FileDiff::binary_with_previews(
+                &target_path,
+                vec![(
+                    build_short_caption(trimmed_prompt),
+                    generated_path.to_string_lossy().into_owned(),
+                )],
+            );
             let preview_note = format!(
                 "[Binary image: {} bytes ({ext}, model: {})]",
                 generated.bytes.len(),

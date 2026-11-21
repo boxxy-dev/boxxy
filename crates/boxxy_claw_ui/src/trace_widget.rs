@@ -180,9 +180,6 @@ impl TurnTraceSlot {
         root.append(&trace_revealer);
 
         let skills_lbl = gtk::Label::new(None);
-        skills_lbl.add_css_class("caption");
-        skills_lbl.add_css_class("dim-label");
-        skills_lbl.add_css_class("monospace");
         skills_lbl.add_css_class("claw-trace-skill-line");
         skills_lbl.set_halign(gtk::Align::Start);
         skills_lbl.set_ellipsize(pango::EllipsizeMode::End);

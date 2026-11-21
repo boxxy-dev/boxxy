@@ -557,6 +557,17 @@ pub async fn create_claw_agent(
         });
     }
 
+    if config.character_creator_enabled {
+        tool_server = tool_server.tool(
+            crate::engine::tools::character_creator::PrepareCharacterAssetsTool {
+                current_dir: current_dir.to_string(),
+                state: state.clone(),
+                approval: approval_handler.clone(),
+                characters_dir_override: None,
+            },
+        );
+    }
+
     // Conditional Core Toolbox tools
     if config.file_tools_enabled {
         tool_server = tool_server

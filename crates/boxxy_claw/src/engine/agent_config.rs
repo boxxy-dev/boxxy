@@ -4,6 +4,7 @@ use boxxy_model_selection::ModelProvider;
 pub struct AgentConfig {
     pub model: Option<ModelProvider>,
     pub file_tools_enabled: bool,
+    pub character_creator_enabled: bool,
     pub system_tools_enabled: bool,
     pub dangerous_tools_enabled: bool,
     pub web_tools_enabled: bool,
@@ -98,9 +99,17 @@ impl AgentConfig {
             find_image_capable_characters(settings, character_id.unwrap_or_default())
         };
 
+        let character_creator_enabled = settings.enable_file_tools
+            && !boxxy_claw_protocol::skill_loader::is_skill_disabled(
+                &settings.disabled_skills,
+                boxxy_preferences::config::BOXXY_CHARACTER_CREATOR_SLUG,
+                "Boxxy Character Creator",
+            );
+
         Self {
             model: resolved_model,
             file_tools_enabled: settings.enable_file_tools,
+            character_creator_enabled,
             system_tools_enabled: settings.enable_system_tools,
             dangerous_tools_enabled: settings.enable_dangerous_tools,
             web_tools_enabled: settings.enable_web_tools,
@@ -346,5 +355,34 @@ mod tests {
         let self_peers =
             find_image_capable_characters_in_catalog(&settings, "char-gemini", &catalog);
         assert!(self_peers.is_empty());
+    }
+
+    #[test]
+    fn character_creator_tool_flag_tracks_default_off_skill_toggle_and_file_tools() {
+        let default_settings = boxxy_preferences::Settings::default();
+        let cfg_default =
+            AgentConfig::from_env_for_character(&default_settings, None, false, String::new());
+        assert!(
+            !cfg_default.character_creator_enabled,
+            "boxxy-character-creator must be off by default"
+        );
+
+        let enabled_settings = boxxy_preferences::Settings {
+            disabled_skills: vec!["boxxy-theme-creator".to_string()],
+            enable_file_tools: true,
+            ..boxxy_preferences::Settings::default()
+        };
+        let cfg_enabled =
+            AgentConfig::from_env_for_character(&enabled_settings, None, false, String::new());
+        assert!(cfg_enabled.character_creator_enabled);
+
+        let no_file_tools = boxxy_preferences::Settings {
+            disabled_skills: Vec::new(),
+            enable_file_tools: false,
+            ..boxxy_preferences::Settings::default()
+        };
+        let cfg_no_files =
+            AgentConfig::from_env_for_character(&no_file_tools, None, false, String::new());
+        assert!(!cfg_no_files.character_creator_enabled);
     }
 }

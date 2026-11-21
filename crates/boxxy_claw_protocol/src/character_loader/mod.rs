@@ -606,7 +606,12 @@ fn scan_character_dirs(base_dir: &Path, warn_on_invalid: bool) -> Result<Vec<Cha
                             || path.display().to_string(),
                             |n| n.to_string_lossy().into_owned(),
                         );
-                        log::warn!("Skipping character at {name}: {e}");
+                        if path.join("CHARACTER.toml").exists() {
+                            log::warn!("Skipping character at {name}: {e}");
+                        } else {
+                            // A directory may be mid-creation while artwork or manifest.toml lands first.
+                            log::debug!("Skipping incomplete character directory '{name}': {e}");
+                        }
                     }
                 }
             },

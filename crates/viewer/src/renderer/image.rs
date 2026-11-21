@@ -1150,6 +1150,10 @@ fn build_image_card(
     }
 }
 
+pub(crate) fn render_preview_gallery(items: &[GalleryItem]) -> gtk::Widget {
+    render_gallery(items, &RenderContext::default())
+}
+
 fn render_gallery(items: &[GalleryItem], ctx: &RenderContext) -> gtk::Widget {
     if items.len() == 1 {
         let item = &items[0];

@@ -1,6 +1,6 @@
-use super::avatar::MAX_INPUT_BYTES;
+use super::avatar::{AVATAR_SIZE, AvatarOutput, MAX_INPUT_BYTES};
 use super::decode::{DecodePolicy, decode_bounded, encode_dynamic_png, encode_dynamic_webp};
-use super::ops::{RegionCrop, crop_and_resize_dynamic_rect};
+use super::ops::{RegionCrop, crop_and_resize_dynamic_rect, crop_and_resize_dynamic_square};
 use crate::AssetError;
 use image::ImageFormat;
 
@@ -53,6 +53,21 @@ pub struct DecodedRgbaAsset {
 /// Returns [`AssetError`] if `input` exceeds [`MAX_INPUT_BYTES`], is not PNG/JPEG/WebP,
 /// fails header dimension checks (`>= 64×36`, `<= 8192`), or fails decode/encode.
 pub fn process_portrait(input: &[u8]) -> Result<PortraitOutput, AssetError> {
+    process_portrait_focused(input, 0.5, 0.5, 1.0)
+}
+
+/// Validates and crops an input image to `16:9` (`768 × 432`) around `(focus_x, focus_y)`
+/// with optional `zoom` (`1.0..=4.0`), encoding to lossless WebP.
+///
+/// # Errors
+/// Returns [`AssetError`] if `input` exceeds [`MAX_INPUT_BYTES`], is not PNG/JPEG/WebP,
+/// fails header dimension checks (`>= 64×36`, `<= 8192`), or fails decode/encode.
+pub fn process_portrait_focused(
+    input: &[u8],
+    focus_x: f32,
+    focus_y: f32,
+    zoom: f32,
+) -> Result<PortraitOutput, AssetError> {
     let decoded = decode_bounded(input, &PORTRAIT_DECODE_POLICY)?;
     if decoded.width() < MIN_PORTRAIT_WIDTH || decoded.height() < MIN_PORTRAIT_HEIGHT {
         return Err(AssetError::DimensionsTooSmall(
@@ -61,15 +76,46 @@ pub fn process_portrait(input: &[u8]) -> Result<PortraitOutput, AssetError> {
             MIN_PORTRAIT_WIDTH,
         ));
     }
-    let crop = RegionCrop::center_aspect(
+    let crop = RegionCrop::focused_aspect(
         decoded.width(),
         decoded.height(),
         PORTRAIT_ASPECT_W,
         PORTRAIT_ASPECT_H,
+        focus_x,
+        focus_y,
+        zoom,
     );
     let processed = crop_and_resize_dynamic_rect(decoded, crop, PORTRAIT_WIDTH, PORTRAIT_HEIGHT);
     let webp_bytes = encode_dynamic_webp(processed)?;
     Ok(PortraitOutput { webp_bytes })
+}
+
+/// Crops a `1:1` square around `(focus_x, focus_y)` with `zoom` and encodes a `256 × 256` PNG.
+///
+/// Accepts widescreen and 4K sources up to `8192 px` per axis.
+///
+/// # Errors
+/// Returns [`AssetError`] if `input` exceeds [`MAX_INPUT_BYTES`], is not PNG/JPEG/WebP,
+/// fails header dimension checks (`16..=8192`), or fails decode/encode.
+pub fn process_character_avatar_focused(
+    input: &[u8],
+    focus_x: f32,
+    focus_y: f32,
+    zoom: f32,
+) -> Result<AvatarOutput, AssetError> {
+    let decoded = decode_bounded(input, &CHARACTER_ASSET_DECODE_POLICY)?;
+    let crop = RegionCrop::focused_aspect(
+        decoded.width(),
+        decoded.height(),
+        1,
+        1,
+        focus_x,
+        focus_y,
+        zoom,
+    );
+    let processed = crop_and_resize_dynamic_square(decoded, crop, AVATAR_SIZE);
+    let png_bytes = encode_dynamic_png(processed)?;
+    Ok(AvatarOutput { png_bytes })
 }
 
 /// Validates input bytes, crops to `crop`, resizes to `768 × 432`, and encodes as PNG bytes.
@@ -147,5 +193,29 @@ mod tests {
             process_portrait(&tiny),
             Err(AssetError::DimensionsTooSmall(48, 48, MIN_PORTRAIT_WIDTH))
         ));
+    }
+
+    #[test]
+    fn process_character_avatar_focused_extracts_target_quadrant_from_widescreen() {
+        // Synthetic 1600x900 image: top half pure red, bottom half pure blue
+        let img = RgbImage::from_fn(1600, 900, |_x, y| {
+            if y < 450 {
+                Rgb([240, 20, 20])
+            } else {
+                Rgb([20, 40, 240])
+            }
+        });
+        let mut src = Vec::new();
+        img.write_to(&mut Cursor::new(&mut src), ImageFormat::Png)
+            .unwrap();
+
+        // Zoom in 2.2x on the upper region (`focus_y = 0.20`) -> entire 256x256 output should be red
+        let top_avatar = process_character_avatar_focused(&src, 0.5, 0.20, 2.2).unwrap();
+        let decoded = decode_character_asset_rgba(&top_avatar.png_bytes).unwrap();
+        assert_eq!(decoded.width, AVATAR_SIZE);
+        assert_eq!(decoded.height, AVATAR_SIZE);
+        let center_idx = ((AVATAR_SIZE / 2 * AVATAR_SIZE + AVATAR_SIZE / 2) * 4) as usize;
+        assert!(decoded.rgba[center_idx] > 200, "expected red channel dominant");
+        assert!(decoded.rgba[center_idx + 2] < 60, "expected blue channel low");
     }
 }

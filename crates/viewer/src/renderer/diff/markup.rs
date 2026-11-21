@@ -95,6 +95,8 @@ pub struct DiffPayload {
     pub kind: DiffPayloadKind,
     pub stats: DiffPayloadStats,
     pub hunks: Vec<DiffPayloadHunk>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub preview_images: Vec<(String, String)>,
 }
 
 /// Pre-computed, ready-to-bind Pango markup and line tone metadata for a single hunk.
