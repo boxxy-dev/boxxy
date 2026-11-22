@@ -748,6 +748,7 @@ fn load_character_from_dir(dir: &Path) -> Result<CharacterInfo> {
 mod tests {
     use super::*;
     use bundled::find_bundled;
+    use manifest::parse_semver_triplet;
 
     #[test]
     fn bundled_characters_table_matches_embedded_toml_and_manifests() {
@@ -762,11 +763,126 @@ mod tests {
             let man_str = std::str::from_utf8(b.manifest_bytes).unwrap();
             let man = parse_and_sanitize_manifest(man_str, b.slug).unwrap();
             assert_eq!(man.schema_version, 2);
+            assert_eq!(parse_semver_triplet(&man.package.version), Some(b.version));
             assert_eq!(man.assets.portrait.as_deref(), Some("portrait.webp"));
             assert_eq!(man.theme.accent_color.as_deref(), Some(b.default_color));
         }
         assert_ne!(incognito_avatar_bytes(), b"" as &[u8]);
         assert_ne!(incognito_portrait_bytes(), b"" as &[u8]);
+    }
+
+    #[test]
+    fn bundled_character_version_upgrade_skips_deleted_and_preserves_user_state() {
+        assert_eq!(parse_semver_triplet("2.0.0"), Some((2, 0, 0)));
+        assert_eq!(parse_semver_triplet("v2.0.1-beta.1+git"), Some((2, 0, 1)));
+        assert_eq!(parse_semver_triplet("2.0"), None);
+
+        let tmp = tempfile::tempdir().unwrap();
+        let base_dir = tmp.path().join("chars");
+
+        // Simulate an existing v2.0.0 user who kept `niko-una` and `levi-kujo`,
+        // customized `levi-kujo` with `custom_avatar.png` + `custom.toml`, and deleted `kuro`.
+        let niko_dir = base_dir.join("niko-una");
+        let levi_dir = base_dir.join("levi-kujo");
+        fs::create_dir_all(&niko_dir).unwrap();
+        fs::create_dir_all(&levi_dir).unwrap();
+
+        let old_niko_manifest = std::str::from_utf8(bundled_default_manifest("niko-una").unwrap())
+            .unwrap()
+            .replace("version = \"2.0.1\"", "version = \"2.0.0\"");
+        let preserved_niko_toml = "id = \"11111111-2222-4333-8444-555555555555\"\ndisplay_name = \"Niko\"\ncolor = \"#8035D4\"\nduties = \"Custom Duties\"\npersonality = \"User-tweaked prompt\"\n";
+        fs::write(niko_dir.join("manifest.toml"), old_niko_manifest).unwrap();
+        fs::write(niko_dir.join("CHARACTER.toml"), preserved_niko_toml).unwrap();
+        fs::write(niko_dir.join("AVATAR.png"), b"old-2.0.0-avatar-bytes").unwrap();
+        fs::write(
+            niko_dir.join("portrait.webp"),
+            bundled_default_portrait("niko-una").unwrap(),
+        )
+        .unwrap();
+
+        let old_levi_manifest = std::str::from_utf8(bundled_default_manifest("levi-kujo").unwrap())
+            .unwrap()
+            .replace("version = \"2.0.1\"", "version = \"2.0.0\"");
+        fs::write(levi_dir.join("manifest.toml"), old_levi_manifest).unwrap();
+        fs::write(
+            levi_dir.join("CHARACTER.toml"),
+            find_bundled("levi-kujo").unwrap().toml_bytes,
+        )
+        .unwrap();
+        fs::write(levi_dir.join("AVATAR.png"), b"old-2.0.0-levi-avatar").unwrap();
+        fs::write(
+            levi_dir.join("portrait.webp"),
+            bundled_default_portrait("levi-kujo").unwrap(),
+        )
+        .unwrap();
+        save_custom_character_avatar(&levi_dir, b"user-custom-levi-avatar").unwrap();
+        save_character_color(&levi_dir, "#12AB34").unwrap();
+
+        let loaded = load_characters_in(&base_dir).unwrap();
+
+        // 1. Deleted `kuro` must NOT be recreated.
+        assert_eq!(loaded.len(), 2);
+        assert!(!base_dir.join("kuro").exists());
+
+        // 2. `niko-una` upgraded to 2.0.1 with new AVATAR.png while keeping UUID & CHARACTER.toml.
+        let niko = loaded.iter().find(|c| c.config.name == "niko-una").unwrap();
+        assert_eq!(
+            niko.manifest.as_ref().unwrap().package.version.as_str(),
+            "2.0.1"
+        );
+        assert_eq!(niko.config.id, "11111111-2222-4333-8444-555555555555");
+        assert_eq!(niko.config.personality, "User-tweaked prompt");
+        assert_eq!(
+            fs::read(niko_dir.join("AVATAR.png")).unwrap().as_slice(),
+            bundled_default_avatar("niko-una").unwrap()
+        );
+        assert_eq!(
+            fs::read_to_string(niko_dir.join("CHARACTER.toml")).unwrap(),
+            preserved_niko_toml
+        );
+
+        // 3. `levi-kujo` upgraded base AVATAR.png & manifest to 2.0.1 while keeping custom overrides.
+        let levi = loaded
+            .iter()
+            .find(|c| c.config.name == "levi-kujo")
+            .unwrap();
+        assert_eq!(
+            levi.manifest.as_ref().unwrap().package.version.as_str(),
+            "2.0.1"
+        );
+        assert_eq!(levi.config.color, "#12AB34");
+        assert_eq!(levi.avatar_rel_path.as_deref(), Some("custom_avatar.png"));
+        assert_eq!(
+            fs::read(levi_dir.join("AVATAR.png")).unwrap().as_slice(),
+            bundled_default_avatar("levi-kujo").unwrap()
+        );
+
+        // 4. Newer on-disk version (e.g. `99.0.0`) is never downgraded by an older binary.
+        let future_manifest = std::str::from_utf8(bundled_default_manifest("niko-una").unwrap())
+            .unwrap()
+            .replace("version = \"2.0.1\"", "version = \"99.0.0\"");
+        fs::write(niko_dir.join("manifest.toml"), future_manifest).unwrap();
+        fs::write(niko_dir.join("AVATAR.png"), b"future-99-avatar").unwrap();
+
+        let reloaded = load_characters_in(&base_dir).unwrap();
+        let niko_future = reloaded
+            .iter()
+            .find(|c| c.config.name == "niko-una")
+            .unwrap();
+        assert_eq!(
+            niko_future
+                .manifest
+                .as_ref()
+                .unwrap()
+                .package
+                .version
+                .as_str(),
+            "99.0.0"
+        );
+        assert_eq!(
+            fs::read(niko_dir.join("AVATAR.png")).unwrap(),
+            b"future-99-avatar"
+        );
     }
 
     #[test]

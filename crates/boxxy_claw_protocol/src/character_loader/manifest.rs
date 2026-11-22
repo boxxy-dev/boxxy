@@ -3,8 +3,8 @@
 
 use super::atomic_write;
 use super::bundled::{
-    bundled_default_avatar, bundled_default_manifest, bundled_default_portrait,
-    legacy_v1_avatar_len, matches_legacy_v1_bundled_avatar,
+    bundled_default_avatar, bundled_default_portrait, find_bundled, legacy_v1_avatar_len,
+    matches_legacy_v1_bundled_avatar,
 };
 use super::toml_patch::CharacterToml;
 use crate::characters::{CHARACTER_SCHEMA_VERSION_V2, CharacterInfo, CharacterManifest};
@@ -160,29 +160,81 @@ pub fn validate_relative_asset_path(raw: &str, require_image_ext: bool) -> Resul
     Ok(trimmed.to_string())
 }
 
+/// Parses a `major.minor.patch` version string (ignoring any leading `v`/`V` or
+/// `-prerelease` / `+build` suffix) into a comparable `(u32, u32, u32)` tuple.
+#[must_use]
+pub(super) fn parse_semver_triplet(raw: &str) -> Option<(u32, u32, u32)> {
+    let trimmed = raw.trim();
+    let without_v = trimmed
+        .strip_prefix('v')
+        .or_else(|| trimmed.strip_prefix('V'))
+        .unwrap_or(trimmed);
+    let core = without_v.split(['-', '+']).next()?;
+    let mut parts = core.split('.');
+    let major = parts.next()?.parse().ok()?;
+    let minor = parts.next()?.parse().ok()?;
+    let patch = parts.next()?.parse().ok()?;
+    parts.next().is_none().then_some((major, minor, patch))
+}
+
+fn write_if_changed(path: &Path, expected: &[u8]) -> Result<()> {
+    let unchanged = fs::metadata(path)
+        .is_ok_and(|m| m.is_file() && m.len() == expected.len() as u64)
+        && fs::read(path).is_ok_and(|disk| disk.as_slice() == expected);
+    if unchanged {
+        return Ok(());
+    }
+    atomic_write(path, expected)
+}
+
 /// Parses and validates `manifest.toml` if present in `dir`.
 ///
-/// For the three bundled characters (`niko-una`, `levi-kujo`, `kuro`), gently seeds the
-/// bundled `manifest.toml` if absent on disk so upgraded installations gain v2 metadata.
+/// For the three bundled characters (`niko-una`, `levi-kujo`, `kuro`):
+/// - Seeds `manifest.toml` if absent on disk (legacy v1 -> v2 upgrade).
+/// - Transparently upgrades package-owned assets (`AVATAR.png`, `portrait.webp`) and
+///   `manifest.toml` in-place when `[package].version` on disk is older than the bundled
+///   version (e.g. `2.0.0` -> `2.0.1`), leaving deleted characters absent and preserving
+///   `CHARACTER.toml` (UUID + persona) and local `custom_*` / `custom.toml` overrides.
 pub(super) fn load_or_seed_manifest(dir: &Path, slug: &str) -> Option<CharacterManifest> {
     let manifest_path = dir.join("manifest.toml");
+    let bundled = find_bundled(slug);
+
     if !manifest_path.is_file()
-        && let Some(default_bytes) = bundled_default_manifest(slug)
+        && let Some(b) = bundled
     {
-        let _ = atomic_write(&manifest_path, default_bytes);
+        let _ = atomic_write(&manifest_path, b.manifest_bytes);
     }
 
     let raw = fs::read_to_string(&manifest_path).ok()?;
     match parse_and_sanitize_manifest(&raw, slug) {
         Ok(mut manifest) => {
-            // Upgrade pre-portrait bundled `manifest.toml` files seamlessly when bundled portrait exists.
-            if manifest.assets.portrait.is_none()
-                && let Some(default_bytes) = bundled_default_manifest(slug)
-                && let Ok(default_str) = std::str::from_utf8(default_bytes)
-                && let Ok(default_man) = parse_and_sanitize_manifest(default_str, slug)
-            {
-                let _ = atomic_write(&manifest_path, default_bytes);
-                manifest = default_man;
+            if let Some(b) = bundled {
+                let is_bundled_author = manifest.package.authors.is_empty()
+                    || manifest
+                        .package
+                        .authors
+                        .iter()
+                        .any(|a| a.trim().eq_ignore_ascii_case("Boxxy Team"));
+                let is_older_version = parse_semver_triplet(&manifest.package.version)
+                    .is_none_or(|disk_ver| disk_ver < b.version);
+
+                if is_bundled_author && (manifest.assets.portrait.is_none() || is_older_version) {
+                    let assets_res = write_if_changed(&dir.join("AVATAR.png"), b.avatar_bytes)
+                        .and_then(|()| {
+                            write_if_changed(&dir.join("portrait.webp"), b.portrait_bytes)
+                        });
+
+                    if let Err(err) = assets_res {
+                        log::warn!(
+                            "Failed to upgrade bundled character assets for '{slug}': {err}"
+                        );
+                    } else if let Ok(default_str) = std::str::from_utf8(b.manifest_bytes)
+                        && let Ok(default_man) = parse_and_sanitize_manifest(default_str, slug)
+                        && atomic_write(&manifest_path, b.manifest_bytes).is_ok()
+                    {
+                        manifest = default_man;
+                    }
+                }
             }
             Some(manifest)
         }

@@ -126,6 +126,7 @@ Characters v2 preserves user customizations across community package updates:
 1. **Model Overrides:** Stored in `settings.json` (`Settings.character_models`) keyed by stable `CHARACTER.toml` `id` UUID.
 2. **Color Overrides:** Changing a v2 character's color swatch in **Preferences → Characters** writes `color = "#..."` to `custom.toml` without mutating `manifest.toml` or `CHARACTER.toml` (with a 1-click undo button to restore the package default color).
 3. **Avatar / Portrait Overrides on Disk:** Dropping `custom_avatar.png`/`.webp` or `custom_portrait.webp`/`.png` into `<char_dir>/` overrides the package's bundled `avatar` or `portrait` without modifying author files.
+4. **Bundled Default Upgrades (`[package].version`):** When a bundled default character (`niko-una`, `levi-kujo`, `kuro`) ships a newer `[package].version` in `resources/characters/*/manifest.toml`, `load_or_seed_manifest` upgrades `AVATAR.png`, `portrait.webp`, and `manifest.toml` in-place **only** for bundled character folders still present on disk (deleted characters are never recreated, newer versions on disk are never downgraded, and `CHARACTER.toml` + `custom_*` / `custom.toml` remain untouched).
 
 Asset resolution priority on disk:
 - **Avatar:** `custom_avatar.png` → `custom_avatar.webp` → `manifest.toml [assets].avatar` → `avatar.png` → `avatar.webp` → `AVATAR.png` → `AVATAR.webp` → bundled default (`niko-una`, `levi-kujo`, `kuro`).

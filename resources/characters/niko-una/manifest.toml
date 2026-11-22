@@ -1,7 +1,7 @@
 schema_version = 2
 
 [package]
-version = "2.0.0"
+version = "2.0.1"
 authors = ["Boxxy Team"]
 description = "Efficient tsundere maid who keeps your Linux desktop spotless."
 license = "MIT"

@@ -2,6 +2,7 @@
 
 pub(super) struct BundledCharacter {
     pub(super) slug: &'static str,
+    pub(super) version: (u32, u32, u32),
     pub(super) default_color: &'static str,
     pub(super) manifest_bytes: &'static [u8],
     pub(super) toml_bytes: &'static [u8],
@@ -23,6 +24,7 @@ const INCOGNITO_PORTRAIT: &[u8] =
 pub(super) const BUNDLED_CHARACTERS: &[BundledCharacter] = &[
     BundledCharacter {
         slug: "niko-una",
+        version: (2, 0, 1),
         default_color: "#8035D4",
         manifest_bytes: include_bytes!("../../../../resources/characters/niko-una/manifest.toml"),
         toml_bytes: include_bytes!("../../../../resources/characters/niko-una/CHARACTER.toml"),
@@ -37,6 +39,7 @@ pub(super) const BUNDLED_CHARACTERS: &[BundledCharacter] = &[
     },
     BundledCharacter {
         slug: "levi-kujo",
+        version: (2, 0, 1),
         default_color: "#204A87",
         manifest_bytes: include_bytes!("../../../../resources/characters/levi-kujo/manifest.toml"),
         toml_bytes: include_bytes!("../../../../resources/characters/levi-kujo/CHARACTER.toml"),
@@ -51,6 +54,7 @@ pub(super) const BUNDLED_CHARACTERS: &[BundledCharacter] = &[
     },
     BundledCharacter {
         slug: "kuro",
+        version: (2, 0, 1),
         default_color: "#B31825",
         manifest_bytes: include_bytes!("../../../../resources/characters/kuro/manifest.toml"),
         toml_bytes: include_bytes!("../../../../resources/characters/kuro/CHARACTER.toml"),
