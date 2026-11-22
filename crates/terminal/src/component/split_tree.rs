@@ -286,6 +286,13 @@ impl TerminalComponent {
         let active_id = inner.active_pane_id.clone();
         let is_max = inner.is_maximized;
 
+        inner.is_maximized = !is_max;
+        if is_max {
+            inner.stack.set_visible_child_name("split");
+        } else {
+            inner.stack.set_visible_child_name("max");
+        }
+
         if let Some(pane_data) = inner.panes.get(&active_id) {
             let leaf_widget = pane_data.controller.widget();
             if is_max {
@@ -295,13 +302,6 @@ impl TerminalComponent {
                 pane_data.wrapper.remove(leaf_widget);
                 inner.maximized_container.append(leaf_widget);
             }
-        }
-
-        inner.is_maximized = !is_max;
-        if is_max {
-            inner.stack.set_visible_child_name("split");
-        } else {
-            inner.stack.set_visible_child_name("max");
         }
 
         if let Some(pane_data) = inner.panes.get(&active_id) {

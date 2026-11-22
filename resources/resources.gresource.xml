@@ -87,10 +87,12 @@
     <file compressed="true" alias="icons/boxxy-user-trash-symbolic.svg">icons/boxxy-user-trash-symbolic.svg</file>
     <file compressed="true" alias="icons/boxxy-vibe-symbolic.svg">icons/boxxy-vibe-symbolic.svg</file>
     <file compressed="true" alias="icons/boxxy-view-pin-symbolic.svg">icons/boxxy-view-pin-symbolic.svg</file>
+    <file compressed="true" alias="icons/boxxy-view-restore-symbolic.svg">icons/boxxy-view-restore-symbolic.svg</file>
     <file compressed="true" alias="icons/boxxy-visual-bell-symbolic.svg">icons/boxxy-visual-bell-symbolic.svg</file>
     <file compressed="true" alias="icons/boxxy-walking2-symbolic.svg">icons/boxxy-walking2-symbolic.svg</file>
     <file compressed="true" alias="icons/boxxy-window-close-symbolic.svg">icons/boxxy-window-close-symbolic.svg</file>
     <file compressed="true" alias="icons/boxxy-window-new-symbolic.svg">icons/boxxy-window-new-symbolic.svg</file>
+    <file compressed="true" alias="icons/boxxy-zoom-fit-best-symbolic.svg">icons/boxxy-zoom-fit-best-symbolic.svg</file>
     <file compressed="true" alias="icons/boxxy-zoom-fit.gpa">icons/boxxy-zoom-fit.gpa</file>
     <file compressed="true" alias="icons/boxxyclaw.svg">icons/boxxyclaw.svg</file>
     <file compressed="true" alias="icons/console.svg">icons/console.svg</file>

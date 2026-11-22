@@ -84,7 +84,9 @@ impl TerminalComponent {
         stack.add_css_class("terminal-stack");
         stack.set_hexpand(true);
         stack.set_vexpand(true);
-        stack.set_transition_type(gtk::StackTransitionType::Crossfade);
+        // Switch instantly: maximizing reparents the active pane between `"split"` and
+        // `"max"`, so crossfading would blend against an emptied transparent container.
+        stack.set_transition_type(gtk::StackTransitionType::None);
         overlay.add_overlay(&stack);
 
         let maximized_container = gtk::Box::new(gtk::Orientation::Vertical, 0);

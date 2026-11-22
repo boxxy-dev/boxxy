@@ -3,6 +3,7 @@ use gtk4::{gdk, gio};
 
 #[derive(Debug, Clone)]
 pub struct AppMenuContext {
+    pub has_splits: bool,
     pub is_maximized: bool,
     pub path_to_copy: Option<String>,
     pub has_selection: bool,
@@ -77,11 +78,16 @@ fn build_menu_model(ctx: &AppMenuContext) -> gio::Menu {
         "boxxy-split-horizontal-symbolic",
     ));
     let max_icon = if ctx.is_maximized {
-        "boxxy-split-unmaximize-symbolic"
+        "boxxy-view-restore-symbolic"
     } else {
-        "boxxy-split-maximize-symbolic"
+        "boxxy-zoom-fit-best-symbolic"
     };
-    split_model.append_item(&icon_item("win.toggle-maximize", max_icon));
+    let max_action = if ctx.has_splits || ctx.is_maximized {
+        "win.toggle-maximize"
+    } else {
+        "term.disabled"
+    };
+    split_model.append_item(&icon_item(max_action, max_icon));
     split_model.append_item(&icon_item("win.close-split", "boxxy-split-close-symbolic"));
 
     let split_section_item = gio::MenuItem::new_section(None, &split_model);
@@ -163,6 +169,7 @@ mod tests {
     #[test]
     fn context_menu_sections_match_expected_layout() {
         let menu = build_menu_model(&AppMenuContext {
+            has_splits: false,
             is_maximized: false,
             path_to_copy: Some("https://example.com".to_string()),
             has_selection: true,
@@ -206,6 +213,50 @@ mod tests {
                     Some("win.preferences".to_string()),
                 ),
             ]
+        );
+    }
+
+    #[test]
+    fn maximize_button_reflects_split_and_maximized_state() {
+        let max_item_attrs = |has_splits: bool, is_maximized: bool| {
+            let menu = build_menu_model(&AppMenuContext {
+                has_splits,
+                is_maximized,
+                path_to_copy: None,
+                has_selection: false,
+            });
+            let split_section = menu
+                .item_link(2, gio::MENU_LINK_SECTION)
+                .expect("split section");
+            let action = split_section
+                .item_attribute_value(2, gio::MENU_ATTRIBUTE_ACTION, None)
+                .and_then(|v| v.get::<String>());
+            let icon = split_section
+                .item_attribute_value(2, "verb-icon", None)
+                .and_then(|v| v.get::<String>());
+            (action, icon)
+        };
+
+        assert_eq!(
+            max_item_attrs(false, false),
+            (
+                Some("term.disabled".to_string()),
+                Some("boxxy-zoom-fit-best-symbolic".to_string()),
+            )
+        );
+        assert_eq!(
+            max_item_attrs(true, false),
+            (
+                Some("win.toggle-maximize".to_string()),
+                Some("boxxy-zoom-fit-best-symbolic".to_string()),
+            )
+        );
+        assert_eq!(
+            max_item_attrs(true, true),
+            (
+                Some("win.toggle-maximize".to_string()),
+                Some("boxxy-view-restore-symbolic".to_string()),
+            )
         );
     }
 }

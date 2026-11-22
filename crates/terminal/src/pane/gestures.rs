@@ -219,11 +219,19 @@ pub(super) fn setup_gestures(
             }
         }
 
+        let mut has_splits = false;
         let mut is_maximized = false;
         let mut current = term_for_menu.parent();
         while let Some(parent) = current {
             if parent.widget_name() == "maximized-container" {
                 is_maximized = true;
+                has_splits = true;
+                break;
+            }
+            if parent.is::<gtk::Paned>() {
+                has_splits = true;
+            }
+            if parent.has_css_class("terminal-stack") {
                 break;
             }
             current = parent.parent();
@@ -231,6 +239,7 @@ pub(super) fn setup_gestures(
 
         let rect = gdk::Rectangle::new(x as i32, y as i32, 1, 1);
         let ctx = AppMenuContext {
+            has_splits,
             is_maximized,
             path_to_copy,
             has_selection: term_for_menu.has_selection(),

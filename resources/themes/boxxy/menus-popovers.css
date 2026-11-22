@@ -207,9 +207,22 @@ popover.terminal-menu box.linked > button.model:selected:not(:disabled) image {
 }
 
 popover.menu box.linked > button.model:disabled,
-popover.terminal-menu box.linked > button.model:disabled {
+popover.terminal-menu box.linked > button.model:disabled,
+popover.menu box.linked > button:disabled,
+popover.terminal-menu box.linked > button:disabled {
     background-color: @card_bg_color;
     background-image: none;
+    color: alpha(@card_fg_color, 0.38);
+}
+
+popover.menu box.linked > button.model:disabled label,
+popover.menu box.linked > button.model:disabled image,
+popover.terminal-menu box.linked > button.model:disabled label,
+popover.terminal-menu box.linked > button.model:disabled image,
+popover.menu box.linked > button:disabled label,
+popover.menu box.linked > button:disabled image,
+popover.terminal-menu box.linked > button:disabled label,
+popover.terminal-menu box.linked > button:disabled image {
     color: alpha(@card_fg_color, 0.38);
 }
 
