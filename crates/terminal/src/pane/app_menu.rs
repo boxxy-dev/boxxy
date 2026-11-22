@@ -80,7 +80,7 @@ fn build_menu_model(ctx: &AppMenuContext) -> gio::Menu {
     let max_icon = if ctx.is_maximized {
         "boxxy-view-restore-symbolic"
     } else {
-        "boxxy-zoom-fit-best-symbolic"
+        "boxxy-view-fullscreen-symbolic"
     };
     let max_action = if ctx.has_splits || ctx.is_maximized {
         "win.toggle-maximize"
@@ -241,14 +241,14 @@ mod tests {
             max_item_attrs(false, false),
             (
                 Some("term.disabled".to_string()),
-                Some("boxxy-zoom-fit-best-symbolic".to_string()),
+                Some("boxxy-view-fullscreen-symbolic".to_string()),
             )
         );
         assert_eq!(
             max_item_attrs(true, false),
             (
                 Some("win.toggle-maximize".to_string()),
-                Some("boxxy-zoom-fit-best-symbolic".to_string()),
+                Some("boxxy-view-fullscreen-symbolic".to_string()),
             )
         );
         assert_eq!(
