@@ -415,11 +415,6 @@
                                   </object>
                                 </child>
                                 <child>
-                                  <object class="AdwSwitchRow" id="fixed_width_tabs_switch">                                    <property name="title" translatable="yes">Fixed Width Tabs</property>
-                                    <property name="subtitle" translatable="yes">Do not expand tabs to fill the entire tab bar</property>
-                                  </object>
-                                </child>
-                                <child>
                                   <object class="AdwSwitchRow" id="smart_tab_naming_switch">
                                     <property name="title" translatable="yes">Smart Tab Naming</property>
                                     <property name="subtitle" translatable="yes">Show concise directory or command names in tabs and the full path on hover</property>

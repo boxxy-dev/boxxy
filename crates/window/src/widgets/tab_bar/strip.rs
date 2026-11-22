@@ -7,7 +7,7 @@ use libadwaita as adw;
 use std::cell::{Cell, RefCell};
 use std::rc::{Rc, Weak};
 
-use super:: {MIN_TAB_WIDTH, TAB_GAP};
+use super::{DEFAULT_TAB_WIDTH, MIN_TAB_WIDTH, TAB_GAP};
 use super::slot::{OPEN_CLOSE_DURATION_MS, REORDER_DURATION_MS, TabSlot};
 use super::tab::{BoxxyTab, TabCallbacks};
 
@@ -107,8 +107,10 @@ mod imp {
                 if slots.is_empty() {
                     (0, 0, -1, -1)
                 } else {
-                    let per_w = self.per_tab_width.get().max(MIN_TAB_WIDTH);
-                    let nat_w = self.obj().animated_content_width(per_w);
+                    // Report natural width from `DEFAULT_TAB_WIDTH` rather than the previous
+                    // `size_allocate` output (`per_tab_width`) so `AdwHeaderBar` never traps
+                    // shrunk tabs inside its half-width center-box after closing overflowed tabs.
+                    let nat_w = self.obj().animated_content_width(DEFAULT_TAB_WIDTH);
                     (MIN_TAB_WIDTH.min(nat_w.max(1)), nat_w, -1, -1)
                 }
             } else {

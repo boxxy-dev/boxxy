@@ -36,8 +36,6 @@ pub(crate) fn setup_appearance_page(
     let hide_scrollbars_switch: adw::SwitchRow = builder.object("hide_scrollbars_switch").unwrap();
     let invert_scroll_switch: adw::SwitchRow = builder.object("invert_scroll_switch").unwrap();
     let dim_inactive_switch: adw::SwitchRow = builder.object("dim_inactive_switch").unwrap();
-    let fixed_width_tabs_switch: adw::SwitchRow =
-        builder.object("fixed_width_tabs_switch").unwrap();
     let smart_tab_naming_switch: adw::SwitchRow =
         builder.object("smart_tab_naming_switch").unwrap();
     let colored_tabs_switch: adw::SwitchRow = builder.object("colored_tabs_switch").unwrap();
@@ -331,7 +329,6 @@ pub(crate) fn setup_appearance_page(
     bind_bool_switch!(hide_scrollbars_switch, hide_scrollbars);
     bind_bool_switch!(invert_scroll_switch, invert_scroll);
     bind_bool_switch!(dim_inactive_switch, dim_inactive_panes);
-    bind_bool_switch!(fixed_width_tabs_switch, fixed_width_tabs);
     bind_bool_switch!(smart_tab_naming_switch, smart_tab_naming);
     bind_bool_switch!(colored_tabs_switch, colored_tabs);
     bind_bool_switch!(cursor_blinking_switch, cursor_blinking);
@@ -414,7 +411,6 @@ pub(crate) fn setup_appearance_page(
     let s_scroll = SearchRow::new(&hide_scrollbars_switch, "hide scrollbars vertical");
     let s_inv = SearchRow::new(&invert_scroll_switch, "invert scroll direction wheel");
     let s_dim = SearchRow::new(&dim_inactive_switch, "dim inactive panes splits");
-    let s_fixed_tabs = SearchRow::new(&fixed_width_tabs_switch, "fixed width tabs");
     let s_smart_tabs = SearchRow::new(&smart_tab_naming_switch, "smart tab naming basename");
 
     let sync = Box::new(move |s: &Settings| {
@@ -451,7 +447,6 @@ pub(crate) fn setup_appearance_page(
         hide_scrollbars_switch.set_active(s.hide_scrollbars);
         invert_scroll_switch.set_active(s.invert_scroll);
         dim_inactive_switch.set_active(s.dim_inactive_panes);
-        fixed_width_tabs_switch.set_active(s.fixed_width_tabs);
         smart_tab_naming_switch.set_active(s.smart_tab_naming);
         colored_tabs_switch.set_active(s.colored_tabs);
         cursor_blinking_switch.set_active(s.cursor_blinking);
@@ -487,7 +482,6 @@ pub(crate) fn setup_appearance_page(
             | s_scroll.apply(query)
             | s_inv.apply(query)
             | s_dim.apply(query)
-            | s_fixed_tabs.apply(query)
             | s_smart_tabs.apply(query);
 
         group_appearance.set_visible(a);

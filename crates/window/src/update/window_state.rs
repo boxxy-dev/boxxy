@@ -196,7 +196,6 @@ fn only_ui_chrome_changed(prev: &Settings, next: &Settings) -> bool {
         .clone_from(&next.custom_accent_color);
     probe.color_scheme = next.color_scheme;
     probe.smart_tab_naming = next.smart_tab_naming;
-    probe.fixed_width_tabs = next.fixed_width_tabs;
     probe.colored_tabs = next.colored_tabs;
     probe == *next
 }
@@ -345,9 +344,7 @@ pub fn settings_changed(inner: &mut AppWindowInner, settings: Settings) {
         });
     }
 
-    if prev.smart_tab_naming != settings.smart_tab_naming
-        || prev.fixed_width_tabs != settings.fixed_width_tabs
-    {
+    if prev.smart_tab_naming != settings.smart_tab_naming {
         super::tab_bar_sync::sync_tab_titles(inner);
     }
 }

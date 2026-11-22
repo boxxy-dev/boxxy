@@ -10,14 +10,6 @@ use crate::application_detector::{
 };
 use crate::state::AppWindowInner;
 
-pub fn sync_header_title(inner: &AppWindowInner) {
-    let unpinned_pages = inner.tab_view.n_pages() - inner.tab_view.n_pinned_pages();
-    let should_expand = unpinned_pages > 1 && !inner.current_settings.fixed_width_tabs;
-    if inner.tab_bar.expands_tabs() != should_expand {
-        inner.tab_bar.set_expand_tabs(should_expand);
-    }
-}
-
 pub fn sync_tab_titles(inner: &mut AppWindowInner) {
     let inputs: Vec<crate::tab_title::TabTitleInput> = inner
         .tabs
@@ -54,7 +46,6 @@ pub fn sync_tab_titles(inner: &mut AppWindowInner) {
     }
 
     sync_tab_colors(inner);
-    sync_header_title(inner);
 }
 
 /// Finds the index of the `"empty"` or `"hidden"` state in a GPA `gtk4::Svg`

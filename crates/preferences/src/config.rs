@@ -332,7 +332,6 @@ pub struct Settings {
     pub mouse_autohide: bool,
     pub hide_scrollbars: bool,
     pub dim_inactive_panes: bool,
-    pub fixed_width_tabs: bool,
     #[serde(default = "default_smart_tab_naming")]
     pub smart_tab_naming: bool,
     pub api_keys: HashMap<String, String>,
@@ -422,7 +421,6 @@ impl Default for Settings {
             mouse_autohide: false,
             hide_scrollbars: true,
             dim_inactive_panes: true,
-            fixed_width_tabs: true,
             smart_tab_naming: default_smart_tab_naming(),
             api_keys: HashMap::new(),
             ollama_base_url: "http://localhost:11434".to_string(),

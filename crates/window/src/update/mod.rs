@@ -280,7 +280,6 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
             let template = boxxy_bookmarks::parser::BookmarkTemplate::parse(&script);
             let placeholders = template.placeholders;
             tabs::new_tab(&mut inner);
-            tab_bar_sync::sync_header_title(&inner);
 
             if let Some(tab) = inner.active_tab() {
                 let tc = tab.controller.clone();

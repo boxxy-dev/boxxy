@@ -8,7 +8,7 @@ use boxxy_terminal::{TerminalComponent, TerminalInit};
 use boxxy_themes::load_palette;
 
 use super::close_dialog::{CloseDecision, prompt_close_active_work};
-use super::tab_bar_sync::{sync_header_title, sync_tab_colors, sync_tab_titles};
+use super::tab_bar_sync::{sync_tab_colors, sync_tab_titles};
 use crate::init::{AppInit, ORPHAN_TABS, TabLaunchSpec, TerminalController};
 use crate::state::{AppInput, AppWindowInner, TabColor};
 use crate::ui::AppWindow;
@@ -543,7 +543,6 @@ pub fn focus_active_terminal(inner: &mut AppWindowInner) {
         }
     }
     sync_tab_colors(inner);
-    sync_header_title(inner);
 }
 
 pub fn open_bookmarks(inner: &mut AppWindowInner) {
@@ -567,5 +566,4 @@ pub fn open_bookmarks(inner: &mut AppWindowInner) {
         inner.bookmarks_page = Some(page.clone());
         inner.tab_view.set_selected_page(&page);
     }
-    sync_header_title(inner);
 }

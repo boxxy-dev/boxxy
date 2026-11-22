@@ -10,14 +10,14 @@ use gtk::glib;
 use gtk::subclass::prelude::*;
 use gtk4 as gtk;
 use libadwaita as adw;
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use strip::TabStrip;
 use tab::TabCallbacks;
 
-/// Default non-expanded tab width in pixels (replaces Libadwaita's hardcoded 207px cap, #64).
+/// Default tab width in pixels before tabs shrink to fit (replaces Libadwaita's hardcoded 207px cap, #64).
 pub const DEFAULT_TAB_WIDTH: i32 = 250;
 /// Minimum unpinned tab width before horizontal scrolling engages.
 pub const MIN_TAB_WIDTH: i32 = 120;
@@ -33,8 +33,6 @@ mod imp {
         pub pinned_box: gtk::Box,
         pub strip: TabStrip,
         pub new_tab_btn: gtk::Button,
-        pub expand_tabs: Cell<bool>,
-        pub target_tab_width: Cell<i32>,
         pub tab_view: RefCell<Option<adw::TabView>>,
         pub view_handlers: RefCell<Vec<glib::SignalHandlerId>>,
         pub pinned_tabs: RefCell<HashMap<adw::TabPage, BoxxyTab>>,
@@ -49,8 +47,6 @@ mod imp {
                 pinned_box: gtk::Box::new(gtk::Orientation::Horizontal, TAB_GAP),
                 strip: TabStrip::default(),
                 new_tab_btn: gtk::Button::new(),
-                expand_tabs: Cell::new(false),
-                target_tab_width: Cell::new(DEFAULT_TAB_WIDTH),
                 tab_view: RefCell::new(None),
                 view_handlers: RefCell::new(Vec::new()),
                 pinned_tabs: RefCell::new(HashMap::new()),
@@ -122,6 +118,8 @@ mod imp {
                 self.new_tab_btn.measure(gtk::Orientation::Horizontal, -1);
             let (btn_min_h, btn_nat_h, _, _) =
                 self.new_tab_btn.measure(gtk::Orientation::Vertical, -1);
+            let btn_min_w = btn_min_w.max(28);
+            let btn_nat_w = btn_nat_w.max(28);
 
             let (pin_min_w, pin_nat_w, pin_min_h, pin_nat_h) = if self.pinned_box.is_visible() {
                 let (mw, nw, _, _) = self.pinned_box.measure(gtk::Orientation::Horizontal, -1);
@@ -185,17 +183,18 @@ mod imp {
 
             if strip_visible {
                 let avail_unpinned = (width - cur_x - btn_w - TAB_GAP).max(0);
-                let progress_sum = self.strip.animated_progress_sum();
-                let n_eff = progress_sum.max(1.0);
-                let max_per_tab = if self.expand_tabs.get() {
-                    avail_unpinned.max(MIN_TAB_WIDTH)
-                } else {
-                    self.target_tab_width.get().max(MIN_TAB_WIDTH)
-                };
-                let fit_w =
-                    ((f64::from(avail_unpinned) - (n_eff - 1.0) * f64::from(TAB_GAP)) / n_eff)
-                        .floor() as i32;
-                let per_tab_w = fit_w.clamp(MIN_TAB_WIDTH, max_per_tab);
+                let per_tab_w =
+                    if self.strip.animated_content_width(DEFAULT_TAB_WIDTH) <= avail_unpinned {
+                        DEFAULT_TAB_WIDTH
+                    } else {
+                        let progress_sum = self.strip.animated_progress_sum();
+                        let n_eff = progress_sum.max(1.0);
+                        let fit_w = ((f64::from(avail_unpinned)
+                            - (n_eff - 1.0) * f64::from(TAB_GAP))
+                            / n_eff)
+                            .floor() as i32;
+                        fit_w.clamp(MIN_TAB_WIDTH, DEFAULT_TAB_WIDTH)
+                    };
                 self.strip.imp().per_tab_width.set(per_tab_w);
 
                 let _ = self.strip.measure(gtk::Orientation::Horizontal, -1);
@@ -245,18 +244,6 @@ impl BoxxyTabBar {
         let obj = Self::default();
         obj.set_view(tab_view);
         obj
-    }
-
-    #[must_use]
-    pub fn expands_tabs(&self) -> bool {
-        self.imp().expand_tabs.get()
-    }
-
-    pub fn set_expand_tabs(&self, expand: bool) {
-        if self.imp().expand_tabs.get() != expand {
-            self.imp().expand_tabs.set(expand);
-            self.queue_resize();
-        }
     }
 
     #[must_use]
@@ -787,5 +774,74 @@ mod tests {
 
         tab.set_tab_color(crate::state::TabColor::Default);
         assert!(!tab.color_dot().is_visible());
+    }
+
+    #[gtk::test]
+    fn tabs_recover_to_default_width_inside_header_bar_after_overflow_close() {
+        if let Some(settings) = gtk::Settings::default() {
+            settings.set_gtk_enable_animations(false);
+        }
+
+        let tab_view = adw::TabView::new();
+        let toolbar = adw::ToolbarView::new();
+        let header = adw::HeaderBar::builder()
+            .show_title(false)
+            .show_start_title_buttons(false)
+            .show_end_title_buttons(false)
+            .build();
+        let tab_bar = BoxxyTabBar::new(&tab_view);
+        tab_bar.set_hexpand(true);
+        tab_bar.set_margin_start(36);
+        header.pack_start(&tab_bar);
+        if let Some(start_box) = tab_bar.parent() {
+            start_box.set_halign(gtk::Align::Fill);
+            start_box.set_hexpand(true);
+        }
+        toolbar.add_top_bar(&header);
+        toolbar.set_content(Some(&tab_view));
+
+        let win = gtk::Window::builder()
+            .default_width(1200)
+            .default_height(160)
+            .child(&toolbar)
+            .build();
+        win.set_visible(true);
+
+        for i in 0..15 {
+            let p = tab_view.append(&gtk::Box::new(gtk::Orientation::Vertical, 0));
+            p.set_title(&format!("tab-{i}"));
+        }
+
+        let (_, nat_h, _, _) = toolbar.measure(gtk::Orientation::Vertical, 1200);
+        toolbar.allocate(1200, nat_h.max(160), -1, None);
+
+        let overflow_tab = tab_bar.tab_for_page(&tab_view.nth_page(0)).unwrap();
+        assert_eq!(
+            overflow_tab.compute_bounds(&tab_bar).unwrap().width(),
+            MIN_TAB_WIDTH as f32
+        );
+
+        // Close 11 tabs so 4 remain (`4 * 250 = 1000px`, wider than `1200 / 2 = 600px`
+        // while fitting comfortably inside the 1200px header bar).
+        for _ in 0..11 {
+            let last = tab_view.nth_page(tab_view.n_pages() - 1);
+            tab_view.close_page(&last);
+        }
+
+        let (_, nat_h_after, _, _) = toolbar.measure(gtk::Orientation::Vertical, 1200);
+        toolbar.allocate(1200, nat_h_after.max(160), -1, None);
+
+        assert_eq!(tab_view.n_pages(), 4);
+        for i in 0..4 {
+            let page = tab_view.nth_page(i);
+            let tab = tab_bar.tab_for_page(&page).unwrap();
+            assert_eq!(
+                tab.compute_bounds(&tab_bar).unwrap().width(),
+                DEFAULT_TAB_WIDTH as f32,
+                "Tab {i} must recover to DEFAULT_TAB_WIDTH after closing overflowed tabs"
+            );
+        }
+
+        win.destroy();
     }
 }
