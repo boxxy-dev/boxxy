@@ -314,6 +314,7 @@ impl ClawSession {
         self.send_ui(ClawEngineEvent::UserMessage {
             content: prompt.clone(),
             images: Vec::new(),
+            text_attachments: Vec::new(),
         })
         .await;
 

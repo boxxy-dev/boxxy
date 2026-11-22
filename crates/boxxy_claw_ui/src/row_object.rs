@@ -435,6 +435,7 @@ mod tests {
             pane_id: "pane-1".to_string(),
             content: "hello".to_string(),
             images: Vec::new(),
+            text_attachments: Vec::new(),
         });
         assert!(user_obj.cached_file_diff_json().is_none());
     }

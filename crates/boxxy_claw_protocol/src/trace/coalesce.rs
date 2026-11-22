@@ -265,6 +265,7 @@ mod tests {
                 pane_id: "pane-1".to_string(),
                 content: "Refactor module".to_string(),
                 images: Vec::new(),
+                text_attachments: Vec::new(),
             },
             PersistentClawRow::ToolCall {
                 pane_id: "pane-1".to_string(),

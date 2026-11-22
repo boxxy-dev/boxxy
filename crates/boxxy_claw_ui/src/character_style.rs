@@ -154,6 +154,7 @@ thread_local! {
     static AVATAR_TEXTURES: RefCell<AvatarTextureCache> = RefCell::new(HashMap::new());
     static INCOGNITO_TEXTURE: OnceCell<Option<gdk::Texture>> = const { OnceCell::new() };
     static INCOGNITO_PORTRAIT_TEXTURE: OnceCell<Option<gdk::Texture>> = const { OnceCell::new() };
+    static TEXT_ATTACHMENT_TEXTURE: OnceCell<Option<gdk::Texture>> = const { OnceCell::new() };
     static COLOR_CSS_REGISTRY: RefCell<DynamicColorRegistry> =
         RefCell::new(DynamicColorRegistry::new());
 }
@@ -312,6 +313,22 @@ pub(crate) fn load_incognito_portrait_texture() -> Option<gdk::Texture> {
             boxxy_core_widgets::decode_texture_from_bytes(
                 boxxy_claw_protocol::character_loader::incognito_portrait_bytes(),
             )
+        })
+        .clone()
+    })
+}
+
+/// Loads and caches the bundled generic text-attachment document icon once per UI thread.
+#[must_use]
+pub(crate) fn load_text_attachment_texture() -> Option<gdk::Texture> {
+    TEXT_ATTACHMENT_TEXTURE.with(|cell| {
+        cell.get_or_init(|| {
+            gtk::gio::resources_lookup_data(
+                "/dev/boxxy/BoxxyTerminal/icons/text_attachment.png",
+                gtk::gio::ResourceLookupFlags::NONE,
+            )
+            .ok()
+            .and_then(|bytes| boxxy_core_widgets::decode_texture_from_bytes(&bytes))
         })
         .clone()
     })

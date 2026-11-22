@@ -158,6 +158,8 @@ pub enum ClawEngineEvent {
         content: String,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         images: Vec<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        text_attachments: Vec<String>,
     },
     DiagnosisComplete {
         agent_name: String,

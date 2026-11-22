@@ -159,6 +159,12 @@ impl TerminalOverlay {
 
         msgbar_slot.append(&msgbar_vbox);
         msg_bar.set_embedded(true);
+        {
+            let host_for_notify = host.clone();
+            msg_bar.attachment_mgr.set_notify_hook(move |msg| {
+                host_for_notify.notify(msg);
+            });
+        }
 
         // Build the virtualized history list (Claude-Code-style scrollable log).
         // Uses the same factory + backing store as the sidebar so a huge

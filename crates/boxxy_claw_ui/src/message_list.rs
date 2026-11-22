@@ -2,7 +2,8 @@
 
 use crate::character_style::{
     avatar_ring_color_class, is_safe_hex_color, load_cached_texture, load_character_avatar_texture,
-    load_incognito_texture, prettify_character_name, resolve_character_display_name,
+    load_incognito_texture, load_text_attachment_texture, prettify_character_name,
+    resolve_character_display_name,
 };
 use crate::process_renderer::get_claw_viewer_registry;
 use crate::row_object::{ClawRowObject, RowUpdateKind};
@@ -567,7 +568,10 @@ fn bind_or_refresh_slot(hbox: &gtk::Box, obj: &ClawRowObject) {
             }
         }
         PersistentClawRow::User {
-            content, images, ..
+            content,
+            images,
+            text_attachments,
+            ..
         } => {
             set_user_header();
             trace_slot.widget().set_visible(false);
@@ -581,6 +585,24 @@ fn bind_or_refresh_slot(hbox: &gtk::Box, obj: &ClawRowObject) {
 
                     let img = gtk::Image::new();
                     img.set_paintable(Some(&texture));
+                    img.set_pixel_size(56);
+                    thumb_frame.append(&img);
+                    thumbs_box.append(&thumb_frame);
+                }
+            }
+
+            if !text_attachments.is_empty()
+                && let Some(text_tex) = load_text_attachment_texture()
+            {
+                for label in text_attachments {
+                    let thumb_frame = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+                    thumb_frame.add_css_class("user-text-attachment-thumb");
+                    if !label.trim().is_empty() {
+                        thumb_frame.set_tooltip_text(Some(label));
+                    }
+
+                    let img = gtk::Image::new();
+                    img.set_paintable(Some(&text_tex));
                     img.set_pixel_size(56);
                     thumb_frame.append(&img);
                     thumbs_box.append(&thumb_frame);
@@ -959,11 +981,18 @@ pub fn add_diagnosis_row_with_trace(
     ));
 }
 
-pub fn add_user_row(store: &gio::ListStore, pane_id: String, content: &str, images: Vec<String>) {
+pub fn add_user_row(
+    store: &gio::ListStore,
+    pane_id: String,
+    content: &str,
+    images: Vec<String>,
+    text_attachments: Vec<String>,
+) {
     store.append(&ClawRowObject::new(PersistentClawRow::User {
         pane_id,
         content: content.to_string(),
         images,
+        text_attachments,
     }));
 }
 
@@ -1079,6 +1108,7 @@ mod tests {
             "pane-1".to_string(),
             "Explain the parser module.",
             Vec::new(),
+            Vec::new(),
         );
         add_system_message_row(&store, "pane-1".to_string(), "Claw: Model A");
         add_diagnosis_row(
@@ -1092,6 +1122,7 @@ mod tests {
             &store,
             "pane-1".to_string(),
             "What about errors?",
+            Vec::new(),
             Vec::new(),
         );
         add_diagnosis_row(

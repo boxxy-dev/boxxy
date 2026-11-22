@@ -49,6 +49,54 @@ pub fn extract_user_authored_prompt(prompt: &str) -> &str {
     base
 }
 
+/// Extracts attached text/code display labels from the `--- ATTACHMENTS ---` payload tail.
+///
+/// Tracks backtick fence boundaries so `**bold**` lines inside attached markdown or source
+/// code are never mistaken for attachment headers.
+#[must_use]
+pub fn extract_text_attachment_labels(prompt: &str) -> Vec<String> {
+    let Some((_, tail)) = prompt.split_once(ATTACHMENTS_CONTEXT_MARKER) else {
+        return Vec::new();
+    };
+
+    let mut labels = Vec::new();
+    let mut active_fence_ticks: Option<usize> = None;
+    let mut pending_label: Option<&str> = None;
+
+    for line in tail.lines() {
+        let trimmed_end = line.trim_end_matches('\r');
+        if let Some(fence_len) = active_fence_ticks {
+            let trimmed = trimmed_end.trim();
+            let ticks = trimmed.bytes().take_while(|&b| b == b'`').count();
+            if ticks >= fence_len && trimmed.len() == ticks {
+                active_fence_ticks = None;
+            }
+            continue;
+        }
+
+        let ticks = trimmed_end.bytes().take_while(|&b| b == b'`').count();
+        if ticks >= 3 {
+            active_fence_ticks = Some(ticks);
+            if let Some(lbl) = pending_label.take() {
+                labels.push(lbl.to_string());
+            }
+            continue;
+        }
+
+        if let Some(inner) = trimmed_end
+            .strip_prefix("**")
+            .and_then(|s| s.strip_suffix("**"))
+            .filter(|s| !s.is_empty())
+        {
+            pending_label = Some(inner);
+        } else if !trimmed_end.trim().is_empty() {
+            pending_label = None;
+        }
+    }
+
+    labels
+}
+
 use crate::engine::{
     ClawEngineEvent, ClawEnvironment, ClawMessage, dispatcher::extract_command_and_clean,
     persist_visual_event, session::SessionState,
@@ -1133,6 +1181,23 @@ mod tests {
         assert_eq!(
             extract_user_authored_prompt(handoff),
             "Generate a geometric blue cube"
+        );
+    }
+
+    #[test]
+    fn extracts_text_attachment_labels_even_with_nested_markdown_and_backticks() {
+        let payload = concat!(
+            "Review these files\n\n--- ATTACHMENTS ---",
+            "\n\n**src/parser.rs**\n````text\nfn parse() {\n    // **not a header**\n    // ```rust\n}\n````",
+            "\n\n**Text Snippet**\n```text\nhello world\n```"
+        );
+        assert_eq!(
+            extract_text_attachment_labels(payload),
+            vec!["src/parser.rs".to_string(), "Text Snippet".to_string()]
+        );
+        assert_eq!(
+            extract_text_attachment_labels("Plain message with no attachments"),
+            Vec::<String>::new()
         );
     }
 

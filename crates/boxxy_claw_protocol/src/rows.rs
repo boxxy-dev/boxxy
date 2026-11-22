@@ -19,6 +19,8 @@ pub enum PersistentClawRow {
         content: String,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         images: Vec<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        text_attachments: Vec<String>,
     },
     Suggested {
         pane_id: String,
@@ -147,6 +149,7 @@ mod tests {
             pane_id: "pane-1".to_string(),
             content: "Hello".to_string(),
             images: Vec::new(),
+            text_attachments: Vec::new(),
         };
         assert!(user.is_overlay_visible());
         assert_eq!(user.pane_id(), Some("pane-1"));
@@ -179,5 +182,30 @@ mod tests {
         };
         assert!(cmd.is_overlay_visible());
         assert_eq!(cmd.pane_id(), None);
+    }
+
+    #[test]
+    fn user_row_deserializes_legacy_json_without_text_attachments() {
+        let legacy = r#"{"User":{"pane_id":"pane-1","content":"Check snippet"}}"#;
+        let parsed: PersistentClawRow = serde_json::from_str(legacy).expect("legacy JSON");
+        assert_eq!(
+            parsed,
+            PersistentClawRow::User {
+                pane_id: "pane-1".to_string(),
+                content: "Check snippet".to_string(),
+                images: Vec::new(),
+                text_attachments: Vec::new(),
+            }
+        );
+
+        let with_text = PersistentClawRow::User {
+            pane_id: "pane-1".to_string(),
+            content: "Review file".to_string(),
+            images: Vec::new(),
+            text_attachments: vec!["src/module.rs".to_string()],
+        };
+        let encoded = serde_json::to_string(&with_text).expect("encode");
+        let roundtrip: PersistentClawRow = serde_json::from_str(&encoded).expect("decode");
+        assert_eq!(roundtrip, with_text);
     }
 }

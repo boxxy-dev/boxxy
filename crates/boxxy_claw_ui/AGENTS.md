@@ -27,7 +27,7 @@ Each virtualized history row shares the same layout (avatar/icon + heading + dim
 | Row variant | Icon/Avatar | Heading | Extra styling |
 |---|---|---|---|
 | SystemMessage | — (hidden) | — | `system-message`, `dimmed` |
-| User | User Avatar | User Display Name | Optional image attachment thumbnails |
+| User | User Avatar | User Display Name | Optional image thumbnails and `text_attachment.png` document icons (`text_attachments`) |
 | Diagnosis | Character Avatar | Character Name | Optional typewriter reveal; fallback to `boxxyclaw` icon |
 | Suggested | Character Avatar | Character Name | Fallback to `boxxy-dialog-warning-symbolic`; command in monospace |
 | ProcessList | Character Avatar | Character Name | Custom `ProcessListRenderer` table |

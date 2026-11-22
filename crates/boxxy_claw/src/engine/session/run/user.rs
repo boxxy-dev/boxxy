@@ -486,6 +486,8 @@ impl ClawSession {
             return;
         }
 
+        let text_attachments = crate::engine::turn::extract_text_attachment_labels(&raw_query);
+
         let action = if is_whats_new {
             UserTurnAction::RunTurn {
                 user_bubble: Some(display_query),
@@ -520,6 +522,7 @@ impl ClawSession {
                     self.send_ui(ClawEngineEvent::UserMessage {
                         content: bubble,
                         images: thumb_paths,
+                        text_attachments,
                     })
                     .await;
                 }
@@ -554,10 +557,14 @@ impl ClawSession {
                 }
 
                 let thumb_paths = cache_user_attachment_thumbnails(&image_attachments).await;
-                if user_bubble.is_some() || !thumb_paths.is_empty() {
+                if user_bubble.is_some()
+                    || !thumb_paths.is_empty()
+                    || !text_attachments.is_empty()
+                {
                     self.send_ui(ClawEngineEvent::UserMessage {
                         content: user_bubble.unwrap_or_default(),
                         images: thumb_paths,
+                        text_attachments,
                     })
                     .await;
                 }
@@ -691,9 +698,14 @@ impl ClawSession {
             }
             ctx.backlog.clear();
 
+            let incognito_display =
+                crate::engine::turn::extract_user_authored_prompt(&query).to_string();
+            let incognito_text_attachments =
+                crate::engine::turn::extract_text_attachment_labels(&query);
             self.send_ui(ClawEngineEvent::UserMessage {
-                content: query.clone(),
+                content: incognito_display,
                 images: Vec::new(),
+                text_attachments: incognito_text_attachments,
             })
             .await;
 

@@ -96,6 +96,7 @@
     <file compressed="true" alias="icons/console.svg">icons/console.svg</file>
     <file alias="icons/dev.boxxy.BoxxyTerminal.png">icons/dev.boxxy.BoxxyTerminal.png</file>
     <file compressed="true" alias="icons/python.svg">icons/python.svg</file>
+    <file alias="icons/text_attachment.png">icons/text_attachment.png</file>
     <file alias="icons/whats_new_banner.png">icons/whats_new_banner.png</file>
     <file compressed="true" alias="prompts/ai_chat.md">prompts/ai_chat.md</file>
     <file compressed="true" alias="prompts/bookmark_generator.md">prompts/bookmark_generator.md</file>

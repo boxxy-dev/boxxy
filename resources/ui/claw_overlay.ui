@@ -26,8 +26,8 @@
                 <property name="orientation">vertical</property>
                 <property name="margin-top">12</property>
                 <property name="margin-bottom">12</property>
-                <property name="margin-start">12</property>
-                <property name="margin-end">12</property>
+                <property name="margin-start">20</property>
+                <property name="margin-end">20</property>
               </object>
             </child>
           </object>
@@ -158,9 +158,9 @@
             <property name="orientation">vertical</property>
             <property name="spacing">12</property>
             <property name="margin-top">12</property>
-            <property name="margin-bottom">12</property>
-            <property name="margin-start">12</property>
-            <property name="margin-end">12</property>
+            <property name="margin-bottom">14</property>
+            <property name="margin-start">20</property>
+            <property name="margin-end">20</property>
             <child>
               <object class="GtkFrame" id="command_frame">
                 <style>

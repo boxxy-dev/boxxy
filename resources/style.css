@@ -223,7 +223,8 @@ button.secondary-action:hover {
 }
 
 .claw-drawer .virtual-history {
-    margin: 12px;
+    margin: 0;
+    padding: 12px 0;
 }
 
 /* Strip all interactive states from ListView row wrappers — double-click flash (active),
@@ -242,6 +243,8 @@ button.secondary-action:hover {
     box-shadow: none;
     border: none;
     outline: none;
+    padding: 0;
+    margin: 0;
 }
 
 /* ── Claw Virtual Rows ─────────────────────────────────────────────────── */
@@ -252,6 +255,14 @@ button.secondary-action:hover {
     border-radius: 4px;
     margin: 4px 6px;
     padding: 6px 8px;
+}
+
+/* Keep the 20 px gutter inside `.claw-virtual-row` padding (matching `bottom_area`)
+   while `.virtual-history` spans full width so avatar hover/typing glow never clips. */
+.claw-drawer .claw-virtual-row,
+.claw-drawer .claw-virtual-row:hover {
+    margin: 4px 0;
+    padding: 8px 20px;
 }
 
 /* Copy exchange button in the top-right of the row header */
@@ -848,7 +859,7 @@ window:not(.frosted-glass-active) .terminal-header {
   background: alpha(@view_fg_color, 0.06);
   border: none;
   border-radius: 10px;
-  padding: 2px 6px;
+  padding: 5px 8px;
   margin: 0;
   box-shadow: none;
 }
@@ -863,7 +874,7 @@ window:not(.frosted-glass-active) .terminal-header {
   background-color: transparent;
   border: none;
   border-radius: 0;
-  padding: 4px 4px;
+  padding: 6px 4px;
   min-height: 0;
   box-shadow: none;
   outline: none;
@@ -876,7 +887,7 @@ window:not(.frosted-glass-active) .terminal-header {
 }
 
 .claw-drawer .boxxy-msgbar .msgbar-placeholder {
-  padding: 4px 4px;
+  padding: 6px 4px;
   min-height: 0;
   font-size: 1.1em;
   opacity: 0.5;
@@ -908,19 +919,30 @@ window:not(.frosted-glass-active) .terminal-header {
 }
 
 /* Toggle buttons on the left side of the bar: flat with no bg at rest. */
-.claw-drawer .boxxy-msgbar button.image-button,
-.claw-drawer .boxxy-msgbar button.flat {
+.claw-drawer .boxxy-msgbar button.msgbar-plus-btn {
   background: transparent;
   box-shadow: none;
   border: none;
   outline: none;
-  min-height: 0;
-  padding: 4px;
+  min-width: 32px;
+  min-height: 32px;
+  padding: 0;
+  border-radius: 9999px;
 }
 
-.claw-drawer .boxxy-msgbar button.image-button:hover,
-.claw-drawer .boxxy-msgbar button.flat:hover {
-  background: alpha(@view_fg_color, 0.08);
+.claw-drawer .boxxy-msgbar button.msgbar-plus-btn:hover:not(:disabled) {
+  background: alpha(@view_fg_color, 0.10);
+}
+
+/* Session & attachment options popover anchored left above the `+` button */
+popover.msgbar-options-popover > contents {
+  margin-bottom: 8px;
+  margin-left: 0;
+}
+
+popover.msgbar-options-popover separator {
+  min-height: 1px;
+  margin: 4px 6px;
 }
 
 /* Trailing status indicators inside the right end of the msgbar (Sleep / Vibe) */
@@ -933,19 +955,14 @@ window:not(.frosted-glass-active) .terminal-header {
     opacity: 0.5;
 }
 
-.avatar-icon {
-    border-radius: 4px;
-    transition: filter 0.2s ease-in-out, opacity 0.2s ease-in-out, transform 0.2s ease-in-out;
-}
-
-.boxxy-msgbar button:hover .avatar-icon {
-    transform: scale(1.1);
-}
-
 /* Status Indicators for MsgBar Buttons */
 .boxxy-msgbar button.msgbar-popover-row {
   padding: 6px 8px;
-  border-radius: 6px;
+  border-radius: 8px;
+}
+
+.boxxy-msgbar button.msgbar-popover-row:hover:not(:disabled) {
+  background: alpha(currentColor, 0.08);
 }
 
 .avatar-sleep-badge {
@@ -1025,36 +1042,43 @@ window:not(.frosted-glass-active) .terminal-header {
 }
 
 .msgbar-tag {
-  background: alpha(currentColor, 0.12);
+  background: alpha(currentColor, 0.10);
   color: inherit;
-  border-radius: 12px;
-  padding: 0 4px 0 10px;
+  border-radius: 6px;
+  padding: 4px 6px 4px 10px;
   margin: 0;
   font-size: 0.9em;
-  font-weight: bold;
+  font-weight: 600;
   border: 1px solid alpha(currentColor, 0.18);
 }
 
 .msgbar-tag label {
-  margin-right: 4px;
+  margin-right: 2px;
 }
 
 .msgbar-tag button {
-  min-height: 18px;
-  min-width: 18px;
+  min-height: 20px;
+  min-width: 20px;
   padding: 0;
   margin: 0;
+  border-radius: 4px;
   opacity: 0.7;
 }
 
 .msgbar-tag button:hover {
   opacity: 1.0;
-  background: alpha(currentColor, 0.10);
+  background: alpha(currentColor, 0.12);
 }
 
 .user-attachment-thumb {
   border-radius: 8px;
   border: 1px solid alpha(currentColor, 0.22);
+}
+
+.user-text-attachment-thumb {
+  background: transparent;
+  border: none;
+  padding: 0;
 }
 
 
@@ -1091,6 +1115,12 @@ spinrow button.down image {
     font-size: 0.9em;
     padding: 0px;
     margin: 0px 8px;
+}
+
+.claw-drawer .claw-virtual-row.system-message,
+.claw-drawer .claw-virtual-row.system-message:hover {
+    margin: 2px 0;
+    padding: 2px 20px;
 }
 
 

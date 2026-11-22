@@ -203,6 +203,7 @@ fn is_supported_image(path: &str) -> bool {
             || ext.eq_ignore_ascii_case("jpg")
             || ext.eq_ignore_ascii_case("jpeg")
             || ext.eq_ignore_ascii_case("webp")
+            || ext.eq_ignore_ascii_case("gif")
     })
 }
 

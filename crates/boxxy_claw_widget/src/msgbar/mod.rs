@@ -6,7 +6,6 @@ pub mod history;
 use boxxy_claw_protocol::AgentStatus;
 use gtk4 as gtk;
 use gtk4::prelude::*;
-use libadwaita as adw;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
@@ -24,7 +23,7 @@ pub struct MsgBarComponent {
     pub attachment_mgr: AttachmentManager,
     pub history: Rc<RefCell<history::MsgHistory>>,
     pub claw_toggle: gtk::Button,
-    pub claw_image: gtk::Image,
+    pub add_files_btn: gtk::Button,
     pub sleep_toggle: gtk::Button,
     pub pin_toggle: gtk::Button,
     pub web_search_toggle: gtk::Button,
@@ -41,12 +40,10 @@ pub struct MsgBarComponent {
     pub pin_state: Rc<Cell<bool>>,
     pub web_search_state: Rc<Cell<bool>>,
     pub vibe_state: Rc<Cell<bool>>,
-    /// Current character UUID for avatar lookup
+    /// Current character UUID for placeholder and mention context
     pub character_id: Rc<RefCell<Option<String>>>,
     /// Live working directory of the host terminal pane for `@` file autocomplete
     pub working_dir: Rc<RefCell<Option<String>>>,
-    pub avatar: adw::Avatar,
-    avatar_stack: gtk::Stack,
     /// When true, the msgbar does not hide itself on Enter/Escape — its
     /// enclosing container (e.g. the claw overlay drawer) owns visibility.
     embedded: Rc<Cell<bool>>,
@@ -146,28 +143,21 @@ impl MsgBarComponent {
         // chat-chrome inside the drawer; monospace made it feel like a
         // shell prompt.
 
-        let claw_image = gtk::Image::from_icon_name("boxxy-boxxyclaw-symbolic");
-
-        let avatar = adw::Avatar::new(32, None, true);
-        let profile = boxxy_preferences::user_profile::current();
-        boxxy_preferences::user_profile::configure_avatar(&avatar, &profile);
-
-        let avatar_stack = gtk::Stack::new();
-        avatar_stack.set_transition_type(gtk::StackTransitionType::None);
-        avatar_stack.add_named(&claw_image, Some("icon"));
-        avatar_stack.add_named(&avatar, Some("avatar"));
-        avatar_stack.set_visible_child_name("avatar");
-        avatar_stack.set_margin_top(2);
-        avatar_stack.set_margin_bottom(2);
-        avatar_stack.set_margin_start(2);
-        avatar_stack.set_margin_end(2);
+        let plus_icon = gtk::Image::builder()
+            .icon_name("boxxy-plus-symbolic")
+            .pixel_size(16)
+            .halign(gtk::Align::Center)
+            .valign(gtk::Align::Center)
+            .build();
 
         let claw_toggle = gtk::Button::builder()
-            .child(&avatar_stack)
-            .css_classes(["flat", "image-button"])
-            .tooltip_text("Session Options (/vibe, /sleep, /pin, /web)")
-            .margin_start(4)
-            .margin_end(2)
+            .child(&plus_icon)
+            .css_classes(["flat", "circular", "image-button", "msgbar-plus-btn"])
+            .tooltip_text("Add photos & files or session options (/vibe, /sleep, /pin, /web)")
+            .margin_start(2)
+            .margin_end(6)
+            .margin_top(1)
+            .margin_bottom(1)
             .valign(gtk::Align::Center)
             .can_focus(false)
             .build();
@@ -180,8 +170,10 @@ impl MsgBarComponent {
 
         let status_popover = gtk::Popover::builder()
             .position(gtk::PositionType::Top)
+            .halign(gtk::Align::Start)
             .has_arrow(false)
             .autohide(true)
+            .css_classes(["msgbar-options-popover"])
             .build();
         status_popover.set_parent(&claw_toggle);
         let popover_for_destroy = status_popover.clone();
@@ -290,6 +282,56 @@ impl MsgBarComponent {
         });
 
         popover_box.append(&vibe_toggle);
+
+        let menu_sep = gtk::Separator::new(gtk::Orientation::Horizontal);
+        menu_sep.set_margin_top(4);
+        menu_sep.set_margin_bottom(4);
+        menu_sep.set_margin_start(4);
+        menu_sep.set_margin_end(4);
+        popover_box.append(&menu_sep);
+
+        let add_files_row_box = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+        let add_files_icon = gtk::Image::builder()
+            .icon_name("boxxy-folder-open-symbolic")
+            .valign(gtk::Align::Center)
+            .css_classes(["dim-label"])
+            .build();
+        let add_files_text_box = gtk::Box::new(gtk::Orientation::Vertical, 1);
+        add_files_text_box.set_hexpand(true);
+        add_files_text_box.set_valign(gtk::Align::Center);
+
+        let add_files_title = gtk::Label::builder()
+            .label("Add photos & files")
+            .xalign(0.0)
+            .build();
+        let add_files_subtitle = gtk::Label::builder()
+            .label("Images, text & code · Max 10 MB")
+            .xalign(0.0)
+            .css_classes(["caption", "dim-label"])
+            .build();
+        add_files_text_box.append(&add_files_title);
+        add_files_text_box.append(&add_files_subtitle);
+        add_files_row_box.append(&add_files_icon);
+        add_files_row_box.append(&add_files_text_box);
+
+        let add_files_btn = gtk::Button::builder()
+            .child(&add_files_row_box)
+            .css_classes(["flat", "msgbar-popover-row"])
+            .tooltip_text("Attach PNG, JPEG, WebP, or GIF images and UTF-8 text or code files")
+            .can_focus(false)
+            .build();
+        {
+            let popover_for_add = status_popover.clone();
+            let att_mgr_for_add = attachment_mgr.clone();
+            let entry_for_add = entry.clone();
+            let cwd_for_add = working_dir.clone();
+            add_files_btn.connect_clicked(move |btn| {
+                popover_for_add.popdown();
+                let cwd = cwd_for_add.borrow().clone();
+                att_mgr_for_add.prompt_and_attach_files(btn, &entry_for_add, cwd.as_deref());
+            });
+        }
+        popover_box.append(&add_files_btn);
 
         widget.append(&entry_overlay);
 
@@ -694,6 +736,8 @@ impl MsgBarComponent {
             let drop_att_mgr = attachment_mgr.clone();
             let drop_entry = entry.clone();
             let drop_cwd = working_dir.clone();
+            let drop_claw_state = claw_state.clone();
+            let drop_char_id = character_id.clone();
             file_drop.connect_drop(move |_, value, _, _| {
                 let files = if let Ok(list) = value.get::<gtk::gdk::FileList>() {
                     list.files()
@@ -703,7 +747,12 @@ impl MsgBarComponent {
                     return false;
                 };
                 let cwd = drop_cwd.borrow().clone();
-                drop_att_mgr.handle_dropped_files(files, &drop_entry, cwd.as_deref())
+                let is_incognito = drop_claw_state.get()
+                    && drop_char_id
+                        .borrow()
+                        .as_deref()
+                        .is_some_and(boxxy_claw_protocol::characters::is_incognito_character);
+                drop_att_mgr.handle_dropped_files(files, &drop_entry, cwd.as_deref(), is_incognito)
             });
         }
         widget.add_controller(file_drop);
@@ -717,7 +766,7 @@ impl MsgBarComponent {
             attachment_mgr,
             history,
             claw_toggle,
-            claw_image,
+            add_files_btn,
             sleep_toggle,
             pin_toggle,
             web_search_toggle,
@@ -736,8 +785,6 @@ impl MsgBarComponent {
             vibe_state,
             character_id,
             working_dir,
-            avatar,
-            avatar_stack,
             embedded,
             on_submit_hook,
             on_clear_hook,
@@ -779,13 +826,6 @@ impl MsgBarComponent {
         });
     }
 
-    /// Refreshes the input bar's left-hand avatar to show the user's own profile avatar.
-    pub fn refresh_user_avatar(&self) {
-        let profile = boxxy_preferences::user_profile::current();
-        boxxy_preferences::user_profile::configure_avatar(&self.avatar, &profile);
-        self.avatar_stack.set_visible_child_name("avatar");
-    }
-
     /// Clears the active character binding and restores the default input placeholder.
     pub fn clear_character(&self) {
         *self.character_id.borrow_mut() = None;
@@ -795,7 +835,6 @@ impl MsgBarComponent {
             self.placeholder_label.set_label(&text);
         }
         *self.default_placeholder.borrow_mut() = text;
-        self.refresh_user_avatar();
     }
 
     /// Updates the host pane's live working directory and pre-warms the background `@` file index.
@@ -808,7 +847,7 @@ impl MsgBarComponent {
         *self.working_dir.borrow_mut() = cwd;
     }
 
-    /// Update the placeholder text based on the active character UUID and refresh the user avatar.
+    /// Updates the placeholder text based on the active character UUID.
     pub fn set_character(&self, character_id: &str) {
         *self.character_id.borrow_mut() = Some(character_id.to_string());
 
@@ -821,7 +860,6 @@ impl MsgBarComponent {
                 self.placeholder_label.set_label(&text);
             }
             *self.default_placeholder.borrow_mut() = text;
-            self.refresh_user_avatar();
             return;
         }
 
@@ -834,8 +872,6 @@ impl MsgBarComponent {
             }
             *self.default_placeholder.borrow_mut() = text;
         }
-
-        self.refresh_user_avatar();
     }
 
     /// Mark the msgbar as embedded inside another container (the claw
@@ -864,7 +900,6 @@ impl MsgBarComponent {
         ] {
             self.claw_toggle.remove_css_class(cls);
             self.sleep_toggle.remove_css_class(cls);
-            self.claw_image.remove_css_class(cls);
         }
 
         match status {
@@ -890,7 +925,6 @@ impl MsgBarComponent {
             AgentStatus::Off => {
                 self.sleep_state.set(false);
                 self.sleep_switch.set_active(false);
-                self.claw_image.add_css_class("grayscale");
             }
         }
         self.sync_right_badges();
@@ -936,7 +970,6 @@ impl MsgBarComponent {
         self.web_search_toggle.set_sensitive(!is_incognito);
         self.vibe_state.set(vibe && !is_incognito);
         self.set_status(status);
-        self.refresh_user_avatar();
 
         self.pin_state.set(pinned);
         self.web_search_state.set(web_search);

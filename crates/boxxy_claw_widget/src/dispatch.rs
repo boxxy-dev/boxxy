@@ -143,7 +143,11 @@ pub fn spawn_dispatch(
                         settle_or_prune_working_row(&overlay_store, &active_turn_row);
                     }
                 }
-                ClawEngineEvent::UserMessage { content, images } => {
+                ClawEngineEvent::UserMessage {
+                    content,
+                    images,
+                    text_attachments,
+                } => {
                     ignoring_aborted_turn.set(false);
                     settle_or_prune_working_row(&overlay_store, &active_turn_row);
                     boxxy_claw_ui::add_user_row(
@@ -151,6 +155,7 @@ pub fn spawn_dispatch(
                         id.clone(),
                         content,
                         images.clone(),
+                        text_attachments.clone(),
                     );
                 }
                 ClawEngineEvent::ToolCallStarted {
