@@ -28,18 +28,19 @@
 }
 
 .claw-drawer .boxxy-msgbar {
-    background-color: @card_bg_color;
+    background-color: mix(@window_bg_color, @card_bg_color, 0.55);
     color: @card_fg_color;
     border-radius: var(--boxxy-radius-lg);
-    outline: var(--boxxy-border-width) solid @boxxy_ink;
-    outline-offset: -2px;
-    box-shadow: 2px 3px 0px @boxxy_shadow;
+    border: var(--boxxy-border-width) solid @boxxy_ink;
+    outline: none;
+    box-shadow: 1px 1px 0px @boxxy_shadow;
 }
 
 .claw-drawer .boxxy-msgbar:focus-within {
-    outline: var(--boxxy-border-width) solid @accent_color;
-    outline-offset: -2px;
-    box-shadow: 2px 3px 0px @boxxy_ink;
+    background-color: @card_bg_color;
+    border-color: @boxxy_ink;
+    outline: none;
+    box-shadow: 2px 3px 0px @boxxy_shadow;
 }
 
 .claw-drawer .boxxy-msgbar entry,

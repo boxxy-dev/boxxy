@@ -856,12 +856,17 @@ window:not(.frosted-glass-active) .terminal-header {
    entry inside is transparent; the send button is a sibling widget placed
    outside the bar with zero background. */
 .claw-drawer .boxxy-msgbar {
-  background: alpha(@view_fg_color, 0.06);
+  background-color: alpha(@view_fg_color, 0.05);
   border: none;
   border-radius: 10px;
-  padding: 5px 8px;
+  padding: 8px 12px;
   margin: 0;
-  box-shadow: none;
+  box-shadow: inset 0 0 0 1px alpha(@view_fg_color, 0.08);
+}
+
+.claw-drawer .boxxy-msgbar:focus-within {
+  background-color: alpha(@view_fg_color, 0.10);
+  box-shadow: inset 0 0 0 1px alpha(@view_fg_color, 0.20);
 }
 
 .claw-drawer .boxxy-msgbar entry,
@@ -874,7 +879,7 @@ window:not(.frosted-glass-active) .terminal-header {
   background-color: transparent;
   border: none;
   border-radius: 0;
-  padding: 6px 4px;
+  padding: 6px 6px;
   min-height: 0;
   box-shadow: none;
   outline: none;
@@ -887,7 +892,7 @@ window:not(.frosted-glass-active) .terminal-header {
 }
 
 .claw-drawer .boxxy-msgbar .msgbar-placeholder {
-  padding: 6px 4px;
+  padding: 6px 6px;
   min-height: 0;
   font-size: 1.1em;
   opacity: 0.5;
@@ -936,7 +941,7 @@ window:not(.frosted-glass-active) .terminal-header {
 
 /* Session & attachment options popover anchored left above the `+` button */
 popover.msgbar-options-popover > contents {
-  margin-bottom: 8px;
+  margin-bottom: 18px;
   margin-left: 0;
 }
 
