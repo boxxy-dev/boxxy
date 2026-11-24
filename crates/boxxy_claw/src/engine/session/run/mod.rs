@@ -220,6 +220,7 @@ impl ClawSession {
             }
             ClawMessage::Deactivate => {
                 info!("Deactivating Claw Session for pane {}...", self.pane_id);
+                ctx.abort_btw_tasks(None);
                 self.handle_abort(ctx).await;
                 self.flush_unflushed_history(&ctx.current_dir).await;
                 ctx.is_initialized = false;
@@ -239,6 +240,7 @@ impl ClawSession {
             }
             ClawMessage::Evict => {
                 info!("Agent in pane {} was EVICTED.", self.pane_id);
+                ctx.abort_btw_tasks(None);
                 self.handle_abort(ctx).await;
                 self.flush_unflushed_history(&ctx.current_dir).await;
                 ctx.is_initialized = false;
@@ -261,6 +263,7 @@ impl ClawSession {
                 session_id,
                 character_id,
             } => {
+                ctx.abort_btw_tasks(None);
                 self.handle_resume_session(
                     session_id,
                     character_id,
@@ -716,6 +719,44 @@ impl ClawSession {
             }
             ClawMessage::RebindPane { new_pane_id } => {
                 self.handle_rebind_pane(ctx, new_pane_id).await;
+            }
+            ClawMessage::BtwQuery {
+                request_id,
+                question,
+                prior_exchange,
+                snapshot,
+                cwd,
+            } => {
+                if !self.incognito && self.db.lock().await.is_none()
+                    && let Ok(db) = Db::new().await
+                {
+                    *self.db.lock().await = Some(db);
+                }
+                if !self.incognito && self.session_context.trim().is_empty() && !self.character_id.is_empty() {
+                    self.session_context = load_session_context(&self.character_id);
+                }
+                ctx.active_btw_tasks.retain(|_, h| !h.is_finished());
+                let handle = crate::engine::turn::btw::spawn_btw_query(
+                    crate::engine::turn::btw::BtwQueryParams {
+                        request_id,
+                        pane_id: self.pane_id.clone(),
+                        session_id: self.session_id.clone(),
+                        host_agent_name: self.name.clone(),
+                        question,
+                        prior_exchange,
+                        snapshot,
+                        session_ctx: self.session_context.clone(),
+                        cwd,
+                        env: ctx.env.clone(),
+                        db: self.db.clone(),
+                        state: self.state.clone(),
+                        tx_ui: self.tx_ui.clone(),
+                    },
+                );
+                ctx.active_btw_tasks.insert(request_id, handle);
+            }
+            ClawMessage::CancelBtw { request_id } => {
+                ctx.abort_btw_tasks(request_id);
             }
         }
         false

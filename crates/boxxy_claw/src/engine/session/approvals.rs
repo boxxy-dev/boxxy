@@ -154,6 +154,9 @@ mod pending_drain_tests {
             current_turn_trace: Vec::new(),
             generated_images_this_turn: Vec::new(),
             current_turn_user_images: Vec::new(),
+            in_flight_snapshot: Arc::new(std::sync::Mutex::new(
+                crate::engine::session::InFlightSnapshot::default(),
+            )),
         }
     }
 

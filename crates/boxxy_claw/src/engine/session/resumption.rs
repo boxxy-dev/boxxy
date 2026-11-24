@@ -175,6 +175,11 @@ impl ClawSession {
                     }
 
                     state_lock.persistent_agent = None;
+                    state_lock
+                        .in_flight_snapshot
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .clear();
                     (
                         state_lock.agent_name.clone(),
                         state_lock.pending_tasks.clone(),

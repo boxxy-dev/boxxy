@@ -1,0 +1,376 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<interface>
+  <requires lib="gtk" version="4.0"/>
+  <requires lib="libadwaita" version="1.4"/>
+  <object class="AdwDialog" id="btw_dialog">
+    <property name="title">Side Question</property>
+    <property name="content-width">680</property>
+    <property name="follows-content-size">true</property>
+    <child>
+      <object class="GtkBox">
+        <property name="orientation">vertical</property>
+        <property name="spacing">12</property>
+        <property name="margin-top">16</property>
+        <property name="margin-bottom">14</property>
+        <property name="margin-start">18</property>
+        <property name="margin-end">18</property>
+
+        <!-- Unified Character Identity Row (no headerbar line, no [x] button) -->
+        <child>
+          <object class="GtkBox">
+            <property name="orientation">horizontal</property>
+            <property name="spacing">10</property>
+            <property name="valign">center</property>
+            <child>
+              <object class="AdwAvatar" id="header_avatar">
+                <property name="size">34</property>
+                <property name="show-initials">true</property>
+                <property name="valign">center</property>
+              </object>
+            </child>
+            <child>
+              <object class="GtkLabel" id="header_character_label">
+                <property name="label">Claw</property>
+                <property name="valign">center</property>
+                <style>
+                  <class name="title-4"/>
+                </style>
+              </object>
+            </child>
+            <child>
+              <object class="GtkLabel">
+                <property name="label">BTW</property>
+                <property name="valign">center</property>
+                <style>
+                  <class name="model-badge-custom"/>
+                  <class name="claw-btw-dialog-badge"/>
+                </style>
+              </object>
+            </child>
+            <child>
+              <object class="GtkLabel" id="header_meta_label">
+                <property name="label">Side question</property>
+                <property name="halign">start</property>
+                <property name="valign">center</property>
+                <property name="hexpand">true</property>
+                <property name="xalign">0.0</property>
+                <property name="ellipsize">end</property>
+                <style>
+                  <class name="caption"/>
+                  <class name="dim-label"/>
+                </style>
+              </object>
+            </child>
+            <child>
+              <object class="GtkButton" id="last_answer_btn">
+                <property name="label">Last answer</property>
+                <property name="visible">false</property>
+                <property name="valign">center</property>
+                <property name="tooltip-text">View the most recent /btw answer from this session</property>
+                <style>
+                  <class name="flat"/>
+                  <class name="caption"/>
+                </style>
+              </object>
+            </child>
+          </object>
+        </child>
+
+        <!-- View Stack: Ask vs Answer -->
+        <child>
+          <object class="GtkStack" id="view_stack">
+            <property name="transition-type">crossfade</property>
+            <property name="transition-duration">150</property>
+            <property name="vhomogeneous">false</property>
+            <property name="interpolate-size">true</property>
+
+            <!-- Page 1: Ask -->
+            <child>
+              <object class="GtkStackPage">
+                <property name="name">ask</property>
+                <property name="child">
+                  <object class="GtkBox">
+                    <property name="orientation">vertical</property>
+                    <property name="spacing">12</property>
+
+                    <child>
+                      <object class="GtkBox" id="followup_box">
+                        <property name="orientation">horizontal</property>
+                        <property name="spacing">8</property>
+                        <property name="visible">false</property>
+                        <style>
+                          <class name="claw-btw-followup-bar"/>
+                        </style>
+                        <child>
+                          <object class="GtkLabel" id="followup_label">
+                            <property name="hexpand">true</property>
+                            <property name="xalign">0.0</property>
+                            <property name="ellipsize">end</property>
+                            <style>
+                              <class name="caption"/>
+                              <class name="dim-label"/>
+                            </style>
+                          </object>
+                        </child>
+                        <child>
+                          <object class="GtkButton" id="clear_followup_btn">
+                            <property name="icon-name">boxxy-cross-small-symbolic</property>
+                            <property name="tooltip-text">Start a fresh question instead</property>
+                            <property name="valign">center</property>
+                            <style>
+                              <class name="flat"/>
+                              <class name="circular"/>
+                            </style>
+                          </object>
+                        </child>
+                      </object>
+                    </child>
+
+                    <child>
+                      <object class="GtkFrame">
+                        <style>
+                          <class name="claw-btw-input-frame"/>
+                        </style>
+                        <child>
+                          <object class="GtkScrolledWindow">
+                            <property name="hscrollbar-policy">never</property>
+                            <property name="vscrollbar-policy">automatic</property>
+                            <property name="min-content-height">96</property>
+                            <property name="max-content-height">220</property>
+                            <property name="propagate-natural-height">true</property>
+                            <child>
+                              <object class="GtkOverlay" id="ask_overlay">
+                                <child>
+                                  <object class="GtkTextView" id="ask_entry">
+                                    <property name="wrap-mode">word-char</property>
+                                    <property name="accepts-tab">false</property>
+                                    <property name="top-margin">12</property>
+                                    <property name="bottom-margin">12</property>
+                                    <property name="left-margin">14</property>
+                                    <property name="right-margin">14</property>
+                                  </object>
+                                </child>
+                              </object>
+                            </child>
+                          </object>
+                        </child>
+                      </object>
+                    </child>
+
+                    <child>
+                      <object class="GtkBox">
+                        <property name="orientation">horizontal</property>
+                        <property name="spacing">10</property>
+                        <property name="margin-top">2</property>
+                        <property name="valign">center</property>
+                        <child>
+                          <object class="GtkLabel">
+                            <property name="label">Enter to ask · Shift+Enter for new line · Won't interrupt or save</property>
+                            <property name="hexpand">true</property>
+                            <property name="xalign">0.0</property>
+                            <property name="ellipsize">end</property>
+                            <style>
+                              <class name="caption"/>
+                              <class name="dim-label"/>
+                            </style>
+                          </object>
+                        </child>
+                        <child>
+                          <object class="GtkButton" id="ask_cancel_btn">
+                            <property name="label">Close</property>
+                            <property name="valign">center</property>
+                          </object>
+                        </child>
+                        <child>
+                          <object class="GtkButton" id="ask_submit_btn">
+                            <property name="label">Ask</property>
+                            <property name="valign">center</property>
+                            <property name="sensitive">false</property>
+                            <style>
+                              <class name="suggested-action"/>
+                              <class name="pill"/>
+                            </style>
+                          </object>
+                        </child>
+                      </object>
+                    </child>
+                  </object>
+                </property>
+              </object>
+            </child>
+
+            <!-- Page 2: Answer / Loading / Error -->
+            <child>
+              <object class="GtkStackPage">
+                <property name="name">answer</property>
+                <property name="child">
+                  <object class="GtkBox">
+                    <property name="orientation">vertical</property>
+                    <property name="spacing">12</property>
+
+                    <!-- Recessed Boxxy Content Card (matches Model Assignment cards) -->
+                    <child>
+                      <object class="GtkBox">
+                        <property name="orientation">vertical</property>
+                        <property name="spacing">10</property>
+                        <style>
+                          <class name="claw-btw-card"/>
+                        </style>
+
+                        <child>
+                          <object class="GtkLabel" id="question_display_label">
+                            <property name="xalign">0.0</property>
+                            <property name="wrap">true</property>
+                            <property name="wrap-mode">word-char</property>
+                            <property name="selectable">true</property>
+                            <style>
+                              <class name="heading"/>
+                            </style>
+                          </object>
+                        </child>
+
+                        <child>
+                          <object class="GtkSeparator">
+                            <property name="orientation">horizontal</property>
+                          </object>
+                        </child>
+
+                        <!-- Live loading status row (visible while in-flight) -->
+                        <child>
+                          <object class="GtkBox" id="loading_status_box">
+                            <property name="orientation">horizontal</property>
+                            <property name="spacing">8</property>
+                            <property name="valign">center</property>
+                            <property name="visible">false</property>
+                            <child>
+                              <object class="GtkBox" id="loading_spinner_slot">
+                                <property name="valign">center</property>
+                              </object>
+                            </child>
+                            <child>
+                              <object class="GtkLabel" id="loading_status_label">
+                                <property name="label">Thinking…</property>
+                                <property name="xalign">0.0</property>
+                                <property name="ellipsize">end</property>
+                                <property name="hexpand">true</property>
+                                <style>
+                                  <class name="dim-label"/>
+                                  <class name="caption"/>
+                                </style>
+                              </object>
+                            </child>
+                          </object>
+                        </child>
+
+                        <!-- Scrollable Markdown Answer Viewer -->
+                        <child>
+                          <object class="GtkScrolledWindow" id="answer_scroll">
+                            <property name="hscrollbar-policy">never</property>
+                            <property name="vscrollbar-policy">automatic</property>
+                            <property name="max-content-height">460</property>
+                            <property name="propagate-natural-height">true</property>
+                            <child>
+                              <object class="GtkBox" id="answer_viewer_slot">
+                                <property name="orientation">vertical</property>
+                                <property name="margin-top">2</property>
+                                <property name="margin-bottom">2</property>
+                                <property name="margin-end">4</property>
+                              </object>
+                            </child>
+                          </object>
+                        </child>
+                      </object>
+                    </child>
+
+                    <!-- Answer Footer Actions -->
+                    <child>
+                      <object class="GtkBox">
+                        <property name="orientation">horizontal</property>
+                        <property name="spacing">10</property>
+                        <property name="margin-top">2</property>
+                        <property name="valign">center</property>
+                        <child>
+                          <object class="GtkButton" id="abort_btw_btn">
+                            <property name="label">Cancel Question</property>
+                            <property name="valign">center</property>
+                            <property name="visible">false</property>
+                            <style>
+                              <class name="destructive-action"/>
+                            </style>
+                          </object>
+                        </child>
+                        <child>
+                          <object class="GtkButton" id="followup_btn">
+                            <property name="label">Ask Follow-up</property>
+                            <property name="valign">center</property>
+                            <property name="tooltip-text">Ask a follow-up side question with this answer in context</property>
+                            <style>
+                              <class name="flat"/>
+                            </style>
+                          </object>
+                        </child>
+                        <child>
+                          <object class="GtkButton" id="new_question_btn">
+                            <property name="label">New Question</property>
+                            <property name="valign">center</property>
+                            <style>
+                              <class name="flat"/>
+                            </style>
+                          </object>
+                        </child>
+                        <child>
+                          <object class="GtkBox">
+                            <property name="hexpand">true</property>
+                          </object>
+                        </child>
+                        <child>
+                          <object class="GtkButton" id="retry_btn">
+                            <property name="label">Retry</property>
+                            <property name="valign">center</property>
+                            <property name="visible">false</property>
+                          </object>
+                        </child>
+                        <child>
+                          <object class="GtkButton" id="copy_answer_btn">
+                            <property name="valign">center</property>
+                            <property name="tooltip-text">Copy response (c)</property>
+                            <child>
+                              <object class="GtkBox">
+                                <property name="orientation">horizontal</property>
+                                <property name="spacing">6</property>
+                                <child>
+                                  <object class="GtkImage" id="copy_btn_icon">
+                                    <property name="icon-name">boxxy-edit-copy-symbolic</property>
+                                  </object>
+                                </child>
+                                <child>
+                                  <object class="GtkLabel" id="copy_btn_label">
+                                    <property name="label">Copy</property>
+                                  </object>
+                                </child>
+                              </object>
+                            </child>
+                          </object>
+                        </child>
+                        <child>
+                          <object class="GtkButton" id="done_btn">
+                            <property name="label">Close</property>
+                            <property name="valign">center</property>
+                            <style>
+                              <class name="suggested-action"/>
+                              <class name="pill"/>
+                            </style>
+                          </object>
+                        </child>
+                      </object>
+                    </child>
+                  </object>
+                </property>
+              </object>
+            </child>
+          </object>
+        </child>
+      </object>
+    </child>
+  </object>
+</interface>

@@ -12,6 +12,25 @@ mod resumption;
 pub mod roundtable;
 pub mod run;
 
+/// Live in-flight turn snapshot shared with concurrent `/btw` side queries without
+/// acquiring the async `SessionState` mutex on every streamed chunk.
+#[derive(Debug, Clone, Default)]
+pub struct InFlightSnapshot {
+    /// Exact committed `Arc<Message>` transcript passed to the latest model call of an
+    /// active turn (`[...prepared_history, step_prompt]`), preserving all provider
+    /// reasoning/tool signatures and warm KV prompt-cache prefixes.
+    pub messages: Option<Vec<Arc<Message>>>,
+    /// Human-readable label of the currently executing step (e.g. `"Running cargo test…"`).
+    pub active_status: Option<String>,
+}
+
+impl InFlightSnapshot {
+    pub fn clear(&mut self) {
+        self.messages = None;
+        self.active_status = None;
+    }
+}
+
 pub struct SessionState {
     pub session_id: String,
     pub pane_id: String,
@@ -92,6 +111,9 @@ pub struct SessionState {
     /// Base64-encoded user images attached or `@file`-referenced in the active turn,
     /// allowing `generate_image` to edit pasted/attached images without a disk path.
     pub current_turn_user_images: Vec<String>,
+    /// Lock-light snapshot of the currently running turn's committed messages and active step
+    /// so `/btw` side queries observe live mid-turn tool results and warm KV cache prefixes.
+    pub in_flight_snapshot: Arc<std::sync::Mutex<InFlightSnapshot>>,
 }
 
 impl SessionState {
@@ -231,6 +253,7 @@ impl ClawSession {
                 current_turn_trace: Vec::new(),
                 generated_images_this_turn: Vec::new(),
                 current_turn_user_images: Vec::new(),
+                in_flight_snapshot: Arc::new(std::sync::Mutex::new(InFlightSnapshot::default())),
             })),
         };
 
@@ -347,6 +370,8 @@ impl ClawSession {
                 | ClawMessage::CancelTask { .. }
                 | ClawMessage::TogglePauseTask { .. }
                 | ClawMessage::CancelAllTasks
+                | ClawMessage::BtwQuery { .. }
+                | ClawMessage::CancelBtw { .. }
         )
     }
 
@@ -425,5 +450,36 @@ mod tests {
             .await
             .expect("CancelAllTasks should also bypass the active turn backlog");
         assert!(matches!(clear_all, ClawMessage::CancelAllTasks));
+
+        // `/btw` queries and cancellations must also dispatch immediately while a turn is active
+        let req_id = uuid::Uuid::new_v4();
+        tx.send(ClawMessage::BtwQuery {
+            request_id: req_id,
+            question: "What changed in src/module.rs?".to_string(),
+            prior_exchange: None,
+            snapshot: String::new(),
+            cwd: "/workspace".to_string(),
+        })
+        .await
+        .unwrap();
+        let btw = ClawSession::get_next_msg(&rx, &mut urgent_backlog, &mut backlog, true)
+            .await
+            .expect("BtwQuery must bypass backlog during an active turn");
+        assert!(matches!(btw, ClawMessage::BtwQuery { request_id, .. } if request_id == req_id));
+
+        tx.send(ClawMessage::CancelBtw {
+            request_id: Some(req_id),
+        })
+        .await
+        .unwrap();
+        let cancel_btw = ClawSession::get_next_msg(&rx, &mut urgent_backlog, &mut backlog, true)
+            .await
+            .expect("CancelBtw must bypass backlog during an active turn");
+        assert!(matches!(
+            cancel_btw,
+            ClawMessage::CancelBtw {
+                request_id: Some(id)
+            } if id == req_id
+        ));
     }
 }

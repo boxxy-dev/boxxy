@@ -6,7 +6,7 @@ Centralizes keyboard shortcut definitions, custom `keybindings.toml` persistence
 ## Architecture & Modules
 
 - **`src/action.rs` (`ShortcutId`, `ShortcutCategory`, `ActionScope`, `TerminalInputMode`):**
-  - Defines all 49 user-bindable actions across `General`, `Terminal`, `Split Panes`, and `Tabs` (including `Alt+1`..`Alt+0` tab switching).
+  - Defines all 50 user-bindable actions across `General`, `Terminal`, `Split Panes`, and `Tabs` (including `Alt+1`..`Alt+0` tab switching and `Ctrl+Shift+B` for `Ask Side Question (/btw)`).
   - Declares explicit `ActionScope` tiers (`GlobalWindow` -> `PaneOrOverlay` -> `TerminalFocused`) so terminal-specific shortcuts (`Copy`, `Paste`, `Select All`, `PrevPrompt`, `NextPrompt`) never hijack standard GTK text editing inside `MsgBar` or `Preferences` entries even when customized.
   - Includes `TerminalInputMode` (`Normal`, `Search`, `ViNormal`, `ViVisual`) hooks prepared for Stage 2 Vi/Copy Mode.
 - **`src/defaults.rs` (`ACTION_SPECS`, `spec_for`):**

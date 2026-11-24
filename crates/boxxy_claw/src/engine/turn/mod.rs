@@ -1,3 +1,4 @@
+pub mod btw;
 pub mod file_refs;
 pub mod history;
 mod incognito;
@@ -623,17 +624,28 @@ pub fn spawn_turn(
         }
 
         let query_for_chat = build_user_message_with_images(full_prompt.clone(), images_clone);
+        let in_flight_snapshot = {
+            let state_lock = state.lock().await;
+            state_lock.in_flight_snapshot.clone()
+        };
         let stream_ctx = crate::engine::agent::TurnStreamContext {
             tx_ui: tx_ui.clone(),
             state: state.clone(),
+            in_flight_snapshot: in_flight_snapshot.clone(),
             agent_name: agent_name.clone(),
             character_id: character_id.clone(),
         };
 
         let start_time = std::time::Instant::now();
-        match agent
+        let stream_res = agent
             .chat_streaming(query_for_chat, final_history, Some(stream_ctx))
-            .await
+            .await;
+        in_flight_snapshot
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clear();
+
+        match stream_res
         {
             Ok((response, usage, messages)) => {
                 let duration = start_time.elapsed();

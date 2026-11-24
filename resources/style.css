@@ -2531,3 +2531,80 @@ row.shortcut-row-pulse {
     background-color: alpha(@boxxy_highlight_bg_color, 0.26);
     transition: background-color 280ms ease;
 }
+
+/* --- /btw Ephemeral Side-Channel Button & Modal Dialog --- */
+.claw-drawer button.claw-btw-btn {
+    min-height: 34px;
+    padding: 0 11px;
+    border-radius: 8px;
+    background-color: alpha(currentColor, 0.08);
+    background-image: none;
+    border: 1px solid alpha(currentColor, 0.12);
+    box-shadow: none;
+    transition: background-color 140ms ease, border-color 140ms ease;
+}
+
+.claw-drawer button.claw-btw-btn:hover {
+    background-color: alpha(currentColor, 0.14);
+    border-color: alpha(currentColor, 0.22);
+}
+
+.claw-drawer button.claw-btw-btn .claw-btw-btn-label {
+    font-size: 0.86em;
+    font-weight: 800;
+    letter-spacing: 0.03em;
+    opacity: 0.9;
+}
+
+.claw-drawer button.claw-btw-btn.is-loading {
+    background-color: alpha(@accent_bg_color, 0.14);
+    border-color: alpha(@accent_bg_color, 0.35);
+    color: @accent_color;
+}
+
+.claw-drawer button.claw-btw-btn.is-ready {
+    background-color: alpha(@accent_bg_color, 0.22);
+    border-color: alpha(@accent_bg_color, 0.55);
+    color: @accent_color;
+}
+
+.claw-btw-dialog-badge {
+    letter-spacing: 0.04em;
+}
+
+frame.claw-btw-input-frame {
+    border-radius: 12px;
+    border: 1px solid alpha(currentColor, 0.14);
+    background-color: @card_bg_color;
+    color: @card_fg_color;
+}
+
+frame.claw-btw-input-frame:focus-within {
+    border-color: alpha(@accent_bg_color, 0.65);
+}
+
+frame.claw-btw-input-frame textview,
+frame.claw-btw-input-frame textview text {
+    background-color: transparent;
+}
+
+.claw-btw-card {
+    padding: 14px 16px;
+    border-radius: 12px;
+    background-color: @card_bg_color;
+    color: @card_fg_color;
+    border: 1px solid alpha(currentColor, 0.14);
+}
+
+.claw-btw-followup-bar {
+    padding: 4px 6px 4px 10px;
+    border-radius: 8px;
+    background-color: alpha(@accent_bg_color, 0.10);
+    border: 1px solid alpha(@accent_bg_color, 0.24);
+}
+
+.claw-btw-followup-bar button.circular {
+    min-width: 24px;
+    min-height: 24px;
+    padding: 0;
+}

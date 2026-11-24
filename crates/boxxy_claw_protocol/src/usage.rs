@@ -157,6 +157,27 @@ impl SessionUsage {
             self.cost_usd += cost;
         }
     }
+
+    /// Applies an ephemeral `/btw` side-query's `UsageWrapper` to cumulative session totals
+    /// (`total_tokens` and `cost_usd`) without overwriting the main turn's `context_tokens`.
+    pub fn record_side_turn(&mut self, usage: &UsageWrapper) {
+        let turn_total = usage.total_tokens();
+        self.total_tokens = self.total_tokens.saturating_add(turn_total);
+        if self.context_window.is_none()
+            && let Some(window) = usage.context_window.filter(|&w| w > 0)
+        {
+            self.context_window = Some(window);
+        }
+        if !self.cost_usd.is_finite() || self.cost_usd < 0.0 {
+            self.cost_usd = 0.0;
+        }
+        if let Some(cost) = usage.cost_usd
+            && cost.is_finite()
+            && cost > 0.0
+        {
+            self.cost_usd += cost;
+        }
+    }
 }
 
 /// Formats an integer with ASCII comma thousands separators (e.g. `25236` -> `"25,236"`)
@@ -296,5 +317,19 @@ mod tests {
         assert_eq!(su.total_tokens, 26_736);
         assert_eq!(su.context_window, Some(1_048_576));
         assert!((su.cost_usd - 0.05).abs() < 1e-9);
+
+        // Side-turn (/btw) usage accumulates total_tokens and cost_usd without clobbering context_tokens
+        su.record_side_turn(&UsageWrapper {
+            input_tokens: 4_000,
+            output_tokens: 200,
+            reasoning_tokens: None,
+            cached_input_tokens: Some(3_800),
+            cost_usd: Some(0.01),
+            context_tokens: Some(4_200),
+            context_window: Some(1_048_576),
+        });
+        assert_eq!(su.total_tokens, 30_936);
+        assert_eq!(su.context_tokens, 26_736);
+        assert!((su.cost_usd - 0.06).abs() < 1e-9);
     }
 }

@@ -11,6 +11,8 @@ The crate is **surface-agnostic**. It talks to its host — the thing that owns 
 boxxy_claw_widget/
 ├── overlay.rs          drawer UI (TerminalOverlay) — loaded from
 │                       /dev/boxxy/BoxxyTerminal/ui/claw_overlay.ui
+├── btw_dialog.rs       ephemeral /btw button + AdwDialog (claw_btw_dialog.ui)
+├── zoom.rs             display-wide overlay font-size zoom CSS provider
 ├── character_picker.rs centered empty-state character banner cards (model + thinking pills) + left-aligned Models Selection • Open Characters links
 ├── claw_indicator.rs   floating status pill / badge (ClawIndicator)
 ├── msgbar/             merged input bar (formerly a crate)
@@ -34,6 +36,7 @@ Defines `TerminalOverlay` and `OverlayMode { Claw, Bookmark }`. Constructed via 
 `TerminalOverlay::sync_action_state()` is the single source of truth for the bottom action row (`file_action_box`, `action_box`, `ok_btn`, `accept_btn`, `reject_btn`, `indicator_slot`, `tips_cycle`, and `msg_bar.set_input_sensitive`):
 - `OverlayState::Idle` — `ok_btn` visible, `indicator_slot` hidden, input sensitive.
 - `OverlayState::Thinking` — `indicator_slot` visible (spinner pill + Cancel `×`), `ok_btn` and proposal buttons hidden, input disabled until the turn finishes, pauses on a proposal, or is cancelled.
+- `btw_slot` (`BTW` / `BTW…` / `● BTW Ready`) — visible across all active session states (`Thinking`, `Action`, `Pending`, and `Idle` once a conversation has started; hidden only on the empty `CharacterPicker` screen and in `Bookmark` preview mode), allowing 1-click side questions both while input is locked and while inspecting pending file/command proposals without steering/cancelling them.
 - `OverlayState::Pending` — `ok_btn` visible + pending tips, `indicator_slot` hidden, input sensitive.
 - `OverlayState::Action(Proposal)` — only the proposal's approval/reject buttons visible, `ok_btn` and `indicator_slot` hidden, input sensitive so the user can steer the proposal by typing a follow-up instruction.
 

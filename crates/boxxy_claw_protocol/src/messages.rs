@@ -124,6 +124,21 @@ pub enum ClawMessage {
     RebindPane {
         new_pane_id: String,
     },
+    /// Ephemeral `/btw` side question executed against the settled session context
+    /// without interrupting an active turn or mutating conversation history.
+    BtwQuery {
+        request_id: Uuid,
+        question: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        prior_exchange: Option<(String, String)>,
+        snapshot: String,
+        cwd: String,
+    },
+    /// Cancels an in-flight `/btw` side question (or all active side questions when `None`).
+    CancelBtw {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        request_id: Option<Uuid>,
+    },
 }
 
 /// Events emitted from the Claw Engine up to the GTK UI.
@@ -352,6 +367,31 @@ pub enum ClawEngineEvent {
         title: String,
         message: String,
     },
+    /// Live reasoning/text progress for an ephemeral `/btw` side question.
+    BtwProgress {
+        request_id: Uuid,
+        agent_name: String,
+        character_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        active_status: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        text_delta: Option<String>,
+    },
+    /// Final answer (or error) for an ephemeral `/btw` side question.
+    BtwComplete {
+        request_id: Uuid,
+        agent_name: String,
+        character_id: String,
+        question: String,
+        answer: String,
+        #[serde(default)]
+        model_label: String,
+        #[serde(default)]
+        duration_ms: u64,
+        usage: Option<UsageWrapper>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    },
 }
 
 impl ClawEngineEvent {
@@ -380,7 +420,9 @@ impl ClawEngineEvent {
             | Self::LazyErrorIndicator { character_id, .. }
             | Self::TaskStatusChanged { character_id, .. }
             | Self::TaskCompleted { character_id, .. }
-            | Self::LongTaskCompleted { character_id, .. } => Some(character_id),
+            | Self::LongTaskCompleted { character_id, .. }
+            | Self::BtwProgress { character_id, .. }
+            | Self::BtwComplete { character_id, .. } => Some(character_id),
             Self::UserMessage { .. }
             | Self::DismissDrawer
             | Self::FocusPane
@@ -425,7 +467,9 @@ impl ClawEngineEvent {
             | Self::LazyErrorIndicator { agent_name, .. }
             | Self::TaskStatusChanged { agent_name, .. }
             | Self::TaskCompleted { agent_name, .. }
-            | Self::LongTaskCompleted { agent_name, .. } => Some(agent_name),
+            | Self::LongTaskCompleted { agent_name, .. }
+            | Self::BtwProgress { agent_name, .. }
+            | Self::BtwComplete { agent_name, .. } => Some(agent_name),
             Self::UserMessage { .. }
             | Self::DismissDrawer
             | Self::FocusPane

@@ -17,7 +17,7 @@ pub struct ActionSpec {
     pub keywords: &'static [&'static str],
 }
 
-pub const ACTION_SPECS: [ActionSpec; 49] = [
+pub const ACTION_SPECS: [ActionSpec; 50] = [
     // ── General ──────────────────────────────────────────────────────────────
     ActionSpec {
         id: ShortcutId::NewWindow,
@@ -58,6 +58,16 @@ pub const ACTION_SPECS: [ActionSpec; 49] = [
         default_triggers: &["Ctrl+/"],
         implicit_aliases: &[],
         keywords: &["message bar", "ai", "agent", "overlay", "chat"],
+    },
+    ActionSpec {
+        id: ShortcutId::ClawBtw,
+        category: ShortcutCategory::General,
+        scope: ActionScope::PaneOrOverlay,
+        title: "Ask Side Question (/btw)",
+        action_name: "win.claw-btw",
+        default_triggers: &["Ctrl+Shift+B"],
+        implicit_aliases: &[],
+        keywords: &["btw", "aside", "side question", "quick question", "claw"],
     },
     ActionSpec {
         id: ShortcutId::ToggleClawCodeBlocks,

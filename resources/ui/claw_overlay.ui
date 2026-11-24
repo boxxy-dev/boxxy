@@ -205,7 +205,7 @@
                 <child type="start">
                   <object class="GtkBox" id="action_row_start">
                     <property name="orientation">horizontal</property>
-                    <property name="spacing">12</property>
+                    <property name="spacing">8</property>
                     <child>
                       <object class="GtkBox" id="file_action_box">
                         <property name="orientation">horizontal</property>
@@ -273,6 +273,15 @@
                         <property name="orientation">horizontal</property>
                         <property name="spacing">6</property>
                         <property name="halign">start</property>
+                        <property name="visible">false</property>
+                      </object>
+                    </child>
+                    <child>
+                      <object class="GtkBox" id="btw_slot">
+                        <property name="orientation">horizontal</property>
+                        <property name="spacing">6</property>
+                        <property name="halign">start</property>
+                        <property name="valign">center</property>
                         <property name="visible">false</property>
                       </object>
                     </child>

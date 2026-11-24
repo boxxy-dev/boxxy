@@ -1,3 +1,4 @@
+use crate::btw_dialog::BtwController;
 use crate::character_picker::CharacterPicker;
 use crate::claw_host::ClawHost;
 use crate::claw_indicator::ClawIndicator;
@@ -5,6 +6,7 @@ use crate::msgbar::MsgBarComponent;
 use crate::proposal::Proposal;
 use crate::state::OverlayState;
 use crate::tips::TipsCycle;
+use crate::zoom::{set_overlay_zoom_pct, zoom_in_overlay, zoom_out_overlay};
 use boxxy_claw_protocol::ClawMessage;
 use boxxy_preferences::config::Settings;
 use boxxy_viewer::StructuredViewer;
@@ -31,6 +33,8 @@ pub struct TerminalOverlay {
     bottom_area: gtk::Box,
     indicator: ClawIndicator,
     indicator_slot: gtk::Box,
+    btw_slot: gtk::Box,
+    btw: BtwController,
     character_picker: CharacterPicker,
     single_scroll: gtk::ScrolledWindow,
     history_scroll: gtk::ScrolledWindow,
@@ -101,17 +105,19 @@ impl TerminalOverlay {
         });
         Self::attach_zoom_controllers(&main_drawer, &host);
         let indicator_slot: gtk::Box = builder.object("indicator_slot").unwrap();
+        let btw_slot: gtk::Box = builder.object("btw_slot").unwrap();
+        let action_row_start: gtk::Box = builder.object("action_row_start").unwrap();
         let character_picker = CharacterPicker::from_builder(&builder, &host, &pending_character);
 
         indicator_slot.append(indicator.widget());
         let esc_interrupt_label = gtk::Label::builder()
             .label("Press Escape again to interrupt")
             .valign(gtk::Align::Center)
-            .margin_start(6)
+            .margin_start(4)
             .visible(false)
             .css_classes(["warning", "caption"])
             .build();
-        indicator_slot.append(&esc_interrupt_label);
+        action_row_start.append(&esc_interrupt_label);
         let esc_interrupt_armed = Rc::new(Cell::new(false));
         let esc_interrupt_timer: Rc<RefCell<Option<gtk::glib::SourceId>>> =
             Rc::new(RefCell::new(None));
@@ -362,12 +368,23 @@ impl TerminalOverlay {
         let last_pane_height = Rc::new(Cell::new(0));
         let bottom_gap = Rc::new(Cell::new(initial_settings.overlay_bottom_gap));
 
+        let btw = BtwController::new(
+            revealer.clone(),
+            host.clone(),
+            msg_bar.clone(),
+            active_agent.clone(),
+            pending_character.clone(),
+        );
+        btw_slot.append(btw.widget());
+
         let s = Self {
             revealer: revealer.clone(),
             main_drawer: main_drawer.clone(),
             bottom_area,
             indicator: indicator.clone(),
             indicator_slot,
+            btw_slot,
+            btw: btw.clone(),
             character_picker,
             single_scroll,
             history_scroll,
@@ -714,6 +731,23 @@ impl TerminalOverlay {
             overlay_for_clear.clear_visible_history();
         });
 
+        let overlay_for_btw = s.clone();
+        s.msg_bar.set_on_btw_hook(move |args| {
+            let trimmed = args.trim();
+            if trimmed.is_empty() {
+                overlay_for_btw.open_btw_dialog();
+            } else {
+                overlay_for_btw.btw.submit_question(trimmed, None);
+            }
+        });
+
+        {
+            let overlay_for_btw_state = s.clone();
+            btw.connect_state_changed(move || {
+                overlay_for_btw_state.sync_action_state();
+            });
+        }
+
         // Hide the empty-state character picker as soon as session rows arrive (e.g. session restore).
         let picker_for_hist = s.character_picker.clone();
         let hist_scroll_for_hist = s.history_scroll.clone();
@@ -819,9 +853,25 @@ impl TerminalOverlay {
         self.full_history_store.clone()
     }
 
+    #[must_use]
+    pub const fn btw(&self) -> &BtwController {
+        &self.btw
+    }
+
+    /// Opens the `/btw` side-question dialog (revealing the Claw drawer first if hidden
+    /// so the user has session context underneath).
+    pub fn open_btw_dialog(&self) {
+        if !self.is_visible() {
+            let agent = self.active_agent.borrow().clone();
+            self.show_chat_only(&agent);
+        }
+        self.btw.open_ask_dialog();
+    }
+
     /// Temporarily clears the visible conversation history from the main overlay
     /// view without deleting the session's underlying history.
     pub fn clear_visible_history(&self) {
+        self.btw.reset_session();
         self.clear_offset.set(self.full_history_store.n_items());
         self.history_store.remove_all();
         self.diagnosis_viewer.park_for_recycle();
@@ -831,6 +881,7 @@ impl TerminalOverlay {
         if !self.pending_exit_reset.replace(false) {
             return;
         }
+        self.btw.reset_session();
         *self.active_agent.borrow_mut() = String::new();
         self.clear_offset.set(0);
         self.full_history_store.remove_all();
@@ -1256,6 +1307,9 @@ impl TerminalOverlay {
         self.msgbar_slot.set_visible(is_claw);
         self.msg_bar.widget.set_visible(is_claw);
         self.inspect_btn.set_visible(is_claw);
+        self.btw_slot.set_visible(
+            is_claw && (!show_picker || self.btw.is_active_or_unread()),
+        );
 
         let overlay_had_focus = self.revealer.focus_child().is_some();
 
@@ -1462,71 +1516,6 @@ impl TerminalOverlay {
             }
         });
     }
-}
-
-const OVERLAY_ZOOM_DEFAULT_PCT: u32 = 100;
-const OVERLAY_ZOOM_MIN_PCT: u32 = 60;
-const OVERLAY_ZOOM_MAX_PCT: u32 = 220;
-const OVERLAY_ZOOM_STEP_PCT: u32 = 10;
-
-thread_local! {
-    static OVERLAY_ZOOM_STATE: (Cell<u32>, RefCell<Option<gtk::CssProvider>>) =
-        const { (Cell::new(OVERLAY_ZOOM_DEFAULT_PCT), RefCell::new(None)) };
-}
-
-fn apply_overlay_zoom_pct(pct: u32) {
-    let clamped = pct.clamp(OVERLAY_ZOOM_MIN_PCT, OVERLAY_ZOOM_MAX_PCT);
-    OVERLAY_ZOOM_STATE.with(|(zoom_cell, provider_cell)| {
-        if zoom_cell.get() == clamped && provider_cell.borrow().is_some() {
-            return;
-        }
-        zoom_cell.set(clamped);
-        let mut slot = provider_cell.borrow_mut();
-        let provider = slot.get_or_insert_with(|| {
-            let p = gtk::CssProvider::new();
-            if let Some(display) = gtk::gdk::Display::default() {
-                gtk::style_context_add_provider_for_display(
-                    &display,
-                    &p,
-                    gtk::STYLE_PROVIDER_PRIORITY_USER,
-                );
-            }
-            p
-        });
-        provider.load_from_string(&format!(
-            ".claw-drawer .virtual-history, .claw-drawer #diagnosis_container, .claw-drawer #command_frame, .claw-drawer .boxxy-msgbar {{ font-size: {clamped}%; }}"
-        ));
-    });
-}
-
-pub fn set_overlay_zoom_pct(pct: u32) {
-    apply_overlay_zoom_pct(pct);
-}
-
-fn update_and_persist_overlay_zoom_pct(pct: u32) {
-    let clamped = pct.clamp(OVERLAY_ZOOM_MIN_PCT, OVERLAY_ZOOM_MAX_PCT);
-    apply_overlay_zoom_pct(clamped);
-    if Settings::load().overlay_font_scale != clamped {
-        Settings::update(|s| {
-            s.overlay_font_scale = clamped;
-        });
-    }
-}
-
-pub fn zoom_in_overlay() {
-    let next = OVERLAY_ZOOM_STATE
-        .with(|(zoom_cell, _)| zoom_cell.get().saturating_add(OVERLAY_ZOOM_STEP_PCT));
-    update_and_persist_overlay_zoom_pct(next);
-}
-
-pub fn zoom_out_overlay() {
-    let next = OVERLAY_ZOOM_STATE
-        .with(|(zoom_cell, _)| zoom_cell.get().saturating_sub(OVERLAY_ZOOM_STEP_PCT));
-    update_and_persist_overlay_zoom_pct(next);
-}
-
-pub fn reset_overlay_zoom() {
-    update_and_persist_overlay_zoom_pct(OVERLAY_ZOOM_DEFAULT_PCT);
 }
 
 fn arm_sticky_scroll(

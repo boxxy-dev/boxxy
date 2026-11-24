@@ -358,13 +358,19 @@ headerbar.model-assignment-header viewswitcher > button.toggle + button.toggle {
 
 .model-default-card,
 .model-character-list-frame,
-.model-override-card {
+.model-override-card,
+.claw-btw-card,
+frame.claw-btw-input-frame {
     background-color: @window_bg_color;
     color: @dialog_fg_color;
     border: var(--boxxy-border-thin) solid @boxxy_ink;
     border-radius: var(--boxxy-radius-lg);
     outline: none;
     box-shadow: none;
+}
+
+frame.claw-btw-input-frame:focus-within {
+    border-color: @accent_bg_color;
 }
 
 .model-character-list.navigation-sidebar > row {

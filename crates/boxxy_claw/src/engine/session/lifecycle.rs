@@ -112,6 +112,7 @@ impl ClawSession {
         let needs_initialization = match msg {
             ClawMessage::ClawQuery { .. }
             | ClawMessage::UserMessage { .. }
+            | ClawMessage::BtwQuery { .. }
             | ClawMessage::ScheduledTaskTriggered { .. }
             | ClawMessage::DelegatedTask { .. }
             | ClawMessage::RequestLazyDiagnosis

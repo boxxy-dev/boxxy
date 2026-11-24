@@ -22,13 +22,74 @@ use boxxy_core_toolbox::{
     ListProcessesTool, ReplaceInFileTool, RunBackgroundCommandTool, SetClipboardTool,
 };
 use rig::agent::Agent;
+use rig::agent::hook::{
+    AgentHook, CompletionCallAction, CompletionCallEvent, DispatchAction, DispatchEvent,
+    HookContext,
+};
 use rig::message::Message;
 use rig::tool::server::ToolServer;
+use rig::wasm_compat::WasmCompatSend;
+use std::future::Future;
 use std::sync::Arc;
+
+const BTW_STREAM_INTERVAL: std::time::Duration = std::time::Duration::from_millis(45);
+
+/// Captures the exact committed `Arc<Message>` transcript passed to each model step of an
+/// active `chat_streaming` turn so concurrent `/btw` side queries see settled tool results
+/// and hit the warm provider KV prompt cache without acquiring async locks.
+#[derive(Clone)]
+struct InFlightTranscriptHook {
+    slot: Arc<std::sync::Mutex<crate::engine::session::InFlightSnapshot>>,
+}
+
+impl AgentHook for InFlightTranscriptHook {
+    fn on_completion_call(
+        &self,
+        _ctx: &HookContext,
+        event: CompletionCallEvent<'_>,
+    ) -> impl Future<Output = CompletionCallAction> + WasmCompatSend {
+        let mut committed = Vec::with_capacity(event.history.len() + 1);
+        committed.extend(event.history.iter().cloned());
+        committed.push(Arc::new(event.prompt.clone()));
+        {
+            let mut guard = self
+                .slot
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            guard.messages = Some(committed);
+        }
+        async { CompletionCallAction::Continue }
+    }
+}
+
+/// Hard-blocks any tool execution during an ephemeral `/btw` side query (defense-in-depth
+/// for local gateways such as Ollama that ignore wire-level `ToolChoice::None`).
+#[derive(Clone, Copy)]
+struct ForbidToolsHook;
+
+impl AgentHook for ForbidToolsHook {
+    fn on_dispatch(
+        &self,
+        _ctx: &HookContext,
+        event: DispatchEvent<'_>,
+    ) -> impl Future<Output = DispatchAction> + WasmCompatSend {
+        let is_tool = event.tool_name().is_some();
+        async move {
+            if is_tool {
+                DispatchAction::skip(
+                    "Tools are disabled in /btw side questions. Answer directly in markdown from existing session context.",
+                )
+            } else {
+                DispatchAction::Proceed
+            }
+        }
+    }
+}
 
 pub struct TurnStreamContext {
     pub tx_ui: async_channel::Sender<ClawEngineEvent>,
     pub state: Arc<tokio::sync::Mutex<SessionState>>,
+    pub in_flight_snapshot: Arc<std::sync::Mutex<crate::engine::session::InFlightSnapshot>>,
     pub agent_name: String,
     pub character_id: String,
 }
@@ -47,6 +108,180 @@ impl ClawAgent {
     pub fn matches_config(&self, candidate: &AgentConfig) -> bool {
         &self.config == candidate
             && **boxxy_claw_protocol::characters::MCP_STATUS_CACHE.load() == self.mcp_statuses
+    }
+
+    #[must_use]
+    pub fn display_model_label(&self) -> String {
+        self.config
+            .model
+            .as_ref()
+            .map_or_else(|| self.model_name.clone(), |p| p.display_model_name())
+    }
+
+    /// Runs an ephemeral single-answer `/btw` side query against the session's warm prefix
+    /// with tool execution strictly disabled (`ToolChoice::None` + `ForbidToolsHook`),
+    /// streaming reasoning titles and prose deltas to `BtwProgress`.
+    #[allow(clippy::too_many_lines)]
+    pub async fn generate_side_answer<P: Into<Message> + Send>(
+        &self,
+        prompt: P,
+        history: Vec<Message>,
+        request_id: uuid::Uuid,
+        agent_name: &str,
+        character_id: &str,
+        tx_ui: &async_channel::Sender<ClawEngineEvent>,
+    ) -> Result<(String, Option<boxxy_claw_protocol::UsageWrapper>), rig::completion::PromptError>
+    {
+        use futures_util::StreamExt as _;
+
+        let start = std::time::Instant::now();
+        let msg = prompt.into();
+        let supports_wire_tool_choice_none = !matches!(
+            self.config.model,
+            Some(
+                boxxy_model_selection::ModelProvider::Ollama(_)
+                    | boxxy_model_selection::ModelProvider::OpenAiCompatible { .. }
+            )
+        );
+
+        let mut runner = self
+            .agent
+            .prompt(msg)
+            .history(history)
+            .add_hook(ForbidToolsHook);
+        if supports_wire_tool_choice_none {
+            runner = runner.tool_choice(rig::message::ToolChoice::None).max_turns(1);
+        } else {
+            runner = runner.max_turns(2);
+        }
+
+        let mut stream = runner.stream();
+        let mut reasoning_parts: std::collections::HashMap<usize, (String, Option<String>)> =
+            std::collections::HashMap::new();
+        let mut text_buf = String::new();
+        let mut dirty_text = false;
+        let mut last_emit = std::time::Instant::now()
+            .checked_sub(std::time::Duration::from_millis(100))
+            .unwrap_or_else(std::time::Instant::now);
+        let mut final_res: Option<rig::agent::PromptResponse> = None;
+
+        while let Some(item_res) = stream.next().await {
+            match item_res {
+                Ok(rig::agent::MultiTurnStreamItem::StreamAssistantItem(
+                    rig::streaming::Item::Event(ev),
+                )) => match ev {
+                    rig::streaming::StreamEvent::Start {
+                        part,
+                        kind: rig::streaming::PartKind::Reasoning,
+                        ..
+                    } => {
+                        reasoning_parts.insert(part.index(), (String::new(), None));
+                        let _ = tx_ui
+                            .try_send(ClawEngineEvent::BtwProgress {
+                                request_id,
+                                agent_name: agent_name.to_string(),
+                                character_id: character_id.to_string(),
+                                active_status: Some("Thinking…".to_string()),
+                                text_delta: None,
+                            });
+                    }
+                    rig::streaming::StreamEvent::Reasoning { part, text } => {
+                        let (buf, last_title) = reasoning_parts
+                            .entry(part.index())
+                            .or_insert_with(|| (String::new(), None));
+                        buf.push_str(&text);
+                        if let Some(title) = boxxy_claw_protocol::live_reasoning_title(buf)
+                            && last_title.as_deref() != Some(title.as_str())
+                        {
+                            *last_title = Some(title.clone());
+                            let _ = tx_ui.try_send(ClawEngineEvent::BtwProgress {
+                                request_id,
+                                agent_name: agent_name.to_string(),
+                                character_id: character_id.to_string(),
+                                active_status: Some(format!("Thinking: {title}…")),
+                                text_delta: None,
+                            });
+                        }
+                    }
+                    rig::streaming::StreamEvent::Text { text, .. } => {
+                        text_buf.push_str(&text);
+                        dirty_text = true;
+                        if last_emit.elapsed() >= BTW_STREAM_INTERVAL {
+                            last_emit = std::time::Instant::now();
+                            dirty_text = false;
+                            let _ = tx_ui.try_send(ClawEngineEvent::BtwProgress {
+                                request_id,
+                                agent_name: agent_name.to_string(),
+                                character_id: character_id.to_string(),
+                                active_status: None,
+                                text_delta: Some(text_buf.clone()),
+                            });
+                        }
+                    }
+                    _ => {}
+                },
+                Ok(rig::agent::MultiTurnStreamItem::ModelTurnRetried { .. }) => {
+                    reasoning_parts.clear();
+                    text_buf.clear();
+                    dirty_text = false;
+                }
+                Ok(rig::agent::MultiTurnStreamItem::FinalResponse(res)) => {
+                    final_res = Some(res);
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    if boxxy_sys_utils::env::debug_context() {
+                        log::info!(
+                            target: "model-context",
+                            "\n=== BTW MODEL ERROR ===\n{e:?}\n=======================\n"
+                        );
+                    }
+                    return Err(e);
+                }
+            }
+        }
+
+        if dirty_text {
+            let _ = tx_ui.try_send(ClawEngineEvent::BtwProgress {
+                request_id,
+                agent_name: agent_name.to_string(),
+                character_id: character_id.to_string(),
+                active_status: None,
+                text_delta: Some(text_buf),
+            });
+        }
+
+        let res = final_res.ok_or_else(|| {
+            rig::completion::PromptError::Provider(rig::error::ProviderError::Provider(
+                "BTW stream terminated before FinalResponse".to_string(),
+            ))
+        })?;
+
+        let duration = start.elapsed();
+        let raw_output = res.output();
+        let output = boxxy_ai_core::append_citations_to_output(&res.messages, &raw_output);
+        let endpoints = &self.config.openai_compatible_endpoints;
+        let context_window =
+            boxxy_ai_core::model_context_window_with_endpoints(&self.config.model, endpoints);
+        let usage = boxxy_ai_core::enrich_usage_with_endpoints_cost(
+            res.usage,
+            &self.config.model,
+            endpoints,
+        );
+
+        boxxy_telemetry::track_ai_turn(
+            &self.provider_name,
+            &self.model_name,
+            "claw_btw",
+            u64::try_from(duration.as_millis()).unwrap_or(u64::MAX),
+            usage.input_tokens.unwrap_or(0),
+            usage.output_tokens.unwrap_or(0),
+        )
+        .await;
+
+        let mut wrapper = boxxy_claw_protocol::UsageWrapper::from(usage);
+        wrapper.context_window = context_window;
+        Ok((output, Some(wrapper)))
     }
 
     pub async fn chat<P: Into<Message> + Send>(
@@ -85,10 +320,21 @@ impl ClawAgent {
 
         let res_result: Result<rig::agent::PromptResponse, rig::completion::PromptError> =
             if let Some(sctx) = stream_ctx {
+                let set_in_flight_status = |status: String| {
+                    sctx.in_flight_snapshot
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .active_status = Some(status);
+                };
+                set_in_flight_status("Thinking…".to_string());
+
                 let mut stream = self
                     .agent
                     .prompt(msg)
                     .history(history)
+                    .add_hook(InFlightTranscriptHook {
+                        slot: sctx.in_flight_snapshot.clone(),
+                    })
                     .tool_concurrency(4)
                     .ordered_by_footprint(true)
                     .max_consecutive_malformed_tool_calls(Some(4))
@@ -120,6 +366,7 @@ impl ClawAgent {
                                     part.index(),
                                     (std::time::Instant::now(), String::new(), None),
                                 );
+                                set_in_flight_status("Thinking…".to_string());
                                 let _ = sctx
                                     .tx_ui
                                     .send(ClawEngineEvent::TurnTraceProgress {
@@ -140,13 +387,15 @@ impl ClawAgent {
                                         && last_title.as_deref() != Some(title.as_str())
                                     {
                                         *last_title = Some(title.clone());
+                                        let status_str = format!("Thinking: {title}…");
+                                        set_in_flight_status(status_str.clone());
                                         let _ = sctx
                                             .tx_ui
                                             .send(ClawEngineEvent::TurnTraceProgress {
                                                 agent_name: sctx.agent_name.clone(),
                                                 character_id: sctx.character_id.clone(),
                                                 item: None,
-                                                active_status: Some(format!("Thinking: {title}…")),
+                                                active_status: Some(status_str),
                                             })
                                             .await;
                                     }
@@ -192,6 +441,7 @@ impl ClawAgent {
                                 composing_reply = false;
                                 let status_str =
                                     boxxy_claw_protocol::busy_tool_label(tool_name.as_str(), true);
+                                set_in_flight_status(status_str.clone());
                                 let _ = sctx
                                     .tx_ui
                                     .send(ClawEngineEvent::TurnTraceProgress {
@@ -209,6 +459,7 @@ impl ClawAgent {
                             | rig::streaming::StreamEvent::Text { .. } => {
                                 if !composing_reply {
                                     composing_reply = true;
+                                    set_in_flight_status("Composing reply…".to_string());
                                     let _ = sctx
                                         .tx_ui
                                         .send(ClawEngineEvent::TurnTraceProgress {
@@ -228,6 +479,7 @@ impl ClawAgent {
                                 tool_call.function.name.as_str(),
                                 false,
                             );
+                            set_in_flight_status(status_str.clone());
                             let _ = sctx
                                 .tx_ui
                                 .send(ClawEngineEvent::TurnTraceProgress {

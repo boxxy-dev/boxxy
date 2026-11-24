@@ -13,6 +13,7 @@ pub use attachment::{Attachment, AttachmentManager};
 
 type SubmitHook = Rc<RefCell<Option<Box<dyn Fn(&str)>>>>;
 type ClearHook = Rc<RefCell<Option<Box<dyn Fn()>>>>;
+type BtwHook = Rc<RefCell<Option<Box<dyn Fn(&str)>>>>;
 
 pub struct MsgBarComponent {
     pub widget: gtk::Box,
@@ -40,6 +41,8 @@ pub struct MsgBarComponent {
     pub pin_state: Rc<Cell<bool>>,
     pub web_search_state: Rc<Cell<bool>>,
     pub vibe_state: Rc<Cell<bool>>,
+    /// True while an ephemeral `/btw` side question is actively running in the background.
+    pub btw_busy: Rc<Cell<bool>>,
     /// Current character UUID for placeholder and mention context
     pub character_id: Rc<RefCell<Option<String>>>,
     /// Live working directory of the host terminal pane for `@` file autocomplete
@@ -49,6 +52,7 @@ pub struct MsgBarComponent {
     embedded: Rc<Cell<bool>>,
     on_submit_hook: SubmitHook,
     on_clear_hook: ClearHook,
+    on_btw_hook: BtwHook,
     status_popover: gtk::Popover,
     autocomplete: Rc<boxxy_core_widgets::autocomplete::AutocompleteController>,
 }
@@ -163,6 +167,7 @@ impl MsgBarComponent {
             .build();
 
         let claw_state = Rc::new(Cell::new(false));
+        let btw_busy = Rc::new(Cell::new(false));
         let character_id: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
         let working_dir: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
 
@@ -369,6 +374,7 @@ impl MsgBarComponent {
         let embedded = Rc::new(Cell::new(false));
         let on_submit_hook: SubmitHook = Rc::new(RefCell::new(None));
         let on_clear_hook: ClearHook = Rc::new(RefCell::new(None));
+        let on_btw_hook: BtwHook = Rc::new(RefCell::new(None));
 
         let on_submit_rc = Rc::new(on_submit);
         let on_cancel_rc = Rc::new(on_cancel);
@@ -392,6 +398,8 @@ impl MsgBarComponent {
             let vibe_state = vibe_state.clone();
             let on_submit_hook = on_submit_hook.clone();
             let on_clear_hook = on_clear_hook.clone();
+            let on_btw_hook = on_btw_hook.clone();
+            let btw_busy = btw_busy.clone();
             let embedded = embedded.clone();
             let is_active = is_active.clone();
             let widget = widget.clone();
@@ -409,6 +417,31 @@ impl MsgBarComponent {
                         .is_some_and(boxxy_claw_protocol::characters::is_incognito_character);
 
                 let trimmed_input = original_text.trim();
+                if let Some((boxxy_claw_protocol::SlashCommand::Btw, args)) =
+                    boxxy_claw_protocol::SlashCommand::parse(trimmed_input)
+                {
+                    if btw_busy.get() {
+                        // A `/btw` query is already running: never clobber it or erase a newly typed question;
+                        // open the live Peek dialog so the user can view progress or cancel it explicitly.
+                        if args.is_empty() {
+                            buf.set_text("");
+                        }
+                        if let Some(hook) = on_btw_hook.borrow().as_ref() {
+                            hook("");
+                        }
+                        return;
+                    }
+                    if !is_incognito_active {
+                        history.borrow_mut().push(original_text.clone(), Vec::new());
+                    }
+                    let owned_args = args.to_string();
+                    buf.set_text("");
+                    if let Some(hook) = on_btw_hook.borrow().as_ref() {
+                        hook(&owned_args);
+                    }
+                    return;
+                }
+
                 let is_incognito_cmd = trimmed_input.eq_ignore_ascii_case("/incognito")
                     || trimmed_input
                         .get(..11)
@@ -600,6 +633,7 @@ impl MsgBarComponent {
                 pin_state.clone(),
                 web_search_state.clone(),
                 vibe_state.clone(),
+                btw_busy.clone(),
             )),
             Box::new(autocomplete::ResumeCompletionProvider::new(Some(
                 entry.downgrade(),
@@ -783,11 +817,13 @@ impl MsgBarComponent {
             pin_state,
             web_search_state,
             vibe_state,
+            btw_busy,
             character_id,
             working_dir,
             embedded,
             on_submit_hook,
             on_clear_hook,
+            on_btw_hook,
             status_popover,
             autocomplete: autocomplete_ctrl,
         }
@@ -818,6 +854,10 @@ impl MsgBarComponent {
 
     pub fn set_on_clear_hook<F: Fn() + 'static>(&self, hook: F) {
         *self.on_clear_hook.borrow_mut() = Some(Box::new(hook));
+    }
+
+    pub fn set_on_btw_hook<F: Fn(&str) + 'static>(&self, hook: F) {
+        *self.on_btw_hook.borrow_mut() = Some(Box::new(hook));
     }
 
     pub fn set_text(&self, text: &str) {

@@ -12,6 +12,7 @@ pub struct RunContext {
     pub is_initialized: bool,
     pub current_dir: String,
     pub current_turn: Option<tokio::task::JoinHandle<()>>,
+    pub active_btw_tasks: std::collections::HashMap<uuid::Uuid, tokio::task::JoinHandle<()>>,
     pub backlog: VecDeque<ClawMessage>,
     pub urgent_backlog: VecDeque<ClawMessage>,
 }
@@ -24,8 +25,22 @@ impl RunContext {
             is_initialized: false,
             current_dir: String::from("/"),
             current_turn: None,
+            active_btw_tasks: std::collections::HashMap::new(),
             backlog: VecDeque::new(),
             urgent_backlog: VecDeque::new(),
+        }
+    }
+
+    pub fn abort_btw_tasks(&mut self, request_id: Option<uuid::Uuid>) {
+        self.active_btw_tasks.retain(|_, handle| !handle.is_finished());
+        if let Some(id) = request_id {
+            if let Some(handle) = self.active_btw_tasks.remove(&id) {
+                handle.abort();
+            }
+        } else {
+            for (_, handle) in self.active_btw_tasks.drain() {
+                handle.abort();
+            }
         }
     }
 }

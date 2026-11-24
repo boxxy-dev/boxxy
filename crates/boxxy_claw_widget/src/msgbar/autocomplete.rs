@@ -220,6 +220,7 @@ pub struct CommandCompletionProvider {
     pin_state: std::rc::Rc<std::cell::Cell<bool>>,
     web_search_state: std::rc::Rc<std::cell::Cell<bool>>,
     vibe_state: std::rc::Rc<std::cell::Cell<bool>>,
+    btw_busy: std::rc::Rc<std::cell::Cell<bool>>,
 }
 
 impl CommandCompletionProvider {
@@ -231,6 +232,7 @@ impl CommandCompletionProvider {
         pin_state: std::rc::Rc<std::cell::Cell<bool>>,
         web_search_state: std::rc::Rc<std::cell::Cell<bool>>,
         vibe_state: std::rc::Rc<std::cell::Cell<bool>>,
+        btw_busy: std::rc::Rc<std::cell::Cell<bool>>,
     ) -> Self {
         Self {
             claw_state,
@@ -239,6 +241,7 @@ impl CommandCompletionProvider {
             pin_state,
             web_search_state,
             vibe_state,
+            btw_busy,
         }
     }
 }
@@ -264,6 +267,25 @@ impl CompletionProvider for CommandCompletionProvider {
                 .as_deref()
                 .is_some_and(boxxy_claw_protocol::characters::is_incognito_character);
         let has_character = has_session && !is_incognito;
+
+        if "btw".contains(&query_lower) {
+            let is_btw_busy = self.btw_busy.get();
+            let subtitle = if is_btw_busy {
+                "Side question already in progress…"
+            } else {
+                "Ask a quick side question without adding to chat"
+            };
+            items.push(CompletionItem {
+                display_name: "/btw".to_string(),
+                replacement_text: "/btw".to_string(),
+                icon_name: None,
+                icon_path: None,
+                secondary_text: Some(subtitle.to_string()),
+                badge_text: None,
+                badge_color: None,
+                disabled: is_btw_busy,
+            });
+        }
 
         if "incognito".contains(&query_lower) {
             items.push(CompletionItem {
@@ -717,6 +739,7 @@ mod tests {
         let pin_state = Rc::new(Cell::new(false));
         let web_state = Rc::new(Cell::new(false));
         let vibe_state = Rc::new(Cell::new(false));
+        let btw_busy = Rc::new(Cell::new(false));
 
         let provider = CommandCompletionProvider::new(
             claw_state.clone(),
@@ -725,6 +748,7 @@ mod tests {
             pin_state,
             web_state,
             vibe_state,
+            btw_busy.clone(),
         );
 
         // 1. New session (`claw_state == false`, even with pre-selected character in picker):
@@ -783,5 +807,21 @@ mod tests {
         assert!(!exit_inc.disabled);
         assert!(pin_inc.disabled);
         assert!(debate_inc.disabled);
+
+        // 4. While a `/btw` side question is actively working (`btw_busy == true`),
+        // `/btw` is disabled in the autocomplete list until it finishes.
+        let btw_idle = inc_session_items
+            .iter()
+            .find(|i| i.display_name == "/btw")
+            .unwrap();
+        assert!(!btw_idle.disabled);
+
+        btw_busy.set(true);
+        let busy_items = provider.get_completions("");
+        let btw_working = busy_items
+            .iter()
+            .find(|i| i.display_name == "/btw")
+            .unwrap();
+        assert!(btw_working.disabled);
     }
 }

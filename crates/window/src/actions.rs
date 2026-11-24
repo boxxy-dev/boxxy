@@ -104,6 +104,7 @@ pub fn setup_actions(
     add_active_tab_action!("prev-prompt", scroll_to_prev_prompt);
     add_active_tab_action!("next-prompt", scroll_to_next_prompt);
     add_active_tab_action!("ask-claw", open_claw_msgbar);
+    add_active_tab_action!("claw-btw", open_claw_btw);
     add_active_tab_action!("copy-last-output", copy_last_command_output);
     add_active_tab_action!("open-scrollback", open_scrollback_in_editor);
     add_active_tab_action!("clear-scrollback", clear_scrollback);

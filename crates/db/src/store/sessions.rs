@@ -391,6 +391,24 @@ impl Store<'_> {
             .await?;
         Ok(())
     }
+
+    /// Updates cumulative `total_tokens` and `total_cost_usd` for an already-persisted session
+    /// (such as after an ephemeral `/btw` side question) without creating a phantom session row
+    /// or modifying `context_tokens` / `updated_at`.
+    pub async fn update_session_usage_totals(
+        &self,
+        session_id: &str,
+        total_tokens: i64,
+        total_cost_usd: f64,
+    ) -> Result<()> {
+        sqlx::query("UPDATE sessions SET total_tokens = ?, total_cost_usd = ? WHERE id = ?")
+            .bind(total_tokens)
+            .bind(total_cost_usd)
+            .bind(session_id)
+            .execute(self.pool)
+            .await?;
+        Ok(())
+    }
 }
 
 fn prettify_character_label(raw: &str) -> String {
@@ -637,6 +655,23 @@ mod tests {
         let remaining = store.get_recent_active_sessions(10).await.unwrap();
         assert_eq!(remaining.len(), 1);
         assert_eq!(remaining[0].id, "sess_pin_2");
+
+        // `update_session_usage_totals` updates cumulative counters without touching context_tokens
+        // and never inserts a phantom row for a non-existent session ID.
+        store
+            .update_session_usage_totals("sess_nonexistent", 500, 0.02)
+            .await
+            .unwrap();
+        assert!(store.get_session("sess_nonexistent").await.unwrap().is_none());
+
+        store
+            .update_session_usage_totals("sess_pin_2", 350, 0.04)
+            .await
+            .unwrap();
+        let s2 = store.get_session("sess_pin_2").await.unwrap().unwrap();
+        assert_eq!(s2.total_tokens, 350);
+        assert_eq!(s2.context_tokens, 20);
+        assert!((s2.total_cost_usd - 0.04).abs() < 1e-9);
     }
 
     #[tokio::test]

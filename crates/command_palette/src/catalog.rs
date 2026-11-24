@@ -416,6 +416,7 @@ pub(super) fn builtin_commands() -> Vec<CommandItem> {
     // ── Sidebar, Claw, Bookmarks & Models ────────────────────────────────────
     items.push(cmd_for_id(&km, Id::ToggleSidebar, None));
     items.push(cmd_for_id(&km, Id::AskClaw, None));
+    items.push(cmd_for_id(&km, Id::ClawBtw, None));
     items.push(CommandItem::action("Claw Sidebar", "win.claw").with_keywords(["agent", "logs"]));
     items.push(cmd_for_id(
         &km,

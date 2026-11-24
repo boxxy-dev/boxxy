@@ -179,7 +179,57 @@ impl ClawHost for PaneClawHost {
 
     fn send_claw(&self, msg: ClawMessage) {
         let tx = self.claw_sender.clone();
+        let inner_weak = self.inner_weak.clone();
+        let pane_id = self.id.clone();
+        let event_tx = self.event_sender.clone();
+        let is_btw = matches!(msg, ClawMessage::BtwQuery { .. });
+
         gtk::glib::spawn_future_local(async move {
+            if is_btw
+                && let Some(inner_rc) = inner_weak.upgrade()
+            {
+                let (session_id_ref, claw_sub_ref, selected_cid) = {
+                    let b = inner_rc.borrow();
+                    let cid = b
+                        .msg_bar
+                        .character_id
+                        .borrow()
+                        .clone()
+                        .filter(|s| !s.is_empty());
+                    (b.session_id.clone(), b.claw_subscription.clone(), cid)
+                };
+                if session_id_ref.lock().await.is_none() {
+                    let char_id = selected_cid.unwrap_or_else(|| {
+                        boxxy_claw_protocol::characters::find_first_available_character(Some(
+                            &pane_id,
+                        ))
+                        .map_or_else(
+                            || {
+                                boxxy_claw_protocol::characters::CHARACTER_CACHE
+                                    .load()
+                                    .first()
+                                    .map(|c| c.config.id.clone())
+                                    .unwrap_or_default()
+                            },
+                            |c| c.config.id,
+                        )
+                    });
+                    let agent = crate::get_agent().await;
+                    if let Ok((sid, sub_guard)) = agent
+                        .create_claw_session_with_sender(pane_id, char_id, event_tx)
+                        .await
+                        && !sid.is_empty()
+                    {
+                        *claw_sub_ref.lock() = Some(sub_guard);
+                        *session_id_ref.lock().await = Some(sid.clone());
+                        let _ = agent
+                            .post_claw_message(sid.clone(), ClawMessage::Initialize)
+                            .await;
+                        let _ = agent.post_claw_message(sid, msg).await;
+                        return;
+                    }
+                }
+            }
             let _ = tx.send(msg).await;
         });
     }

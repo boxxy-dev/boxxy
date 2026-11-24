@@ -37,6 +37,7 @@ const fn is_actionable_claw_msg(msg: &ClawMessage) -> bool {
         msg,
         ClawMessage::ClawQuery { .. }
             | ClawMessage::UserMessage { .. }
+            | ClawMessage::BtwQuery { .. }
             | ClawMessage::ResumeSession { .. }
             | ClawMessage::Initialize
             | ClawMessage::RequestLazyDiagnosis
@@ -848,6 +849,19 @@ impl TerminalPaneComponent {
         );
         let aname = self.agent_name.borrow().clone();
         self.claw_popover.show_input_only(&aname);
+    }
+
+    /// Opens the ephemeral `/btw` side-question dialog for this pane.
+    pub fn open_claw_btw(&self) {
+        let term = self.inner.borrow().terminal.clone();
+        term.set_focusable(false);
+        self.msg_bar.update_ui(
+            self.session_status.borrow().clone(),
+            self.is_pinned.get(),
+            self.is_web_search.get(),
+            self.is_vibe.get(),
+        );
+        self.claw_popover.open_btw_dialog();
     }
 
     pub fn inject_keystrokes(&self, keys: &str) {

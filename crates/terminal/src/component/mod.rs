@@ -605,6 +605,13 @@ impl TerminalComponent {
         }
     }
 
+    pub fn open_claw_btw(&self) {
+        let inner = self.inner.borrow();
+        if let Some(pane_data) = inner.panes.get(&inner.active_pane_id) {
+            pane_data.controller.open_claw_btw();
+        }
+    }
+
     pub fn grab_focus(&self) {
         let inner = self.inner.borrow();
         if let Some(pane_data) = inner.panes.get(&inner.active_pane_id) {

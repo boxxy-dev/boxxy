@@ -5,6 +5,7 @@
 /// Built-in slash commands recognized in the Claw overlay input bar.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SlashCommand {
+    Btw,
     Incognito,
     Resume,
     Debate,
@@ -57,7 +58,9 @@ impl SlashCommand {
             return None;
         }
 
-        let cmd = if head.eq_ignore_ascii_case("incognito") {
+        let cmd = if head.eq_ignore_ascii_case("btw") {
+            Self::Btw
+        } else if head.eq_ignore_ascii_case("incognito") {
             Self::Incognito
         } else if head.eq_ignore_ascii_case("resume") {
             Self::Resume
@@ -99,7 +102,10 @@ impl SlashCommand {
     /// Whether this command accepts trailing arguments after `/command `.
     #[must_use]
     pub const fn accepts_args(self) -> bool {
-        matches!(self, Self::Incognito | Self::Resume | Self::Debate | Self::Drama)
+        matches!(
+            self,
+            Self::Btw | Self::Incognito | Self::Resume | Self::Debate | Self::Drama
+        )
     }
 
     /// Returns `true` when selecting `replacement` from the autocomplete popup should
@@ -115,7 +121,8 @@ impl SlashCommand {
         match cmd {
             Self::Resume => !rest.is_empty(),
             Self::Debate => false,
-            Self::Incognito
+            Self::Btw
+            | Self::Incognito
             | Self::Drama
             | Self::Stop
             | Self::Undo
@@ -142,7 +149,7 @@ impl SlashCommand {
             | Self::Code
             | Self::Clear
             | Self::Exit => SlashSubmitEffect::FrontendOnly,
-            Self::Resume => {
+            Self::Btw | Self::Resume => {
                 if args.is_empty() {
                     SlashSubmitEffect::FrontendOnly
                 } else {
@@ -166,12 +173,6 @@ impl SlashCommand {
 #[must_use]
 pub fn classify_submit_effect(input: &str) -> SlashSubmitEffect {
     let trimmed = input.trim();
-    if trimmed
-        .get(..5)
-        .is_some_and(|p| p.eq_ignore_ascii_case("/btw "))
-    {
-        return SlashSubmitEffect::InstantControl;
-    }
     match SlashCommand::parse(trimmed) {
         Some((cmd, args)) => cmd.submit_effect(args),
         None => SlashSubmitEffect::StartsTurn,
@@ -202,6 +203,11 @@ mod tests {
         );
         assert_eq!(SlashCommand::parse("/stop"), Some((SlashCommand::Stop, "")));
         assert_eq!(SlashCommand::parse("/undo"), Some((SlashCommand::Undo, "")));
+        assert_eq!(SlashCommand::parse("/btw"), Some((SlashCommand::Btw, "")));
+        assert_eq!(
+            SlashCommand::parse("  /BTW  what changed in src/parser.rs? "),
+            Some((SlashCommand::Btw, "what changed in src/parser.rs?"))
+        );
 
         // Zero-arg commands with trailing prose are not parsed as slash commands
         assert_eq!(SlashCommand::parse("/stop extra"), None);
@@ -250,6 +256,14 @@ mod tests {
         assert_eq!(
             classify_submit_effect("/code"),
             SlashSubmitEffect::FrontendOnly
+        );
+        assert_eq!(
+            classify_submit_effect("/btw"),
+            SlashSubmitEffect::FrontendOnly
+        );
+        assert_eq!(
+            classify_submit_effect("/btw why did that fail?"),
+            SlashSubmitEffect::InstantControl
         );
         assert_eq!(
             classify_submit_effect("Check /etc/fstab please"),

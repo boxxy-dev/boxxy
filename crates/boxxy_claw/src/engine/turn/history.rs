@@ -284,26 +284,34 @@ pub fn prepare_query_history(history: Vec<Message>, history_len: usize) -> Vec<M
     prepare_query_history_for_speaker(history, history_len, "", "")
 }
 
-/// Prepares the history from the perspective of `current_speaker_id`.
-///
-/// - Assistant messages authored by `current_speaker_id` stay `Message::Assistant` (with the
-///   internal `[SPEAKER_ID:...]` header stripped).
-/// - Pure-text Assistant messages authored by *other* characters in a roundtable are converted
-///   into `Message::User` blocks (`[Character <Name> said]: ...`) so the active speaker stays
-///   strictly in its own persona without blending voices.
+/// Prepares the history from the perspective of `current_speaker_id`, popping the
+/// trailing current-turn user message first (since `spawn_turn` pushes the active prompt
+/// to `SessionState.history` before calling the model).
 #[must_use]
 pub fn prepare_query_history_for_speaker(
-    history: Vec<Message>,
+    mut history: Vec<Message>,
     history_len: usize,
     current_speaker_id: &str,
     default_host_name: &str,
 ) -> Vec<Message> {
-    // Context Hygiene 2.0: Aggressively strip ALL transient context from previous turns
-    // (Skills, Radar, Memories, and Snapshots) so history grows near-zero tokens per turn.
-    // Pop the current user message first — it will be passed as query_for_chat instead.
-    let mut final_history = history;
-    final_history.pop();
+    let _ = history_len;
+    // Pop the current user message first — it will be passed as `query_for_chat` instead.
+    history.pop();
+    prepare_settled_history_for_speaker(history, current_speaker_id, default_host_name)
+}
 
+/// Prepares an already-settled history slice from the perspective of `current_speaker_id`
+/// **without** popping the last message.
+///
+/// Shared by both `prepare_query_history_for_speaker` (after popping the outgoing prompt)
+/// and `/btw` side queries on idle sessions so both paths produce a byte-for-byte identical
+/// KV prompt-cache prefix.
+#[must_use]
+pub fn prepare_settled_history_for_speaker(
+    mut final_history: Vec<Message>,
+    current_speaker_id: &str,
+    default_host_name: &str,
+) -> Vec<Message> {
     // Remove synthetic `[ROUNDTABLE TURN ...]` handoff prompts from *previous* turns in history.
     // The current turn's `[ROUNDTABLE TURN ...]` prompt is already in `query_for_chat`, and the
     // characters' actual responses from previous rounds are preserved as Assistant / `[Character X said]` turns.
@@ -403,7 +411,6 @@ pub fn prepare_query_history_for_speaker(
             }
         }
     }
-    let _ = history_len;
 
     // Perspective-flip Assistant messages from other characters into `[<Name> said]: ...` User turns
     // when they are pure text responses (not tool-call turns that require paired ToolResults).
@@ -507,6 +514,61 @@ pub fn prepare_query_history_for_speaker(
     }
 
     repaired_history
+}
+
+/// Formats a compact synthetic assistant bridge for an in-progress turn so `/btw` knows
+/// what step or approval proposal is currently unsettled while preserving strict
+/// `User` / `Assistant` alternation right before the `/btw` user question.
+#[must_use]
+pub fn format_in_flight_bridge(
+    active_status: Option<&str>,
+    pending_proposal_summary: Option<&str>,
+    recent_trace: &[boxxy_claw_protocol::TurnTraceItem],
+) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    let trace_summary = boxxy_claw_protocol::ActivitySummary::summarize(recent_trace).format_label();
+    if !trace_summary.is_empty() {
+        parts.push(format!("completed so far in this turn: {trace_summary}"));
+    }
+    if let Some(proposal) = pending_proposal_summary.map(str::trim).filter(|s| !s.is_empty()) {
+        parts.push(format!("paused awaiting user approval on: {proposal}"));
+    } else if let Some(status) = active_status.map(str::trim).filter(|s| !s.is_empty()) {
+        parts.push(format!("currently active step: {status}"));
+    }
+    if parts.is_empty() {
+        "[Working on the current turn…]".to_string()
+    } else {
+        format!("[Working on the current turn — {}]", parts.join("; "))
+    }
+}
+
+/// Builds the history vector for an ephemeral `/btw` side question without mutating session state.
+#[must_use]
+pub fn build_btw_history(
+    in_flight_messages: Option<&[ std::sync::Arc<Message> ]>,
+    settled_history: Vec<Message>,
+    current_speaker_id: &str,
+    default_host_name: &str,
+    active_status: Option<&str>,
+    pending_proposal_summary: Option<&str>,
+    recent_trace: &[boxxy_claw_protocol::TurnTraceItem],
+) -> Vec<Message> {
+    if let Some(live) = in_flight_messages
+        && !live.is_empty()
+    {
+        let mut out: Vec<Message> = Vec::with_capacity(live.len() + 1);
+        out.extend(live.iter().map(|m| (**m).clone()));
+        if matches!(out.last(), Some(Message::User { .. })) {
+            out.push(Message::assistant(format_in_flight_bridge(
+                active_status,
+                pending_proposal_summary,
+                recent_trace,
+            )));
+        }
+        return out;
+    }
+
+    prepare_settled_history_for_speaker(settled_history, current_speaker_id, default_host_name)
 }
 
 #[cfg(test)]
@@ -803,6 +865,56 @@ mod tests {
             assert_eq!(t.text, "Turn 5 recent no change");
         } else {
             panic!("Expected cleaned Turn 5 user message");
+        }
+    }
+
+    #[test]
+    fn build_btw_history_handles_idle_and_mid_turn_tool_batches() {
+        // 1. Idle session (`in_flight_messages` is None): preserves full settled history without popping
+        let settled = vec![
+            user("Read src/module.rs"),
+            tool_call_msg("call_1", "file_read", "src/module.rs"),
+            tool_result_msg("call_1", "file_read", "pub fn run() {}"),
+            asst("`src/module.rs` defines `run()`."),
+        ];
+        let idle_btw = build_btw_history(None, settled, "", "", None, None, &[]);
+        assert_eq!(idle_btw.len(), 4);
+        assert!(matches!(idle_btw.last(), Some(Message::Assistant(_))));
+
+        // 2. Active mid-turn (`in_flight_messages` ends on a settled ToolResult batch):
+        //    keeps exact prefix and appends synthetic Assistant bridge with active status & trace.
+        let in_flight = vec![
+            std::sync::Arc::new(user("Refactor src/parser.rs")),
+            std::sync::Arc::new(tool_call_msg("call_2", "file_read", "src/parser.rs")),
+            std::sync::Arc::new(tool_result_msg("call_2", "file_read", "struct Parser;")),
+        ];
+        let trace = vec![boxxy_claw_protocol::TurnTraceItem::Tool {
+            tool_name: "file_read".to_string(),
+            category: boxxy_claw_protocol::TraceCategory::Read,
+            label: "src/parser.rs".to_string(),
+            preview: None,
+            failed: false,
+        }];
+        let active_btw = build_btw_history(
+            Some(&in_flight),
+            Vec::new(),
+            "",
+            "",
+            Some("Running cargo test…"),
+            Some("file_write to `src/parser.rs`"),
+            &trace,
+        );
+        assert_eq!(active_btw.len(), 4);
+        assert!(matches!(active_btw[0], Message::User { .. }));
+        assert!(matches!(active_btw[1], Message::Assistant(_)));
+        assert!(matches!(active_btw[2], Message::User { .. }));
+        if let Some(Message::Assistant(bridge)) = active_btw.last()
+            && let Some(text) = bridge.content.first().and_then(|c| c.as_text())
+        {
+            assert!(text.contains("1 read"));
+            assert!(text.contains("file_write to `src/parser.rs`"));
+        } else {
+            panic!("Expected trailing synthetic Assistant bridge message");
         }
     }
 }

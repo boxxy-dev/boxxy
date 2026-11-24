@@ -62,6 +62,7 @@ pub enum ShortcutId {
     CommandPalette,
     ToggleSidebar,
     AskClaw,
+    ClawBtw,
     ToggleClawCodeBlocks,
     Preferences,
     DetachedSessions,
@@ -116,11 +117,12 @@ pub enum ShortcutId {
 }
 
 impl ShortcutId {
-    pub const ALL: [Self; 49] = [
+    pub const ALL: [Self; 50] = [
         Self::NewWindow,
         Self::CommandPalette,
         Self::ToggleSidebar,
         Self::AskClaw,
+        Self::ClawBtw,
         Self::ToggleClawCodeBlocks,
         Self::Preferences,
         Self::DetachedSessions,
@@ -176,6 +178,7 @@ impl ShortcutId {
             Self::CommandPalette => "command-palette",
             Self::ToggleSidebar => "toggle-sidebar",
             Self::AskClaw => "ask-claw",
+            Self::ClawBtw => "claw-btw",
             Self::ToggleClawCodeBlocks => "toggle-claw-code-blocks",
             Self::Preferences => "preferences",
             Self::DetachedSessions => "detached-sessions",

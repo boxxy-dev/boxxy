@@ -20,6 +20,7 @@ pub const TIPS: &[&str] = &[
     "Are you using Arch, btw?",
     "You can press Esc in the Okay state",
     "Try editing the personality of your characters",
+    "Click BTW or press Ctrl+Shift+B to ask a side question while working",
 ];
 
 pub const PENDING_TIPS: &[&str] = &[

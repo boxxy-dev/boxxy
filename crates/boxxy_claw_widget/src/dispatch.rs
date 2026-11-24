@@ -30,6 +30,13 @@ fn record_usage(cell: &Cell<SessionUsage>, u: &UsageWrapper) {
     cell.set(su);
 }
 
+#[inline]
+fn record_side_usage(cell: &Cell<SessionUsage>, u: &UsageWrapper) {
+    let mut su = cell.get();
+    su.record_side_turn(u);
+    cell.set(su);
+}
+
 fn ensure_working_row(
     overlay_store: &gtk::gio::ListStore,
     slot: &RefCell<Option<ClawRowObject>>,
@@ -744,6 +751,7 @@ pub fn spawn_dispatch(
                 ClawEngineEvent::Evicted => {
                     ignoring_aborted_turn.set(false);
                     settle_or_prune_working_row(&overlay_store, &active_turn_row);
+                    overlay.btw().reset_session();
                     *pending_tasks.borrow_mut() = Vec::new();
                     indicator.set_vibe(false);
                     indicator.set_evicted(true);
@@ -855,9 +863,52 @@ pub fn spawn_dispatch(
                         .any(|t| t.status == boxxy_claw_protocol::TaskStatus::Pending);
                     indicator.set_has_tasks(has_pending);
                 }
+                ClawEngineEvent::BtwProgress {
+                    request_id,
+                    agent_name: event_agent_name,
+                    character_id,
+                    active_status,
+                    text_delta,
+                } => {
+                    overlay.btw().on_progress(
+                        *request_id,
+                        event_agent_name,
+                        character_id,
+                        active_status.as_deref(),
+                        text_delta.as_deref(),
+                    );
+                }
+                ClawEngineEvent::BtwComplete {
+                    request_id,
+                    agent_name: event_agent_name,
+                    character_id,
+                    question,
+                    answer,
+                    model_label,
+                    duration_ms,
+                    usage,
+                    error,
+                } => {
+                    if let Some(usage) = usage {
+                        record_side_usage(&session_usage, usage);
+                    }
+                    overlay.btw().on_complete(
+                        *request_id,
+                        event_agent_name,
+                        character_id.clone(),
+                        question.clone(),
+                        answer.clone(),
+                        model_label.clone(),
+                        *duration_ms,
+                        error.clone(),
+                        overlay.pane_owns_focus(),
+                        overlay.is_visible(),
+                    );
+                }
                 ClawEngineEvent::RestoreHistory(rows) => {
                     ignoring_aborted_turn.set(false);
                     *active_turn_row.borrow_mut() = None;
+                    overlay.btw().reset_session();
                     let mut restored_tools: u64 = 0;
                     for row in rows {
                         if matches!(
