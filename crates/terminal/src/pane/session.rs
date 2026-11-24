@@ -95,6 +95,7 @@ pub(super) fn build_msg_bar(
 
     Rc::new(MsgBarComponent::new(
         move |payload| {
+            let prompt_id = payload.prompt_id;
             let query = payload.text;
             let images = payload.images;
             let image_meta = payload.image_meta;
@@ -115,18 +116,7 @@ pub(super) fn build_msg_bar(
             } else {
                 None
             };
-            let is_resume_cmd = query
-                .strip_prefix("/resume ")
-                .map(str::trim)
-                .is_some_and(|s| !s.is_empty());
-            if is_resume_cmd
-                || !matches!(
-                    boxxy_claw_protocol::classify_submit_effect(trimmed_query),
-                    boxxy_claw_protocol::SlashSubmitEffect::StartsTurn
-                )
-            {
-                inner_arc.borrow().msg_bar.entry.grab_focus();
-            }
+            inner_arc.borrow().msg_bar.entry.grab_focus();
 
             if !is_claw_active_for_msg.get() {
                 is_claw_active_for_msg.set(true);
@@ -195,6 +185,7 @@ pub(super) fn build_msg_bar(
                                 .post_claw_message(
                                     session_id,
                                     ClawMessage::ClawQuery {
+                                        prompt_id,
                                         query: inline_incognito_query,
                                         snapshot: String::new(),
                                         cwd: String::new(),
@@ -290,6 +281,7 @@ pub(super) fn build_msg_bar(
                                 .post_claw_message(
                                     session_id,
                                     ClawMessage::ClawQuery {
+                                        prompt_id,
                                         query,
                                         snapshot,
                                         cwd,
@@ -319,6 +311,7 @@ pub(super) fn build_msg_bar(
 
                 let _ = tx
                     .send(ClawMessage::ClawQuery {
+                        prompt_id,
                         query,
                         snapshot,
                         cwd,
@@ -858,6 +851,7 @@ impl TerminalPaneComponent {
                         .post_claw_message(
                             session_id,
                             ClawMessage::ClawQuery {
+                                prompt_id: None,
                                 query,
                                 snapshot,
                                 cwd,
@@ -870,6 +864,7 @@ impl TerminalPaneComponent {
             } else {
                 let _ = tx
                     .send(ClawMessage::ClawQuery {
+                        prompt_id: None,
                         query,
                         snapshot,
                         cwd,

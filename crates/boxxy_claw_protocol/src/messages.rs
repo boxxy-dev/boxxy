@@ -20,6 +20,20 @@ pub struct ImageAttachmentMeta {
     pub label: String,
 }
 
+/// Lightweight metadata for a user follow-up message waiting in the session's prompt queue.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct QueuedPromptSummary {
+    pub id: Uuid,
+    /// User-authored text preview (stripped of appended file/snippet blocks).
+    pub display_text: String,
+    /// Cached square thumbnail paths for attached images.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<String>,
+    /// Display labels for attached text/code snippets.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub text_attachments: Vec<String>,
+}
+
 /// Messages sent from the GTK UI down to an active `ClawSession`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum ClawMessage {
@@ -37,6 +51,8 @@ pub enum ClawMessage {
         cwd: String,
     },
     ClawQuery {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        prompt_id: Option<Uuid>,
         query: String,
         snapshot: String,
         cwd: String,
@@ -155,6 +171,22 @@ pub enum ClawMessage {
     CancelBtw {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         request_id: Option<Uuid>,
+    },
+    /// Removes a queued follow-up prompt before execution (optionally recalling it to the input bar).
+    RemoveQueuedPrompt {
+        id: Uuid,
+        #[serde(default)]
+        recall_to_input: bool,
+    },
+    /// Removes all queued follow-up prompts in this session.
+    ClearQueuedPrompts,
+    /// Immediately runs a parked queued prompt (e.g. after manual turn interrupt or error).
+    SendQueuedPrompt {
+        id: Uuid,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        snapshot: String,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        cwd: String,
     },
 }
 
@@ -409,6 +441,18 @@ pub enum ClawEngineEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         error: Option<String>,
     },
+    /// Live snapshot of user prompts waiting in the follow-up queue behind the current turn.
+    QueueUpdated {
+        items: Vec<QueuedPromptSummary>,
+        /// True when the queue is parked (e.g. after the user cancelled a turn or a turn errored).
+        #[serde(default)]
+        paused: bool,
+    },
+    /// Confirms that a queued prompt was removed before execution for editing in the input bar.
+    QueuedPromptRecalled {
+        id: Uuid,
+        fallback_text: String,
+    },
 }
 
 impl ClawEngineEvent {
@@ -455,7 +499,9 @@ impl ClawEngineEvent {
             | Self::VibeStatusChanged(_)
             | Self::RestoreHistory(_)
             | Self::Evicted
-            | Self::PushGlobalNotification { .. } => None,
+            | Self::PushGlobalNotification { .. }
+            | Self::QueueUpdated { .. }
+            | Self::QueuedPromptRecalled { .. } => None,
         }
     }
 
@@ -502,7 +548,9 @@ impl ClawEngineEvent {
             | Self::VibeStatusChanged(_)
             | Self::RestoreHistory(_)
             | Self::Evicted
-            | Self::PushGlobalNotification { .. } => None,
+            | Self::PushGlobalNotification { .. }
+            | Self::QueueUpdated { .. }
+            | Self::QueuedPromptRecalled { .. } => None,
         }
     }
 }
@@ -520,6 +568,7 @@ mod tests {
         assert_eq!(
             msg,
             ClawMessage::ClawQuery {
+                prompt_id: None,
                 query: "check status".to_string(),
                 snapshot: String::new(),
                 cwd: "/workspace".to_string(),
@@ -529,6 +578,7 @@ mod tests {
         );
 
         let with_meta = ClawMessage::ClawQuery {
+            prompt_id: Some(Uuid::nil()),
             query: "inspect [Image 1]".to_string(),
             snapshot: String::new(),
             cwd: "/workspace".to_string(),
@@ -556,5 +606,29 @@ mod tests {
         let json = serde_json::to_string(&ev).unwrap();
         let decoded: ClawEngineEvent = serde_json::from_str(&json).unwrap();
         assert_eq!(decoded, ev);
+
+        let q_id = Uuid::new_v4();
+        let queue_ev = ClawEngineEvent::QueueUpdated {
+            items: vec![QueuedPromptSummary {
+                id: q_id,
+                display_text: "Refactor src/parser.rs".to_string(),
+                images: Vec::new(),
+                text_attachments: vec!["src/parser.rs".to_string()],
+            }],
+            paused: true,
+        };
+        assert_eq!(queue_ev.character_id(), None);
+        assert_eq!(queue_ev.agent_name(), None);
+        let queue_json = serde_json::to_string(&queue_ev).unwrap();
+        let queue_decoded: ClawEngineEvent = serde_json::from_str(&queue_json).unwrap();
+        assert_eq!(queue_decoded, queue_ev);
+
+        let remove_msg = ClawMessage::RemoveQueuedPrompt {
+            id: q_id,
+            recall_to_input: true,
+        };
+        let remove_json = serde_json::to_string(&remove_msg).unwrap();
+        let remove_decoded: ClawMessage = serde_json::from_str(&remove_json).unwrap();
+        assert_eq!(remove_decoded, remove_msg);
     }
 }

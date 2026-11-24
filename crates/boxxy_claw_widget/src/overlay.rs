@@ -173,7 +173,39 @@ impl TerminalOverlay {
         // We set the list as the direct child of the ScrolledWindow so that
         // they share a single Adjustment. This ensures scroll_to(FOCUS) correctly
         // drives the visible viewport.
-        let (history_list, history_store) = boxxy_claw_ui::create_claw_message_list();
+        let queue_send_hook: Rc<RefCell<Option<Rc<dyn Fn()>>>> = Rc::new(RefCell::new(None));
+        let queue_action_handler: boxxy_claw_ui::QueuedActionHandler = {
+            let host_for_q = host.clone();
+            let send_hook = queue_send_hook.clone();
+            Rc::new(move |action| match action {
+                boxxy_claw_ui::QueuedRowAction::Send(id) => {
+                    if let Some(cb) = send_hook.borrow().as_ref().cloned() {
+                        cb();
+                    }
+                    let snap_fut = host_for_q.snapshot(100, 0);
+                    let cwd = host_for_q.working_dir().unwrap_or_default();
+                    let host_async = host_for_q.clone();
+                    gtk::glib::spawn_future_local(async move {
+                        let snapshot = snap_fut.await.unwrap_or_default();
+                        host_async.send_claw(ClawMessage::SendQueuedPrompt { id, snapshot, cwd });
+                    });
+                }
+                boxxy_claw_ui::QueuedRowAction::Edit(id) => {
+                    host_for_q.send_claw(ClawMessage::RemoveQueuedPrompt {
+                        id,
+                        recall_to_input: true,
+                    });
+                }
+                boxxy_claw_ui::QueuedRowAction::Cancel(id) => {
+                    host_for_q.send_claw(ClawMessage::RemoveQueuedPrompt {
+                        id,
+                        recall_to_input: false,
+                    });
+                }
+            })
+        };
+        let (history_list, history_store) =
+            boxxy_claw_ui::create_claw_message_list_with_queue_actions(Some(queue_action_handler));
         history_scroll.set_child(Some(&history_list));
 
         let full_history_store = gio::ListStore::new::<boxxy_claw_ui::row_object::ClawRowObject>();
@@ -703,13 +735,16 @@ impl TerminalOverlay {
         revealer.add_controller(esc_controller);
 
         // Immediately transition overlay state when the user submits in the msgbar:
-        // LLM-starting prompts enter Thinking, cancel/undo commands settle to Idle,
-        // and instant control commands (/drama toggle, /incognito, /resume) stay Idle.
+        // LLM-starting prompts enter Thinking (unless already Thinking, in which case the
+        // prompt joins the follow-up queue without resetting the active tool indicator),
+        // cancel/undo commands settle to Idle, and instant control commands stay Idle.
         let overlay_for_submit = s.clone();
         s.msg_bar.set_on_submit_hook(move |text| {
             match boxxy_claw_protocol::classify_submit_effect(text) {
                 boxxy_claw_protocol::SlashSubmitEffect::StartsTurn => {
-                    overlay_for_submit.enter_waiting_state();
+                    if !matches!(*overlay_for_submit.state.borrow(), OverlayState::Thinking) {
+                        overlay_for_submit.enter_waiting_state();
+                    }
                 }
                 boxxy_claw_protocol::SlashSubmitEffect::CancelAndSettle => {
                     overlay_for_submit.set_state(OverlayState::Idle);
@@ -719,6 +754,18 @@ impl TerminalOverlay {
                 | boxxy_claw_protocol::SlashSubmitEffect::InstantControl => {}
             }
         });
+
+        {
+            let overlay_for_queue_send = s.clone();
+            *queue_send_hook.borrow_mut() = Some(Rc::new(move || {
+                if !matches!(
+                    *overlay_for_queue_send.state.borrow(),
+                    OverlayState::Thinking
+                ) {
+                    overlay_for_queue_send.enter_waiting_state();
+                }
+            }));
+        }
 
         let overlay_for_clear = s.clone();
         s.msg_bar.set_on_clear_hook(move || {
@@ -863,18 +910,54 @@ impl TerminalOverlay {
     }
 
     /// Temporarily clears the visible conversation history from the main overlay
-    /// view without deleting the session's underlying history.
+    /// view without deleting the session's underlying history (retaining any active queued rows).
     pub fn clear_visible_history(&self) {
         self.btw.reset_session();
-        self.clear_offset.set(self.full_history_store.n_items());
-        self.history_store.remove_all();
+        let settled_count = boxxy_claw_ui::first_queued_index(&self.full_history_store);
+        self.clear_offset.set(settled_count);
+        let total = self.full_history_store.n_items();
+        let mut remaining_queued = Vec::new();
+        for i in settled_count..total {
+            if let Some(obj) = self
+                .full_history_store
+                .item(i)
+                .and_downcast::<boxxy_claw_ui::row_object::ClawRowObject>()
+            {
+                remaining_queued.push(obj);
+            }
+        }
+        self.history_store
+            .splice(0, self.history_store.n_items(), &remaining_queued);
         self.diagnosis_viewer.park_for_recycle();
+    }
+
+    /// Reconciles trailing queued follow-up User rows in the conversation list and prunes stashed drafts.
+    pub fn update_queue(
+        &self,
+        items: &[boxxy_claw_protocol::QueuedPromptSummary],
+        paused: bool,
+    ) {
+        let active_ids: Vec<uuid::Uuid> = items.iter().map(|i| i.id).collect();
+        self.msg_bar.retain_queued_drafts(&active_ids);
+        boxxy_claw_ui::sync_queued_rows(
+            &self.full_history_store,
+            &self.host.host_id(),
+            items,
+            paused,
+        );
+    }
+
+    /// Clears any trailing queued follow-up User rows and stashed composer drafts.
+    pub fn clear_queue(&self) {
+        self.msg_bar.clear_queued_drafts();
+        boxxy_claw_ui::clear_queued_rows(&self.full_history_store);
     }
 
     fn flush_pending_exit_reset(&self) {
         if !self.pending_exit_reset.replace(false) {
             return;
         }
+        self.clear_queue();
         self.btw.reset_session();
         *self.active_agent.borrow_mut() = String::new();
         self.clear_offset.set(0);
@@ -1227,11 +1310,6 @@ impl TerminalOverlay {
             return;
         }
         match &*self.state.borrow() {
-            OverlayState::Thinking => {
-                if !self.indicator.grab_cancel_focus() {
-                    self.main_drawer.grab_focus();
-                }
-            }
             OverlayState::Action(_) => {
                 if self.template_box.is_visible() {
                     self.template_entry.grab_focus();
@@ -1245,7 +1323,7 @@ impl TerminalOverlay {
                     self.main_drawer.grab_focus();
                 }
             }
-            OverlayState::Idle | OverlayState::Pending => {
+            OverlayState::Idle | OverlayState::Thinking | OverlayState::Pending => {
                 if *self.current_mode.borrow() == OverlayMode::Claw {
                     if !self.msg_bar.entry.grab_focus() {
                         self.main_drawer.grab_focus();
@@ -1300,6 +1378,8 @@ impl TerminalOverlay {
         self.history_scroll.set_visible(is_claw && !show_picker);
         self.msgbar_slot.set_visible(is_claw);
         self.msg_bar.widget.set_visible(is_claw);
+        self.msg_bar
+            .set_thinking_hint(matches!(state, OverlayState::Thinking));
         self.inspect_btn.set_visible(is_claw);
         self.btw_slot.set_visible(
             is_claw && (!show_picker || self.btw.is_active_or_unread()),
@@ -1324,16 +1404,22 @@ impl TerminalOverlay {
                 self.action_box.set_visible(true);
                 self.ok_btn.set_visible(true);
                 self.tips_cycle.stop();
-                if overlay_had_focus && self.revealer.reveals_child() && is_claw {
+                if overlay_had_focus
+                    && self.revealer.reveals_child()
+                    && is_claw
+                    && !self.revealer_contains_focus()
+                {
                     self.msg_bar.entry.grab_focus();
                 }
             }
             OverlayState::Thinking => {
-                self.msg_bar.set_input_sensitive(false);
+                self.msg_bar.set_input_sensitive(true);
                 self.indicator_slot.set_visible(true);
                 if overlay_had_focus
                     && self.revealer.reveals_child()
-                    && !self.indicator.grab_cancel_focus()
+                    && is_claw
+                    && !self.revealer_contains_focus()
+                    && !self.msg_bar.entry.grab_focus()
                 {
                     self.main_drawer.grab_focus();
                 }

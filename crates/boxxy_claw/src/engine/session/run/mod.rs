@@ -61,15 +61,95 @@ impl ClawSession {
             ClawMessage::TurnFinished => {
                 ctx.current_turn = None;
 
-                // If the user sent an urgent interrupt/message while the turn was finishing,
-                // prioritize it immediately over any queued roundtable handoff.
-                if let Some(next_msg) = ctx.urgent_backlog.pop_front() {
+                let (paused_by_turn, is_sleeping_now) = {
+                    let mut state_lock = self.state.lock().await;
+                    (
+                        std::mem::take(&mut state_lock.last_turn_paused_queue),
+                        state_lock.status == crate::engine::AgentStatus::Sleep,
+                    )
+                };
+
+                if (paused_by_turn || is_sleeping_now)
+                    && !ctx.queued_prompts.is_empty()
+                    && !ctx.queue_paused
+                {
+                    ctx.queue_paused = true;
+                    self.emit_queue_updated(ctx).await;
+                }
+
+                // Apply any in-flight queue removals before deciding what runs next so a click
+                // on Remove (`×`) that arrived alongside `TurnFinished` always takes effect.
+                let mut idx = 0;
+                while idx < ctx.urgent_backlog.len() {
+                    match &ctx.urgent_backlog[idx] {
+                        ClawMessage::RemoveQueuedPrompt { .. }
+                        | ClawMessage::ClearQueuedPrompts => {
+                            if let Some(q_msg) = ctx.urgent_backlog.remove(idx) {
+                                match q_msg {
+                                    ClawMessage::RemoveQueuedPrompt {
+                                        id,
+                                        recall_to_input,
+                                    } => {
+                                        self.handle_remove_queued_prompt(ctx, id, recall_to_input)
+                                            .await;
+                                    }
+                                    ClawMessage::ClearQueuedPrompts => {
+                                        self.handle_clear_queued_prompts(ctx).await;
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                        _ => idx += 1,
+                    }
+                }
+
+                // If an explicit session/turn interrupt is already waiting in `urgent_backlog`,
+                // let the main loop process it first without auto-starting queued work.
+                let has_pending_interrupt = ctx.urgent_backlog.iter().any(|m| {
+                    matches!(
+                        m,
+                        ClawMessage::Abort
+                            | ClawMessage::CancelPending
+                            | ClawMessage::Deactivate
+                            | ClawMessage::Evict
+                            | ClawMessage::SleepToggle(true)
+                    )
+                });
+                if has_pending_interrupt {
                     {
                         let mut state_lock = self.state.lock().await;
                         state_lock.next_roundtable_turn = None;
                         state_lock.active_speaker = None;
                     }
-                    let _ = self.tx_self.send(next_msg).await;
+                    if !ctx.queued_prompts.is_empty() && !ctx.queue_paused {
+                        ctx.queue_paused = true;
+                        self.emit_queue_updated(ctx).await;
+                    }
+                    return false;
+                }
+
+                // Drain the next queued user follow-up prompt in FIFO order before any
+                // autonomous roundtable handoff so user follow-ups execute right after the turn.
+                // Emitting `execute_dequeued_prompt` (`UserMessage`) before `emit_queue_updated`
+                // lets the UI graduate the queued User row in-place with zero remove+insert flicker.
+                if !ctx.queue_paused
+                    && !is_sleeping_now
+                    && let Some(mut next_queued) = ctx.queued_prompts.pop_front()
+                {
+                    if !self.incognito {
+                        if let Some(latest_snap) =
+                            ctx.workspace.get_pane_snapshot(self.pane_id.clone()).await
+                        {
+                            next_queued.snapshot = latest_snap;
+                        }
+                        if !ctx.current_dir.is_empty() && ctx.current_dir != "/" {
+                            next_queued.cwd.clone_from(&ctx.current_dir);
+                        }
+                    }
+                    self.execute_dequeued_prompt(ctx, &session_ctx, next_queued)
+                        .await;
+                    self.emit_queue_updated(ctx).await;
                     return false;
                 }
 
@@ -222,6 +302,7 @@ impl ClawSession {
             ClawMessage::Deactivate => {
                 info!("Deactivating Claw Session for pane {}...", self.pane_id);
                 ctx.abort_btw_tasks(None);
+                self.handle_clear_queued_prompts(ctx).await;
                 self.handle_abort(ctx).await;
                 self.flush_unflushed_history(&ctx.current_dir).await;
                 ctx.is_initialized = false;
@@ -242,6 +323,7 @@ impl ClawSession {
             ClawMessage::Evict => {
                 info!("Agent in pane {} was EVICTED.", self.pane_id);
                 ctx.abort_btw_tasks(None);
+                self.handle_clear_queued_prompts(ctx).await;
                 self.handle_abort(ctx).await;
                 self.flush_unflushed_history(&ctx.current_dir).await;
                 ctx.is_initialized = false;
@@ -265,6 +347,7 @@ impl ClawSession {
                 character_id,
             } => {
                 ctx.abort_btw_tasks(None);
+                self.handle_clear_queued_prompts(ctx).await;
                 self.handle_resume_session(
                     session_id,
                     character_id,
@@ -405,6 +488,7 @@ impl ClawSession {
                 .await;
             }
             ClawMessage::ClawQuery {
+                prompt_id,
                 query,
                 snapshot,
                 cwd,
@@ -414,6 +498,7 @@ impl ClawSession {
                 self.handle_claw_query(
                     ctx,
                     &session_ctx,
+                    prompt_id,
                     query,
                     snapshot,
                     cwd,
@@ -588,6 +673,7 @@ impl ClawSession {
                     // Keep `pending_inject_command = true` so if this agent-originated command
                     // later exits with a non-zero status, origin-aware auto-diagnosis still runs.
                     state_lock.pending_inject_command = true;
+                    state_lock.last_turn_paused_queue = true;
                     state_lock.active_speaker = None;
 
                     let summary = state_lock
@@ -769,6 +855,20 @@ impl ClawSession {
             }
             ClawMessage::CancelBtw { request_id } => {
                 ctx.abort_btw_tasks(request_id);
+            }
+            ClawMessage::RemoveQueuedPrompt {
+                id,
+                recall_to_input,
+            } => {
+                self.handle_remove_queued_prompt(ctx, id, recall_to_input)
+                    .await;
+            }
+            ClawMessage::ClearQueuedPrompts => {
+                self.handle_clear_queued_prompts(ctx).await;
+            }
+            ClawMessage::SendQueuedPrompt { id, snapshot, cwd } => {
+                self.handle_send_queued_prompt(ctx, &session_ctx, id, snapshot, cwd)
+                    .await;
             }
         }
         false

@@ -114,6 +114,9 @@ pub struct SessionState {
     /// Lock-light snapshot of the currently running turn's committed messages and active step
     /// so `/btw` side queries observe live mid-turn tool results and warm KV cache prefixes.
     pub in_flight_snapshot: Arc<std::sync::Mutex<InFlightSnapshot>>,
+    /// Set to `true` when the latest completed turn ended with an error or a blocking command
+    /// proposal so queued follow-up prompts pause instead of auto-executing over broken/unapproved state.
+    pub last_turn_paused_queue: bool,
 }
 
 impl SessionState {
@@ -128,17 +131,22 @@ impl SessionState {
         }
     }
 
-    /// Returns true if any tool approval channel or command injection is currently waiting for user action.
+    /// Returns true if an in-turn oneshot approval channel is actively blocking the current turn.
     #[must_use]
-    pub const fn has_pending_approval(&self) -> bool {
-        self.pending_inject_command
-            || self.pending_terminal_reply.is_some()
+    pub const fn has_in_turn_approval(&self) -> bool {
+        self.pending_terminal_reply.is_some()
             || self.pending_file_reply.is_some()
             || self.pending_file_delete_reply.is_some()
             || self.pending_kill_process_reply.is_some()
             || self.pending_background_reply.is_some()
             || self.pending_get_clipboard_reply.is_some()
             || self.pending_set_clipboard_reply.is_some()
+    }
+
+    /// Returns true if any tool approval channel or command injection is currently waiting for user action.
+    #[must_use]
+    pub const fn has_pending_approval(&self) -> bool {
+        self.pending_inject_command || self.has_in_turn_approval()
     }
 }
 
@@ -254,6 +262,7 @@ impl ClawSession {
                 generated_images_this_turn: Vec::new(),
                 current_turn_user_images: Vec::new(),
                 in_flight_snapshot: Arc::new(std::sync::Mutex::new(InFlightSnapshot::default())),
+                last_turn_paused_queue: false,
             })),
         };
 
@@ -372,6 +381,9 @@ impl ClawSession {
                 | ClawMessage::CancelAllTasks
                 | ClawMessage::BtwQuery { .. }
                 | ClawMessage::CancelBtw { .. }
+                | ClawMessage::RemoveQueuedPrompt { .. }
+                | ClawMessage::ClearQueuedPrompts
+                | ClawMessage::SendQueuedPrompt { .. }
         )
     }
 

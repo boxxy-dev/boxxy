@@ -2608,3 +2608,58 @@ frame.claw-btw-input-frame textview text {
     min-height: 24px;
     padding: 0;
 }
+
+/* --- Queued Follow-Up User Message Rows (Inline in Virtual History) --- */
+.claw-virtual-row.claw-row-queued .claw-queued-dim {
+    opacity: 0.72;
+}
+
+.claw-virtual-row .claw-row-queue-badge {
+    padding: 1px 7px;
+    border-radius: 999px;
+    background-color: alpha(currentColor, 0.08);
+    font-weight: 600;
+    opacity: 0.78;
+}
+
+.claw-virtual-row .claw-row-queue-badge.is-paused {
+    background-color: alpha(@warning_color, 0.16);
+    color: @warning_color;
+    opacity: 0.95;
+}
+
+.claw-virtual-row .claw-row-queue-dot {
+    opacity: 0.45;
+}
+
+.claw-virtual-row button.claw-row-queue-btn {
+    min-height: 20px;
+    min-width: 0;
+    padding: 0 5px;
+    border-radius: 5px;
+    background-color: transparent;
+    background-image: none;
+    box-shadow: none;
+    opacity: 0.68;
+    transition: opacity 120ms ease, background-color 120ms ease, color 120ms ease;
+}
+
+.claw-virtual-row button.claw-row-queue-btn:hover {
+    opacity: 1.0;
+    background-color: alpha(currentColor, 0.08);
+}
+
+.claw-virtual-row button.claw-row-queue-btn.claw-row-queue-send {
+    color: @accent_color;
+    font-weight: 700;
+    opacity: 0.95;
+}
+
+.claw-virtual-row button.claw-row-queue-btn.claw-row-queue-send:hover {
+    background-color: alpha(@accent_bg_color, 0.18);
+}
+
+.claw-virtual-row button.claw-row-queue-btn.claw-row-queue-cancel:hover {
+    color: @error_color;
+    background-color: alpha(@error_color, 0.12);
+}

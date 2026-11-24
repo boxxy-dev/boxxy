@@ -15,13 +15,25 @@ type SubmitHook = Rc<RefCell<Option<Box<dyn Fn(&str)>>>>;
 type ClearHook = Rc<RefCell<Option<Box<dyn Fn()>>>>;
 type BtwHook = Rc<RefCell<Option<Box<dyn Fn(&str)>>>>;
 
+const MAX_STASHED_QUEUED_DRAFTS: usize = 24;
+
+#[derive(Debug, Clone)]
+struct QueuedDraftEntry {
+    id: uuid::Uuid,
+    text: String,
+    attachments: Vec<Attachment>,
+}
+
 pub struct MsgBarComponent {
     pub widget: gtk::Box,
     pub entry: gtk::TextView,
     placeholder_label: gtk::Label,
     default_placeholder: Rc<RefCell<String>>,
+    thinking_hint_active: Rc<Cell<bool>>,
     pub is_active: Rc<Cell<bool>>,
     pub attachment_mgr: AttachmentManager,
+    queued_drafts: Rc<RefCell<std::collections::VecDeque<QueuedDraftEntry>>>,
+    refresh_highlights: Rc<dyn Fn(&gtk::TextBuffer)>,
     pub history: Rc<RefCell<history::MsgHistory>>,
     pub claw_toggle: gtk::Button,
     pub add_files_btn: gtk::Button,
@@ -392,6 +404,9 @@ impl MsgBarComponent {
         widget.append(&right_badges);
 
         let is_active = Rc::new(Cell::new(false));
+        let thinking_hint_active = Rc::new(Cell::new(false));
+        let queued_drafts: Rc<RefCell<std::collections::VecDeque<QueuedDraftEntry>>> =
+            Rc::new(RefCell::new(std::collections::VecDeque::new()));
         let history = Rc::new(RefCell::new(history::MsgHistory::new()));
         let embedded = Rc::new(Cell::new(false));
         let on_submit_hook: SubmitHook = Rc::new(RefCell::new(None));
@@ -405,6 +420,7 @@ impl MsgBarComponent {
         let submit_action: Rc<dyn Fn()> = {
             let entry = entry.clone();
             let attachment_mgr = attachment_mgr.clone();
+            let queued_drafts = queued_drafts.clone();
             let history = history.clone();
             let on_submit = on_submit_rc;
             let on_claw_toggle = on_claw_toggle_rc;
@@ -485,12 +501,15 @@ impl MsgBarComponent {
                     };
                     let payload = if inline_msg.is_empty() {
                         AttachmentPayload {
+                            prompt_id: None,
                             text: payload_prefix,
                             images: Vec::new(),
                             image_meta: Vec::new(),
                         }
                     } else {
-                        attachment_mgr.build_payload(&payload_prefix)
+                        let mut built = attachment_mgr.build_payload(&payload_prefix);
+                        built.prompt_id = Some(uuid::Uuid::new_v4());
+                        built
                     };
                     attachment_mgr.with_sync_suppressed(|| {
                         buf.set_text("");
@@ -623,16 +642,30 @@ impl MsgBarComponent {
                     return;
                 }
 
-                let payload = attachment_mgr.build_payload(&original_text);
+                let mut payload = attachment_mgr.build_payload(&original_text);
 
                 if !payload.text.trim().is_empty() || !payload.images.is_empty() {
+                    let minted_id = uuid::Uuid::new_v4();
+                    payload.prompt_id = Some(minted_id);
+                    let submitted_attachments = attachment_mgr.get_attachments();
+                    {
+                        let mut drafts = queued_drafts.borrow_mut();
+                        if drafts.len() >= MAX_STASHED_QUEUED_DRAFTS {
+                            drafts.pop_front();
+                        }
+                        drafts.push_back(QueuedDraftEntry {
+                            id: minted_id,
+                            text: original_text.clone(),
+                            attachments: submitted_attachments.clone(),
+                        });
+                    }
                     if let Some(hook) = on_submit_hook.borrow().as_ref() {
                         hook(&payload.text);
                     }
                     if !is_incognito_active {
                         history
                             .borrow_mut()
-                            .push(original_text, attachment_mgr.get_attachments());
+                            .push(original_text, submitted_attachments);
                     }
                     on_submit(payload);
                     attachment_mgr.with_sync_suppressed(|| {
@@ -715,7 +748,7 @@ impl MsgBarComponent {
         let k_submit = submit_action;
 
         let k_autocomplete = autocomplete_ctrl.clone();
-        let k_refresh_highlights = refresh_highlights;
+        let k_refresh_highlights = refresh_highlights.clone();
         key_ctrl.connect_key_pressed(move |_, key, _, state| {
             let is_ctrl = state.contains(gtk::gdk::ModifierType::CONTROL_MASK);
             let is_shift = state.contains(gtk::gdk::ModifierType::SHIFT_MASK);
@@ -881,8 +914,11 @@ impl MsgBarComponent {
             entry,
             placeholder_label,
             default_placeholder,
+            thinking_hint_active,
             is_active,
             attachment_mgr,
+            queued_drafts,
+            refresh_highlights,
             history,
             claw_toggle,
             add_files_btn,
@@ -954,12 +990,84 @@ impl MsgBarComponent {
     /// Clears the active character binding and restores the default input placeholder.
     pub fn clear_character(&self) {
         *self.character_id.borrow_mut() = None;
+        self.queued_drafts.borrow_mut().clear();
         let text =
             "Type your message... (@file: attach, :character: mention, /: commands)".to_string();
-        if self.entry.is_sensitive() {
-            self.placeholder_label.set_label(&text);
-        }
         *self.default_placeholder.borrow_mut() = text;
+        self.sync_placeholder_label();
+    }
+
+    /// Prunes stashed submitted drafts to only those IDs still present in the active queue.
+    pub fn retain_queued_drafts(&self, active_ids: &[uuid::Uuid]) {
+        self.queued_drafts
+            .borrow_mut()
+            .retain(|entry| active_ids.contains(&entry.id));
+    }
+
+    /// Clears all stashed queued drafts (e.g. on session exit or resume).
+    pub fn clear_queued_drafts(&self) {
+        self.queued_drafts.borrow_mut().clear();
+    }
+
+    /// Restores a recalled queued prompt (and its inline attachments) back into the composer,
+    /// merging cleanly below any draft the user may already be typing.
+    pub fn restore_recalled_draft(&self, id: uuid::Uuid, fallback_text: &str) {
+        let recalled = {
+            let mut drafts = self.queued_drafts.borrow_mut();
+            drafts
+                .iter()
+                .position(|d| d.id == id)
+                .and_then(|idx| drafts.remove(idx))
+        };
+
+        let (recalled_text, recalled_atts) = match recalled {
+            Some(entry) => (entry.text, entry.attachments),
+            None => (fallback_text.to_string(), Vec::new()),
+        };
+
+        let buf = self.entry.buffer();
+        let current_text = buf
+            .text(&buf.start_iter(), &buf.end_iter(), false)
+            .to_string();
+
+        let merged = self.attachment_mgr.merge_recalled_for_text(
+            &current_text,
+            &recalled_text,
+            recalled_atts,
+        );
+
+        self.autocomplete.with_suppressed(|| {
+            self.attachment_mgr.with_sync_suppressed(|| {
+                buf.set_text(&merged);
+                let end = buf.end_iter();
+                buf.place_cursor(&end);
+            });
+        });
+        (self.refresh_highlights)(&buf);
+        let _ = self.entry.grab_focus();
+    }
+
+    fn sync_placeholder_label(&self) {
+        if !self.entry.is_sensitive() {
+            self.placeholder_label.set_label("Esc to interrupt");
+            return;
+        }
+        let base = self.default_placeholder.borrow().clone();
+        if self.thinking_hint_active.get() {
+            let stem = base.trim_end_matches('.');
+            self.placeholder_label.set_label(&format!(
+                "{stem}… (Enter to queue · Esc Esc to interrupt)"
+            ));
+        } else {
+            self.placeholder_label.set_label(&base);
+        }
+    }
+
+    /// Toggles the "Enter to queue · Esc Esc to interrupt" placeholder hint while a turn runs.
+    pub fn set_thinking_hint(&self, thinking: bool) {
+        if self.thinking_hint_active.replace(thinking) != thinking {
+            self.sync_placeholder_label();
+        }
     }
 
     /// Updates the host pane's live working directory and pre-warms the background `@` file index.
@@ -981,10 +1089,8 @@ impl MsgBarComponent {
                 "Message {} (Incognito — no context sent, nothing saved)...",
                 boxxy_claw_protocol::characters::INCOGNITO_DISPLAY_NAME
             );
-            if self.entry.is_sensitive() {
-                self.placeholder_label.set_label(&text);
-            }
             *self.default_placeholder.borrow_mut() = text;
+            self.sync_placeholder_label();
             return;
         }
 
@@ -992,10 +1098,8 @@ impl MsgBarComponent {
         if let Some(info) = registry.iter().find(|c| c.config.id == character_id) {
             let formatted_name = boxxy_claw_ui::resolve_character_display_name(info);
             let text = format!("Message {formatted_name}...");
-            if self.entry.is_sensitive() {
-                self.placeholder_label.set_label(&text);
-            }
             *self.default_placeholder.borrow_mut() = text;
+            self.sync_placeholder_label();
         }
     }
 
@@ -1072,12 +1176,7 @@ impl MsgBarComponent {
             }
         }
         self.entry.set_sensitive(sensitive);
-        if sensitive {
-            self.placeholder_label
-                .set_label(&self.default_placeholder.borrow());
-        } else {
-            self.placeholder_label.set_label("Esc to interrupt");
-        }
+        self.sync_placeholder_label();
     }
 
     pub fn update_ui(&self, status: AgentStatus, pinned: bool, web_search: bool, vibe: bool) {

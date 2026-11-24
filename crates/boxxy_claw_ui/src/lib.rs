@@ -23,11 +23,12 @@ pub use character_style::{
     resolve_character_display_name,
 };
 pub use message_list::{
-    add_approval_row, add_clipboard_get_approval_row, add_clipboard_set_approval_row,
-    add_diagnosis_row, add_diagnosis_row_with_trace, add_file_delete_approval_row,
-    add_kill_process_approval_row, add_suggested_row_with_trace, add_system_message_row,
-    add_user_row, add_working_turn_row, apply_code_blocks_visibility_policy,
-    create_claw_message_list, format_exchange_for_copy,
+    QueuedActionHandler, QueuedRowAction, add_approval_row, add_clipboard_get_approval_row,
+    add_clipboard_set_approval_row, add_diagnosis_row, add_diagnosis_row_with_trace,
+    add_file_delete_approval_row, add_kill_process_approval_row, add_suggested_row_with_trace,
+    add_system_message_row, add_user_row, add_working_turn_row, apply_code_blocks_visibility_policy,
+    clear_queued_rows, create_claw_message_list, create_claw_message_list_with_queue_actions,
+    first_queued_index, format_exchange_for_copy, sync_queued_rows,
 };
 pub use process_renderer::{ProcessListRenderer, get_claw_viewer_registry};
 pub use sidebar::ClawSidebarComponent;

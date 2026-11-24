@@ -19,7 +19,7 @@ pub use diff::{
     MAX_DIFF_LINE_CHARS, MAX_DIFF_RENDER_ROWS,
 };
 pub use environment::{ClawEnvironment, ProcessSample};
-pub use messages::{ClawEngineEvent, ClawMessage, ImageAttachmentMeta};
+pub use messages::{ClawEngineEvent, ClawMessage, ImageAttachmentMeta, QueuedPromptSummary};
 pub use rows::PersistentClawRow;
 pub use slash::{SlashCommand, SlashSubmitEffect, classify_submit_effect};
 pub use status::{

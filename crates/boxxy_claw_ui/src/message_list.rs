@@ -6,9 +6,9 @@ use crate::character_style::{
     resolve_character_display_name,
 };
 use crate::process_renderer::get_claw_viewer_registry;
-use crate::row_object::{ClawRowObject, RowUpdateKind};
+use crate::row_object::{ClawRowObject, QueuedRowMeta, RowUpdateKind};
 use crate::trace_widget::TurnTraceSlot;
-use boxxy_claw_protocol::{PersistentClawRow, TurnTraceItem};
+use boxxy_claw_protocol::{PersistentClawRow, QueuedPromptSummary, TurnTraceItem};
 use boxxy_core_widgets::ObjectExtSafe;
 use boxxy_preferences::{Settings, user_profile};
 use boxxy_viewer::StructuredViewer;
@@ -22,6 +22,16 @@ use std::cell::{Cell, RefCell};
 use std::path::Path;
 use std::rc::Rc;
 
+/// Interactive action triggered on a queued follow-up User row inside the conversation list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QueuedRowAction {
+    Send(uuid::Uuid),
+    Edit(uuid::Uuid),
+    Cancel(uuid::Uuid),
+}
+
+pub type QueuedActionHandler = Rc<dyn Fn(QueuedRowAction)>;
+
 /// Builds the Claw per-pane virtualized history `ListView`.
 ///
 /// Each row has a single stable widget tree (icon/avatar, title, working dots,
@@ -30,12 +40,20 @@ use std::rc::Rc;
 /// outer box via `ObjectExtSafe` so long histories recycle a handful of live
 /// widgets per visible slot rather than allocating per message.
 #[must_use]
-#[allow(clippy::too_many_lines)]
 pub fn create_claw_message_list() -> (gtk::ListView, gio::ListStore) {
+    create_claw_message_list_with_queue_actions(None)
+}
+
+#[must_use]
+#[allow(clippy::too_many_lines)]
+pub fn create_claw_message_list_with_queue_actions(
+    on_queue_action: Option<QueuedActionHandler>,
+) -> (gtk::ListView, gio::ListStore) {
     boxxy_viewer::set_always_expand_code_blocks(Settings::load().always_show_code_blocks);
 
     let store = gio::ListStore::new::<ClawRowObject>();
     let store_for_factory = store.clone();
+    let queue_action_for_setup = on_queue_action;
     let viewer_registry = get_claw_viewer_registry();
     let factory = gtk::SignalListItemFactory::new();
 
@@ -100,6 +118,105 @@ pub fn create_claw_message_list() -> (gtk::ListView, gio::ListStore) {
         pane_lbl.add_css_class("dim-label");
         pane_lbl.set_valign(gtk::Align::Center);
         header.append(&pane_lbl);
+
+        // Inline queued-message controls anchored directly next to the user's name:
+        // `Queued · Edit · Cancel` (or `Paused · Send · Edit · Cancel`).
+        let queue_meta_box = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+        queue_meta_box.set_valign(gtk::Align::Center);
+        queue_meta_box.set_margin_start(4);
+        queue_meta_box.set_visible(false);
+        queue_meta_box.add_css_class("claw-row-queue-meta");
+
+        let queue_status_lbl = gtk::Label::new(Some("Queued"));
+        queue_status_lbl.set_valign(gtk::Align::Center);
+        queue_status_lbl.add_css_class("caption");
+        queue_status_lbl.add_css_class("claw-row-queue-badge");
+        queue_meta_box.append(&queue_status_lbl);
+
+        let make_dot = || {
+            gtk::Label::builder()
+                .label("·")
+                .valign(gtk::Align::Center)
+                .css_classes(["caption", "dim-label", "claw-row-queue-dot"])
+                .build()
+        };
+
+        let queue_send_dot = make_dot();
+        queue_send_dot.set_visible(false);
+        queue_meta_box.append(&queue_send_dot);
+
+        let queue_send_btn = gtk::Button::builder()
+            .label("Send")
+            .tooltip_text("Run this queued message now")
+            .valign(gtk::Align::Center)
+            .focus_on_click(false)
+            .visible(false)
+            .css_classes(["flat", "caption", "claw-row-queue-btn", "claw-row-queue-send"])
+            .build();
+        queue_meta_box.append(&queue_send_btn);
+
+        let queue_edit_dot = make_dot();
+        queue_meta_box.append(&queue_edit_dot);
+
+        let queue_edit_btn = gtk::Button::builder()
+            .label("Edit")
+            .tooltip_text("Move back into input bar for editing")
+            .valign(gtk::Align::Center)
+            .focus_on_click(false)
+            .css_classes(["flat", "caption", "claw-row-queue-btn"])
+            .build();
+        queue_meta_box.append(&queue_edit_btn);
+
+        let queue_cancel_dot = make_dot();
+        queue_meta_box.append(&queue_cancel_dot);
+
+        let queue_cancel_btn = gtk::Button::builder()
+            .label("Cancel")
+            .tooltip_text("Cancel queued message")
+            .valign(gtk::Align::Center)
+            .focus_on_click(false)
+            .css_classes(["flat", "caption", "claw-row-queue-btn", "claw-row-queue-cancel"])
+            .build();
+        queue_meta_box.append(&queue_cancel_btn);
+
+        header.append(&queue_meta_box);
+
+        if let Some(ref handler) = queue_action_for_setup {
+            let current_queued_id = |item_weak: &glib::WeakRef<gtk::ListItem>| {
+                item_weak
+                    .upgrade()
+                    .and_then(|li| li.item())
+                    .and_downcast::<ClawRowObject>()
+                    .and_then(|obj| obj.queued_meta().map(|m| m.id))
+            };
+            {
+                let cb = handler.clone();
+                let item_weak = list_item.downgrade();
+                queue_send_btn.connect_clicked(move |_| {
+                    if let Some(id) = current_queued_id(&item_weak) {
+                        cb(QueuedRowAction::Send(id));
+                    }
+                });
+            }
+            {
+                let cb = handler.clone();
+                let item_weak = list_item.downgrade();
+                queue_edit_btn.connect_clicked(move |_| {
+                    if let Some(id) = current_queued_id(&item_weak) {
+                        cb(QueuedRowAction::Edit(id));
+                    }
+                });
+            }
+            {
+                let cb = handler.clone();
+                let item_weak = list_item.downgrade();
+                queue_cancel_btn.connect_clicked(move |_| {
+                    if let Some(id) = current_queued_id(&item_weak) {
+                        cb(QueuedRowAction::Cancel(id));
+                    }
+                });
+            }
+        }
 
         let copy_btn = gtk::Button::builder()
             .icon_name("boxxy-edit-copy-symbolic")
@@ -188,6 +305,10 @@ pub fn create_claw_message_list() -> (gtk::ListView, gio::ListStore) {
         hbox.set_safe_data("copy_timer", copy_timer);
         hbox.set_safe_data("title", title);
         hbox.set_safe_data("pane_lbl", pane_lbl);
+        hbox.set_safe_data("queue_meta_box", queue_meta_box);
+        hbox.set_safe_data("queue_status_lbl", queue_status_lbl);
+        hbox.set_safe_data("queue_send_dot", queue_send_dot);
+        hbox.set_safe_data("queue_send_btn", queue_send_btn);
         hbox.set_safe_data("trace_slot", trace_slot);
         hbox.set_safe_data("viewer", viewer);
         hbox.set_safe_data("cmd_label", cmd_label);
@@ -315,6 +436,14 @@ fn bind_or_refresh_slot(hbox: &gtk::Box, obj: &ClawRowObject) {
     let copy_btn = hbox.get_safe_data::<gtk::Button>("copy_btn").unwrap();
     let title = hbox.get_safe_data::<gtk::Label>("title").unwrap();
     let pane_lbl = hbox.get_safe_data::<gtk::Label>("pane_lbl").unwrap();
+    let queue_meta_box = hbox.get_safe_data::<gtk::Box>("queue_meta_box").unwrap();
+    let queue_status_lbl = hbox
+        .get_safe_data::<gtk::Label>("queue_status_lbl")
+        .unwrap();
+    let queue_send_dot = hbox.get_safe_data::<gtk::Label>("queue_send_dot").unwrap();
+    let queue_send_btn = hbox
+        .get_safe_data::<gtk::Button>("queue_send_btn")
+        .unwrap();
     let trace_slot = hbox.get_safe_data::<TurnTraceSlot>("trace_slot").unwrap();
     let viewer = hbox.get_safe_data::<StructuredViewer>("viewer").unwrap();
     let cmd_label = hbox.get_safe_data::<gtk::Label>("cmd_label").unwrap();
@@ -327,12 +456,18 @@ fn bind_or_refresh_slot(hbox: &gtk::Box, obj: &ClawRowObject) {
     }
 
     let is_working = obj.is_working();
+    let queued_meta = obj.queued_meta();
+    let is_queued = queued_meta.is_some();
     let always_show_code_blocks = boxxy_viewer::always_expand_code_blocks();
 
     // Reset per-row state that specific variants may mutate.
     left_col.set_visible(true);
+    left_col.remove_css_class("claw-queued-dim");
     header.set_visible(true);
-    copy_btn.set_visible(!is_working);
+    queue_meta_box.set_visible(false);
+    copy_btn.set_visible(!is_working && !is_queued);
+    viewer.widget().remove_css_class("claw-queued-dim");
+    thumbs_box.remove_css_class("claw-queued-dim");
     while let Some(child) = thumbs_box.first_child() {
         thumbs_box.remove(&child);
     }
@@ -354,6 +489,7 @@ fn bind_or_refresh_slot(hbox: &gtk::Box, obj: &ClawRowObject) {
         "claw-row-system",
         "claw-row-diagnosis",
         "claw-row-user",
+        "claw-row-queued",
         "claw-row-suggested",
         "claw-row-process-list",
         "claw-row-tool-call",
@@ -576,6 +712,30 @@ fn bind_or_refresh_slot(hbox: &gtk::Box, obj: &ClawRowObject) {
             set_user_header();
             trace_slot.widget().set_visible(false);
             hbox.add_css_class("claw-row-user");
+
+            if let Some(q_meta) = queued_meta {
+                hbox.add_css_class("claw-row-queued");
+                left_col.add_css_class("claw-queued-dim");
+                viewer.widget().add_css_class("claw-queued-dim");
+                thumbs_box.add_css_class("claw-queued-dim");
+
+                let badge_text = format_queued_badge_label(q_meta);
+                queue_status_lbl.set_label(&badge_text);
+                if q_meta.paused {
+                    queue_status_lbl.add_css_class("is-paused");
+                    queue_status_lbl.set_tooltip_text(Some(
+                        "Turn was interrupted — click Send to run this message",
+                    ));
+                } else {
+                    queue_status_lbl.remove_css_class("is-paused");
+                    queue_status_lbl.set_tooltip_text(Some(
+                        "Queued — runs automatically right after the current turn finishes",
+                    ));
+                }
+                queue_send_dot.set_visible(q_meta.paused);
+                queue_send_btn.set_visible(q_meta.paused);
+                queue_meta_box.set_visible(true);
+            }
 
             for img_path in images {
                 if let Some(texture) = load_cached_texture(Path::new(img_path)) {
@@ -892,6 +1052,9 @@ pub fn format_exchange_for_copy(store: &gio::ListStore, pos: u32) -> String {
         let Some(obj) = store.item(idx).and_downcast::<ClawRowObject>() else {
             continue;
         };
+        if obj.is_queued() {
+            break;
+        }
         let (is_user, is_system, is_assistant) = obj.with_row(|r| {
             (
                 matches!(r, PersistentClawRow::User { .. }),
@@ -918,6 +1081,106 @@ pub fn format_exchange_for_copy(store: &gio::ListStore, pos: u32) -> String {
     sections.join("\n\n")
 }
 
+#[must_use]
+fn format_queued_badge_label(meta: QueuedRowMeta) -> String {
+    if meta.paused {
+        if meta.total > 1 {
+            format!("Paused #{}", meta.position)
+        } else {
+            "Paused".to_string()
+        }
+    } else if meta.total > 1 {
+        format!("Queued #{}", meta.position)
+    } else {
+        "Queued".to_string()
+    }
+}
+
+/// Returns the index of the first trailing queued User row in `store` (or `store.n_items()`
+/// when no prompts are currently queued), ensuring new live turn rows always insert above
+/// pending follow-up prompts.
+#[must_use]
+pub fn first_queued_index(store: &gio::ListStore) -> u32 {
+    let mut idx = store.n_items();
+    while idx > 0 {
+        let prev = idx - 1;
+        let is_q = store
+            .item(prev)
+            .and_downcast::<ClawRowObject>()
+            .is_some_and(|o| o.is_queued());
+        if is_q {
+            idx = prev;
+        } else {
+            break;
+        }
+    }
+    idx
+}
+
+fn insert_before_queued(store: &gio::ListStore, obj: &ClawRowObject) {
+    let pos = first_queued_index(store);
+    store.insert(pos, obj);
+}
+
+/// Reconciles the trailing queued User rows in `store` against `items` (`QueueUpdated`).
+pub fn sync_queued_rows(
+    store: &gio::ListStore,
+    pane_id: &str,
+    items: &[QueuedPromptSummary],
+    paused: bool,
+) {
+    // 1. Remove any queued rows whose ID is no longer in `items` (cancelled, recalled, or popped).
+    let mut i = store.n_items();
+    while i > 0 {
+        i -= 1;
+        let remove_here = store
+            .item(i)
+            .and_downcast::<ClawRowObject>()
+            .and_then(|o| o.queued_meta())
+            .is_some_and(|m| !items.iter().any(|it| it.id == m.id));
+        if remove_here {
+            store.remove(i);
+        }
+    }
+
+    // 2. Update existing queued rows in-place and append newly enqueued items in FIFO order.
+    let total = items.len();
+    for (idx, item) in items.iter().enumerate() {
+        let meta = QueuedRowMeta {
+            id: item.id,
+            position: idx + 1,
+            total,
+            paused,
+        };
+
+        let mut existing_obj: Option<ClawRowObject> = None;
+        let n = store.n_items();
+        for pos in first_queued_index(store)..n {
+            if let Some(obj) = store.item(pos).and_downcast::<ClawRowObject>()
+                && obj.queued_meta().is_some_and(|m| m.id == item.id)
+            {
+                existing_obj = Some(obj);
+                break;
+            }
+        }
+
+        if let Some(obj) = existing_obj {
+            obj.update_queued(item, meta);
+        } else {
+            store.append(&ClawRowObject::new_queued(
+                pane_id.to_string(),
+                item,
+                meta,
+            ));
+        }
+    }
+}
+
+/// Removes all trailing queued User rows from `store` (e.g. on session exit or resume).
+pub fn clear_queued_rows(store: &gio::ListStore) {
+    sync_queued_rows(store, "", &[], false);
+}
+
 // ---------------------------------------------------------------------------
 // Row-append helpers (live working & read-only history rows)
 // ---------------------------------------------------------------------------
@@ -930,15 +1193,18 @@ pub fn add_working_turn_row(
     character_id: Option<String>,
 ) -> ClawRowObject {
     let obj = ClawRowObject::new_working(pane_id, agent_name, character_id);
-    store.append(&obj);
+    insert_before_queued(store, &obj);
     obj
 }
 
 pub fn add_system_message_row(store: &gio::ListStore, pane_id: String, content: &str) {
-    store.append(&ClawRowObject::new(PersistentClawRow::SystemMessage {
-        pane_id,
-        content: content.to_string(),
-    }));
+    insert_before_queued(
+        store,
+        &ClawRowObject::new(PersistentClawRow::SystemMessage {
+            pane_id,
+            content: content.to_string(),
+        }),
+    );
 }
 
 pub fn add_diagnosis_row(
@@ -968,17 +1234,20 @@ pub fn add_diagnosis_row_with_trace(
     trace: Vec<TurnTraceItem>,
     typewriter: bool,
 ) {
-    store.append(&ClawRowObject::new_with_typewriter(
-        PersistentClawRow::Diagnosis {
-            pane_id,
-            agent_name,
-            character_id,
-            content: content.to_string(),
-            trace,
-            usage: None,
-        },
-        typewriter,
-    ));
+    insert_before_queued(
+        store,
+        &ClawRowObject::new_with_typewriter(
+            PersistentClawRow::Diagnosis {
+                pane_id,
+                agent_name,
+                character_id,
+                content: content.to_string(),
+                trace,
+                usage: None,
+            },
+            typewriter,
+        ),
+    );
 }
 
 pub fn add_user_row(
@@ -988,12 +1257,24 @@ pub fn add_user_row(
     images: Vec<String>,
     text_attachments: Vec<String>,
 ) {
-    store.append(&ClawRowObject::new(PersistentClawRow::User {
-        pane_id,
-        content: content.to_string(),
-        images,
-        text_attachments,
-    }));
+    let first_q = first_queued_index(store);
+    if first_q < store.n_items()
+        && let Some(q_obj) = store.item(first_q).and_downcast::<ClawRowObject>()
+        && q_obj.with_row(|r| matches!(r, PersistentClawRow::User { content: c, .. } if c == content))
+    {
+        q_obj.graduate_from_queue(content.to_string(), images, text_attachments);
+        return;
+    }
+
+    insert_before_queued(
+        store,
+        &ClawRowObject::new(PersistentClawRow::User {
+            pane_id,
+            content: content.to_string(),
+            images,
+            text_attachments,
+        }),
+    );
 }
 
 pub fn add_suggested_row_with_trace(
@@ -1005,15 +1286,18 @@ pub fn add_suggested_row_with_trace(
     command: &str,
     trace: Vec<TurnTraceItem>,
 ) {
-    store.append(&ClawRowObject::new(PersistentClawRow::Suggested {
-        pane_id,
-        agent_name,
-        character_id,
-        diagnosis: diagnosis.to_string(),
-        command: command.to_string(),
-        trace,
-        usage: None,
-    }));
+    insert_before_queued(
+        store,
+        &ClawRowObject::new(PersistentClawRow::Suggested {
+            pane_id,
+            agent_name,
+            character_id,
+            diagnosis: diagnosis.to_string(),
+            command: command.to_string(),
+            trace,
+            usage: None,
+        }),
+    );
 }
 
 pub fn add_approval_row(
@@ -1173,6 +1457,97 @@ mod tests {
         assert_eq!(
             format_exchange_for_copy(&store, 7),
             "Niko Una:\nAsync tasks multiplex I/O cleanly.\n\nLevi Kujo:\nOS threads simplify blocking syscalls."
+        );
+    }
+
+    #[test]
+    fn queued_rows_stay_at_tail_and_graduate_in_place_without_flicker() {
+        let store = gio::ListStore::new::<ClawRowObject>();
+        add_user_row(
+            &store,
+            "pane-1".to_string(),
+            "Run cargo check",
+            Vec::new(),
+            Vec::new(),
+        );
+        let working = add_working_turn_row(
+            &store,
+            "pane-1".to_string(),
+            Some("Niko Una".to_string()),
+            Some("char-1".to_string()),
+        );
+
+        let id_1 = uuid::Uuid::new_v4();
+        let id_2 = uuid::Uuid::new_v4();
+        let summaries = vec![
+            QueuedPromptSummary {
+                id: id_1,
+                display_text: "Update src/parser.rs".to_string(),
+                images: Vec::new(),
+                text_attachments: Vec::new(),
+            },
+            QueuedPromptSummary {
+                id: id_2,
+                display_text: "Run unit tests".to_string(),
+                images: Vec::new(),
+                text_attachments: Vec::new(),
+            },
+        ];
+        sync_queued_rows(&store, "pane-1", &summaries, false);
+        assert_eq!(store.n_items(), 4);
+        assert_eq!(first_queued_index(&store), 2);
+
+        let q1_obj = store.item(2).and_downcast::<ClawRowObject>().unwrap();
+        assert_eq!(
+            q1_obj.queued_meta(),
+            Some(QueuedRowMeta {
+                id: id_1,
+                position: 1,
+                total: 2,
+                paused: false,
+            })
+        );
+
+        // New non-queued rows (e.g. a SystemMessage or Roundtable turn) insert BEFORE queued rows.
+        add_system_message_row(&store, "pane-1".to_string(), "Status update");
+        assert_eq!(store.n_items(), 5);
+        assert_eq!(first_queued_index(&store), 3);
+
+        // Finalize Turn 1, then dequeue item 1 (`add_user_row` + `sync_queued_rows` with `[id_2]`):
+        // `q1_obj` graduates in-place at index 3 without creating a duplicate row!
+        working.finalize_diagnosis(
+            Some("Niko Una".to_string()),
+            Some("char-1".to_string()),
+            "Check passed.".to_string(),
+            Vec::new(),
+            None,
+            false,
+        );
+        add_user_row(
+            &store,
+            "pane-1".to_string(),
+            "Update src/parser.rs",
+            Vec::new(),
+            Vec::new(),
+        );
+        sync_queued_rows(&store, "pane-1", &summaries[1..], false);
+
+        assert_eq!(store.n_items(), 5);
+        assert!(!q1_obj.is_queued());
+        assert_eq!(
+            store.item(3).and_downcast::<ClawRowObject>().unwrap(),
+            q1_obj
+        );
+        assert_eq!(first_queued_index(&store), 4);
+        let q2_obj = store.item(4).and_downcast::<ClawRowObject>().unwrap();
+        assert_eq!(
+            q2_obj.queued_meta(),
+            Some(QueuedRowMeta {
+                id: id_2,
+                position: 1,
+                total: 1,
+                paused: false,
+            })
         );
     }
 }

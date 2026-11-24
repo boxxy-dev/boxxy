@@ -157,6 +157,7 @@ mod pending_drain_tests {
             in_flight_snapshot: Arc::new(std::sync::Mutex::new(
                 crate::engine::session::InFlightSnapshot::default(),
             )),
+            last_turn_paused_queue: false,
         }
     }
 

@@ -137,7 +137,8 @@ pub fn spawn_turn(
 
     tokio::spawn(async move {
         let (speaker, host_agent_name, _host_character_id, is_incognito) = {
-            let state_lock = state.lock().await;
+            let mut state_lock = state.lock().await;
+            state_lock.last_turn_paused_queue = false;
             let host_name = if state_lock.agent_name.is_empty() {
                 agent_name.clone()
             } else {
@@ -605,6 +606,7 @@ pub fn spawn_turn(
                             })
                             .await;
                     }
+                    state.lock().await.last_turn_paused_queue = true;
                     let _ = tx_self.send(ClawMessage::TurnFinished).await;
                     return;
                 }
@@ -898,6 +900,9 @@ pub fn spawn_turn(
                     let mut state_lock = state.lock().await;
                     state_lock.active_speaker = None;
                     let blocking = had_blocking_proposal || state_lock.has_pending_approval();
+                    if had_blocking_proposal {
+                        state_lock.last_turn_paused_queue = true;
+                    }
                     state_lock.next_roundtable_turn = state_lock.roundtable.on_turn_completed(
                         &speaker,
                         &response,
@@ -965,6 +970,7 @@ pub fn spawn_turn(
                     state_lock.active_speaker = None;
                     state_lock.next_roundtable_turn = None;
                     state_lock.roundtable.clear();
+                    state_lock.last_turn_paused_queue = true;
                     std::mem::take(&mut state_lock.current_turn_trace)
                 };
 

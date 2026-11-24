@@ -751,6 +751,7 @@ pub fn spawn_dispatch(
                 ClawEngineEvent::Evicted => {
                     ignoring_aborted_turn.set(false);
                     settle_or_prune_working_row(&overlay_store, &active_turn_row);
+                    overlay.clear_queue();
                     overlay.btw().reset_session();
                     *pending_tasks.borrow_mut() = Vec::new();
                     indicator.set_vibe(false);
@@ -905,9 +906,19 @@ pub fn spawn_dispatch(
                         overlay.is_visible(),
                     );
                 }
+                ClawEngineEvent::QueueUpdated { items, paused } => {
+                    overlay.update_queue(items, *paused);
+                }
+                ClawEngineEvent::QueuedPromptRecalled {
+                    id: prompt_id,
+                    fallback_text,
+                } => {
+                    msg_bar.restore_recalled_draft(*prompt_id, fallback_text);
+                }
                 ClawEngineEvent::RestoreHistory(rows) => {
                     ignoring_aborted_turn.set(false);
                     *active_turn_row.borrow_mut() = None;
+                    overlay.clear_queue();
                     overlay.btw().reset_session();
                     let mut restored_tools: u64 = 0;
                     for row in rows {

@@ -113,6 +113,7 @@ impl ClawSession {
             ClawMessage::ClawQuery { .. }
             | ClawMessage::UserMessage { .. }
             | ClawMessage::BtwQuery { .. }
+            | ClawMessage::SendQueuedPrompt { .. }
             | ClawMessage::ScheduledTaskTriggered { .. }
             | ClawMessage::DelegatedTask { .. }
             | ClawMessage::RequestLazyDiagnosis

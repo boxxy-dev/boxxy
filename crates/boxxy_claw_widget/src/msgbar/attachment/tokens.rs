@@ -99,6 +99,7 @@ impl Attachment {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AttachmentPayload {
+    pub prompt_id: Option<uuid::Uuid>,
     pub text: String,
     pub images: Vec<String>,
     pub image_meta: Vec<ImageAttachmentMeta>,
@@ -494,6 +495,7 @@ pub fn build_payload_from_attachments(base_text: &str, active: &[Attachment]) ->
     let mut text = base_text.to_string();
     if active.is_empty() {
         return AttachmentPayload {
+            prompt_id: None,
             text,
             images: Vec::new(),
             image_meta: Vec::new(),
@@ -537,6 +539,7 @@ pub fn build_payload_from_attachments(base_text: &str, active: &[Attachment]) ->
     }
 
     AttachmentPayload {
+        prompt_id: None,
         text,
         images,
         image_meta,

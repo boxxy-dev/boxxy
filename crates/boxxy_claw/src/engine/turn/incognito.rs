@@ -161,6 +161,7 @@ pub(super) async fn run_incognito_turn(
             }
         }
         Err(e) => {
+            state.lock().await.last_turn_paused_queue = true;
             let _ = tx_ui
                 .send(ClawEngineEvent::AgentThinking {
                     agent_name: agent_name.clone(),

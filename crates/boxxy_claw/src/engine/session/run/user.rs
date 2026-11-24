@@ -5,7 +5,7 @@ use sha2::{Digest, Sha256};
 use crate::engine::session::ClawSession;
 use crate::engine::{ClawEngineEvent, ClawMessage, turn::spawn_turn};
 
-use super::context::RunContext;
+use super::context::{QueuedPrompt, RunContext};
 
 const ATTACHMENT_SQUARE_THUMB_PX: u32 = 128;
 
@@ -205,6 +205,10 @@ impl ClawSession {
         if !ctx.backlog.is_empty() {
             ctx.backlog.clear();
             had_active = true;
+        }
+        if !ctx.queued_prompts.is_empty() && !ctx.queue_paused {
+            ctx.queue_paused = true;
+            self.emit_queue_updated(ctx).await;
         }
 
         let local_cancelled = {
@@ -510,7 +514,9 @@ impl ClawSession {
                     text: system_message,
                 })
                 .await;
-                let _ = self.tx_self.send(ClawMessage::TurnFinished).await;
+                if ctx.current_turn.is_none() {
+                    let _ = self.tx_self.send(ClawMessage::TurnFinished).await;
+                }
             }
             UserTurnAction::Stop {
                 is_slash,
@@ -646,8 +652,234 @@ impl ClawSession {
         }
     }
 
+    pub(super) async fn emit_queue_updated(&self, ctx: &RunContext) {
+        let _ = self
+            .tx_ui
+            .send(ClawEngineEvent::QueueUpdated {
+                items: ctx.queue_summaries(),
+                paused: ctx.queue_paused,
+            })
+            .await;
+    }
+
+    async fn should_bypass_queue(
+        &self,
+        ctx: &RunContext,
+        raw_query: &str,
+        display_query: &str,
+    ) -> bool {
+        if ctx.current_turn.is_none() {
+            return true;
+        }
+        let trimmed = display_query.trim();
+        if let Some((cmd, args)) = boxxy_claw_protocol::SlashCommand::parse(trimmed) {
+            match cmd {
+                boxxy_claw_protocol::SlashCommand::Stop
+                | boxxy_claw_protocol::SlashCommand::Undo => return true,
+                boxxy_claw_protocol::SlashCommand::Drama if args.is_empty() => return true,
+                boxxy_claw_protocol::SlashCommand::Drama
+                | boxxy_claw_protocol::SlashCommand::Debate
+                    if self.incognito =>
+                {
+                    return true;
+                }
+                _ => {}
+            }
+        }
+        if self.incognito
+            && let Some((
+                boxxy_claw_protocol::SlashCommand::Stop
+                | boxxy_claw_protocol::SlashCommand::Drama
+                | boxxy_claw_protocol::SlashCommand::Debate
+                | boxxy_claw_protocol::SlashCommand::Undo,
+                _,
+            )) = boxxy_claw_protocol::SlashCommand::parse(raw_query)
+        {
+            return true;
+        }
+
+        let state_lock = self.state.lock().await;
+        if state_lock.has_in_turn_approval() {
+            return true;
+        }
+        let roundtable_active = state_lock.roundtable.is_active()
+            || state_lock.roundtable.auto_alternate
+            || state_lock.active_speaker.is_some();
+        drop(state_lock);
+        roundtable_active && trimmed.eq_ignore_ascii_case("stop")
+    }
+
+    pub(super) async fn handle_remove_queued_prompt(
+        &self,
+        ctx: &mut RunContext,
+        id: uuid::Uuid,
+        recall_to_input: bool,
+    ) {
+        let Some(pos) = ctx.queued_prompts.iter().position(|item| item.id == id) else {
+            return;
+        };
+        let Some(removed) = ctx.queued_prompts.remove(pos) else {
+            return;
+        };
+        if ctx.queued_prompts.is_empty() {
+            ctx.queue_paused = false;
+        }
+        self.emit_queue_updated(ctx).await;
+        if recall_to_input {
+            let _ = self
+                .tx_ui
+                .send(ClawEngineEvent::QueuedPromptRecalled {
+                    id,
+                    fallback_text: removed.display_query,
+                })
+                .await;
+        }
+    }
+
+    pub(super) async fn handle_clear_queued_prompts(&self, ctx: &mut RunContext) {
+        if ctx.clear_queue() {
+            self.emit_queue_updated(ctx).await;
+        }
+    }
+
+    pub(super) async fn handle_send_queued_prompt(
+        &self,
+        ctx: &mut RunContext,
+        session_ctx: &str,
+        id: uuid::Uuid,
+        snapshot: String,
+        cwd: String,
+    ) {
+        let Some(pos) = ctx.queued_prompts.iter().position(|item| item.id == id) else {
+            return;
+        };
+        let Some(mut item) = ctx.queued_prompts.remove(pos) else {
+            return;
+        };
+
+        if ctx.current_turn.is_some() {
+            // A turn is already active: promote to front of queue and unpause.
+            ctx.queued_prompts.push_front(item);
+            ctx.queue_paused = false;
+            self.emit_queue_updated(ctx).await;
+            return;
+        }
+
+        ctx.queue_paused = false;
+
+        if !self.incognito {
+            if !snapshot.is_empty() {
+                item.snapshot = snapshot;
+            } else if let Some(latest_snap) =
+                ctx.workspace.get_pane_snapshot(self.pane_id.clone()).await
+            {
+                item.snapshot = latest_snap;
+            }
+            if !cwd.is_empty() {
+                item.cwd = cwd;
+            } else if !ctx.current_dir.is_empty() && ctx.current_dir != "/" {
+                item.cwd.clone_from(&ctx.current_dir);
+            }
+        }
+
+        self.execute_dequeued_prompt(ctx, session_ctx, item).await;
+        self.emit_queue_updated(ctx).await;
+    }
+
+    pub(super) async fn execute_dequeued_prompt(
+        &self,
+        ctx: &mut RunContext,
+        session_ctx: &str,
+        item: QueuedPrompt,
+    ) {
+        {
+            let mut state_lock = self.state.lock().await;
+            state_lock.next_roundtable_turn = None;
+        }
+        if item.is_user_message_variant {
+            self.execute_user_message_now(
+                ctx,
+                session_ctx,
+                item.raw_query,
+                item.snapshot,
+                item.cwd,
+                item.image_attachments,
+                item.image_attachment_meta,
+            )
+            .await;
+        } else {
+            self.execute_claw_query_now(
+                ctx,
+                session_ctx,
+                item.raw_query,
+                item.snapshot,
+                item.cwd,
+                item.image_attachments,
+                item.image_attachment_meta,
+            )
+            .await;
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(super) async fn handle_claw_query(
+        &self,
+        ctx: &mut RunContext,
+        session_ctx: &str,
+        prompt_id: Option<uuid::Uuid>,
+        query: String,
+        snapshot: String,
+        cwd: String,
+        image_attachments: Vec<String>,
+        image_attachment_meta: Vec<boxxy_claw_protocol::ImageAttachmentMeta>,
+    ) {
+        let display_query = crate::engine::turn::extract_user_authored_prompt(&query).to_string();
+
+        if !self.should_bypass_queue(ctx, &query, &display_query).await {
+            let text_attachments = crate::engine::turn::extract_text_attachment_labels(&query);
+            let thumb_paths = if self.incognito {
+                Vec::new()
+            } else {
+                cache_user_attachment_thumbnails(&image_attachments).await
+            };
+            ctx.queue_paused = false;
+            ctx.queued_prompts.push_back(QueuedPrompt {
+                id: prompt_id.unwrap_or_else(uuid::Uuid::new_v4),
+                raw_query: query,
+                display_query,
+                snapshot,
+                cwd,
+                image_attachments,
+                image_attachment_meta,
+                thumb_paths,
+                text_attachments,
+                is_user_message_variant: false,
+            });
+            self.emit_queue_updated(ctx).await;
+            return;
+        }
+
+        if ctx.current_turn.is_none() && ctx.queue_paused {
+            ctx.queue_paused = false;
+            if !ctx.queued_prompts.is_empty() {
+                self.emit_queue_updated(ctx).await;
+            }
+        }
+
+        self.execute_claw_query_now(
+            ctx,
+            session_ctx,
+            query,
+            snapshot,
+            cwd,
+            image_attachments,
+            image_attachment_meta,
+        )
+        .await;
+    }
+
+    #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+    async fn execute_claw_query_now(
         &self,
         ctx: &mut RunContext,
         session_ctx: &str,
@@ -673,6 +905,10 @@ impl ClawSession {
                                 .await;
                         }
                         ctx.backlog.clear();
+                        if !ctx.queued_prompts.is_empty() && !ctx.queue_paused {
+                            ctx.queue_paused = true;
+                            self.emit_queue_updated(ctx).await;
+                        }
                         let _ = self.tx_self.send(ClawMessage::TurnFinished).await;
                         return;
                     }
@@ -685,7 +921,9 @@ impl ClawSession {
                                 text: "🕵️ Session commands (/drama, /debate, /undo) are unavailable in Incognito Mode.".to_string(),
                             })
                             .await;
-                        let _ = self.tx_self.send(ClawMessage::TurnFinished).await;
+                        if ctx.current_turn.is_none() {
+                            let _ = self.tx_self.send(ClawMessage::TurnFinished).await;
+                        }
                         return;
                     }
                     _ => {}
@@ -773,6 +1011,59 @@ impl ClawSession {
 
     #[allow(clippy::too_many_arguments)]
     pub(super) async fn handle_user_message(
+        &self,
+        ctx: &mut RunContext,
+        session_ctx: &str,
+        message: String,
+        snapshot: String,
+        cwd: String,
+        image_attachments: Vec<String>,
+        image_attachment_meta: Vec<boxxy_claw_protocol::ImageAttachmentMeta>,
+    ) {
+        if !self.should_bypass_queue(ctx, &message, &message).await {
+            let thumb_paths = if self.incognito {
+                Vec::new()
+            } else {
+                cache_user_attachment_thumbnails(&image_attachments).await
+            };
+            ctx.queue_paused = false;
+            ctx.queued_prompts.push_back(QueuedPrompt {
+                id: uuid::Uuid::new_v4(),
+                raw_query: message.clone(),
+                display_query: message,
+                snapshot,
+                cwd,
+                image_attachments,
+                image_attachment_meta,
+                thumb_paths,
+                text_attachments: Vec::new(),
+                is_user_message_variant: true,
+            });
+            self.emit_queue_updated(ctx).await;
+            return;
+        }
+
+        if ctx.current_turn.is_none() && ctx.queue_paused {
+            ctx.queue_paused = false;
+            if !ctx.queued_prompts.is_empty() {
+                self.emit_queue_updated(ctx).await;
+            }
+        }
+
+        self.execute_user_message_now(
+            ctx,
+            session_ctx,
+            message,
+            snapshot,
+            cwd,
+            image_attachments,
+            image_attachment_meta,
+        )
+        .await;
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn execute_user_message_now(
         &self,
         ctx: &mut RunContext,
         session_ctx: &str,
@@ -947,6 +1238,7 @@ mod tests {
             .handle_claw_query(
                 &mut ctx,
                 "",
+                None,
                 "/drama".to_string(),
                 String::new(),
                 String::new(),
@@ -975,6 +1267,7 @@ mod tests {
             .handle_claw_query(
                 &mut ctx,
                 "",
+                None,
                 "/undo".to_string(),
                 String::new(),
                 String::new(),
@@ -1011,6 +1304,7 @@ mod tests {
             .handle_claw_query(
                 &mut ctx,
                 "",
+                None,
                 "/stop".to_string(),
                 String::new(),
                 String::new(),
@@ -1033,6 +1327,165 @@ mod tests {
                 effective_query: "Explain src/module.rs".to_string(),
                 allow_steering: false,
             }
+        );
+    }
+
+    #[tokio::test]
+    async fn prompts_submitted_during_active_turn_enqueue_in_fifo_order_and_support_remove_recall_and_park() {
+        let (session, _tx, rx_ui) = ClawSession::new("pane-queue-test".to_string());
+        let session = session.with_identity(
+            "char-host".to_string(),
+            "Host Agent".to_string(),
+            "sess-queue-test".to_string(),
+        );
+        let workspace = Arc::new(crate::registry::workspace::WorkspaceRegistry::new());
+        let mut ctx = RunContext::new(Arc::new(NoopEnv), workspace);
+
+        // Simulate an active running turn (`current_turn = Some(...)`).
+        let (hold_tx, hold_rx) = tokio::sync::oneshot::channel::<()>();
+        ctx.current_turn = Some(tokio::spawn(async move {
+            let _ = hold_rx.await;
+        }));
+
+        let first_id = uuid::Uuid::new_v4();
+        let second_id = uuid::Uuid::new_v4();
+
+        // 1. Submitting two prompts while `current_turn.is_some()` enqueues them without aborting the turn.
+        session
+            .handle_claw_query(
+                &mut ctx,
+                "",
+                Some(first_id),
+                "Inspect src/parser.rs".to_string(),
+                String::new(),
+                "/workspace".to_string(),
+                Vec::new(),
+                Vec::new(),
+            )
+            .await;
+
+        session
+            .handle_claw_query(
+                &mut ctx,
+                "",
+                Some(second_id),
+                "Run unit tests [Image 1 · diagram.png]".to_string(),
+                String::new(),
+                "/workspace".to_string(),
+                vec!["aGVsbG8=".to_string()],
+                Vec::new(),
+            )
+            .await;
+
+        assert!(
+            ctx.current_turn
+                .as_ref()
+                .is_some_and(|h| !h.is_finished()),
+            "Active turn must keep running when follow-up messages are queued"
+        );
+        assert_eq!(ctx.queued_prompts.len(), 2);
+        assert!(!ctx.queue_paused);
+
+        let mut events = Vec::new();
+        while let Ok(ev) = rx_ui.try_recv() {
+            events.push(ev);
+        }
+        assert!(matches!(
+            events.last(),
+            Some(ClawEngineEvent::QueueUpdated { items, paused: false })
+                if items.len() == 2
+                    && items[0].id == first_id
+                    && items[0].display_text == "Inspect src/parser.rs"
+                    && items[0].images.is_empty()
+                    && items[1].id == second_id
+                    && items[1].images.len() == 1
+        ));
+
+        // 2. Recalling `second_id` removes it from the queue and emits `QueuedPromptRecalled`.
+        session
+            .handle_remove_queued_prompt(&mut ctx, second_id, true)
+            .await;
+        assert_eq!(ctx.queued_prompts.len(), 1);
+        assert_eq!(ctx.queued_prompts[0].id, first_id);
+
+        let mut recall_events = Vec::new();
+        while let Ok(ev) = rx_ui.try_recv() {
+            recall_events.push(ev);
+        }
+        assert!(recall_events.iter().any(|e| matches!(
+            e,
+            ClawEngineEvent::QueueUpdated { items, paused: false } if items.len() == 1 && items[0].id == first_id
+        )));
+        assert!(recall_events.iter().any(|e| matches!(
+            e,
+            ClawEngineEvent::QueuedPromptRecalled { id, fallback_text }
+                if *id == second_id && fallback_text == "Run unit tests [Image 1 · diagram.png]"
+        )));
+
+        // 3. Aborting the active turn parks (`paused: true`) the remaining queued item instead of deleting it.
+        session.handle_abort(&mut ctx).await;
+        assert!(ctx.current_turn.is_none());
+        assert_eq!(ctx.queued_prompts.len(), 1);
+        assert!(ctx.queue_paused);
+
+        let mut abort_events = Vec::new();
+        while let Ok(ev) = rx_ui.try_recv() {
+            abort_events.push(ev);
+        }
+        assert!(abort_events.iter().any(|e| matches!(
+            e,
+            ClawEngineEvent::QueueUpdated { items, paused: true } if items.len() == 1 && items[0].id == first_id
+        )));
+
+        // 4. Removing the last item resets `queue_paused` and empties the queue.
+        session
+            .handle_remove_queued_prompt(&mut ctx, first_id, false)
+            .await;
+        assert!(ctx.queued_prompts.is_empty());
+        assert!(!ctx.queue_paused);
+        let _ = hold_tx.send(());
+    }
+
+    #[tokio::test]
+    async fn pending_in_turn_proposal_is_steered_immediately_instead_of_queuing() {
+        let (session, _tx, _rx_ui) = ClawSession::new("pane-steer-test".to_string());
+        let session = session.with_identity(
+            "char-host".to_string(),
+            "Host Agent".to_string(),
+            "sess-steer-test".to_string(),
+        );
+        let workspace = Arc::new(crate::registry::workspace::WorkspaceRegistry::new());
+        let mut ctx = RunContext::new(Arc::new(NoopEnv), workspace);
+
+        let (_hold_tx, hold_rx) = tokio::sync::oneshot::channel::<()>();
+        ctx.current_turn = Some(tokio::spawn(async move {
+            let _ = hold_rx.await;
+        }));
+        let (file_tx, file_rx) = tokio::sync::oneshot::channel();
+        session.state.lock().await.pending_file_reply = Some(file_tx);
+
+        session
+            .handle_claw_query(
+                &mut ctx,
+                "",
+                Some(uuid::Uuid::new_v4()),
+                "Use src/config.rs instead".to_string(),
+                String::new(),
+                "/workspace".to_string(),
+                Vec::new(),
+                Vec::new(),
+            )
+            .await;
+
+        assert!(
+            ctx.queued_prompts.is_empty(),
+            "Steering an awaiting tool approval must resolve the approval immediately, not sit in the queue"
+        );
+        assert_eq!(
+            file_rx.await.unwrap(),
+            boxxy_core_toolbox::ApprovalOutcome::Interrupted(
+                "Use src/config.rs instead".to_string()
+            )
         );
     }
 }

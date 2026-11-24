@@ -1,9 +1,20 @@
-use boxxy_claw_protocol::{FileDiff, PersistentClawRow, TurnTraceItem, UsageWrapper};
+use boxxy_claw_protocol::{
+    FileDiff, PersistentClawRow, QueuedPromptSummary, TurnTraceItem, UsageWrapper,
+};
 use gtk4::glib;
 use gtk4::subclass::prelude::*;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
+
+/// Metadata carried by an unsent follow-up User row while waiting in the session queue.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct QueuedRowMeta {
+    pub id: uuid::Uuid,
+    pub position: usize,
+    pub total: usize,
+    pub paused: bool,
+}
 
 /// Granularity of an in-place `ClawRowObject` mutation so bound `GtkListView` slots
 /// can fast-path high-frequency prose streaming without rebinding avatars or trace headers.
@@ -17,7 +28,8 @@ pub type RowUpdateCallback = Rc<dyn Fn(RowUpdateKind)>;
 
 mod imp {
     use super::{
-        Arc, Cell, ObjectImpl, ObjectSubclass, PersistentClawRow, RefCell, RowUpdateCallback, glib,
+        Arc, Cell, ObjectImpl, ObjectSubclass, PersistentClawRow, QueuedRowMeta, RefCell,
+        RowUpdateCallback, glib,
     };
 
     #[derive(Default)]
@@ -25,6 +37,7 @@ mod imp {
         pub row: RefCell<Option<PersistentClawRow>>,
         pub typewriter: Cell<bool>,
         pub is_working: Cell<bool>,
+        pub queued_meta: Cell<Option<QueuedRowMeta>>,
         pub active_status: RefCell<Option<String>>,
         pub pending_approval_diff: RefCell<Option<Arc<str>>>,
         pub trace_expanded: Cell<bool>,
@@ -84,6 +97,85 @@ impl ClawRowObject {
         imp.is_working.set(true);
         *imp.active_status.borrow_mut() = Some("Thinking…".to_string());
         obj
+    }
+
+    /// Creates a pending follow-up User row waiting in the session's prompt queue.
+    #[must_use]
+    pub fn new_queued(
+        pane_id: String,
+        item: &QueuedPromptSummary,
+        meta: QueuedRowMeta,
+    ) -> Self {
+        let obj = Self::new(PersistentClawRow::User {
+            pane_id,
+            content: item.display_text.clone(),
+            images: item.images.clone(),
+            text_attachments: item.text_attachments.clone(),
+        });
+        obj.imp().queued_meta.set(Some(meta));
+        obj
+    }
+
+    #[must_use]
+    pub fn queued_meta(&self) -> Option<QueuedRowMeta> {
+        self.imp().queued_meta.get()
+    }
+
+    #[must_use]
+    pub fn is_queued(&self) -> bool {
+        self.imp().queued_meta.get().is_some()
+    }
+
+    pub fn update_queued(&self, item: &QueuedPromptSummary, meta: QueuedRowMeta) {
+        let imp = self.imp();
+        let meta_changed = imp.queued_meta.replace(Some(meta)) != Some(meta);
+        let mut row_changed = false;
+        if let Some(PersistentClawRow::User {
+            ref mut content,
+            ref mut images,
+            ref mut text_attachments,
+            ..
+        }) = *imp.row.borrow_mut()
+        {
+            if content != &item.display_text {
+                content.clone_from(&item.display_text);
+                row_changed = true;
+            }
+            if images != &item.images {
+                images.clone_from(&item.images);
+                row_changed = true;
+            }
+            if text_attachments != &item.text_attachments {
+                text_attachments.clone_from(&item.text_attachments);
+                row_changed = true;
+            }
+        }
+        if meta_changed || row_changed {
+            self.bump_and_notify();
+        }
+    }
+
+    /// Transitions a queued User row in-place into a settled User message when its turn begins.
+    pub fn graduate_from_queue(
+        &self,
+        next_content: String,
+        next_images: Vec<String>,
+        next_text_attachments: Vec<String>,
+    ) {
+        let imp = self.imp();
+        imp.queued_meta.set(None);
+        if let Some(PersistentClawRow::User {
+            ref mut content,
+            ref mut images,
+            ref mut text_attachments,
+            ..
+        }) = *imp.row.borrow_mut()
+        {
+            *content = next_content;
+            *images = next_images;
+            *text_attachments = next_text_attachments;
+        }
+        self.bump_and_notify();
     }
 
     #[must_use]

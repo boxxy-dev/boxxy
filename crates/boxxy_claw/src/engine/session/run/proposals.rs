@@ -20,6 +20,10 @@ impl ClawSession {
                 .await;
         }
         ctx.backlog.clear();
+        if !ctx.queued_prompts.is_empty() && !ctx.queue_paused {
+            ctx.queue_paused = true;
+            self.emit_queue_updated(ctx).await;
+        }
 
         {
             let mut state_lock = self.state.lock().await;
@@ -28,6 +32,7 @@ impl ClawSession {
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .clear();
+            state_lock.last_turn_paused_queue = false;
             state_lock.status = crate::engine::AgentStatus::Waiting;
             state_lock.active_speaker = None;
             state_lock.next_roundtable_turn = None;

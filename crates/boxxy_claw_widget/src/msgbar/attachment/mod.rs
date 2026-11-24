@@ -210,6 +210,99 @@ impl AttachmentManager {
         }
     }
 
+    /// Merges a recalled queued prompt (and its inline attachments) into the composer,
+    /// preserving any in-progress draft and re-numbering colliding `[Image N]`/`[File N]` tokens.
+    #[must_use]
+    pub fn merge_recalled_for_text(
+        &self,
+        current_text: &str,
+        recalled_text: &str,
+        recalled_attachments: Vec<Attachment>,
+    ) -> String {
+        if current_text.trim().is_empty() && self.attachments.borrow().is_empty() {
+            let owned = recalled_text.to_string();
+            self.load_attachments_for_text(recalled_attachments, &owned);
+            return owned;
+        }
+
+        let mut merged_segment = recalled_text.to_string();
+        if !recalled_attachments.is_empty() {
+            let mut active = self.attachments.borrow_mut();
+            let stashed = self.stashed.borrow();
+            let mut tracked = self.tracked_inline_ids.borrow_mut();
+
+            for mut att in recalled_attachments {
+                if att.id.is_empty() {
+                    att.id = uuid::Uuid::new_v4().to_string();
+                }
+                let old_token = att.token.clone();
+
+                if let Some(existing_token) = active
+                    .iter()
+                    .find(|a| {
+                        a.is_image == att.is_image
+                            && a.label == att.label
+                            && a.content == att.content
+                    })
+                    .map(|a| a.token.clone())
+                {
+                    if !old_token.is_empty() && old_token != existing_token {
+                        merged_segment = merged_segment.replace(&old_token, &existing_token);
+                    }
+                    continue;
+                }
+
+                let kind = TokenKind::from_attachment(&att.label, att.is_image);
+                let att_num = tokens::parse_token_number(&att.token, kind);
+                let number_conflicts = att_num.is_some_and(|n| {
+                    active
+                        .iter()
+                        .any(|a| tokens::parse_token_number(&a.token, kind) == Some(n))
+                        || stashed
+                            .iter()
+                            .any(|a| tokens::parse_token_number(&a.token, kind) == Some(n))
+                });
+                let combined_probe = format!("{current_text}\n{merged_segment}");
+                let token_conflicts = att.token.is_empty()
+                    || number_conflicts
+                    || active.iter().any(|a| a.token == att.token)
+                    || stashed.iter().any(|a| a.token == att.token)
+                    || current_text.contains(&att.token);
+
+                if token_conflicts {
+                    let next_token = allocate_next_token(
+                        kind,
+                        &att.label,
+                        &att.content,
+                        &active,
+                        &stashed,
+                        &combined_probe,
+                    );
+                    if !old_token.is_empty() {
+                        merged_segment = merged_segment.replace(&old_token, &next_token);
+                    } else if !merged_segment.is_empty() {
+                        merged_segment.push(' ');
+                        merged_segment.push_str(&next_token);
+                    } else {
+                        merged_segment.clone_from(&next_token);
+                    }
+                    att.token = next_token;
+                }
+
+                tracked.insert(att.id.clone());
+                active.push(att);
+            }
+        }
+
+        if current_text.is_empty() {
+            merged_segment
+        } else if merged_segment.is_empty() {
+            current_text.to_string()
+        } else {
+            format!("{current_text}\n{merged_segment}")
+        }
+    }
+
     /// Adds an attachment and, when an input `GtkTextView` is bound, inserts its inline token
     /// (`[Image N · file]`, `[Image N]`, `[File N · file]`, or `[Pasted ~N lines]`) at the cursor.
     #[allow(clippy::needless_pass_by_value)]
@@ -847,5 +940,53 @@ fn insert_pasted_text(mgr: &AttachmentManager, entry: &gtk::TextView, raw_text: 
         buf.delete_selection(true, true);
         buf.insert_at_cursor(&normalized);
         buf.end_user_action();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn merge_recalled_for_text_preserves_existing_draft_and_renumbers_colliding_tokens() {
+        let mgr = AttachmentManager::new();
+
+        // 1. Into empty composer: restores text and attachments directly.
+        let recalled_one = vec![Attachment {
+            id: "att-1".to_string(),
+            token: "[Image 1 · diagram.png]".to_string(),
+            label: "diagram.png".to_string(),
+            content: "aW1nMQ==".to_string(),
+            is_image: true,
+        }];
+        let restored = mgr.merge_recalled_for_text(
+            "",
+            "Check layout in [Image 1 · diagram.png]",
+            recalled_one,
+        );
+        assert_eq!(restored, "Check layout in [Image 1 · diagram.png]");
+        assert_eq!(mgr.get_attachments().len(), 1);
+        assert_eq!(mgr.get_attachments()[0].token, "[Image 1 · diagram.png]");
+
+        // 2. Into non-empty composer that already holds `[Image 1 · diagram.png]`:
+        //    recalling a second prompt with a different `[Image 1 · chart.png]` renumbers to `Image 2`!
+        let recalled_two = vec![Attachment {
+            id: "att-2".to_string(),
+            token: "[Image 1 · chart.png]".to_string(),
+            label: "chart.png".to_string(),
+            content: "aW1nMg==".to_string(),
+            is_image: true,
+        }];
+        let merged = mgr.merge_recalled_for_text(
+            &restored,
+            "Also compare [Image 1 · chart.png]",
+            recalled_two,
+        );
+        assert_eq!(
+            merged,
+            "Check layout in [Image 1 · diagram.png]\nAlso compare [Image 2 · chart.png]"
+        );
+        assert_eq!(mgr.get_attachments().len(), 2);
+        assert_eq!(mgr.get_attachments()[1].token, "[Image 2 · chart.png]");
     }
 }
