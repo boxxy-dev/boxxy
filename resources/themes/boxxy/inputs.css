@@ -61,6 +61,62 @@ switch:checked > slider {
     border: var(--boxxy-border-thin) solid @boxxy_ink;
 }
 
+/* ── Segmented Toggle Groups (`AdwToggleGroup`) ──────────────────────────── */
+
+toggle-group:not(.flat) {
+    background-color: @window_bg_color;
+    background-image: none;
+    color: @card_fg_color;
+    border-radius: var(--boxxy-radius-input);
+    outline: var(--boxxy-border-width) solid @boxxy_ink;
+    outline-offset: -2px;
+    padding: 3px;
+    box-shadow: none;
+}
+
+toggle-group:not(.flat) > toggle {
+    background: transparent;
+    background-color: transparent;
+    background-image: none;
+    color: @card_fg_color;
+    border-radius: var(--boxxy-radius-sm);
+    min-height: 24px;
+    padding: 2px 10px;
+    font-weight: 600;
+    box-shadow: none;
+}
+
+toggle-group:not(.flat) > toggle:hover:not(:checked) {
+    background-color: mix(@window_bg_color, @accent_bg_color, 0.16);
+    color: @card_fg_color;
+}
+
+toggle-group:not(.flat) > toggle:checked {
+    background-color: @accent_bg_color;
+    background-image: none;
+    color: @accent_fg_color;
+    outline: var(--boxxy-border-thin) solid @boxxy_ink;
+    outline-offset: -1.5px;
+    box-shadow: 1px 1.5px 0px @boxxy_shadow;
+    font-weight: 700;
+}
+
+toggle-group:not(.flat) > toggle:checked label,
+toggle-group:not(.flat) > toggle:checked image {
+    color: @accent_fg_color;
+    font-weight: 700;
+}
+
+toggle-group:not(.flat) > separator {
+    background-color: alpha(@boxxy_ink, 0.45);
+    margin: 4px 1px;
+}
+
+toggle-group:not(.flat) > separator.hidden {
+    background-color: transparent;
+    opacity: 0;
+}
+
 /* ── Scale Sliders ───────────────────────────────────────────────────────── */
 
 scale > trough {

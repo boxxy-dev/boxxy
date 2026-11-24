@@ -333,7 +333,8 @@ pub(super) fn setup_split_drag_and_drop(
     claw_popover: &boxxy_claw_widget::TerminalOverlay,
     callback: std::sync::Arc<dyn Fn(PaneOutput) + Send + Sync + 'static>,
     pane_id: String,
-) {
+    drag_handle_allowed: Rc<std::cell::Cell<bool>>,
+) -> Box<dyn Fn()> {
     let is_lane_visible = Rc::new(std::cell::Cell::new(false));
     let is_dragging = Rc::new(std::cell::Cell::new(false));
 
@@ -361,6 +362,7 @@ pub(super) fn setup_split_drag_and_drop(
     {
         let is_lane_visible = is_lane_visible.clone();
         let is_dragging = is_dragging.clone();
+        let drag_handle_allowed = drag_handle_allowed.clone();
         let drag_lane_w = drag_lane.downgrade();
         let drag_handle_w = drag_handle.downgrade();
         let search_bar = search_bar.clone();
@@ -368,7 +370,11 @@ pub(super) fn setup_split_drag_and_drop(
         let hide_lane_c = hide_lane.clone();
 
         hover_motion.connect_motion(move |ctrl, _x, y| {
-            if is_dragging.get() || claw_popover.is_visible() || search_bar.is_visible() {
+            if !drag_handle_allowed.get()
+                || is_dragging.get()
+                || claw_popover.is_visible()
+                || search_bar.is_visible()
+            {
                 hide_lane_c();
                 return;
             }
@@ -430,6 +436,9 @@ pub(super) fn setup_split_drag_and_drop(
     {
         let payload = PaneDragPayload(pane_id.clone());
         drag_source.connect_prepare(move |_, _, _| {
+            if !drag_handle_allowed.get() {
+                return None;
+            }
             Some(gdk::ContentProvider::for_value(&payload.to_value()))
         });
     }
@@ -582,6 +591,8 @@ pub(super) fn setup_split_drag_and_drop(
         });
     }
     pane_overlay.add_controller(drop_target);
+
+    Box::new(hide_lane)
 }
 
 #[cfg(test)]

@@ -149,6 +149,9 @@ pub(crate) struct PaneInner {
     pub(super) current_settings: Option<Settings>,
     pub(super) hide_scrollbars: bool,
     pub(super) is_dimmed: bool,
+    pub(super) is_in_split: bool,
+    pub(super) drag_handle_allowed: Rc<Cell<bool>>,
+    pub(super) hide_drag_lane: Option<Box<dyn Fn()>>,
     pub(super) size_dismiss_source: Option<gtk::glib::SourceId>,
     pub(super) n_columns: i64,
     pub(super) n_rows: i64,
@@ -202,6 +205,20 @@ impl PaneInner {
             self.terminal.detach_pty();
         }
         Some(self.session_id.clone())
+    }
+
+    pub(super) fn sync_drag_handle_allowed(&self) {
+        let mode = self
+            .current_settings
+            .as_ref()
+            .map_or_else(|| Settings::load().pane_move_handle, |s| s.pane_move_handle);
+        let allowed = mode.should_show(self.is_in_split);
+        self.drag_handle_allowed.set(allowed);
+        if !allowed
+            && let Some(ref hide) = self.hide_drag_lane
+        {
+            hide();
+        }
     }
 }
 
@@ -399,6 +416,8 @@ impl TerminalPaneComponent {
         msg_bar.set_web_search_visible(settings.enable_web_search);
         msg_bar.set_working_dir(init.working_dir.clone());
 
+        let drag_handle_allowed = Rc::new(Cell::new(settings.pane_move_handle.should_show(false)));
+
         let inner = Rc::new(RefCell::new(PaneInner {
             terminal: terminal.clone(),
             scrolled_window,
@@ -410,6 +429,9 @@ impl TerminalPaneComponent {
             current_settings: None,
             hide_scrollbars: false,
             is_dimmed: false,
+            is_in_split: false,
+            drag_handle_allowed: drag_handle_allowed.clone(),
+            hide_drag_lane: None,
             size_dismiss_source: None,
             n_columns: 0,
             n_rows: 0,
@@ -485,7 +507,7 @@ impl TerminalPaneComponent {
         inner.borrow_mut().claw_indicator = Some(claw_indicator.clone());
         inner.borrow_mut().claw_popover = Some(claw_popover.clone());
 
-        gestures::setup_split_drag_and_drop(
+        let hide_drag_lane = gestures::setup_split_drag_and_drop(
             &widget,
             &terminal,
             &drop_overlay,
@@ -495,7 +517,9 @@ impl TerminalPaneComponent {
             &claw_popover,
             callback,
             id,
+            drag_handle_allowed,
         );
+        inner.borrow_mut().hide_drag_lane = Some(hide_drag_lane);
 
         // Single pass-through resize observer driving both the `cols × rows` OSD
         // and the Claw drawer's live max-height cap.
@@ -1081,6 +1105,7 @@ impl TerminalPaneComponent {
 
         let hide_badge = settings.hide_character_badge;
         inner.current_settings = Some(settings);
+        inner.sync_drag_handle_allowed();
         if let Some(ind) = &inner.claw_indicator {
             ind.update_settings(hide_badge);
         }
@@ -1090,5 +1115,13 @@ impl TerminalPaneComponent {
         let mut inner = self.inner.borrow_mut();
         inner.is_dimmed = dimmed;
         inner.terminal.set_dimmed(dimmed);
+    }
+
+    pub fn set_in_split(&self, in_split: bool) {
+        let mut inner = self.inner.borrow_mut();
+        if inner.is_in_split != in_split {
+            inner.is_in_split = in_split;
+            inner.sync_drag_handle_allowed();
+        }
     }
 }

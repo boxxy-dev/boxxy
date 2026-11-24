@@ -415,6 +415,39 @@
                                   </object>
                                 </child>
                                 <child>
+                                  <object class="AdwActionRow" id="pane_move_handle_row">
+                                    <property name="title" translatable="yes">Display Move Handle</property>
+                                    <property name="subtitle" translatable="yes">Show the top drag handle used to rearrange panes</property>
+                                    <child type="suffix">
+                                      <object class="AdwToggleGroup" id="pane_move_handle_toggle">
+                                        <property name="valign">center</property>
+                                        <property name="active-name">split_panes_only</property>
+                                        <child>
+                                          <object class="AdwToggle">
+                                            <property name="name">always</property>
+                                            <property name="label" translatable="yes">Always</property>
+                                            <property name="tooltip" translatable="yes">Always show the move handle on hover, including single panes</property>
+                                          </object>
+                                        </child>
+                                        <child>
+                                          <object class="AdwToggle">
+                                            <property name="name">split_panes_only</property>
+                                            <property name="label" translatable="yes">Split Panes</property>
+                                            <property name="tooltip" translatable="yes">Show the move handle for split panes only</property>
+                                          </object>
+                                        </child>
+                                        <child>
+                                          <object class="AdwToggle">
+                                            <property name="name">never</property>
+                                            <property name="label" translatable="yes">Never</property>
+                                            <property name="tooltip" translatable="yes">Never show the pane move handle</property>
+                                          </object>
+                                        </child>
+                                      </object>
+                                    </child>
+                                  </object>
+                                </child>
+                                <child>
                                   <object class="AdwSwitchRow" id="smart_tab_naming_switch">
                                     <property name="title" translatable="yes">Smart Tab Naming</property>
                                     <property name="subtitle" translatable="yes">Show concise directory or command names in tabs and the full path on hover</property>

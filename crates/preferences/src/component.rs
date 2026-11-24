@@ -62,6 +62,8 @@ impl PreferencesComponent {
         on_open_themes: F1,
         on_reload_engine: F2,
     ) -> Self {
+        adw::ToggleGroup::ensure_type();
+        adw::Toggle::ensure_type();
         let builder = gtk::Builder::from_resource("/dev/boxxy/BoxxyTerminal/ui/preferences.ui");
         let dialog: adw::Dialog = builder.object("dialog").unwrap();
         let split_view: adw::NavigationSplitView = builder.object("split_view").unwrap();
@@ -406,5 +408,42 @@ fn widen_preferences_clamps(root: &gtk::Widget) {
     while let Some(w) = child {
         widen_preferences_clamps(&w);
         child = w.next_sibling();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn preferences_ui_xml_parses_and_exposes_pane_move_handle_toggle_group() {
+        if adw::init().is_err() {
+            return;
+        }
+        adw::ToggleGroup::ensure_type();
+        adw::Toggle::ensure_type();
+
+        let builder = gtk::Builder::from_string(include_str!(
+            "../../../resources/ui/preferences.ui"
+        ));
+        let row: adw::ActionRow = builder
+            .object("pane_move_handle_row")
+            .expect("pane_move_handle_row must exist in preferences.ui");
+        assert_eq!(row.title().as_str(), "Display Move Handle");
+
+        let toggle_group: adw::ToggleGroup = builder
+            .object("pane_move_handle_toggle")
+            .expect("pane_move_handle_toggle must exist in preferences.ui");
+        assert_eq!(toggle_group.n_toggles(), 3);
+        assert_eq!(
+            toggle_group.active_name().as_deref(),
+            Some("split_panes_only")
+        );
+        for name in ["always", "split_panes_only", "never"] {
+            assert!(
+                toggle_group.toggle_by_name(name).is_some(),
+                "expected toggle '{name}' in pane_move_handle_toggle"
+            );
+        }
     }
 }

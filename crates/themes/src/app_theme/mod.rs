@@ -341,4 +341,37 @@ highlight = "#fcbf49"
         }
         assert_eq!(button_count, 2, "expected 2 direct child buttons in ViewSwitcher");
     }
+
+    #[test]
+    fn test_adw_toggle_group_nodes_match_inputs_css_contract() {
+        if libadwaita::init().is_err() {
+            return;
+        }
+
+        let group = libadwaita::ToggleGroup::new();
+        for (name, label) in [
+            ("always", "Always"),
+            ("split_panes_only", "Split Panes"),
+            ("never", "Never"),
+        ] {
+            let toggle = libadwaita::Toggle::new();
+            toggle.set_name(Some(name));
+            toggle.set_label(Some(label));
+            group.add(toggle);
+        }
+        group.set_active_name(Some("split_panes_only"));
+
+        assert_eq!(group.css_name().as_str(), "toggle-group");
+        assert_eq!(group.active_name().as_deref(), Some("split_panes_only"));
+
+        let mut toggle_count = 0;
+        let mut child = group.first_child();
+        while let Some(widget) = child {
+            if widget.css_name().as_str() == "toggle" {
+                toggle_count += 1;
+            }
+            child = widget.next_sibling();
+        }
+        assert_eq!(toggle_count, 3, "expected 3 direct toggle children in AdwToggleGroup");
+    }
 }

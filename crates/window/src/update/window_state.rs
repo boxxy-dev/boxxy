@@ -197,6 +197,8 @@ fn only_ui_chrome_changed(prev: &Settings, next: &Settings) -> bool {
     probe.color_scheme = next.color_scheme;
     probe.smart_tab_naming = next.smart_tab_naming;
     probe.colored_tabs = next.colored_tabs;
+    probe.dim_inactive_panes = next.dim_inactive_panes;
+    probe.pane_move_handle = next.pane_move_handle;
     probe == *next
 }
 

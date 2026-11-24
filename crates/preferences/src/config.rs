@@ -69,6 +69,59 @@ impl fmt::Display for ImagePreviewTrigger {
     }
 }
 
+// --- Pane Move Handle ---
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum PaneMoveHandleMode {
+    Always,
+    #[default]
+    #[serde(alias = "splits_only")]
+    SplitPanesOnly,
+    Never,
+}
+
+impl PaneMoveHandleMode {
+    #[must_use]
+    pub const fn as_name(self) -> &'static str {
+        match self {
+            Self::Always => "always",
+            Self::SplitPanesOnly => "split_panes_only",
+            Self::Never => "never",
+        }
+    }
+
+    #[must_use]
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "always" => Some(Self::Always),
+            "split_panes_only" => Some(Self::SplitPanesOnly),
+            "never" => Some(Self::Never),
+            _ => None,
+        }
+    }
+
+    /// Returns whether the top hover move handle should be shown for a pane,
+    /// given whether the enclosing tab currently displays multiple split panes.
+    #[must_use]
+    pub const fn should_show(self, is_split: bool) -> bool {
+        match self {
+            Self::Always => true,
+            Self::SplitPanesOnly => is_split,
+            Self::Never => false,
+        }
+    }
+}
+
+impl fmt::Display for PaneMoveHandleMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Always => write!(f, "Always"),
+            Self::SplitPanesOnly => write!(f, "Split Panes"),
+            Self::Never => write!(f, "Never"),
+        }
+    }
+}
+
 // --- Currency ---
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Default)]
 #[serde(rename_all = "UPPERCASE")]
@@ -332,6 +385,8 @@ pub struct Settings {
     pub mouse_autohide: bool,
     pub hide_scrollbars: bool,
     pub dim_inactive_panes: bool,
+    #[serde(default)]
+    pub pane_move_handle: PaneMoveHandleMode,
     #[serde(default = "default_smart_tab_naming")]
     pub smart_tab_naming: bool,
     pub api_keys: HashMap<String, String>,
@@ -421,6 +476,7 @@ impl Default for Settings {
             mouse_autohide: false,
             hide_scrollbars: true,
             dim_inactive_panes: true,
+            pane_move_handle: PaneMoveHandleMode::SplitPanesOnly,
             smart_tab_naming: default_smart_tab_naming(),
             api_keys: HashMap::new(),
             ollama_base_url: "http://localhost:11434".to_string(),
@@ -1479,6 +1535,7 @@ mod tests {
         assert!(legacy.use_native_search);
         assert!(legacy.nautilus_integration);
         assert!(legacy.smart_tab_naming);
+        assert_eq!(legacy.pane_move_handle, PaneMoveHandleMode::SplitPanesOnly);
         assert_eq!(
             legacy.disabled_skills,
             vec![
@@ -1509,6 +1566,37 @@ mod tests {
         assert_eq!(Currency::Cny.format_from_usd(1.0), "¥6.69");
         assert_eq!(Currency::Inr.format_from_usd(1.0), "₹95.06");
         assert_eq!(Currency::Brl.format_from_usd(1.0), "R$5.06");
+    }
+
+    #[test]
+    fn pane_move_handle_mode_roundtrip_and_visibility_rules() {
+        assert_eq!(
+            PaneMoveHandleMode::default(),
+            PaneMoveHandleMode::SplitPanesOnly
+        );
+
+        assert!(PaneMoveHandleMode::Always.should_show(false));
+        assert!(PaneMoveHandleMode::Always.should_show(true));
+        assert!(!PaneMoveHandleMode::SplitPanesOnly.should_show(false));
+        assert!(PaneMoveHandleMode::SplitPanesOnly.should_show(true));
+        assert!(!PaneMoveHandleMode::Never.should_show(false));
+        assert!(!PaneMoveHandleMode::Never.should_show(true));
+
+        for mode in [
+            PaneMoveHandleMode::Always,
+            PaneMoveHandleMode::SplitPanesOnly,
+            PaneMoveHandleMode::Never,
+        ] {
+            assert_eq!(PaneMoveHandleMode::from_name(mode.as_name()), Some(mode));
+            let s = Settings {
+                pane_move_handle: mode,
+                ..Settings::default()
+            };
+            let json = serde_json::to_string(&s).unwrap();
+            let decoded: Settings = serde_json::from_str(&json).unwrap();
+            assert_eq!(decoded.pane_move_handle, mode);
+        }
+        assert_eq!(PaneMoveHandleMode::from_name("unknown"), None);
     }
 
     #[test]

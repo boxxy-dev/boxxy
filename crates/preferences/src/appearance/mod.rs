@@ -1,4 +1,4 @@
-use crate::config::{CursorShape, Settings};
+use crate::config::{CursorShape, PaneMoveHandleMode, Settings};
 use crate::ui_utils::{Debouncer, PageHooks, SearchRow, make_editable_color_dot};
 use adw::prelude::*;
 use gtk::pango;
@@ -36,6 +36,9 @@ pub(crate) fn setup_appearance_page(
     let hide_scrollbars_switch: adw::SwitchRow = builder.object("hide_scrollbars_switch").unwrap();
     let invert_scroll_switch: adw::SwitchRow = builder.object("invert_scroll_switch").unwrap();
     let dim_inactive_switch: adw::SwitchRow = builder.object("dim_inactive_switch").unwrap();
+    let pane_move_handle_row: adw::ActionRow = builder.object("pane_move_handle_row").unwrap();
+    let pane_move_handle_toggle: adw::ToggleGroup =
+        builder.object("pane_move_handle_toggle").unwrap();
     let smart_tab_naming_switch: adw::SwitchRow =
         builder.object("smart_tab_naming_switch").unwrap();
     let colored_tabs_switch: adw::SwitchRow = builder.object("colored_tabs_switch").unwrap();
@@ -334,6 +337,25 @@ pub(crate) fn setup_appearance_page(
     bind_bool_switch!(cursor_blinking_switch, cursor_blinking);
     bind_bool_switch!(mouse_autohide_switch, mouse_autohide);
 
+    pane_move_handle_toggle.set_active_name(Some(initial.pane_move_handle.as_name()));
+    {
+        let is_syncing = is_syncing.clone();
+        pane_move_handle_toggle.connect_active_name_notify(move |group| {
+            if is_syncing.get() {
+                return;
+            }
+            let Some(name) = group.active_name() else {
+                return;
+            };
+            let Some(mode) = PaneMoveHandleMode::from_name(name.as_str()) else {
+                return;
+            };
+            Settings::update(|s| {
+                s.pane_move_handle = mode;
+            });
+        });
+    }
+
     // 5. Cursor settings
     let cursor_shapes_list = gtk::StringList::new(&["Block", "I-Beam", "Underline"]);
     cursor_shape_combo.set_model(Some(&cursor_shapes_list));
@@ -411,6 +433,10 @@ pub(crate) fn setup_appearance_page(
     let s_scroll = SearchRow::new(&hide_scrollbars_switch, "hide scrollbars vertical");
     let s_inv = SearchRow::new(&invert_scroll_switch, "invert scroll direction wheel");
     let s_dim = SearchRow::new(&dim_inactive_switch, "dim inactive panes splits");
+    let s_move_handle = SearchRow::new(
+        &pane_move_handle_row,
+        "display move handle handler drag bar split panes rearrange always never",
+    );
     let s_smart_tabs = SearchRow::new(&smart_tab_naming_switch, "smart tab naming basename");
 
     let sync = Box::new(move |s: &Settings| {
@@ -447,6 +473,10 @@ pub(crate) fn setup_appearance_page(
         hide_scrollbars_switch.set_active(s.hide_scrollbars);
         invert_scroll_switch.set_active(s.invert_scroll);
         dim_inactive_switch.set_active(s.dim_inactive_panes);
+        let target_move_handle = s.pane_move_handle.as_name();
+        if pane_move_handle_toggle.active_name().as_deref() != Some(target_move_handle) {
+            pane_move_handle_toggle.set_active_name(Some(target_move_handle));
+        }
         smart_tab_naming_switch.set_active(s.smart_tab_naming);
         colored_tabs_switch.set_active(s.colored_tabs);
         cursor_blinking_switch.set_active(s.cursor_blinking);
@@ -482,6 +512,7 @@ pub(crate) fn setup_appearance_page(
             | s_scroll.apply(query)
             | s_inv.apply(query)
             | s_dim.apply(query)
+            | s_move_handle.apply(query)
             | s_smart_tabs.apply(query);
 
         group_appearance.set_visible(a);

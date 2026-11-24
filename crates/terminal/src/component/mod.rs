@@ -315,6 +315,8 @@ impl TerminalComponent {
                             pane.controller.grab_focus();
                         }
                     }
+                    drop(inner);
+                    self.update_dimming();
                 }
             }
             PaneOutput::TitleChanged(id, title) => {
@@ -515,6 +517,7 @@ impl TerminalComponent {
         for (id, data) in &inner.panes {
             let should_dim = dimming_enabled && has_multiple && *id != inner.active_pane_id;
             data.controller.set_dimmed(should_dim);
+            data.controller.set_in_split(has_multiple);
         }
     }
 
@@ -1081,6 +1084,8 @@ impl TerminalComponent {
         for pane in inner.panes.values() {
             pane.controller.update_settings(settings.clone(), palette);
         }
+        drop(inner);
+        self.update_dimming();
     }
 
     pub fn inject_keystrokes_by_id(&self, id: &str, keys: &str) -> bool {
