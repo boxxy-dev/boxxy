@@ -297,6 +297,15 @@ impl AppWindow {
             &current_settings,
         );
         sidebar_overlay.set_visible(app_state.sidebar_visible);
+        let sidebar_menu = boxxy_terminal::AppMenuComponent::new();
+        sidebar_menu.widget().set_parent(&sidebar_overlay);
+        {
+            let sidebar_menu_destroy = sidebar_menu.clone();
+            sidebar_overlay.connect_destroy(move |_| {
+                sidebar_menu_destroy.unparent();
+            });
+        }
+        sidebar_menu.bind_app_only_surface(&sidebar_overlay, false, || {});
         split_view.set_sidebar(Some(&sidebar_overlay));
         let (content_toolbar, content_header, detached_btn, detached_count_lbl, tab_bar) =
             Self::build_content_area(&tx, &tab_view, &current_settings);
@@ -392,6 +401,7 @@ impl AppWindow {
             sidebar_visible: app_state.sidebar_visible,
             preferences: None,
             tab_menu: None,
+            sidebar_menu,
             claw,
             bookmarks_sidebar,
             bookmarks_controller: None,
@@ -505,6 +515,7 @@ impl AppWindow {
                     && let Ok(mut inner) = inner_rc.try_borrow_mut()
                 {
                     inner.command_palette.unparent();
+                    inner.sidebar_menu.unparent();
                     if let Some(tm) = inner.tab_menu.take() {
                         tm.unparent();
                     }

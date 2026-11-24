@@ -49,7 +49,7 @@ pub(super) fn setup_gestures(
     search_bar: &Rc<SearchBarComponent>,
     callback: std::sync::Arc<dyn Fn(PaneOutput) + Send + Sync + 'static>,
     id: String,
-) {
+) -> AppMenuComponent {
     // Track focus across the entire pane (`gtk::Overlay`) rather than only `TerminalWidget`
     // so focusing the Claw overlay drawer, input bar, cancel button, or search bar updates
     // `active_pane_id`, inactive-pane dimming, and sidebar state across splits.
@@ -278,6 +278,8 @@ pub(super) fn setup_gestures(
         gtk::glib::Propagation::Proceed
     });
     terminal.add_controller(scroll_ctrl);
+
+    app_menu
 }
 
 /// Dedicated in-process GType for pane split drag-and-drop so external file or

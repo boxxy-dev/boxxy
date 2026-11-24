@@ -17,7 +17,7 @@ use boxxy_claw_protocol::*;
 use boxxy_claw_widget::ClawIndicator;
 use boxxy_claw_widget::{OverlayMode, TerminalOverlay};
 
-mod app_menu;
+pub mod app_menu;
 mod claw;
 mod claw_host;
 mod events;
@@ -457,7 +457,7 @@ impl TerminalPaneComponent {
         *inner_weak_ref.borrow_mut() = Some(Rc::downgrade(&inner));
         crate::register_live_pane(id.clone(), Rc::downgrade(&inner));
 
-        gestures::setup_gestures(
+        let app_menu = gestures::setup_gestures(
             &widget,
             &terminal,
             &inner,
@@ -507,6 +507,14 @@ impl TerminalPaneComponent {
 
         inner.borrow_mut().claw_indicator = Some(claw_indicator.clone());
         inner.borrow_mut().claw_popover = Some(claw_popover.clone());
+
+        {
+            let cb_for_menu = callback.clone();
+            let id_for_menu = id.clone();
+            app_menu.bind_app_only_surface(claw_popover.widget(), true, move || {
+                cb_for_menu(PaneOutput::Focused(id_for_menu.clone()));
+            });
+        }
 
         let hide_drag_lane = gestures::setup_split_drag_and_drop(
             &widget,

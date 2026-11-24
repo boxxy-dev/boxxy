@@ -194,6 +194,7 @@ pub struct AppWindowInner {
     pub sidebar_visible: bool,
     pub preferences: Option<PreferencesComponent>,
     pub tab_menu: Option<TabContextMenu>,
+    pub sidebar_menu: boxxy_terminal::AppMenuComponent,
     pub claw: ClawSidebarComponent,
     pub bookmarks_sidebar: BookmarksSidebarComponent,
     pub bookmarks_controller: Option<BookmarksTabComponent>,

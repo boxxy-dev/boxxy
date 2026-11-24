@@ -14,15 +14,30 @@ pub struct AppMenuComponent {
     popover: gtk4::PopoverMenu,
 }
 
+fn menu_item(label: &str, action: &str) -> gio::MenuItem {
+    let i = gio::MenuItem::new(Some(label), Some(action));
+    i.set_attribute_value("accel", Some(&"".to_variant()));
+    i
+}
+
+fn append_app_section(menu_model: &gio::Menu, include_open_in_files: bool) {
+    let app_section = gio::Menu::new();
+    if include_open_in_files {
+        app_section.append_item(&menu_item("Open in Files", "win.open-in-files"));
+    }
+    app_section.append_item(&menu_item("Command Palette", "win.command-palette"));
+    app_section.append_item(&menu_item("Preferences", "win.preferences"));
+    menu_model.append_section(None, &app_section);
+}
+
+fn build_app_only_menu_model(include_open_in_files: bool) -> gio::Menu {
+    let menu_model = gio::Menu::new();
+    append_app_section(&menu_model, include_open_in_files);
+    menu_model
+}
+
 fn build_menu_model(ctx: &AppMenuContext) -> gio::Menu {
     let menu_model = gio::Menu::new();
-
-    // Helper to create menu items without inline shortcut labels
-    let item = |label: &str, action: &str| {
-        let i = gio::MenuItem::new(Some(label), Some(action));
-        i.set_attribute_value("accel", Some(&"".to_variant()));
-        i
-    };
 
     // ── Section 1: Copy Actions ──────────────────────────────────────────────
     let copy_model = gio::Menu::new();
@@ -32,7 +47,7 @@ fn build_menu_model(ctx: &AppMenuContext) -> gio::Menu {
     } else {
         "term.disabled"
     };
-    copy_model.append_item(&item("Copy", copy_action));
+    copy_model.append_item(&menu_item("Copy", copy_action));
 
     let path_item = if let Some(ref path) = ctx.path_to_copy {
         let label = if path.starts_with("http://") || path.starts_with("https://") {
@@ -45,7 +60,7 @@ fn build_menu_model(ctx: &AppMenuContext) -> gio::Menu {
         i.set_attribute_value("accel", Some(&"".to_variant()));
         i
     } else {
-        item("Copy Link", "term.disabled")
+        menu_item("Copy Link", "term.disabled")
     };
     copy_model.append_item(&path_item);
 
@@ -56,9 +71,9 @@ fn build_menu_model(ctx: &AppMenuContext) -> gio::Menu {
 
     // ── Section 2: Terminal Edit & Reset ─────────────────────────────────────
     let std_section = gio::Menu::new();
-    std_section.append_item(&item("Paste", "term.paste"));
-    std_section.append_item(&item("Select All", "term.select-all"));
-    std_section.append_item(&item("Reset", "term.reset-terminal"));
+    std_section.append_item(&menu_item("Paste", "term.paste"));
+    std_section.append_item(&menu_item("Select All", "term.select-all"));
+    std_section.append_item(&menu_item("Reset", "term.reset-terminal"));
     menu_model.append_section(None, &std_section);
 
     // ── Section 3: Split Pane Icons ──────────────────────────────────────────
@@ -96,13 +111,38 @@ fn build_menu_model(ctx: &AppMenuContext) -> gio::Menu {
     menu_model.append_item(&split_section_item);
 
     // ── Section 4: App & Meta Actions ────────────────────────────────────────
-    let app_section = gio::Menu::new();
-    app_section.append_item(&item("Open in Files", "win.open-in-files"));
-    app_section.append_item(&item("Command Palette", "win.command-palette"));
-    app_section.append_item(&item("Preferences", "win.preferences"));
-    menu_model.append_section(None, &app_section);
+    append_app_section(&menu_model, true);
 
     menu_model
+}
+
+/// Returns `true` when a secondary click at `(x, y)` inside `surface` should be left to
+/// a descendant widget's native context menu (text inputs, selected/linked labels, child
+/// popovers, or inline media preview cards).
+fn should_defer_secondary_click(surface: &gtk4::Widget, x: f64, y: f64) -> bool {
+    let mut current = surface.pick(x, y, gtk4::PickFlags::DEFAULT);
+    while let Some(widget) = current {
+        if &widget == surface {
+            break;
+        }
+        if widget.is::<gtk4::Popover>()
+            || widget.is::<gtk4::Text>()
+            || widget.is::<gtk4::TextView>()
+            || widget.is::<gtk4::Editable>()
+            || widget.has_css_class("viewer-image-card")
+            || widget.has_css_class("sidebar-resize-handle")
+        {
+            return true;
+        }
+        if let Ok(label) = widget.clone().downcast::<gtk4::Label>()
+            && label.is_selectable()
+            && (label.selection_bounds().is_some() || label.current_uri().is_some())
+        {
+            return true;
+        }
+        current = widget.parent();
+    }
+    false
 }
 
 impl AppMenuComponent {
@@ -132,13 +172,64 @@ impl AppMenuComponent {
     }
 
     pub fn show(&self, rect: gdk::Rectangle, ctx: AppMenuContext) {
-        let menu_model = build_menu_model(&ctx);
-        self.popover.set_menu_model(Some(&menu_model));
+        self.popup_with_model(rect, &build_menu_model(&ctx));
+    }
+
+    pub fn show_app_only(&self, rect: gdk::Rectangle, include_open_in_files: bool) {
+        self.popup_with_model(rect, &build_app_only_menu_model(include_open_in_files));
+    }
+
+    fn popup_with_model(&self, rect: gdk::Rectangle, menu_model: &gio::Menu) {
+        self.popover.set_menu_model(Some(menu_model));
         self.popover.set_pointing_to(Some(&rect));
         let popover = self.popover.clone();
         gtk4::glib::idle_add_local_once(move || {
             popover.popup();
         });
+    }
+
+    /// Attaches a right-click gesture onto `surface` that opens the compact app-only
+    /// menu (`Command Palette`, `Preferences`, plus optional `Open in Files`), deferring
+    /// to native context menus on text inputs, selected/linked labels, child popovers,
+    /// and inline media cards.
+    pub fn bind_app_only_surface<F: Fn() + 'static>(
+        &self,
+        surface: &impl IsA<gtk4::Widget>,
+        include_open_in_files: bool,
+        on_before_open: F,
+    ) {
+        let gesture = gtk4::GestureClick::new();
+        gesture.set_button(gdk::BUTTON_SECONDARY);
+        gesture.set_propagation_phase(gtk4::PropagationPhase::Capture);
+
+        let surface_weak = surface.upcast_ref().downgrade();
+        let menu = self.clone();
+        gesture.connect_pressed(move |gesture, _n_press, x, y| {
+            let Some(surface_widget) = surface_weak.upgrade() else {
+                return;
+            };
+            if should_defer_secondary_click(&surface_widget, x, y) {
+                return;
+            }
+            let Some(popover_parent) = menu.widget().parent() else {
+                return;
+            };
+            let pt = surface_widget
+                .compute_point(
+                    &popover_parent,
+                    &gtk4::graphene::Point::new(x as f32, y as f32),
+                )
+                .unwrap_or_else(|| gtk4::graphene::Point::new(x as f32, y as f32));
+
+            gesture.set_state(gtk4::EventSequenceState::Claimed);
+            on_before_open();
+            menu.show_app_only(
+                gdk::Rectangle::new(pt.x() as i32, pt.y() as i32, 1, 1),
+                include_open_in_files,
+            );
+        });
+
+        surface.add_controller(gesture);
     }
 }
 
@@ -257,6 +348,51 @@ mod tests {
                 Some("win.toggle-maximize".to_string()),
                 Some("boxxy-view-restore-symbolic".to_string()),
             )
+        );
+    }
+
+    #[test]
+    fn app_only_context_menu_respects_open_in_files_flag() {
+        let overlay_menu = build_app_only_menu_model(true);
+        assert_eq!(overlay_menu.n_items(), 1);
+        let overlay_section = overlay_menu
+            .item_link(0, gio::MENU_LINK_SECTION)
+            .expect("overlay app section");
+        assert_eq!(
+            section_items(&overlay_section),
+            vec![
+                (
+                    Some("Open in Files".to_string()),
+                    Some("win.open-in-files".to_string()),
+                ),
+                (
+                    Some("Command Palette".to_string()),
+                    Some("win.command-palette".to_string()),
+                ),
+                (
+                    Some("Preferences".to_string()),
+                    Some("win.preferences".to_string()),
+                ),
+            ]
+        );
+
+        let sidebar_menu = build_app_only_menu_model(false);
+        assert_eq!(sidebar_menu.n_items(), 1);
+        let sidebar_section = sidebar_menu
+            .item_link(0, gio::MENU_LINK_SECTION)
+            .expect("sidebar app section");
+        assert_eq!(
+            section_items(&sidebar_section),
+            vec![
+                (
+                    Some("Command Palette".to_string()),
+                    Some("win.command-palette".to_string()),
+                ),
+                (
+                    Some("Preferences".to_string()),
+                    Some("win.preferences".to_string()),
+                ),
+            ]
         );
     }
 }
