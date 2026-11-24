@@ -2,7 +2,7 @@ use crate::engine::{ClawEngineEvent, ClawMessage, session::SessionState};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-use super::{build_user_message_with_images, history};
+use super::{history, multimodal};
 
 /// Executes an ephemeral `/incognito` turn:
 /// - Sends ONLY the raw user prompt (and any pasted images) + in-memory incognito conversation history.
@@ -15,6 +15,7 @@ pub(super) async fn run_incognito_turn(
     character_id: String,
     prompt: String,
     images: Vec<String>,
+    image_meta: Vec<boxxy_claw_protocol::ImageAttachmentMeta>,
     session_ctx: String,
     state: Arc<Mutex<SessionState>>,
     tx_ui: async_channel::Sender<ClawEngineEvent>,
@@ -33,9 +34,11 @@ pub(super) async fn run_incognito_turn(
     let (history, history_len, api_keys, ollama_url) = {
         let mut state_lock = state.lock().await;
         // Push ONLY the user's raw text — zero identity, CWD, snapshot, memories, or user profile.
+        let history_prompt =
+            multimodal::annotate_prompt_for_history(&prompt, images.len(), &image_meta);
         state_lock
             .history
-            .push(rig::message::Message::user(prompt.clone()));
+            .push(rig::message::Message::user(history_prompt));
         let h = state_lock.history.clone();
         let l = h.len();
         (
@@ -71,7 +74,8 @@ pub(super) async fn run_incognito_turn(
     let final_history =
         history::prepare_query_history_for_speaker(history, history_len, &character_id, &agent_name);
 
-    let query_for_chat = build_user_message_with_images(prompt, images);
+    let query_for_chat =
+        multimodal::build_interleaved_user_message(&prompt, "", images, &image_meta);
     let mut incognito_trace: Vec<boxxy_claw_protocol::TurnTraceItem> = Vec::new();
     let tx_for_thoughts = tx_ui.clone();
     let name_for_thoughts = agent_name.clone();

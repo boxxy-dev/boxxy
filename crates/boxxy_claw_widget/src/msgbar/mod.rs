@@ -9,7 +9,7 @@ use gtk4::prelude::*;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-pub use attachment::{Attachment, AttachmentManager};
+pub use attachment::{Attachment, AttachmentManager, AttachmentPayload};
 
 type SubmitHook = Rc<RefCell<Option<Box<dyn Fn(&str)>>>>;
 type ClearHook = Rc<RefCell<Option<Box<dyn Fn()>>>>;
@@ -61,7 +61,7 @@ impl MsgBarComponent {
     #[must_use]
     #[allow(clippy::too_many_lines)]
     pub fn new<
-        F: Fn((String, Vec<String>)) + 'static,
+        F: Fn(AttachmentPayload) + 'static,
         C: Fn() + 'static,
         T1: Fn(bool) + 'static,
         T2: Fn(bool) + 'static,
@@ -100,6 +100,7 @@ impl MsgBarComponent {
             .wrap_mode(gtk::WrapMode::WordChar)
             .accepts_tab(false)
             .build();
+        attachment_mgr.bind_entry(&entry);
 
         let default_placeholder_str =
             "Type your message... (@file: attach, :character: mention, /: commands)";
@@ -132,15 +133,36 @@ impl MsgBarComponent {
             .foreground("#c061cb")
             .weight(600)
             .build();
+        let attachment_tag = gtk::TextTag::builder()
+            .name("mention-attachment")
+            .foreground("#62a0ea")
+            .weight(700)
+            .build();
         entry.buffer().tag_table().add(&file_tag);
         entry.buffer().tag_table().add(&char_tag);
+        entry.buffer().tag_table().add(&attachment_tag);
+
+        let refresh_highlights: Rc<dyn Fn(&gtk::TextBuffer)> = {
+            let att_mgr_for_buf = attachment_mgr.clone();
+            let last_mention_colors: Rc<RefCell<(String, String)>> =
+                Rc::new(RefCell::new((String::new(), String::new())));
+            Rc::new(move |buf: &gtk::TextBuffer| {
+                highlight_input_mentions(
+                    buf,
+                    &att_mgr_for_buf,
+                    &file_tag,
+                    &char_tag,
+                    &attachment_tag,
+                    &last_mention_colors,
+                );
+            })
+        };
 
         let placeholder_for_buf = placeholder_label.clone();
-        let last_mention_colors: Rc<RefCell<(String, String)>> =
-            Rc::new(RefCell::new((String::new(), String::new())));
+        let refresh_for_changed = refresh_highlights.clone();
         entry.buffer().connect_changed(move |buf| {
             placeholder_for_buf.set_visible(buf.char_count() == 0);
-            highlight_input_mentions(buf, &file_tag, &char_tag, &last_mention_colors);
+            refresh_for_changed(buf);
         });
 
         // Default app font, not terminal monospace. The msgbar is
@@ -447,22 +469,37 @@ impl MsgBarComponent {
                         .get(..11)
                         .is_some_and(|p| p.eq_ignore_ascii_case("/incognito "));
                 if is_incognito_cmd {
-                    buf.set_text("");
-                    attachment_mgr.clear();
                     if claw_state.get() {
                         // /incognito is only allowed when starting a new session
+                        attachment_mgr.with_sync_suppressed(|| {
+                            buf.set_text("");
+                        });
+                        attachment_mgr.clear();
                         return;
                     }
-                    let inline_msg = trimmed_input.get(10..).map(str::trim).unwrap_or_default();
-                    let payload_text = if inline_msg.is_empty() {
+                    let inline_msg = trimmed_input.get(10..).map_or_default(str::trim);
+                    let payload_prefix = if inline_msg.is_empty() {
                         "/incognito".to_string()
                     } else {
                         format!("/incognito {inline_msg}")
                     };
+                    let payload = if inline_msg.is_empty() {
+                        AttachmentPayload {
+                            text: payload_prefix,
+                            images: Vec::new(),
+                            image_meta: Vec::new(),
+                        }
+                    } else {
+                        attachment_mgr.build_payload(&payload_prefix)
+                    };
+                    attachment_mgr.with_sync_suppressed(|| {
+                        buf.set_text("");
+                    });
+                    attachment_mgr.clear();
                     if let Some(hook) = on_submit_hook.borrow().as_ref() {
-                        hook(&payload_text);
+                        hook(&payload.text);
                     }
-                    on_submit((payload_text, Vec::new()));
+                    on_submit(payload);
                     return;
                 }
 
@@ -586,19 +623,21 @@ impl MsgBarComponent {
                     return;
                 }
 
-                let (text, images) = attachment_mgr.build_payload(&original_text);
+                let payload = attachment_mgr.build_payload(&original_text);
 
-                if !text.trim().is_empty() || !images.is_empty() {
+                if !payload.text.trim().is_empty() || !payload.images.is_empty() {
                     if let Some(hook) = on_submit_hook.borrow().as_ref() {
-                        hook(&text);
+                        hook(&payload.text);
                     }
                     if !is_incognito_active {
                         history
                             .borrow_mut()
                             .push(original_text, attachment_mgr.get_attachments());
                     }
-                    on_submit((text, images));
-                    buf.set_text("");
+                    on_submit(payload);
+                    attachment_mgr.with_sync_suppressed(|| {
+                        buf.set_text("");
+                    });
                 }
 
                 attachment_mgr.clear();
@@ -676,12 +715,35 @@ impl MsgBarComponent {
         let k_submit = submit_action;
 
         let k_autocomplete = autocomplete_ctrl.clone();
+        let k_refresh_highlights = refresh_highlights;
         key_ctrl.connect_key_pressed(move |_, key, _, state| {
             let is_ctrl = state.contains(gtk::gdk::ModifierType::CONTROL_MASK);
             let is_shift = state.contains(gtk::gdk::ModifierType::SHIFT_MASK);
+            let is_alt = state.contains(gtk::gdk::ModifierType::ALT_MASK);
 
             if k_autocomplete.handle_key_pressed_with_state(key, state) == glib::Propagation::Stop {
                 return glib::Propagation::Stop;
+            }
+
+            if !is_ctrl && !is_shift && !is_alt {
+                let atomic_op = match key {
+                    gtk::gdk::Key::BackSpace => Some(attachment::AtomicKeyOp::Backspace),
+                    gtk::gdk::Key::Delete | gtk::gdk::Key::KP_Delete => {
+                        Some(attachment::AtomicKeyOp::Delete)
+                    }
+                    gtk::gdk::Key::Left | gtk::gdk::Key::KP_Left => {
+                        Some(attachment::AtomicKeyOp::Left)
+                    }
+                    gtk::gdk::Key::Right | gtk::gdk::Key::KP_Right => {
+                        Some(attachment::AtomicKeyOp::Right)
+                    }
+                    _ => None,
+                };
+                if let Some(op) = atomic_op
+                    && k_attachment_mgr.handle_atomic_key(&k_entry, op)
+                {
+                    return glib::Propagation::Stop;
+                }
             }
 
             if key == gtk::gdk::Key::Return || key == gtk::gdk::Key::KP_Enter {
@@ -707,11 +769,14 @@ impl MsgBarComponent {
                     .navigate_up(current_text, current_atts)
                 {
                     k_autocomplete.with_suppressed(|| {
-                        buf.set_text(&item.text);
-                        let end = buf.end_iter();
-                        buf.place_cursor(&end);
+                        k_attachment_mgr.with_sync_suppressed(|| {
+                            buf.set_text(&item.text);
+                            let end = buf.end_iter();
+                            buf.place_cursor(&end);
+                        });
                     });
-                    k_attachment_mgr.load_attachments(item.attachments);
+                    k_attachment_mgr.load_attachments_for_text(item.attachments, &item.text);
+                    k_refresh_highlights(&buf);
                 }
                 return glib::Propagation::Stop;
             }
@@ -724,11 +789,14 @@ impl MsgBarComponent {
                 }
                 if let Some(item) = k_history.borrow_mut().navigate_down() {
                     k_autocomplete.with_suppressed(|| {
-                        buf.set_text(&item.text);
-                        let end = buf.end_iter();
-                        buf.place_cursor(&end);
+                        k_attachment_mgr.with_sync_suppressed(|| {
+                            buf.set_text(&item.text);
+                            let end = buf.end_iter();
+                            buf.place_cursor(&end);
+                        });
                     });
-                    k_attachment_mgr.load_attachments(item.attachments);
+                    k_attachment_mgr.load_attachments_for_text(item.attachments, &item.text);
+                    k_refresh_highlights(&buf);
                 }
                 return glib::Propagation::Stop;
             }
@@ -742,7 +810,9 @@ impl MsgBarComponent {
                 // In embedded mode the drawer owns visibility and focus; never invoke `k_cancel()`
                 // (which focuses the underlying terminal behind an open drawer).
                 k_autocomplete.with_suppressed(|| {
-                    k_entry.buffer().set_text("");
+                    k_attachment_mgr.with_sync_suppressed(|| {
+                        k_entry.buffer().set_text("");
+                    });
                 });
                 k_history.borrow_mut().reset();
                 k_attachment_mgr.clear();
@@ -757,6 +827,21 @@ impl MsgBarComponent {
             }
         });
         entry.add_controller(key_ctrl);
+
+        // Snap non-selection single clicks that land mid-token (`[Image 1]`) to the nearer edge.
+        let click_snap = gtk::GestureClick::builder()
+            .button(gtk::gdk::BUTTON_PRIMARY)
+            .build();
+        {
+            let snap_att_mgr = attachment_mgr.clone();
+            let snap_entry = entry.clone();
+            click_snap.connect_released(move |_, n_press, _, _| {
+                if n_press == 1 {
+                    snap_att_mgr.snap_click_cursor(&snap_entry);
+                }
+            });
+        }
+        entry.add_controller(click_snap);
 
         // Intercept file drops in Capture phase before `GtkTextView`'s built-in
         // text drop handler can insert raw `file:///...` URIs.
@@ -1052,21 +1137,27 @@ impl MsgBarComponent {
     pub const fn apply_font(&self, _font_desc: &gtk::pango::FontDescription) {}
 }
 
-/// Applies OpenCode-style live syntax highlighting (`gtk::TextTag`) to `@file` and `:character`
-/// tokens inside the input buffer in a single zero-allocation pass over `text.chars()`.
+/// Applies OpenCode-style live syntax highlighting (`gtk::TextTag`) to `@file`, `:character`,
+/// and active inline attachment (`[Image N]`, `[File N]`, `[Snippet N]`) tokens inside the input
+/// buffer while reconciling stashed/restored attachments.
 fn highlight_input_mentions(
     buf: &gtk::TextBuffer,
+    attachment_mgr: &AttachmentManager,
     file_tag: &gtk::TextTag,
     char_tag: &gtk::TextTag,
+    attachment_tag: &gtk::TextTag,
     last_colors: &RefCell<(String, String)>,
 ) {
     let start = buf.start_iter();
     let end = buf.end_iter();
     buf.remove_tag(file_tag, &start, &end);
     buf.remove_tag(char_tag, &start, &end);
+    buf.remove_tag(attachment_tag, &start, &end);
 
     let text = buf.text(&start, &end, false);
-    if !text.contains('@') && !text.contains(':') {
+    let attachment_spans = attachment_mgr.sync_with_buffer_text(&text);
+
+    if attachment_spans.is_empty() && !text.contains('@') && !text.contains(':') {
         return;
     }
 
@@ -1076,8 +1167,25 @@ fn highlight_input_mentions(
         if cached.0 != file_hex || cached.1 != char_hex {
             file_tag.set_foreground(Some(&file_hex));
             char_tag.set_foreground(Some(&char_hex));
+            attachment_tag.set_foreground(Some(&file_hex));
+            if let Ok(mut bg) = gtk::gdk::RGBA::parse(&file_hex) {
+                bg.set_alpha(0.15);
+                attachment_tag.set_background_rgba(Some(&bg));
+            }
             *cached = (file_hex, char_hex);
         }
+    }
+
+    for span in &attachment_spans {
+        if let (Ok(s_off), Ok(e_off)) = (i32::try_from(span.start), i32::try_from(span.end)) {
+            let start_iter = buf.iter_at_offset(s_off);
+            let end_iter = buf.iter_at_offset(e_off);
+            buf.apply_tag(attachment_tag, &start_iter, &end_iter);
+        }
+    }
+
+    if !text.contains('@') && !text.contains(':') {
+        return;
     }
 
     let mut chars = text.chars().enumerate().peekable();

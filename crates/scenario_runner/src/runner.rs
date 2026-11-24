@@ -180,6 +180,7 @@ impl ScenarioRunner {
                     snapshot: p.buffer.clone(),
                     cwd,
                     image_attachments: vec![],
+                    image_attachment_meta: vec![],
                 })
                 .await?;
             }

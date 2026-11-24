@@ -131,6 +131,7 @@ impl ClawSession {
                 self.tx_self.clone(),
                 None,
                 vec![],
+                vec![],
             ));
         }
     }
@@ -172,6 +173,7 @@ impl ClawSession {
                 self.tx_ui.clone(),
                 self.tx_self.clone(),
                 None,
+                vec![],
                 vec![],
             ));
         }

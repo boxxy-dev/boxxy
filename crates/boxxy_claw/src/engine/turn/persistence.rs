@@ -102,7 +102,9 @@ pub async fn perform_persistence(ctx: PersistenceContext, state: Arc<Mutex<Sessi
                 .iter()
                 .filter_map(rig::message::UserContent::as_text)
                 .map(|raw| {
-                    crate::engine::summarization::history::clean_user_text_for_flush(raw).trim()
+                    let flushed =
+                        crate::engine::summarization::history::clean_user_text_for_flush(raw);
+                    super::extract_user_authored_prompt(flushed).trim()
                 })
                 .find(|trimmed| {
                     !trimmed.is_empty()
@@ -111,7 +113,11 @@ pub async fn perform_persistence(ctx: PersistenceContext, state: Arc<Mutex<Sessi
                 })
                 .map(str::to_string)
         })
-        .unwrap_or_else(|| ctx.user_query.clone());
+        .unwrap_or_else(|| {
+            super::extract_user_authored_prompt(&ctx.user_query)
+                .trim()
+                .to_string()
+        });
 
     let should_attempt_title =
         !state_lock.title_requested && !initial_user_query.trim().is_empty();

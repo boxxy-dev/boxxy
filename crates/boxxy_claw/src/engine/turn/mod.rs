@@ -2,6 +2,7 @@ pub mod btw;
 pub mod file_refs;
 pub mod history;
 mod incognito;
+pub mod multimodal;
 pub mod persistence;
 pub mod skills;
 pub mod snapshot;
@@ -107,6 +108,7 @@ use log::info;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
+#[allow(clippy::too_many_arguments)]
 pub fn spawn_turn(
     pane_id: String,
     session_id: String,
@@ -123,12 +125,14 @@ pub fn spawn_turn(
     tx_self: async_channel::Sender<ClawMessage>,
     delegate_reply_id: Option<uuid::Uuid>,
     image_attachments: Vec<String>,
+    image_attachment_meta: Vec<boxxy_claw_protocol::ImageAttachmentMeta>,
 ) -> tokio::task::JoinHandle<()> {
     let prompt_clone = prompt.to_string();
     let session_id_clone = session_id;
     let snapshot_clone = snapshot.to_string();
     let cwd_clone = cwd;
-    let mut images_clone = image_attachments;
+    let images_clone = image_attachments;
+    let image_meta_clone = image_attachment_meta;
     let session_ctx_clone = _session_ctx.to_string();
 
     tokio::spawn(async move {
@@ -169,6 +173,7 @@ pub fn spawn_turn(
                 character_id,
                 prompt_clone,
                 images_clone,
+                image_meta_clone,
                 session_ctx_clone,
                 state,
                 tx_ui,
@@ -231,11 +236,13 @@ pub fn spawn_turn(
         let skills_context = format!("{active_skills_text}{available_skills_text}");
         let resolved_file_refs =
             file_refs::resolve_prompt_file_refs(&user_authored_prompt, &cwd_clone).await;
-        for b64 in resolved_file_refs.image_attachments {
-            if !images_clone.contains(&b64) {
-                images_clone.push(b64);
-            }
-        }
+        let (images_clone, image_meta_clone) = multimodal::merge_and_order_turn_images(
+            &prompt_clone,
+            images_clone,
+            image_meta_clone,
+            resolved_file_refs.image_attachments,
+            &resolved_file_refs.image_attachment_meta,
+        );
         let prior_read_hashes = state.lock().await.read_file_hashes.clone();
         let (stale_files_notice, deleted_tracked_paths) =
             file_refs::check_externally_modified_files(
@@ -332,7 +339,7 @@ pub fn spawn_turn(
             drama_mode,
             history,
             history_len,
-            full_prompt,
+            turn_tail,
             character_id,
         ) = {
             let mut state_lock = state.lock().await;
@@ -484,14 +491,20 @@ pub fn spawn_turn(
                 tui_warning
             );
 
-            let full_prompt = format!(
-                "{prompt_clone}\n\n{turn_context}\n\nTerminal Snapshot:\n```\n{final_snapshot_text}\n```"
+            let turn_tail = format!(
+                "\n\n{turn_context}\n\nTerminal Snapshot:\n```\n{final_snapshot_text}\n```"
             );
+            let annotated_prompt = multimodal::annotate_prompt_for_history(
+                &prompt_clone,
+                images_clone.len(),
+                &image_meta_clone,
+            );
+            let full_prompt = format!("{annotated_prompt}{turn_tail}");
 
             // --- AMNESIA FIX: IMMEDIATE PUSH ---
             state_lock
                 .history
-                .push(rig::message::Message::user(full_prompt.clone()));
+                .push(rig::message::Message::user(full_prompt));
 
             let h = state_lock.history.clone();
             let l = h.len();
@@ -513,7 +526,7 @@ pub fn spawn_turn(
                 drama_mode,
                 h,
                 l,
-                full_prompt,
+                turn_tail,
                 char_id,
             )
         };
@@ -623,7 +636,12 @@ pub fn spawn_turn(
                 .await;
         }
 
-        let query_for_chat = build_user_message_with_images(full_prompt.clone(), images_clone);
+        let query_for_chat = multimodal::build_interleaved_user_message(
+            &prompt_clone,
+            &turn_tail,
+            images_clone,
+            &image_meta_clone,
+        );
         let in_flight_snapshot = {
             let state_lock = state.lock().await;
             state_lock.in_flight_snapshot.clone()
@@ -1062,40 +1080,6 @@ pub(super) fn format_turn_error(err: &rig::completion::PromptError) -> String {
     }
 }
 
-fn sniff_base64_image_media_type(b64: &str) -> rig::message::ImageMediaType {
-    use base64::Engine as _;
-
-    let trimmed = b64.trim();
-    // Decode up to 16 base64 chars (12 raw bytes — covers PNG, JPEG, GIF, and RIFF/WEBP headers)
-    // onto the stack without heap allocation.
-    let take = trimmed.len().min(16) & !3;
-    let mut buf = [0_u8; 12];
-    if take >= 4
-        && let Ok(n) = base64::engine::general_purpose::STANDARD
-            .decode_slice(&trimmed.as_bytes()[..take], &mut buf)
-        && let Some(media) = rig::message::ImageMediaType::sniff(&buf[..n])
-    {
-        return media;
-    }
-    rig::message::ImageMediaType::PNG
-}
-
-fn build_user_message_with_images(prompt: String, images: Vec<String>) -> rig::message::Message {
-    if images.is_empty() {
-        return rig::message::Message::user(prompt);
-    }
-    let mut contents = vec![rig::message::UserContent::text(prompt)];
-    for b64 in images {
-        let media_type = sniff_base64_image_media_type(&b64);
-        contents.push(rig::message::UserContent::image_base64(
-            b64,
-            Some(media_type),
-            None,
-        ));
-    }
-    rig::message::Message::User { content: contents }
-}
-
 fn summarize_long_task_completion(response: &str) -> String {
     let trimmed = response.trim();
     if trimmed.is_empty() {
@@ -1150,26 +1134,6 @@ mod tests {
         let summary = summarize_long_task_completion(&input);
         assert!(summary.ends_with("..."));
         assert!(summary.len() <= 100);
-    }
-
-    #[test]
-    fn sniffs_jpeg_webp_gif_and_png_base64_prefixes() {
-        assert_eq!(
-            sniff_base64_image_media_type("/9j/4AAQSkZJRgABAQ"),
-            rig::message::ImageMediaType::JPEG
-        );
-        assert_eq!(
-            sniff_base64_image_media_type("UklGRh4AAABXRUJQVlA4"),
-            rig::message::ImageMediaType::WEBP
-        );
-        assert_eq!(
-            sniff_base64_image_media_type("R0lGODlhAQABAIAAAP"),
-            rig::message::ImageMediaType::GIF
-        );
-        assert_eq!(
-            sniff_base64_image_media_type("iVBORw0KGgoAAAANSUhEUg"),
-            rig::message::ImageMediaType::PNG
-        );
     }
 
     #[test]

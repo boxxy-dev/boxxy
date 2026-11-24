@@ -27,7 +27,7 @@ pub use btw_dialog::BtwController;
 pub use claw_host::ClawHost;
 pub use claw_indicator::ClawIndicator;
 pub use dispatch::spawn_dispatch;
-pub use msgbar::{Attachment, AttachmentManager, MsgBarComponent};
+pub use msgbar::{Attachment, AttachmentManager, AttachmentPayload, MsgBarComponent};
 pub use overlay::{OverlayMode, TerminalOverlay};
 pub use proposal::Proposal;
 pub mod state;

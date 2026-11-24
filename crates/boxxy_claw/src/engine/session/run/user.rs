@@ -471,6 +471,7 @@ impl ClawSession {
         snapshot: String,
         cwd: String,
         image_attachments: Vec<String>,
+        image_attachment_meta: Vec<boxxy_claw_protocol::ImageAttachmentMeta>,
     ) {
         ctx.current_dir.clone_from(&cwd);
 
@@ -569,7 +570,10 @@ impl ClawSession {
                     .await;
                 }
 
-                if allow_steering {
+                // Only steer in-flight tool proposals via text `ToolResult` when no new vision
+                // images were attached; otherwise cancel and start a fresh turn so the model
+                // receives the attached `UserContent::Image` blocks.
+                if allow_steering && image_attachments.is_empty() {
                     let mut fulfilled = {
                         let mut state_lock = self.state.lock().await;
                         state_lock.drain_pending_with_interruption(&effective_query)
@@ -636,11 +640,13 @@ impl ClawSession {
                     self.tx_self.clone(),
                     None,
                     image_attachments,
+                    image_attachment_meta,
                 ));
             }
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(super) async fn handle_claw_query(
         &self,
         ctx: &mut RunContext,
@@ -649,6 +655,7 @@ impl ClawSession {
         snapshot: String,
         cwd: String,
         image_attachments: Vec<String>,
+        image_attachment_meta: Vec<boxxy_claw_protocol::ImageAttachmentMeta>,
     ) {
         if self.incognito {
             if let Some((cmd, _)) = boxxy_claw_protocol::SlashCommand::parse(&query) {
@@ -725,26 +732,30 @@ impl ClawSession {
                 self.tx_self.clone(),
                 None,
                 image_attachments,
+                image_attachment_meta,
             ));
             return;
         }
 
-        let mut image_attachments = image_attachments;
         let is_whats_new = crate::engine::turn::is_whats_new_prompt(&query);
         let display_query = crate::engine::turn::extract_user_authored_prompt(&query).to_string();
 
-        // Pre-resolve any `@path/to/image.png` file references from user-authored text so their
-        // square thumbnails render in the user message bubble and are passed to vision models.
-        if !is_whats_new {
+        // Pre-resolve any `@path/to/image.png` file references from user-authored text and order
+        // all images by reading position so square thumbnails and vision blocks align 1:1.
+        let (image_attachments, image_attachment_meta) = if is_whats_new {
+            (image_attachments, image_attachment_meta)
+        } else {
             let pre_resolved =
                 crate::engine::turn::file_refs::resolve_prompt_file_refs(&display_query, &cwd)
                     .await;
-            for b64 in pre_resolved.image_attachments {
-                if !image_attachments.contains(&b64) {
-                    image_attachments.push(b64);
-                }
-            }
-        }
+            crate::engine::turn::multimodal::merge_and_order_turn_images(
+                &display_query,
+                image_attachments,
+                image_attachment_meta,
+                pre_resolved.image_attachments,
+                &pre_resolved.image_attachment_meta,
+            )
+        };
 
         self.process_user_submission(
             ctx,
@@ -755,10 +766,12 @@ impl ClawSession {
             snapshot,
             cwd,
             image_attachments,
+            image_attachment_meta,
         )
         .await;
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(super) async fn handle_user_message(
         &self,
         ctx: &mut RunContext,
@@ -767,6 +780,7 @@ impl ClawSession {
         snapshot: String,
         cwd: String,
         image_attachments: Vec<String>,
+        image_attachment_meta: Vec<boxxy_claw_protocol::ImageAttachmentMeta>,
     ) {
         let display_query = message.clone();
         self.process_user_submission(
@@ -778,6 +792,7 @@ impl ClawSession {
             snapshot,
             cwd,
             image_attachments,
+            image_attachment_meta,
         )
         .await;
     }
@@ -860,6 +875,7 @@ impl ClawSession {
             self.tx_self.clone(),
             Some(request_id),
             vec![],
+            vec![],
         ));
     }
 }
@@ -935,6 +951,7 @@ mod tests {
                 String::new(),
                 String::new(),
                 Vec::new(),
+                Vec::new(),
             )
             .await;
 
@@ -961,6 +978,7 @@ mod tests {
                 "/undo".to_string(),
                 String::new(),
                 String::new(),
+                Vec::new(),
                 Vec::new(),
             )
             .await;
@@ -996,6 +1014,7 @@ mod tests {
                 "/stop".to_string(),
                 String::new(),
                 String::new(),
+                Vec::new(),
                 Vec::new(),
             )
             .await;

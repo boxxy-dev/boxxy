@@ -12,7 +12,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
-use super::{build_user_message_with_images, file_refs, format_turn_error, history};
+use super::{file_refs, format_turn_error, history, multimodal};
 
 const BTW_INSTRUCTIONS: &str = "\
 [SIDE QUESTION (/btw) — EPHEMERAL]\n\
@@ -164,16 +164,20 @@ async fn run_btw_query(params: BtwQueryParams) {
     }
     let _ = write!(prompt_body, "\n\nQuestion: {trimmed_question}");
 
-    let images = if is_incognito {
-        Vec::new()
+    let mut btw_tail = String::new();
+    let (images, image_meta) = if is_incognito {
+        (Vec::new(), Vec::new())
     } else {
         let resolved_refs =
             file_refs::resolve_prompt_file_refs(&trimmed_question, &effective_cwd).await;
         if !resolved_refs.context_block.trim().is_empty() {
-            prompt_body.push_str("\n\n");
-            prompt_body.push_str(&resolved_refs.context_block);
+            btw_tail.push_str("\n\n");
+            btw_tail.push_str(&resolved_refs.context_block);
         }
-        resolved_refs.image_attachments
+        (
+            resolved_refs.image_attachments,
+            resolved_refs.image_attachment_meta,
+        )
     };
 
     let has_session_transcript = !settled_history.is_empty() || in_flight.messages.is_some();
@@ -210,7 +214,12 @@ async fn run_btw_query(params: BtwQueryParams) {
             None,
             &[],
         );
-        let msg = build_user_message_with_images(prompt_body, images);
+        let msg = multimodal::build_interleaved_user_message(
+            &prompt_body,
+            &btw_tail,
+            images,
+            &image_meta,
+        );
         let res = run_boxxy_agent_btw(
             &agent,
             model_opt.as_ref(),
@@ -248,11 +257,11 @@ async fn run_btw_query(params: BtwQueryParams) {
             );
         }
         if !effective_cwd.is_empty() {
-            let _ = write!(prompt_body, "\n\nCWD: `{effective_cwd}`");
+            let _ = write!(btw_tail, "\n\nCWD: `{effective_cwd}`");
         }
         let snap_trimmed = snapshot.trim();
         if !snap_trimmed.is_empty() {
-            let _ = write!(prompt_body, "\n\nTerminal Snapshot:\n```\n{snap_trimmed}\n```");
+            let _ = write!(btw_tail, "\n\nTerminal Snapshot:\n```\n{snap_trimmed}\n```");
         }
 
         let model_opt = settings.resolve_character_model(&character_id);
@@ -269,7 +278,12 @@ async fn run_btw_query(params: BtwQueryParams) {
                 session_cache_key: Some(session_id.clone()),
             },
         );
-        let msg = build_user_message_with_images(prompt_body, images);
+        let msg = super::multimodal::build_interleaved_user_message(
+            &prompt_body,
+            &btw_tail,
+            images,
+            &image_meta,
+        );
         let res = run_boxxy_agent_btw(
             &agent,
             model_opt.as_ref(),
@@ -333,7 +347,12 @@ async fn run_btw_query(params: BtwQueryParams) {
                     pending_proposal_summary.as_deref(),
                     &recent_trace,
                 );
-                let msg = build_user_message_with_images(prompt_body, images);
+                let msg = super::multimodal::build_interleaved_user_message(
+                    &prompt_body,
+                    &btw_tail,
+                    images,
+                    &image_meta,
+                );
                 let res = claw_agent
                     .generate_side_answer(
                         msg,

@@ -110,6 +110,7 @@ impl ClawSession {
                         self.tx_self.clone(),
                         None,
                         vec![],
+                        vec![],
                     ));
                     return false;
                 }
@@ -408,9 +409,18 @@ impl ClawSession {
                 snapshot,
                 cwd,
                 image_attachments,
+                image_attachment_meta,
             } => {
-                self.handle_claw_query(ctx, &session_ctx, query, snapshot, cwd, image_attachments)
-                    .await;
+                self.handle_claw_query(
+                    ctx,
+                    &session_ctx,
+                    query,
+                    snapshot,
+                    cwd,
+                    image_attachments,
+                    image_attachment_meta,
+                )
+                .await;
             }
             ClawMessage::FileWriteReply { approved } => {
                 if approved {
@@ -648,6 +658,7 @@ impl ClawSession {
                 snapshot,
                 cwd,
                 image_attachments,
+                image_attachment_meta,
             } => {
                 self.handle_user_message(
                     ctx,
@@ -656,6 +667,7 @@ impl ClawSession {
                     snapshot,
                     cwd,
                     image_attachments,
+                    image_attachment_meta,
                 )
                 .await;
             }

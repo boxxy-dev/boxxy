@@ -117,6 +117,7 @@ pub(super) fn setup_claw(
                                 snapshot,
                                 cwd,
                                 image_attachments: vec![],
+                                image_attachment_meta: vec![],
                             },
                         )
                         .await;
@@ -130,6 +131,7 @@ pub(super) fn setup_claw(
                     snapshot,
                     cwd,
                     image_attachments: vec![],
+                    image_attachment_meta: vec![],
                 })
                 .await;
         });

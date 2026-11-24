@@ -39,6 +39,8 @@ pub struct ResolvedFileRefs {
     pub read_hashes: Vec<(String, u64)>,
     /// Base64-encoded image attachments resolved from `@path/to/image.png` tokens.
     pub image_attachments: Vec<String>,
+    /// Inline `@mention` token and filename metadata paired 1:1 with `image_attachments`.
+    pub image_attachment_meta: Vec<boxxy_claw_protocol::ImageAttachmentMeta>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -248,7 +250,17 @@ fn resolve_tokens_sync(tokens: &[FileMentionToken], cwd: &str) -> ResolvedFileRe
             if is_supported_image(&resolved_path) && meta.len() <= MAX_IMAGE_BYTES {
                 if let Ok(bytes) = std::fs::read(path) {
                     let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+                    let label = path
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or(&token.path_str)
+                        .to_string();
                     out.image_attachments.push(b64);
+                    out.image_attachment_meta
+                        .push(boxxy_claw_protocol::ImageAttachmentMeta {
+                            token: token.raw_token.clone(),
+                            label,
+                        });
                     sections.push(format!(
                         "### `{}` (`{}`)\n[Attached image ({} bytes) into multimodal vision input]",
                         token.raw_token,

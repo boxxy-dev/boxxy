@@ -94,7 +94,10 @@ pub(super) fn build_msg_bar(
     let event_sender_for_toggle = event_sender_for_first_msg.clone();
 
     Rc::new(MsgBarComponent::new(
-        move |(query, images)| {
+        move |payload| {
+            let query = payload.text;
+            let images = payload.images;
+            let image_meta = payload.image_meta;
             let Some(inner_arc) = inner_weak_for_msg.borrow().as_ref().and_then(Weak::upgrade)
             else {
                 return;
@@ -187,7 +190,7 @@ pub(super) fn build_msg_bar(
                         let _ = agent
                             .post_claw_message(session_id.clone(), ClawMessage::Initialize)
                             .await;
-                        if !inline_incognito_query.is_empty() {
+                        if !inline_incognito_query.is_empty() || !images.is_empty() {
                             let _ = agent
                                 .post_claw_message(
                                     session_id,
@@ -196,6 +199,7 @@ pub(super) fn build_msg_bar(
                                         snapshot: String::new(),
                                         cwd: String::new(),
                                         image_attachments: images,
+                                        image_attachment_meta: image_meta,
                                     },
                                 )
                                 .await;
@@ -290,6 +294,7 @@ pub(super) fn build_msg_bar(
                                         snapshot,
                                         cwd,
                                         image_attachments: images,
+                                        image_attachment_meta: image_meta,
                                     },
                                 )
                                 .await;
@@ -318,6 +323,7 @@ pub(super) fn build_msg_bar(
                         snapshot,
                         cwd,
                         image_attachments: images,
+                        image_attachment_meta: image_meta,
                     })
                     .await;
             });
@@ -856,6 +862,7 @@ impl TerminalPaneComponent {
                                 snapshot,
                                 cwd,
                                 image_attachments: vec![],
+                                image_attachment_meta: vec![],
                             },
                         )
                         .await;
@@ -867,6 +874,7 @@ impl TerminalPaneComponent {
                         snapshot,
                         cwd,
                         image_attachments: vec![],
+                        image_attachment_meta: vec![],
                     })
                     .await;
             }

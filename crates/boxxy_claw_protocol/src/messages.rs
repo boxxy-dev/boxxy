@@ -7,6 +7,19 @@ use crate::{
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+/// Metadata pairing an attached base64 image with its inline prompt token and filename.
+///
+/// Enables cursor-ordered `[Text, Image, Text, Image]` multimodal interleaving.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ImageAttachmentMeta {
+    /// Inline token appearing in the user's prompt text (e.g. `"[Image 1]"` or `"@diagram.png"`).
+    #[serde(default)]
+    pub token: String,
+    /// Original filename or display label (e.g. `"photo.jpg"`, `"Pasted Image"`).
+    #[serde(default)]
+    pub label: String,
+}
+
 /// Messages sent from the GTK UI down to an active `ClawSession`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum ClawMessage {
@@ -29,6 +42,8 @@ pub enum ClawMessage {
         cwd: String,
         #[serde(default)]
         image_attachments: Vec<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        image_attachment_meta: Vec<ImageAttachmentMeta>,
     },
     UserMessage {
         message: String,
@@ -36,6 +51,8 @@ pub enum ClawMessage {
         cwd: String,
         #[serde(default)]
         image_attachments: Vec<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        image_attachment_meta: Vec<ImageAttachmentMeta>,
     },
     FileWriteReply {
         approved: bool,
@@ -507,8 +524,23 @@ mod tests {
                 snapshot: String::new(),
                 cwd: "/workspace".to_string(),
                 image_attachments: Vec::new(),
+                image_attachment_meta: Vec::new(),
             }
         );
+
+        let with_meta = ClawMessage::ClawQuery {
+            query: "inspect [Image 1]".to_string(),
+            snapshot: String::new(),
+            cwd: "/workspace".to_string(),
+            image_attachments: vec!["iVBORw0KGgo=".to_string()],
+            image_attachment_meta: vec![ImageAttachmentMeta {
+                token: "[Image 1]".to_string(),
+                label: "diagram.png".to_string(),
+            }],
+        };
+        let encoded_meta = serde_json::to_string(&with_meta).unwrap();
+        let decoded_meta: ClawMessage = serde_json::from_str(&encoded_meta).unwrap();
+        assert_eq!(decoded_meta, with_meta);
 
         let ev = ClawEngineEvent::DiagnosisComplete {
             agent_name: "red-pony".to_string(),

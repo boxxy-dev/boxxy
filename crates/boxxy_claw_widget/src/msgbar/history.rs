@@ -401,6 +401,7 @@ mod tests {
                 text: format!("prompt-{i}"),
                 attachments: vec![Attachment {
                     id: format!("id-{i}"),
+                    token: format!("[Image {}]", i + 1),
                     label: "Image".to_string(),
                     content: "a".repeat(2048),
                     is_image: true,

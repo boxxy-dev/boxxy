@@ -156,14 +156,8 @@ impl TerminalOverlay {
         // (not inside it) so the bar can render as a single rounded field
         // and the send icon floats alongside without a background.
         let msgbar_slot: gtk::Box = builder.object("msgbar_slot").unwrap();
-        let msgbar_vbox = gtk::Box::new(gtk::Orientation::Vertical, 6);
-        msgbar_vbox.set_hexpand(true);
-        msgbar_vbox.append(msg_bar.attachment_mgr.widget());
-
         msg_bar.widget.set_hexpand(true);
-        msgbar_vbox.append(&msg_bar.widget);
-
-        msgbar_slot.append(&msgbar_vbox);
+        msgbar_slot.append(&msg_bar.widget);
         msg_bar.set_embedded(true);
         {
             let host_for_notify = host.clone();
