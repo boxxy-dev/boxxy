@@ -10,7 +10,7 @@
 //! fills (~64 KB) and won't recover without external `kill`.
 
 use std::collections::{HashMap, VecDeque};
-use std::os::unix::io::{AsRawFd, OwnedFd};
+use std::os::unix::io::OwnedFd;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -312,24 +312,68 @@ impl Default for PtyRegistry {
     }
 }
 
-/// Safely signals a process group (`-pgid`), rejecting dangerous PIDs (`0`, `1`,
-/// overflowed `pid_t`, or the daemon itself) and invalid signal numbers (`<= 0` or `> 64`).
-/// Without this guard, `pid = 0` signals the daemon's own group and `pid = 1` (`kill(-1)`)
-/// signals every user process in the desktop session.
-pub(crate) fn kill_process_group_safe(pid: u32, signal: i32) -> std::io::Result<()> {
+/// Validates that `pid` is a positive non-init, non-self process ID and converts it to `pid_t`.
+fn validate_target_pid(pid: u32) -> std::io::Result<i32> {
     let raw_pid =
         i32::try_from(pid).map_err(|_| std::io::Error::from_raw_os_error(libc::EINVAL))?;
     if raw_pid <= 1 || pid == std::process::id() {
         return Err(std::io::Error::from_raw_os_error(libc::EPERM));
     }
-    if !(1..=64).contains(&signal) {
-        return Err(std::io::Error::from_raw_os_error(libc::EINVAL));
+    Ok(raw_pid)
+}
+
+/// Validates that `signal` is either a standard POSIX signal (`nix::sys::signal::Signal`)
+/// or a valid POSIX real-time signal (`SIGRTMIN..=SIGRTMAX`), rejecting `<= 0`, out-of-range
+/// numbers, and reserved NPTL internal signals (`32`/`33` on glibc/musl).
+pub(crate) fn validate_user_signal(signal: i32) -> std::io::Result<Option<nix::sys::signal::Signal>> {
+    if let Ok(sig) = nix::sys::signal::Signal::try_from(signal) {
+        return Ok(Some(sig));
     }
-    let rc = unsafe { libc::kill(-raw_pid, signal) };
-    if rc == 0 {
-        Ok(())
-    } else {
-        Err(std::io::Error::last_os_error())
+    let rt_min = libc::SIGRTMIN();
+    let rt_max = libc::SIGRTMAX();
+    if rt_min > 0 && (rt_min..=rt_max).contains(&signal) {
+        return Ok(None);
+    }
+    Err(std::io::Error::from_raw_os_error(libc::EINVAL))
+}
+
+/// Safely signals a single process (`pid`), rejecting dangerous PIDs (`0`, `1`,
+/// overflowed `pid_t`, or the daemon itself) and invalid/reserved signal numbers.
+pub(crate) fn kill_process_safe(pid: u32, signal: i32) -> std::io::Result<()> {
+    let raw_pid = validate_target_pid(pid)?;
+    match validate_user_signal(signal)? {
+        Some(sig) => nix::sys::signal::kill(nix::unistd::Pid::from_raw(raw_pid), sig)
+            .map_err(std::io::Error::from),
+        None => {
+            // Validated POSIX real-time signal (`SIGRTMIN..=SIGRTMAX`).
+            let rc = unsafe { libc::kill(raw_pid, signal) };
+            if rc == 0 {
+                Ok(())
+            } else {
+                Err(std::io::Error::last_os_error())
+            }
+        }
+    }
+}
+
+/// Safely signals a process group (`pgrp`), rejecting dangerous PIDs (`0`, `1`,
+/// overflowed `pid_t`, or the daemon itself) and invalid/reserved signal numbers.
+/// Without this guard, `pid = 0` signals the daemon's own group and `pid = 1` (`kill(-1)`)
+/// signals every user process in the desktop session.
+pub(crate) fn kill_process_group_safe(pid: u32, signal: i32) -> std::io::Result<()> {
+    let raw_pid = validate_target_pid(pid)?;
+    match validate_user_signal(signal)? {
+        Some(sig) => nix::sys::signal::killpg(nix::unistd::Pid::from_raw(raw_pid), sig)
+            .map_err(std::io::Error::from),
+        None => {
+            // Validated POSIX real-time signal (`SIGRTMIN..=SIGRTMAX`).
+            let rc = unsafe { libc::killpg(raw_pid, signal) };
+            if rc == 0 {
+                Ok(())
+            } else {
+                Err(std::io::Error::last_os_error())
+            }
+        }
     }
 }
 
@@ -825,13 +869,7 @@ async fn run_reader(registry: PtyRegistry, pid: u32) {
     };
 
     // Ensure non-blocking mode so AsyncFd works correctly.
-    unsafe {
-        let raw = owned.as_raw_fd();
-        let flags = libc::fcntl(raw, libc::F_GETFL);
-        if flags >= 0 {
-            libc::fcntl(raw, libc::F_SETFL, flags | libc::O_NONBLOCK);
-        }
-    }
+    let _ = super::ensure_nonblocking(&owned);
     // SAFETY: `owned` is an `OwnedFd` whose descriptor stays open and unchanged
     // for the entire lifetime of `async_fd`. Register with `Interest::READABLE`
     // only since the detached ring-buffer task never writes to the master PTY.
@@ -851,18 +889,11 @@ async fn run_reader(registry: PtyRegistry, pid: u32) {
             Err(_) => break,
         };
 
-        let read_res = ready.try_io(|inner| {
-            let fd = inner.get_ref().as_raw_fd();
-            loop {
-                let n = unsafe { libc::read(fd, buf.as_mut_ptr() as *mut _, buf.len()) };
-                if n < 0 {
-                    let err = std::io::Error::last_os_error();
-                    if err.kind() == std::io::ErrorKind::Interrupted {
-                        continue;
-                    }
-                    return Err(err);
-                }
-                return Ok(n as usize);
+        let read_res = ready.try_io(|inner| loop {
+            match nix::unistd::read(inner.get_ref(), &mut buf) {
+                Ok(n) => return Ok(n),
+                Err(nix::errno::Errno::EINTR) => continue,
+                Err(e) => return Err(std::io::Error::from(e)),
             }
         });
 
@@ -959,9 +990,10 @@ mod tests {
     // second without spawning a real shell.
     #[tokio::test]
     async fn persistence_captures_slave_output_into_ring_buffer() {
-        use nix::fcntl::OFlag;
-        use nix::pty::{grantpt, posix_openpt, ptsname, unlockpt};
-        use std::os::fd::{FromRawFd, IntoRawFd};
+        use nix::fcntl::{OFlag, open};
+        use nix::pty::{grantpt, posix_openpt, ptsname_r, unlockpt};
+        use nix::sys::stat::Mode;
+        use std::path::Path;
         use std::time::Duration;
 
         // 1. Open a PTY master/slave pair. O_NONBLOCK on master so the
@@ -972,16 +1004,15 @@ mod tests {
         .expect("posix_openpt");
         grantpt(&master).expect("grantpt");
         unlockpt(&master).expect("unlockpt");
-        let slave_path = unsafe { ptsname(&master).expect("ptsname") };
-        let slave_fd = unsafe {
-            libc::open(
-                std::ffi::CString::new(slave_path).unwrap().as_ptr(),
-                libc::O_RDWR | libc::O_NOCTTY | libc::O_CLOEXEC,
-            )
-        };
-        assert!(slave_fd >= 0, "open slave pty failed");
+        let slave_path = ptsname_r(&master).expect("ptsname_r");
+        let slave_fd = open(
+            Path::new(&slave_path),
+            OFlag::O_RDWR | OFlag::O_NOCTTY | OFlag::O_CLOEXEC,
+            Mode::empty(),
+        )
+        .expect("open slave pty");
 
-        let master_owned = unsafe { OwnedFd::from_raw_fd(master.into_raw_fd()) };
+        let master_owned = OwnedFd::from(master);
 
         // 2. Register *with the FD already stored*, mirroring what
         //    `PtySubsystem::spawn` does for a real shell.
@@ -1002,8 +1033,8 @@ mod tests {
         //    `marker` below is what we expect to see, not `payload`.
         let payload = b"captured-while-detached\n";
         let marker: &[u8] = b"captured-while-detached";
-        let written = unsafe { libc::write(slave_fd, payload.as_ptr() as *const _, payload.len()) };
-        assert_eq!(written, payload.len() as isize);
+        let written = nix::unistd::write(&slave_fd, payload).expect("write slave pty");
+        assert_eq!(written, payload.len());
 
         // Tokio needs a real wait here; the reader is a separate task.
         for _ in 0..20 {
@@ -1031,9 +1062,7 @@ mod tests {
             "ring buffer did not contain marker; got {:?}",
             String::from_utf8_lossy(&bytes)
         );
-
-        // Cleanup
-        unsafe { libc::close(slave_fd) };
+        // `slave_fd` is an `OwnedFd` and closes automatically on drop.
     }
 
     #[tokio::test]
@@ -1070,7 +1099,6 @@ mod tests {
     async fn release_owner_auto_detaches_on_client_disconnect() {
         use nix::fcntl::OFlag;
         use nix::pty::{grantpt, posix_openpt, unlockpt};
-        use std::os::fd::{FromRawFd, IntoRawFd};
 
         let master = posix_openpt(
             OFlag::O_RDWR | OFlag::O_NOCTTY | OFlag::O_NONBLOCK | OFlag::O_CLOEXEC,
@@ -1078,7 +1106,7 @@ mod tests {
         .expect("posix_openpt");
         grantpt(&master).expect("grantpt");
         unlockpt(&master).expect("unlockpt");
-        let master_owned = unsafe { OwnedFd::from_raw_fd(master.into_raw_fd()) };
+        let master_owned = OwnedFd::from(master);
 
         let reg = PtyRegistry::new();
         reg.register_with_owner(
@@ -1107,13 +1135,20 @@ mod tests {
         assert!(kill_process_group_safe(99999, 0).is_err());
         assert!(kill_process_group_safe(99999, -9).is_err());
         assert!(kill_process_group_safe(99999, 999).is_err());
+        // Reserved NPTL internal signals (32/33 on glibc/musl) must be rejected,
+        // while real-time signals (SIGRTMIN..=SIGRTMAX) pass signal validation.
+        assert!(validate_user_signal(32).is_err());
+        assert!(validate_user_signal(libc::SIGRTMIN()).is_ok());
+        assert!(validate_user_signal(libc::SIGRTMAX()).is_ok());
+        assert!(kill_process_safe(0, libc::SIGTERM).is_err());
+        assert!(kill_process_safe(1, libc::SIGTERM).is_err());
+        assert!(kill_process_safe(std::process::id(), libc::SIGTERM).is_err());
     }
 
     #[tokio::test]
     async fn reattach_returned_fd_has_cloexec_set() {
-        use nix::fcntl::OFlag;
+        use nix::fcntl::{FcntlArg, FdFlag, OFlag, fcntl};
         use nix::pty::{grantpt, posix_openpt, unlockpt};
-        use std::os::fd::{FromRawFd, IntoRawFd};
 
         let master = posix_openpt(
             OFlag::O_RDWR | OFlag::O_NOCTTY | OFlag::O_NONBLOCK | OFlag::O_CLOEXEC,
@@ -1121,7 +1156,7 @@ mod tests {
         .expect("posix_openpt");
         grantpt(&master).expect("grantpt");
         unlockpt(&master).expect("unlockpt");
-        let master_owned = unsafe { OwnedFd::from_raw_fd(master.into_raw_fd()) };
+        let master_owned = OwnedFd::from(master);
 
         let reg = PtyRegistry::new();
         reg.register(43210, "pane-cloexec".into(), Some(master_owned))
@@ -1133,9 +1168,9 @@ mod tests {
 
         let (_buf, reattached_fd) = reg.reattach(43210).await.expect("reattach");
         assert!(reg.is_viewed(43210).await);
-        let fd_flags = unsafe { libc::fcntl(reattached_fd.as_raw_fd(), libc::F_GETFD) };
+        let raw_flags = fcntl(&reattached_fd, FcntlArg::F_GETFD).expect("F_GETFD");
         assert!(
-            fd_flags >= 0 && (fd_flags & libc::FD_CLOEXEC) != 0,
+            FdFlag::from_bits_retain(raw_flags).contains(FdFlag::FD_CLOEXEC),
             "reattached PTY master FD must carry FD_CLOEXEC"
         );
         reg.mark_exited(43210, 0).await;

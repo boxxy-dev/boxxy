@@ -21,6 +21,51 @@ pub struct AgentInterface {
     pub(crate) session_manager: Arc<Mutex<ClawSessionManager>>,
 }
 
+/// Resolves the target executable and filtered `argv` for `RequestReload` (`execvp`)
+/// directly from raw OS byte strings (avoiding lossy UTF-8 conversions on non-UTF8 paths).
+///
+/// Strips Linux's `" (deleted)"` `/proc/self/exe` suffix when the on-disk binary was
+/// atomically swapped via `rename()`, removes `--background` and `--sync-settings`,
+/// and guarantees a non-empty `argv` vector.
+pub(crate) fn prepare_reload_exec_args<I>(
+    current_exe: Option<std::path::PathBuf>,
+    raw_args: I,
+) -> std::result::Result<(std::ffi::CString, Vec<std::ffi::CString>), String>
+where
+    I: IntoIterator<Item = std::ffi::OsString>,
+{
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+
+    let exe_path = current_exe.ok_or_else(|| "current_exe() unavailable".to_string())?;
+    let exe_bytes = exe_path.as_os_str().as_bytes();
+    if exe_bytes.is_empty() {
+        return Err("current_exe() returned an empty path".to_string());
+    }
+
+    let clean_bytes = match exe_bytes.strip_suffix(b" (deleted)") {
+        Some(stripped) if !stripped.is_empty() && !exe_path.exists() => stripped,
+        _ => exe_bytes,
+    };
+    let c_exe = CString::new(clean_bytes)
+        .map_err(|_| "executable path contains interior NUL byte".to_string())?;
+
+    let mut c_args: Vec<CString> = raw_args
+        .into_iter()
+        .filter(|arg| {
+            let b = arg.as_bytes();
+            b != b"--background" && b != b"--sync-settings"
+        })
+        .filter_map(|arg| CString::new(arg.as_bytes()).ok())
+        .collect();
+
+    if c_args.is_empty() {
+        c_args.push(c_exe.clone());
+    }
+
+    Ok((c_exe, c_args))
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct DaemonStatusSnapshot {
     pub bus_name: String,
@@ -420,24 +465,10 @@ impl AgentInterface {
         self.session_manager.lock().await.shutdown_all();
         boxxy_telemetry::flush_journal().await;
 
-        let exe_raw = std::env::current_exe()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .into_owned();
-        // If the binary on disk was atomically swapped via rename(), Linux's
-        // `/proc/self/exe` symlink appends `" (deleted)"`. Strip that suffix so
-        // `execvp` launches the newly installed binary at the canonical path.
-        let exe_clean = exe_raw
-            .strip_suffix(" (deleted)")
-            .unwrap_or(&exe_raw)
-            .to_string();
-
-        // Filter out `--background` and `--sync-settings` so the reloaded process
-        // replaces the current daemon PID in-place without daemonizing a second time
-        // or overwriting runtime settings changes.
-        let args: Vec<String> = std::env::args()
-            .filter(|a| a != "--background" && a != "--sync-settings")
-            .collect();
+        let reload_spec = prepare_reload_exec_args(
+            std::env::current_exe().ok(),
+            std::env::args_os(),
+        );
 
         // Wait until zbus has dispatched the `RequestReload` reply (`zbus` 6.4+),
         // then synchronously release our bus name and flush the socket before `execvp`
@@ -448,13 +479,20 @@ impl AgentInterface {
                 .release_name(boxxy_sys_utils::agent_bus_name())
                 .await;
             let _ = conn_clone.flush().await;
-            if let Ok(c_exe) = std::ffi::CString::new(exe_clean) {
-                let c_args: Vec<std::ffi::CString> = args
-                    .iter()
-                    .filter_map(|s| std::ffi::CString::new(s.as_str()).ok())
-                    .collect();
-                let _ = nix::unistd::execvp(&c_exe, &c_args);
+            match reload_spec {
+                Ok((c_exe, c_args)) => {
+                    let Err(errno) = nix::unistd::execvp(&c_exe, &c_args);
+                    log::error!(
+                        "request_reload: execvp({c_exe:?}) failed: {errno}; closing bus connection"
+                    );
+                }
+                Err(reason) => {
+                    log::error!("request_reload: {reason}; closing bus connection");
+                }
             }
+            // `execvp` only returns on failure; close the connection so `DaemonCore::run`
+            // wakes up and exits cleanly instead of lingering nameless on the session bus.
+            let _ = conn_clone.close().await;
         })
     }
 

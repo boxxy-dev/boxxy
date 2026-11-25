@@ -183,30 +183,31 @@ fn run_async<F: std::future::Future<Output = Result<()>>>(f: F) -> Result<()> {
 /// Double-fork + setsid so the process becomes a true daemon.
 /// MUST be called before starting any threads (including Tokio runtime).
 fn daemonize() -> Result<()> {
-    use nix::unistd::{ForkResult, fork, setsid};
+    use nix::fcntl::{FcntlArg, FdFlag, OFlag, fcntl, open};
+    use nix::sys::stat::Mode;
+    use nix::unistd::{ForkResult, dup2_stderr, dup2_stdin, dup2_stdout, fork, setsid};
+    use std::os::fd::AsRawFd;
 
     match unsafe { fork()? } {
-        ForkResult::Parent { .. } => std::process::exit(0),
+        // Use `_exit` in forked parent/intermediate processes so stdio buffers and
+        // C `atexit` handlers are never flushed or invoked multiple times.
+        ForkResult::Parent { .. } => unsafe { libc::_exit(0) },
         ForkResult::Child => {
             setsid()?;
             match unsafe { fork()? } {
-                ForkResult::Parent { .. } => std::process::exit(0),
+                ForkResult::Parent { .. } => unsafe { libc::_exit(0) },
                 ForkResult::Child => {
-                    // Redirect standard FDs to /dev/null to be a well-behaved daemon
-                    use std::os::unix::io::{AsRawFd, IntoRawFd};
-                    if let Ok(dev_null) = std::fs::OpenOptions::new()
-                        .read(true)
-                        .write(true)
-                        .open("/dev/null")
-                    {
-                        let fd = dev_null.as_raw_fd();
-                        unsafe {
-                            libc::dup2(fd, libc::STDIN_FILENO);
-                            libc::dup2(fd, libc::STDOUT_FILENO);
-                            libc::dup2(fd, libc::STDERR_FILENO);
-                        }
-                        if fd <= libc::STDERR_FILENO {
-                            let _ = dev_null.into_raw_fd();
+                    // Open `/dev/null` without `O_CLOEXEC` so that even if fd 0, 1, or 2 was
+                    // closed on entry (causing `open` to allocate fd <= 2 directly and making
+                    // `dup2(fd, fd)` a POSIX no-op), standard descriptors never carry
+                    // `FD_CLOEXEC` across `request_reload` (`execvp`) or child spawns.
+                    if let Ok(dev_null) = open("/dev/null", OFlag::O_RDWR, Mode::empty()) {
+                        let _ = dup2_stdin(&dev_null);
+                        let _ = dup2_stdout(&dev_null);
+                        let _ = dup2_stderr(&dev_null);
+                        if dev_null.as_raw_fd() <= libc::STDERR_FILENO {
+                            let _ = fcntl(&dev_null, FcntlArg::F_SETFD(FdFlag::empty()));
+                            std::mem::forget(dev_null);
                         }
                     }
                 }

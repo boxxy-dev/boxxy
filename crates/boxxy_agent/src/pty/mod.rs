@@ -4,10 +4,10 @@ pub mod shell_integration;
 
 use crate::core::state::AgentState;
 use crate::ipc::pty::{DetachedSessionInfo, SpawnOptions};
-use nix::fcntl::OFlag;
-use nix::pty::{PtyMaster, grantpt, posix_openpt, ptsname, unlockpt};
+use nix::fcntl::{FcntlArg, FdFlag, OFlag, fcntl};
+use nix::pty::{PtyMaster, Winsize, grantpt, posix_openpt, ptsname_r, unlockpt};
 use nix::unistd::{User, getuid};
-use std::os::unix::io::{AsRawFd, FromRawFd, IntoRawFd};
+use std::os::fd::{AsFd, AsRawFd};
 use zbus::OwnedFd;
 use zbus::fdo;
 use zbus::interface;
@@ -181,11 +181,66 @@ fn exit_status_to_code(status: std::process::ExitStatus) -> i32 {
     }
 }
 
-fn ensure_cloexec(fd: std::os::unix::io::RawFd) {
+pub(crate) fn ensure_cloexec(fd: impl AsFd) -> nix::Result<()> {
+    let raw = fcntl(&fd, FcntlArg::F_GETFD)?;
+    let flags = FdFlag::from_bits_retain(raw);
+    if !flags.contains(FdFlag::FD_CLOEXEC) {
+        fcntl(&fd, FcntlArg::F_SETFD(flags | FdFlag::FD_CLOEXEC))?;
+    }
+    Ok(())
+}
+
+pub(crate) fn ensure_nonblocking(fd: impl AsFd) -> nix::Result<()> {
+    let raw = fcntl(&fd, FcntlArg::F_GETFL)?;
+    let flags = OFlag::from_bits_retain(raw);
+    if !flags.contains(OFlag::O_NONBLOCK) {
+        fcntl(&fd, FcntlArg::F_SETFL(flags | OFlag::O_NONBLOCK))?;
+    }
+    Ok(())
+}
+
+fn set_pty_winsize(fd: impl AsFd, cols: u16, rows: u16) {
+    let ws = Winsize {
+        ws_row: rows,
+        ws_col: cols,
+        ws_xpixel: 0,
+        ws_ypixel: 0,
+    };
     unsafe {
-        let flags = libc::fcntl(fd, libc::F_GETFD);
-        if flags >= 0 && (flags & libc::FD_CLOEXEC) == 0 {
-            let _ = libc::fcntl(fd, libc::F_SETFD, flags | libc::FD_CLOEXEC);
+        let _ = libc::ioctl(fd.as_fd().as_raw_fd(), libc::TIOCSWINSZ, &ws);
+    }
+}
+
+/// Nudges `TIOCSWINSZ` by 1 column and immediately restores the original dimensions so the
+/// kernel unconditionally delivers `SIGWINCH` to the foreground process group on reattach.
+fn nudge_pty_winsize(fd: impl AsFd) {
+    let raw = fd.as_fd().as_raw_fd();
+    unsafe {
+        let mut ws: Winsize = std::mem::zeroed();
+        if libc::ioctl(raw, libc::TIOCGWINSZ, &mut ws) == 0 && ws.ws_col > 0 {
+            let mut nudged = ws;
+            nudged.ws_col = if ws.ws_col < u16::MAX {
+                ws.ws_col + 1
+            } else {
+                ws.ws_col - 1
+            };
+            let _ = libc::ioctl(raw, libc::TIOCSWINSZ, &nudged);
+            let _ = libc::ioctl(raw, libc::TIOCSWINSZ, &ws);
+        }
+    }
+}
+
+/// Async-signal-safe `dup2` wrapper for `pre_exec` that retries `EINTR` and checks errors.
+#[inline]
+unsafe fn dup2_raw_retry(oldfd: libc::c_int, newfd: libc::c_int) -> std::io::Result<()> {
+    loop {
+        let rc = unsafe { libc::dup2(oldfd, newfd) };
+        if rc >= 0 {
+            return Ok(());
+        }
+        let err = std::io::Error::last_os_error();
+        if err.kind() != std::io::ErrorKind::Interrupted {
+            return Err(err);
         }
     }
 }
@@ -210,9 +265,7 @@ impl PtySubsystem {
         grantpt(&master_fd).map_err(|e| fdo::Error::Failed(format!("grantpt failed: {}", e)))?;
         unlockpt(&master_fd).map_err(|e| fdo::Error::Failed(format!("unlockpt failed: {}", e)))?;
 
-        let raw_fd = master_fd.into_raw_fd();
-        let std_fd = unsafe { std::os::unix::io::OwnedFd::from_raw_fd(raw_fd) };
-        Ok(OwnedFd::from(std_fd))
+        Ok(OwnedFd::from(std::os::fd::OwnedFd::from(master_fd)))
     }
 
     async fn set_foreground_tracking(&self, pid: u32, enabled: bool) -> fdo::Result<()> {
@@ -245,7 +298,7 @@ impl PtySubsystem {
             .map(|s| s.as_str().to_string())
             .unwrap_or_default();
         let std_fd: std::os::unix::io::OwnedFd = pty_master.into();
-        ensure_cloexec(std_fd.as_raw_fd());
+        let _ = ensure_cloexec(&std_fd);
 
         // Clone the master FD with FD_CLOEXEC (`F_DUPFD_CLOEXEC`) *before*
         // consuming `std_fd` into `PtyMaster`. Using `try_clone()` (instead of
@@ -262,23 +315,14 @@ impl PtySubsystem {
         };
 
         let master_fd = unsafe { PtyMaster::from_owned_fd(std_fd) };
+        set_pty_winsize(&master_fd, options.cols, options.rows);
 
-        unsafe {
-            let ws = libc::winsize {
-                ws_row: options.rows,
-                ws_col: options.cols,
-                ws_xpixel: 0,
-                ws_ypixel: 0,
-            };
-            libc::ioctl(master_fd.as_raw_fd(), libc::TIOCSWINSZ, &ws);
-        }
-
-        let slave_name = unsafe {
-            ptsname(&master_fd).map_err(|e| {
-                log::error!("ptsname failed: {}", e);
-                fdo::Error::Failed(format!("ptsname failed: {}", e))
-            })?
-        };
+        // Use re-entrant `ptsname_r` rather than `ptsname` so concurrent `spawn()` calls
+        // across Tokio worker threads never race on libc's static `ptsname` buffer.
+        let slave_name = ptsname_r(&master_fd).map_err(|e| {
+            log::error!("ptsname_r failed: {}", e);
+            fdo::Error::Failed(format!("ptsname_r failed: {}", e))
+        })?;
         // Pre-allocate CString on the parent side so `pre_exec` performs zero heap
         // allocations between `fork()` and `exec()` (async-signal-safety requirement).
         let slave_cstr = std::ffi::CString::new(slave_name)
@@ -358,29 +402,29 @@ impl PtySubsystem {
 
         unsafe {
             cmd.pre_exec(move || {
-                libc::setsid();
+                nix::unistd::setsid().map_err(std::io::Error::from)?;
+                nix::sys::prctl::set_pdeathsig(nix::sys::signal::Signal::SIGHUP)
+                    .map_err(std::io::Error::from)?;
 
-                if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGHUP) != 0 {
-                    return Err(std::io::Error::last_os_error());
-                }
-
-                let slave_fd = libc::open(slave_cstr.as_ptr(), libc::O_RDWR);
+                let slave_fd = libc::open(slave_cstr.as_ptr(), libc::O_RDWR | libc::O_NOCTTY);
                 if slave_fd == -1 {
                     return Err(std::io::Error::last_os_error());
                 }
 
                 if libc::ioctl(slave_fd, libc::TIOCSCTTY, 0) != 0 {
-                    return Err(std::io::Error::last_os_error());
+                    let err = std::io::Error::last_os_error();
+                    libc::close(slave_fd);
+                    return Err(err);
                 }
 
-                libc::dup2(slave_fd, libc::STDIN_FILENO);
-                libc::dup2(slave_fd, libc::STDOUT_FILENO);
-                libc::dup2(slave_fd, libc::STDERR_FILENO);
+                dup2_raw_retry(slave_fd, libc::STDIN_FILENO)?;
+                dup2_raw_retry(slave_fd, libc::STDOUT_FILENO)?;
+                dup2_raw_retry(slave_fd, libc::STDERR_FILENO)?;
 
-                if slave_fd > 2 {
+                if slave_fd > libc::STDERR_FILENO {
                     libc::close(slave_fd);
                 }
-                if master_raw_fd > 2 {
+                if master_raw_fd > libc::STDERR_FILENO && master_raw_fd != slave_fd {
                     libc::close(master_raw_fd);
                 }
                 // Mark every remaining descriptor >= 3 as FD_CLOEXEC in O(1) kernel time
@@ -592,16 +636,7 @@ impl PtySubsystem {
                 // Nudge TIOCSWINSZ (+1 col then restore) so the kernel unconditionally
                 // delivers SIGWINCH to the foreground process group, forcing idle shell
                 // prompts (zle/readline/fish) and TUIs (nvim/htop) to redraw on reattach.
-                unsafe {
-                    let raw = fd.as_raw_fd();
-                    let mut ws: libc::winsize = std::mem::zeroed();
-                    if libc::ioctl(raw, libc::TIOCGWINSZ, &mut ws) == 0 && ws.ws_col > 0 {
-                        let mut nudged = ws;
-                        nudged.ws_col = ws.ws_col.saturating_add(1);
-                        let _ = libc::ioctl(raw, libc::TIOCSWINSZ, &nudged);
-                        let _ = libc::ioctl(raw, libc::TIOCSWINSZ, &ws);
-                    }
-                }
+                nudge_pty_winsize(&fd);
                 Ok((bytes, OwnedFd::from(fd)))
             }
             None => Err(fdo::Error::Failed(format!(
@@ -642,7 +677,7 @@ impl PtySubsystem {
                 "Refusing to signal protected or invalid PID {pid}"
             )));
         }
-        if !(1..=64).contains(&signal) {
+        if registry::validate_user_signal(signal).is_err() {
             return Err(fdo::Error::InvalidArgs(format!(
                 "Invalid signal number: {signal}"
             )));
@@ -724,7 +759,6 @@ mod tests {
     async fn idle_shell_with_pending_claw_task_stays_alive_on_detach() {
         use nix::fcntl::OFlag;
         use nix::pty::{grantpt, posix_openpt, unlockpt};
-        use std::os::fd::{FromRawFd, IntoRawFd};
 
         let mut idle_proc = std::process::Command::new("/bin/sh")
             .stdin(std::process::Stdio::piped())
@@ -740,8 +774,7 @@ mod tests {
         .expect("posix_openpt");
         grantpt(&master).expect("grantpt");
         unlockpt(&master).expect("unlockpt");
-        let master_owned =
-            unsafe { std::os::unix::io::OwnedFd::from_raw_fd(master.into_raw_fd()) };
+        let master_owned = std::os::fd::OwnedFd::from(master);
 
         let pane_id = format!("pane-reminder-test-{}", uuid::Uuid::new_v4());
         let workspace = boxxy_claw::registry::workspace::global_workspace().await;
@@ -797,5 +830,46 @@ mod tests {
             opt_out_env,
             vec![("BOXXY_SHELL_INTEGRATION".to_string(), "0".to_string())]
         );
+    }
+
+    #[test]
+    fn fd_flag_helpers_and_threadsafe_ptsname_work_concurrently() {
+        let master = posix_openpt(OFlag::O_RDWR | OFlag::O_NOCTTY).expect("posix_openpt");
+        grantpt(&master).expect("grantpt");
+        unlockpt(&master).expect("unlockpt");
+
+        ensure_cloexec(&master).expect("ensure_cloexec");
+        ensure_nonblocking(&master).expect("ensure_nonblocking");
+
+        let fd_flags = FdFlag::from_bits_retain(fcntl(&master, FcntlArg::F_GETFD).expect("F_GETFD"));
+        assert!(fd_flags.contains(FdFlag::FD_CLOEXEC));
+        let fl_flags = OFlag::from_bits_retain(fcntl(&master, FcntlArg::F_GETFL).expect("F_GETFL"));
+        assert!(fl_flags.contains(OFlag::O_NONBLOCK));
+
+        set_pty_winsize(&master, 132, 43);
+        nudge_pty_winsize(&master);
+        let mut ws: Winsize = unsafe { std::mem::zeroed() };
+        assert_eq!(
+            unsafe { libc::ioctl(master.as_raw_fd(), libc::TIOCGWINSZ, &mut ws) },
+            0
+        );
+        assert_eq!((ws.ws_col, ws.ws_row), (132, 43));
+
+        // Verify `ptsname_r` across parallel OS threads without racing on static buffers.
+        let handles: Vec<_> = (0..8)
+            .map(|_| {
+                std::thread::spawn(|| {
+                    let m = posix_openpt(OFlag::O_RDWR | OFlag::O_NOCTTY | OFlag::O_CLOEXEC)
+                        .expect("posix_openpt");
+                    grantpt(&m).expect("grantpt");
+                    unlockpt(&m).expect("unlockpt");
+                    let slave = ptsname_r(&m).expect("ptsname_r");
+                    assert!(slave.starts_with("/dev/pts/"), "unexpected slave path {slave:?}");
+                })
+            })
+            .collect();
+        for h in handles {
+            h.join().expect("ptsname_r worker panicked");
+        }
     }
 }

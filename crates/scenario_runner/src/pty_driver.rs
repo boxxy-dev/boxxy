@@ -4,11 +4,14 @@
 use anyhow::{Context, Result, anyhow};
 use boxxy_agent::pty::registry::{DetachOutcome, PtyRegistry};
 use boxxy_agent::pty::shell_integration::{apply_shell_integration, ensure_integration_scripts_in};
-use nix::fcntl::OFlag;
-use nix::pty::{grantpt, posix_openpt, ptsname, unlockpt};
+use nix::errno::Errno;
+use nix::fcntl::{FcntlArg, OFlag, fcntl, open};
+use nix::pty::{Winsize, grantpt, posix_openpt, ptsname_r, unlockpt};
+use nix::sys::signal::{Signal, killpg};
+use nix::sys::stat::Mode;
+use nix::unistd::Pid;
 use parking_lot::Mutex;
-use std::ffi::CString;
-use std::os::fd::{AsRawFd as _, FromRawFd as _, IntoRawFd as _, OwnedFd};
+use std::os::fd::{AsRawFd as _, OwnedFd};
 use std::path::Path;
 use std::process::Stdio;
 use std::sync::Arc;
@@ -88,10 +91,10 @@ impl PtyShellSession {
         let _ = raw_tty_fd;
         unsafe {
             cmd.pre_exec(|| {
-                if libc::setsid() < 0 {
+                nix::unistd::setsid().map_err(std::io::Error::from)?;
+                if libc::ioctl(libc::STDIN_FILENO, libc::TIOCSCTTY, 0) != 0 {
                     return Err(std::io::Error::last_os_error());
                 }
-                let _ = libc::ioctl(0, libc::TIOCSCTTY, 0);
                 Ok(())
             });
         }
@@ -155,21 +158,11 @@ impl PtyShellSession {
     pub fn send_bytes(&self, input: &[u8]) -> Result<()> {
         let mut offset = 0;
         while offset < input.len() {
-            let n = unsafe {
-                libc::write(
-                    self.writer_fd.as_raw_fd(),
-                    input[offset..].as_ptr().cast(),
-                    input.len() - offset,
-                )
-            };
-            if n < 0 {
-                let err = std::io::Error::last_os_error();
-                if err.kind() == std::io::ErrorKind::Interrupted {
-                    continue;
-                }
-                return Err(err.into());
+            match nix::unistd::write(&self.writer_fd, &input[offset..]) {
+                Ok(n) => offset += n,
+                Err(Errno::EINTR) => {}
+                Err(err) => return Err(std::io::Error::from(err).into()),
             }
-            offset += usize::try_from(n).unwrap_or(0);
         }
         Ok(())
     }
@@ -306,10 +299,9 @@ impl Drop for PtyShellSession {
         }
         if let Ok(pgid) = i32::try_from(self.pid)
             && pgid > 1
+            && self.pid != std::process::id()
         {
-            unsafe {
-                let _ = libc::kill(-pgid, libc::SIGKILL);
-            }
+            let _ = killpg(Pid::from_raw(pgid), Signal::SIGKILL);
         }
         let _ = self.child.start_kill();
     }
@@ -320,28 +312,18 @@ fn open_pty_pair(cols: u16, rows: u16) -> Result<(OwnedFd, OwnedFd, OwnedFd, Own
         posix_openpt(OFlag::O_RDWR | OFlag::O_NOCTTY | OFlag::O_CLOEXEC).context("posix_openpt")?;
     grantpt(&master).context("grantpt")?;
     unlockpt(&master).context("unlockpt")?;
-    // SAFETY: `master` is a valid unlocked PTY master descriptor on this thread.
-    let slave_name = unsafe { ptsname(&master) }.context("ptsname")?;
-    let slave_cstr = CString::new(slave_name).context("slave path CString")?;
+    let slave_name = ptsname_r(&master).context("ptsname_r")?;
 
-    let raw_slave = unsafe {
-        libc::open(
-            slave_cstr.as_ptr(),
-            libc::O_RDWR | libc::O_NOCTTY | libc::O_CLOEXEC,
-        )
-    };
-    if raw_slave < 0 {
-        return Err(anyhow!(
-            "open slave PTY failed: {}",
-            std::io::Error::last_os_error()
-        ));
-    }
-    // SAFETY: `raw_slave` was just opened and is exclusively owned here.
-    let slave_stdin = unsafe { OwnedFd::from_raw_fd(raw_slave) };
+    let slave_stdin = open(
+        Path::new(&slave_name),
+        OFlag::O_RDWR | OFlag::O_NOCTTY | OFlag::O_CLOEXEC,
+        Mode::empty(),
+    )
+    .context("open slave PTY")?;
     let slave_stdout = slave_stdin.try_clone().context("dup slave stdout")?;
     let slave_stderr = slave_stdin.try_clone().context("dup slave stderr")?;
 
-    let ws = libc::winsize {
+    let ws = Winsize {
         ws_row: rows,
         ws_col: cols,
         ws_xpixel: 0,
@@ -351,8 +333,7 @@ fn open_pty_pair(cols: u16, rows: u16) -> Result<(OwnedFd, OwnedFd, OwnedFd, Own
         let _ = libc::ioctl(master.as_raw_fd(), libc::TIOCSWINSZ, &ws);
     }
 
-    // SAFETY: Converting `PtyMaster` into `OwnedFd` transfers ownership once.
-    let master_owned = unsafe { OwnedFd::from_raw_fd(master.into_raw_fd()) };
+    let master_owned = OwnedFd::from(master);
     Ok((master_owned, slave_stdin, slave_stdout, slave_stderr))
 }
 
@@ -361,12 +342,11 @@ fn spawn_ui_reader(
     captured: Arc<Mutex<Vec<u8>>>,
     notify: Arc<Notify>,
 ) -> Result<JoinHandle<()>> {
-    unsafe {
-        let raw = fd.as_raw_fd();
-        let flags = libc::fcntl(raw, libc::F_GETFL);
-        if flags >= 0 {
-            let _ = libc::fcntl(raw, libc::F_SETFL, flags | libc::O_NONBLOCK);
-        }
+    let raw_flags = fcntl(&fd, FcntlArg::F_GETFL).context("F_GETFL on PTY reader FD")?;
+    let flags = OFlag::from_bits_retain(raw_flags);
+    if !flags.contains(OFlag::O_NONBLOCK) {
+        fcntl(&fd, FcntlArg::F_SETFL(flags | OFlag::O_NONBLOCK))
+            .context("F_SETFL O_NONBLOCK on PTY reader FD")?;
     }
     // SAFETY: `fd` is an exclusively-owned `OwnedFd` kept valid for the lifetime of `async_fd`.
     let async_fd = unsafe { AsyncFd::register_with_interest(fd, Interest::READABLE) }
@@ -378,18 +358,11 @@ fn spawn_ui_reader(
             let Ok(mut guard) = async_fd.readable().await else {
                 break;
             };
-            let result = guard.try_io(|inner| {
-                let n = unsafe {
-                    libc::read(
-                        inner.get_ref().as_raw_fd(),
-                        buf.as_mut_ptr().cast(),
-                        buf.len(),
-                    )
-                };
-                if n < 0 {
-                    Err(std::io::Error::last_os_error())
-                } else {
-                    Ok(usize::try_from(n).unwrap_or(0))
+            let result = guard.try_io(|inner| loop {
+                match nix::unistd::read(inner.get_ref(), &mut buf) {
+                    Ok(n) => return Ok(n),
+                    Err(Errno::EINTR) => {}
+                    Err(err) => return Err(std::io::Error::from(err)),
                 }
             });
 

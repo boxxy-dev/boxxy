@@ -33,7 +33,7 @@ const EXEC_SHELL_TIMEOUT_SECS: u64 = 180;
 /// Ensures an entire spawned process group (`-pgid`) is terminated with `SIGKILL`
 /// if `exec_shell` times out or its future is dropped (e.g. user presses `Esc` twice),
 /// preventing orphaned `cargo` / `rustc` / `pytest` child processes.
-struct ProcessGroupKillGuard(Option<i32>);
+struct ProcessGroupKillGuard(Option<u32>);
 
 impl ProcessGroupKillGuard {
     fn disarm(&mut self) {
@@ -43,12 +43,8 @@ impl ProcessGroupKillGuard {
 
 impl Drop for ProcessGroupKillGuard {
     fn drop(&mut self) {
-        if let Some(pgid) = self.0.take()
-            && pgid > 1
-        {
-            unsafe {
-                let _ = libc::kill(-pgid, libc::SIGKILL);
-            }
+        if let Some(pid) = self.0.take() {
+            let _ = crate::pty::registry::kill_process_group_safe(pid, libc::SIGKILL);
         }
     }
 }
@@ -77,8 +73,7 @@ impl ClawEnvironment for ClawSubsystem {
                 .spawn()?
         };
 
-        let mut pg_guard =
-            ProcessGroupKillGuard(child.id().and_then(|pid| i32::try_from(pid).ok()));
+        let mut pg_guard = ProcessGroupKillGuard(child.id());
 
         match tokio::time::timeout(
             std::time::Duration::from_secs(EXEC_SHELL_TIMEOUT_SECS),
@@ -135,7 +130,7 @@ impl ClawEnvironment for ClawSubsystem {
                 .stdout(Stdio::null())
                 .stderr(Stdio::piped())
                 .pre_exec(|| {
-                    libc::setsid();
+                    nix::unistd::setsid().map_err(std::io::Error::from)?;
                     let _ = libc::syscall(
                         libc::SYS_close_range,
                         3 as libc::c_uint,
@@ -220,17 +215,12 @@ impl ClawEnvironment for ClawSubsystem {
                 "Refusing to signal protected or invalid PID {pid}"
             ));
         }
-        if signal <= 0 || signal > 64 {
+        if crate::pty::registry::validate_user_signal(signal).is_err() {
             return Err(anyhow::anyhow!("Invalid signal number: {signal}"));
         }
 
-        unsafe {
-            if libc::kill(raw_pid, signal) != 0 {
-                let err = std::io::Error::last_os_error();
-                return Err(anyhow::anyhow!("Failed to kill process {pid}: {err}"));
-            }
-        }
-        Ok(())
+        crate::pty::registry::kill_process_safe(pid, signal)
+            .map_err(|err| anyhow::anyhow!("Failed to kill process {pid}: {err}"))
     }
 
     async fn get_clipboard(&self) -> anyhow::Result<String> {

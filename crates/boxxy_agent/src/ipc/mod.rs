@@ -800,4 +800,45 @@ mod tests {
         assert!(!is_service_unavailable(&other_fdo));
         assert!(!is_service_unavailable(&zbus::Error::InvalidReply));
     }
+
+    #[test]
+    fn prepare_reload_exec_args_strips_deleted_suffix_and_transient_flags() {
+        use std::ffi::OsString;
+        use std::os::unix::ffi::OsStringExt;
+        use std::path::PathBuf;
+
+        let swapped_exe = PathBuf::from("/usr/local/bin/boxxy-agent (deleted)");
+        let args = vec![
+            OsString::from("boxxy-agent"),
+            OsString::from("--background"),
+            OsString::from("--dev"),
+            OsString::from("--sync-settings"),
+            OsString::from("--config-dir"),
+            OsString::from_vec(b"/tmp/cfg-\xff".to_vec()),
+        ];
+
+        let (c_exe, c_args) =
+            agent_service::prepare_reload_exec_args(Some(swapped_exe), args).expect("reload spec");
+        assert_eq!(c_exe.as_bytes(), b"/usr/local/bin/boxxy-agent");
+        let arg_bytes: Vec<&[u8]> = c_args.iter().map(|c| c.as_bytes()).collect();
+        assert_eq!(
+            arg_bytes,
+            vec![
+                &b"boxxy-agent"[..],
+                &b"--dev"[..],
+                &b"--config-dir"[..],
+                &b"/tmp/cfg-\xff"[..],
+            ]
+        );
+
+        // Empty argv falls back to executable path as argv[0], and missing exe errors cleanly.
+        let (_, fallback_args) = agent_service::prepare_reload_exec_args(
+            Some(PathBuf::from("/usr/bin/boxxy-agent")),
+            Vec::<OsString>::new(),
+        )
+        .expect("fallback argv[0]");
+        assert_eq!(fallback_args.len(), 1);
+        assert_eq!(fallback_args[0].as_bytes(), b"/usr/bin/boxxy-agent");
+        assert!(agent_service::prepare_reload_exec_args(None, Vec::<OsString>::new()).is_err());
+    }
 }
